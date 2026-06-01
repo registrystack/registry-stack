@@ -4,11 +4,13 @@ set positional-arguments := true
 default_relay_src := if path_exists("../registry-relay/Cargo.toml") == "true" { "../registry-relay" } else { "./vendor/registry-relay" }
 default_notary_src := if path_exists("../registry-notary/Cargo.toml") == "true" { "../registry-notary" } else { "./vendor/registry-notary" }
 default_platform_src := if path_exists("../registry-platform/Cargo.toml") == "true" { "../registry-platform" } else { "./vendor/registry-platform" }
+default_atlas_src := if path_exists("../registry-atlas/Cargo.toml") == "true" { "../registry-atlas" } else { "./vendor/registry-atlas" }
 
 relay_src := env_var_or_default("REGISTRY_RELAY_SOURCE_DIR", default_relay_src)
 notary_src := env_var_or_default("REGISTRY_NOTARY_SOURCE_DIR", default_notary_src)
 openfn_notary_src := env_var_or_default("REGISTRY_OPENFN_NOTARY_SOURCE_DIR", notary_src)
 platform_src := env_var_or_default("REGISTRY_PLATFORM_SOURCE_DIR", default_platform_src)
+atlas_src := env_var_or_default("REGISTRY_ATLAS_SOURCE_DIR", default_atlas_src)
 manifest_src := env_var_or_default("REGISTRY_MANIFEST_REPO", "./vendor/registry-manifest")
 cel_mapping_src := env_var_or_default("CEL_MAPPING_SOURCE_DIR", "./vendor/cel-mapping")
 relay_features := env_var_or_default("REGISTRY_RELAY_FEATURES", "spdci-api-standards,standards-cel-mapping,ogcapi-edr")
@@ -20,6 +22,7 @@ export REGISTRY_PLATFORM_SOURCE_DIR := platform_src
 export REGISTRY_RELAY_PLATFORM_SOURCE_DIR := platform_src
 export REGISTRY_NOTARY_PLATFORM_SOURCE_DIR := platform_src
 export REGISTRY_MANIFEST_REPO := manifest_src
+export REGISTRY_ATLAS_SOURCE_DIR := atlas_src
 export CEL_MAPPING_SOURCE_DIR := cel_mapping_src
 export REGISTRY_RELAY_FEATURES := relay_features
 

@@ -52,8 +52,15 @@ manifest_path() {
 }
 
 atlas_path() {
-  local raw="${REGISTRY_ATLAS_SOURCE_DIR:-../registry-atlas}"
+  local raw="${REGISTRY_ATLAS_SOURCE_DIR:-}"
   local resolved
+  if [[ -z "${raw}" ]]; then
+    raw="../registry-atlas"
+    resolved="$(resolve_dir "${raw}")"
+    if [[ ! -f "${resolved}/Cargo.toml" ]] || [[ ! -d "${resolved}/crates/semantic-asset-discovery-core" ]] || [[ ! -d "${resolved}/crates/semantic-asset-discovery-cli" ]]; then
+      raw="./vendor/registry-atlas"
+    fi
+  fi
   resolved="$(resolve_dir "${raw}")"
   if [[ ! -f "${resolved}/Cargo.toml" ]] || [[ ! -d "${resolved}/crates/semantic-asset-discovery-core" ]] || [[ ! -d "${resolved}/crates/semantic-asset-discovery-cli" ]]; then
     diagnose_missing "registry-atlas" "REGISTRY_ATLAS_SOURCE_DIR" "${raw}" "${resolved}" \

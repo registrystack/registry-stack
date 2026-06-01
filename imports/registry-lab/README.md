@@ -65,12 +65,12 @@ just smoke
 just client
 ```
 
-The service-first story uses sibling checkouts of `registry-manifest` and
-`registry-atlas` by default. Override `REGISTRY_MANIFEST_REPO` and
-`REGISTRY_ATLAS_SOURCE_DIR` if those projects are not next to this repo.
-`just generate` fails early when `registry-manifest` is missing, while
-`just smoke`, `just live-stories`, and `just release` fail early when either
-service-first sibling checkout is missing.
+The service-first story uses the `vendor/registry-manifest` and
+`vendor/registry-atlas` submodules by default. Override `REGISTRY_MANIFEST_REPO`
+and `REGISTRY_ATLAS_SOURCE_DIR` when you want to test sibling checkouts or other
+local paths. `just generate` fails early when `registry-manifest` is missing,
+while `just smoke`, `just live-stories`, and `just release` fail early when
+either service-first checkout is missing.
 
 `just generate` writes `.env`, fixture files, and static metadata. Run it before
 `just up` the first time, and run it again after pulling demo changes that add
@@ -296,8 +296,9 @@ The `justfile` defaults `REGISTRY_RELAY_SOURCE_DIR`,
 `REGISTRY_NOTARY_SOURCE_DIR`, and `REGISTRY_PLATFORM_SOURCE_DIR` to sibling
 checkouts when present, otherwise to the pinned `vendor/` submodules.
 `REGISTRY_OPENFN_NOTARY_SOURCE_DIR` follows `REGISTRY_NOTARY_SOURCE_DIR` by
-default. Override those variables when you want to build from another local
-path.
+default. `REGISTRY_ATLAS_SOURCE_DIR` follows the same sibling-then-vendor
+pattern for the service-first smoke. Override those variables when you want to
+build from another local path.
 
 ## Live Notary Redis checks
 
@@ -590,13 +591,16 @@ behavior.
 ## Source repositories
 
 This demo keeps runtime orchestration, fixtures, static metadata config, and
-walkthrough scripts in this repository. Registry Platform, Registry Relay, and
-Registry Notary are submodules under `vendor/`:
+walkthrough scripts in this repository. Supporting source repositories are
+submodules under `vendor/`:
 
 - `vendor/registry-platform`: shared platform crates used by Relay and Notary.
 - `vendor/registry-relay`: Relay source used by `Dockerfile.registry-relay`.
 - `vendor/registry-notary`: Registry Notary source used by
   `Dockerfile.registry-notary`.
+- `vendor/registry-manifest`: static metadata publishing CLI and profiles.
+- `vendor/registry-atlas`: service-first discovery CLI used by smoke and live
+  stories.
 
 The Compose build uses Docker named contexts so local source checkouts can be
 used without changing `compose.yaml`:
