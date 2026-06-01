@@ -34,8 +34,10 @@ Missing ${name} checkout required for the service-first discovery path.
   expected: ${expected}
 
 Fix:
+  run: just setup
+or run: git submodule update --init --recursive
+or set:
   export ${env_var}=/absolute/path/to/${name}
-or place ${name} under registry-lab/vendor and point ${env_var} there.
 EOF
 }
 
