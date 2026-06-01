@@ -1,0 +1,79 @@
+name: Container Image
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: containers-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
+  REGISTRY_PLATFORM_REF: ${{ (github.head_ref || github.ref_name) == 'codex/audit-hash-helpers' && 'codex/audit-reference-hashing' || ((github.head_ref || github.ref_name) == 'commons-release-cleanup' && 'commons-release-cleanup' || 'main') }}
+  REGISTRY_MANIFEST_REPOSITORY: jeremi/registry-manifest
+  REGISTRY_MANIFEST_REF: main
+  CEL_MAPPING_REPOSITORY: PublicSchema/crosswalk
+  CEL_MAPPING_REF: ca7411d735f1507b9db0db637f79aff7e4ae4611
+  REGISTRY_RELAY_IMAGE: ghcr.io/jeremi/registry-relay
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout registry-relay
+        uses: actions/checkout@v6
+        with:
+          path: registry-relay
+
+      - name: Checkout registry-platform
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          path: registry-platform
+
+      - name: Checkout registry-manifest
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.REGISTRY_MANIFEST_REPOSITORY }}
+          ref: ${{ env.REGISTRY_MANIFEST_REF }}
+          token: ${{ secrets.REGISTRY_MANIFEST_TOKEN || github.token }}
+          path: registry-manifest
+
+      - name: Checkout cel-mapping
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.CEL_MAPPING_REPOSITORY }}
+          ref: ${{ env.CEL_MAPPING_REF }}
+          path: cel-mapping
+
+      - name: Build registry-relay image
+        run: |
+          docker build \
+            --build-context registry-platform=registry-platform \
+            --build-context registry-manifest=registry-manifest \
+            --build-context cel-mapping=cel-mapping \
+            --file registry-relay/Dockerfile \
+            --tag "$REGISTRY_RELAY_IMAGE:sha-${GITHUB_SHA}" \
+            --tag "$REGISTRY_RELAY_IMAGE:main" \
+            registry-relay
+
+      - name: Login to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Push image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          docker push "$REGISTRY_RELAY_IMAGE:sha-${GITHUB_SHA}"
+          docker push "$REGISTRY_RELAY_IMAGE:main"

@@ -316,16 +316,17 @@ just validate-catalog-semic-local catalog=target/metadata.bregdcat-ap.jsonld pro
 
 ## Container Image
 
-The image build uses the shared `registry-platform` and `cel-mapping` crates
+The image build uses the shared `registry-platform`, `registry-manifest`, and `cel-mapping` crates
 through the same path dependency layout as local Cargo builds. Keep those
 checkouts next to this repository, or set `REGISTRY_PLATFORM_DIR` and
-`CEL_MAPPING_DIR` when using the helper script.
+`REGISTRY_MANIFEST_DIR` and `CEL_MAPPING_DIR` when using the helper script.
 
 Build the production image with Docker:
 
 ```sh
 docker buildx build --load \
   --build-context registry-platform=../registry-platform \
+  --build-context registry-manifest=../registry-manifest \
   --build-context cel-mapping=../cel-mapping \
   -t registry-relay:local \
   .
@@ -336,6 +337,22 @@ or with the helper:
 ```sh
 scripts/build-image.sh registry-relay:local
 ```
+
+The default image is built with no optional Cargo features. For a lab image
+that needs standards adapters, pass feature flags explicitly:
+
+```sh
+REGISTRY_RELAY_FEATURES=spdci-api-standards,standards-cel-mapping,ogcapi-edr \
+  scripts/build-image.sh registry-relay:lab
+```
+
+The equivalent direct Docker build argument is
+`--build-arg REGISTRY_RELAY_FEATURES=spdci-api-standards,standards-cel-mapping,ogcapi-edr`.
+
+The product repository publishes canonical images to
+`ghcr.io/jeremi/registry-relay` on `main`, tagged as `main` and
+`sha-<commit>`. Downstream deployments should consume those refs directly and
+pin by digest when they need rollback guarantees.
 
 The image:
 

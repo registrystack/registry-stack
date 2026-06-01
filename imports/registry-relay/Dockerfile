@@ -15,9 +15,14 @@ COPY benches ./benches
 COPY resources ./resources
 COPY src ./src
 
+ARG REGISTRY_RELAY_FEATURES=""
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/workspace/registry_relay/target \
-    cargo build --release --locked && \
+    if [ -n "$REGISTRY_RELAY_FEATURES" ]; then \
+        cargo build --release --locked --features "$REGISTRY_RELAY_FEATURES"; \
+    else \
+        cargo build --release --locked; \
+    fi && \
     cp /workspace/registry_relay/target/release/registry-relay /usr/local/bin/registry-relay
 
 FROM debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb AS runtime

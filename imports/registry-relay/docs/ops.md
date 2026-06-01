@@ -38,6 +38,8 @@ Build a container image:
 ```sh
 docker buildx build --load \
   --build-context registry-platform=../registry-platform \
+  --build-context registry-manifest=../registry-manifest \
+  --build-context cel-mapping=../cel-mapping \
   -t registry-relay:<version> \
   .
 ```
@@ -48,10 +50,19 @@ or:
 scripts/build-image.sh registry-relay:<version>
 ```
 
-The build requires the pinned `registry-platform` source tree because Relay
-uses sibling path dependencies for the platform security crates. For local
-builds, keep `../registry-platform` next to this repository or set
-`REGISTRY_PLATFORM_DIR` before running `scripts/build-image.sh`.
+The default image is built with no optional Cargo features. Builds that need
+standards adapters must opt in explicitly:
+
+```sh
+REGISTRY_RELAY_FEATURES=spdci-api-standards,standards-cel-mapping,ogcapi-edr \
+  scripts/build-image.sh registry-relay:<version>-lab
+```
+
+The build requires the pinned `registry-platform`, `registry-manifest`, and
+`cel-mapping` source trees because Relay uses sibling path dependencies. For
+local builds, keep those checkouts next to this repository or set
+`REGISTRY_PLATFORM_DIR`, `REGISTRY_MANIFEST_DIR`, and `CEL_MAPPING_DIR` before
+running `scripts/build-image.sh`.
 
 Before promoting an image, inspect the effective config and verify that every referenced `hash_env` is supplied by the runtime environment. Do not bake API keys or API-key hashes into the image.
 

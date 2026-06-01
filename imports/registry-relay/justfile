@@ -11,6 +11,10 @@ setup:
 build:
     cargo build --release
 
+# Check that Dockerfile and helper-script feature build behavior stays aligned.
+docker-build-contract:
+    python3 scripts/check_docker_build_contract.py
+
 # Build the binary shape used by the core demo configs.
 # Usage: just demo-build
 #        just demo-build ogcapi-features
@@ -94,9 +98,9 @@ metadata-publish manifest="profiles/example-civil-registration/fixtures/metadata
 audit:
     if [ -x "$HOME/.cargo/bin/cargo-deny" ]; then "$HOME/.cargo/bin/cargo-deny" check advisories; else cargo deny check advisories; fi
 
-# Run the full CI gate locally: fmt-check, default/all-feature lint,
+# Run the full CI gate locally: Docker build contract, fmt-check, default/all-feature lint,
 # default/all-feature tests, and cargo-deny.
-ci: fmt-check lint-default lint test-default test deny
+ci: docker-build-contract fmt-check lint-default lint test-default test deny
 
 # Run the development server with a config file.
 # Usage: just run              (uses config/example.yaml)

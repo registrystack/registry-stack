@@ -90,6 +90,9 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
+      - name: Check Docker build contract
+        run: python3 scripts/check_docker_build_contract.py
+
       - name: Install cargo-nextest
         # Pinned to 0.9.136 so CI matches the version contributors install
         # via `cargo install cargo-nextest --locked`. The installer is
