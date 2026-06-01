@@ -153,6 +153,7 @@ just relay-postgres  # Relay ignored Postgres integration test
 just relay-zitadel   # Relay ignored Zitadel integration test
 just notary-redis   # Notary and Platform live Redis integration tests
 just oidc-relay      # separate OIDC-protected Relay node
+just esignet-up     # start local MOSIP eSignet for citizen wallet/self-attestation demos
 just citizen-login  # print local eSignet login URL
 just citizen-code   # exchange returned code and run flow
 just citizen-token  # run flow with exported tokens
@@ -367,8 +368,17 @@ as sensitive local evidence.
 For the local eSignet profile used by the lab, prefer the Just wrappers:
 
 ```bash
+just esignet-up
 just citizen-login
 ```
+
+`just esignet-up` starts a separate MOSIP eSignet Compose project from
+`compose.esignet-live.yaml`: eSignet on port `8088`, the browser UI on port
+`3000`, mock identity on port `8082`, and a Postgres database on port `5455`.
+It also seeds the `registry-lab-live-client` OIDC client and writes the matching
+demo private key to `output/esignet-live/client-private.pem`. The mock identity
+store is seeded with the civil fixture people `NID-1001` through `NID-1009`;
+the local generated code is `111111`, and the static PIN is `545411`.
 
 Open the printed `http://localhost:3000/authorize?...` URL, authenticate as the
 citizen, and leave the terminal running. The recipe waits on
@@ -386,9 +396,10 @@ Then run:
 just citizen-code
 ```
 
-`citizen-code` reads the saved callback code. If the local live eSignet setup
-created `/tmp/esignet-live-test/client-private.pem`, it uses that client key;
-otherwise set `ESIGNET_CLIENT_PRIVATE_KEY_FILE=/path/to/client-private-key.pem`.
+`citizen-code` reads the saved callback code. It uses
+`output/esignet-live/client-private.pem` from `just esignet-up` when present,
+falls back to `/tmp/esignet-live-test/client-private.pem` for older local
+stacks, or accepts `ESIGNET_CLIENT_PRIVATE_KEY_FILE=/path/to/client-private-key.pem`.
 The command narrates the verified token metadata, UserInfo subject binding,
 Notary discovery, successful self claim, other-person denial, and audit check
 without printing raw tokens.

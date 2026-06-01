@@ -53,6 +53,18 @@ up:
 down:
     docker compose -f compose.yaml down -v
 
+# Start the local MOSIP eSignet stack used by citizen wallet/self-attestation demos.
+esignet-up:
+    docker compose -f compose.esignet-live.yaml up -d
+
+# Stop the local MOSIP eSignet stack and remove its demo volumes.
+esignet-down:
+    docker compose -f compose.esignet-live.yaml down -v
+
+# Follow local MOSIP eSignet logs. Pass service names after `--`, for example: just esignet-logs -- esignet esignet-seed
+esignet-logs *services:
+    docker compose -f compose.esignet-live.yaml logs -f {{services}}
+
 # Show running demo services.
 ps:
     docker compose -f compose.yaml ps
@@ -145,9 +157,10 @@ citizen-self-attestation-esignet-login:
 # Exchange the returned eSignet code and run the citizen self-attestation smoke.
 citizen-self-attestation-esignet-code:
     @test -n "${ESIGNET_AUTHORIZATION_CODE:-}" || test -f output/citizen-self-attestation/esignet-callback.env || (echo "Run just citizen-login first, or set ESIGNET_AUTHORIZATION_CODE." >&2; exit 1)
-    @test -n "${ESIGNET_CLIENT_PRIVATE_KEY_FILE:-}" || test -f /tmp/esignet-live-test/client-private.pem || (echo "Set ESIGNET_CLIENT_PRIVATE_KEY_FILE to the client RSA private key." >&2; exit 1)
+    @test -n "${ESIGNET_CLIENT_PRIVATE_KEY_FILE:-}" || test -f output/esignet-live/client-private.pem || test -f /tmp/esignet-live-test/client-private.pem || (echo "Run just esignet-up, or set ESIGNET_CLIENT_PRIVATE_KEY_FILE to the client RSA private key." >&2; exit 1)
     @set -a; \
     if [ -z "${ESIGNET_AUTHORIZATION_CODE:-}" ] && [ -f output/citizen-self-attestation/esignet-callback.env ]; then . output/citizen-self-attestation/esignet-callback.env; fi; \
+    if [ -z "${ESIGNET_CLIENT_PRIVATE_KEY_FILE:-}" ] && [ -f output/esignet-live/client-private.pem ]; then ESIGNET_CLIENT_PRIVATE_KEY_FILE=output/esignet-live/client-private.pem; fi; \
     if [ -z "${ESIGNET_CLIENT_PRIVATE_KEY_FILE:-}" ] && [ -f /tmp/esignet-live-test/client-private.pem ]; then ESIGNET_CLIENT_PRIVATE_KEY_FILE=/tmp/esignet-live-test/client-private.pem; fi; \
     set +a; \
     ESIGNET_ISSUER=http://localhost:8088 \
@@ -247,9 +260,10 @@ citizen-oid4vci-login:
 # Exchange the local eSignet callback code and probe citizen OID4VCI endpoints.
 citizen-oid4vci-code:
     @test -n "${ESIGNET_AUTHORIZATION_CODE:-}" || test -f output/citizen-self-attestation/esignet-callback.env || (echo "Run just citizen-oid4vci-login first, or set ESIGNET_AUTHORIZATION_CODE." >&2; exit 1)
-    @test -n "${ESIGNET_CLIENT_PRIVATE_KEY_FILE:-}" || test -f /tmp/esignet-live-test/client-private.pem || (echo "Set ESIGNET_CLIENT_PRIVATE_KEY_FILE to the client RSA private key." >&2; exit 1)
+    @test -n "${ESIGNET_CLIENT_PRIVATE_KEY_FILE:-}" || test -f output/esignet-live/client-private.pem || test -f /tmp/esignet-live-test/client-private.pem || (echo "Run just esignet-up, or set ESIGNET_CLIENT_PRIVATE_KEY_FILE to the client RSA private key." >&2; exit 1)
     @set -a; \
     if [ -z "${ESIGNET_AUTHORIZATION_CODE:-}" ] && [ -f output/citizen-self-attestation/esignet-callback.env ]; then . output/citizen-self-attestation/esignet-callback.env; fi; \
+    if [ -z "${ESIGNET_CLIENT_PRIVATE_KEY_FILE:-}" ] && [ -f output/esignet-live/client-private.pem ]; then ESIGNET_CLIENT_PRIVATE_KEY_FILE=output/esignet-live/client-private.pem; fi; \
     if [ -z "${ESIGNET_CLIENT_PRIVATE_KEY_FILE:-}" ] && [ -f /tmp/esignet-live-test/client-private.pem ]; then ESIGNET_CLIENT_PRIVATE_KEY_FILE=/tmp/esignet-live-test/client-private.pem; fi; \
     set +a; \
     ESIGNET_ISSUER=http://localhost:8088 \

@@ -1,0 +1,152 @@
+name: registry-lab-esignet-live
+
+services:
+  database:
+    image: postgres:bookworm
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "${REGISTRY_LAB_ESIGNET_POSTGRES_PORT:-5455}:5432"
+    volumes:
+      - esignet-postgres-data:/var/lib/postgresql
+      - ./config/esignet/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:6.0
+    command: ["redis-server"]
+    restart: unless-stopped
+    networks:
+      default:
+        aliases:
+          - redis-server
+
+  mock-identity-system:
+    image: mosipid/mock-identity-system:0.13.0
+    user: root
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      active_profile_env: default,local
+      spring_config_label_env: ""
+      spring_config_url_env: ""
+      hsm_client_zip_url_env: ""
+      hsm_local_dir_env: hsm-client
+      loader_path_env: /home/mosip/additional_jars/
+      work_dir: /home/mosip
+      container_user: mosip
+      SPRING_DATASOURCE_URL: jdbc:postgresql://database:5432/mosip_mockidentitysystem?currentSchema=mockidentitysystem
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+      MOSIP_ESIGNET_HOST: localhost:8088
+      MOSIP_MOCK_IDA_KYC_TRANSACTION_TIMEOUT_SECS: "900"
+      MOSIP_MOCK_IDA_IDENTITY_OPENID_CLAIMS_MAPPING: '{"individualId":"individual_id","fullName":"name","givenName":"given_name","familyName":"family_name","email":"email","phone":"phone_number","gender":"gender","dateOfBirth":"birthdate","encodedPhoto":"picture","preferredUsername":"preferred_username","middleName":"middle_name","nickName":"nickname","streetAddress":"address.street_address","locality":"address.locality","region":"address.region","country":"address.country","postalCode":"address.postal_code","preferredLang":"locale","zoneInfo":"address.zoneinfo"}'
+    ports:
+      - "${REGISTRY_LAB_ESIGNET_MOCK_IDENTITY_PORT:-8082}:8082"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8082/v1/mock-identity-system/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  esignet:
+    image: mosipid/esignet-with-plugins:1.8.0
+    user: root
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      mock-identity-system:
+        condition: service_healthy
+    environment:
+      active_profile_env: default,local
+      spring_config_label_env: ""
+      spring_config_url_env: ""
+      hsm_client_zip_url_env: ""
+      hsm_local_dir_env: hsm-client
+      loader_path_env: /home/mosip/additional_jars/
+      work_dir: /home/mosip
+      container_user: mosip
+      plugin_name_env: esignet-mock-plugin.jar
+      plugin_url_env: ""
+      plugins_path_env: /home/mosip/plugins
+      amr_acr_mapping_file_path_env: /home/mosip/amr_acr_mapping.json
+      KAFKA_ENABLED: "false"
+      SPRING_AUTOCONFIGURE_EXCLUDE: org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
+      SPRING_CACHE_TYPE: redis
+      SPRING_DATA_REDIS_HOST: redis-server
+      SPRING_REDIS_PASSWORD: ""
+      MOSIP_ESIGNET_DATABASE_URL: jdbc:postgresql://database:5432/mosip_esignet?currentSchema=esignet
+      MOSIP_ESIGNET_DATABASE_USERNAME: postgres
+      MOSIP_ESIGNET_DATABASE_PASSWORD: postgres
+      MOSIP_ESIGNET_INTEGRATION_KEY_BINDER: MockKeyBindingWrapperService
+      MOSIP_ESIGNET_MOCK_DOMAIN_URL: http://mock-identity-system:8082
+      MOSIP_ESIGNET_OPENID_SCOPE_CLAIMS: "{'profile' : {'name','address','gender','birthdate','picture','email','phone_number','phone_number_verified','registration_type','updated_at','individual_id'},'email' : {'email'}, 'phone' : {'phone_number','phone_number_verified'}, 'address': {'address'}}"
+    ports:
+      - "${REGISTRY_LAB_ESIGNET_PORT:-8088}:8088"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8088/v1/esignet/oidc/.well-known/openid-configuration"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 90s
+
+  esignet-ui:
+    image: mosipid/oidc-ui:1.8.0
+    user: root
+    depends_on:
+      esignet:
+        condition: service_healthy
+    environment:
+      container_user: mosip
+      DEFAULT_WELLKNOWN: "%5B%7B%22name%22%3A%22OpenID%20Configuration%22%2C%22value%22%3A%22%2F.well-known%2Fopenid-configuration%22%7D%2C%7B%22name%22%3A%22Jwks%20Json%22%2C%22value%22%3A%22%2F.well-known%2Fjwks.json%22%7D%2C%7B%22name%22%3A%22Authorization%20Server%22%2C%22value%22%3A%22%2F.well-known%2Foauth-authorization-server%22%7D%5D"
+      SIGN_IN_WITH_ESIGNET_PLUGIN_URL: https://raw.githubusercontent.com/mosip/artifactory-ref-impl/master/artifacts/src/mosip-plugins/sign-in-with-esignet/sign-in-with-esignet.zip
+      i18n_url_env: ""
+      theme_url_env: ""
+      images_url_env: ""
+    ports:
+      - "${REGISTRY_LAB_ESIGNET_UI_PORT:-3000}:3000"
+    volumes:
+      - ./config/esignet/nginx.conf:/etc/nginx/nginx.conf:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/.well-known/openid-configuration"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  esignet-seed:
+    image: python:3.12-alpine
+    depends_on:
+      database:
+        condition: service_healthy
+      esignet:
+        condition: service_healthy
+      mock-identity-system:
+        condition: service_healthy
+    environment:
+      PGHOST: database
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      ESIGNET_CLIENT_PRIVATE_KEY_FILE: /output/client-private.pem
+    volumes:
+      - ./scripts/seed-esignet-live.py:/seed/seed-esignet-live.py:ro
+      - ./output/esignet-live:/output
+    entrypoint: ["/bin/sh", "-euc"]
+    command:
+      - |
+        apk add --no-cache openssl postgresql-client >/dev/null
+        python /seed/seed-esignet-live.py
+    restart: "no"
+
+volumes:
+  esignet-postgres-data:
