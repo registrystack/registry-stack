@@ -42,7 +42,10 @@ jobs:
         run: actionlint
 
       - name: Run zizmor
-        run: uvx zizmor --no-exit-codes .
+        run: |
+          mkdir -p target/security
+          uvx zizmor --format json --no-exit-codes . > target/security/zizmor.json
+          python3 scripts/check_advisory_baselines.py zizmor target/security/zizmor.json
 
       - name: Run hadolint
         run: |

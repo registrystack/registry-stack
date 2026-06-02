@@ -9,14 +9,27 @@ Security waivers live in `security/waivers.yml` when needed. Each waiver must
 name an owner, rationale, review trigger, and expiration. The default owner is
 `@PublicSchema/maintainers`.
 
+Reviewed advisory ratchets live in `security/advisory-baseline.json`. The
+initial blocking gates are:
+
+- `zizmor` findings with severity `high` or above.
+- Grype image findings with severity `critical` or above.
+
+Every reviewed entry must include a fingerprint, owner, reason, review date,
+and expiration date. New unreviewed findings at or above the threshold fail CI.
+Expired reviewed entries fail CI while the finding is still active. Stale
+reviewed entries are reported so the baseline can shrink after the underlying
+issue is fixed.
+
 The unauthenticated endpoint allowlist lives in
 `security/auth-none-allowlist.yml`. Additions require maintainer review through
 CODEOWNERS.
 
 GitHub Actions in this repo intentionally use major-version pins for
 well-known maintained actions unless a workflow documents a stronger SHA pin.
-`zizmor` and code review enforce least-privilege permissions and unsafe event
-handling, not a blanket SHA-only policy.
+`zizmor`, the reviewed advisory baseline, and code review enforce
+least-privilege permissions and unsafe event handling, not a blanket SHA-only
+policy.
 
 ## OpenAPI comparison strategy
 
@@ -41,8 +54,8 @@ just security
 ```
 
 This validates exposure contracts, Dockerfile secret-copy guardrails, workflow
-syntax/security tooling when installed, gitleaks current-tree scanning, and Semgrep
-rules when installed.
+syntax/security tooling when installed, the reviewed `zizmor` high-severity
+ratchet, gitleaks current-tree scanning, and Semgrep rules when installed.
 
 ## Implementation review log
 
@@ -59,16 +72,13 @@ rules when installed.
   artifact.
 - Enforcement evidence must reference concrete test functions using
   `path::test_name`; file-only references are rejected.
-- `zizmor` currently runs as advisory evidence with `--no-exit-codes` because
-  the existing workflow baseline reports findings such as artifact permission
-  hardening and action pinning policy. New workflow syntax is still blocked by
-  `actionlint`, and the advisory report gives reviewers a ratchet list for
-  follow-up hardening.
+- `zizmor` still runs with `--no-exit-codes` so the tool can emit a complete
+  JSON report, but `scripts/check_advisory_baselines.py` blocks unreviewed
+  high-severity findings and expired reviewed entries.
 - Container image SBOM generation is enforced in CI. Grype image vulnerability
-  reports currently run as advisory evidence and are uploaded with the image
-  security artifact; the blocking threshold should be ratcheted on after the
-  first reviewed image vulnerability baseline and any required waivers are in
-  place.
+  reports are emitted as JSON and `scripts/check_advisory_baselines.py` blocks
+  unreviewed critical image findings. High-severity image findings remain the
+  next ratchet target once critical baselines are stable.
 - Hadolint ignores `DL3022` because the Dockerfile intentionally copies from
   named external build contexts. It also ignores `DL3008` for the apt package
   installation style already used in the relay container.

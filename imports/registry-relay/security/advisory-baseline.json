@@ -1,0 +1,491 @@
+{
+  "version": 1,
+  "service": "registry-relay",
+  "policies": [
+    {
+      "tool": "zizmor",
+      "minimum_severity": "high",
+      "action": "block_unreviewed"
+    },
+    {
+      "tool": "grype",
+      "minimum_severity": "critical",
+      "action": "block_unreviewed"
+    }
+  ],
+  "reviewed_findings": [
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:build-and-test/k:steps/i:0/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:build-and-test/k:steps/i:1/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:build-and-test/k:steps/i:3/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:build-and-test/k:steps/i:5/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:build-and-test/k:steps/i:7/k:uses|dtolnay/rust-toolchain@stable",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:build-and-test/k:steps/i:8/k:uses|Swatinem/rust-cache@v2",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:build-and-test/k:steps/i:9/k:uses|astral-sh/setup-uv@v7",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:deny/k:steps/i:0/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:deny/k:steps/i:1/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:deny/k:steps/i:3/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:deny/k:steps/i:5/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:deny/k:steps/i:7/k:uses|taiki-e/install-action@v2",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:postgres-integration/k:steps/i:0/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:postgres-integration/k:steps/i:1/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:postgres-integration/k:steps/i:3/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:postgres-integration/k:steps/i:5/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:postgres-integration/k:steps/i:7/k:uses|dtolnay/rust-toolchain@stable",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:postgres-integration/k:steps/i:8/k:uses|Swatinem/rust-cache@v2",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:docker-build/k:steps/i:0/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:docker-build/k:steps/i:1/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:docker-build/k:steps/i:2/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:docker-build/k:steps/i:3/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:docker-build/k:steps/i:4/k:uses|docker/setup-buildx-action@v4",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/ci.yml|k:jobs/k:docker-build/k:steps/i:5/k:uses|docker/build-push-action@v7",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/dcat-ap-external-validation.yml|k:jobs/k:semic-dcat-ap/k:steps/i:0/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/dcat-ap-external-validation.yml|k:jobs/k:semic-dcat-ap/k:steps/i:1/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/dcat-ap-external-validation.yml|k:jobs/k:semic-dcat-ap/k:steps/i:3/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/dcat-ap-external-validation.yml|k:jobs/k:semic-dcat-ap/k:steps/i:5/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/dcat-ap-external-validation.yml|k:jobs/k:semic-dcat-ap/k:steps/i:7/k:uses|dtolnay/rust-toolchain@stable",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/dcat-ap-external-validation.yml|k:jobs/k:semic-dcat-ap/k:steps/i:8/k:uses|Swatinem/rust-cache@v2",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/dcat-ap-external-validation.yml|k:jobs/k:semic-dcat-ap/k:steps/i:9/k:uses|astral-sh/setup-uv@v7",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/dcat-ap-external-validation.yml|k:jobs/k:semic-dcat-ap/k:steps/i:15/k:uses|actions/upload-artifact@v7",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|cache-poisoning|.github/workflows/dcat-ap-external-validation.yml|k:jobs/k:semic-dcat-ap/k:steps/i:8/k:uses|enables caching by default",
+      "rule_id": "cache-poisoning",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing manual/release artifact workflow reviewed for current ratchet; hardening follow-up should remove or shorten this waiver.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|cache-poisoning|.github/workflows/dcat-ap-external-validation.yml|k:jobs/k:semic-dcat-ap/k:steps/i:9/k:uses|enables caching by default",
+      "rule_id": "cache-poisoning",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing manual/release artifact workflow reviewed for current ratchet; hardening follow-up should remove or shorten this waiver.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/perf-smoke.yml|k:jobs/k:perf-smoke/k:steps/i:0/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/perf-smoke.yml|k:jobs/k:perf-smoke/k:steps/i:1/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/perf-smoke.yml|k:jobs/k:perf-smoke/k:steps/i:3/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/perf-smoke.yml|k:jobs/k:perf-smoke/k:steps/i:5/k:uses|actions/checkout@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/perf-smoke.yml|k:jobs/k:perf-smoke/k:steps/i:7/k:uses|dtolnay/rust-toolchain@stable",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/perf-smoke.yml|k:jobs/k:perf-smoke/k:steps/i:8/k:uses|Swatinem/rust-cache@v2",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/perf-smoke.yml|k:jobs/k:perf-smoke/k:steps/i:9/k:uses|astral-sh/setup-uv@v7",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|unpinned-uses|.github/workflows/perf-smoke.yml|k:jobs/k:perf-smoke/k:steps/i:10/k:uses|actions/setup-node@v6",
+      "rule_id": "unpinned-uses",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing Relay workflow advisory accepted temporarily while action SHA pinning and workflow hardening are ratcheted down.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    },
+    {
+      "tool": "grype",
+      "fingerprint": "grype|registry-relay-image|CVE-2023-45853|zlib1g|1:1.2.13.dfsg-1|deb",
+      "rule_id": "CVE-2023-45853",
+      "severity": "critical",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Existing zlib1g finding in the Relay image. Keep as a reviewed ratchet entry until the base image can move to a fixed distro package.",
+      "reviewed_at": "2026-06-02",
+      "expires_at": "2026-09-01"
+    }
+  ]
+}

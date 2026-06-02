@@ -14,6 +14,18 @@ run_optional() {
   fi
 }
 
+run_zizmor_ratchet() {
+  if command -v zizmor >/dev/null 2>&1; then
+    zizmor --format json --no-exit-codes . > target/security/zizmor.json
+  elif command -v uvx >/dev/null 2>&1; then
+    uvx zizmor --format json --no-exit-codes . > target/security/zizmor.json
+  else
+    echo "security check advisory: zizmor is not installed; skipped" >&2
+    return
+  fi
+  python3 scripts/check_advisory_baselines.py zizmor target/security/zizmor.json
+}
+
 python3 scripts/check_security_assurance.py
 
 if command -v gitleaks >/dev/null 2>&1; then
@@ -23,13 +35,7 @@ else
 fi
 
 run_optional actionlint actionlint
-if command -v zizmor >/dev/null 2>&1; then
-  zizmor --no-exit-codes .
-elif command -v uvx >/dev/null 2>&1; then
-  uvx zizmor --no-exit-codes .
-else
-  echo "security check advisory: zizmor is not installed; skipped" >&2
-fi
+run_zizmor_ratchet
 
 if command -v hadolint >/dev/null 2>&1; then
   hadolint --ignore DL3022 --ignore DL3008 Dockerfile Dockerfile.demo
@@ -54,6 +60,7 @@ cat > target/security/security-assurance-report.md <<'EOF'
 - OpenAPI: curated baseline strategy checked by `docs/security-assurance.md`.
 - Secret scan: gitleaks ran when available.
 - GitHub Actions: actionlint and zizmor ran when available.
+- Advisory ratchets: reviewed baseline gates ran for zizmor high findings.
 - Container static checks: Dockerfile secret-copy checks ran; hadolint ran when available.
 - Semgrep: repo-local policy ran when available.
 - Skipped checks: see command output for unavailable local tools.
