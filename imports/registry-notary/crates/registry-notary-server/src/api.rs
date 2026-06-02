@@ -59,6 +59,8 @@ const DATA_PURPOSE_HEADER: &str = "data-purpose";
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 pub(crate) const ADMIN_SCOPE: &str = "registry_notary:admin";
 const OID4VCI_CREDENTIAL_PATH: &str = "/oid4vci/credential";
+// SD-JWT VC Type Metadata well-known prefix inserted between host and vct path.
+const WELL_KNOWN_VCT_PREFIX: &str = "/.well-known/vct";
 
 pub use crate::federation::federation_router;
 
@@ -78,6 +80,10 @@ where
             get(oid4vci_issuer_metadata),
         )
         .route("/credentials/{*vct_path}", get(oid4vci_type_metadata))
+        .route(
+            "/.well-known/vct/{*vct_path}",
+            get(oid4vci_well_known_type_metadata),
+        )
         .route("/oid4vci/credential-offer", get(oid4vci_credential_offer))
         .route("/oid4vci/nonce", post(oid4vci_nonce))
         .route("/oid4vci/credential", post(oid4vci_credential))
@@ -688,10 +694,38 @@ async fn oid4vci_type_metadata(
     let Some(Extension(state)) = state else {
         return oid4vci_error_response(Oid4vciWireError::ServerError);
     };
+    oid4vci_type_metadata_response(&state, &headers, &uri, uri.path())
+}
+
+async fn oid4vci_well_known_type_metadata(
+    state: Option<Extension<Arc<RegistryNotaryApiState>>>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response {
+    let Some(Extension(state)) = state else {
+        return oid4vci_error_response(Oid4vciWireError::ServerError);
+    };
+    // Consumers dereference an HTTPS vct by inserting /.well-known/vct between the
+    // host and the path. Strip that prefix so the candidate vct reconstructs to the
+    // configured identifier (https://{host}/{vct_path}), not the well-known URL.
+    let Some(vct_path) = uri.path().strip_prefix(WELL_KNOWN_VCT_PREFIX) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    oid4vci_type_metadata_response(&state, &headers, &uri, vct_path)
+}
+
+fn oid4vci_type_metadata_response(
+    state: &RegistryNotaryApiState,
+    headers: &HeaderMap,
+    uri: &Uri,
+    request_path: &str,
+) -> Response {
     if !state.oid4vci.enabled {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let Some(request_vct) = oid4vci_requested_absolute_url(&state.oid4vci, &headers, &uri) else {
+    let Some(request_vct) =
+        oid4vci_requested_absolute_url_for_path(&state.oid4vci, headers, uri, request_path)
+    else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let Some(configuration) = state
@@ -2140,10 +2174,11 @@ fn oid4vci_type_metadata_document(configuration: &Oid4vciCredentialConfiguration
     })
 }
 
-fn oid4vci_requested_absolute_url(
+fn oid4vci_requested_absolute_url_for_path(
     config: &Oid4vciConfig,
     headers: &HeaderMap,
     uri: &Uri,
+    request_path: &str,
 ) -> Option<String> {
     let (issuer_scheme, issuer_authority, issuer_path) =
         absolute_url_parts(&config.credential_issuer)?;
@@ -2160,7 +2195,7 @@ fn oid4vci_requested_absolute_url(
         })
         .or_else(|| uri.authority().map(|authority| authority.as_str()))
         .unwrap_or(issuer_authority);
-    let external_path = oid4vci_external_path(issuer_path, uri.path());
+    let external_path = oid4vci_external_path(issuer_path, request_path);
     Some(format!("{scheme}://{authority}{external_path}"))
 }
 

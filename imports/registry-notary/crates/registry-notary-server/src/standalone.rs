@@ -281,6 +281,7 @@ fn is_self_attestation_wallet_cors_path(path: &str) -> bool {
         || path.starts_with("/v1/claims/")
         || path == "/credentials/{*vct_path}"
         || path.starts_with("/credentials/")
+        || path.starts_with("/.well-known/vct/")
         || path.starts_with("/v1/evaluations/")
         || path.starts_with("/v1/credentials/")
 }
@@ -2112,6 +2113,7 @@ fn is_public_probe_path(path: &str) -> bool {
             | "/federation/v1/evaluations"
             | "/credentials/{*vct_path}"
     ) || path.starts_with("/credentials/")
+        || path.starts_with("/.well-known/vct/")
         || path.starts_with("/v1/credentials/")
 }
 

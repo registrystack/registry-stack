@@ -155,6 +155,35 @@ fn build_openapi_document() -> OpenApi {
                     }
                 }
             },
+            "/.well-known/vct/{vct_path}": {
+                "get": {
+                    "summary": "Fetch SD-JWT VC Type Metadata at the well-known location",
+                    "operationId": "getWellKnownSdJwtVcTypeMetadata",
+                    "description": "Returns public SD-JWT VC Type Metadata at the SD-JWT VC well-known location. Consumers dereference an HTTPS vct by inserting /.well-known/vct between the host and the path; the server strips that prefix and matches the reconstructed vct (https://{host}/{vct_path}) against a configured OID4VCI credential configuration. The vct_path parameter represents the full path suffix and may contain nested path segments.",
+                    "x-registry-notary-catch-all": true,
+                    "security": [],
+                    "parameters": [
+                        {
+                            "name": "vct_path",
+                            "in": "path",
+                            "required": true,
+                            "schema": { "type": "string" },
+                            "description": "Credential type path suffix from the configured vct, including nested path segments when configured."
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "SD-JWT VC Type Metadata",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/SdJwtVcTypeMetadata" }
+                                }
+                            }
+                        },
+                        "404": { "description": "OpenID4VCI issuer is disabled or no configured vct matches the reconstructed URL" }
+                    }
+                }
+            },
             "/oid4vci/credential-offer": {
                 "get": {
                     "summary": "Create an OpenID4VCI credential offer",
@@ -857,6 +886,14 @@ fn add_response_examples(document: &mut Value) {
     set_json_response(
         document,
         "/credentials/{vct_path}",
+        "get",
+        "200",
+        "SD-JWT VC Type Metadata",
+        sd_jwt_vc_type_metadata_example(),
+    );
+    set_json_response(
+        document,
+        "/.well-known/vct/{vct_path}",
         "get",
         "200",
         "SD-JWT VC Type Metadata",
@@ -2526,6 +2563,7 @@ mod tests {
             "/.well-known/evidence/jwks.json",
             "/.well-known/openid-credential-issuer",
             "/credentials/{vct_path}",
+            "/.well-known/vct/{vct_path}",
             "/oid4vci/credential-offer",
             "/oid4vci/nonce",
             "/oid4vci/credential",
@@ -2569,6 +2607,10 @@ mod tests {
             json!([])
         );
         assert_eq!(
+            doc["paths"]["/.well-known/vct/{vct_path}"]["get"]["security"],
+            json!([])
+        );
+        assert_eq!(
             doc["paths"]["/oid4vci/credential-offer"]["get"]["security"],
             json!([])
         );
@@ -2607,6 +2649,7 @@ mod tests {
             ("/.well-known/evidence/jwks.json", "get", "200"),
             ("/.well-known/openid-credential-issuer", "get", "200"),
             ("/credentials/{vct_path}", "get", "200"),
+            ("/.well-known/vct/{vct_path}", "get", "200"),
             ("/oid4vci/credential-offer", "get", "200"),
             ("/oid4vci/nonce", "post", "200"),
             ("/oid4vci/credential", "post", "200"),
@@ -2831,6 +2874,27 @@ mod tests {
         );
         assert_eq!(
             doc["paths"]["/credentials/{vct_path}"]["get"]["x-registry-notary-catch-all"],
+            json!(true)
+        );
+        assert_eq!(
+            doc["paths"]["/.well-known/vct/{vct_path}"]["get"]["responses"]["200"]["content"]
+                ["application/json"]["schema"]["$ref"],
+            json!("#/components/schemas/SdJwtVcTypeMetadata")
+        );
+        assert_eq!(
+            doc["paths"]["/.well-known/vct/{vct_path}"]["get"]["responses"]["200"]["content"]
+                ["application/json"]["example"]["claims"][0]["path"],
+            json!(["person-is-alive"])
+        );
+        assert!(
+            doc["paths"]["/.well-known/vct/{vct_path}"]["get"]["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("/.well-known/vct")
+                    && description.contains("nested path segments")),
+            "well-known Type Metadata route must document the well-known prefix and catch-all suffix"
+        );
+        assert_eq!(
+            doc["paths"]["/.well-known/vct/{vct_path}"]["get"]["x-registry-notary-catch-all"],
             json!(true)
         );
     }

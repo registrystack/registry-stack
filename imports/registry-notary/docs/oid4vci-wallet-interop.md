@@ -69,17 +69,34 @@ configurations. Wallets should verify that metadata advertises:
 - `cryptographic_binding_methods_supported: [did:jwk]`.
 - `vct` equal to a public HTTPS URL served by the Notary.
 
-For SD-JWT VC wallet interoperability, the Notary serves public Type Metadata at
-each configured `vct` URL. A wallet can `GET` the `vct` without authentication.
-The response is `application/json`, returns `404` when OID4VCI is disabled or no
-configured `vct` matches, and includes:
+For SD-JWT VC wallet interoperability, the Notary serves public Type Metadata for
+each configured `vct`. Per the SD-JWT VC Type Metadata convention, a consumer
+dereferences an HTTPS `vct` by inserting `/.well-known/vct` between the host and
+the path: for `vct = https://{host}/credentials/citizen-civil-status/v1` it
+fetches `https://{host}/.well-known/vct/credentials/citizen-civil-status/v1`.
+walt.id (wallet-api `0.20.2`) does exactly this during offer setup and aborts the
+flow if it does not get a `200`. The Notary serves the metadata at that
+well-known location, `GET /.well-known/vct/{vct_path}`, and a wallet can fetch it
+without authentication. The route uses a trailing-wildcard capture, so nested
+configured paths such as `/.well-known/vct/credentials/dhis2/health-status/v1`
+resolve. The bare `GET /credentials/{vct_path}` route is also served for
+spec-compliant consumers that dereference the `vct` directly, but it is not the
+path walt fetches. The response is `application/json`, returns `404` when OID4VCI
+is disabled or no configured `vct` matches, and includes:
 
-- `vct`: the exact absolute URL requested by the wallet.
+- `vct`: the configured `vct` identifier (`https://{host}/{vct_path}`), not the
+  requested well-known URL.
 - `name` and `display[].locale`/`display[].name`.
 - `claims[].path` using the configured OID4VCI `claim_id`.
 - `claims[].display[].locale`/`claims[].display[].label`.
 - `claims[].sd: "always"`, because Notary emits evaluated claim results as
   selectively disclosable SD-JWT disclosures.
+
+Browser-based wallets from configured self-attestation wallet origins receive
+CORS headers on the `/.well-known/vct/...` metadata surface (the response echoes
+the request `Origin` in `access-control-allow-origin`, and `OPTIONS` preflights
+for an allowed method return `204` with `access-control-allow-origin` and
+`access-control-allow-methods`).
 
 Credential offers are intentionally lightweight. They tell the wallet which
 credential configuration to request and which issuer metadata to use. If more
