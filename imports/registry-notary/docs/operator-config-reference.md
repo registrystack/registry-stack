@@ -396,6 +396,16 @@ oid4vci:
 
 Public URLs must use HTTPS except for loopback development. Endpoint URLs must
 live under `credential_issuer`, include a path, and have no query string.
+Each `vct` must also be a public HTTPS URL and must match the referenced
+credential profile `vct`. When OID4VCI is enabled, Registry Notary serves public
+SD-JWT VC Type Metadata at that exact URL if its path is under `/credentials/`,
+or under `{credential_issuer path}/credentials/` when `credential_issuer`
+includes a path prefix. Deployments that publish Registry Notary under an issuer
+path prefix must strip that prefix before forwarding to the Notary process while
+preserving the external host and scheme with forwarded headers. The Type
+Metadata route supports nested paths such as `/credentials/dhis2/health-status/v1`,
+returns `404` when no configured `vct` matches, and does not require
+authentication.
 
 `authorization.require_pkce_method` pins the PKCE challenge method wallets must
 use. `proof.max_age_seconds` bounds how fresh a holder proof JWT must be, and

@@ -680,7 +680,7 @@ evidence:
       format: application/dc+sd-jwt
       issuer: did:web:issuer.example
       signing_key: issuer-key
-      vct: https://issuer.example/credentials/civil-status
+      vct: http://127.0.0.1:4325/credentials/civil-status
       validity_seconds: 600
       holder_binding:
         mode: did
@@ -789,6 +789,12 @@ fn self_attestation_oid4vci_config(
     jwks_uri: &str,
 ) -> StandaloneRegistryNotaryConfig {
     let mut config = self_attestation_oidc_config(base_url, audit_path, issuer, jwks_uri);
+    config
+        .evidence
+        .credential_profiles
+        .get_mut("civil_status_sd_jwt")
+        .expect("civil status credential profile exists")
+        .vct = "http://127.0.0.1:4325/credentials/civil-status".to_string();
     config.oid4vci = serde_norway::from_str::<Oid4vciConfig>(
         r#"
 enabled: true
@@ -814,7 +820,7 @@ credential_configurations:
     credential_profile: civil_status_sd_jwt
     format: dc+sd-jwt
     scope: person-is-alive
-    vct: https://issuer.example/credentials/civil-status
+    vct: http://127.0.0.1:4325/credentials/civil-status
     display_name: Person is alive
 "#,
     )
@@ -2022,6 +2028,213 @@ async fn oid4vci_metadata_offer_and_nonce_are_public() {
 }
 
 #[tokio::test]
+async fn oid4vci_type_metadata_is_public_and_matches_configured_vct() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(self_attestation_oid4vci_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let response = server
+        .get("/credentials/civil-status")
+        .add_header("host", "internal-notary:8080")
+        .add_header("x-forwarded-host", "127.0.0.1:4325")
+        .add_header("x-forwarded-proto", "http")
+        .await;
+    response.assert_status_ok();
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json")
+    );
+    let body: Value = response.json();
+    assert_eq!(
+        body["vct"],
+        json!("http://127.0.0.1:4325/credentials/civil-status")
+    );
+    assert_eq!(body["name"], json!("Person is alive"));
+    assert_eq!(body["display"][0]["locale"], json!("en-US"));
+    assert_eq!(body["display"][0]["name"], json!("Person is alive"));
+    assert_eq!(body["claims"][0]["path"], json!(["person-is-alive"]));
+    assert_eq!(body["claims"][0]["display"][0]["locale"], json!("en-US"));
+    assert_eq!(
+        body["claims"][0]["display"][0]["label"],
+        json!("Person is alive")
+    );
+    assert_eq!(body["claims"][0]["sd"], json!("always"));
+
+    let query_response = server
+        .get("/credentials/civil-status?cache_bust=1")
+        .add_header("host", "internal-notary:8080")
+        .add_header("x-forwarded-host", "127.0.0.1:4325")
+        .add_header("x-forwarded-proto", "http")
+        .await;
+    query_response.assert_status_ok();
+    let query_body: Value = query_response.json();
+    assert_eq!(
+        query_body["vct"],
+        json!("http://127.0.0.1:4325/credentials/civil-status")
+    );
+
+    let head = server
+        .method(Method::HEAD, "/credentials/civil-status")
+        .add_header("host", "internal-notary:8080")
+        .add_header("x-forwarded-host", "127.0.0.1:4325")
+        .add_header("x-forwarded-proto", "http")
+        .await;
+    head.assert_status_ok();
+    assert_eq!(
+        head.headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json")
+    );
+
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn oid4vci_type_metadata_supports_nested_paths_and_public_404s() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_oid4vci_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    );
+    let nested_vct = "http://127.0.0.1:4325/credentials/dhis2/health-status/v1";
+    config
+        .evidence
+        .credential_profiles
+        .get_mut("civil_status_sd_jwt")
+        .expect("credential profile exists")
+        .vct = nested_vct.to_string();
+    config
+        .oid4vci
+        .credential_configurations
+        .get_mut("person_is_alive_sd_jwt")
+        .expect("credential configuration exists")
+        .vct = nested_vct.to_string();
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let nested = server
+        .get("/credentials/dhis2/health-status/v1")
+        .add_header("host", "127.0.0.1:4325")
+        .add_header("x-forwarded-proto", "http")
+        .await;
+    nested.assert_status_ok();
+    let body: Value = nested.json();
+    assert_eq!(body["vct"], json!(nested_vct));
+
+    let unknown = server
+        .get("/credentials/dhis2/unknown/v1")
+        .add_header("host", "127.0.0.1:4325")
+        .add_header("x-forwarded-proto", "http")
+        .await;
+    unknown.assert_status(StatusCode::NOT_FOUND);
+
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn oid4vci_type_metadata_supports_path_prefixed_issuer_behind_stripping_proxy() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_oid4vci_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    );
+    let prefixed_vct = "http://127.0.0.1:4325/notary/credentials/civil-status";
+    config.oid4vci.credential_issuer = "http://127.0.0.1:4325/notary".to_string();
+    config.oid4vci.credential_endpoint =
+        "http://127.0.0.1:4325/notary/oid4vci/credential".to_string();
+    config.oid4vci.offer_endpoint =
+        "http://127.0.0.1:4325/notary/oid4vci/credential-offer".to_string();
+    config.oid4vci.nonce_endpoint = Some("http://127.0.0.1:4325/notary/oid4vci/nonce".to_string());
+    config
+        .evidence
+        .credential_profiles
+        .get_mut("civil_status_sd_jwt")
+        .expect("credential profile exists")
+        .vct = prefixed_vct.to_string();
+    config
+        .oid4vci
+        .credential_configurations
+        .get_mut("person_is_alive_sd_jwt")
+        .expect("credential configuration exists")
+        .vct = prefixed_vct.to_string();
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let response = server
+        .get("/credentials/civil-status")
+        .add_header("host", "internal-notary:8080")
+        .add_header("x-forwarded-host", "127.0.0.1:4325")
+        .add_header("x-forwarded-proto", "http")
+        .await;
+    response.assert_status_ok();
+    let body: Value = response.json();
+    assert_eq!(body["vct"], json!(prefixed_vct));
+
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn oid4vci_type_metadata_is_not_served_when_oid4vci_is_disabled() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_oid4vci_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    );
+    config.oid4vci.enabled = false;
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    server
+        .get("/credentials/civil-status")
+        .add_header("host", "127.0.0.1:4325")
+        .add_header("x-forwarded-proto", "http")
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    idp.stop().await;
+}
+
+#[tokio::test]
 async fn public_probe_routes_remain_public_except_metrics() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
@@ -2067,6 +2280,14 @@ async fn public_probe_routes_remain_public_except_metrics() {
 
     server
         .get("/metrics")
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    server
+        .get("/credentials")
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    server
+        .post("/v1/credentials")
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
 
@@ -3150,7 +3371,7 @@ async fn self_attestation_cors_uses_wallet_origins_on_browser_paths() {
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oidc_config(
+    let mut config = self_attestation_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -3167,6 +3388,21 @@ async fn self_attestation_cors_uses_wallet_origins_on_browser_paths() {
     wallet.assert_status(StatusCode::UNAUTHORIZED);
     assert_eq!(
         wallet
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|value| value.to_str().ok()),
+        Some("https://wallet.example.gov")
+    );
+
+    let type_metadata = server
+        .get("/credentials/civil-status")
+        .add_header("host", "127.0.0.1:4325")
+        .add_header("x-forwarded-proto", "http")
+        .add_header("origin", "https://wallet.example.gov")
+        .await;
+    type_metadata.assert_status_ok();
+    assert_eq!(
+        type_metadata
             .headers()
             .get("access-control-allow-origin")
             .and_then(|value| value.to_str().ok()),
@@ -3203,7 +3439,7 @@ async fn self_attestation_preflight_uses_wallet_origin_allow_list() {
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oidc_config(
+    let mut config = self_attestation_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -3236,6 +3472,28 @@ async fn self_attestation_preflight_uses_wallet_origin_allow_list() {
             .get("access-control-allow-headers")
             .and_then(|value| value.to_str().ok()),
         Some("authorization, content-type")
+    );
+
+    let type_metadata = server
+        .method(Method::OPTIONS, "/credentials/civil-status")
+        .add_header("origin", "https://wallet.example.gov")
+        .add_header("access-control-request-method", "GET")
+        .await;
+    type_metadata.assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        type_metadata
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|value| value.to_str().ok()),
+        Some("https://wallet.example.gov")
+    );
+    assert!(
+        type_metadata
+            .headers()
+            .get("access-control-allow-methods")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|methods| methods.split(',').any(|method| method.trim() == "GET")),
+        "preflight response should allow GET"
     );
 
     let ops = server

@@ -112,6 +112,18 @@ the same constants listed in this profile:
 The metadata is Registry Notary capability metadata. It is not a claim of full
 OpenID4VCI issuer conformance.
 
+When OID4VCI is enabled, Registry Notary also serves SD-JWT VC Type Metadata at
+each configured HTTPS `vct` URL whose path is under `/credentials/`, or under
+`{credential_issuer path}/credentials/` when the issuer has a path prefix. The
+route is public and expects path-prefix deployments to strip the issuer prefix
+before forwarding to Notary, while preserving the external host and scheme. It
+returns `404` when OID4VCI is disabled or the requested absolute URL does not
+exactly match a configured credential configuration `vct`. The Type Metadata
+document includes the exact `vct`, display metadata, and one claim metadata
+entry for the OID4VCI configuration's `claim_id`. Current Notary-issued claim
+results are always selectively disclosable, so claim metadata uses
+`sd: "always"`.
+
 ## Explicit Non-Support
 
 The following features are out of scope for the current profile:

@@ -67,6 +67,19 @@ configurations. Wallets should verify that metadata advertises:
 - `format: dc+sd-jwt`.
 - `proof_signing_alg_values_supported: [EdDSA]`.
 - `cryptographic_binding_methods_supported: [did:jwk]`.
+- `vct` equal to a public HTTPS URL served by the Notary.
+
+For SD-JWT VC wallet interoperability, the Notary serves public Type Metadata at
+each configured `vct` URL. A wallet can `GET` the `vct` without authentication.
+The response is `application/json`, returns `404` when OID4VCI is disabled or no
+configured `vct` matches, and includes:
+
+- `vct`: the exact absolute URL requested by the wallet.
+- `name` and `display[].locale`/`display[].name`.
+- `claims[].path` using the configured OID4VCI `claim_id`.
+- `claims[].display[].locale`/`claims[].display[].label`.
+- `claims[].sd: "always"`, because Notary emits evaluated claim results as
+  selectively disclosable SD-JWT disclosures.
 
 Credential offers are intentionally lightweight. They tell the wallet which
 credential configuration to request and which issuer metadata to use. If more

@@ -1065,14 +1065,21 @@ impl Oid4vciConfig {
             .map(String::as_str)
             .collect();
 
+        let mut configured_vcts = HashSet::new();
         for (configuration_id, configuration) in &self.credential_configurations {
             configuration.validate(
                 configuration_id,
+                &self.credential_issuer,
                 evidence,
                 &claim_ids,
                 &allowed_claim_ids,
                 &allowed_profiles,
             )?;
+            if !configured_vcts.insert(configuration.vct.as_str()) {
+                return invalid_oid4vci(format!(
+                    "credential configuration '{configuration_id}' vct must be unique"
+                ));
+            }
         }
         Ok(())
     }
@@ -1194,6 +1201,7 @@ impl Oid4vciCredentialConfigurationConfig {
     fn validate(
         &self,
         configuration_id: &str,
+        credential_issuer: &str,
         evidence: &EvidenceConfig,
         claim_ids: &HashSet<&str>,
         allowed_claim_ids: &HashSet<&str>,
@@ -1284,6 +1292,22 @@ impl Oid4vciCredentialConfigurationConfig {
             ));
         }
         validate_oid4vci_public_url("credential_configurations.vct", &self.vct)?;
+        validate_oid4vci_endpoint_url(
+            "credential_configurations.vct",
+            &self.vct,
+            credential_issuer,
+        )?;
+        let Some((_, _, vct_path)) = split_absolute_url(&self.vct) else {
+            return invalid_oid4vci("credential_configurations.vct must be an absolute URL");
+        };
+        let Some(expected_vct_prefix) = oid4vci_credentials_path_prefix(credential_issuer) else {
+            return invalid_oid4vci("oid4vci.credential_issuer must be an absolute URL");
+        };
+        if !vct_path.starts_with(&expected_vct_prefix) {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' vct path must start with {expected_vct_prefix}"
+            ));
+        }
         validate_oid4vci_non_empty_entries(
             "credential_configurations.proof_signing_alg_values_supported",
             &self.proof_signing_alg_values_supported,
@@ -1344,8 +1368,9 @@ fn validate_oid4vci_endpoint_url(
     credential_issuer: &str,
 ) -> Result<(), EvidenceConfigError> {
     validate_oid4vci_public_url(name, url)?;
-    // SAFETY: validate_oid4vci_public_url accepted the absolute URL shape.
-    let (_, _, path) = split_absolute_url(url).expect("absolute URL was validated above");
+    let Some((_, _, path)) = split_absolute_url(url) else {
+        return invalid_oid4vci(format!("{name} must be an absolute URL"));
+    };
     if path.is_empty() || path == "/" {
         return invalid_oid4vci(format!("{name} must include an endpoint path"));
     }
@@ -1357,6 +1382,16 @@ fn validate_oid4vci_endpoint_url(
         return invalid_oid4vci(format!("{name} must be under oid4vci.credential_issuer"));
     }
     Ok(())
+}
+
+fn oid4vci_credentials_path_prefix(credential_issuer: &str) -> Option<String> {
+    let (_, _, issuer_path) = split_absolute_url(credential_issuer.trim())?;
+    let issuer_path = issuer_path.trim_end_matches('/');
+    if issuer_path.is_empty() {
+        Some("/credentials/".to_string())
+    } else {
+        Some(format!("{issuer_path}/credentials/"))
+    }
 }
 
 fn split_absolute_url(url: &str) -> Option<(&str, &str, &str)> {
@@ -3934,6 +3969,12 @@ self_attestation:
 
     fn valid_oid4vci_config() -> StandaloneRegistryNotaryConfig {
         let mut config = valid_self_attestation_config();
+        config
+            .evidence
+            .credential_profiles
+            .get_mut("civil_status_sd_jwt")
+            .expect("civil status credential profile exists")
+            .vct = "http://127.0.0.1:4325/credentials/civil-status".to_string();
         config.oid4vci = serde_norway::from_str(
             r#"
 enabled: true
@@ -3959,7 +4000,7 @@ credential_configurations:
     credential_profile: civil_status_sd_jwt
     format: dc+sd-jwt
     scope: date-of-birth
-    vct: https://issuer.example/credentials/civil-status
+    vct: http://127.0.0.1:4325/credentials/civil-status
     display_name: Date of birth
     proof_signing_alg_values_supported:
       - EdDSA
@@ -5815,6 +5856,32 @@ allowed_claims: ["", "   "]
     }
 
     #[test]
+    fn oid4vci_accepts_vct_under_path_prefixed_credential_issuer() {
+        let mut config = valid_oid4vci_config();
+        config.oid4vci.credential_issuer = "http://127.0.0.1:4325/notary".to_string();
+        config.oid4vci.credential_endpoint =
+            "http://127.0.0.1:4325/notary/oid4vci/credential".to_string();
+        config.oid4vci.offer_endpoint =
+            "http://127.0.0.1:4325/notary/oid4vci/credential-offer".to_string();
+        config.oid4vci.nonce_endpoint =
+            Some("http://127.0.0.1:4325/notary/oid4vci/nonce".to_string());
+        config
+            .evidence
+            .credential_profiles
+            .get_mut("civil_status_sd_jwt")
+            .unwrap()
+            .vct = "http://127.0.0.1:4325/notary/credentials/civil-status".to_string();
+        config
+            .oid4vci
+            .credential_configurations
+            .get_mut("date_of_birth_sd_jwt")
+            .unwrap()
+            .vct = "http://127.0.0.1:4325/notary/credentials/civil-status".to_string();
+
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
     fn oid4vci_deserializes_absent_block_with_default() {
         let config = valid_self_attestation_config();
         assert_eq!(config.oid4vci, Oid4vciConfig::default());
@@ -5897,6 +5964,74 @@ allowed_claims: ["", "   "]
 
         let reason = expect_oid4vci_error(&config);
         assert!(reason.contains("endpoint path"), "unexpected: {reason}");
+    }
+
+    #[test]
+    fn oid4vci_rejects_vct_outside_credential_issuer() {
+        let mut config = valid_oid4vci_config();
+        config
+            .evidence
+            .credential_profiles
+            .get_mut("civil_status_sd_jwt")
+            .unwrap()
+            .vct = "https://vct.example/credentials/civil-status".to_string();
+        config
+            .oid4vci
+            .credential_configurations
+            .get_mut("date_of_birth_sd_jwt")
+            .unwrap()
+            .vct = "https://vct.example/credentials/civil-status".to_string();
+
+        let reason = expect_oid4vci_error(&config);
+        assert!(
+            reason.contains("credential_configurations.vct")
+                && reason.contains("oid4vci.credential_issuer"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
+    fn oid4vci_rejects_vct_outside_credentials_path() {
+        let mut config = valid_oid4vci_config();
+        config
+            .evidence
+            .credential_profiles
+            .get_mut("civil_status_sd_jwt")
+            .unwrap()
+            .vct = "http://127.0.0.1:4325/not-credentials/civil-status".to_string();
+        config
+            .oid4vci
+            .credential_configurations
+            .get_mut("date_of_birth_sd_jwt")
+            .unwrap()
+            .vct = "http://127.0.0.1:4325/not-credentials/civil-status".to_string();
+
+        let reason = expect_oid4vci_error(&config);
+        assert!(
+            reason.contains("vct path") && reason.contains("/credentials/"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
+    fn oid4vci_rejects_duplicate_credential_configuration_vct() {
+        let mut config = valid_oid4vci_config();
+        let duplicate = config
+            .oid4vci
+            .credential_configurations
+            .get("date_of_birth_sd_jwt")
+            .unwrap()
+            .clone();
+        config
+            .oid4vci
+            .credential_configurations
+            .insert("duplicate_sd_jwt".to_string(), duplicate);
+
+        let reason = expect_oid4vci_error(&config);
+        assert!(
+            reason.contains("vct") && reason.contains("unique"),
+            "unexpected: {reason}"
+        );
     }
 
     #[test]

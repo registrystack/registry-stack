@@ -6,7 +6,7 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use axum::body::{to_bytes, Body, Bytes};
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, Query, State};
-use axum::http::{header, HeaderMap, HeaderValue, Request, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, Request, StatusCode, Uri};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
@@ -77,6 +77,7 @@ where
             "/.well-known/openid-credential-issuer",
             get(oid4vci_issuer_metadata),
         )
+        .route("/credentials/{*vct_path}", get(oid4vci_type_metadata))
         .route("/oid4vci/credential-offer", get(oid4vci_credential_offer))
         .route("/oid4vci/nonce", post(oid4vci_nonce))
         .route("/oid4vci/credential", post(oid4vci_credential))
@@ -677,6 +678,31 @@ async fn oid4vci_credential_offer(
         state.oid4vci.authorization_servers.first().cloned(),
     ))
     .into_response()
+}
+
+async fn oid4vci_type_metadata(
+    state: Option<Extension<Arc<RegistryNotaryApiState>>>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response {
+    let Some(Extension(state)) = state else {
+        return oid4vci_error_response(Oid4vciWireError::ServerError);
+    };
+    if !state.oid4vci.enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(request_vct) = oid4vci_requested_absolute_url(&state.oid4vci, &headers, &uri) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Some(configuration) = state
+        .oid4vci
+        .credential_configurations
+        .values()
+        .find(|configuration| configuration.vct == request_vct)
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    Json(oid4vci_type_metadata_document(configuration)).into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -2087,6 +2113,94 @@ fn oid4vci_configuration_metadata(
         configuration.display_name.clone(),
         configuration.vct.clone(),
     )
+}
+
+fn oid4vci_type_metadata_document(configuration: &Oid4vciCredentialConfigurationConfig) -> Value {
+    json!({
+        "vct": configuration.vct,
+        "name": configuration.display_name,
+        "display": [
+            {
+                "locale": "en-US",
+                "name": configuration.display_name,
+            }
+        ],
+        "claims": [
+            {
+                "path": [configuration.claim_id],
+                "display": [
+                    {
+                        "locale": "en-US",
+                        "label": configuration.display_name,
+                    }
+                ],
+                "sd": "always",
+            }
+        ],
+    })
+}
+
+fn oid4vci_requested_absolute_url(
+    config: &Oid4vciConfig,
+    headers: &HeaderMap,
+    uri: &Uri,
+) -> Option<String> {
+    let (issuer_scheme, issuer_authority, issuer_path) =
+        absolute_url_parts(&config.credential_issuer)?;
+    let scheme = forwarded_header_value(headers, "x-forwarded-proto")
+        .or_else(|| uri.scheme_str())
+        .unwrap_or(issuer_scheme);
+    let authority = forwarded_header_value(headers, "x-forwarded-host")
+        .or_else(|| {
+            headers
+                .get(header::HOST)
+                .and_then(|value| value.to_str().ok())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .or_else(|| uri.authority().map(|authority| authority.as_str()))
+        .unwrap_or(issuer_authority);
+    let external_path = oid4vci_external_path(issuer_path, uri.path());
+    Some(format!("{scheme}://{authority}{external_path}"))
+}
+
+fn absolute_url_parts(url: &str) -> Option<(&str, &str, &str)> {
+    let (scheme, rest) = url.trim().split_once("://")?;
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = rest[..authority_end].trim();
+    if scheme.is_empty() || authority.is_empty() {
+        return None;
+    }
+    let path = if rest[authority_end..].starts_with('/') {
+        rest[authority_end..]
+            .split(['?', '#'])
+            .next()
+            .unwrap_or_default()
+    } else {
+        ""
+    };
+    Some((scheme, authority, path))
+}
+
+fn oid4vci_external_path(issuer_path: &str, path: &str) -> String {
+    let issuer_path = issuer_path.trim_end_matches('/');
+    if issuer_path.is_empty()
+        || path.starts_with(&format!("{issuer_path}/"))
+        || !path.starts_with("/credentials/")
+    {
+        path.to_string()
+    } else {
+        format!("{issuer_path}{path}")
+    }
+}
+
+fn forwarded_header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 fn holder_key_matches_issuer_key(holder_jwk: &PublicJwk, issuer_jwk: &Value) -> bool {

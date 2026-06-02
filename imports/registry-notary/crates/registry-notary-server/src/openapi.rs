@@ -126,6 +126,35 @@ fn build_openapi_document() -> OpenApi {
                     }
                 }
             },
+            "/credentials/{vct_path}": {
+                "get": {
+                    "summary": "Fetch SD-JWT VC Type Metadata",
+                    "operationId": "getSdJwtVcTypeMetadata",
+                    "description": "Returns public SD-JWT VC Type Metadata for a configured OID4VCI credential configuration whose vct exactly matches the requested absolute URL. The vct_path parameter represents the full path suffix under /credentials and may contain nested path segments.",
+                    "x-registry-notary-catch-all": true,
+                    "security": [],
+                    "parameters": [
+                        {
+                            "name": "vct_path",
+                            "in": "path",
+                            "required": true,
+                            "schema": { "type": "string" },
+                            "description": "Credential type path suffix under /credentials, including nested path segments when configured."
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "SD-JWT VC Type Metadata",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/SdJwtVcTypeMetadata" }
+                                }
+                            }
+                        },
+                        "404": { "description": "OpenID4VCI issuer is disabled or no configured vct matches the requested URL" }
+                    }
+                }
+            },
             "/oid4vci/credential-offer": {
                 "get": {
                     "summary": "Create an OpenID4VCI credential offer",
@@ -538,6 +567,7 @@ fn build_openapi_document() -> OpenApi {
                 "CredentialStatusUpdateRequest": credential_status_update_request_schema(),
                 "CredentialIssuerMetadata": credential_issuer_metadata_schema(),
                 "CredentialConfigurationMetadata": credential_configuration_metadata_schema(),
+                "SdJwtVcTypeMetadata": sd_jwt_vc_type_metadata_schema(),
                 "CredentialOffer": credential_offer_schema(),
                 "NonceRequest": nonce_request_schema(),
                 "NonceResponse": nonce_response_schema(),
@@ -823,6 +853,14 @@ fn add_response_examples(document: &mut Value) {
         "500",
         "OpenID4VCI issuer failed",
         oid4vci_error_example("server_error", "credential issuer failed"),
+    );
+    set_json_response(
+        document,
+        "/credentials/{vct_path}",
+        "get",
+        "200",
+        "SD-JWT VC Type Metadata",
+        sd_jwt_vc_type_metadata_example(),
     );
     set_json_response(
         document,
@@ -1898,6 +1936,61 @@ fn credential_configuration_metadata_schema() -> Value {
     })
 }
 
+fn sd_jwt_vc_type_metadata_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["vct", "name", "display", "claims"],
+        "properties": {
+            "vct": { "type": "string", "format": "uri" },
+            "name": { "type": "string" },
+            "description": { "type": "string" },
+            "display": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["locale", "name"],
+                    "properties": {
+                        "locale": { "type": "string" },
+                        "name": { "type": "string" }
+                    },
+                    "additionalProperties": true
+                }
+            },
+            "claims": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["path", "display", "sd"],
+                    "properties": {
+                        "path": {
+                            "type": "array",
+                            "items": { "type": "string" }
+                        },
+                        "display": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["locale", "label"],
+                                "properties": {
+                                    "locale": { "type": "string" },
+                                    "label": { "type": "string" }
+                                },
+                                "additionalProperties": true
+                            }
+                        },
+                        "sd": {
+                            "type": "string",
+                            "enum": ["always"]
+                        }
+                    },
+                    "additionalProperties": true
+                }
+            }
+        },
+        "additionalProperties": true
+    })
+}
+
 fn nonce_request_schema() -> Value {
     json!({
         "type": "object",
@@ -2143,6 +2236,31 @@ fn oid4vci_issuer_metadata_example() -> Value {
                 "vct": "https://issuer.example.gov/credentials/person-is-alive"
             }
         }
+    })
+}
+
+fn sd_jwt_vc_type_metadata_example() -> Value {
+    json!({
+        "vct": "https://issuer.example.gov/credentials/person-is-alive",
+        "name": "Person is alive",
+        "display": [
+            {
+                "locale": "en-US",
+                "name": "Person is alive"
+            }
+        ],
+        "claims": [
+            {
+                "path": ["person-is-alive"],
+                "display": [
+                    {
+                        "locale": "en-US",
+                        "label": "Person is alive"
+                    }
+                ],
+                "sd": "always"
+            }
+        ]
     })
 }
 
@@ -2407,6 +2525,7 @@ mod tests {
             "/.well-known/evidence-service",
             "/.well-known/evidence/jwks.json",
             "/.well-known/openid-credential-issuer",
+            "/credentials/{vct_path}",
             "/oid4vci/credential-offer",
             "/oid4vci/nonce",
             "/oid4vci/credential",
@@ -2443,6 +2562,10 @@ mod tests {
         assert_eq!(doc["paths"]["/ready"]["get"]["security"], json!([]));
         assert_eq!(
             doc["paths"]["/.well-known/openid-credential-issuer"]["get"]["security"],
+            json!([])
+        );
+        assert_eq!(
+            doc["paths"]["/credentials/{vct_path}"]["get"]["security"],
             json!([])
         );
         assert_eq!(
@@ -2483,6 +2606,7 @@ mod tests {
             ("/.well-known/evidence-service", "get", "200"),
             ("/.well-known/evidence/jwks.json", "get", "200"),
             ("/.well-known/openid-credential-issuer", "get", "200"),
+            ("/credentials/{vct_path}", "get", "200"),
             ("/oid4vci/credential-offer", "get", "200"),
             ("/oid4vci/nonce", "post", "200"),
             ("/oid4vci/credential", "post", "200"),
@@ -2683,6 +2807,31 @@ mod tests {
         assert_eq!(
             doc["paths"]["/oid4vci/credential"]["post"]["description"],
             json!("Issues a dc+sd-jwt credential for an authenticated self-attestation principal. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.")
+        );
+        assert_eq!(
+            doc["components"]["schemas"]["SdJwtVcTypeMetadata"]["properties"]["claims"]["items"]
+                ["properties"]["sd"]["enum"],
+            json!(["always"])
+        );
+        assert_eq!(
+            doc["paths"]["/credentials/{vct_path}"]["get"]["responses"]["200"]["content"]
+                ["application/json"]["schema"]["$ref"],
+            json!("#/components/schemas/SdJwtVcTypeMetadata")
+        );
+        assert_eq!(
+            doc["paths"]["/credentials/{vct_path}"]["get"]["responses"]["200"]["content"]
+                ["application/json"]["example"]["claims"][0]["path"],
+            json!(["person-is-alive"])
+        );
+        assert!(
+            doc["paths"]["/credentials/{vct_path}"]["get"]["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("nested path segments")),
+            "Type Metadata route must document that vct_path is a catch-all suffix"
+        );
+        assert_eq!(
+            doc["paths"]["/credentials/{vct_path}"]["get"]["x-registry-notary-catch-all"],
+            json!(true)
         );
     }
 

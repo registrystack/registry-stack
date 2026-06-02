@@ -35,6 +35,7 @@ that route.
 | `GET /v1/credentials/{id}/status` | `credential_status` | `credential_status` | `credentialStatus` |
 | `POST /admin/v1/credentials/{id}/status` | `update_credential_status` | not exposed | not exposed |
 | `GET /.well-known/openid-credential-issuer` | `oid4vci_issuer_metadata` | `oid4vci_issuer_metadata` | `oid4vciIssuerMetadata` |
+| `GET /credentials/{vct_path}` | not exposed | not exposed | not exposed |
 | `GET /oid4vci/credential-offer` | `oid4vci_credential_offer` | `oid4vci_credential_offer` | `oid4vciCredentialOffer` |
 | `POST /oid4vci/nonce` | `oid4vci_nonce` | `oid4vci_nonce` | `oid4vciNonce` |
 | `POST /oid4vci/credential` | `oid4vci_credential` | `oid4vci_credential` | `oid4vciCredential` |

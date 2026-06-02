@@ -5,7 +5,8 @@
 - Added citizen self-attestation flows, including bearer-token subject binding,
   rate limiting, denial audit metadata, and SD-JWT VC issuance.
 - Added OpenID4VCI issuer primitives and HTTP routes for credential issuer
-  metadata, credential offers, nonce creation, and credential issuance.
+  metadata, SD-JWT VC Type Metadata at configured `vct` URLs, credential offers,
+  nonce creation, and credential issuance.
 - Added the OpenFn sidecar source for isolated worker execution.
 - Added named SD-JWT VC signing keys under `evidence.signing_keys`, including
   local JWK signing, publish-only rotation keys, disabled keys, and optional

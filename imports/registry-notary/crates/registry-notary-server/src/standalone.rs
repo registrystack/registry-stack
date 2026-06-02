@@ -279,6 +279,8 @@ fn is_self_attestation_wallet_cors_path(path: &str) -> bool {
             | "/v1/credentials"
     ) || path == "/v1/claims"
         || path.starts_with("/v1/claims/")
+        || path == "/credentials/{*vct_path}"
+        || path.starts_with("/credentials/")
         || path.starts_with("/v1/evaluations/")
         || path.starts_with("/v1/credentials/")
 }
@@ -2108,7 +2110,9 @@ fn is_public_probe_path(path: &str) -> bool {
             | "/oid4vci/credential-offer"
             | "/oid4vci/nonce"
             | "/federation/v1/evaluations"
-    ) || path.starts_with("/v1/credentials/")
+            | "/credentials/{*vct_path}"
+    ) || path.starts_with("/credentials/")
+        || path.starts_with("/v1/credentials/")
 }
 
 async fn admin_metrics_handler(
