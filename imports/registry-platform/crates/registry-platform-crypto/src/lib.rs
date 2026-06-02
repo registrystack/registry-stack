@@ -6,6 +6,9 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use hmac::{Hmac, KeyInit, Mac};
+use rsa::pkcs1v15::Pkcs1v15Sign;
+use rsa::sha2::{Digest as RsaDigest, Sha256 as RsaSha256};
+use rsa::{BigUint, RsaPrivateKey, RsaPublicKey};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -20,9 +23,11 @@ use zeroize::{Zeroize, Zeroizing};
 pub enum SigningAlgorithm {
     /// Ed25519 EdDSA signatures using OKP/Ed25519 JWKs.
     ///
-    /// This crate currently supports only EdDSA for signing and verification.
-    /// ES256, RS256, and PS256 JWKs are rejected as unsupported at parse time.
+    /// This crate supports EdDSA and RS256 for signing and verification.
+    /// ES256 and PS256 JWKs are rejected as unsupported at parse time.
     EdDsa,
+    /// RSASSA-PKCS1-v1_5 with SHA-256 (RS256) signatures using RSA JWKs.
+    Rs256,
 }
 
 #[derive(Clone, Deserialize)]
@@ -44,6 +49,16 @@ pub struct PrivateJwk {
     pub n: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub e: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub q: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dp: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dq: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qi: Option<String>,
 }
 
 impl fmt::Debug for PrivateJwk {
@@ -58,6 +73,11 @@ impl fmt::Debug for PrivateJwk {
             .field("y", &self.y)
             .field("n", &self.n.as_ref().map(|_| "[redacted]"))
             .field("e", &self.e)
+            .field("p", &self.p.as_ref().map(|_| "[redacted]"))
+            .field("q", &self.q.as_ref().map(|_| "[redacted]"))
+            .field("dp", &self.dp.as_ref().map(|_| "[redacted]"))
+            .field("dq", &self.dq.as_ref().map(|_| "[redacted]"))
+            .field("qi", &self.qi.as_ref().map(|_| "[redacted]"))
             .finish()
     }
 }
@@ -74,6 +94,11 @@ impl Serialize for PrivateJwk {
 impl Drop for PrivateJwk {
     fn drop(&mut self) {
         self.d.zeroize();
+        self.p.zeroize();
+        self.q.zeroize();
+        self.dp.zeroize();
+        self.dq.zeroize();
+        self.qi.zeroize();
     }
 }
 
@@ -116,12 +141,15 @@ pub struct LocalJwkSigner {
     jwk: Arc<PrivateJwk>,
     key_id: String,
     public_jwk: PublicJwk,
+    algorithm: SigningAlgorithm,
 }
 
 impl LocalJwkSigner {
-    /// Build a local signer from an Ed25519 private JWK with a non-empty `kid`.
+    /// Build a local signer from an EdDSA (Ed25519) or RS256 (RSA) private JWK
+    /// with a non-empty `kid`.
     pub fn new(jwk: PrivateJwk) -> Result<Self, SigningError> {
         jwk.validate_private().map_err(SigningError::InvalidKey)?;
+        let algorithm = jwk.algorithm().map_err(SigningError::InvalidKey)?;
         let key_id = jwk
             .kid
             .as_deref()
@@ -133,6 +161,7 @@ impl LocalJwkSigner {
             jwk: Arc::new(jwk),
             key_id,
             public_jwk,
+            algorithm,
         })
     }
 }
@@ -149,7 +178,7 @@ impl fmt::Debug for LocalJwkSigner {
 #[async_trait]
 impl SigningProvider for LocalJwkSigner {
     fn algorithm(&self) -> SigningAlgorithm {
-        SigningAlgorithm::EdDsa
+        self.algorithm
     }
 
     fn key_id(&self) -> &str {
@@ -199,6 +228,19 @@ impl PrivateJwk {
                 }
                 decode_fixed(self.d.as_deref(), 32, "d")?;
                 decode_fixed(self.x.as_deref(), 32, "x")?;
+            }
+            Ok(SigningAlgorithm::Rs256) => {
+                if self.kty != "RSA" {
+                    return Err(JwkError::Invalid("RS256 keys must be RSA"));
+                }
+                // RSA parameters are variable width, so only require non-empty
+                // base64url. dp, dq, qi are optional; the rsa crate recomputes
+                // them from p and q when absent.
+                decode_nonempty(self.n.as_deref(), "n")?;
+                decode_nonempty(self.e.as_deref(), "e")?;
+                decode_nonempty(self.d.as_deref(), "d")?;
+                decode_nonempty(self.p.as_deref(), "p")?;
+                decode_nonempty(self.q.as_deref(), "q")?;
             }
             Err(err) => return Err(err),
         }
@@ -258,6 +300,13 @@ impl PublicJwk {
                 }
                 decode_fixed(self.x.as_deref(), 32, "x")?;
             }
+            Ok(SigningAlgorithm::Rs256) => {
+                if self.kty != "RSA" {
+                    return Err(JwkError::Invalid("RS256 keys must be RSA"));
+                }
+                decode_nonempty(self.n.as_deref(), "n")?;
+                decode_nonempty(self.e.as_deref(), "e")?;
+            }
             Err(err) => return Err(err),
         }
         Ok(())
@@ -284,6 +333,8 @@ pub enum CryptoError {
     InvalidBase64(#[from] base64::DecodeError),
     #[error("invalid signature")]
     InvalidSignature,
+    #[error("cryptographic operation failed: {0}")]
+    Crypto(&'static str),
 }
 
 /// Errors from local and external signing providers.
@@ -511,15 +562,23 @@ pub fn pairwise_subject_ref_hash(
     ))
 }
 
-/// Sign `payload` using the Ed25519 private key in `jwk`.
+/// Sign `payload` using the private key in `jwk`.
 ///
-/// Runs synchronously on the calling thread. Measured ~15 µs/op (release,
-/// Apple M5 Max). Callers on a Tokio runtime that process many concurrent
-/// issuances should offload to `tokio::task::spawn_blocking` if latency
-/// becomes a concern. Run the ignored `eddsa_sign_microbench` test to
-/// re-measure on your hardware.
+/// Dispatches on the JWK algorithm: EdDSA (Ed25519) or RS256 (RSASSA-PKCS1-v1_5
+/// with SHA-256). Runs synchronously on the calling thread. EdDSA is measured
+/// ~15 µs/op (release, Apple M5 Max); RS256 is slower. Callers on a Tokio
+/// runtime that process many concurrent issuances should offload to
+/// `tokio::task::spawn_blocking` if latency becomes a concern. Run the ignored
+/// `eddsa_sign_microbench` test to re-measure on your hardware.
 pub fn sign(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> {
     jwk.validate_private()?;
+    match jwk.algorithm()? {
+        SigningAlgorithm::EdDsa => sign_eddsa(payload, jwk),
+        SigningAlgorithm::Rs256 => sign_rs256(payload, jwk),
+    }
+}
+
+fn sign_eddsa(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> {
     // Decode directly into a stack-allocated Zeroizing buffer to avoid any
     // intermediate heap allocation that would not be zeroed on error paths.
     let d_str = jwk.d.as_deref().ok_or(JwkError::Invalid("d"))?;
@@ -534,19 +593,61 @@ pub fn sign(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> {
     Ok(signature.to_bytes().to_vec())
 }
 
-/// Verify `signature` over `payload` using the Ed25519 public key in `jwk`.
+fn sign_rs256(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> {
+    let key = rsa_private_key(jwk)?;
+    let digest = RsaSha256::digest(payload);
+    key.sign(Pkcs1v15Sign::new::<RsaSha256>(), &digest)
+        .map_err(|_| CryptoError::Crypto("RS256 signing failed"))
+}
+
+fn rsa_private_key(jwk: &PrivateJwk) -> Result<RsaPrivateKey, CryptoError> {
+    let n = decode_biguint(jwk.n.as_deref(), "n")?;
+    let e = decode_biguint(jwk.e.as_deref(), "e")?;
+    let d = decode_biguint(jwk.d.as_deref(), "d")?;
+    let p = decode_biguint(jwk.p.as_deref(), "p")?;
+    let q = decode_biguint(jwk.q.as_deref(), "q")?;
+    let key = RsaPrivateKey::from_components(n, e, d, vec![p, q])
+        .map_err(|_| CryptoError::Crypto("invalid RSA private key components"))?;
+    key.validate()
+        .map_err(|_| CryptoError::Crypto("invalid RSA private key components"))?;
+    Ok(key)
+}
+
+fn decode_biguint(value: Option<&str>, field: &'static str) -> Result<BigUint, CryptoError> {
+    let bytes = decode_nonempty(value, field)?;
+    Ok(BigUint::from_bytes_be(&bytes))
+}
+
+/// Verify `signature` over `payload` using the public key in `jwk`.
 ///
-/// Runs synchronously on the calling thread. Measured ~22 µs/op (release,
-/// Apple M5 Max). Run the ignored `eddsa_verify_microbench` test to
-/// re-measure on your hardware.
+/// Dispatches on the JWK algorithm: EdDSA (Ed25519) or RS256 (RSASSA-PKCS1-v1_5
+/// with SHA-256). Runs synchronously on the calling thread. EdDSA is measured
+/// ~22 µs/op (release, Apple M5 Max). Run the ignored `eddsa_verify_microbench`
+/// test to re-measure on your hardware.
 pub fn verify(payload: &[u8], signature: &[u8], jwk: &PublicJwk) -> Result<(), CryptoError> {
     jwk.validate_public()?;
+    match jwk.algorithm()? {
+        SigningAlgorithm::EdDsa => verify_eddsa(payload, signature, jwk),
+        SigningAlgorithm::Rs256 => verify_rs256(payload, signature, jwk),
+    }
+}
+
+fn verify_eddsa(payload: &[u8], signature: &[u8], jwk: &PublicJwk) -> Result<(), CryptoError> {
     let x = decode_fixed(jwk.x.as_deref(), 32, "x")?;
     let x: [u8; 32] = x.try_into().map_err(|_| JwkError::Invalid("x length"))?;
     let verifying_key = VerifyingKey::from_bytes(&x).map_err(|_| CryptoError::InvalidSignature)?;
     let signature = Signature::try_from(signature).map_err(|_| CryptoError::InvalidSignature)?;
     verifying_key
         .verify_strict(payload, &signature)
+        .map_err(|_| CryptoError::InvalidSignature)
+}
+
+fn verify_rs256(payload: &[u8], signature: &[u8], jwk: &PublicJwk) -> Result<(), CryptoError> {
+    let n = decode_biguint(jwk.n.as_deref(), "n")?;
+    let e = decode_biguint(jwk.e.as_deref(), "e")?;
+    let key = RsaPublicKey::new(n, e).map_err(|_| CryptoError::InvalidSignature)?;
+    let digest = RsaSha256::digest(payload);
+    key.verify(Pkcs1v15Sign::new::<RsaSha256>(), &digest, signature)
         .map_err(|_| CryptoError::InvalidSignature)
 }
 
@@ -557,8 +658,10 @@ fn algorithm_from_fields(
 ) -> Result<SigningAlgorithm, JwkError> {
     match alg {
         Some("EdDSA") => Ok(SigningAlgorithm::EdDsa),
+        Some("RS256") => Ok(SigningAlgorithm::Rs256),
         Some(_) => Err(JwkError::UnsupportedAlgorithm),
         None if kty == "OKP" && crv == Some("Ed25519") => Ok(SigningAlgorithm::EdDsa),
+        // RSA keys must carry an explicit alg: "RS256"; never inferred from kty.
         None => Err(JwkError::UnsupportedAlgorithm),
     }
 }
@@ -640,6 +743,25 @@ fn decode_fixed(
         .decode(value)
         .map_err(|_| JwkError::Invalid(field))?;
     if decoded.len() != expected_len {
+        return Err(JwkError::Invalid(field));
+    }
+    Ok(decoded)
+}
+
+fn decode_nonempty(
+    value: Option<&str>,
+    field: &'static str,
+) -> Result<Zeroizing<Vec<u8>>, JwkError> {
+    let value = value.ok_or(JwkError::Invalid(field))?;
+    // The decoded buffer can hold private RSA components (d, p, q), so wrap it
+    // in Zeroizing to clear the bytes when the buffer drops, including on the
+    // validation paths that decode purely to check the field and discard it.
+    let decoded = Zeroizing::new(
+        URL_SAFE_NO_PAD
+            .decode(value)
+            .map_err(|_| JwkError::Invalid(field))?,
+    );
+    if decoded.is_empty() {
         return Err(JwkError::Invalid(field));
     }
     Ok(decoded)
@@ -760,6 +882,11 @@ mod tests {
     use serde_json::json;
 
     const RAW_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:web:issuer.test#key-1"}"#;
+
+    // Test-only 2048-bit RSA private JWK (kty=RSA, alg=RS256). Generated once
+    // with openssl and converted to JWK; used only by RS256 tests. Not a
+    // production key.
+    const RSA_JWK: &str = r#"{"kty":"RSA","kid":"registry-notary-rs256-test","alg":"RS256","n":"yIgEn3IXWI3CRyUY0gvZ-kJ55EC36MRFvj-ICsitN1-50phRS4CKMBRwbHwjgeTkbMDndOCmVfIbyKhJjOMIPxAzIHeMn9oWj5i-s8nlSgjHZpvCTnRbwZhbq6mEVoHJliX36IfV_iUopcwSL5lPd2wZmJ-msUmZFs6CTRExu0JGUJScOwFO5dqxBwiKyh7yGEPXI3u4tc3_47SZYxyde7fb-o3wl2RBJ28upa2jVRP9r-WjOGjE6tbZ35HnVUY4ECdYWzsiotg_XA9QVWa-pAKXV2Flr-gocCQ9E2qrSYjEbNXuFjPtMnuL6AHi0o5PiwT1dllcl925hpKd7Xt60w","e":"AQAB","d":"ATDtMhpe_z1-GTUV7NLO3V_Z0kb8W1YXkC7JbJTAdcE-FdKJrtu84Q87WpxG0tPcutFPLqW12QAQp2fbmxhZ6VrfVYneeOlEjO14ukqM_g35Z-eRDmYhwoFYrEWGqlH9XrZysHhKFZyKHW_G0lJV-Ks8Na_RFNNIXeVedVMQiytAFXibTHvdAdIrBGtt0M4tlQOCeRwnuoAQU-a5VB7rKGpxnJtUA7F_jjeX6jQPnUhkOXs20pPRey-i-jxwBbsF4XijHgTnGwAo5uOoY9b0kOmOb3Hs5TVqZCb3a4JoYAqZBbWrkKxccJTGMqLHCe0MBgQzKqP5KyrHRgQdzlmTnQ","p":"5xhkHe5lD7tUYJAFffHiRpy4unHfKDvTEASu8RBgWvHP2Hu5XLQU5n6DvI47LsW42swTcT6Ce1pWB2LK3SjKcw9FPEEGg8m5-tmfixaRq4DBaK0hj17763HmnYR0eQC0n_5y-My8WSC1y80T-AhKHJ_3xTtLXQd5Z9bf9MEiKS8","q":"3iRoiwbnn8oRJMjZUZhqKB-GVa7AJV0SUqXiUsBAJnqtbhuIESbkJKpt5eULeUQgdNkoG65KD-jXFUipWX1zlentc1FliCaB46jntqtxUsui8LNwKw_eb3nujQO7H1He4NJ5pfaLfRcmBOLwB-u2Z1cxrRDWhIgiHtGaAdQ7F50","dp":"j4h9vn1wNbozaRpq3tPap-L1dY_-e93UdPGDuuRiBHqGjr4h3itXg-X2aqmopp9V9kekl8SshHMSVdoNiBmqzJYieY8lvbsQkXaTem8VIQGCn0JRQtxK-eyvwQwgz3sZtPn0bQW0wmLnp2KD0Z1McsUEvnLalzhqNo2mYj2Guy8","dq":"0T6ySuLCIz2PUHrwWW-b7xdizirBS3CT5c3jldcJljVQT7sXPDDKDc-LnVVWrW-Csw4qPYi6sqm8j4vWGTmWOswSouE1Jj4_c1aSjPqI0FiIrvoW2jkkaRUNoz60cBgKPPOFKtNFKRs48LljJ9LcChOT81U8-7HPkgAVdUuYLfE","qi":"PnMeCE0dvWDLp2Dn1wsxtl-a0qjpkT9cp8EkvHYjCvVqqWqrVv84CoEo-1wA9j_VDvCG6T4n0UO9K0jfBf5yvPnahSQCLJk2nw-2uZ9YzBZKwkm21wU6hTknPst5Vk5ZbYJmzqXsCqEB5T2Bn5vqeXMe3SOB5hD2CbTFFfp3TC4"}"#;
 
     #[test]
     fn private_jwk_parse_debug_redacts_and_public_strips_private_material() {
@@ -910,7 +1037,9 @@ mod tests {
     #[test]
     fn unsupported_signing_algorithms_are_rejected_at_parse_time() {
         let p256 = r#"{"kty":"EC","crv":"P-256","d":"jpsQnnGQmTMRzLC0W_9-v8RC0ZQ79OJWfZPOGdXGdP8","x":"f83OJ3D2xF4k1JQWctzS0r8uXH6Gz-l4WfXccj5WHv0","y":"x_FEzRu9dVvZt2pSuGQgH7u9tZxU7I5oUJu-4G8Azjo","alg":"ES256"}"#;
-        let rsa = r#"{"kty":"RSA","n":"sXchDaQebHnPiGvyDOAT4saGEUetSyo9MKLOoWFsueri23bOdgWp4PBO8BxG7NXXjO4IhYGoOi0Lem4xXeUq7W57RtgGF4wSGZ4HAvY8R9H_JVU3tO7K0XG3L8m5vB2T2KQeJ0gJg9g4nG9QpXJYpJ2NmgH6L7ZqQHX7I4M","e":"AQAB","d":"V8tFoZRiEbWqT2DF3t5R6u9vS9LqQEVtGg5oQ2Y0t5k","alg":"RS256"}"#;
+        // RS256 is supported, but an RSA key missing the required private primes
+        // p and q must still fail validation (not parse as a usable key).
+        let rsa_without_primes = r#"{"kty":"RSA","n":"sXchDaQebHnPiGvyDOAT4saGEUetSyo9MKLOoWFsueri23bOdgWp4PBO8BxG7NXXjO4IhYGoOi0Lem4xXeUq7W57RtgGF4wSGZ4HAvY8R9H_JVU3tO7K0XG3L8m5vB2T2KQeJ0gJg9g4nG9QpXJYpJ2NmgH6L7ZqQHX7I4M","e":"AQAB","d":"V8tFoZRiEbWqT2DF3t5R6u9vS9LqQEVtGg5oQ2Y0t5k","alg":"RS256"}"#;
         let public_p256 = r#"{"kty":"EC","crv":"P-256","x":"f83OJ3D2xF4k1JQWctzS0r8uXH6Gz-l4WfXccj5WHv0","y":"x_FEzRu9dVvZt2pSuGQgH7u9tZxU7I5oUJu-4G8Azjo","alg":"ES256"}"#;
 
         assert!(matches!(
@@ -918,13 +1047,142 @@ mod tests {
             Err(JwkError::UnsupportedAlgorithm)
         ));
         assert!(matches!(
-            PrivateJwk::parse(rsa),
-            Err(JwkError::UnsupportedAlgorithm)
+            PrivateJwk::parse(rsa_without_primes),
+            Err(JwkError::Invalid("p"))
         ));
         assert!(matches!(
             PublicJwk::parse(public_p256),
             Err(JwkError::UnsupportedAlgorithm)
         ));
+    }
+
+    fn rsa_public_json() -> String {
+        let public = PrivateJwk::parse(RSA_JWK)
+            .expect("rsa private jwk parses")
+            .public();
+        serde_json::to_string(&public).expect("rsa public jwk serializes")
+    }
+
+    #[test]
+    fn rs256_sign_then_verify_roundtrips() {
+        let private = PrivateJwk::parse(RSA_JWK).expect("rsa private jwk parses");
+        let public = private.public();
+        let payload = b"registry-notary-rs256";
+        let signature = sign(payload, &private).expect("payload signs");
+
+        verify(payload, &signature, &public).expect("signature verifies");
+    }
+
+    #[test]
+    fn rs256_verify_rejects_tampered_payload() {
+        let private = PrivateJwk::parse(RSA_JWK).expect("rsa private jwk parses");
+        let public = private.public();
+        let signature = sign(b"registry-notary-rs256", &private).expect("payload signs");
+
+        assert!(matches!(
+            verify(b"tampered", &signature, &public),
+            Err(CryptoError::InvalidSignature)
+        ));
+    }
+
+    #[test]
+    fn rs256_verify_rejects_wrong_signature() {
+        let private = PrivateJwk::parse(RSA_JWK).expect("rsa private jwk parses");
+        let public = private.public();
+        let payload = b"registry-notary-rs256";
+        let mut signature = sign(payload, &private).expect("payload signs");
+        let last = signature.len() - 1;
+        signature[last] ^= 0x01;
+
+        assert!(matches!(
+            verify(payload, &signature, &public),
+            Err(CryptoError::InvalidSignature)
+        ));
+    }
+
+    #[test]
+    fn rs256_private_jwk_parses_and_reports_rs256() {
+        let private = PrivateJwk::parse(RSA_JWK).expect("rsa private jwk parses");
+        assert!(matches!(private.algorithm(), Ok(SigningAlgorithm::Rs256)));
+    }
+
+    #[test]
+    fn rs256_public_jwk_parses() {
+        let public = PublicJwk::parse(&rsa_public_json()).expect("rsa public jwk parses");
+        assert_eq!(public.kty, "RSA");
+        assert!(matches!(public.algorithm(), Ok(SigningAlgorithm::Rs256)));
+    }
+
+    #[test]
+    fn rs256_public_jwk_rejects_private_members() {
+        let public = PrivateJwk::parse(RSA_JWK)
+            .expect("rsa private jwk parses")
+            .public();
+        let mut value = serde_json::to_value(&public).expect("rsa public jwk serializes");
+        value
+            .as_object_mut()
+            .expect("object")
+            .insert("p".to_string(), json!("not-allowed-on-public"));
+        let json = serde_json::to_string(&value).expect("json serializes");
+
+        let err = PublicJwk::parse(&json).expect_err("private member must reject");
+        assert!(matches!(err, JwkError::Invalid(_)));
+    }
+
+    #[test]
+    fn rsa_private_public_drops_private_members() {
+        let public = PrivateJwk::parse(RSA_JWK)
+            .expect("rsa private jwk parses")
+            .public();
+        let public_json = serde_json::to_value(&public).expect("rsa public jwk serializes");
+
+        assert!(public_json.get("n").is_some());
+        assert!(public_json.get("e").is_some());
+        for member in ["d", "p", "q", "dp", "dq", "qi"] {
+            assert!(
+                public_json.get(member).is_none(),
+                "public projection leaked {member}"
+            );
+        }
+    }
+
+    #[test]
+    fn rsa_jwk_without_alg_is_unsupported() {
+        let mut value: Value = serde_json::from_str(RSA_JWK).expect("rsa jwk json");
+        value.as_object_mut().expect("object").remove("alg");
+        let json = serde_json::to_string(&value).expect("json serializes");
+
+        assert!(matches!(
+            PrivateJwk::parse(&json),
+            Err(JwkError::UnsupportedAlgorithm)
+        ));
+    }
+
+    #[tokio::test]
+    async fn local_jwk_signer_rs256() {
+        let private = PrivateJwk::parse(RSA_JWK).expect("rsa private jwk parses");
+        let signer = LocalJwkSigner::new(private).expect("local signer builds");
+        let payload = b"registry-notary-rs256-provider";
+        let signature = signer.sign(payload).await.expect("payload signs");
+
+        assert_eq!(signer.algorithm(), SigningAlgorithm::Rs256);
+        let public = signer.public_jwk();
+        assert_eq!(public.kty, "RSA");
+        verify(payload, &signature, &public).expect("signature verifies");
+    }
+
+    #[test]
+    fn private_jwk_debug_redacts_rsa_private_members() {
+        let private = PrivateJwk::parse(RSA_JWK).expect("rsa private jwk parses");
+        let debug = format!("{private:?}");
+
+        assert!(debug.contains("[redacted]"));
+        let d = private.d.as_deref().expect("d");
+        let p = private.p.as_deref().expect("p");
+        let q = private.q.as_deref().expect("q");
+        assert!(!debug.contains(d));
+        assert!(!debug.contains(p));
+        assert!(!debug.contains(q));
     }
 
     #[test]

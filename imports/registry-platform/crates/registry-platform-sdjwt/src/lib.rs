@@ -338,6 +338,7 @@ fn map_signing_error(err: SigningError) -> SdJwtError {
 fn signing_algorithm_jwa(algorithm: SigningAlgorithm) -> &'static str {
     match algorithm {
         SigningAlgorithm::EdDsa => "EdDSA",
+        SigningAlgorithm::Rs256 => "RS256",
     }
 }
 
