@@ -64,6 +64,11 @@ rules when installed.
   hardening and action pinning policy. New workflow syntax is still blocked by
   `actionlint`, and the advisory report gives reviewers a ratchet list for
   follow-up hardening.
+- Container image SBOM generation is enforced in CI. Grype image vulnerability
+  reports currently run as advisory evidence and are uploaded with the image
+  security artifact; the blocking threshold should be ratcheted on after the
+  first reviewed image vulnerability baseline and any required waivers are in
+  place.
 - Hadolint ignores `DL3022` because the Dockerfile intentionally copies from
   named external build contexts. It also ignores `DL3008` for the apt package
   installation style already used in the relay container.

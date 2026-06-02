@@ -71,8 +71,9 @@ jobs:
             --tag "$REGISTRY_RELAY_IMAGE:sha-${GITHUB_SHA}" \
             --tag "$REGISTRY_RELAY_IMAGE:main" \
             registry-relay
-      - name: Generate image SBOM and vulnerability report
+      - name: Generate image SBOM and advisory vulnerability report
         run: |
+          set -o pipefail
           mkdir -p registry-relay/target/security
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$PWD/registry-relay/target/security:/out" \
@@ -81,8 +82,9 @@ jobs:
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$PWD/registry-relay/target/security:/out" \
             anchore/grype:v0.85.0@sha256:8d7a54c4281e334a60c2d1616269411a940efad44c2cc1533ddc76689b9268af "$REGISTRY_RELAY_IMAGE:sha-${GITHUB_SHA}" \
-            --fail-on critical -o table > registry-relay/target/security/registry-relay-image-vulnerabilities.txt
+            -o table | tee registry-relay/target/security/registry-relay-image-vulnerabilities.txt
       - name: Upload image security evidence
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: registry-relay-image-security-evidence
