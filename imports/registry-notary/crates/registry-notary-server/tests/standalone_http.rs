@@ -4567,6 +4567,11 @@ fn audit_hash_secret_env_is_required_for_runtime_config() {
 const TEST_ACCESS_TOKEN_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"8jFBgUJxaaQimd4NjzxhvPYyNbcOnnZsqOntZbpP3Xk","x":"XvW-aWwJCWSYoYudTB9OZqNHURKElnnyGNa6DQNjzZk","alg":"EdDSA"}"#;
 // eSignet RP client signing key (signs the private_key_jwt client assertion).
 const TEST_ESIGNET_RP_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"EOLPz23yGd5Ju5e-PYybLE-YyvjgXLhGzS6XgmszzXs","x":"3v5jZ5rAf7KGvcC3zuKh6-ujgtA0ABa4jqmAWXq-S_c","alg":"EdDSA"}"#;
+// Test-only 2048-bit RSA private JWK (kty=RSA, alg=RS256) for the eSignet RP
+// client when the lab registers the Notary's RP client with an RSA key.
+// Generated once with openssl and converted to a JWK; not a production key.
+#[cfg(feature = "registry-notary-cel")]
+const TEST_ESIGNET_RP_RSA_JWK: &str = r#"{"kty":"RSA","kid":"did:web:rp.example#esignet-rp-rsa-key","alg":"RS256","n":"uujuLM_PhTFXueBzTafeFW7O4kJgQnLIzuoHJQgaYDkCBbUYAznt-IZvGkyTTkg4mfolJj47HDlBsSNzzx7bYcFDKdBMoZQwukVX9bhkXVUPT9-fot1jfW0EPrvdJdDQ-5LjQYfk2a2OpKtV5hmBIxoHm_JRU3QOmKU0h1_vKjwStMO0ntaitIL7pSIE0X7Ht4P3edhBc5Vxf_-Ui7wSaN-jAjHCk6HYRY4BTODI-zo5K8yB5JERBqcawsuAIDPTjQ1eIOHxIQsTlsdbmSgqnMldoyZAkjxCyOm9Ad_rpbJ04WDaIhFxyaqHTVUD32cufcZFYxkSJ35zuIlJYgoebw","e":"AQAB","d":"EEvSyFFuFHzS2z_4jaK_ODsrCosi_WgonfHFobLtKcqOpJS_fTiFyQ9fjHl0tnSRistGhekTGkjbs2gV5s8X7ZP-GR0yMTxMa1E0dBYZmhGafipPLtICpKLmpdmXVH66WdTav5HroBcDwtO1b5R1r-vLEgu0j4Qk6aYtyEfTAGmKRzH9fk7crZwaM2MiklIWLaK6Gfior5KDrQhIMGfKZzu78naJ5FyFSHBUW0VvikTg0C8QbRgBuFbQCuOceu4UZhjySJUhugdgzlbnteVRc_VvSvusLL4i7fSeecRIXURSexUjraLifeh1lM_jrD8ZM-o_2Qop2ada12Asll4gkQ","p":"4QhhINnwbq_vuFTQL3Wx980l2eg8yocFS5hsmk7vbqAUbAZVSVOGW_y6ip-uG_c9xpYBvTyZAANUZHpqDyu0frPDdZplJZX2FTMkiHTg4RJQfj8OD0tmL370cGv3RRfO4md4-0E0wxl8Zsv4-PSVrMZCFyIk8TLgLZs1w7bpg0U","q":"1KGH6VP7TkA3hDXTlSL2GPShsGY0Y9P1Kn6mMA8aHIZ690QmeJU2j91oWcCP1AG6LnAp5pvxT0XJJu3OVsQs7OZPiUwAf_RoSdlMtm6xll1FkBKC3AtTLYn0vgHwFPeXa29wZM1khFv_vBdhk47ZgZT0G3f4Y88FHh5EM5EFPCM","dp":"0D332_WyWEu5c4QQ74pjuaP_XgpajzSpgs432ggn6-B5ZYnqzKNdl6xlV7jy3vBKG4Zfb6YvE-MA6saZdRaFviZOP3s0FLcUdYPRT_GQ1Nck498n_KFSm6tJOuu-dBLXIY6NVz19PPpNs7cX3BJCnBMPv-aZ9xaUe7_A3i9bIl0","dq":"gDDudp5aGSAgGEY3TGdqhTsfK_FCTpkf6sG2Qa0pKd9tzRs6MmKLJYrveYTdcYylCZA3wr9raUaCckTWrHrTNvPXKcg3WO0p3rPySt5LlIKhCK4QVMdDG2Zbth4G9y0aDfx-f1dQ7Xdlo6lY-5QYz8XUsabPiqTpyfGnXotk448","qi":"XlLiaiQDLYZXtyR1ixq3dJ1EqnBtHtx75VjpQydmb4yQMtzsQ1JS5xyRgv1gws8u5KVaF3h3CUo6wBrtKBFGIhL9WFnym_8DEECgVF7eLHZ6WNtnIv6Vs7vjO3CAPKG3TrIuaHhY5KXQf0za7criZ9Euai41_ky9_iU6j0Lw5CY"}"#;
 
 const NOTARY_ISSUER: &str = "http://127.0.0.1:4325";
 const NOTARY_AUDIENCE: &str = "registry-notary-citizen";
@@ -4856,6 +4861,28 @@ fn jwt_payload(jwt: &str) -> Value {
     serde_json::from_slice(&bytes).expect("payload is JSON")
 }
 
+/// Decode (without verifying) the JOSE header of a compact JWT.
+#[cfg(feature = "registry-notary-cel")]
+fn jwt_header(jwt: &str) -> Value {
+    let header_b64 = jwt.split('.').next().expect("jwt has a header segment");
+    let bytes = URL_SAFE_NO_PAD
+        .decode(header_b64)
+        .expect("header is base64url");
+    serde_json::from_slice(&bytes).expect("header is JSON")
+}
+
+/// Extract a field from an `application/x-www-form-urlencoded` body.
+#[cfg(feature = "registry-notary-cel")]
+fn form_field(body: &str, name: &str) -> Option<String> {
+    for pair in body.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if key == name {
+            return Some(percent_decode(value));
+        }
+    }
+    None
+}
+
 #[tokio::test]
 async fn preauth_offer_start_redirects_to_esignet_and_mints_nothing() {
     set_preauth_env();
@@ -4956,6 +4983,94 @@ async fn preauth_callback_mints_pre_authorized_offer_with_tx_code() {
     assert!(!code.is_empty(), "callback mints a pre-authorized_code");
     assert_eq!(pin.len(), 6, "tx_code is a 6-digit PIN");
     assert!(pin.chars().all(|c| c.is_ascii_digit()));
+    idp.stop().await;
+}
+
+/// When the eSignet RP client signing key is RS256, the `private_key_jwt`
+/// client assertion the Notary sends to the eSignet token endpoint must carry
+/// header `alg: RS256` and verify against the RP RSA public key. This proves the
+/// RS256 RP key path end to end: the callback exchanges the eSignet code, which
+/// signs the assertion with the configured RS256 key.
+#[cfg(feature = "registry-notary-cel")]
+#[tokio::test]
+async fn preauth_client_assertion_is_rs256_signed_when_rp_key_is_rsa() {
+    set_preauth_env();
+    std::env::set_var("TEST_ESIGNET_RP_RSA_JWK", TEST_ESIGNET_RP_RSA_JWK);
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    );
+    // Swap the eSignet RP client signing key for an RSA/RS256 key.
+    config.evidence.signing_keys.insert(
+        "esignet-rp-key".to_string(),
+        SigningKeyConfig {
+            provider: SigningKeyProviderConfig::LocalJwkEnv,
+            alg: "RS256".to_string(),
+            kid: "did:web:rp.example#esignet-rp-rsa-key".to_string(),
+            status: SigningKeyStatus::Active,
+            private_jwk_env: "TEST_ESIGNET_RP_RSA_JWK".to_string(),
+            public_jwk_env: String::new(),
+            module_path: String::new(),
+            token_label: String::new(),
+            pin_env: String::new(),
+            key_label: String::new(),
+            key_id_hex: String::new(),
+            path: String::new(),
+            password_env: String::new(),
+        },
+    );
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let (code, _pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
+    assert!(!code.is_empty(), "callback mints a pre-authorized_code");
+
+    // Capture the token-endpoint POST the Notary sent and pull out the
+    // client_assertion form field.
+    let requests = token_upstream
+        .wiremock_server()
+        .received_requests()
+        .await
+        .expect("wiremock records requests");
+    let token_request = requests
+        .iter()
+        .find(|request| request.url.path() == "/token")
+        .expect("the Notary posts to the eSignet token endpoint");
+    let body = String::from_utf8(token_request.body.clone()).expect("token request body is UTF-8");
+    let client_assertion = form_field(&body, "client_assertion")
+        .expect("the token request carries a client_assertion");
+
+    // The JOSE header alg must be RS256 (derived from the RP RSA key).
+    let header = jwt_header(&client_assertion);
+    assert_eq!(
+        header["alg"], "RS256",
+        "the client assertion is signed with the RP key's RS256 algorithm"
+    );
+    assert_eq!(header["typ"], "JWT");
+    assert_eq!(header["kid"], "did:web:rp.example#esignet-rp-rsa-key");
+
+    // The signature must verify against the RP RSA public key.
+    let rp_private = PrivateJwk::parse(TEST_ESIGNET_RP_RSA_JWK).expect("RP RSA JWK parses");
+    let rp_public = rp_private.public();
+    let mut segments = client_assertion.split('.');
+    let header_b64 = segments.next().expect("assertion has a header segment");
+    let payload_b64 = segments.next().expect("assertion has a payload segment");
+    let signature_b64 = segments.next().expect("assertion has a signature segment");
+    let signing_input = format!("{header_b64}.{payload_b64}");
+    let signature = URL_SAFE_NO_PAD
+        .decode(signature_b64)
+        .expect("signature is base64url");
+    verify(signing_input.as_bytes(), &signature, &rp_public)
+        .expect("the RS256 client assertion verifies against the RP RSA public key");
+
     idp.stop().await;
 }
 

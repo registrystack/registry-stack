@@ -18,6 +18,13 @@ use crate::model::{
 
 const PKCE_METHOD_S256: &str = "S256";
 
+/// The only non-EdDSA signing algorithm the Notary accepts, and only for the
+/// eSignet pre-authorized-code RP client assertion. eSignet registers the RP
+/// client with an RSA/RS256 key and rejects EdDSA client assertions, so the RP
+/// key signs with RS256. Credential, access-token, and federation signing stay
+/// EdDSA; `validate_signing_key_alg_usage` enforces that separation.
+pub const CLIENT_ASSERTION_SIGNING_ALG_RS256: &str = "RS256";
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct StandaloneRegistryNotaryConfig {
@@ -349,6 +356,54 @@ impl StandaloneRegistryNotaryConfig {
         self.validate_access_token_signing_cross_block()?;
         self.federation.validate(&self.evidence)?;
         self.validate_replay_cross_block()?;
+        self.validate_signing_key_alg_usage()?;
+        Ok(())
+    }
+
+    /// Confine non-EdDSA (RS256) signing keys to the eSignet pre-authorized-code
+    /// RP client assertion. Every EdDSA-required site (credential profiles, the
+    /// access-token signing key, the federation signing key) must reference an
+    /// EdDSA key, so relaxing the per-key alg gate cannot weaken those sites. A
+    /// non-EdDSA key referenced only by
+    /// `oid4vci.pre_authorized_code.esignet.client_signing_key_id`, or not
+    /// referenced at all, is allowed.
+    fn validate_signing_key_alg_usage(&self) -> Result<(), EvidenceConfigError> {
+        for (key_id, key) in &self.evidence.signing_keys {
+            if key.alg == CREDENTIAL_SIGNING_ALG_EDDSA {
+                continue;
+            }
+            for (profile_id, profile) in &self.evidence.credential_profiles {
+                if profile.signing_key == *key_id {
+                    return invalid_signing_key(
+                        key_id,
+                        format!(
+                            "non-EdDSA signing key is used by credential profile '{profile_id}'; \
+                             non-EdDSA signing keys may only be used as the eSignet \
+                             pre-authorized-code RP client assertion key \
+                             (oid4vci.pre_authorized_code.esignet.client_signing_key_id)"
+                        ),
+                    );
+                }
+            }
+            if self.auth.access_token_signing.signing_key_id == *key_id {
+                return invalid_signing_key(
+                    key_id,
+                    "non-EdDSA signing key is used as the access-token signing key \
+                     (auth.access_token_signing.signing_key_id); non-EdDSA signing keys may only \
+                     be used as the eSignet pre-authorized-code RP client assertion key \
+                     (oid4vci.pre_authorized_code.esignet.client_signing_key_id)",
+                );
+            }
+            if self.federation.signing.signing_key == *key_id {
+                return invalid_signing_key(
+                    key_id,
+                    "non-EdDSA signing key is used as the federation signing key \
+                     (federation.signing.signing_key); non-EdDSA signing keys may only be used as \
+                     the eSignet pre-authorized-code RP client assertion key \
+                     (oid4vci.pre_authorized_code.esignet.client_signing_key_id)",
+                );
+            }
+        }
         Ok(())
     }
 
@@ -1134,6 +1189,28 @@ impl Oid4vciConfig {
             );
         }
         self.pre_authorized_code.validate()?;
+        // The eSignet RP client assertion is signed with this key, so it must
+        // resolve to an active signing key. Surface that at config time rather
+        // than as a startup failure when the pre-auth flow is first built.
+        if self.pre_authorized_code.enabled {
+            let key_id = self
+                .pre_authorized_code
+                .esignet
+                .client_signing_key_id
+                .as_str();
+            let key = evidence.signing_keys.get(key_id).ok_or_else(|| {
+                EvidenceConfigError::InvalidOid4vciConfig {
+                    reason: format!(
+                        "pre_authorized_code.esignet.client_signing_key_id '{key_id}' must reference an evidence.signing_keys entry"
+                    ),
+                }
+            })?;
+            if !key.status.may_sign() {
+                return invalid_oid4vci(format!(
+                    "pre_authorized_code.esignet.client_signing_key_id '{key_id}' must reference an active signing key"
+                ));
+            }
+        }
         // The pre-auth callback resolves the subject-binding claim from the
         // eSignet userinfo endpoint when the claim is userinfo-sourced, so the
         // endpoint must be configured for that path to work.
@@ -4016,8 +4093,15 @@ pub struct SigningKeyConfig {
 impl SigningKeyConfig {
     fn validate(&self, key_id: &str) -> Result<(), EvidenceConfigError> {
         validate_signing_key_non_empty(key_id, "alg", &self.alg)?;
-        if self.alg != SD_JWT_VC_SIGNING_ALG {
-            return invalid_signing_key(key_id, format!("alg must be {SD_JWT_VC_SIGNING_ALG}"));
+        if self.alg != CREDENTIAL_SIGNING_ALG_EDDSA
+            && self.alg != CLIENT_ASSERTION_SIGNING_ALG_RS256
+        {
+            return invalid_signing_key(
+                key_id,
+                format!(
+                    "alg must be {CREDENTIAL_SIGNING_ALG_EDDSA} or {CLIENT_ASSERTION_SIGNING_ALG_RS256}"
+                ),
+            );
         }
         validate_signing_key_non_empty(key_id, "kid", &self.kid)?;
         match self.provider {
@@ -7443,6 +7527,162 @@ access_token_ttl_seconds: 300
         config.auth.access_token_signing.allowed_algorithms = vec!["RS256".to_string()];
         let reason = expect_access_token_signing_error(&config);
         assert!(reason.contains("EdDSA"));
+    }
+
+    /// An RS256 signing key entry. Config validation only checks the alg string
+    /// and the per-provider fields, so a dummy private_jwk_env name suffices; the
+    /// JWK itself is not decoded at validation time.
+    fn rs256_signing_key(private_jwk_env: &str, kid: &str) -> SigningKeyConfig {
+        SigningKeyConfig {
+            provider: SigningKeyProviderConfig::LocalJwkEnv,
+            alg: CLIENT_ASSERTION_SIGNING_ALG_RS256.to_string(),
+            kid: kid.to_string(),
+            status: SigningKeyStatus::Active,
+            private_jwk_env: private_jwk_env.to_string(),
+            public_jwk_env: String::new(),
+            module_path: String::new(),
+            token_label: String::new(),
+            pin_env: String::new(),
+            key_label: String::new(),
+            key_id_hex: String::new(),
+            path: String::new(),
+            password_env: String::new(),
+        }
+    }
+
+    fn expect_signing_key_error(config: &StandaloneRegistryNotaryConfig) -> String {
+        match config
+            .validate()
+            .expect_err("signing-key config must fail validation")
+        {
+            EvidenceConfigError::InvalidSigningKeyConfig { reason, .. } => reason,
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn esignet_rp_client_assertion_key_may_be_rs256() {
+        let mut config = valid_pre_auth_config();
+        config.evidence.signing_keys.insert(
+            "esignet-rp-key".to_string(),
+            rs256_signing_key("ESIGNET_RP_KEY", "did:web:rp.example#esignet-rp-key"),
+        );
+        config
+            .oid4vci
+            .pre_authorized_code
+            .esignet
+            .client_signing_key_id = "esignet-rp-key".to_string();
+        config
+            .validate()
+            .expect("an RS256 eSignet RP client-assertion key validates");
+    }
+
+    #[test]
+    fn pre_auth_client_signing_key_must_exist() {
+        let mut config = valid_pre_auth_config();
+        config
+            .oid4vci
+            .pre_authorized_code
+            .esignet
+            .client_signing_key_id = "missing-rp-key".to_string();
+        let reason = match config
+            .validate()
+            .expect_err("a missing RP client-assertion key must fail validation")
+        {
+            EvidenceConfigError::InvalidOid4vciConfig { reason } => reason,
+            other => panic!("unexpected error variant: {other}"),
+        };
+        assert!(reason.contains("client_signing_key_id"));
+        assert!(reason.contains("evidence.signing_keys"));
+    }
+
+    #[test]
+    fn pre_auth_client_signing_key_must_be_active() {
+        let mut config = valid_pre_auth_config();
+        config.evidence.signing_keys.insert(
+            "esignet-rp-key".to_string(),
+            rs256_signing_key("ESIGNET_RP_KEY", "did:web:rp.example#esignet-rp-key"),
+        );
+        config
+            .oid4vci
+            .pre_authorized_code
+            .esignet
+            .client_signing_key_id = "esignet-rp-key".to_string();
+        // PublishOnly cannot sign; it requires public_jwk_env and no private_jwk_env.
+        let key = config
+            .evidence
+            .signing_keys
+            .get_mut("esignet-rp-key")
+            .expect("esignet rp key exists");
+        key.status = SigningKeyStatus::PublishOnly;
+        key.public_jwk_env = "ESIGNET_RP_PUBLIC_KEY".to_string();
+        key.private_jwk_env = String::new();
+        let reason = match config
+            .validate()
+            .expect_err("an inactive RP client-assertion key must fail validation")
+        {
+            EvidenceConfigError::InvalidOid4vciConfig { reason } => reason,
+            other => panic!("unexpected error variant: {other}"),
+        };
+        assert!(reason.contains("active signing key"));
+    }
+
+    #[test]
+    fn rs256_signing_key_rejected_as_credential_profile_key() {
+        let mut config = valid_pre_auth_config();
+        // The kid DID matches the credential profile issuer so the alg-usage
+        // guard (not the unrelated issuer-binding check) is what rejects this.
+        config.evidence.signing_keys.insert(
+            "esignet-rp-key".to_string(),
+            rs256_signing_key("ESIGNET_RP_KEY", "did:web:issuer.example#esignet-rp-key"),
+        );
+        // Point a credential profile at the RS256 key.
+        config
+            .evidence
+            .credential_profiles
+            .get_mut("civil_status_sd_jwt")
+            .expect("civil status credential profile exists")
+            .signing_key = "esignet-rp-key".to_string();
+        let reason = expect_signing_key_error(&config);
+        assert!(reason.contains("client_signing_key_id"));
+    }
+
+    #[test]
+    fn rs256_signing_key_rejected_as_access_token_key() {
+        let mut config = valid_pre_auth_config();
+        config.evidence.signing_keys.insert(
+            "esignet-rp-key".to_string(),
+            rs256_signing_key("ESIGNET_RP_KEY", "did:web:rp.example#esignet-rp-key"),
+        );
+        config.auth.access_token_signing.signing_key_id = "esignet-rp-key".to_string();
+        let reason = expect_signing_key_error(&config);
+        assert!(reason.contains("client_signing_key_id"));
+    }
+
+    #[test]
+    fn rs256_signing_key_rejected_as_federation_key() {
+        let mut config = valid_federation_config();
+        config.evidence.signing_keys.insert(
+            "esignet-rp-key".to_string(),
+            rs256_signing_key("ESIGNET_RP_KEY", "did:web:rp.example#esignet-rp-key"),
+        );
+        config.federation.signing.signing_key = "esignet-rp-key".to_string();
+        let reason = expect_signing_key_error(&config);
+        assert!(reason.contains("client_signing_key_id"));
+    }
+
+    #[test]
+    fn signing_key_alg_must_be_eddsa_or_rs256() {
+        let mut config = valid_pre_auth_config();
+        config
+            .evidence
+            .signing_keys
+            .get_mut("issuer-key")
+            .expect("issuer-key exists")
+            .alg = "ES256".to_string();
+        let reason = expect_signing_key_error(&config);
+        assert!(reason.contains(CREDENTIAL_SIGNING_ALG_EDDSA));
+        assert!(reason.contains(CLIENT_ASSERTION_SIGNING_ALG_RS256));
     }
 
     #[test]
