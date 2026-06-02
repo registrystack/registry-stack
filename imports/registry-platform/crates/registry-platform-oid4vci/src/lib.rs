@@ -19,11 +19,15 @@ pub const SD_JWT_VC_FORMAT: &str = "dc+sd-jwt";
 pub const CREDENTIAL_SIGNING_ALG_EDDSA: &str = "EdDSA";
 pub const CRYPTOGRAPHIC_BINDING_METHOD_DID_JWK: &str = "did:jwk";
 pub const AUTHORIZATION_CODE_GRANT_TYPE: &str = "authorization_code";
+pub const PRE_AUTHORIZED_CODE_GRANT_TYPE: &str =
+    "urn:ietf:params:oauth:grant-type:pre-authorized_code";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialIssuerMetadata {
     pub credential_issuer: String,
     pub credential_endpoint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_endpoint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nonce_endpoint: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -42,10 +46,17 @@ impl CredentialIssuerMetadata {
         Self {
             credential_issuer: credential_issuer.into(),
             credential_endpoint: credential_endpoint.into(),
+            token_endpoint: None,
             nonce_endpoint,
             authorization_servers,
             credential_configurations_supported,
         }
+    }
+
+    #[must_use]
+    pub fn with_token_endpoint(mut self, token_endpoint: impl Into<String>) -> Self {
+        self.token_endpoint = Some(token_endpoint.into());
+        self
     }
 }
 
@@ -108,6 +119,40 @@ pub struct ProofTypeMetadata {
     pub proof_signing_alg_values_supported: Vec<String>,
 }
 
+/// Expected character set of a transaction code, per OID4VCI: `numeric` (digits
+/// only, the default) or `text` (any characters).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TxCodeInputMode {
+    #[default]
+    Numeric,
+    Text,
+}
+
+/// Transaction code parameters carried inside a pre-authorized-code grant.
+///
+/// See the OID4VCI pre-authorized code flow: `input_mode` is the expected
+/// character set (`numeric` by default), `length` is the number of characters,
+/// and `description` is optional guidance shown to the holder.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TxCode {
+    #[serde(default)]
+    pub input_mode: TxCodeInputMode,
+    pub length: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+impl TxCode {
+    pub fn new(length: u64, description: Option<String>) -> Self {
+        Self {
+            input_mode: TxCodeInputMode::Numeric,
+            length,
+            description,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialOffer {
     pub credential_issuer: String,
@@ -137,6 +182,33 @@ impl CredentialOffer {
             credential_configuration_ids,
             grants: BTreeMap::from([(
                 AUTHORIZATION_CODE_GRANT_TYPE.to_string(),
+                Value::Object(grant),
+            )]),
+        }
+    }
+
+    pub fn pre_authorized_code(
+        credential_issuer: impl Into<String>,
+        credential_configuration_ids: Vec<String>,
+        pre_authorized_code: impl Into<String>,
+        tx_code: Option<TxCode>,
+    ) -> Self {
+        let mut grant = serde_json::Map::new();
+        grant.insert(
+            "pre-authorized_code".to_string(),
+            Value::String(pre_authorized_code.into()),
+        );
+        if let Some(tx_code) = tx_code {
+            grant.insert(
+                "tx_code".to_string(),
+                serde_json::to_value(tx_code).expect("tx_code serializes"),
+            );
+        }
+        Self {
+            credential_issuer: credential_issuer.into(),
+            credential_configuration_ids,
+            grants: BTreeMap::from([(
+                PRE_AUTHORIZED_CODE_GRANT_TYPE.to_string(),
                 Value::Object(grant),
             )]),
         }
@@ -182,6 +254,31 @@ pub struct CredentialResponse {
     pub credential: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c_nonce: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c_nonce_expires_in: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenRequest {
+    pub grant_type: String,
+    #[serde(
+        rename = "pre-authorized_code",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pre_authorized_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tx_code: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenResponse {
+    pub access_token: String,
+    pub token_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_in: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub c_nonce: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -873,6 +970,173 @@ mod tests {
         assert!(round_tripped
             .grants
             .contains_key(AUTHORIZATION_CODE_GRANT_TYPE));
+    }
+
+    #[test]
+    fn credential_offer_authorization_code_grant_has_no_pre_authorized_fields() {
+        let offer = CredentialOffer::authorization_code(
+            "https://issuer.example",
+            vec!["identity_vc".to_string()],
+            "state-xyz",
+            Some("https://as.example".to_string()),
+        );
+        let value = serde_json::to_value(&offer).expect("serializes");
+
+        assert!(value["grants"]
+            .get(PRE_AUTHORIZED_CODE_GRANT_TYPE)
+            .is_none());
+        let grant = &value["grants"][AUTHORIZATION_CODE_GRANT_TYPE];
+        assert!(grant.get("pre-authorized_code").is_none());
+        assert!(grant.get("tx_code").is_none());
+    }
+
+    #[test]
+    fn credential_offer_pre_authorized_code_serialises_to_spec_shape() {
+        let offer = CredentialOffer::pre_authorized_code(
+            "https://issuer.example",
+            vec!["identity_vc".to_string()],
+            "pre-auth-code-123",
+            Some(TxCode::new(
+                6,
+                Some("Enter the code from the letter".to_string()),
+            )),
+        );
+        let value = serde_json::to_value(&offer).expect("serializes");
+
+        assert_eq!(value["credential_issuer"], "https://issuer.example");
+        assert_eq!(value["credential_configuration_ids"][0], "identity_vc");
+        let grant = &value["grants"][PRE_AUTHORIZED_CODE_GRANT_TYPE];
+        assert_eq!(grant["pre-authorized_code"], "pre-auth-code-123");
+        assert_eq!(grant["tx_code"]["input_mode"], "numeric");
+        assert_eq!(grant["tx_code"]["length"], 6);
+        assert_eq!(
+            grant["tx_code"]["description"],
+            "Enter the code from the letter"
+        );
+
+        let round_tripped: CredentialOffer =
+            serde_json::from_value(value).expect("round-trip deserializes");
+        assert!(round_tripped
+            .grants
+            .contains_key(PRE_AUTHORIZED_CODE_GRANT_TYPE));
+    }
+
+    #[test]
+    fn credential_offer_pre_authorized_code_omits_tx_code_when_absent() {
+        let offer = CredentialOffer::pre_authorized_code(
+            "https://issuer.example",
+            vec!["identity_vc".to_string()],
+            "pre-auth-code-123",
+            None,
+        );
+        let value = serde_json::to_value(&offer).expect("serializes");
+
+        let grant = &value["grants"][PRE_AUTHORIZED_CODE_GRANT_TYPE];
+        assert_eq!(grant["pre-authorized_code"], "pre-auth-code-123");
+        assert!(grant.get("tx_code").is_none());
+    }
+
+    #[test]
+    fn tx_code_defaults_input_mode_and_omits_description() {
+        let tx_code = TxCode::new(4, None);
+        let value = serde_json::to_value(&tx_code).expect("serializes");
+
+        assert_eq!(value["input_mode"], "numeric");
+        assert_eq!(value["length"], 4);
+        assert!(value.get("description").is_none());
+
+        let from_minimal: TxCode =
+            serde_json::from_value(json!({"length": 8})).expect("deserializes minimal tx_code");
+        assert_eq!(from_minimal.input_mode, TxCodeInputMode::Numeric);
+        assert_eq!(from_minimal.length, 8);
+        assert_eq!(from_minimal.description, None);
+    }
+
+    #[test]
+    fn token_request_deserialises_from_form_payload() {
+        let form = "grant_type=urn:ietf:params:oauth:grant-type:pre-authorized_code\
+            &pre-authorized_code=pre-auth-code-123&tx_code=123456";
+        let request: TokenRequest =
+            serde_urlencoded::from_str(form).expect("form decodes into TokenRequest");
+
+        assert_eq!(request.grant_type, PRE_AUTHORIZED_CODE_GRANT_TYPE);
+        assert_eq!(
+            request.pre_authorized_code.as_deref(),
+            Some("pre-auth-code-123")
+        );
+        assert_eq!(request.tx_code.as_deref(), Some("123456"));
+
+        let request: TokenRequest = serde_json::from_value(json!({
+            "grant_type": PRE_AUTHORIZED_CODE_GRANT_TYPE,
+            "pre-authorized_code": "pre-auth-code-123"
+        }))
+        .expect("json decodes into TokenRequest");
+        assert_eq!(
+            request.pre_authorized_code.as_deref(),
+            Some("pre-auth-code-123")
+        );
+        assert_eq!(request.tx_code, None);
+    }
+
+    #[test]
+    fn token_response_serialises_access_token_and_c_nonce() {
+        let response = TokenResponse {
+            access_token: "access-token-abc".to_string(),
+            token_type: "Bearer".to_string(),
+            expires_in: Some(300),
+            c_nonce: Some("c-nonce-xyz".to_string()),
+            c_nonce_expires_in: Some(120),
+        };
+        let value = serde_json::to_value(&response).expect("serializes");
+
+        assert_eq!(value["access_token"], "access-token-abc");
+        assert_eq!(value["token_type"], "Bearer");
+        assert_eq!(value["expires_in"], 300);
+        assert_eq!(value["c_nonce"], "c-nonce-xyz");
+        assert_eq!(value["c_nonce_expires_in"], 120);
+
+        let round_tripped: TokenResponse =
+            serde_json::from_value(value).expect("round-trip deserializes");
+        assert_eq!(round_tripped.access_token, "access-token-abc");
+        assert_eq!(round_tripped.c_nonce.as_deref(), Some("c-nonce-xyz"));
+    }
+
+    #[test]
+    fn token_response_omits_c_nonce_expires_in_when_absent() {
+        let response = TokenResponse {
+            access_token: "access-token-abc".to_string(),
+            token_type: "Bearer".to_string(),
+            expires_in: Some(300),
+            c_nonce: Some("c-nonce-xyz".to_string()),
+            c_nonce_expires_in: None,
+        };
+        let value = serde_json::to_value(&response).expect("serializes");
+
+        assert!(value.get("c_nonce_expires_in").is_none());
+    }
+
+    #[test]
+    fn credential_issuer_metadata_token_endpoint_serialisation() {
+        let metadata = CredentialIssuerMetadata::new(
+            "https://issuer.example",
+            "https://issuer.example/credential",
+            None,
+            Vec::new(),
+            BTreeMap::new(),
+        );
+        let value = serde_json::to_value(&metadata).expect("serializes");
+        assert!(value.get("token_endpoint").is_none());
+
+        let metadata = metadata.with_token_endpoint("https://issuer.example/token".to_string());
+        let value = serde_json::to_value(&metadata).expect("serializes");
+        assert_eq!(value["token_endpoint"], "https://issuer.example/token");
+
+        let round_tripped: CredentialIssuerMetadata =
+            serde_json::from_value(value).expect("round-trip deserializes");
+        assert_eq!(
+            round_tripped.token_endpoint.as_deref(),
+            Some("https://issuer.example/token")
+        );
     }
 
     fn policy(expected_nonce: Option<&str>) -> ProofValidationPolicy<'_> {

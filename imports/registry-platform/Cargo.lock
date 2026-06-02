@@ -1656,6 +1656,7 @@ dependencies = [
  "registry-platform-replay",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "thiserror",
  "time",
  "tokio",
