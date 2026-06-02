@@ -5,6 +5,7 @@ pub mod config;
 pub mod error;
 pub mod model;
 pub mod sd_jwt;
+pub mod tokens;
 
 pub use config::*;
 pub use error::{missing_context_error, EvidenceError};

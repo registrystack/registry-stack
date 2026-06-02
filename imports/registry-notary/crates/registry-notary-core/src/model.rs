@@ -310,6 +310,9 @@ pub enum EvidenceEntityReference {}
 pub enum HolderIdentifier {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreAuthorizedCodeIdentifier {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CredentialIdentifier {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

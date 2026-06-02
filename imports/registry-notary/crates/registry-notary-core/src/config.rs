@@ -289,6 +289,7 @@ impl StandaloneRegistryNotaryConfig {
         }
         self.self_attestation.validate(&self.auth, &self.evidence)?;
         self.validate_oid4vci_cross_block()?;
+        self.validate_access_token_signing_cross_block()?;
         self.federation.validate(&self.evidence)?;
         self.validate_replay_cross_block()?;
         Ok(())
@@ -297,6 +298,74 @@ impl StandaloneRegistryNotaryConfig {
     fn validate_oid4vci_cross_block(&self) -> Result<(), EvidenceConfigError> {
         self.oid4vci
             .validate(&self.self_attestation, &self.evidence)
+    }
+
+    fn validate_access_token_signing_cross_block(&self) -> Result<(), EvidenceConfigError> {
+        let signing = &self.auth.access_token_signing;
+        if !signing.enabled {
+            return Ok(());
+        }
+        if signing.issuer.trim().is_empty() {
+            return invalid_access_token_signing("issuer must not be empty when enabled");
+        }
+        validate_access_token_signing_entries("audiences", &signing.audiences)?;
+        if signing.allowed_algorithms.is_empty()
+            || signing
+                .allowed_algorithms
+                .iter()
+                .any(|alg| alg != CREDENTIAL_SIGNING_ALG_EDDSA)
+        {
+            return invalid_access_token_signing(format!(
+                "allowed_algorithms must list only {CREDENTIAL_SIGNING_ALG_EDDSA}"
+            ));
+        }
+        if signing.token_typ.trim().is_empty() {
+            return invalid_access_token_signing("token_typ must not be empty when enabled");
+        }
+        // The access-token `typ` must differ from the pre-authorized-code `typ`,
+        // or a pre-authorized code would also verify as an access token (the two
+        // are distinguished only by header `typ`).
+        if signing.token_typ == crate::tokens::PRE_AUTHORIZED_CODE_JWT_TYP {
+            return invalid_access_token_signing(format!(
+                "token_typ must not equal the pre-authorized-code typ '{}'",
+                crate::tokens::PRE_AUTHORIZED_CODE_JWT_TYP
+            ));
+        }
+        if signing.access_token_ttl_seconds == 0 || signing.access_token_ttl_seconds > 600 {
+            return invalid_access_token_signing(
+                "access_token_ttl_seconds must be between 1 and 600",
+            );
+        }
+        if signing.signing_key_id.trim().is_empty() {
+            return invalid_access_token_signing("signing_key_id must not be empty when enabled");
+        }
+        let key = self
+            .evidence
+            .signing_keys
+            .get(signing.signing_key_id.as_str())
+            .ok_or_else(|| EvidenceConfigError::InvalidAccessTokenSigningConfig {
+                reason: format!(
+                    "signing_key_id '{}' must reference an evidence.signing_keys entry",
+                    signing.signing_key_id
+                ),
+            })?;
+        if !key.status.may_sign() {
+            return invalid_access_token_signing(format!(
+                "signing_key_id '{}' must be an active signing key",
+                signing.signing_key_id
+            ));
+        }
+        // The access-token key MUST be distinct from every credential-signing
+        // key so a confusion or compromise of one is not the other.
+        for (profile_id, profile) in &self.evidence.credential_profiles {
+            if profile.signing_key == signing.signing_key_id {
+                return invalid_access_token_signing(format!(
+                    "signing_key_id '{}' must be distinct from credential profile '{profile_id}' signing key",
+                    signing.signing_key_id
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn validate_replay_cross_block(&self) -> Result<(), EvidenceConfigError> {
@@ -981,6 +1050,10 @@ pub struct Oid4vciConfig {
     pub authorization: Oid4vciAuthorizationConfig,
     #[serde(default)]
     pub proof: Oid4vciProofConfig,
+    /// Pre-authorized-code flow settings. Disabled by default; offers fall
+    /// back to the `authorization_code` grant unless this is enabled.
+    #[serde(default)]
+    pub pre_authorized_code: Oid4vciPreAuthorizedCodeConfig,
     #[serde(default)]
     pub credential_configurations: BTreeMap<String, Oid4vciCredentialConfigurationConfig>,
 }
@@ -995,6 +1068,25 @@ impl Oid4vciConfig {
         self_attestation: &SelfAttestationConfig,
         evidence: &EvidenceConfig,
     ) -> Result<(), EvidenceConfigError> {
+        // The pre-authorized-code block is validated regardless of the oid4vci
+        // enable toggle so a partially-configured flow is rejected, but the
+        // flow is an OID4VCI grant and so requires oid4vci itself enabled.
+        if self.pre_authorized_code.enabled && !self.enabled {
+            return invalid_oid4vci(
+                "pre_authorized_code.enabled = true requires oid4vci.enabled = true",
+            );
+        }
+        self.pre_authorized_code.validate()?;
+        if self.pre_authorized_code.enabled
+            && self_attestation
+                .rate_limits
+                .tx_code_attempts_per_code_per_minute
+                == 0
+        {
+            return invalid_oid4vci(
+                "self_attestation.rate_limits.tx_code_attempts_per_code_per_minute must be greater than zero when pre_authorized_code.enabled = true",
+            );
+        }
         if !self.enabled {
             return Ok(());
         }
@@ -1143,6 +1235,161 @@ impl Oid4vciAuthorizationConfig {
 fn default_oid4vci_pkce_method() -> String {
     PKCE_METHOD_S256.to_string()
 }
+
+/// Pre-authorized-code flow configuration.
+///
+/// All fields default so existing configs that omit this block load unchanged
+/// with the flow disabled. When `enabled`, the eSignet RP login settings, the
+/// callback redirect, and the TTLs become required (validated cross-block).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Oid4vciPreAuthorizedCodeConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub tx_code: Oid4vciTxCodeConfig,
+    /// eSignet RP settings for the citizen login leg.
+    #[serde(default)]
+    pub esignet: Oid4vciEsignetRpConfig,
+    /// Pre-authorized-code lifetime in seconds.
+    #[serde(default = "default_pre_authorized_code_ttl_seconds")]
+    pub pre_authorized_code_ttl_seconds: u64,
+}
+
+impl Default for Oid4vciPreAuthorizedCodeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            tx_code: Oid4vciTxCodeConfig::default(),
+            esignet: Oid4vciEsignetRpConfig::default(),
+            pre_authorized_code_ttl_seconds: default_pre_authorized_code_ttl_seconds(),
+        }
+    }
+}
+
+impl Oid4vciPreAuthorizedCodeConfig {
+    fn validate(&self) -> Result<(), EvidenceConfigError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        self.tx_code.validate()?;
+        self.esignet.validate()?;
+        if self.pre_authorized_code_ttl_seconds == 0 || self.pre_authorized_code_ttl_seconds > 600 {
+            return invalid_oid4vci(
+                "pre_authorized_code.pre_authorized_code_ttl_seconds must be between 1 and 600",
+            );
+        }
+        Ok(())
+    }
+}
+
+const fn default_pre_authorized_code_ttl_seconds() -> u64 {
+    300
+}
+
+/// `tx_code` (PIN) policy for the pre-authorized-code grant. A `tx_code` is
+/// required by default because a code without a PIN is a bearer credential.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Oid4vciTxCodeConfig {
+    #[serde(default = "default_tx_code_required")]
+    pub required: bool,
+    #[serde(default = "default_tx_code_input_mode")]
+    pub input_mode: String,
+    #[serde(default = "default_tx_code_length")]
+    pub length: u64,
+}
+
+impl Default for Oid4vciTxCodeConfig {
+    fn default() -> Self {
+        Self {
+            required: default_tx_code_required(),
+            input_mode: default_tx_code_input_mode(),
+            length: default_tx_code_length(),
+        }
+    }
+}
+
+impl Oid4vciTxCodeConfig {
+    fn validate(&self) -> Result<(), EvidenceConfigError> {
+        if !self.required {
+            return invalid_oid4vci(
+                "pre_authorized_code.tx_code.required must be true; an offer without a PIN is a bearer credential",
+            );
+        }
+        if self.input_mode != TX_CODE_INPUT_MODE_NUMERIC {
+            return invalid_oid4vci("pre_authorized_code.tx_code.input_mode must be numeric");
+        }
+        if !(4..=12).contains(&self.length) {
+            return invalid_oid4vci("pre_authorized_code.tx_code.length must be between 4 and 12");
+        }
+        Ok(())
+    }
+}
+
+const fn default_tx_code_required() -> bool {
+    true
+}
+
+fn default_tx_code_input_mode() -> String {
+    TX_CODE_INPUT_MODE_NUMERIC.to_string()
+}
+
+const fn default_tx_code_length() -> u64 {
+    6
+}
+
+/// eSignet relying-party settings for the citizen login leg of the
+/// pre-authorized-code flow.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Oid4vciEsignetRpConfig {
+    /// Confidential client id the Notary presents to eSignet.
+    #[serde(default)]
+    pub client_id: String,
+    /// `evidence.signing_keys` entry used to sign the eSignet
+    /// `private_key_jwt` client assertion.
+    #[serde(default)]
+    pub client_signing_key_id: String,
+    /// Notary callback the citizen browser is redirected back to.
+    #[serde(default)]
+    pub redirect_uri: String,
+    /// eSignet authorize endpoint.
+    #[serde(default)]
+    pub authorize_url: String,
+    /// eSignet token endpoint.
+    #[serde(default)]
+    pub token_url: String,
+    /// OAuth scopes requested at eSignet.
+    #[serde(default)]
+    pub scopes: Vec<String>,
+}
+
+impl Oid4vciEsignetRpConfig {
+    fn validate(&self) -> Result<(), EvidenceConfigError> {
+        if self.client_id.trim().is_empty() {
+            return invalid_oid4vci("pre_authorized_code.esignet.client_id must not be empty");
+        }
+        if self.client_signing_key_id.trim().is_empty() {
+            return invalid_oid4vci(
+                "pre_authorized_code.esignet.client_signing_key_id must not be empty",
+            );
+        }
+        validate_oid4vci_public_url(
+            "pre_authorized_code.esignet.redirect_uri",
+            &self.redirect_uri,
+        )?;
+        validate_oid4vci_public_url(
+            "pre_authorized_code.esignet.authorize_url",
+            &self.authorize_url,
+        )?;
+        validate_oid4vci_public_url("pre_authorized_code.esignet.token_url", &self.token_url)?;
+        validate_oid4vci_non_empty_entries("pre_authorized_code.esignet.scopes", &self.scopes)?;
+        Ok(())
+    }
+}
+
+const TX_CODE_INPUT_MODE_NUMERIC: &str = "numeric";
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -1439,6 +1686,25 @@ fn invalid_oid4vci<T>(reason: impl Into<String>) -> Result<T, EvidenceConfigErro
     Err(EvidenceConfigError::InvalidOid4vciConfig {
         reason: reason.into(),
     })
+}
+
+fn invalid_access_token_signing<T>(reason: impl Into<String>) -> Result<T, EvidenceConfigError> {
+    Err(EvidenceConfigError::InvalidAccessTokenSigningConfig {
+        reason: reason.into(),
+    })
+}
+
+fn validate_access_token_signing_entries(
+    field: &str,
+    values: &[String],
+) -> Result<(), EvidenceConfigError> {
+    if values.is_empty() {
+        return invalid_access_token_signing(format!("{field} must not be empty when enabled"));
+    }
+    if values.iter().any(|value| value.trim().is_empty()) {
+        return invalid_access_token_signing(format!("{field} must not contain blank entries"));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -1894,6 +2160,13 @@ pub struct SelfAttestationRateLimitsConfig {
     pub per_holder_per_hour: u32,
     #[serde(default)]
     pub credential_issuance_per_principal_per_hour: u32,
+    /// Per-minute cap on `tx_code` attempts against a single
+    /// `pre-authorized_code`. Bounds brute force of the numeric PIN at the
+    /// pre-authorized-code token endpoint. Defaults to zero so existing
+    /// configs that do not enable pre-auth still validate; it must be greater
+    /// than zero only when the pre-authorized-code flow is enabled.
+    #[serde(default)]
+    pub tx_code_attempts_per_code_per_minute: u32,
 }
 
 impl SelfAttestationRateLimitsConfig {
@@ -2285,6 +2558,11 @@ pub struct EvidenceAuthConfig {
     pub bearer_tokens: Vec<EvidenceCredentialConfig>,
     #[serde(default)]
     pub oidc: Option<EvidenceOidcAuthConfig>,
+    /// Trust anchor for Notary-minted access tokens (the pre-authorized-code
+    /// flow's second verifier). Disabled by default so existing configs load
+    /// unchanged.
+    #[serde(default)]
+    pub access_token_signing: AccessTokenSigningConfig,
 }
 
 impl Default for EvidenceAuthConfig {
@@ -2294,12 +2572,72 @@ impl Default for EvidenceAuthConfig {
             api_keys: Vec::new(),
             bearer_tokens: Vec::new(),
             oidc: None,
+            access_token_signing: AccessTokenSigningConfig::default(),
         }
     }
 }
 
 fn default_auth_mode() -> String {
     "api_key".to_string()
+}
+
+/// Self-issued access-token signing configuration.
+///
+/// When `enabled`, the Notary mints its own access tokens (for the
+/// pre-authorized-code flow) signed with a dedicated `signing_keys` entry that
+/// MUST be distinct from any credential-signing key. The minted token's
+/// `iss`/`aud`/`typ`/alg pin the second verifier's trust anchor.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccessTokenSigningConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Issuer (`iss`) the Notary stamps into its own access tokens.
+    #[serde(default)]
+    pub issuer: String,
+    /// Audiences (`aud`) accepted for Notary-minted access tokens.
+    #[serde(default)]
+    pub audiences: Vec<String>,
+    /// Allowed signing algorithms. Only EdDSA is supported.
+    #[serde(default = "default_access_token_signing_algorithms")]
+    pub allowed_algorithms: Vec<String>,
+    /// Header `typ` stamped into Notary access tokens, distinct from the
+    /// credential `typ` so a token cannot be replayed as another class.
+    #[serde(default = "default_access_token_typ")]
+    pub token_typ: String,
+    /// `evidence.signing_keys` entry used to sign access tokens. Must be a
+    /// dedicated key, never a credential-signing key.
+    #[serde(default)]
+    pub signing_key_id: String,
+    /// Access-token lifetime in seconds.
+    #[serde(default = "default_access_token_ttl_seconds")]
+    pub access_token_ttl_seconds: u64,
+}
+
+impl Default for AccessTokenSigningConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            issuer: String::new(),
+            audiences: Vec::new(),
+            allowed_algorithms: default_access_token_signing_algorithms(),
+            token_typ: default_access_token_typ(),
+            signing_key_id: String::new(),
+            access_token_ttl_seconds: default_access_token_ttl_seconds(),
+        }
+    }
+}
+
+fn default_access_token_signing_algorithms() -> Vec<String> {
+    vec![CREDENTIAL_SIGNING_ALG_EDDSA.to_string()]
+}
+
+fn default_access_token_typ() -> String {
+    "registry-notary-access+jwt".to_string()
+}
+
+const fn default_access_token_ttl_seconds() -> u64 {
+    300
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -2571,6 +2909,8 @@ pub enum EvidenceConfigError {
     InvalidSelfAttestationConfig { reason: String },
     #[error("invalid oid4vci config: {reason}")]
     InvalidOid4vciConfig { reason: String },
+    #[error("invalid auth.access_token_signing config: {reason}")]
+    InvalidAccessTokenSigningConfig { reason: String },
     #[error("invalid replay config: {reason}")]
     InvalidReplayConfig { reason: String },
     #[error("invalid credential status config: {reason}")]
@@ -6523,5 +6863,212 @@ disclosure:
             err,
             EvidenceConfigError::UnsupportedCredentialProfileDidMethods { .. }
         ));
+    }
+
+    fn second_signing_key() -> SigningKeyConfig {
+        serde_norway::from_str(
+            r#"
+provider: local_jwk_env
+private_jwk_env: ACCESS_TOKEN_KEY
+alg: EdDSA
+kid: did:web:issuer.example#access-token-key
+status: active
+"#,
+        )
+        .expect("access-token signing key is valid YAML")
+    }
+
+    /// A pre-auth-enabled oid4vci config with a dedicated access-token signing
+    /// key, distinct from the credential-signing key.
+    fn valid_pre_auth_config() -> StandaloneRegistryNotaryConfig {
+        let mut config = valid_oid4vci_config();
+        config
+            .self_attestation
+            .rate_limits
+            .tx_code_attempts_per_code_per_minute = 5;
+        config
+            .evidence
+            .signing_keys
+            .insert("access-token-key".to_string(), second_signing_key());
+        config.oid4vci.pre_authorized_code = serde_norway::from_str(
+            r#"
+enabled: true
+tx_code:
+  required: true
+  input_mode: numeric
+  length: 6
+esignet:
+  client_id: registry-lab-live-client
+  client_signing_key_id: issuer-key
+  redirect_uri: http://127.0.0.1:4325/oid4vci/offer/callback
+  authorize_url: https://id.example.gov/authorize
+  token_url: https://id.example.gov/oauth/v2/token
+  scopes:
+    - openid
+pre_authorized_code_ttl_seconds: 300
+"#,
+        )
+        .expect("pre-auth config is valid YAML");
+        config.auth.access_token_signing = serde_norway::from_str(
+            r#"
+enabled: true
+issuer: http://127.0.0.1:4325
+audiences:
+  - http://127.0.0.1:4325
+allowed_algorithms:
+  - EdDSA
+token_typ: registry-notary-access+jwt
+signing_key_id: access-token-key
+access_token_ttl_seconds: 300
+"#,
+        )
+        .expect("access-token signing config is valid YAML");
+        config
+    }
+
+    fn expect_access_token_signing_error(config: &StandaloneRegistryNotaryConfig) -> String {
+        match config
+            .validate()
+            .expect_err("access-token signing config must fail validation")
+        {
+            EvidenceConfigError::InvalidAccessTokenSigningConfig { reason } => reason,
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn pre_auth_and_access_token_signing_are_disabled_by_default() {
+        let config = minimal_config();
+        assert!(!config.oid4vci.pre_authorized_code.enabled);
+        assert!(!config.auth.access_token_signing.enabled);
+        config
+            .validate()
+            .expect("a config that omits the pre-auth blocks still validates");
+    }
+
+    #[test]
+    fn omitted_pre_auth_blocks_use_safe_defaults() {
+        let config = minimal_config();
+        let tx_code = &config.oid4vci.pre_authorized_code.tx_code;
+        assert!(tx_code.required, "tx_code is required by default");
+        assert_eq!(tx_code.input_mode, "numeric");
+        let signing = &config.auth.access_token_signing;
+        assert_eq!(signing.allowed_algorithms, vec!["EdDSA".to_string()]);
+        assert_eq!(signing.token_typ, "registry-notary-access+jwt");
+    }
+
+    #[test]
+    fn valid_pre_auth_config_validates() {
+        valid_pre_auth_config()
+            .validate()
+            .expect("a fully-configured pre-auth config validates");
+    }
+
+    #[test]
+    fn access_token_signing_enabled_requires_issuer() {
+        let mut config = valid_pre_auth_config();
+        config.auth.access_token_signing.issuer = String::new();
+        let reason = expect_access_token_signing_error(&config);
+        assert!(reason.contains("issuer"));
+    }
+
+    #[test]
+    fn access_token_signing_enabled_requires_audiences() {
+        let mut config = valid_pre_auth_config();
+        config.auth.access_token_signing.audiences = Vec::new();
+        let reason = expect_access_token_signing_error(&config);
+        assert!(reason.contains("audiences"));
+    }
+
+    #[test]
+    fn access_token_signing_requires_known_signing_key() {
+        let mut config = valid_pre_auth_config();
+        config.auth.access_token_signing.signing_key_id = "missing-key".to_string();
+        let reason = expect_access_token_signing_error(&config);
+        assert!(reason.contains("evidence.signing_keys"));
+    }
+
+    #[test]
+    fn access_token_signing_key_must_be_distinct_from_credential_key() {
+        let mut config = valid_pre_auth_config();
+        // Point the access-token key at the credential-signing key.
+        config.auth.access_token_signing.signing_key_id = "issuer-key".to_string();
+        let reason = expect_access_token_signing_error(&config);
+        assert!(reason.contains("distinct from credential profile"));
+    }
+
+    #[test]
+    fn access_token_signing_key_must_be_active() {
+        let mut config = valid_pre_auth_config();
+        config
+            .evidence
+            .signing_keys
+            .get_mut("access-token-key")
+            .expect("access-token key exists")
+            .status = SigningKeyStatus::PublishOnly;
+        // PublishOnly requires public_jwk_env and no private_jwk_env.
+        let key = config
+            .evidence
+            .signing_keys
+            .get_mut("access-token-key")
+            .expect("access-token key exists");
+        key.public_jwk_env = "ACCESS_TOKEN_PUBLIC_KEY".to_string();
+        key.private_jwk_env = String::new();
+        let reason = expect_access_token_signing_error(&config);
+        assert!(reason.contains("active signing key"));
+    }
+
+    #[test]
+    fn access_token_signing_rejects_non_eddsa_algorithms() {
+        let mut config = valid_pre_auth_config();
+        config.auth.access_token_signing.allowed_algorithms = vec!["RS256".to_string()];
+        let reason = expect_access_token_signing_error(&config);
+        assert!(reason.contains("EdDSA"));
+    }
+
+    #[test]
+    fn pre_auth_enabled_requires_oid4vci_enabled() {
+        let mut config = valid_pre_auth_config();
+        config.oid4vci.enabled = false;
+        let reason = expect_oid4vci_error(&config);
+        assert!(reason.contains("requires oid4vci.enabled = true"));
+    }
+
+    #[test]
+    fn pre_auth_rejects_optional_tx_code() {
+        let mut config = valid_pre_auth_config();
+        config.oid4vci.pre_authorized_code.tx_code.required = false;
+        let reason = expect_oid4vci_error(&config);
+        assert!(reason.contains("tx_code.required must be true"));
+    }
+
+    #[test]
+    fn pre_auth_requires_esignet_client_id() {
+        let mut config = valid_pre_auth_config();
+        config.oid4vci.pre_authorized_code.esignet.client_id = String::new();
+        let reason = expect_oid4vci_error(&config);
+        assert!(reason.contains("esignet.client_id"));
+    }
+
+    #[test]
+    fn pre_auth_rejects_out_of_range_code_ttl() {
+        let mut config = valid_pre_auth_config();
+        config
+            .oid4vci
+            .pre_authorized_code
+            .pre_authorized_code_ttl_seconds = 0;
+        let reason = expect_oid4vci_error(&config);
+        assert!(reason.contains("pre_authorized_code_ttl_seconds"));
+    }
+
+    #[test]
+    fn pre_auth_requires_tx_code_rate_limit() {
+        let mut config = valid_pre_auth_config();
+        config
+            .self_attestation
+            .rate_limits
+            .tx_code_attempts_per_code_per_minute = 0;
+        let reason = expect_oid4vci_error(&config);
+        assert!(reason.contains("tx_code_attempts_per_code_per_minute"));
     }
 }

@@ -5,8 +5,9 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use registry_notary_core::{
-    Bounded, EvidenceEntityReference, EvidenceError, Hashed, HolderIdentifier, PrincipalIdentifier,
-    SelfAttestationDenialCode, SelfAttestationRateLimitsConfig, SubjectBinding,
+    Bounded, EvidenceEntityReference, EvidenceError, Hashed, HolderIdentifier,
+    PreAuthorizedCodeIdentifier, PrincipalIdentifier, SelfAttestationDenialCode,
+    SelfAttestationRateLimitsConfig, SubjectBinding,
 };
 use registry_platform_audit::AuditKeyHasher;
 use time::{Duration, OffsetDateTime};
@@ -22,6 +23,7 @@ pub enum SelfAttestationRateLimitBucket {
     SubjectMismatchPerPrincipal,
     PerHolderIssuance,
     CredentialIssuancePerPrincipal,
+    TxCodeAttemptPerCode,
 }
 
 impl SelfAttestationRateLimitBucket {
@@ -33,6 +35,7 @@ impl SelfAttestationRateLimitBucket {
             Self::SubjectMismatchPerPrincipal => "subject_mismatch_per_principal",
             Self::PerHolderIssuance => "per_holder_issuance",
             Self::CredentialIssuancePerPrincipal => "credential_issuance_per_principal",
+            Self::TxCodeAttemptPerCode => "tx_code_attempt_per_code",
         }
     }
 
@@ -43,12 +46,15 @@ impl SelfAttestationRateLimitBucket {
             Self::SubjectMismatchPerPrincipal => "sm",
             Self::PerHolderIssuance => "hi",
             Self::CredentialIssuancePerPrincipal => "ci",
+            Self::TxCodeAttemptPerCode => "tx",
         }
     }
 
     const fn window(self) -> Duration {
         match self {
-            Self::InvalidTokenPerClientAddress | Self::PerPrincipal => Duration::minutes(1),
+            Self::InvalidTokenPerClientAddress
+            | Self::PerPrincipal
+            | Self::TxCodeAttemptPerCode => Duration::minutes(1),
             Self::SubjectMismatchPerPrincipal
             | Self::PerHolderIssuance
             | Self::CredentialIssuancePerPrincipal => Duration::hours(1),
@@ -147,6 +153,16 @@ impl SelfAttestationRateLimitKeys {
         subject_binding: &str,
     ) -> SelfAttestationRateLimitResult<Hashed<SubjectBinding>> {
         self.hash_identifier("subject_binding", subject_binding)
+    }
+
+    /// Hash a raw `pre-authorized_code` for use as a rate-limit key. The raw
+    /// code is brute-forceable via its `tx_code` PIN, so the limiter must key
+    /// by this hash and never by the raw code.
+    pub fn pre_authorized_code(
+        &self,
+        pre_authorized_code: &str,
+    ) -> SelfAttestationRateLimitResult<Hashed<PreAuthorizedCodeIdentifier>> {
+        self.hash_identifier("pre_authorized_code", pre_authorized_code)
     }
 
     pub fn subject_ref(
@@ -294,6 +310,16 @@ impl SelfAttestationRateLimiter {
         self.check_credential_issuance_at(principal, holder, OffsetDateTime::now_utc())
     }
 
+    /// Record one `tx_code` attempt against a single (hashed)
+    /// `pre-authorized_code`. After `tx_code_attempts_per_code_per_minute`
+    /// attempts in the window the code is locked.
+    pub fn check_tx_code_attempt(
+        &self,
+        pre_authorized_code: &Hashed<PreAuthorizedCodeIdentifier>,
+    ) -> SelfAttestationRateLimitResult<()> {
+        self.check_tx_code_attempt_at(pre_authorized_code, OffsetDateTime::now_utc())
+    }
+
     fn check_invalid_token_for_client_address_at(
         &self,
         client_address: &Hashed<ClientAddressIdentifier>,
@@ -380,6 +406,18 @@ impl SelfAttestationRateLimiter {
                 holder.as_str(),
             )?);
         }
+        self.check_and_consume(checks, None, now)
+    }
+
+    fn check_tx_code_attempt_at(
+        &self,
+        pre_authorized_code: &Hashed<PreAuthorizedCodeIdentifier>,
+        now: OffsetDateTime,
+    ) -> SelfAttestationRateLimitResult<()> {
+        let checks = vec![BucketCheck::new(
+            SelfAttestationRateLimitBucket::TxCodeAttemptPerCode,
+            pre_authorized_code.as_str(),
+        )?];
         self.check_and_consume(checks, None, now)
     }
 
@@ -483,6 +521,9 @@ impl SelfAttestationRateLimiter {
             SelfAttestationRateLimitBucket::PerHolderIssuance => self.config.per_holder_per_hour,
             SelfAttestationRateLimitBucket::CredentialIssuancePerPrincipal => {
                 self.config.credential_issuance_per_principal_per_hour
+            }
+            SelfAttestationRateLimitBucket::TxCodeAttemptPerCode => {
+                self.config.tx_code_attempts_per_code_per_minute
             }
         }
     }
@@ -597,6 +638,7 @@ mod tests {
             subject_mismatch_per_principal_per_hour: 2,
             per_holder_per_hour: 1,
             credential_issuance_per_principal_per_hour: 2,
+            tx_code_attempts_per_code_per_minute: 2,
             ..SelfAttestationRateLimitsConfig::default()
         }
     }
@@ -826,6 +868,80 @@ mod tests {
                 .expect("counter can be read"),
             2
         );
+    }
+
+    #[test]
+    fn tx_code_attempts_lock_a_single_pre_authorized_code() {
+        let mut config = config();
+        config.tx_code_attempts_per_code_per_minute = 2;
+        let limiter = SelfAttestationRateLimiter::new(config);
+        let code = keys()
+            .pre_authorized_code("pre-auth-code-secret")
+            .expect("pre-authorized code hashes");
+
+        limiter
+            .check_tx_code_attempt_at(&code, now())
+            .expect("first tx_code attempt is recorded");
+        limiter
+            .check_tx_code_attempt_at(&code, now())
+            .expect("second tx_code attempt is recorded");
+        let error = limiter
+            .check_tx_code_attempt_at(&code, now())
+            .expect_err("third tx_code attempt is limited");
+
+        assert_eq!(
+            error.bucket(),
+            Some(SelfAttestationRateLimitBucket::TxCodeAttemptPerCode)
+        );
+    }
+
+    #[test]
+    fn tx_code_bucket_is_keyed_by_hashed_code_not_the_raw_code() {
+        let limiter = SelfAttestationRateLimiter::new(config());
+        let raw_code = "pre-auth-code-secret";
+        let code = keys()
+            .pre_authorized_code(raw_code)
+            .expect("pre-authorized code hashes");
+
+        limiter
+            .check_tx_code_attempt_at(&code, now())
+            .expect("tx_code attempt is recorded");
+
+        assert!(
+            limiter
+                .stored_keys()
+                .iter()
+                .all(|key| !key.contains(raw_code)),
+            "raw pre-authorized_code must not be stored in limiter keys"
+        );
+    }
+
+    #[test]
+    fn tx_code_attempts_are_isolated_per_code() {
+        let mut config = config();
+        config.tx_code_attempts_per_code_per_minute = 1;
+        let limiter = SelfAttestationRateLimiter::new(config);
+        let key_builder = keys();
+        let code_one = key_builder
+            .pre_authorized_code("code-one")
+            .expect("first code hashes");
+        let code_two = key_builder
+            .pre_authorized_code("code-two")
+            .expect("second code hashes");
+
+        limiter
+            .check_tx_code_attempt_at(&code_one, now())
+            .expect("first attempt on code-one is allowed");
+        let error = limiter
+            .check_tx_code_attempt_at(&code_one, now())
+            .expect_err("second attempt on code-one is limited");
+        assert_eq!(
+            error.bucket(),
+            Some(SelfAttestationRateLimitBucket::TxCodeAttemptPerCode)
+        );
+        limiter
+            .check_tx_code_attempt_at(&code_two, now())
+            .expect("a different code is tracked independently");
     }
 
     #[test]
