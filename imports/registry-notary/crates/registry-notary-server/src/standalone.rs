@@ -1433,6 +1433,29 @@ fn subject_binding_value_from_id_token(
     subject_binding_value_from_claims(&verified.claims, subject_binding_claim)
 }
 
+/// Build the verifier config for eSignet `id_token`s and userinfo JWS.
+///
+/// The `id_token`'s `aud` is the RP client_id, so eSignet's issuer is pinned and
+/// the RP client_id is the only accepted audience. MOSIP eSignet signs its
+/// userinfo JWS without an `exp` claim (OpenID Connect Core makes `exp` optional
+/// for UserInfo responses), so this verifier must not require one; requiring it
+/// would reject every eSignet userinfo response and fail userinfo-sourced
+/// subject binding.
+fn esignet_token_verifier_config(issuer: &str, client_id: &str) -> TokenVerifierConfig {
+    TokenVerifierConfig::access_token_profile(
+        issuer.to_string(),
+        vec![client_id.to_string()],
+        vec![
+            Algorithm::EdDSA,
+            Algorithm::RS256,
+            Algorithm::PS256,
+            Algorithm::ES256,
+        ],
+        vec!["JWT".to_string()],
+    )
+    .with_userinfo_requires_exp(false)
+}
+
 impl PreAuthRuntime {
     fn from_config(
         config: &StandaloneRegistryNotaryConfig,
@@ -1478,20 +1501,8 @@ impl PreAuthRuntime {
             JwksFetcherConfig::defaults(),
             fetch_url_policy.clone(),
         ));
-        // The id_token's `aud` is the RP client_id; pin eSignet's issuer and the
-        // RP client_id as the only accepted audience.
         let esignet_id_token_verifier = Arc::new(TokenVerifier::new(
-            TokenVerifierConfig::access_token_profile(
-                esignet.issuer.clone(),
-                vec![esignet.client_id.clone()],
-                vec![
-                    Algorithm::EdDSA,
-                    Algorithm::RS256,
-                    Algorithm::PS256,
-                    Algorithm::ES256,
-                ],
-                vec!["JWT".to_string()],
-            ),
+            esignet_token_verifier_config(&esignet.issuer, &esignet.client_id),
             id_token_fetcher,
         ));
         Ok(Some(Self {
@@ -1631,7 +1642,10 @@ impl PreAuthRuntime {
             .esignet_id_token_verifier
             .verify_related_token(&tokens.id_token)
             .await
-            .map_err(|_| EvidenceError::MissingCredential)?;
+            .map_err(|err| {
+                tracing::warn!(error = %err, "eSignet id_token verification failed");
+                EvidenceError::MissingCredential
+            })?;
         // Bind the id_token to this login: the nonce must equal the one this
         // Notary generated at offer/start. This is the CSRF/replay guard.
         let nonce = verified
@@ -1639,8 +1653,12 @@ impl PreAuthRuntime {
             .extra
             .get("nonce")
             .and_then(Value::as_str)
-            .ok_or(EvidenceError::MissingCredential)?;
+            .ok_or_else(|| {
+                tracing::warn!("eSignet id_token missing nonce claim");
+                EvidenceError::MissingCredential
+            })?;
         if !constant_time_eq(nonce.as_bytes(), expected_nonce.as_bytes()) {
+            tracing::warn!("eSignet id_token nonce did not match the offer nonce");
             return Err(EvidenceError::MissingCredential);
         }
         let subject_binding_value = match self.subject_binding_claim_source {
@@ -1682,7 +1700,10 @@ impl PreAuthRuntime {
             ESIGNET_MAX_RESPONSE_BYTES,
         )
         .await
-        .map_err(|_| EvidenceError::MissingCredential)?;
+        .map_err(|err| {
+            tracing::warn!(error = %err, "eSignet userinfo fetch failed");
+            EvidenceError::MissingCredential
+        })?;
         let userinfo = self
             .esignet_id_token_verifier
             .verify_userinfo_jwt_with_claims_policy(
@@ -1692,7 +1713,10 @@ impl PreAuthRuntime {
                 std::slice::from_ref(&self.esignet_client_id),
             )
             .await
-            .map_err(|_| EvidenceError::MissingCredential)?;
+            .map_err(|err| {
+                tracing::warn!(error = %err, "eSignet userinfo verification failed");
+                EvidenceError::MissingCredential
+            })?;
         subject_binding_value_from_claims(&userinfo, subject_binding_claim)
     }
 
@@ -5191,6 +5215,19 @@ mod tests {
         assert_eq!(first, again);
         assert_ne!(first, other);
         assert_ne!(first.as_str(), "request-jti-1");
+    }
+
+    #[test]
+    fn esignet_verifier_config_does_not_require_userinfo_exp() {
+        // MOSIP eSignet signs its userinfo JWS without an `exp` claim, which the
+        // OpenID Connect Core spec permits for UserInfo responses. The RP verifier
+        // must therefore not require one, or every userinfo-sourced binding fails.
+        let config = esignet_token_verifier_config("https://esignet.example", "rp-client");
+
+        assert!(!config.userinfo_requires_exp);
+        assert_eq!(config.issuer, "https://esignet.example");
+        assert_eq!(config.audiences, vec!["rp-client".to_string()]);
+        assert_eq!(config.allowed_userinfo_typ, vec!["JWT".to_string()]);
     }
 
     #[tokio::test]
