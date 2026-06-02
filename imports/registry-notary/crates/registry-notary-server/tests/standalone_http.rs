@@ -4717,6 +4717,15 @@ fn urlencode(value: &str) -> String {
     out
 }
 
+/// Decode (without verifying) the JSON claims of a compact JWT's payload.
+fn jwt_payload(jwt: &str) -> Value {
+    let payload_b64 = jwt.split('.').nth(1).expect("jwt has a payload segment");
+    let bytes = URL_SAFE_NO_PAD
+        .decode(payload_b64)
+        .expect("payload is base64url");
+    serde_json::from_slice(&bytes).expect("payload is JSON")
+}
+
 #[tokio::test]
 async fn preauth_offer_start_redirects_to_esignet_and_mints_nothing() {
     set_preauth_env();
@@ -4846,6 +4855,142 @@ async fn preauth_token_endpoint_issues_access_token_and_c_nonce() {
     assert_eq!(body["token_type"], json!("Bearer"));
     assert!(body["c_nonce"].is_string());
     assert_eq!(body["expires_in"], json!(300));
+    idp.stop().await;
+}
+
+/// A userinfo-sourced subject binding (`claim_source = userinfo`) reads the
+/// binding claim from the eSignet userinfo JWS, not the `id_token`. This mirrors
+/// the hosted lab, where eSignet delivers `individual_id` only via userinfo.
+#[tokio::test]
+async fn preauth_callback_binds_subject_from_userinfo_when_claim_source_is_userinfo() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    );
+    config.self_attestation.subject_binding.claim_source = SelfAttestationClaimSource::Userinfo;
+    config.self_attestation.subject_binding.token_claim = "individual_id".to_string();
+    config.oid4vci.pre_authorized_code.esignet.userinfo_url =
+        format!("{}/userinfo", token_upstream.url());
+    config
+        .auth
+        .oidc
+        .as_mut()
+        .expect("oidc config exists")
+        .userinfo_endpoint = Some(format!("{}/userinfo", token_upstream.url()));
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    // The id_token (minted by drive_offer_to_code) carries no individual_id;
+    // the userinfo JWS supplies it, bound to the same subject.
+    let userinfo = idp.mint_token(json!({
+        "sub": "esignet-citizen-subject",
+        "aud": ESIGNET_RP_CLIENT_ID,
+        "individual_id": "civil-id-9001",
+    }));
+    token_upstream
+        .expect("GET", "/userinfo")
+        .respond_body(200, userinfo)
+        .await;
+
+    let (code, pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
+    let token = redeem_token(&server, &code, &pin).await;
+    token.assert_status_ok();
+    let body: Value = token.json();
+    let access_token = body["access_token"].as_str().expect("access token minted");
+    let claims = jwt_payload(access_token);
+    assert_eq!(
+        claims["individual_id"],
+        json!("civil-id-9001"),
+        "subject binding must come from the userinfo JWS, not the id_token"
+    );
+    idp.stop().await;
+}
+
+/// When the subject binding is userinfo-sourced but the userinfo JWS omits the
+/// binding claim, the callback denies the login and mints no code.
+#[tokio::test]
+async fn preauth_callback_denies_when_userinfo_lacks_subject_binding_claim() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    );
+    config.self_attestation.subject_binding.claim_source = SelfAttestationClaimSource::Userinfo;
+    config.self_attestation.subject_binding.token_claim = "individual_id".to_string();
+    config.oid4vci.pre_authorized_code.esignet.userinfo_url =
+        format!("{}/userinfo", token_upstream.url());
+    config
+        .auth
+        .oidc
+        .as_mut()
+        .expect("oidc config exists")
+        .userinfo_endpoint = Some(format!("{}/userinfo", token_upstream.url()));
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    // userinfo JWS bound to the subject but without the binding claim.
+    let userinfo = idp.mint_token(json!({
+        "sub": "esignet-citizen-subject",
+        "aud": ESIGNET_RP_CLIENT_ID,
+    }));
+    token_upstream
+        .expect("GET", "/userinfo")
+        .respond_body(200, userinfo)
+        .await;
+
+    let start = server
+        .get("/oid4vci/offer/start?credential_configuration_id=person_is_alive_sd_jwt")
+        .await;
+    start.assert_status(StatusCode::SEE_OTHER);
+    let location = start
+        .headers()
+        .get("location")
+        .expect("offer start redirects")
+        .to_str()
+        .expect("location is valid")
+        .to_string();
+    let state = query_param(&location, "state").expect("redirect carries state");
+    let nonce = query_param(&location, "nonce").expect("redirect carries nonce");
+    let id_token = esignet_id_token(&idp, &nonce, "person-1");
+    token_upstream
+        .expect("POST", "/token")
+        .respond_json(
+            200,
+            json!({
+                "access_token": "esignet-access-token",
+                "token_type": "Bearer",
+                "id_token": id_token,
+                "expires_in": 300,
+            }),
+        )
+        .await;
+    let callback = server
+        .get(&format!(
+            "/oid4vci/offer/callback?code=esignet-code-123&state={state}"
+        ))
+        .await;
+    assert_ne!(
+        callback.status_code(),
+        StatusCode::OK,
+        "a userinfo response missing the binding claim must deny the callback"
+    );
     idp.stop().await;
 }
 

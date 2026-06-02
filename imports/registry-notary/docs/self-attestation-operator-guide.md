@@ -112,7 +112,11 @@ Rules:
 
 - `token_claim` must be present in the configured token source.
 - `claim_source` is `access_token` by default. Use `userinfo` only when
-  `auth.oidc.userinfo_endpoint` is configured and reviewed.
+  `auth.oidc.userinfo_endpoint` is configured and reviewed. The pre-authorized-code
+  flow resolves the same binding claim from its own RP login, so when
+  `claim_source: userinfo` it additionally requires
+  `oid4vci.pre_authorized_code.esignet.userinfo_url` (the callback fetches the
+  userinfo JWS with the eSignet access token).
 - `request_field` is currently `subject_id`.
 - `id_type` should match the source lookup identifier type.
 - `normalize` must be `exact`.

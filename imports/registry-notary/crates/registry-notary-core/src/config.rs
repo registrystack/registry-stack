@@ -1077,6 +1077,22 @@ impl Oid4vciConfig {
             );
         }
         self.pre_authorized_code.validate()?;
+        // The pre-auth callback resolves the subject-binding claim from the
+        // eSignet userinfo endpoint when the claim is userinfo-sourced, so the
+        // endpoint must be configured for that path to work.
+        if self.pre_authorized_code.enabled
+            && self_attestation.subject_binding.claim_source == SelfAttestationClaimSource::Userinfo
+            && self
+                .pre_authorized_code
+                .esignet
+                .userinfo_url
+                .trim()
+                .is_empty()
+        {
+            return invalid_oid4vci(
+                "pre_authorized_code.esignet.userinfo_url must be set when self_attestation.subject_binding.claim_source = userinfo",
+            );
+        }
         if self.pre_authorized_code.enabled
             && self_attestation
                 .rate_limits
@@ -1366,6 +1382,12 @@ pub struct Oid4vciEsignetRpConfig {
     /// eSignet JWKS URI, used to resolve the `id_token` signing key by `kid`.
     #[serde(default)]
     pub jwks_uri: String,
+    /// eSignet userinfo endpoint. Required when the subject-binding claim is
+    /// sourced from userinfo rather than the `id_token`; the callback fetches
+    /// the userinfo JWS with the eSignet access token and reads the binding
+    /// claim from it.
+    #[serde(default)]
+    pub userinfo_url: String,
     /// OAuth scopes requested at eSignet.
     #[serde(default)]
     pub scopes: Vec<String>,
@@ -1400,6 +1422,12 @@ impl Oid4vciEsignetRpConfig {
         validate_oid4vci_public_url("pre_authorized_code.esignet.token_url", &self.token_url)?;
         validate_oid4vci_public_url("pre_authorized_code.esignet.issuer", &self.issuer)?;
         validate_oid4vci_public_url("pre_authorized_code.esignet.jwks_uri", &self.jwks_uri)?;
+        if !self.userinfo_url.trim().is_empty() {
+            validate_oid4vci_public_url(
+                "pre_authorized_code.esignet.userinfo_url",
+                &self.userinfo_url,
+            )?;
+        }
         validate_oid4vci_non_empty_entries("pre_authorized_code.esignet.scopes", &self.scopes)?;
         if self.login_state_ttl_seconds == 0 || self.login_state_ttl_seconds > 600 {
             return invalid_oid4vci(
@@ -7097,5 +7125,36 @@ access_token_ttl_seconds: 300
             .tx_code_attempts_per_code_per_minute = 0;
         let reason = expect_oid4vci_error(&config);
         assert!(reason.contains("tx_code_attempts_per_code_per_minute"));
+    }
+
+    #[test]
+    fn pre_auth_userinfo_binding_requires_esignet_userinfo_url() {
+        let mut config = valid_pre_auth_config();
+        config.self_attestation.subject_binding.claim_source = SelfAttestationClaimSource::Userinfo;
+        // Satisfy the resource-server userinfo rule so the failure is
+        // specifically the missing pre-auth eSignet userinfo endpoint.
+        if let Some(oidc) = config.auth.oidc.as_mut() {
+            oidc.userinfo_endpoint = Some("https://id.example.gov/userinfo".to_string());
+        }
+        config.oid4vci.pre_authorized_code.esignet.userinfo_url = String::new();
+        let reason = expect_oid4vci_error(&config);
+        assert!(
+            reason.contains("esignet.userinfo_url"),
+            "unexpected reason: {reason}"
+        );
+    }
+
+    #[test]
+    fn pre_auth_userinfo_binding_accepts_configured_userinfo_url() {
+        let mut config = valid_pre_auth_config();
+        config.self_attestation.subject_binding.claim_source = SelfAttestationClaimSource::Userinfo;
+        if let Some(oidc) = config.auth.oidc.as_mut() {
+            oidc.userinfo_endpoint = Some("https://id.example.gov/userinfo".to_string());
+        }
+        config.oid4vci.pre_authorized_code.esignet.userinfo_url =
+            "https://id.example.gov/userinfo".to_string();
+        config
+            .validate()
+            .expect("userinfo-sourced pre-auth binding validates with a userinfo_url");
     }
 }

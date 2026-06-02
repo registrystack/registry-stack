@@ -1283,8 +1283,19 @@ pub(crate) struct PreAuthRuntime {
     esignet_token_url: String,
     esignet_redirect_uri: String,
     esignet_scopes: Vec<String>,
+    /// eSignet issuer, accepted as the userinfo JWS `iss` when the subject
+    /// binding is userinfo-sourced.
+    esignet_issuer: String,
+    /// eSignet userinfo endpoint. `Some` only when the subject-binding claim is
+    /// userinfo-sourced; the callback fetches the userinfo JWS from here.
+    esignet_userinfo_url: Option<String>,
+    /// How the subject-binding claim is sourced. `Userinfo` makes the callback
+    /// fetch the eSignet userinfo JWS; otherwise the binding value is read from
+    /// the `id_token`.
+    subject_binding_claim_source: SelfAttestationClaimSource,
     /// eSignet `id_token` verifier (pins eSignet `iss`, `aud`=RP client_id,
-    /// signature via the eSignet JWKS, `exp`/`nbf`).
+    /// signature via the eSignet JWKS, `exp`/`nbf`). Also verifies the userinfo
+    /// JWS (same eSignet signing keys) when the binding is userinfo-sourced.
     esignet_id_token_verifier: Arc<TokenVerifier>,
     fetch_url_policy: FetchUrlPolicy,
     login_state_ttl_seconds: u64,
@@ -1313,6 +1324,44 @@ const ESIGNET_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const ESIGNET_MAX_RESPONSE_BYTES: u64 = 64 * 1024;
 const PRIVATE_KEY_JWT_CLIENT_ASSERTION_TYPE: &str =
     "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
+
+/// The eSignet token-endpoint response material the callback needs: the
+/// `id_token` (always) and the `access_token` (used to fetch userinfo when the
+/// subject binding is userinfo-sourced).
+struct EsignetTokenResponse {
+    id_token: String,
+    access_token: Option<String>,
+}
+
+/// Read the subject-binding claim value from verified OIDC claims (the
+/// `id_token` or the userinfo JWS).
+fn subject_binding_value_from_claims(
+    claims: &registry_platform_oidc::Claims,
+    subject_binding_claim: &str,
+) -> Result<String, EvidenceError> {
+    let value = if subject_binding_claim == "sub" {
+        claims.sub.clone().ok_or(EvidenceError::MissingCredential)?
+    } else {
+        claims
+            .extra
+            .get(subject_binding_claim)
+            .and_then(Value::as_str)
+            .ok_or(EvidenceError::MissingCredential)?
+            .to_string()
+    };
+    if value.trim().is_empty() {
+        return Err(EvidenceError::MissingCredential);
+    }
+    Ok(value)
+}
+
+/// Read the subject-binding claim from a verified `id_token`.
+fn subject_binding_value_from_id_token(
+    verified: &VerifiedToken,
+    subject_binding_claim: &str,
+) -> Result<String, EvidenceError> {
+    subject_binding_value_from_claims(&verified.claims, subject_binding_claim)
+}
 
 impl PreAuthRuntime {
     fn from_config(
@@ -1390,6 +1439,12 @@ impl PreAuthRuntime {
             esignet_token_url: esignet.token_url.clone(),
             esignet_redirect_uri: esignet.redirect_uri.clone(),
             esignet_scopes: esignet.scopes.clone(),
+            esignet_issuer: esignet.issuer.clone(),
+            esignet_userinfo_url: {
+                let url = esignet.userinfo_url.trim();
+                (!url.is_empty()).then(|| url.to_string())
+            },
+            subject_binding_claim_source: config.self_attestation.subject_binding.claim_source,
             esignet_id_token_verifier,
             fetch_url_policy,
             login_state_ttl_seconds: esignet.login_state_ttl_seconds,
@@ -1482,10 +1537,12 @@ impl PreAuthRuntime {
         Ok(url.to_string())
     }
 
-    /// Exchange the eSignet authorization `code` for an `id_token` using
-    /// `private_key_jwt` client authentication, validate the `id_token`
-    /// (signature against the eSignet JWKS, `iss`, `aud`==RP client_id, `exp`,
-    /// `nonce`==`expected_nonce`), then extract the subject claims.
+    /// Exchange the eSignet authorization `code` for an `id_token` (and
+    /// `access_token`) using `private_key_jwt` client authentication, validate
+    /// the `id_token` (signature against the eSignet JWKS, `iss`, `aud`==RP
+    /// client_id, `exp`, `nonce`==`expected_nonce`), then extract the subject
+    /// claims. The subject-binding value is read from the `id_token` or, when
+    /// the binding is userinfo-sourced, fetched from the eSignet userinfo JWS.
     ///
     /// Every failure maps to `EvidenceError::MissingCredential` so the callback
     /// leaks no detail about why the login failed.
@@ -1496,13 +1553,13 @@ impl PreAuthRuntime {
         expected_nonce: &str,
         subject_binding_claim: &str,
     ) -> Result<EsignetSubject, EvidenceError> {
-        let id_token = self
+        let tokens = self
             .esignet_token_exchange(code, pkce_verifier)
             .await
             .map_err(|_| EvidenceError::MissingCredential)?;
         let verified = self
             .esignet_id_token_verifier
-            .verify_related_token(&id_token)
+            .verify_related_token(&tokens.id_token)
             .await
             .map_err(|_| EvidenceError::MissingCredential)?;
         // Bind the id_token to this login: the nonce must equal the one this
@@ -1516,33 +1573,71 @@ impl PreAuthRuntime {
         if !constant_time_eq(nonce.as_bytes(), expected_nonce.as_bytes()) {
             return Err(EvidenceError::MissingCredential);
         }
-        self.subject_from_id_token(&verified, subject_binding_claim)
+        let subject_binding_value = match self.subject_binding_claim_source {
+            SelfAttestationClaimSource::Userinfo => {
+                self.subject_binding_value_from_userinfo(
+                    &verified,
+                    subject_binding_claim,
+                    tokens.access_token.as_deref(),
+                )
+                .await?
+            }
+            SelfAttestationClaimSource::AccessToken => {
+                subject_binding_value_from_id_token(&verified, subject_binding_claim)?
+            }
+        };
+        self.esignet_subject(&verified, subject_binding_value)
     }
 
-    fn subject_from_id_token(
+    /// Resolve the subject-binding claim from the eSignet userinfo JWS. The
+    /// callback fetches userinfo with the eSignet access token, verifies the JWS
+    /// against the eSignet signing keys, binds it to the `id_token` subject, and
+    /// reads the configured binding claim from it.
+    async fn subject_binding_value_from_userinfo(
+        &self,
+        verified_id_token: &VerifiedToken,
+        subject_binding_claim: &str,
+        access_token: Option<&str>,
+    ) -> Result<String, EvidenceError> {
+        let userinfo_url = self
+            .esignet_userinfo_url
+            .as_deref()
+            .ok_or(EvidenceError::MissingCredential)?;
+        let access_token = access_token.ok_or(EvidenceError::MissingCredential)?;
+        let userinfo_jwt = fetch_userinfo_jwt_with_policy(
+            userinfo_url,
+            access_token,
+            &self.fetch_url_policy,
+            ESIGNET_REQUEST_TIMEOUT,
+            ESIGNET_MAX_RESPONSE_BYTES,
+        )
+        .await
+        .map_err(|_| EvidenceError::MissingCredential)?;
+        let userinfo = self
+            .esignet_id_token_verifier
+            .verify_userinfo_jwt_with_claims_policy(
+                &userinfo_jwt,
+                verified_id_token,
+                &[self.esignet_issuer.as_str()],
+                std::slice::from_ref(&self.esignet_client_id),
+            )
+            .await
+            .map_err(|_| EvidenceError::MissingCredential)?;
+        subject_binding_value_from_claims(&userinfo, subject_binding_claim)
+    }
+
+    /// Build the `EsignetSubject` from the verified `id_token`, carrying the
+    /// already-resolved subject-binding value (from the `id_token` or userinfo).
+    fn esignet_subject(
         &self,
         verified: &VerifiedToken,
-        subject_binding_claim: &str,
+        subject_binding_value: String,
     ) -> Result<EsignetSubject, EvidenceError> {
         let subject = verified
             .claims
             .sub
             .clone()
             .ok_or(EvidenceError::MissingCredential)?;
-        let subject_binding_value = if subject_binding_claim == "sub" {
-            subject.clone()
-        } else {
-            verified
-                .claims
-                .extra
-                .get(subject_binding_claim)
-                .and_then(Value::as_str)
-                .ok_or(EvidenceError::MissingCredential)?
-                .to_string()
-        };
-        if subject_binding_value.trim().is_empty() {
-            return Err(EvidenceError::MissingCredential);
-        }
         let scopes = if verified.scopes.is_empty() {
             verified
                 .claims
@@ -1587,7 +1682,7 @@ impl PreAuthRuntime {
         &self,
         code: &str,
         pkce_verifier: &str,
-    ) -> Result<String, EvidenceError> {
+    ) -> Result<EsignetTokenResponse, EvidenceError> {
         let token_url = reqwest::Url::parse(&self.esignet_token_url)
             .map_err(|_| EvidenceError::MissingCredential)?;
         let validated_url = self
@@ -1631,11 +1726,21 @@ impl PreAuthRuntime {
             .map_err(|_| EvidenceError::MissingCredential)?;
         let body: Value =
             serde_json::from_slice(&body).map_err(|_| EvidenceError::MissingCredential)?;
-        body.get("id_token")
+        let id_token = body
+            .get("id_token")
             .and_then(Value::as_str)
             .filter(|id_token| !id_token.is_empty())
             .map(ToString::to_string)
-            .ok_or(EvidenceError::MissingCredential)
+            .ok_or(EvidenceError::MissingCredential)?;
+        let access_token = body
+            .get("access_token")
+            .and_then(Value::as_str)
+            .filter(|access_token| !access_token.is_empty())
+            .map(ToString::to_string);
+        Ok(EsignetTokenResponse {
+            id_token,
+            access_token,
+        })
     }
 
     /// Build the `private_key_jwt` client assertion the eSignet token endpoint
