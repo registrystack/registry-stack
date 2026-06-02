@@ -98,6 +98,19 @@ metadata-publish manifest="profiles/example-civil-registration/fixtures/metadata
 audit:
     if [ -x "$HOME/.cargo/bin/cargo-deny" ]; then "$HOME/.cargo/bin/cargo-deny" check advisories; else cargo deny check advisories; fi
 
+# Run security assurance checks that do not require external services.
+security:
+    scripts/check-security.sh
+
+# Validate exposure manifest, route inventory, OpenAPI policy, and Dockerfile
+# secret-copy guardrails.
+exposure-check:
+    python3 scripts/check_security_assurance.py manifest
+
+# Validate Dockerfiles for obvious secret-copy hazards.
+container-security:
+    python3 scripts/check_security_assurance.py dockerfile-secrets
+
 # Run the full CI gate locally: Docker build contract, fmt-check, default/all-feature lint,
 # default/all-feature tests, and cargo-deny.
 ci: docker-build-contract fmt-check lint-default lint test-default test deny

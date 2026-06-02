@@ -1,0 +1,9 @@
+title = "registry-relay gitleaks config"
+
+[allowlist]
+description = "Generated and local build output are not source review surfaces."
+paths = [
+  '''^target/''',
+  '''^cache/''',
+  '''^demo/var/''',
+]

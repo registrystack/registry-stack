@@ -30,32 +30,36 @@ jobs:
       packages: write
     steps:
       - name: Checkout registry-relay
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           path: registry-relay
+          persist-credentials: false
 
       - name: Checkout registry-platform
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
           ref: ${{ env.REGISTRY_PLATFORM_REF }}
           token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
           path: registry-platform
+          persist-credentials: false
 
       - name: Checkout registry-manifest
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ env.REGISTRY_MANIFEST_REPOSITORY }}
           ref: ${{ env.REGISTRY_MANIFEST_REF }}
           token: ${{ secrets.REGISTRY_MANIFEST_TOKEN || github.token }}
           path: registry-manifest
+          persist-credentials: false
 
       - name: Checkout cel-mapping
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ env.CEL_MAPPING_REPOSITORY }}
           ref: ${{ env.CEL_MAPPING_REF }}
           path: cel-mapping
+          persist-credentials: false
 
       - name: Build registry-relay image
         run: |
@@ -67,10 +71,29 @@ jobs:
             --tag "$REGISTRY_RELAY_IMAGE:sha-${GITHUB_SHA}" \
             --tag "$REGISTRY_RELAY_IMAGE:main" \
             registry-relay
+      - name: Generate image SBOM and vulnerability report
+        run: |
+          mkdir -p registry-relay/target/security
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD/registry-relay/target/security:/out" \
+            anchore/syft:v1.18.1@sha256:b8c170b8e51bfc4779ec3ef4399942c57290f5ce76a9c3af564c9d00d4946a6b "$REGISTRY_RELAY_IMAGE:sha-${GITHUB_SHA}" \
+            -o spdx-json=/out/registry-relay-image.spdx.json
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD/registry-relay/target/security:/out" \
+            anchore/grype:v0.85.0@sha256:8d7a54c4281e334a60c2d1616269411a940efad44c2cc1533ddc76689b9268af "$REGISTRY_RELAY_IMAGE:sha-${GITHUB_SHA}" \
+            --fail-on critical -o table > registry-relay/target/security/registry-relay-image-vulnerabilities.txt
+      - name: Upload image security evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: registry-relay-image-security-evidence
+          path: registry-relay/target/security/
 
       - name: Login to GHCR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+        env:
+          GHCR_ACTOR: ${{ github.actor }}
+          GHCR_TOKEN: ${{ github.token }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin
 
       - name: Push image
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
