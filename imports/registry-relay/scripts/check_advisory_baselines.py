@@ -269,6 +269,7 @@ def check_findings(
     findings: list[Finding],
     baseline: dict[str, Any],
     today: dt.date,
+    review_scope: str | None = None,
 ) -> int:
     threshold = policy_threshold(baseline, tool)
     threshold_rank = severity_rank(threshold)
@@ -278,6 +279,10 @@ def check_findings(
         str(review["fingerprint"]): review
         for review in baseline["reviewed_findings"]
         if review.get("tool") == tool
+        and (
+            review_scope is None
+            or str(review["fingerprint"]).startswith(f"{tool}|{review_scope}|")
+        )
     }
     expired = [
         review
@@ -350,7 +355,8 @@ def main() -> None:
         print(json.dumps(blocking, indent=2, sort_keys=True))
         return
 
-    raise SystemExit(check_findings(args.tool, findings, baseline, today))
+    review_scope = args.subject if args.tool == "grype" else None
+    raise SystemExit(check_findings(args.tool, findings, baseline, today, review_scope))
 
 
 if __name__ == "__main__":

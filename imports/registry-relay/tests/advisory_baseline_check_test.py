@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
+import contextlib
 import importlib.util
+import io
 import json
 import sys
 import tempfile
@@ -292,6 +294,30 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
             ),
             0,
         )
+
+    def test_grype_review_scope_ignores_other_image_subjects(self):
+        sidecar_finding = self.module.Finding(
+            tool="grype",
+            fingerprint="grype|registry-relay-sidecar-image|CVE-2026-0004|zlib1g|1.0|deb",
+            rule_id="CVE-2026-0004",
+            severity="critical",
+            location="registry-relay-sidecar-image",
+            summary="CVE-2026-0004 in zlib1g 1.0",
+        )
+        self.write_baseline([self.review(sidecar_finding)])
+        baseline = self.module.load_baseline(self.baseline_path)
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            result = self.module.check_findings(
+                "grype",
+                [],
+                baseline,
+                self.module.parse_date("2026-06-02", "today"),
+                "registry-relay-image",
+            )
+        self.assertEqual(result, 0)
+        self.assertIn("reviewed=0", stdout.getvalue())
+        self.assertIn("stale=0", stdout.getvalue())
 
     def test_malformed_review_entry_fails_baseline_load(self):
         self.baseline_path.write_text(json.dumps({
