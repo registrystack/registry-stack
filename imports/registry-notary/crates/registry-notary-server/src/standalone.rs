@@ -4154,7 +4154,7 @@ async fn read_remote_openfn_sidecar_many_context(
         },
     )
     .await;
-    let body = match body_result {
+    let mut body = match body_result {
         Ok(body) => body,
         Err(error) => {
             tracing::warn!(
@@ -4173,9 +4173,12 @@ async fn read_remote_openfn_sidecar_many_context(
         }
     };
     let response_items = body
-        .get("items")
-        .and_then(Value::as_array)
-        .cloned()
+        .as_object_mut()
+        .and_then(|object| object.remove("items"))
+        .and_then(|value| match value {
+            Value::Array(items) => Some(items),
+            _ => None,
+        })
         .unwrap_or_default();
     let mut by_id: BTreeMap<String, Value> = BTreeMap::new();
     let requested_ids = item_ids
@@ -4183,19 +4186,23 @@ async fn read_remote_openfn_sidecar_many_context(
         .filter_map(|id| id.as_deref())
         .collect::<BTreeSet<_>>();
     for item in response_items {
-        let Some(id) = item.get("id").and_then(Value::as_str) else {
+        let Some(id) = item
+            .get("id")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+        else {
             return bindings
                 .iter()
                 .map(|_| Err(EvidenceError::SourceUnavailable))
                 .collect();
         };
-        if !requested_ids.contains(id) {
+        if !requested_ids.contains(id.as_str()) {
             return bindings
                 .iter()
                 .map(|_| Err(EvidenceError::SourceUnavailable))
                 .collect();
         }
-        if by_id.insert(id.to_string(), item).is_some() {
+        if by_id.insert(id, item).is_some() {
             return bindings
                 .iter()
                 .map(|_| Err(EvidenceError::SourceUnavailable))
@@ -4209,7 +4216,7 @@ async fn read_remote_openfn_sidecar_many_context(
             (Err(error), _) => results.push(Err(error)),
             (Ok(_), None) => results.push(Err(EvidenceError::SourceUnavailable)),
             (Ok(_), Some(id)) => {
-                let Some(item) = by_id.get(&id) else {
+                let Some(mut item) = by_id.remove(&id) else {
                     results.push(Err(EvidenceError::SourceUnavailable));
                     continue;
                 };
@@ -4218,15 +4225,18 @@ async fn read_remote_openfn_sidecar_many_context(
                     continue;
                 }
                 let rows = item
-                    .get("data")
-                    .and_then(Value::as_array)
-                    .cloned()
+                    .as_object_mut()
+                    .and_then(|object| object.remove("data"))
+                    .and_then(|value| match value {
+                        Value::Array(rows) => Some(rows),
+                        _ => None,
+                    })
                     .unwrap_or_default();
                 let outcome = match rows.len() {
                     0 => Err(EvidenceError::SourceNotFound),
                     1 => rows
-                        .first()
-                        .cloned()
+                        .into_iter()
+                        .next()
                         .ok_or(EvidenceError::SourceUnavailable),
                     _ => Err(EvidenceError::SourceAmbiguous),
                 };

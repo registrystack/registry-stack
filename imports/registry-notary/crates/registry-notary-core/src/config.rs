@@ -237,6 +237,22 @@ impl StandaloneRegistryNotaryConfig {
                             connection: binding.connection.clone().unwrap_or_default(),
                         });
                     }
+                    if binding.lookup.op != "eq" {
+                        return Err(EvidenceConfigError::OpenFnSidecarUnsupportedOperator {
+                            claim: claim.id.clone(),
+                            binding: binding_id.clone(),
+                            op: binding.lookup.op.clone(),
+                        });
+                    }
+                    for query_field in &binding.query_fields {
+                        if query_field.op != "eq" {
+                            return Err(EvidenceConfigError::OpenFnSidecarUnsupportedOperator {
+                                claim: claim.id.clone(),
+                                binding: binding_id.clone(),
+                                op: query_field.op.clone(),
+                            });
+                        }
+                    }
                 }
                 validate_source_matching_config(&claim.id, binding_id, &binding.matching)?;
             }
@@ -3136,6 +3152,14 @@ pub enum EvidenceConfigError {
         "source_connection '{connection}': connector = openfn_sidecar requires retry_on_5xx = false"
     )]
     OpenFnSidecarRequiresNoRetry { connection: String },
+    #[error(
+        "claim '{claim}', binding '{binding}': connector = openfn_sidecar only supports lookup operator 'eq' (found '{op}')"
+    )]
+    OpenFnSidecarUnsupportedOperator {
+        claim: String,
+        binding: String,
+        op: String,
+    },
     #[error(
         "source_connection '{connection}': bulk_mode = {bulk_mode} cannot be used with \
          query_fields (binding '{binding}' in claim '{claim}'); bulk reads currently support \
@@ -6387,6 +6411,83 @@ evidence:
         match err {
             EvidenceConfigError::OpenFnSidecarRequiresNoRetry { connection } => {
                 assert_eq!(connection, "openfn_crvs");
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn openfn_sidecar_rejects_non_eq_lookup_operator() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "openfn_crvs".to_string(),
+            SourceConnectionConfig {
+                base_url: "http://127.0.0.1:9191".to_string(),
+                allow_insecure_localhost: true,
+                allow_insecure_private_network: false,
+                token_env: "OPENFN_SIDECAR_TOKEN".to_string(),
+                source_auth: None,
+                dci: DciSourceConnectionConfig::default(),
+                max_in_flight: 8,
+                retry_on_5xx: false,
+                bulk_mode: BulkMode::OpenFnSidecarBatch,
+                bulk_mode_lookup_unique: false,
+                bulk_timeout_max_ms: 30_000,
+            },
+        );
+        let mut binding = openfn_sidecar_binding("openfn_crvs");
+        binding.lookup.op = "contains".to_string();
+        let mut claim = minimal_claim("date-of-birth");
+        claim.source_bindings.insert("crvs".to_string(), binding);
+        config.evidence.claims = vec![claim];
+
+        let err = config
+            .validate()
+            .expect_err("OpenFn sidecar must reject non-eq lookup operators");
+        match err {
+            EvidenceConfigError::OpenFnSidecarUnsupportedOperator { claim, binding, op } => {
+                assert_eq!(claim, "date-of-birth");
+                assert_eq!(binding, "crvs");
+                assert_eq!(op, "contains");
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn openfn_sidecar_rejects_non_eq_query_field_operator() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "openfn_crvs".to_string(),
+            SourceConnectionConfig {
+                base_url: "http://127.0.0.1:9191".to_string(),
+                allow_insecure_localhost: true,
+                allow_insecure_private_network: false,
+                token_env: "OPENFN_SIDECAR_TOKEN".to_string(),
+                source_auth: None,
+                dci: DciSourceConnectionConfig::default(),
+                max_in_flight: 8,
+                retry_on_5xx: false,
+                bulk_mode: BulkMode::OpenFnSidecarBatch,
+                bulk_mode_lookup_unique: false,
+                bulk_timeout_max_ms: 30_000,
+            },
+        );
+        let mut binding = openfn_sidecar_binding("openfn_crvs");
+        add_query_fields(&mut binding);
+        binding.query_fields[1].op = "contains".to_string();
+        let mut claim = minimal_claim("date-of-birth");
+        claim.source_bindings.insert("crvs".to_string(), binding);
+        config.evidence.claims = vec![claim];
+
+        let err = config
+            .validate()
+            .expect_err("OpenFn sidecar must reject non-eq query field operators");
+        match err {
+            EvidenceConfigError::OpenFnSidecarUnsupportedOperator { claim, binding, op } => {
+                assert_eq!(claim, "date-of-birth");
+                assert_eq!(binding, "crvs");
+                assert_eq!(op, "contains");
             }
             other => panic!("unexpected error variant: {other}"),
         }

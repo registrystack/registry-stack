@@ -1388,11 +1388,19 @@ fn normalize_batch_worker_response(
     fields: &[String],
     requested_ids: &[String],
 ) -> Response {
+    let mut response = response;
     if let Some(error) = response.get("error").and_then(Value::as_object) {
         return target_error_response(error);
     }
 
-    let Some(items) = response.get("items").and_then(Value::as_array) else {
+    let Some(items) = response
+        .as_object_mut()
+        .and_then(|object| object.remove("items"))
+        .and_then(|value| match value {
+            Value::Array(items) => Some(items),
+            _ => None,
+        })
+    else {
         return problem(
             StatusCode::BAD_GATEWAY,
             "worker response missing items array",
@@ -1406,24 +1414,28 @@ fn normalize_batch_worker_response(
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
     for item in items {
-        let Some(object) = item.as_object() else {
+        let Value::Object(object) = item else {
             return problem(StatusCode::BAD_GATEWAY, "worker items must be JSON objects");
         };
-        let Some(id) = object.get("id").and_then(Value::as_str) else {
+        let Some(id) = object
+            .get("id")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+        else {
             return problem(StatusCode::BAD_GATEWAY, "worker item missing id");
         };
-        if !seen.insert(id.to_string()) {
+        if !seen.insert(id.clone()) {
             return problem(StatusCode::BAD_GATEWAY, "worker item id duplicated");
         }
-        if !requested.contains(id) {
+        if !requested.contains(id.as_str()) {
             return problem(StatusCode::BAD_GATEWAY, "worker item id was not requested");
         }
-        by_id.insert(id.to_string(), object.clone());
+        by_id.insert(id, object);
     }
 
     let mut normalized = Vec::with_capacity(requested_ids.len());
     for id in requested_ids {
-        let Some(item) = by_id.get(id) else {
+        let Some(mut item) = by_id.remove(id) else {
             normalized.push(json!({
                 "id": id,
                 "error": { "code": "source_unavailable" }
@@ -1434,13 +1446,16 @@ fn normalize_batch_worker_response(
             normalized.push(json!({ "id": id, "error": normalize_item_error(error) }));
             continue;
         }
-        let Some(records) = item.get("data").and_then(Value::as_array) else {
+        let Some(records) = item.remove("data").and_then(|value| match value {
+            Value::Array(records) => Some(records),
+            _ => None,
+        }) else {
             return problem(StatusCode::BAD_GATEWAY, "worker item missing data array");
         };
         let projected = records
-            .iter()
+            .into_iter()
             .take(2)
-            .map(|record| project_record(record, fields))
+            .map(|record| project_record(&record, fields))
             .collect::<Result<Vec<_>, _>>();
         match projected {
             Ok(data) => normalized.push(json!({ "id": id, "data": data })),
