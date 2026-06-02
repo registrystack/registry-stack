@@ -132,6 +132,17 @@ impl MockIdp {
         mint_ed25519_jwt(&self.issuer, claims, &key.private)
     }
 
+    /// Mint a token whose JOSE header omits the optional `typ` member, modelling
+    /// IdPs (such as eSignet) that sign ID Tokens with only `alg` + `kid`.
+    #[must_use]
+    pub fn mint_token_without_typ(&self, claims: Value) -> String {
+        let key = {
+            let state = self.state.read().expect("mock IdP state lock is healthy");
+            state.keys[state.current].clone()
+        };
+        mint_ed25519_jwt_without_typ(&self.issuer, claims, &key.private)
+    }
+
     pub fn rotate_key(&self) {
         let mut state = self.state.write().expect("mock IdP state lock is healthy");
         state.current = (state.current + 1) % state.keys.len();
@@ -195,6 +206,18 @@ fn mint_ed25519_jwt(issuer: &str, claims: Value, private: &PrivateJwk) -> String
         .unwrap_or_else(|| "registry-platform-testing-ed25519-1".to_string());
     let claims = normalize_claims(issuer, claims);
     sign_ed25519_compact_jwt_with_key(private, "JWT", &kid, claims)
+}
+
+fn mint_ed25519_jwt_without_typ(issuer: &str, claims: Value, private: &PrivateJwk) -> String {
+    let kid = private
+        .kid
+        .clone()
+        .unwrap_or_else(|| "registry-platform-testing-ed25519-1".to_string());
+    let claims = normalize_claims(issuer, claims);
+    let header = json!({ "alg": "EdDSA", "kid": kid });
+    let signing_input = format!("{}.{}", encode_json(&header), encode_json(&claims));
+    let signature = sign(signing_input.as_bytes(), private).expect("fixture key signs JWT");
+    format!("{}.{}", signing_input, URL_SAFE_NO_PAD.encode(signature))
 }
 
 #[must_use]
