@@ -346,6 +346,145 @@ fn build_openapi_document() -> OpenApi {
                     }
                 }
             },
+            "/oid4vci/offer/start": {
+                "get": {
+                    "summary": "Begin an authenticated pre-authorized-code offer",
+                    "operationId": "startOid4vciOffer",
+                    "description": "Public and unauthenticated. Begins the eSignet authorization-code login as the confidential RP and 302-redirects the browser to eSignet. Mints no pre-authorized_code or credential material. Returns 404 when the pre-authorized-code flow is disabled. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
+                    "security": [],
+                    "parameters": [
+                        {
+                            "name": "credential_configuration_id",
+                            "in": "query",
+                            "required": false,
+                            "schema": { "type": "string" }
+                        }
+                    ],
+                    "responses": {
+                        "303": { "description": "Redirect to the eSignet authorization endpoint" },
+                        "400": {
+                            "description": "Invalid or unknown credential configuration",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/Oid4vciError" }
+                                }
+                            }
+                        },
+                        "404": { "description": "Pre-authorized-code flow is disabled" },
+                        "500": {
+                            "description": "OpenID4VCI issuer failed",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/Oid4vciError" }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "/oid4vci/offer/callback": {
+                "get": {
+                    "summary": "Complete eSignet login and render a pre-authorized-code offer",
+                    "operationId": "completeOid4vciOffer",
+                    "description": "Public and unauthenticated. Consumes the login state, exchanges the eSignet code with private_key_jwt, validates the id_token, and mints one single-use pre-authorized_code plus one numeric tx_code (PIN). Renders an HTML offer page carrying the credential offer URI and the PIN out-of-band from the QR. Returns 404 when the pre-authorized-code flow is disabled.",
+                    "security": [],
+                    "parameters": [
+                        {
+                            "name": "code",
+                            "in": "query",
+                            "required": true,
+                            "schema": { "type": "string" }
+                        },
+                        {
+                            "name": "state",
+                            "in": "query",
+                            "required": true,
+                            "schema": { "type": "string" }
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Offer page with the credential offer URI and tx_code PIN",
+                            "content": {
+                                "text/html": {
+                                    "schema": { "type": "string" }
+                                }
+                            }
+                        },
+                        "400": {
+                            "description": "Login state, eSignet code, or id_token is invalid",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/Oid4vciError" }
+                                }
+                            }
+                        },
+                        "404": { "description": "Pre-authorized-code flow is disabled" },
+                        "500": {
+                            "description": "OpenID4VCI issuer failed",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/Oid4vciError" }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "/oid4vci/token": {
+                "post": {
+                    "summary": "Redeem a pre-authorized-code for an access token",
+                    "operationId": "redeemOid4vciToken",
+                    "description": "Public and unauthenticated OID4VCI token endpoint for the pre-authorized-code grant. Accepts only grant_type=urn:ietf:params:oauth:grant-type:pre-authorized_code with a valid, unexpired, single-use pre-authorized_code and a matching tx_code (the PIN is mandatory). Mints a short-TTL Notary-signed access token plus a c_nonce. Returns 404 when the pre-authorized-code flow is disabled. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
+                    "security": [],
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/x-www-form-urlencoded": {
+                                "schema": { "$ref": "#/components/schemas/TokenRequest" }
+                            },
+                            "application/json": {
+                                "schema": { "$ref": "#/components/schemas/TokenRequest" }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Token response",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/TokenResponse" }
+                                }
+                            }
+                        },
+                        "400": {
+                            "description": "Invalid request, grant, or tx_code",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/Oid4vciError" }
+                                }
+                            }
+                        },
+                        "404": { "description": "Pre-authorized-code flow is disabled" },
+                        "429": {
+                            "description": "Too many token attempts (wrong-PIN lockout or random-code flood)",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/Oid4vciError" }
+                                }
+                            }
+                        },
+                        "500": {
+                            "description": "Token issuance failed",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/Oid4vciError" }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
             "/v1/claims": {
                 "get": {
                     "summary": "List claims visible to the caller",
@@ -602,6 +741,8 @@ fn build_openapi_document() -> OpenApi {
                 "NonceResponse": nonce_response_schema(),
                 "CredentialRequest": credential_request_schema(),
                 "CredentialResponse": credential_response_schema(),
+                "TokenRequest": token_request_schema(),
+                "TokenResponse": token_response_schema(),
                 "Oid4vciError": oid4vci_error_schema()
             },
             "securitySchemes": {
@@ -984,6 +1125,36 @@ fn add_response_examples(document: &mut Value) {
                 "403" => "Credential request is denied",
                 "429" => "Credential request is rate limited",
                 _ => "OpenID4VCI issuer failed",
+            },
+            oid4vci_error_example(code, description),
+        );
+    }
+    set_json_response(
+        document,
+        "/oid4vci/token",
+        "post",
+        "200",
+        "Token response",
+        oid4vci_token_response_example(),
+    );
+    for (status, code, description) in [
+        (
+            "400",
+            "invalid_grant",
+            "pre-authorized code or tx_code is invalid",
+        ),
+        ("429", "slow_down", "too many token requests"),
+        ("500", "server_error", "token issuance failed"),
+    ] {
+        set_oid4vci_error_response(
+            document,
+            "/oid4vci/token",
+            "post",
+            status,
+            match status {
+                "400" => "Invalid request, grant, or tx_code",
+                "429" => "Too many token attempts (wrong-PIN lockout or random-code flood)",
+                _ => "Token issuance failed",
             },
             oid4vci_error_example(code, description),
         );
@@ -2086,6 +2257,38 @@ fn credential_response_schema() -> Value {
     })
 }
 
+fn token_request_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["grant_type", "pre-authorized_code", "tx_code"],
+        "properties": {
+            "grant_type": {
+                "type": "string",
+                "example": "urn:ietf:params:oauth:grant-type:pre-authorized_code"
+            },
+            "pre-authorized_code": { "type": "string" },
+            "tx_code": {
+                "type": "string",
+                "description": "The numeric PIN shown on the offer page; mandatory for this grant."
+            }
+        }
+    })
+}
+
+fn token_response_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["access_token", "token_type"],
+        "properties": {
+            "access_token": { "type": "string" },
+            "token_type": { "type": "string", "example": "Bearer" },
+            "expires_in": { "type": "integer", "format": "uint64" },
+            "c_nonce": { "type": "string" },
+            "c_nonce_expires_in": { "type": "integer", "format": "uint64" }
+        }
+    })
+}
+
 fn oid4vci_error_schema() -> Value {
     json!({
         "type": "object",
@@ -2330,6 +2533,16 @@ fn oid4vci_credential_response_example() -> Value {
     })
 }
 
+fn oid4vci_token_response_example() -> Value {
+    json!({
+        "access_token": "eyJhbGciOiJFZERTQSIsInR5cCI6InJlZ2lzdHJ5LW5vdGFyeS1hY2Nlc3MrancifQ.payload.signature",
+        "token_type": "Bearer",
+        "expires_in": 300,
+        "c_nonce": "b64url-nonce",
+        "c_nonce_expires_in": 300
+    })
+}
+
 fn oid4vci_error_example(code: &str, description: &str) -> Value {
     json!({
         "error": code,
@@ -2567,6 +2780,9 @@ mod tests {
             "/oid4vci/credential-offer",
             "/oid4vci/nonce",
             "/oid4vci/credential",
+            "/oid4vci/offer/start",
+            "/oid4vci/offer/callback",
+            "/oid4vci/token",
             "/v1/claims",
             "/v1/claims/{claim_id}",
             "/v1/formats",
@@ -2619,6 +2835,18 @@ mod tests {
             json!([])
         );
         assert_eq!(
+            doc["paths"]["/oid4vci/offer/start"]["get"]["security"],
+            json!([])
+        );
+        assert_eq!(
+            doc["paths"]["/oid4vci/offer/callback"]["get"]["security"],
+            json!([])
+        );
+        assert_eq!(
+            doc["paths"]["/oid4vci/token"]["post"]["security"],
+            json!([])
+        );
+        assert_eq!(
             doc["paths"]["/federation/v1/evaluations"]["post"]["security"],
             json!([])
         );
@@ -2653,6 +2881,7 @@ mod tests {
             ("/oid4vci/credential-offer", "get", "200"),
             ("/oid4vci/nonce", "post", "200"),
             ("/oid4vci/credential", "post", "200"),
+            ("/oid4vci/token", "post", "200"),
             ("/v1/claims", "get", "200"),
             ("/v1/claims/{claim_id}", "get", "200"),
             ("/v1/formats", "get", "200"),
@@ -2850,6 +3079,50 @@ mod tests {
         assert_eq!(
             doc["paths"]["/oid4vci/credential"]["post"]["description"],
             json!("Issues a dc+sd-jwt credential for an authenticated self-attestation principal. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.")
+        );
+        assert_eq!(
+            doc["components"]["schemas"]["TokenRequest"]["type"],
+            json!("object")
+        );
+        assert_eq!(
+            doc["components"]["schemas"]["TokenResponse"]["type"],
+            json!("object")
+        );
+        assert_eq!(
+            doc["paths"]["/oid4vci/token"]["post"]["requestBody"]["content"]
+                ["application/x-www-form-urlencoded"]["schema"]["$ref"],
+            json!("#/components/schemas/TokenRequest")
+        );
+        assert_eq!(
+            doc["paths"]["/oid4vci/token"]["post"]["responses"]["200"]["content"]
+                ["application/json"]["schema"]["$ref"],
+            json!("#/components/schemas/TokenResponse")
+        );
+        assert_eq!(
+            doc["paths"]["/oid4vci/token"]["post"]["responses"]["400"]["content"]
+                ["application/json"]["schema"]["$ref"],
+            json!("#/components/schemas/Oid4vciError")
+        );
+        // The token endpoint documents its grant, the mandatory tx_code, and the
+        // public/unauthenticated nature.
+        let token_description = doc["paths"]["/oid4vci/token"]["post"]["description"]
+            .as_str()
+            .expect("token endpoint has a description");
+        assert!(
+            token_description.contains("urn:ietf:params:oauth:grant-type:pre-authorized_code"),
+            "token endpoint documents the pre-authorized-code grant"
+        );
+        assert!(
+            token_description.contains("tx_code") && token_description.contains("mandatory"),
+            "token endpoint documents the mandatory tx_code"
+        );
+        assert!(
+            token_description.contains("unauthenticated"),
+            "token endpoint documents that it is unauthenticated"
+        );
+        assert!(
+            token_description.contains("404") && token_description.contains("disabled"),
+            "token endpoint documents the disabled 404 behavior"
         );
         assert_eq!(
             doc["components"]["schemas"]["SdJwtVcTypeMetadata"]["properties"]["claims"]["items"]

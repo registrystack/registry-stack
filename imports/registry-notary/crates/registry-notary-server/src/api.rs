@@ -3014,7 +3014,7 @@ fn oid4vci_error_from_evidence(error: &EvidenceError) -> Oid4vciWireError {
 }
 
 fn oid4vci_metadata(config: &Oid4vciConfig) -> CredentialIssuerMetadata {
-    CredentialIssuerMetadata::new(
+    let metadata = CredentialIssuerMetadata::new(
         config.credential_issuer.clone(),
         config.credential_endpoint.clone(),
         config
@@ -3028,7 +3028,31 @@ fn oid4vci_metadata(config: &Oid4vciConfig) -> CredentialIssuerMetadata {
             .iter()
             .map(|(id, configuration)| (id.clone(), oid4vci_configuration_metadata(configuration)))
             .collect(),
-    )
+    );
+    // When the pre-authorized-code flow is enabled the Notary is its own
+    // authorization server for that grant, so issuer metadata advertises its
+    // token endpoint. Per OID4VCI, the credential offer's `grants` carries the
+    // `urn:ietf:params:oauth:grant-type:pre-authorized_code` advertisement
+    // per-offer (see the offer/callback handler); the `token_endpoint` is the
+    // metadata signal that the issuer accepts that grant directly. When the
+    // flow is disabled there is no token endpoint and metadata is unchanged.
+    match (
+        config.pre_authorized_code.enabled,
+        oid4vci_token_endpoint_url(config),
+    ) {
+        (true, Some(token_endpoint)) => metadata.with_token_endpoint(token_endpoint),
+        _ => metadata,
+    }
+}
+
+/// The Notary's own OID4VCI token endpoint URL: the credential-issuer base with
+/// `oid4vci/token` appended (preserving any configured base subpath). Returns
+/// `None` when the configured `credential_issuer` is not a usable absolute URL.
+fn oid4vci_token_endpoint_url(config: &Oid4vciConfig) -> Option<String> {
+    let base = reqwest::Url::parse(config.credential_issuer.trim()).ok()?;
+    registry_platform_httputil::url::append_path_segments(&base, &["oid4vci", "token"])
+        .ok()
+        .map(|url| url.to_string())
 }
 
 fn oid4vci_configuration_metadata(
@@ -5230,6 +5254,40 @@ mod tests {
         assert!(!text.contains("token_env"));
         assert!(!text.contains("source_connections"));
         assert!(!text.contains("NAT-123"));
+    }
+
+    #[test]
+    fn oid4vci_metadata_advertises_token_endpoint_only_when_preauth_enabled() {
+        // Pre-auth disabled (the default): no token endpoint is advertised, so a
+        // wallet sees an authorization_code-only issuer.
+        let disabled = oid4vci_config();
+        assert!(!disabled.pre_authorized_code.enabled);
+        let disabled_metadata =
+            serde_json::to_value(oid4vci_metadata(&disabled)).expect("metadata serializes");
+        assert!(
+            disabled_metadata.get("token_endpoint").is_none(),
+            "disabled pre-auth must not advertise a token endpoint"
+        );
+
+        // Pre-auth enabled: the Notary's own token endpoint is advertised,
+        // derived from the credential-issuer base like the credential endpoint.
+        let mut enabled = oid4vci_config();
+        enabled.pre_authorized_code.enabled = true;
+        let enabled_metadata =
+            serde_json::to_value(oid4vci_metadata(&enabled)).expect("metadata serializes");
+        assert_eq!(
+            enabled_metadata["token_endpoint"],
+            json!("http://127.0.0.1:4325/oid4vci/token"),
+            "enabled pre-auth advertises the Notary token endpoint"
+        );
+        // The credential-configuration metadata is otherwise unchanged: the
+        // pre-authorized-code grant is advertised per-offer in `grants`, not on
+        // the credential configuration.
+        assert_eq!(
+            enabled_metadata["credential_configurations_supported"]["person_is_alive_sd_jwt"]
+                ["scope"],
+            json!("person_is_alive")
+        );
     }
 
     #[tokio::test]

@@ -55,6 +55,72 @@ The credential request should not carry a raw subject id as a free-form wallet
 choice. The subject comes from the OIDC token claim configured in
 `self_attestation.subject_binding` and must match the Notary request context.
 
+## Authenticated Pre-Authorized-Code Flow
+
+A public holder wallet (for example walt.id `wallet-api`) is a PKCE client and
+cannot authenticate to a confidential authorization server such as eSignet. For
+those wallets the Notary additionally supports an authenticated
+pre-authorized-code flow. The citizen still authenticates at eSignet; the wallet
+never authenticates to eSignet and only ever talks to the Notary.
+
+This flow is disabled by default. When `oid4vci.pre_authorized_code.enabled` is
+false (or unset), the three endpoints below return `404`, issuer metadata
+advertises no `token_endpoint`, and credential offers stay
+`authorization_code`. The confidential-client `authorization_code` path above is
+unchanged regardless of this setting.
+
+When enabled, the flow is:
+
+1. The citizen browser opens `GET /oid4vci/offer/start`, optionally with
+   `?credential_configuration_id=<id>`. This endpoint is public and
+   unauthenticated. It begins the eSignet authorization-code login as the
+   configured confidential RP (PKCE S256), stores short-lived state, and
+   `302`-redirects the browser to eSignet. It mints no `pre-authorized_code` and
+   no credential material.
+2. The citizen authenticates at eSignet. eSignet redirects back to
+   `GET /oid4vci/offer/callback?code=...&state=...` (public, unauthenticated).
+   The Notary exchanges the code with eSignet using `private_key_jwt`, validates
+   the returned `id_token`, captures the exact `self_attestation.subject_binding`
+   claim value (the civil id), and only then mints one single-use
+   `pre-authorized_code` plus one numeric `tx_code` (a PIN). It renders an HTML
+   offer page carrying the `openid-credential-offer://` URI (the QR payload) and
+   the PIN shown out-of-band from the QR.
+3. The wallet reads the offer. Its `grants` carry
+   `urn:ietf:params:oauth:grant-type:pre-authorized_code` with the
+   `pre-authorized_code` and a `tx_code` object. The citizen enters the PIN.
+4. The wallet redeems the offer at `POST /oid4vci/token` (public,
+   unauthenticated). A `tx_code` is mandatory: a code without a PIN is a bearer
+   credential, so the token endpoint rejects a missing or wrong PIN. The request
+   is form-encoded or JSON:
+
+   ```sh
+   curl -fsS -X POST https://notary.example.gov/oid4vci/token \
+     -H 'content-type: application/x-www-form-urlencoded' \
+     --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:pre-authorized_code' \
+     --data-urlencode "pre-authorized_code=$CODE" \
+     --data-urlencode "tx_code=$PIN"
+   ```
+
+   The response carries a short-TTL Notary-signed `access_token`, `token_type`,
+   `expires_in`, and a `c_nonce`.
+5. The wallet calls `POST /oid4vci/credential` with the Notary-issued
+   `access_token` and a `did:jwk` holder proof, exactly as in the flow above. The
+   issued SD-JWT VC is bound to the eSignet-authenticated subject (the civil id
+   determines whose claim is evaluated) and to the holder's `did:jwk` key.
+
+The `pre-authorized_code` is single-use and short-lived: a second redemption
+fails, and the code expires after `pre_authorized_code_ttl_seconds`. Repeated
+wrong-PIN attempts on one code hit
+`self_attestation.rate_limits.tx_code_attempts_per_code_per_minute` and lock the
+code, and a flood of random codes from one client address is throttled by the
+existing per-address invalid-attempt limiter.
+
+The Notary mints its access token with a dedicated signing key separate from the
+SD-JWT VC credential key, with its own issuer, audience, and a distinct header
+`typ`. It is verified by a second, separately-keyed trust anchor; the existing
+eSignet single-issuer path is unchanged, so an eSignet token and a Notary token
+each pass only their own verifier.
+
 ## Metadata And Offers
 
 Issuer metadata is derived from `oid4vci` and the configured credential
@@ -68,6 +134,12 @@ configurations. Wallets should verify that metadata advertises:
 - `proof_signing_alg_values_supported: [EdDSA]`.
 - `cryptographic_binding_methods_supported: [did:jwk]`.
 - `vct` equal to a public HTTPS URL served by the Notary.
+- `token_endpoint` equal to the Notary's `/oid4vci/token` endpoint, present only
+  when the authenticated pre-authorized-code flow is enabled. Its presence is the
+  metadata signal that the Notary is its own authorization server for the
+  pre-authorized-code grant; the grant itself is advertised per-offer in the
+  credential offer's `grants`. When the flow is disabled there is no
+  `token_endpoint`.
 
 For SD-JWT VC wallet interoperability, the Notary serves public Type Metadata for
 each configured `vct`. Per the SD-JWT VC Type Metadata convention, a consumer
