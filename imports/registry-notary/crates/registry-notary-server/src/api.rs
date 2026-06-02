@@ -3103,7 +3103,8 @@ fn oid4vci_requested_absolute_url_for_path(
         absolute_url_parts(&config.credential_issuer)?;
     let scheme = forwarded_header_value(headers, "x-forwarded-proto")
         .or_else(|| uri.scheme_str())
-        .unwrap_or(issuer_scheme);
+        .unwrap_or(issuer_scheme)
+        .to_lowercase();
     let authority = forwarded_header_value(headers, "x-forwarded-host")
         .or_else(|| {
             headers
@@ -3113,7 +3114,8 @@ fn oid4vci_requested_absolute_url_for_path(
                 .filter(|value| !value.is_empty())
         })
         .or_else(|| uri.authority().map(|authority| authority.as_str()))
-        .unwrap_or(issuer_authority);
+        .unwrap_or(issuer_authority)
+        .to_lowercase();
     let external_path = oid4vci_external_path(issuer_path, request_path);
     Some(format!("{scheme}://{authority}{external_path}"))
 }

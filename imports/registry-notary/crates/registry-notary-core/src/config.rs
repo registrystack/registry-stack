@@ -163,6 +163,31 @@ impl StandaloneRegistryNotaryConfig {
                         }
                     }
                 }
+                BulkMode::OpenFnSidecarBatch => {
+                    for claim in &self.evidence.claims {
+                        for (binding_id, binding) in &claim.source_bindings {
+                            if binding.connection.as_deref() != Some(connection_id.as_str()) {
+                                continue;
+                            }
+                            if binding.connector != SourceConnectorKind::OpenFnSidecar {
+                                return Err(
+                                    EvidenceConfigError::BulkModeRequiresOpenFnSidecarConnector {
+                                        connection: connection_id.clone(),
+                                        claim: claim.id.clone(),
+                                        binding: binding_id.clone(),
+                                    },
+                                );
+                            }
+                            if binding.lookup.cardinality != "one" {
+                                return Err(EvidenceConfigError::BulkModeRequiresCardinalityOne {
+                                    connection: connection_id.clone(),
+                                    claim: claim.id.clone(),
+                                    binding: binding_id.clone(),
+                                });
+                            }
+                        }
+                    }
+                }
             }
         }
         for claim in &self.evidence.claims {
@@ -196,6 +221,22 @@ impl StandaloneRegistryNotaryConfig {
                             binding: binding_id.clone(),
                         },
                     );
+                }
+                if binding.connector == SourceConnectorKind::OpenFnSidecar {
+                    let has_static_token = !connection.token_env.trim().is_empty();
+                    if !has_static_token || connection.source_auth.is_some() {
+                        return Err(EvidenceConfigError::InvalidSourceAuthConfig {
+                            connection: binding.connection.clone().unwrap_or_default(),
+                            reason:
+                                "openfn_sidecar requires static bearer token auth through token_env"
+                                    .to_string(),
+                        });
+                    }
+                    if connection.retry_on_5xx {
+                        return Err(EvidenceConfigError::OpenFnSidecarRequiresNoRetry {
+                            connection: binding.connection.clone().unwrap_or_default(),
+                        });
+                    }
                 }
                 validate_source_matching_config(&claim.id, binding_id, &binding.matching)?;
             }
@@ -3082,6 +3123,20 @@ pub enum EvidenceConfigError {
         binding: String,
     },
     #[error(
+        "source_connection '{connection}': bulk_mode = openfn_sidecar_batch \
+         requires all bindings to use connector = openfn_sidecar (binding \
+         '{binding}' in claim '{claim}' uses a different connector)"
+    )]
+    BulkModeRequiresOpenFnSidecarConnector {
+        connection: String,
+        claim: String,
+        binding: String,
+    },
+    #[error(
+        "source_connection '{connection}': connector = openfn_sidecar requires retry_on_5xx = false"
+    )]
+    OpenFnSidecarRequiresNoRetry { connection: String },
+    #[error(
         "source_connection '{connection}': bulk_mode = {bulk_mode} cannot be used with \
          query_fields (binding '{binding}' in claim '{claim}'); bulk reads currently support \
          lookup only"
@@ -3585,6 +3640,8 @@ pub enum BulkMode {
     None,
     RdaInFilter,
     DciBatchedSearch,
+    #[serde(rename = "openfn_sidecar_batch")]
+    OpenFnSidecarBatch,
 }
 
 /// Per-request fan-out caps. `subjects=1, bindings=1` reproduces the strictly
@@ -3706,6 +3763,8 @@ const fn default_dci_max_results() -> usize {
 pub enum SourceConnectorKind {
     RegistryDataApi,
     Dci,
+    #[serde(rename = "openfn_sidecar")]
+    OpenFnSidecar,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -5772,6 +5831,25 @@ source_auth:
         }
     }
 
+    fn openfn_sidecar_binding(connection: &str) -> SourceBindingConfig {
+        SourceBindingConfig {
+            connector: SourceConnectorKind::OpenFnSidecar,
+            connection: Some(connection.to_string()),
+            required_scope: None,
+            dataset: "civil_registry".to_string(),
+            entity: "civil_person".to_string(),
+            lookup: SourceLookupConfig {
+                input: "target.id".to_string(),
+                field: "national_id".to_string(),
+                op: "eq".to_string(),
+                cardinality: "one".to_string(),
+            },
+            query_fields: Vec::new(),
+            fields: BTreeMap::new(),
+            matching: SourceMatchingConfig::default(),
+        }
+    }
+
     fn add_query_fields(binding: &mut SourceBindingConfig) {
         binding.query_fields = vec![
             SourceQueryFieldConfig {
@@ -6127,6 +6205,191 @@ bulk_mode: unsupported_mode
         config.evidence.claims = vec![claim];
 
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn openfn_sidecar_connector_and_batch_mode_parse_and_validate_with_query_fields() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "openfn_crvs".to_string(),
+            SourceConnectionConfig {
+                base_url: "http://127.0.0.1:9191".to_string(),
+                allow_insecure_localhost: true,
+                allow_insecure_private_network: false,
+                token_env: "OPENFN_SIDECAR_TOKEN".to_string(),
+                source_auth: None,
+                dci: DciSourceConnectionConfig::default(),
+                max_in_flight: 8,
+                retry_on_5xx: false,
+                bulk_mode: BulkMode::OpenFnSidecarBatch,
+                bulk_mode_lookup_unique: false,
+                bulk_timeout_max_ms: 30_000,
+            },
+        );
+        let mut binding = openfn_sidecar_binding("openfn_crvs");
+        add_query_fields(&mut binding);
+        let mut claim = minimal_claim("date-of-birth");
+        claim.source_bindings.insert("crvs".to_string(), binding);
+        config.evidence.claims = vec![claim];
+
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn openfn_sidecar_yaml_names_parse_and_validate() {
+        let raw = r#"
+server:
+  bind: 127.0.0.1:0
+auth:
+  mode: api_key
+  api_keys:
+    - id: caseworker
+      hash_env: TEST_HASH
+      scopes: [civil_registry:evidence_verification]
+evidence:
+  enabled: true
+  service_id: evidence.test
+  source_connections:
+    openfn_crvs:
+      base_url: http://127.0.0.1:9191
+      allow_insecure_localhost: true
+      token_env: OPENFN_SIDECAR_TOKEN
+      retry_on_5xx: false
+      bulk_mode: openfn_sidecar_batch
+  claims:
+    - id: date-of-birth
+      title: Date of birth
+      version: 2026-05
+      subject_type: person
+      source_bindings:
+        crvs:
+          connector: openfn_sidecar
+          connection: openfn_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person
+          lookup:
+            input: target.id
+            field: national_id
+            op: eq
+            cardinality: one
+          query_fields:
+            - input: target.attributes.given_name
+              field: given_name
+              op: eq
+            - input: target.attributes.family_name
+              field: family_name
+              op: eq
+          fields:
+            birth_date:
+              field: birth_date
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: crvs
+        field: birth_date
+      disclosure:
+        default: value
+        allowed: [value]
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+"#;
+        let config: StandaloneRegistryNotaryConfig =
+            serde_norway::from_str(raw).expect("OpenFn YAML config deserializes");
+
+        assert_eq!(
+            config.evidence.source_connections["openfn_crvs"].bulk_mode,
+            BulkMode::OpenFnSidecarBatch
+        );
+        assert_eq!(
+            config.evidence.claims[0].source_bindings["crvs"].connector,
+            SourceConnectorKind::OpenFnSidecar
+        );
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn openfn_sidecar_rejects_oauth_source_auth() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "openfn_crvs".to_string(),
+            SourceConnectionConfig {
+                base_url: "http://127.0.0.1:9191".to_string(),
+                allow_insecure_localhost: true,
+                allow_insecure_private_network: false,
+                token_env: String::new(),
+                source_auth: Some(SourceAuthConfig::Oauth2ClientCredentials(
+                    Oauth2ClientCredentialsSourceAuthConfig {
+                        token_url: "https://sidecar.example/oauth/token".to_string(),
+                        client_id_env: "OPENFN_CLIENT_ID".to_string(),
+                        client_secret_env: "OPENFN_CLIENT_SECRET".to_string(),
+                        request_format: "json".to_string(),
+                        scope: String::new(),
+                        refresh_skew_seconds: 60,
+                    },
+                )),
+                dci: DciSourceConnectionConfig::default(),
+                max_in_flight: 8,
+                retry_on_5xx: false,
+                bulk_mode: BulkMode::OpenFnSidecarBatch,
+                bulk_mode_lookup_unique: false,
+                bulk_timeout_max_ms: 30_000,
+            },
+        );
+        let mut claim = minimal_claim("date-of-birth");
+        claim
+            .source_bindings
+            .insert("crvs".to_string(), openfn_sidecar_binding("openfn_crvs"));
+        config.evidence.claims = vec![claim];
+
+        let err = config
+            .validate()
+            .expect_err("OpenFn sidecar connections must use token_env auth");
+        match err {
+            EvidenceConfigError::InvalidSourceAuthConfig { connection, reason } => {
+                assert_eq!(connection, "openfn_crvs");
+                assert!(reason.contains("token_env"));
+                assert!(reason.contains("openfn_sidecar"));
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn openfn_sidecar_rejects_retry_on_5xx() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "openfn_crvs".to_string(),
+            SourceConnectionConfig {
+                base_url: "http://127.0.0.1:9191".to_string(),
+                allow_insecure_localhost: true,
+                allow_insecure_private_network: false,
+                token_env: "OPENFN_SIDECAR_TOKEN".to_string(),
+                source_auth: None,
+                dci: DciSourceConnectionConfig::default(),
+                max_in_flight: 8,
+                retry_on_5xx: true,
+                bulk_mode: BulkMode::OpenFnSidecarBatch,
+                bulk_mode_lookup_unique: false,
+                bulk_timeout_max_ms: 30_000,
+            },
+        );
+        let mut claim = minimal_claim("date-of-birth");
+        claim
+            .source_bindings
+            .insert("crvs".to_string(), openfn_sidecar_binding("openfn_crvs"));
+        config.evidence.claims = vec![claim];
+
+        let err = config
+            .validate()
+            .expect_err("OpenFn sidecar connections must not retry worker executions");
+        match err {
+            EvidenceConfigError::OpenFnSidecarRequiresNoRetry { connection } => {
+                assert_eq!(connection, "openfn_crvs");
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
     }
 
     #[test]

@@ -1,9 +1,10 @@
 use crate::{WorkerCommand, WorkerError, WorkerPool, WorkerPoolConfig};
 use axum::{
+    body::{to_bytes, Body},
     extract::{Path, Query, RawQuery, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Request, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use registry_platform_authcommon::{parse_bearer_token, parse_fingerprint, verify_api_key};
@@ -73,6 +74,8 @@ pub struct LimitConfig {
     pub liveness_window_ms: u64,
     #[serde(default = "default_retry_after_seconds")]
     pub retry_after_seconds: u64,
+    #[serde(default = "default_max_batch_items")]
+    pub max_batch_items: usize,
     pub max_worker_memory_mb: Option<u64>,
 }
 
@@ -161,6 +164,28 @@ pub struct SmokeLookupConfig {
     pub fields: Vec<String>,
     #[serde(default = "default_smoke_purpose")]
     pub purpose: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BatchMatchRequest {
+    fields: Vec<String>,
+    query_signature: Vec<BatchQueryTerm>,
+    items: Vec<BatchMatchItem>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct BatchQueryTerm {
+    field: String,
+    op: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct BatchMatchItem {
+    id: String,
+    values: Vec<Value>,
 }
 
 #[derive(Debug, Error)]
@@ -261,6 +286,10 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
             "/v1/datasets/{dataset}/entities/{entity}/records",
             get(lookup),
         )
+        .route(
+            "/v1/datasets/{dataset}/entities/{entity}/records:batchMatch",
+            post(batch_match),
+        )
         .with_state(state))
 }
 
@@ -348,6 +377,7 @@ fn validate_config(config: &SidecarConfig) -> Result<(), SidecarError> {
     if config.limits.max_output_bytes == 0
         || config.limits.max_request_bytes == 0
         || config.limits.max_query_parameter_bytes == 0
+        || config.limits.max_batch_items == 0
     {
         return Err(SidecarError::Config(
             "byte limits must be greater than zero".to_string(),
@@ -964,6 +994,130 @@ async fn lookup(
     response
 }
 
+async fn batch_match(
+    State(state): State<Arc<AppState>>,
+    Path((dataset, entity)): Path<(String, String)>,
+    request: Request<Body>,
+) -> Response {
+    let started_at = Instant::now();
+    let (parts, body) = request.into_parts();
+    let headers = parts.headers;
+    if let Err(response) = authorize(&state, &headers) {
+        return *response;
+    }
+    let Some(purpose) = headers
+        .get("data-purpose")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+    else {
+        return problem(StatusCode::BAD_REQUEST, "missing Data-Purpose");
+    };
+
+    let Some((source_id, source)) = state
+        .config
+        .sources
+        .iter()
+        .find(|(_, source)| source.dataset == dataset && source.entity == entity)
+    else {
+        return problem(StatusCode::NOT_FOUND, "source route not found");
+    };
+
+    let body = match parse_batch_match_body(&state, body).await {
+        Ok(body) => body,
+        Err(response) => return *response,
+    };
+    if let Err(response) = validate_batch_match_request(&state, &body) {
+        return *response;
+    }
+
+    let correlation_id = headers
+        .get("x-correlation-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let mut request = json!({
+        "mode": "batch_match",
+        "source_id": source_id,
+        "dataset": dataset,
+        "entity": entity,
+        "query_signature": body.query_signature,
+        "items": body.items,
+        "fields": body.fields,
+        "purpose": purpose,
+        "correlation_id": correlation_id.clone(),
+        "configuration": state.credentials.get(source_id).cloned().unwrap_or(Value::Null),
+    });
+    add_source_execution(&mut request, source);
+
+    let worker_execution = match state.pool.execute_json_with_metadata(request).await {
+        Ok(execution) => execution,
+        Err(error) => {
+            let worker_id = error.worker_id();
+            record_metric(
+                &state,
+                source_id,
+                "batch_worker_error",
+                started_at.elapsed(),
+            )
+            .await;
+            warn!(
+                correlation_id = correlation_id.as_deref().unwrap_or(""),
+                source_id = source_id.as_str(),
+                outcome = "batch_worker_error",
+                worker_id,
+                duration_ms = started_at.elapsed().as_millis() as u64,
+                "sidecar batch match failed"
+            );
+            return worker_error_response(error, state.config.limits.retry_after_seconds);
+        }
+    };
+
+    let response = normalize_batch_worker_response(
+        worker_execution.value,
+        &body.fields,
+        &body
+            .items
+            .iter()
+            .map(|item| item.id.clone())
+            .collect::<Vec<_>>(),
+    );
+    let outcome = if response.status().is_success() {
+        "batch_success"
+    } else {
+        "batch_source_error"
+    };
+    record_metric(&state, source_id, outcome, started_at.elapsed()).await;
+    info!(
+        correlation_id = correlation_id.as_deref().unwrap_or(""),
+        source_id = source_id.as_str(),
+        outcome,
+        worker_id = worker_execution.worker_id,
+        status = response.status().as_u16(),
+        duration_ms = started_at.elapsed().as_millis() as u64,
+        "sidecar batch match completed"
+    );
+    response
+}
+
+async fn parse_batch_match_body(
+    state: &AppState,
+    body: Body,
+) -> Result<BatchMatchRequest, Box<Response>> {
+    let limit = state.config.limits.max_request_bytes;
+    let bytes = to_bytes(body, limit).await.map_err(|_| {
+        Box::new(problem(
+            StatusCode::BAD_REQUEST,
+            "request body exceeds configured byte limit",
+        ))
+    })?;
+    serde_json::from_slice(&bytes).map_err(|_| {
+        Box::new(problem(
+            StatusCode::BAD_REQUEST,
+            "invalid batch match request",
+        ))
+    })
+}
+
 async fn record_metric(state: &AppState, source_id: &str, outcome: &str, duration: Duration) {
     let key = MetricKey {
         source_id: source_id.to_string(),
@@ -1105,6 +1259,107 @@ fn validate_query(
     })
 }
 
+fn validate_batch_match_request(
+    state: &AppState,
+    body: &BatchMatchRequest,
+) -> Result<(), Box<Response>> {
+    if body.fields.is_empty() {
+        return Err(Box::new(problem(
+            StatusCode::BAD_REQUEST,
+            "fields projection is required",
+        )));
+    }
+    for field in &body.fields {
+        if field.is_empty() {
+            return Err(Box::new(problem(
+                StatusCode::BAD_REQUEST,
+                "fields projection entries are required",
+            )));
+        }
+        if field.len() > state.config.limits.max_query_parameter_bytes {
+            return Err(Box::new(problem(
+                StatusCode::BAD_REQUEST,
+                "fields projection entry exceeds configured byte limit",
+            )));
+        }
+    }
+    if body.query_signature.is_empty() {
+        return Err(Box::new(problem(
+            StatusCode::BAD_REQUEST,
+            "query_signature is required",
+        )));
+    }
+    if body.items.is_empty() {
+        return Err(Box::new(problem(
+            StatusCode::BAD_REQUEST,
+            "items are required",
+        )));
+    }
+    if body.items.len() > state.config.limits.max_batch_items {
+        return Err(Box::new(problem(
+            StatusCode::BAD_REQUEST,
+            "batch item count exceeds configured limit",
+        )));
+    }
+    for term in &body.query_signature {
+        if term.field.is_empty() {
+            return Err(Box::new(problem(
+                StatusCode::BAD_REQUEST,
+                "query_signature field is required",
+            )));
+        }
+        if term.field.len() > state.config.limits.max_query_parameter_bytes {
+            return Err(Box::new(problem(
+                StatusCode::BAD_REQUEST,
+                "query_signature field exceeds configured byte limit",
+            )));
+        }
+        if term.op != "eq" {
+            return Err(Box::new(problem(
+                StatusCode::BAD_REQUEST,
+                "unsupported query operation",
+            )));
+        }
+    }
+    let mut request_ids = BTreeSet::new();
+    for item in &body.items {
+        if item.id.is_empty() {
+            return Err(Box::new(problem(
+                StatusCode::BAD_REQUEST,
+                "batch item id is required",
+            )));
+        }
+        if !request_ids.insert(item.id.as_str()) {
+            return Err(Box::new(problem(
+                StatusCode::BAD_REQUEST,
+                "batch item id duplicated",
+            )));
+        }
+        if item.values.len() != body.query_signature.len() {
+            return Err(Box::new(problem(
+                StatusCode::BAD_REQUEST,
+                "batch item values must match query_signature length",
+            )));
+        }
+        for value in &item.values {
+            if value_query_size(value) > state.config.limits.max_query_parameter_bytes {
+                return Err(Box::new(problem(
+                    StatusCode::BAD_REQUEST,
+                    "batch item value exceeds configured byte limit",
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn value_query_size(value: &Value) -> usize {
+    match value {
+        Value::String(value) => value.len(),
+        other => other.to_string().len(),
+    }
+}
+
 fn normalize_worker_response(response: Value, fields: &[String], limit: usize) -> Response {
     if let Some(error) = response.get("error").and_then(Value::as_object) {
         return target_error_response(error);
@@ -1125,6 +1380,88 @@ fn normalize_worker_response(response: Value, fields: &[String], limit: usize) -
     match projected {
         Ok(data) => (StatusCode::OK, Json(json!({ "data": data }))).into_response(),
         Err(response) => *response,
+    }
+}
+
+fn normalize_batch_worker_response(
+    response: Value,
+    fields: &[String],
+    requested_ids: &[String],
+) -> Response {
+    if let Some(error) = response.get("error").and_then(Value::as_object) {
+        return target_error_response(error);
+    }
+
+    let Some(items) = response.get("items").and_then(Value::as_array) else {
+        return problem(
+            StatusCode::BAD_GATEWAY,
+            "worker response missing items array",
+        );
+    };
+
+    let mut seen = BTreeSet::new();
+    let mut by_id = BTreeMap::new();
+    let requested = requested_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    for item in items {
+        let Some(object) = item.as_object() else {
+            return problem(StatusCode::BAD_GATEWAY, "worker items must be JSON objects");
+        };
+        let Some(id) = object.get("id").and_then(Value::as_str) else {
+            return problem(StatusCode::BAD_GATEWAY, "worker item missing id");
+        };
+        if !seen.insert(id.to_string()) {
+            return problem(StatusCode::BAD_GATEWAY, "worker item id duplicated");
+        }
+        if !requested.contains(id) {
+            return problem(StatusCode::BAD_GATEWAY, "worker item id was not requested");
+        }
+        by_id.insert(id.to_string(), object.clone());
+    }
+
+    let mut normalized = Vec::with_capacity(requested_ids.len());
+    for id in requested_ids {
+        let Some(item) = by_id.get(id) else {
+            normalized.push(json!({
+                "id": id,
+                "error": { "code": "source_unavailable" }
+            }));
+            continue;
+        };
+        if let Some(error) = item.get("error").and_then(Value::as_object) {
+            normalized.push(json!({ "id": id, "error": normalize_item_error(error) }));
+            continue;
+        }
+        let Some(records) = item.get("data").and_then(Value::as_array) else {
+            return problem(StatusCode::BAD_GATEWAY, "worker item missing data array");
+        };
+        let projected = records
+            .iter()
+            .take(2)
+            .map(|record| project_record(record, fields))
+            .collect::<Result<Vec<_>, _>>();
+        match projected {
+            Ok(data) => normalized.push(json!({ "id": id, "data": data })),
+            Err(response) => return *response,
+        }
+    }
+
+    (StatusCode::OK, Json(json!({ "items": normalized }))).into_response()
+}
+
+fn normalize_item_error(error: &Map<String, Value>) -> Value {
+    match error.get("code").and_then(Value::as_str) {
+        Some("target_auth") => json!({ "code": "target_auth" }),
+        Some("target_rate_limit") => {
+            let mut normalized = json!({ "code": "target_rate_limit" });
+            if let Some(retry_after) = error.get("retry_after_seconds").and_then(Value::as_u64) {
+                normalized["retry_after_seconds"] = json!(retry_after);
+            }
+            normalized
+        }
+        _ => json!({ "code": "source_unavailable" }),
     }
 }
 
@@ -1205,6 +1542,10 @@ fn default_liveness_window_ms() -> u64 {
 
 fn default_retry_after_seconds() -> u64 {
     1
+}
+
+fn default_max_batch_items() -> usize {
+    100
 }
 
 fn default_smoke_purpose() -> String {

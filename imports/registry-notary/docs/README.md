@@ -11,6 +11,7 @@ Pick your path below. If you are new, start with the architecture overview.
 
 - [Architecture overview](architecture-overview.md): what Registry Notary is, the request lifecycle, and how the layers relate.
 - [Capability matrix](notary-capability-matrix.md): which flows Notary supports today, by persona and system.
+- [Identity and record matching](identity-and-record-matching.md): how Notary resolves the target entity to a source record, the outcome model, and matching policy.
 
 ## Integrate
 
@@ -28,7 +29,7 @@ For application and wallet developers calling the API or the SDKs.
 For operators deploying, configuring, and running a Registry Notary.
 
 - [Configuration reference](operator-config-reference.md): the config blocks for auth, evidence, sources, replay, status, self-attestation, OID4VCI, and federation.
-- [Model sources and claims](source-claim-modeling-guide.md): design source connectors, claim boundaries, disclosure, and batch reads.
+- [Model sources and claims](source-claim-modeling-guide.md): design source connectors, OpenFn sidecars, claim boundaries, disclosure, and batch reads.
 - [Signing key providers](signing-key-provider.md): SD-JWT VC signing-key configuration, rotation, and PKCS#11 setup.
 - [Self-attestation](self-attestation-operator-guide.md): citizen OIDC subject binding, token policy, allow-lists, and rollout.
 - [Federated evaluation](federated-evaluation-operator-guide.md): static-peer setup, environment variables, and the replay limitation.

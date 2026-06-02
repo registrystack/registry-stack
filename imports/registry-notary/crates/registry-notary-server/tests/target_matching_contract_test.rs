@@ -8,12 +8,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use registry_notary_core::{
-    AccessMode, BatchEvaluateItemRequest, BatchEvaluateRequest, BatchOperationConfig,
-    ClaimDefinition, ClaimOperationsConfig, ClaimRef, ClaimValueConfig, DisclosureConfig,
-    EvaluateRequest, EvidenceConfig, EvidenceEntity, EvidenceError, EvidencePrincipal,
-    EvidenceRelationship, EvidenceRequestContext, OperationConfig, RuleConfig, SourceBindingConfig,
-    SourceConnectorKind, SourceFieldConfig, SourceLookupConfig, SourceMatchingConfig,
-    SubjectRequest, FORMAT_CLAIM_RESULT_JSON,
+    AccessMode, BatchEvaluateItemRequest, BatchEvaluateRequest, BatchOperationConfig, BulkMode,
+    ClaimDefinition, ClaimOperationsConfig, ClaimRef, ClaimValueConfig, DciSourceConnectionConfig,
+    DisclosureConfig, EvaluateRequest, EvidenceConfig, EvidenceEntity, EvidenceError,
+    EvidencePrincipal, EvidenceRelationship, EvidenceRequestContext, OperationConfig, RuleConfig,
+    SourceBindingConfig, SourceConnectionConfig, SourceConnectorKind, SourceFieldConfig,
+    SourceLookupConfig, SourceMatchingConfig, SourceQueryFieldConfig, SubjectRequest,
+    FORMAT_CLAIM_RESULT_JSON,
 };
 use registry_notary_server::{
     BatchEvaluateOptions, EvidenceStore, RegistryNotaryRuntime, SourceReader,
@@ -94,6 +95,38 @@ impl ContextRecordingSource {
 }
 
 #[derive(Debug)]
+struct BatchContextRecordingSource {
+    seen_batches: Mutex<Vec<Vec<EvidenceRequestContext>>>,
+    read_many_calls: AtomicUsize,
+    read_one_calls: AtomicUsize,
+}
+
+impl BatchContextRecordingSource {
+    fn new() -> Self {
+        Self {
+            seen_batches: Mutex::new(Vec::new()),
+            read_many_calls: AtomicUsize::new(0),
+            read_one_calls: AtomicUsize::new(0),
+        }
+    }
+
+    fn seen_batches(&self) -> Vec<Vec<EvidenceRequestContext>> {
+        self.seen_batches
+            .lock()
+            .expect("seen batches mutex is not poisoned")
+            .clone()
+    }
+
+    fn read_many_calls(&self) -> usize {
+        self.read_many_calls.load(Ordering::SeqCst)
+    }
+
+    fn read_one_calls(&self) -> usize {
+        self.read_one_calls.load(Ordering::SeqCst)
+    }
+}
+
+#[derive(Debug)]
 struct DelayedContextSource;
 
 impl SourceReader for DelayedContextSource {
@@ -154,6 +187,62 @@ impl SourceReader for ContextRecordingSource {
                 .lock()
                 .expect("seen context mutex is not poisoned") = Some(context.clone());
             Ok(json!({ "alive": true }))
+        })
+    }
+
+    fn required_scopes(
+        &self,
+        _evidence: &EvidenceConfig,
+        _claim_id: &str,
+    ) -> Result<Vec<String>, EvidenceError> {
+        Ok(Vec::new())
+    }
+}
+
+impl SourceReader for BatchContextRecordingSource {
+    fn read_one<'a>(
+        &'a self,
+        _binding: &'a SourceBindingConfig,
+        _subject: &'a SubjectRequest,
+        _purpose: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+        Box::pin(async {
+            self.read_one_calls.fetch_add(1, Ordering::SeqCst);
+            Err(EvidenceError::SourceUnavailable)
+        })
+    }
+
+    fn read_one_for_context<'a>(
+        &'a self,
+        _binding: &'a SourceBindingConfig,
+        _context: &'a EvidenceRequestContext,
+        _purpose: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+        Box::pin(async {
+            self.read_one_calls.fetch_add(1, Ordering::SeqCst);
+            Err(EvidenceError::SourceUnavailable)
+        })
+    }
+
+    fn read_many_context<'a>(
+        &'a self,
+        bindings: Vec<(SourceBindingConfig, EvidenceRequestContext)>,
+        _purpose: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Vec<Result<Value, EvidenceError>>> + Send + 'a>> {
+        Box::pin(async move {
+            self.read_many_calls.fetch_add(1, Ordering::SeqCst);
+            let contexts: Vec<EvidenceRequestContext> = bindings
+                .iter()
+                .map(|(_, context)| context.clone())
+                .collect();
+            self.seen_batches
+                .lock()
+                .expect("seen batches mutex is not poisoned")
+                .push(contexts);
+            bindings
+                .iter()
+                .map(|_| Ok(json!({ "alive": true })))
+                .collect()
         })
     }
 
@@ -257,6 +346,33 @@ fn evidence_config(claims: Vec<ClaimDefinition>) -> Arc<EvidenceConfig> {
     Arc::new(EvidenceConfig {
         enabled: true,
         inline_batch_limit: 20,
+        claims,
+        ..EvidenceConfig::default()
+    })
+}
+
+fn evidence_config_with_openfn_batch_connection(
+    claims: Vec<ClaimDefinition>,
+) -> Arc<EvidenceConfig> {
+    Arc::new(EvidenceConfig {
+        enabled: true,
+        inline_batch_limit: 20,
+        source_connections: BTreeMap::from([(
+            "openfn_crvs".to_string(),
+            SourceConnectionConfig {
+                base_url: "http://127.0.0.1:9191".to_string(),
+                allow_insecure_localhost: true,
+                allow_insecure_private_network: false,
+                token_env: "OPENFN_SIDECAR_TOKEN".to_string(),
+                source_auth: None,
+                dci: DciSourceConnectionConfig::default(),
+                max_in_flight: 8,
+                retry_on_5xx: false,
+                bulk_mode: BulkMode::OpenFnSidecarBatch,
+                bulk_mode_lookup_unique: false,
+                bulk_timeout_max_ms: 30_000,
+            },
+        )]),
         claims,
         ..EvidenceConfig::default()
     })
@@ -1250,6 +1366,112 @@ async fn batch_supports_same_rich_item_model() {
     assert_eq!(response.summary.failed, 1);
     assert_eq!(response.items[0].target_ref.entity_type, "LandParcel");
     assert_eq!(response.items[1].errors[0].code, "target.not_found");
+}
+
+#[tokio::test]
+async fn batch_prefetch_minimizes_context_and_excludes_policy_rejected_items() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(BatchContextRecordingSource::new());
+    let mut claim = person_claim();
+    let binding = claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists");
+    binding.connector = SourceConnectorKind::OpenFnSidecar;
+    binding.connection = Some("openfn_crvs".to_string());
+    binding.query_fields = vec![
+        SourceQueryFieldConfig {
+            input: "target.attributes.given_name".to_string(),
+            field: "given_name".to_string(),
+            op: "eq".to_string(),
+        },
+        SourceQueryFieldConfig {
+            input: "target.attributes.family_name".to_string(),
+            field: "family_name".to_string(),
+            op: "eq".to_string(),
+        },
+        SourceQueryFieldConfig {
+            input: "target.attributes.birthdate".to_string(),
+            field: "birthdate".to_string(),
+            op: "eq".to_string(),
+        },
+    ];
+    binding.matching.allowed_target_inputs = vec![
+        "target.attributes.given_name".to_string(),
+        "target.attributes.family_name".to_string(),
+        "target.attributes.birthdate".to_string(),
+    ];
+
+    let valid = person_target("Amina", "Diallo", Some("1984-02-10"));
+    let mut rejected = person_target("Amina", "Diallo", Some("1984-02-10"));
+    rejected
+        .attributes
+        .insert("private_note".to_string(), json!("do-not-forward"));
+
+    let response = runtime
+        .batch_evaluate(
+            evidence_config_with_openfn_batch_connection(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            BatchEvaluateRequest {
+                items: vec![
+                    BatchEvaluateItemRequest {
+                        requester: None,
+                        target: valid,
+                        relationship: Some(EvidenceRelationship {
+                            relationship_type: "self".to_string(),
+                            attributes: BTreeMap::new(),
+                        }),
+                        on_behalf_of: None,
+                        purpose: Some("benefits".to_string()),
+                    },
+                    BatchEvaluateItemRequest {
+                        requester: None,
+                        target: rejected,
+                        relationship: Some(EvidenceRelationship {
+                            relationship_type: "self".to_string(),
+                            attributes: BTreeMap::new(),
+                        }),
+                        on_behalf_of: None,
+                        purpose: Some("benefits".to_string()),
+                    },
+                ],
+                claims: vec![ClaimRef::new("person-is-alive")],
+                disclosure: Some("value".to_string()),
+                format: None,
+                purpose: None,
+            },
+            BatchEvaluateOptions::default(),
+        )
+        .await
+        .expect("batch completes with per-item outcomes");
+
+    assert_eq!(source.read_many_calls(), 1);
+    assert_eq!(source.read_one_calls(), 0);
+    let batches = source.seen_batches();
+    assert_eq!(batches.len(), 1);
+    assert_eq!(
+        batches[0].len(),
+        1,
+        "only the policy-valid item is prefetched"
+    );
+    let seen = &batches[0][0];
+    assert!(seen.target.attributes.contains_key("given_name"));
+    assert!(seen.target.attributes.contains_key("family_name"));
+    assert!(seen.target.attributes.contains_key("birthdate"));
+    assert!(!seen.target.attributes.contains_key("private_note"));
+    assert!(seen.requester.is_none());
+    assert!(seen.on_behalf_of.is_none());
+
+    assert!(matches!(
+        response.items[0].status,
+        registry_notary_core::BatchItemStatus::Succeeded
+    ));
+    assert_eq!(
+        response.items[1].errors[0].code,
+        "target.matching_policy_rejected"
+    );
 }
 
 #[tokio::test]

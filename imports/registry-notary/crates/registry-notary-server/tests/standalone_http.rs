@@ -32,6 +32,7 @@ use registry_platform_testing::{
     fixtures, jwks_from_private_jwk, sign_ed25519_compact_jwt, sign_openid4vci_proof_jwt,
     MockHttpUpstream, MockIdp, FEDERATION_PROTOCOL, FEDERATION_REQUEST_JWT_TYPE,
 };
+use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -45,6 +46,20 @@ use time::OffsetDateTime;
 const TEST_AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
 const TEST_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
 const TEST_HOLDER_JWK: &str = r#"{"crv":"Ed25519","d":"f4QIxnAyRWzhuBOmNRgvBTE56mWePdsPL0mvCtl8Gys","x":"pv4e_hXHBLN27rcs6VDFV1ED0TiU8M3xy9vsuWFEsec","kty":"OKP","alg":"EdDSA"}"#;
+
+#[derive(Debug, Deserialize)]
+struct ExposureManifest {
+    endpoints: Vec<ExposureEndpoint>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExposureEndpoint {
+    listener: String,
+    method: String,
+    path: String,
+    feature: Option<String>,
+    auth: String,
+}
 
 fn person_target(id: &str) -> Value {
     json!({
@@ -127,6 +142,13 @@ fn add_admin_api_key(config: &mut StandaloneRegistryNotaryConfig) {
         hash_env: "TEST_EVIDENCE_ADMIN_KEY_HASH".to_string(),
         scopes: vec!["registry_notary:admin".to_string()],
     });
+}
+
+fn sample_manifest_path(path: &str) -> String {
+    path.replace("{claim_id}", "farmed-land-size")
+        .replace("{evaluation_id}", "eval-1")
+        .replace("{credential_id}", "urn:ulid:01HX0000000000000000000000")
+        .replace("{*vct_path}", "civil-status")
 }
 
 async fn registry_data_api(
@@ -2106,6 +2128,56 @@ async fn oid4vci_type_metadata_is_public_and_matches_configured_vct() {
 }
 
 #[tokio::test]
+async fn oid4vci_type_metadata_normalizes_forwarded_scheme_and_host_case() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_oid4vci_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    );
+    let vct = "https://issuer.example.test/credentials/civil-status";
+    config.oid4vci.credential_issuer = "https://issuer.example.test".to_string();
+    config.oid4vci.credential_endpoint =
+        "https://issuer.example.test/oid4vci/credential".to_string();
+    config.oid4vci.offer_endpoint =
+        "https://issuer.example.test/oid4vci/credential-offer".to_string();
+    config.oid4vci.nonce_endpoint = Some("https://issuer.example.test/oid4vci/nonce".to_string());
+    config
+        .evidence
+        .credential_profiles
+        .get_mut("civil_status_sd_jwt")
+        .expect("credential profile exists")
+        .vct = vct.to_string();
+    config
+        .oid4vci
+        .credential_configurations
+        .get_mut("person_is_alive_sd_jwt")
+        .expect("credential configuration exists")
+        .vct = vct.to_string();
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let response = server
+        .get("/credentials/civil-status")
+        .add_header("host", "internal-notary:8080")
+        .add_header("x-forwarded-host", "ISSUER.EXAMPLE.TEST")
+        .add_header("x-forwarded-proto", "HTTPS")
+        .await;
+    response.assert_status_ok();
+    let body: Value = response.json();
+    assert_eq!(body["vct"], json!(vct));
+
+    idp.stop().await;
+}
+
+#[tokio::test]
 async fn oid4vci_type_metadata_supports_nested_paths_and_public_404s() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
@@ -2499,6 +2571,10 @@ async fn public_probe_routes_remain_public_except_metrics() {
         .await
         .assert_status(StatusCode::NOT_FOUND);
     server
+        .get("/v1/credentials/urn:ulid:01HX0000000000000000000000/history")
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    server
         .post("/federation/v1/evaluations")
         .bytes(Bytes::from_static(b"not-mounted"))
         .await
@@ -2516,6 +2592,60 @@ async fn public_probe_routes_remain_public_except_metrics() {
         .post("/v1/credentials")
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
+
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn manifest_public_protected_routes_are_mounted_behind_auth() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let manifest: ExposureManifest =
+        serde_json::from_str(include_str!("../../../security/exposure-manifest.json"))
+            .expect("security exposure manifest parses");
+    let idp = MockIdp::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_oid4vci_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    );
+    enable_credential_status(&mut config);
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    for endpoint in manifest.endpoints.iter().filter(|endpoint| {
+        endpoint.listener == "public" && endpoint.auth != "none" && endpoint.feature.is_none()
+    }) {
+        let method = Method::from_bytes(endpoint.method.as_bytes()).expect("method parses");
+        let path = sample_manifest_path(&endpoint.path);
+        let request = server.method(method, &path);
+        let response = if endpoint.auth == "bearer" && endpoint.path == "/oid4vci/credential" {
+            request
+                .json(&json!({
+                    "format": "dc+sd-jwt",
+                    "credential_configuration_id": "person_is_alive_sd_jwt",
+                    "proof": {
+                        "proof_type": "jwt",
+                        "jwt": sign_oid4vci_proof("http://127.0.0.1:4325", "nonce-1")
+                    }
+                }))
+                .await
+        } else {
+            request.await
+        };
+        assert_eq!(
+            response.status_code(),
+            StatusCode::UNAUTHORIZED,
+            "{} {} must be mounted behind auth on the public listener",
+            endpoint.method,
+            endpoint.path
+        );
+    }
 
     idp.stop().await;
 }

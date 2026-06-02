@@ -25,6 +25,8 @@ Before editing YAML, decide these items:
 | Multi-instance deployment | More than one Notary process serves traffic | `replay.storage: redis`, usually `credential_status.storage: redis` |
 | Credential suspension or revocation | Verifiers need a live status URL | `credential_status.enabled: true` |
 | Audit retention | Operators need traceability without raw personal data | `audit` |
+| OpenFn sidecar reads | A target system needs pinned adaptor execution or normalization outside Notary | `connector: openfn_sidecar`, `retry_on_5xx: false` |
+| OpenFn batch matching | Batch evaluation should share one OpenFn sidecar read across compatible items | `bulk_mode: openfn_sidecar_batch`, binding `query_fields` |
 
 Start with one narrow claim, one source connection, one signing key, and one
 credential profile. Add federation, wallet issuance, and batch evaluation after
@@ -230,12 +232,161 @@ For DCI sources, check these fields carefully:
 For any source binding, `query_fields` can replace the single-field `lookup`
 wire query when the source supports multi-field lookup. `registry_data_api`
 sends them as query parameters, and DCI `expression` sends them inside the DCI
-query envelope. Leave `query_fields` empty for the legacy single-field lookup.
+query envelope. For `openfn_sidecar`, Notary sends single reads through the
+sidecar's Registry Data API-shaped read endpoint, and sends batch reads through
+the sidecar's `records:batchMatch` endpoint. Leave `query_fields` empty for the
+legacy single-field lookup.
 
 For production, leave `allow_insecure_localhost` and
 `allow_insecure_private_network` false unless the deployment review explicitly
 accepts the private network source. Local demos may use them for loopback or
 Docker Compose style setups.
+
+### OpenFn Sidecar Source Connections
+
+Use `connector: openfn_sidecar` when a target system needs OpenFn adaptor
+execution, target credential handling, or output normalization outside Notary.
+The source connection must use static sidecar bearer auth through `token_env`.
+Do not configure target-service credentials in Notary; keep them in the sidecar
+environment or secret store.
+
+Single-read OpenFn sidecar example:
+
+```yaml
+evidence:
+  source_connections:
+    openfn_crvs:
+      base_url: http://127.0.0.1:9191
+      allow_insecure_localhost: true
+      token_env: OPENFN_SIDECAR_TOKEN
+      retry_on_5xx: false
+      bulk_mode: none
+  claims:
+    - id: date-of-birth
+      title: Date of birth
+      version: 2026-06
+      subject_type: person
+      value:
+        type: date
+      inputs:
+        - name: target.identifiers.national_id
+          type: string
+      source_bindings:
+        crvs:
+          connector: openfn_sidecar
+          connection: openfn_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person
+          lookup:
+            input: target.identifiers.national_id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+      rule:
+        type: extract
+        source: crvs
+        field: birth_date
+```
+
+OpenFn sidecar batch matching example with `query_fields`:
+
+```yaml
+evidence:
+  source_connections:
+    openfn_crvs:
+      base_url: http://127.0.0.1:9191
+      allow_insecure_localhost: true
+      token_env: OPENFN_SIDECAR_TOKEN
+      retry_on_5xx: false
+      bulk_mode: openfn_sidecar_batch
+      bulk_timeout_max_ms: 30000
+  claims:
+    - id: birth-record-exists
+      title: Birth record exists
+      version: 2026-06
+      subject_type: person
+      value:
+        type: boolean
+      operations:
+        batch_evaluate:
+          enabled: true
+          max_subjects: 100
+      inputs:
+        - name: target.attributes.given_name
+          type: string
+        - name: target.attributes.family_name
+          type: string
+        - name: target.attributes.birthdate
+          type: date
+      source_bindings:
+        crvs:
+          connector: openfn_sidecar
+          connection: openfn_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person
+          lookup:
+            input: target.attributes.birthdate
+            field: birthdate
+            op: eq
+            cardinality: one
+          query_fields:
+            - input: target.attributes.given_name
+              field: given_name
+              op: eq
+            - input: target.attributes.family_name
+              field: family_name
+              op: eq
+            - input: target.attributes.birthdate
+              field: birthdate
+              op: eq
+          matching:
+            policy_id: civil-person-name-birthdate-v1
+            method: exact_name_birthdate
+            target_type: Person
+            allowed_purposes:
+              - benefit_eligibility_check
+            sufficient_target_inputs:
+              - [target.attributes.given_name, target.attributes.family_name, target.attributes.birthdate]
+            allowed_target_inputs:
+              - target.attributes.given_name
+              - target.attributes.family_name
+              - target.attributes.birthdate
+            collapse_matching_errors: true
+            confidence: high
+          fields:
+            national_id:
+              field: national_id
+              type: string
+              required: true
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+      rule:
+        type: exists
+        source: crvs
+```
+
+For OpenFn sidecar connections:
+
+- Set `retry_on_5xx: false`. Notary does not retry OpenFn worker execution
+  failures unless a future explicit retry policy is added.
+- Use `bulk_mode: openfn_sidecar_batch` only after sidecar contract tests cover
+  per-item not found, exact match, ambiguous match, missing response item,
+  duplicate response item id, worker timeout, worker failure, and output
+  projection.
+- Keep the sidecar on localhost or a private pod network reachable only from
+  Notary. Do not expose the sidecar publicly.
+- Keep policy, minimization, audit, disclosure, and credential issuance in
+  Notary. Keep adaptor execution, target credentials, normalization, source
+  comparison, and worker isolation in the sidecar.
 
 ## Claims
 
@@ -263,6 +414,81 @@ Important fields:
 Avoid broad source bindings. A claim should read only the fields needed to
 evaluate that claim. If two credentials need different fields, prefer two claims
 or a small dependency graph over one over-broad claim.
+
+## Matching policy
+
+Each source binding has an optional `matching` block that gates and shapes how the
+request is resolved to a source record before the read runs. The block is the
+operator control behind [identity and record
+matching](identity-and-record-matching.md); read that page for the concepts and the
+outcome model. With no `matching` block, a binding falls back to unrestricted,
+identifier-only behavior.
+
+```yaml
+source_bindings:
+  person_record:
+    connector: registry_data_api
+    connection: civil_registry
+    dataset: people
+    entity: person
+    lookup:
+      input: target.attributes.birthdate
+      field: birthdate
+    matching:
+      policy_id: person-name-birthdate-v1
+      method: exact_name_birthdate
+      target_type: Person
+      allowed_purposes:
+        - benefit_eligibility_check
+      allowed_relationships:
+        - self
+      sufficient_target_inputs:
+        - [target.attributes.given_name, target.attributes.family_name, target.attributes.birthdate]
+      allowed_target_inputs:
+        - target.attributes.given_name
+        - target.attributes.family_name
+        - target.attributes.birthdate
+      confidence: high
+```
+
+Fields:
+
+| Field | Purpose | Default |
+| --- | --- | --- |
+| `policy_id` | Stable label for this policy, returned in the response and audit trail | none |
+| `method` | Stable label for the matching method, returned in the response and audit trail | none |
+| `target_type` | If set, the request `target.type` must equal this value | unenforced |
+| `requester_type` | If set, the request `requester.type` must equal this value | unenforced |
+| `allowed_purposes` | Purposes this binding may be used for; empty means no purpose restriction here | empty |
+| `allowed_relationships` | Relationship types this binding accepts | empty |
+| `sufficient_target_inputs` | OR-of-AND groups of target paths; the request must satisfy at least one full group | empty |
+| `allowed_target_inputs` | Allow-list of target paths the binding may read; empty means unrestricted | empty |
+| `allowed_requester_inputs` | Allow-list of requester paths the binding may read; empty means unrestricted | empty |
+| `collapse_matching_errors` | Map every matching error to public `evidence.not_available`, keeping the granular reason in audit | `true` |
+| `require_requester_reauthentication` | Require the requester to reauthenticate before this binding reads | `false` |
+| `confidence` | Confidence label returned with a successful match | none |
+
+Notes:
+
+- `sufficient_target_inputs` is an OR of ANDs. Each inner list is a complete set of
+  paths that, when all present, is enough to match; the request needs to satisfy any
+  one group. For example, `[[national_id], [given_name, family_name, birthdate]]`
+  accepts either a national id alone or the full name-and-birthdate triple.
+- `allowed_target_inputs` and `allowed_requester_inputs` are minimization controls.
+  A request that supplies a path outside the allow-list is rejected, so a binding
+  cannot over-collect by accident. Leave them empty only for identifier-only
+  bindings that need no attribute minimization.
+- `collapse_matching_errors` defaults to on. Turn it off only in a controlled
+  environment where exposing not-found versus ambiguous versus rejected to the
+  caller is acceptable, because those differences can be used as an existence
+  oracle.
+- `confidence` is a fixed label for the source and method. It is returned verbatim
+  on every successful match and does not measure how strong an individual match was.
+  Tracked for improvement in
+  [issue #90](https://github.com/jeremi/registry-notary/issues/90).
+- Config validation rejects blank values: `policy_id`, `method`, `target_type`, and
+  `requester_type` must be non-empty when present, and the purpose, relationship,
+  and input-path lists must not contain blank entries.
 
 ## Credential Profiles
 

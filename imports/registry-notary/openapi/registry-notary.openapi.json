@@ -1,0 +1,3422 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Registry Notary API",
+    "description": "Standalone claim evaluation, rendering, and credential issuance API.",
+    "license": {
+      "name": "Apache-2.0",
+      "identifier": "Apache-2.0"
+    },
+    "version": "0.3.0"
+  },
+  "paths": {
+    "/.well-known/evidence-service": {
+      "get": {
+        "summary": "Discover Registry Notary capabilities",
+        "operationId": "getEvidenceService",
+        "responses": {
+          "200": {
+            "description": "Service document",
+            "content": {
+              "application/json": {
+                "example": {
+                  "api_version": "2026-05",
+                  "auth": {
+                    "api_key": {
+                      "header": "x-api-key"
+                    },
+                    "audience": "demo.registry-notary",
+                    "bearer": {
+                      "format": "Bearer <token>",
+                      "header": "Authorization",
+                      "scheme": "bearer"
+                    },
+                    "methods": [
+                      "api_key",
+                      "bearer"
+                    ]
+                  },
+                  "base_url": "http://127.0.0.1:4255",
+                  "batch": {
+                    "idempotency_window": "PT15M",
+                    "max_inline_subjects": 20
+                  },
+                  "claims_url": "/v1/claims",
+                  "credential_capabilities": {
+                    "formats": [
+                      "application/dc+sd-jwt"
+                    ],
+                    "sd_jwt_vc": {
+                      "credential_profiles": [
+                        {
+                          "allowed_claims": [
+                            "farmer-under-4ha"
+                          ],
+                          "disclosure": {
+                            "allowed": [
+                              "predicate"
+                            ]
+                          },
+                          "format": "application/dc+sd-jwt",
+                          "holder_binding": {
+                            "allowed_did_methods": [
+                              "did:jwk"
+                            ],
+                            "mode": "did",
+                            "proof_of_possession": "required"
+                          },
+                          "id": "smallholder_sd_jwt",
+                          "issuer": "did:web:agriculture.demo.example.gov",
+                          "validity_seconds": 86400,
+                          "vct": "https://demo.example.gov/credentials/smallholder-farmer/v1"
+                        }
+                      ],
+                      "holder_binding_methods": [
+                        "did:jwk"
+                      ],
+                      "issuer_key_types": [
+                        "OKP/Ed25519"
+                      ],
+                      "jwt_typ": "dc+sd-jwt",
+                      "media_type": "application/dc+sd-jwt",
+                      "openid4vci": {
+                        "support": "not_full_issuer"
+                      },
+                      "signing_algs": [
+                        "EdDSA"
+                      ],
+                      "status_methods": []
+                    },
+                    "unsupported_features": [
+                      "application/vc+sd-jwt",
+                      "json_ld_vc_issuance",
+                      "data_integrity_proofs",
+                      "credential_status",
+                      "mso_mdoc",
+                      "openid4vci_full_issuer"
+                    ]
+                  },
+                  "formats": [
+                    {
+                      "id": "application/dc+sd-jwt",
+                      "kind": "credential",
+                      "status": "enabled"
+                    },
+                    {
+                      "id": "application/ld+json; profile=\"cccev\"",
+                      "kind": "renderer",
+                      "status": "enabled"
+                    },
+                    {
+                      "id": "application/vnd.registry-notary.claim-result+json",
+                      "kind": "claim_result",
+                      "status": "enabled"
+                    }
+                  ],
+                  "formats_url": "/v1/formats",
+                  "identity": {
+                    "mapper": "common_subject_id",
+                    "production_mapper": false
+                  },
+                  "issuer": {
+                    "id": "did:web:agriculture.demo.example.gov",
+                    "name": "demo.registry-notary"
+                  },
+                  "operations": {
+                    "batch_evaluate": true,
+                    "credential_issue": true,
+                    "evaluate": true,
+                    "render": true
+                  },
+                  "service_id": "demo.registry-notary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/.well-known/evidence/jwks.json": {
+      "get": {
+        "summary": "Fetch public issuer verification keys",
+        "operationId": "getEvidenceJwks",
+        "responses": {
+          "200": {
+            "description": "Public JWKS",
+            "content": {
+              "application/json": {
+                "example": {
+                  "keys": [
+                    {
+                      "alg": "EdDSA",
+                      "crv": "Ed25519",
+                      "kid": "did:web:agriculture.demo.example.gov#registry-notary-demo-key-1",
+                      "kty": "OKP",
+                      "x": "11qYAYKxCrfVS_3XDbXJC2AgYI57qXzcS7P0W5Y9f4Y"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/.well-known/openid-credential-issuer": {
+      "get": {
+        "summary": "Discover OpenID4VCI credential issuer metadata",
+        "description": "Returns the OpenID4VCI issuer metadata for Registry Notary' dc+sd-jwt issuance profile.",
+        "operationId": "getOpenidCredentialIssuer",
+        "responses": {
+          "200": {
+            "description": "OpenID4VCI credential issuer metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialIssuerMetadata"
+                },
+                "example": {
+                  "authorization_servers": [
+                    "https://id.example.gov"
+                  ],
+                  "credential_configurations_supported": {
+                    "person_is_alive_sd_jwt": {
+                      "credential_signing_alg_values_supported": [
+                        "EdDSA"
+                      ],
+                      "cryptographic_binding_methods_supported": [
+                        "did:jwk"
+                      ],
+                      "display": [
+                        {
+                          "name": "Person is alive"
+                        }
+                      ],
+                      "format": "dc+sd-jwt",
+                      "proof_types_supported": {
+                        "jwt": {
+                          "proof_signing_alg_values_supported": [
+                            "EdDSA"
+                          ]
+                        }
+                      },
+                      "scope": "person_is_alive",
+                      "vct": "https://issuer.example.gov/credentials/person-is-alive"
+                    }
+                  },
+                  "credential_endpoint": "https://issuer.example.gov/oid4vci/credential",
+                  "credential_issuer": "https://issuer.example.gov",
+                  "nonce_endpoint": "https://issuer.example.gov/oid4vci/nonce"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "OpenID4VCI issuer is disabled"
+          },
+          "500": {
+            "description": "OpenID4VCI issuer failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Oid4vciError"
+                },
+                "example": {
+                  "error": "server_error",
+                  "error_description": "credential issuer failed"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/.well-known/vct/{vct_path}": {
+      "get": {
+        "summary": "Fetch SD-JWT VC Type Metadata at the well-known location",
+        "description": "Returns public SD-JWT VC Type Metadata at the SD-JWT VC well-known location. Consumers dereference an HTTPS vct by inserting /.well-known/vct between the host and the path; the server strips that prefix and matches the reconstructed vct (https://{host}/{vct_path}) against a configured OID4VCI credential configuration. The vct_path parameter represents the full path suffix and may contain nested path segments.",
+        "operationId": "getWellKnownSdJwtVcTypeMetadata",
+        "parameters": [
+          {
+            "name": "vct_path",
+            "in": "path",
+            "description": "Credential type path suffix from the configured vct, including nested path segments when configured.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SD-JWT VC Type Metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SdJwtVcTypeMetadata"
+                },
+                "example": {
+                  "claims": [
+                    {
+                      "display": [
+                        {
+                          "label": "Person is alive",
+                          "locale": "en-US"
+                        }
+                      ],
+                      "path": [
+                        "person-is-alive"
+                      ],
+                      "sd": "always"
+                    }
+                  ],
+                  "display": [
+                    {
+                      "locale": "en-US",
+                      "name": "Person is alive"
+                    }
+                  ],
+                  "name": "Person is alive",
+                  "vct": "https://issuer.example.gov/credentials/person-is-alive"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "OpenID4VCI issuer is disabled or no configured vct matches the reconstructed URL"
+          }
+        },
+        "security": [],
+        "x-registry-notary-catch-all": true
+      }
+    },
+    "/admin/v1/credentials/{credential_id}/status": {
+      "post": {
+        "summary": "Update credential lifecycle status",
+        "operationId": "updateCredentialStatus",
+        "parameters": [
+          {
+            "name": "credential_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialStatusUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated credential status record",
+            "content": {
+              "application/json": {
+                "example": {
+                  "credential_id": "urn:ulid:01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
+                  "credential_profile": "civil_status_sd_jwt",
+                  "expires_at": "2026-05-25T12:10:00Z",
+                  "issued_at": "2026-05-25T12:00:00Z",
+                  "issuer": "did:web:issuer.example",
+                  "status": "revoked",
+                  "updated_at": "2026-05-25T12:00:00Z"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid status value",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "credential_status.invalid_status",
+                  "detail": "status must be valid, suspended, or revoked",
+                  "status": 400,
+                  "title": "Invalid credential status",
+                  "type": "https://docs.registry-notary.dev/problems/credential_status/invalid_status"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller lacks registry_notary:admin scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.scope_denied",
+                  "detail": "missing required scope",
+                  "status": 403,
+                  "title": "Scope denied",
+                  "type": "https://docs.registry-notary.dev/problems/auth/scope_denied"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Credential status is disabled or not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "credential_status.not_found",
+                  "detail": "credential status record was not found",
+                  "status": 404,
+                  "title": "Credential status not found",
+                  "type": "https://docs.registry-notary.dev/problems/credential_status/not_found"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Credential status store is unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "credential_status.unavailable",
+                  "detail": "credential status store is unavailable",
+                  "status": 503,
+                  "title": "Credential status unavailable",
+                  "type": "https://docs.registry-notary.dev/problems/credential_status/unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/v1/reload": {
+      "post": {
+        "summary": "Request a standalone config reload",
+        "operationId": "adminReload",
+        "responses": {
+          "200": {
+            "description": "Standalone router accepted the reload request",
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "standalone router has no reloadable external config handle",
+                  "reloaded": false,
+                  "status": "noop"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller lacks registry_notary:admin scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.scope_denied",
+                  "detail": "missing required scope",
+                  "status": 403,
+                  "title": "Scope denied",
+                  "type": "https://docs.registry-notary.dev/problems/auth/scope_denied"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/credentials/{vct_path}": {
+      "get": {
+        "summary": "Fetch SD-JWT VC Type Metadata",
+        "description": "Returns public SD-JWT VC Type Metadata for a configured OID4VCI credential configuration whose vct exactly matches the requested absolute URL. The vct_path parameter represents the full path suffix under /credentials and may contain nested path segments.",
+        "operationId": "getSdJwtVcTypeMetadata",
+        "parameters": [
+          {
+            "name": "vct_path",
+            "in": "path",
+            "description": "Credential type path suffix under /credentials, including nested path segments when configured.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SD-JWT VC Type Metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SdJwtVcTypeMetadata"
+                },
+                "example": {
+                  "claims": [
+                    {
+                      "display": [
+                        {
+                          "label": "Person is alive",
+                          "locale": "en-US"
+                        }
+                      ],
+                      "path": [
+                        "person-is-alive"
+                      ],
+                      "sd": "always"
+                    }
+                  ],
+                  "display": [
+                    {
+                      "locale": "en-US",
+                      "name": "Person is alive"
+                    }
+                  ],
+                  "name": "Person is alive",
+                  "vct": "https://issuer.example.gov/credentials/person-is-alive"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "OpenID4VCI issuer is disabled or no configured vct matches the requested URL"
+          }
+        },
+        "security": [],
+        "x-registry-notary-catch-all": true
+      }
+    },
+    "/federation/v1/evaluations": {
+      "post": {
+        "summary": "Evaluate one configured federation profile for a trusted peer",
+        "description": "Accepts a compact JWS request with typ registry-notary-request+jwt. This route is mounted only when federation is enabled and uses body-JWT authentication instead of API key or bearer authentication.",
+        "operationId": "federatedEvaluate",
+        "requestBody": {
+          "content": {
+            "application/jwt": {
+              "schema": {
+                "type": "string",
+                "description": "Compact JWS signed federation evaluation request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Compact JWS signed federation evaluation response",
+            "content": {
+              "application/jwt": {
+                "schema": {
+                  "type": "string",
+                  "description": "Compact JWS with typ registry-notary-response+jwt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid federation request"
+          },
+          "401": {
+            "description": "Invalid federation token"
+          },
+          "403": {
+            "description": "Peer, profile, purpose, or requester/target identity path is not allowed"
+          },
+          "409": {
+            "description": "Request replay detected"
+          },
+          "413": {
+            "description": "Request body is too large"
+          },
+          "415": {
+            "description": "Content type is not application/jwt"
+          },
+          "503": {
+            "description": "Source service or peer key service is unavailable"
+          }
+        },
+        "security": []
+      }
+    },
+    "/healthz": {
+      "get": {
+        "summary": "Return the liveness probe",
+        "operationId": "getHealthz",
+        "responses": {
+          "200": {
+            "description": "Service process is alive",
+            "content": {
+              "application/json": {
+                "example": {
+                  "checks": {
+                    "failed": 0,
+                    "ok": 1,
+                    "total": 1
+                  },
+                  "status": "ok"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Client error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "request.invalid",
+                  "detail": "the evidence request is invalid",
+                  "status": 400,
+                  "title": "Invalid evidence request",
+                  "type": "https://docs.registry-notary.dev/problems/request/invalid"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/oid4vci/credential": {
+      "post": {
+        "summary": "Issue a credential through OpenID4VCI",
+        "description": "Issues a dc+sd-jwt credential for an authenticated self-attestation principal. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
+        "operationId": "issueOid4vciCredential",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Credential response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialResponse"
+                },
+                "example": {
+                  "c_nonce": "next-b64url-nonce",
+                  "c_nonce_expires_in": 300,
+                  "credential": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRjK3NkLWp3dCJ9.payload.signature~disclosure~",
+                  "format": "dc+sd-jwt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid credential request, proof, or type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Oid4vciError"
+                },
+                "example": {
+                  "error": "invalid_proof",
+                  "error_description": "credential proof is invalid"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credential access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Oid4vciError"
+                },
+                "example": {
+                  "error": "invalid_token",
+                  "error_description": "credential access token is invalid"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Credential request is denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Oid4vciError"
+                },
+                "example": {
+                  "error": "access_denied",
+                  "error_description": "credential request is denied"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Credential request is rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Oid4vciError"
+                },
+                "example": {
+                  "error": "temporarily_unavailable",
+                  "error_description": "credential request is rate limited"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "OpenID4VCI issuer failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Oid4vciError"
+                },
+                "example": {
+                  "error": "server_error",
+                  "error_description": "credential issuer failed"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/oid4vci/credential-offer": {
+      "get": {
+        "summary": "Create an OpenID4VCI credential offer",
+        "description": "Returns an authorization-code credential offer. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
+        "operationId": "getOid4vciCredentialOffer",
+        "parameters": [
+          {
+            "name": "credential_configuration_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Credential offer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialOffer"
+                },
+                "example": {
+                  "credential_configuration_ids": [
+                    "person_is_alive_sd_jwt"
+                  ],
+                  "credential_issuer": "https://issuer.example.gov",
+                  "grants": {
+                    "authorization_code": {
+                      "authorization_server": "https://id.example.gov",
+                      "issuer_state": "issuer-state"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid credential offer request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Oid4vciError"
+                },
+                "example": {
+                  "error": "invalid_request",
+                  "error_description": "credential request is invalid"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "OpenID4VCI issuer is disabled"
+          },
+          "500": {
+            "description": "OpenID4VCI issuer failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Oid4vciError"
+                },
+                "example": {
+                  "error": "server_error",
+                  "error_description": "credential issuer failed"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/oid4vci/nonce": {
+      "post": {
+        "summary": "Create an OpenID4VCI credential nonce",
+        "description": "Returns a c_nonce for proof-of-possession. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
+        "operationId": "createOid4vciNonce",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NonceRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Nonce response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NonceResponse"
+                },
+                "example": {
+                  "c_nonce": "b64url-nonce",
+                  "c_nonce_expires_in": 300
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid nonce request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Oid4vciError"
+                },
+                "example": {
+                  "error": "invalid_request",
+                  "error_description": "credential request is invalid"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "OpenID4VCI nonce endpoint is disabled"
+          },
+          "429": {
+            "description": "Nonce store is rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Oid4vciError"
+                },
+                "example": {
+                  "error": "temporarily_unavailable",
+                  "error_description": "credential request is rate limited"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "OpenID4VCI issuer failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Oid4vciError"
+                },
+                "example": {
+                  "error": "server_error",
+                  "error_description": "credential issuer failed"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/oid4vci/offer/callback": {
+      "get": {
+        "summary": "Complete eSignet login and render a pre-authorized-code offer",
+        "description": "Public and unauthenticated. Consumes the login state, exchanges the eSignet code with private_key_jwt, validates the id_token, and mints one single-use pre-authorized_code plus one numeric tx_code (PIN). Renders an HTML offer page carrying the credential offer URI and the PIN out-of-band from the QR. Returns 404 when the pre-authorized-code flow is disabled.",
+        "operationId": "completeOid4vciOffer",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Offer page with the credential offer URI and tx_code PIN",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Login state, eSignet code, or id_token is invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Oid4vciError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pre-authorized-code flow is disabled"
+          },
+          "500": {
+            "description": "OpenID4VCI issuer failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Oid4vciError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/oid4vci/offer/start": {
+      "get": {
+        "summary": "Begin an authenticated pre-authorized-code offer",
+        "description": "Public and unauthenticated. Begins the eSignet authorization-code login as the confidential RP and 302-redirects the browser to eSignet. Mints no pre-authorized_code or credential material. Returns 404 when the pre-authorized-code flow is disabled. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
+        "operationId": "startOid4vciOffer",
+        "parameters": [
+          {
+            "name": "credential_configuration_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Redirect to the eSignet authorization endpoint"
+          },
+          "400": {
+            "description": "Invalid or unknown credential configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Oid4vciError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pre-authorized-code flow is disabled"
+          },
+          "500": {
+            "description": "OpenID4VCI issuer failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Oid4vciError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/oid4vci/token": {
+      "post": {
+        "summary": "Redeem a pre-authorized-code for an access token",
+        "description": "Public and unauthenticated OID4VCI token endpoint for the pre-authorized-code grant. Accepts only grant_type=urn:ietf:params:oauth:grant-type:pre-authorized_code with a valid, unexpired, single-use pre-authorized_code and a matching tx_code (the PIN is mandatory). Mints a short-TTL Notary-signed access token plus a c_nonce. Returns 404 when the pre-authorized-code flow is disabled. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
+        "operationId": "redeemOid4vciToken",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenRequest"
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Token response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                },
+                "example": {
+                  "access_token": "eyJhbGciOiJFZERTQSIsInR5cCI6InJlZ2lzdHJ5LW5vdGFyeS1hY2Nlc3MrancifQ.payload.signature",
+                  "c_nonce": "b64url-nonce",
+                  "c_nonce_expires_in": 300,
+                  "expires_in": 300,
+                  "token_type": "Bearer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, grant, or tx_code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Oid4vciError"
+                },
+                "example": {
+                  "error": "invalid_grant",
+                  "error_description": "pre-authorized code or tx_code is invalid"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pre-authorized-code flow is disabled"
+          },
+          "429": {
+            "description": "Too many token attempts (wrong-PIN lockout or random-code flood)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Oid4vciError"
+                },
+                "example": {
+                  "error": "slow_down",
+                  "error_description": "too many token requests"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Token issuance failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Oid4vciError"
+                },
+                "example": {
+                  "error": "server_error",
+                  "error_description": "token issuance failed"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "summary": "Fetch this OpenAPI document",
+        "operationId": "getOpenApi",
+        "responses": {
+          "200": {
+            "description": "OpenAPI document",
+            "content": {
+              "application/json": {
+                "example": {
+                  "info": {
+                    "title": "Registry Notary API",
+                    "version": "0.3.0"
+                  },
+                  "openapi": "3.1.0",
+                  "paths": {
+                    "/v1/evaluations": {}
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "summary": "Return the readiness probe",
+        "operationId": "getReady",
+        "responses": {
+          "200": {
+            "description": "Evidence runtime is ready",
+            "content": {
+              "application/json": {
+                "example": {
+                  "checks": {
+                    "failed": 0,
+                    "ok": 1,
+                    "total": 1
+                  },
+                  "status": "ready"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Client error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "request.invalid",
+                  "detail": "the evidence request is invalid",
+                  "status": 400,
+                  "title": "Invalid evidence request",
+                  "type": "https://docs.registry-notary.dev/problems/request/invalid"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Evidence runtime is not ready",
+            "content": {
+              "application/json": {
+                "example": {
+                  "checks": {
+                    "failed": 1,
+                    "ok": 0,
+                    "total": 1
+                  },
+                  "status": "not_ready"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/v1/batch-evaluations": {
+      "post": {
+        "summary": "Evaluate claims for multiple request items inline",
+        "operationId": "batchEvaluateClaims",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchEvaluateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Per-item claim evaluation results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchEvaluateResponse"
+                },
+                "example": {
+                  "batch_id": "01HX7Y4N6S7ZK0R2T8Q9V1M3PA",
+                  "claims": [
+                    "farmer-under-4ha"
+                  ],
+                  "items": [
+                    {
+                      "claim_results": [
+                        {
+                          "claim_id": "farmer-under-4ha",
+                          "claim_version": "2026-05",
+                          "disclosure": "predicate",
+                          "provenance": {
+                            "computed_by": "demo.registry-notary",
+                            "source_count": 1,
+                            "source_versions": {}
+                          },
+                          "result_id": "01HX7Y5F31M8BZWQ2HY7P6J9FA",
+                          "satisfied": true,
+                          "value": true,
+                          "value_type": "boolean"
+                        }
+                      ],
+                      "errors": [],
+                      "evaluation_id": "01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
+                      "input_index": 0,
+                      "matching": {
+                        "confidence": "high",
+                        "method": "identifier_exact",
+                        "policy_id": "national-id-exact-v1",
+                        "score": 1.0
+                      },
+                      "requester_ref": {
+                        "handle": "rnref:v1:example-requester-ref",
+                        "identifier_schemes": [
+                          "agency_id"
+                        ],
+                        "profile": "benefits",
+                        "type": "Agency"
+                      },
+                      "status": "succeeded",
+                      "target_ref": {
+                        "handle": "rnref:v1:example-target-ref",
+                        "identifier_schemes": [
+                          "national_id"
+                        ],
+                        "profile": "resident",
+                        "type": "Person"
+                      }
+                    }
+                  ],
+                  "status": "completed",
+                  "summary": {
+                    "failed": 0,
+                    "succeeded": 1
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "request.invalid",
+                  "detail": "the evidence request is invalid",
+                  "status": 400,
+                  "title": "Invalid evidence request",
+                  "type": "https://docs.registry-notary.dev/problems/request/invalid"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not authorized for requested claim, purpose, disclosure, or format",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "claim.disclosure_not_allowed",
+                  "detail": "the requested disclosure profile is not allowed",
+                  "status": 403,
+                  "title": "Disclosure not allowed",
+                  "type": "https://docs.registry-notary.dev/problems/claim/disclosure_not_allowed"
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "Requested format is not acceptable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "format.unsupported",
+                  "detail": "the requested claim format is not supported",
+                  "status": 406,
+                  "title": "Claim format not supported",
+                  "type": "https://docs.registry-notary.dev/problems/format/unsupported"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency key conflicts with another request body",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "request.conflict",
+                  "detail": "the request conflicts with existing state",
+                  "status": 409,
+                  "title": "Request conflict",
+                  "type": "https://docs.registry-notary.dev/problems/request/conflict"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body or batch is too large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "request.too_large",
+                  "detail": "the request body or batch is too large",
+                  "status": 413,
+                  "title": "Request too large",
+                  "type": "https://docs.registry-notary.dev/problems/request/too_large"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Self-attestation request is rate limited",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "self_attestation.rate_limited",
+                  "detail": "self-attestation request is rate limited",
+                  "status": 429,
+                  "title": "Self-attestation rate limited",
+                  "type": "https://docs.registry-notary.dev/problems/self_attestation/rate_limited"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Source service is unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "source.unavailable",
+                  "detail": "the evidence source is unavailable",
+                  "status": 503,
+                  "title": "Source unavailable",
+                  "type": "https://docs.registry-notary.dev/problems/source/unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/claims": {
+      "get": {
+        "summary": "List claims visible to the caller",
+        "operationId": "listClaims",
+        "responses": {
+          "200": {
+            "description": "Visible claims",
+            "content": {
+              "application/json": {
+                "example": {
+                  "data": [
+                    {
+                      "cccev": null,
+                      "disclosure": {
+                        "allowed": [
+                          "value",
+                          "redacted"
+                        ],
+                        "default": "value",
+                        "downgrade": "deny"
+                      },
+                      "formats": [
+                        "application/vnd.registry-notary.claim-result+json",
+                        "application/ld+json; profile=\"cccev\""
+                      ],
+                      "id": "date-of-birth",
+                      "oots": null,
+                      "operations": {
+                        "batch_evaluate": false,
+                        "evaluate": true
+                      },
+                      "subject_type": "person",
+                      "title": "Date of birth",
+                      "version": "2026-05"
+                    },
+                    {
+                      "cccev": {
+                        "evidence_type": "smallholder_farmer_evidence",
+                        "evidence_type_iri": "https://demo.example.gov/evidence-types/smallholder-farmer",
+                        "requirement_type": "InformationRequirement"
+                      },
+                      "disclosure": {
+                        "allowed": [
+                          "predicate",
+                          "redacted"
+                        ],
+                        "default": "predicate",
+                        "downgrade": "deny"
+                      },
+                      "evidence_type": "smallholder_farmer_evidence",
+                      "evidence_type_iri": "https://demo.example.gov/evidence-types/smallholder-farmer",
+                      "formats": [
+                        "application/vnd.registry-notary.claim-result+json",
+                        "application/ld+json; profile=\"cccev\"",
+                        "application/dc+sd-jwt"
+                      ],
+                      "id": "farmer-under-4ha",
+                      "oots": null,
+                      "operations": {
+                        "batch_evaluate": true,
+                        "evaluate": true
+                      },
+                      "subject_type": "person",
+                      "title": "Farmer under four hectares",
+                      "version": "2026-05"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/claims/{claim_id}": {
+      "get": {
+        "summary": "Get one claim definition",
+        "operationId": "getClaim",
+        "parameters": [
+          {
+            "name": "claim_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Claim definition",
+            "content": {
+              "application/json": {
+                "example": {
+                  "cccev": {
+                    "evidence_type": "smallholder_farmer_evidence",
+                    "evidence_type_iri": "https://demo.example.gov/evidence-types/smallholder-farmer",
+                    "requirement_type": "InformationRequirement"
+                  },
+                  "disclosure": {
+                    "allowed": [
+                      "predicate",
+                      "redacted"
+                    ],
+                    "default": "predicate",
+                    "downgrade": "deny"
+                  },
+                  "evidence_type": "smallholder_farmer_evidence",
+                  "evidence_type_iri": "https://demo.example.gov/evidence-types/smallholder-farmer",
+                  "formats": [
+                    "application/vnd.registry-notary.claim-result+json",
+                    "application/ld+json; profile=\"cccev\"",
+                    "application/dc+sd-jwt"
+                  ],
+                  "id": "farmer-under-4ha",
+                  "oots": null,
+                  "operations": {
+                    "batch_evaluate": true,
+                    "evaluate": true
+                  },
+                  "subject_type": "person",
+                  "title": "Farmer under four hectares",
+                  "version": "2026-05"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Claim not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "claim.not_found",
+                  "detail": "the requested claim is not available",
+                  "status": 404,
+                  "title": "Claim not found",
+                  "type": "https://docs.registry-notary.dev/problems/claim/not_found"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/credentials": {
+      "post": {
+        "summary": "Issue a credential from a stored evaluation",
+        "operationId": "issueCredential",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialIssueRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Issued credential",
+            "content": {
+              "application/json": {
+                "example": {
+                  "credential": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRjK3NkLWp3dCIsImtpZCI6ImRpZDp3ZWI6YWdyaWN1bHR1cmUuZGVtby5leGFtcGxlLmdvdiNyZWdpc3RyeS13aXRuZXNzLWRlbW8ta2V5LTEifQ.eyJpc3MiOiJkaWQ6d2ViOmFncmljdWx0dXJlLmRlbW8uZXhhbXBsZS5nb3YiLCJzdWIiOiJkaWQ6andrOmV5SnJkSGtpT2lKUFMxQWlMQ0pqY25ZaU9pSkZaREkxTlRFNUlpd2llQ0k2SWpFeGNWbEJXVXQ0UTNKbVZsTmZNMWhFWWxoS1F6SkJaMWxKTlRkeFdIcGpVemRRTUZjMVdUbG1ORmtpZlEiLCJpYXQiOjE3Nzk2MjQwMDAsImV4cCI6MTc3OTcxMDQwMCwidmN0IjoiaHR0cHM6Ly9kZW1vLmV4YW1wbGUuZ292L2NyZWRlbnRpYWxzL3NtYWxsaG9sZGVyLWZhcm1lci92MSIsImp0aSI6InVybjpyZWdpc3RyeS13aXRuZXNzOmNyZWRlbnRpYWw6MDFIWDdZNUYyV0FKN1pQMFE0TTVLOUU4TkMiLCJpZCI6InVybjpyZWdpc3RyeS13aXRuZXNzOmNyZWRlbnRpYWw6MDFIWDdZNUYyV0FKN1pQMFE0TTVLOUU4TkMiLCJfc2QiOlsia0ZxYXpKcDdleVhjS1ZIX0tiMzNnQ1lwMGM3dzFDLWd0WjVORkJxbDdYcyJdLCJjbmYiOnsia2lkIjoiZGlkOmp3azpleUpyZEhraU9pSlBTMUFpTENKamNuWWlPaUpGWkRJMU5URTVJaXdpZUNJNklqRXhjVmxCV1V0NFEzSm1WbE5mTTFoRVlsaEtRekpCWjFsSk5UZHhXSHBqVXpkUU1GYzFXVGxtTkZraWZRIiwiandrIjp7Imt0eSI6Ik9LUCIsImNydiI6IkVkMjU1MTkiLCJ4IjoiMTFxWUFZS3hDcmZWU18zWERiWEpDMkFnWUk1N3FYemNTN1AwVzVZOWY0WSJ9fX0.c2lnbmF0dXJl~ZGlzY2xvc3VyZQ~",
+                  "credential_id": "urn:registry-notary:credential:01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
+                  "credential_profile": "climate_smart_input_voucher_sd_jwt",
+                  "disclosures": [
+                    "ZGlzY2xvc3VyZQ"
+                  ],
+                  "expires_at": "2026-05-25T12:00:00Z",
+                  "format": "application/dc+sd-jwt",
+                  "issuer": "did:web:agriculture.demo.example.gov",
+                  "issuer_signed_jwt": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRjK3NkLWp3dCIsImtpZCI6ImRpZDp3ZWI6YWdyaWN1bHR1cmUuZGVtby5leGFtcGxlLmdvdiNyZWdpc3RyeS13aXRuZXNzLWRlbW8ta2V5LTEifQ.eyJpc3MiOiJkaWQ6d2ViOmFncmljdWx0dXJlLmRlbW8uZXhhbXBsZS5nb3YiLCJzdWIiOiJkaWQ6andrOmV5SnJkSGtpT2lKUFMxQWlMQ0pqY25ZaU9pSkZaREkxTlRFNUlpd2llQ0k2SWpFeGNWbEJXVXQ0UTNKbVZsTmZNMWhFWWxoS1F6SkJaMWxKTlRkeFdIcGpVemRRTUZjMVdUbG1ORmtpZlEiLCJpYXQiOjE3Nzk2MjQwMDAsImV4cCI6MTc3OTcxMDQwMCwidmN0IjoiaHR0cHM6Ly9kZW1vLmV4YW1wbGUuZ292L2NyZWRlbnRpYWxzL3NtYWxsaG9sZGVyLWZhcm1lci92MSIsImp0aSI6InVybjpyZWdpc3RyeS13aXRuZXNzOmNyZWRlbnRpYWw6MDFIWDdZNUYyV0FKN1pQMFE0TTVLOUU4TkMiLCJpZCI6InVybjpyZWdpc3RyeS13aXRuZXNzOmNyZWRlbnRpYWw6MDFIWDdZNUYyV0FKN1pQMFE0TTVLOUU4TkMiLCJfc2QiOlsia0ZxYXpKcDdleVhjS1ZIX0tiMzNnQ1lwMGM3dzFDLWd0WjVORkJxbDdYcyJdLCJjbmYiOnsia2lkIjoiZGlkOmp3azpleUpyZEhraU9pSlBTMUFpTENKamNuWWlPaUpGWkRJMU5URTVJaXdpZUNJNklqRXhjVmxCV1V0NFEzSm1WbE5mTTFoRVlsaEtRekpCWjFsSk5UZHhXSHBqVXpkUU1GYzFXVGxtTkZraWZRIiwiandrIjp7Imt0eSI6Ik9LUCIsImNydiI6IkVkMjU1MTkiLCJ4IjoiMTFxWUFZS3hDcmZWU18zWERiWEpDMkFnWUk1N3FYemNTN1AwVzVZOWY0WSJ9fX0.c2lnbmF0dXJl"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or disclosure widening attempt",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "credential.holder_proof_required",
+                  "detail": "holder proof of possession is required",
+                  "status": 400,
+                  "title": "Holder proof required",
+                  "type": "https://docs.registry-notary.dev/problems/credential/holder_proof_required"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Evaluation not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "evaluation.not_found",
+                  "detail": "the evaluation id is unknown or expired",
+                  "status": 404,
+                  "title": "Evaluation not found",
+                  "type": "https://docs.registry-notary.dev/problems/evaluation/not_found"
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "Requested format is not acceptable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "format.unsupported",
+                  "detail": "the requested claim format is not supported",
+                  "status": 406,
+                  "title": "Claim format not supported",
+                  "type": "https://docs.registry-notary.dev/problems/format/unsupported"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Holder proof replay or source ambiguity conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "request.conflict",
+                  "detail": "the request conflicts with existing state",
+                  "status": 409,
+                  "title": "Request conflict",
+                  "type": "https://docs.registry-notary.dev/problems/request/conflict"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body is too large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "request.too_large",
+                  "detail": "the request body or batch is too large",
+                  "status": 413,
+                  "title": "Request too large",
+                  "type": "https://docs.registry-notary.dev/problems/request/too_large"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Self-attestation request is rate limited",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "self_attestation.rate_limited",
+                  "detail": "self-attestation request is rate limited",
+                  "status": 429,
+                  "title": "Self-attestation rate limited",
+                  "type": "https://docs.registry-notary.dev/problems/self_attestation/rate_limited"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Source service is unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "source.unavailable",
+                  "detail": "the evidence source is unavailable",
+                  "status": 503,
+                  "title": "Source unavailable",
+                  "type": "https://docs.registry-notary.dev/problems/source/unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/credentials/{credential_id}/status": {
+      "get": {
+        "summary": "Fetch credential lifecycle status",
+        "operationId": "getCredentialStatus",
+        "parameters": [
+          {
+            "name": "credential_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Credential status record",
+            "content": {
+              "application/json": {
+                "example": {
+                  "credential_id": "urn:ulid:01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
+                  "credential_profile": "civil_status_sd_jwt",
+                  "expires_at": "2026-05-25T12:10:00Z",
+                  "issued_at": "2026-05-25T12:00:00Z",
+                  "issuer": "did:web:issuer.example",
+                  "status": "valid",
+                  "updated_at": "2026-05-25T12:00:00Z"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Credential status is disabled or not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "credential_status.not_found",
+                  "detail": "credential status record was not found",
+                  "status": 404,
+                  "title": "Credential status not found",
+                  "type": "https://docs.registry-notary.dev/problems/credential_status/not_found"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Credential status store is unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "credential_status.unavailable",
+                  "detail": "credential status store is unavailable",
+                  "status": 503,
+                  "title": "Credential status unavailable",
+                  "type": "https://docs.registry-notary.dev/problems/credential_status/unavailable"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/v1/evaluations": {
+      "post": {
+        "summary": "Evaluate claims for one target",
+        "operationId": "evaluateClaims",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvaluateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Claim evaluation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluationResponse"
+                },
+                "example": {
+                  "results": [
+                    {
+                      "claim_id": "farmer-under-4ha",
+                      "claim_version": "2026-05",
+                      "disclosure": "predicate",
+                      "evaluation_id": "01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
+                      "expires_at": "2026-05-25T12:00:00Z",
+                      "format": "application/vnd.registry-notary.claim-result+json",
+                      "issued_at": "2026-05-24T12:00:00Z",
+                      "matching": {
+                        "confidence": "high",
+                        "method": "identifier_exact",
+                        "policy_id": "national-id-exact-v1",
+                        "score": 1.0
+                      },
+                      "provenance": {
+                        "computed_by": "demo.registry-notary",
+                        "source_count": 1,
+                        "source_versions": {}
+                      },
+                      "requester_ref": {
+                        "handle": "rnref:v1:example-requester-ref",
+                        "identifier_schemes": [
+                          "agency_id"
+                        ],
+                        "profile": "benefits",
+                        "type": "Agency"
+                      },
+                      "satisfied": true,
+                      "subject_type": "person",
+                      "target_ref": {
+                        "handle": "rnref:v1:example-target-ref",
+                        "identifier_schemes": [
+                          "national_id"
+                        ],
+                        "profile": "resident",
+                        "type": "Person"
+                      },
+                      "value": true
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "request.invalid",
+                  "detail": "the evidence request is invalid",
+                  "status": 400,
+                  "title": "Invalid evidence request",
+                  "type": "https://docs.registry-notary.dev/problems/request/invalid"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not authorized for requested claim, purpose, disclosure, or format",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.scope_denied",
+                  "detail": "missing required scope",
+                  "status": 403,
+                  "title": "Scope denied",
+                  "type": "https://docs.registry-notary.dev/problems/auth/scope_denied"
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "Requested format is not acceptable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "format.unsupported",
+                  "detail": "the requested claim format is not supported",
+                  "status": 406,
+                  "title": "Claim format not supported",
+                  "type": "https://docs.registry-notary.dev/problems/format/unsupported"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body or batch is too large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "request.too_large",
+                  "detail": "the request body or batch is too large",
+                  "status": 413,
+                  "title": "Request too large",
+                  "type": "https://docs.registry-notary.dev/problems/request/too_large"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Self-attestation request is rate limited",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "self_attestation.rate_limited",
+                  "detail": "self-attestation request is rate limited",
+                  "status": 429,
+                  "title": "Self-attestation rate limited",
+                  "type": "https://docs.registry-notary.dev/problems/self_attestation/rate_limited"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Source service is unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "source.unavailable",
+                  "detail": "the evidence source is unavailable",
+                  "status": 503,
+                  "title": "Source unavailable",
+                  "type": "https://docs.registry-notary.dev/problems/source/unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/evaluations/{evaluation_id}/render": {
+      "post": {
+        "summary": "Render a stored evaluation",
+        "operationId": "renderEvidence",
+        "parameters": [
+          {
+            "name": "evaluation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenderEvaluationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Rendered evidence artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluationResponse"
+                },
+                "example": {
+                  "results": [
+                    {
+                      "claim_id": "farmer-under-4ha",
+                      "claim_version": "2026-05",
+                      "disclosure": "predicate",
+                      "evaluation_id": "01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
+                      "expires_at": "2026-05-25T12:00:00Z",
+                      "format": "application/vnd.registry-notary.claim-result+json",
+                      "issued_at": "2026-05-24T12:00:00Z",
+                      "matching": {
+                        "confidence": "high",
+                        "method": "identifier_exact",
+                        "policy_id": "national-id-exact-v1",
+                        "score": 1.0
+                      },
+                      "provenance": {
+                        "computed_by": "demo.registry-notary",
+                        "source_count": 1,
+                        "source_versions": {}
+                      },
+                      "requester_ref": {
+                        "handle": "rnref:v1:example-requester-ref",
+                        "identifier_schemes": [
+                          "agency_id"
+                        ],
+                        "profile": "benefits",
+                        "type": "Agency"
+                      },
+                      "satisfied": true,
+                      "subject_type": "person",
+                      "target_ref": {
+                        "handle": "rnref:v1:example-target-ref",
+                        "identifier_schemes": [
+                          "national_id"
+                        ],
+                        "profile": "resident",
+                        "type": "Person"
+                      },
+                      "value": true
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or disclosure widening attempt",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "request.invalid",
+                  "detail": "the evidence request is invalid",
+                  "status": 400,
+                  "title": "Invalid evidence request",
+                  "type": "https://docs.registry-notary.dev/problems/request/invalid"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Evaluation not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "evaluation.not_found",
+                  "detail": "the evaluation id is unknown or expired",
+                  "status": 404,
+                  "title": "Evaluation not found",
+                  "type": "https://docs.registry-notary.dev/problems/evaluation/not_found"
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "Requested format is not acceptable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "format.unsupported",
+                  "detail": "the requested claim format is not supported",
+                  "status": 406,
+                  "title": "Claim format not supported",
+                  "type": "https://docs.registry-notary.dev/problems/format/unsupported"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body is too large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "request.too_large",
+                  "detail": "the request body or batch is too large",
+                  "status": 413,
+                  "title": "Request too large",
+                  "type": "https://docs.registry-notary.dev/problems/request/too_large"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Self-attestation request is rate limited",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "self_attestation.rate_limited",
+                  "detail": "self-attestation request is rate limited",
+                  "status": 429,
+                  "title": "Self-attestation rate limited",
+                  "type": "https://docs.registry-notary.dev/problems/self_attestation/rate_limited"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Source service is unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "source.unavailable",
+                  "detail": "the evidence source is unavailable",
+                  "status": 503,
+                  "title": "Source unavailable",
+                  "type": "https://docs.registry-notary.dev/problems/source/unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/formats": {
+      "get": {
+        "summary": "List supported output formats",
+        "operationId": "listFormats",
+        "responses": {
+          "200": {
+            "description": "Supported formats",
+            "content": {
+              "application/json": {
+                "example": {
+                  "formats": [
+                    {
+                      "id": "application/dc+sd-jwt",
+                      "kind": "credential",
+                      "status": "enabled"
+                    },
+                    {
+                      "id": "application/ld+json; profile=\"cccev\"",
+                      "kind": "renderer",
+                      "status": "enabled"
+                    },
+                    {
+                      "id": "application/vnd.registry-notary.claim-result+json",
+                      "kind": "claim_result",
+                      "status": "enabled"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "BatchClaimResultView": {
+        "type": "object",
+        "required": [
+          "result_id",
+          "claim_id",
+          "claim_version",
+          "value_type",
+          "value",
+          "disclosure",
+          "provenance"
+        ],
+        "properties": {
+          "claim_id": {
+            "type": "string"
+          },
+          "claim_version": {
+            "type": "string"
+          },
+          "disclosure": {
+            "type": "string"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/ClaimProvenance"
+          },
+          "result_id": {
+            "type": "string"
+          },
+          "satisfied": {
+            "type": "boolean"
+          },
+          "value": {
+            "type": "object",
+            "description": "Claim value. The runtime may return any JSON value."
+          },
+          "value_type": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BatchEvaluateItemRequest": {
+        "type": "object",
+        "required": [
+          "target"
+        ],
+        "properties": {
+          "on_behalf_of": {
+            "$ref": "#/components/schemas/EvidenceOnBehalfOf"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "relationship": {
+            "$ref": "#/components/schemas/EvidenceRelationship"
+          },
+          "requester": {
+            "$ref": "#/components/schemas/EvidenceEntity"
+          },
+          "target": {
+            "$ref": "#/components/schemas/EvidenceEntity"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BatchEvaluateRequest": {
+        "type": "object",
+        "required": [
+          "items",
+          "claims"
+        ],
+        "properties": {
+          "claims": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClaimRef"
+            }
+          },
+          "disclosure": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BatchEvaluateItemRequest"
+            }
+          },
+          "purpose": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BatchEvaluateResponse": {
+        "type": "object",
+        "required": [
+          "batch_id",
+          "status",
+          "claims",
+          "items",
+          "summary"
+        ],
+        "properties": {
+          "batch_id": {
+            "type": "string"
+          },
+          "claims": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BatchItemResponse"
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "completed"
+            ]
+          },
+          "summary": {
+            "$ref": "#/components/schemas/BatchSummary"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BatchItemError": {
+        "type": "object",
+        "required": [
+          "code",
+          "title",
+          "retryable"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BatchItemResponse": {
+        "type": "object",
+        "required": [
+          "input_index",
+          "target_ref",
+          "status",
+          "claim_results",
+          "errors"
+        ],
+        "properties": {
+          "claim_results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BatchClaimResultView"
+            }
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BatchItemError"
+            }
+          },
+          "evaluation_id": {
+            "type": "string"
+          },
+          "input_index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "matching": {
+            "$ref": "#/components/schemas/MatchingMetadata"
+          },
+          "requester_ref": {
+            "$ref": "#/components/schemas/EvidenceEntityRef"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "succeeded",
+              "failed"
+            ]
+          },
+          "target_ref": {
+            "$ref": "#/components/schemas/TargetRefView"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BatchSummary": {
+        "type": "object",
+        "required": [
+          "succeeded",
+          "failed"
+        ],
+        "properties": {
+          "failed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "succeeded": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "ClaimProvenance": {
+        "type": "object",
+        "required": [
+          "source_count",
+          "source_versions",
+          "computed_by"
+        ],
+        "properties": {
+          "computed_by": {
+            "type": "string"
+          },
+          "source_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "source_versions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "ClaimRef": {
+        "type": "object",
+        "description": "Claim reference. Wire requests may also use a plain string claim id.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ClaimResultView": {
+        "type": "object",
+        "required": [
+          "evaluation_id",
+          "claim_id",
+          "claim_version",
+          "subject_type",
+          "target_ref",
+          "value",
+          "satisfied",
+          "disclosure",
+          "format",
+          "issued_at",
+          "expires_at",
+          "provenance"
+        ],
+        "properties": {
+          "claim_id": {
+            "type": "string"
+          },
+          "claim_version": {
+            "type": "string"
+          },
+          "disclosure": {
+            "type": "string"
+          },
+          "evaluation_id": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "format": {
+            "type": "string"
+          },
+          "issued_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "matching": {
+            "$ref": "#/components/schemas/MatchingMetadata"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/ClaimProvenance"
+          },
+          "requester_ref": {
+            "$ref": "#/components/schemas/EvidenceEntityRef"
+          },
+          "satisfied": {
+            "type": "boolean"
+          },
+          "subject_type": {
+            "type": "string"
+          },
+          "target_ref": {
+            "$ref": "#/components/schemas/TargetRefView"
+          },
+          "value": {
+            "type": "object",
+            "description": "Claim value. The runtime may return any JSON value."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CredentialConfigurationMetadata": {
+        "type": "object",
+        "required": [
+          "format"
+        ],
+        "properties": {
+          "credential_signing_alg_values_supported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "cryptographic_binding_methods_supported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "display": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "format": {
+            "type": "string"
+          },
+          "proof_types_supported": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "scope": {
+            "type": "string"
+          },
+          "vct": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      },
+      "CredentialIssueRequest": {
+        "type": "object",
+        "required": [
+          "evaluation_id"
+        ],
+        "properties": {
+          "claims": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "credential_profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "disclosure": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evaluation_id": {
+            "type": "string"
+          },
+          "format": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "holder": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HolderRequest"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "CredentialIssuerMetadata": {
+        "type": "object",
+        "required": [
+          "credential_issuer",
+          "credential_endpoint",
+          "credential_configurations_supported"
+        ],
+        "properties": {
+          "authorization_servers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          "credential_configurations_supported": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CredentialConfigurationMetadata"
+            }
+          },
+          "credential_endpoint": {
+            "type": "string",
+            "format": "uri"
+          },
+          "credential_issuer": {
+            "type": "string",
+            "format": "uri"
+          },
+          "nonce_endpoint": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      },
+      "CredentialOffer": {
+        "type": "object",
+        "required": [
+          "credential_issuer",
+          "credential_configuration_ids"
+        ],
+        "properties": {
+          "credential_configuration_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "credential_issuer": {
+            "type": "string",
+            "format": "uri"
+          },
+          "grants": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "CredentialRequest": {
+        "type": "object",
+        "required": [
+          "format",
+          "proof"
+        ],
+        "properties": {
+          "credential_configuration_id": {
+            "type": "string"
+          },
+          "credential_identifier": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "example": "dc+sd-jwt"
+          },
+          "proof": {
+            "type": "object",
+            "required": [
+              "proof_type",
+              "jwt"
+            ],
+            "properties": {
+              "jwt": {
+                "type": "string"
+              },
+              "proof_type": {
+                "type": "string",
+                "example": "jwt"
+              }
+            },
+            "additionalProperties": false
+          },
+          "vct": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CredentialResponse": {
+        "type": "object",
+        "required": [
+          "credential"
+        ],
+        "properties": {
+          "c_nonce": {
+            "type": "string"
+          },
+          "c_nonce_expires_in": {
+            "type": "integer",
+            "format": "uint64"
+          },
+          "credential": {
+            "type": "string"
+          },
+          "credential_profile": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          }
+        }
+      },
+      "CredentialStatus": {
+        "type": "object",
+        "required": [
+          "credential_id",
+          "issuer",
+          "credential_profile",
+          "status",
+          "issued_at",
+          "expires_at",
+          "updated_at"
+        ],
+        "properties": {
+          "credential_id": {
+            "type": "string"
+          },
+          "credential_profile": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "issued_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "valid",
+              "suspended",
+              "revoked",
+              "expired"
+            ]
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CredentialStatusUpdateRequest": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "valid",
+              "suspended",
+              "revoked"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "EvaluateRequest": {
+        "type": "object",
+        "required": [
+          "claims"
+        ],
+        "properties": {
+          "claims": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClaimRef"
+            }
+          },
+          "disclosure": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          },
+          "on_behalf_of": {
+            "$ref": "#/components/schemas/EvidenceOnBehalfOf"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "relationship": {
+            "$ref": "#/components/schemas/EvidenceRelationship"
+          },
+          "requester": {
+            "$ref": "#/components/schemas/EvidenceEntity"
+          },
+          "target": {
+            "$ref": "#/components/schemas/EvidenceEntity"
+          }
+        },
+        "additionalProperties": false
+      },
+      "EvaluationResponse": {
+        "type": "object",
+        "required": [
+          "results"
+        ],
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClaimResultView"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "EvidenceAssurance": {
+        "type": "object",
+        "properties": {
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "level": {
+            "type": "string"
+          },
+          "level_scheme": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "verified_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "EvidenceEntity": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "assurance": {
+            "$ref": "#/components/schemas/EvidenceAssurance"
+          },
+          "attributes": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "id": {
+            "type": "string"
+          },
+          "identifiers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvidenceIdentifier"
+            }
+          },
+          "profile": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "EvidenceEntityRef": {
+        "type": "object",
+        "required": [
+          "type",
+          "handle"
+        ],
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "identifier_schemes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "profile": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "EvidenceIdentifier": {
+        "type": "object",
+        "required": [
+          "scheme",
+          "value"
+        ],
+        "properties": {
+          "country": {
+            "type": "string"
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "scheme": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "EvidenceOnBehalfOf": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "EvidenceRelationship": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "attributes": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "HolderRequest": {
+        "type": "object",
+        "properties": {
+          "binding": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "proof": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "MatchingMetadata": {
+        "type": "object",
+        "required": [
+          "policy_id",
+          "method",
+          "confidence"
+        ],
+        "properties": {
+          "confidence": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "score": {
+            "type": "number"
+          }
+        },
+        "additionalProperties": false
+      },
+      "NonceRequest": {
+        "type": "object",
+        "properties": {
+          "credential_configuration_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "NonceResponse": {
+        "type": "object",
+        "required": [
+          "c_nonce",
+          "c_nonce_expires_in"
+        ],
+        "properties": {
+          "c_nonce": {
+            "type": "string"
+          },
+          "c_nonce_expires_in": {
+            "type": "integer",
+            "format": "uint64"
+          }
+        }
+      },
+      "Oid4vciError": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "error_description": {
+            "type": "string"
+          }
+        }
+      },
+      "ProblemDetails": {
+        "type": "object",
+        "required": [
+          "type",
+          "title",
+          "status",
+          "detail",
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "additionalProperties": true
+      },
+      "RenderEvaluationRequest": {
+        "type": "object",
+        "required": [
+          "format"
+        ],
+        "properties": {
+          "claims": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "disclosure": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "format": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "SdJwtVcTypeMetadata": {
+        "type": "object",
+        "required": [
+          "vct",
+          "name",
+          "display",
+          "claims"
+        ],
+        "properties": {
+          "claims": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "path",
+                "display",
+                "sd"
+              ],
+              "properties": {
+                "display": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "locale",
+                      "label"
+                    ],
+                    "properties": {
+                      "label": {
+                        "type": "string"
+                      },
+                      "locale": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": true
+                  }
+                },
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "sd": {
+                  "type": "string",
+                  "enum": [
+                    "always"
+                  ]
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "description": {
+            "type": "string"
+          },
+          "display": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "locale",
+                "name"
+              ],
+              "properties": {
+                "locale": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "vct": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "additionalProperties": true
+      },
+      "TargetRefView": {
+        "type": "object",
+        "required": [
+          "handle"
+        ],
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "identifier_schemes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "profile": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "TokenRequest": {
+        "type": "object",
+        "required": [
+          "grant_type",
+          "pre-authorized_code",
+          "tx_code"
+        ],
+        "properties": {
+          "grant_type": {
+            "type": "string",
+            "example": "urn:ietf:params:oauth:grant-type:pre-authorized_code"
+          },
+          "pre-authorized_code": {
+            "type": "string"
+          },
+          "tx_code": {
+            "type": "string",
+            "description": "The numeric PIN shown on the offer page; mandatory for this grant."
+          }
+        }
+      },
+      "TokenResponse": {
+        "type": "object",
+        "required": [
+          "access_token",
+          "token_type"
+        ],
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "c_nonce": {
+            "type": "string"
+          },
+          "c_nonce_expires_in": {
+            "type": "integer",
+            "format": "uint64"
+          },
+          "expires_in": {
+            "type": "integer",
+            "format": "uint64"
+          },
+          "token_type": {
+            "type": "string",
+            "example": "Bearer"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "apiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key"
+      },
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "security": [
+    {
+      "apiKeyAuth": []
+    },
+    {
+      "bearerAuth": []
+    }
+  ]
+}

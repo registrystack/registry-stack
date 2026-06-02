@@ -20,6 +20,14 @@ does not store a copy of registry data, and a source sidecar does not decide
 whether a claim is true. Source connectors stay narrow; claim meaning stays in
 Notary config.
 
+OpenFn sidecars are source-read adapters, not embedded workflow engines inside
+Notary. Notary owns caller policy, matching policy, minimization, audit,
+disclosure, and credential issuance. The sidecar owns adaptor execution,
+target-service credentials, source comparison, normalization, and worker
+isolation. Batch matching through an OpenFn sidecar is only a way to combine
+compatible source reads; it does not change the matching, authorization,
+disclosure, identity proof, or credential model.
+
 ## The request lifecycle
 
 A claim evaluation moves through a fixed sequence. Each step can stop the
@@ -28,9 +36,11 @@ request before the next one runs.
 1. **Authenticate and authorize.** The caller presents an API key, a bearer
    token, or an OIDC token. Notary maps it to a principal and scopes, and fails
    closed when no credential is configured.
-2. **Read the source.** Notary reads the minimum required fields from a
-   configured source connector: a DCI search endpoint, a Registry Data API
-   lookup, or an OpenFn sidecar that normalizes another system into that shape.
+2. **Read the source.** Notary applies matching policy and minimization, then
+   reads the minimum required fields from a configured source connector: a DCI
+   search endpoint, a Registry Data API lookup, or an OpenFn sidecar that
+   normalizes another system into that shape. Compatible OpenFn sidecar reads
+   may be grouped into a private `records:batchMatch` source request.
 3. **Evaluate the claim.** A rule turns source fields into an answer. A rule is
    `exists` (a record is present), `extract` (return one field), or `cel` (a
    derived expression over fields or dependent claims).
@@ -76,6 +86,7 @@ but Notary does not import their code.
 
 ## Related
 
+- [Identity and record matching](identity-and-record-matching.md)
 - [Model sources and claims](source-claim-modeling-guide.md)
 - [Configuration reference](operator-config-reference.md)
 - [Design records](../specs/README.md)

@@ -6,6 +6,12 @@
 > [`source-claim-modeling-guide.md`](source-claim-modeling-guide.md) and
 > [`../crates/registry-notary-openfn-sidecar/README.md`](../crates/registry-notary-openfn-sidecar/README.md),
 > which are the current references.
+>
+> Update (2026-06-02): the initial `registry_data_api` facade remains useful
+> history, but new Notary configs should use `connector: openfn_sidecar`. Batch
+> matching uses
+> `POST /v1/datasets/{dataset}/entities/{entity}/records:batchMatch` with the
+> explicit `query_signature` contract documented in the source modeling guide.
 
 This spike explores using an OpenFn-powered sidecar as a one-record source for
 Registry Notary claim evaluation. The starting point is intentionally narrow:

@@ -1,0 +1,43 @@
+name: OpenFn DHIS2 Canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      dhis2_host_url:
+        description: DHIS2 base URL
+        required: false
+        default: https://play.im.dhis2.org/stable-2-43-0
+      dhis2_username:
+        description: DHIS2 username
+        required: false
+        default: admin
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: registry-notary
+
+jobs:
+  dhis2-sidecar-canary:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: true
+      OPENFN_DHIS2_HOST_URL: ${{ inputs.dhis2_host_url }}
+      OPENFN_DHIS2_USERNAME: ${{ inputs.dhis2_username }}
+      OPENFN_DHIS2_PASSWORD: ${{ secrets.OPENFN_DHIS2_PASSWORD }}
+    steps:
+      - name: Checkout registry-notary
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          path: registry-notary
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: registry-notary -> target
+      - name: Run live DHIS2 sidecar canary
+        run: crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-dhis2-sidecar.sh

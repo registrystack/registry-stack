@@ -181,6 +181,64 @@ async fn dci_batched_handler(
     .into_response()
 }
 
+/// OpenFn sidecar batchMatch endpoint: records the POST body and returns one
+/// successful item per request item, echoing the query values into the record.
+async fn openfn_batch_match_handler(
+    State(rec): State<UpstreamRecorder>,
+    method: axum::http::Method,
+    axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
+    axum::extract::Json(body): axum::extract::Json<Value>,
+) -> Response {
+    rec.total_requests.fetch_add(1, Ordering::SeqCst);
+    *rec.last_body.lock().unwrap() = Some(body.clone());
+    rec.record(CapturedRequest {
+        method: method.as_str().to_string(),
+        path: uri.path().to_string(),
+        query: BTreeMap::new(),
+        body: Some(body.clone()),
+    });
+    let items = body
+        .get("items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let response_items: Vec<Value> = items
+        .iter()
+        .map(|item| {
+            let id = item.get("id").and_then(Value::as_str).unwrap_or_default();
+            let values = item
+                .get("values")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if values.len() == 1 {
+                let national_id = values.first().cloned().unwrap_or(Value::Null);
+                return json!({
+                    "id": id,
+                    "data": [{
+                        "national_id": national_id,
+                        "birth_date": "1990-01-01",
+                        "unrequested_secret": "must not reach notary",
+                    }]
+                });
+            }
+            let given_name = values.first().cloned().unwrap_or(Value::Null);
+            let family_name = values.get(1).cloned().unwrap_or(Value::Null);
+            let birth_date = values.get(2).cloned().unwrap_or(Value::Null);
+            json!({
+                "id": id,
+                "data": [{
+                    "given_name": given_name,
+                    "family_name": family_name,
+                    "birth_date": birth_date,
+                    "unrequested_secret": "must not reach notary",
+                }]
+            })
+        })
+        .collect();
+    Json(json!({ "items": response_items })).into_response()
+}
+
 /// DCI search that DROPS one entry from the response (the first one) so the
 /// notary must surface SourceNotFound for that subject only.
 async fn dci_partial_handler(
@@ -409,6 +467,313 @@ evidence:
     serde_norway::from_str(&raw).expect("dci bulk config deserializes")
 }
 
+fn openfn_sidecar_bulk_config(base_url: &str, audit_path: &str) -> StandaloneRegistryNotaryConfig {
+    set_audit_secret();
+    let raw = format!(
+        r#"
+server:
+  bind: 127.0.0.1:0
+auth:
+  mode: api_key
+  api_keys:
+    - id: caseworker
+      hash_env: TEST_BULK_API_KEY_HASH
+      scopes: [civil_registry:evidence_verification]
+audit:
+  sink: file
+  path: "{audit_path}"
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+evidence:
+  enabled: true
+  service_id: evidence.test
+  concurrency:
+    subjects: 256
+    bindings: 32
+  source_connections:
+    openfn_crvs:
+      base_url: "{base_url}"
+      allow_insecure_localhost: true
+      token_env: TEST_BULK_SOURCE_TOKEN
+      max_in_flight: 64
+      retry_on_5xx: false
+      bulk_mode: openfn_sidecar_batch
+  claims:
+    - id: date-of-birth
+      title: Date of birth
+      version: 2026-05
+      subject_type: person
+      operations:
+        batch_evaluate:
+          enabled: true
+          max_subjects: 200
+      source_bindings:
+        crvs:
+          connector: openfn_sidecar
+          connection: openfn_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person
+          lookup:
+            input: target.id
+            field: national_id
+            op: eq
+            cardinality: one
+          query_fields:
+            - input: target.attributes.given_name
+              field: given_name
+              op: eq
+            - input: target.attributes.family_name
+              field: family_name
+              op: eq
+            - input: target.attributes.birth_date
+              field: birth_date
+              op: eq
+          fields:
+            birth_date:
+              field: birth_date
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: crvs
+        field: birth_date
+      disclosure:
+        default: value
+        allowed: [value, redacted]
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+"#
+    );
+    serde_norway::from_str(&raw).expect("OpenFn sidecar bulk config deserializes")
+}
+
+fn openfn_sidecar_identifier_bulk_config(
+    base_url: &str,
+    audit_path: &str,
+) -> StandaloneRegistryNotaryConfig {
+    set_audit_secret();
+    let raw = format!(
+        r#"
+server:
+  bind: 127.0.0.1:0
+auth:
+  mode: api_key
+  api_keys:
+    - id: caseworker
+      hash_env: TEST_BULK_API_KEY_HASH
+      scopes: [civil_registry:evidence_verification]
+audit:
+  sink: file
+  path: "{audit_path}"
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+evidence:
+  enabled: true
+  service_id: evidence.test
+  concurrency:
+    subjects: 256
+    bindings: 32
+  source_connections:
+    openfn_crvs:
+      base_url: "{base_url}"
+      allow_insecure_localhost: true
+      token_env: TEST_BULK_SOURCE_TOKEN
+      max_in_flight: 64
+      retry_on_5xx: false
+      bulk_mode: openfn_sidecar_batch
+  claims:
+    - id: date-of-birth
+      title: Date of birth
+      version: 2026-05
+      subject_type: person
+      operations:
+        batch_evaluate:
+          enabled: true
+          max_subjects: 200
+      source_bindings:
+        crvs:
+          connector: openfn_sidecar
+          connection: openfn_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person
+          lookup:
+            input: target.id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            birth_date:
+              field: birth_date
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: crvs
+        field: birth_date
+      disclosure:
+        default: value
+        allowed: [value, redacted]
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+"#
+    );
+    serde_norway::from_str(&raw).expect("OpenFn sidecar identifier config deserializes")
+}
+
+fn openfn_sidecar_relationship_bulk_config(
+    base_url: &str,
+    audit_path: &str,
+) -> StandaloneRegistryNotaryConfig {
+    set_audit_secret();
+    let raw = format!(
+        r#"
+server:
+  bind: 127.0.0.1:0
+auth:
+  mode: api_key
+  api_keys:
+    - id: caseworker
+      hash_env: TEST_BULK_API_KEY_HASH
+      scopes: [civil_registry:evidence_verification]
+audit:
+  sink: file
+  path: "{audit_path}"
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+evidence:
+  enabled: true
+  service_id: evidence.test
+  concurrency:
+    subjects: 256
+    bindings: 32
+  source_connections:
+    openfn_crvs:
+      base_url: "{base_url}"
+      allow_insecure_localhost: true
+      token_env: TEST_BULK_SOURCE_TOKEN
+      max_in_flight: 64
+      retry_on_5xx: false
+      bulk_mode: openfn_sidecar_batch
+  claims:
+    - id: date-of-birth
+      title: Date of birth
+      version: 2026-05
+      subject_type: person
+      operations:
+        batch_evaluate:
+          enabled: true
+          max_subjects: 200
+      source_bindings:
+        crvs:
+          connector: openfn_sidecar
+          connection: openfn_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person
+          lookup:
+            input: target.id
+            field: national_id
+            op: eq
+            cardinality: one
+          query_fields:
+            - input: relationship.attributes.case_id
+              field: case_id
+              op: eq
+          fields:
+            birth_date:
+              field: birth_date
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: crvs
+        field: birth_date
+      disclosure:
+        default: value
+        allowed: [value, redacted]
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+"#
+    );
+    serde_norway::from_str(&raw).expect("OpenFn sidecar relationship config deserializes")
+}
+
+fn openfn_sidecar_requester_bulk_config(
+    base_url: &str,
+    audit_path: &str,
+) -> StandaloneRegistryNotaryConfig {
+    set_audit_secret();
+    let raw = format!(
+        r#"
+server:
+  bind: 127.0.0.1:0
+auth:
+  mode: api_key
+  api_keys:
+    - id: caseworker
+      hash_env: TEST_BULK_API_KEY_HASH
+      scopes: [civil_registry:evidence_verification]
+audit:
+  sink: file
+  path: "{audit_path}"
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+evidence:
+  enabled: true
+  service_id: evidence.test
+  concurrency:
+    subjects: 256
+    bindings: 32
+  source_connections:
+    openfn_crvs:
+      base_url: "{base_url}"
+      allow_insecure_localhost: true
+      token_env: TEST_BULK_SOURCE_TOKEN
+      max_in_flight: 64
+      retry_on_5xx: false
+      bulk_mode: openfn_sidecar_batch
+  claims:
+    - id: date-of-birth
+      title: Date of birth
+      version: 2026-05
+      subject_type: person
+      operations:
+        batch_evaluate:
+          enabled: true
+          max_subjects: 200
+      source_bindings:
+        crvs:
+          connector: openfn_sidecar
+          connection: openfn_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person
+          lookup:
+            input: target.id
+            field: national_id
+            op: eq
+            cardinality: one
+          query_fields:
+            - input: requester.identifiers.worker_id
+              field: worker_id
+              op: eq
+          fields:
+            birth_date:
+              field: birth_date
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: crvs
+        field: birth_date
+      disclosure:
+        default: value
+        allowed: [value, redacted]
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+"#
+    );
+    serde_norway::from_str(&raw).expect("OpenFn sidecar requester config deserializes")
+}
+
 // ---------------------------------------------------------------------------
 // Test scaffolding
 // ---------------------------------------------------------------------------
@@ -425,6 +790,23 @@ fn build_subjects(n: usize) -> Vec<Value> {
     (0..n)
         .map(|i| person_target(&format!("person-{i:03}")))
         .collect()
+}
+
+fn person_target_with_attributes(
+    id: &str,
+    given_name: &str,
+    family_name: &str,
+    birth_date: &str,
+) -> Value {
+    json!({
+        "type": "Person",
+        "id": id,
+        "attributes": {
+            "given_name": given_name,
+            "family_name": family_name,
+            "birth_date": birth_date,
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -536,6 +918,326 @@ async fn rda_bulk_falls_back_to_per_subject_on_collision() {
         5,
         "expected 1 bulk + 4 per-subject = 5 total upstream calls, got {}",
         recorder.total(),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// OpenFn sidecar batchMatch specialization
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn openfn_sidecar_batch_by_identifier_posts_one_batch_match_request() {
+    setup_env();
+    let recorder = UpstreamRecorder::new();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route(
+                "/v1/datasets/civil_registry/entities/civil_person/records:batchMatch",
+                post(openfn_batch_match_handler),
+            )
+            .with_state(recorder.clone()),
+    );
+    let base_url = upstream.server_address().expect("upstream address");
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+
+    let app = standalone_router(openfn_sidecar_identifier_bulk_config(
+        base_url.to_string().trim_end_matches('/'),
+        audit_path.to_str().expect("utf-8 path"),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let subjects = build_subjects(3);
+    let body = json!({
+        "claims": ["date-of-birth"],
+        "items": subjects.iter().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
+        "disclosure": "value",
+    });
+    let response = server
+        .post("/v1/batch-evaluations")
+        .add_header("x-api-key", "api-token")
+        .add_header("data-purpose", "https://purpose.example.test/eligibility")
+        .json(&body)
+        .await;
+    response.assert_status_ok();
+
+    assert_eq!(
+        recorder.total(),
+        1,
+        "expected exactly one OpenFn identifier batchMatch POST, got {}",
+        recorder.total(),
+    );
+    let requests = recorder.snapshot();
+    assert_eq!(requests.len(), 1, "one upstream request is captured");
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(
+        requests[0].path,
+        "/v1/datasets/civil_registry/entities/civil_person/records:batchMatch"
+    );
+
+    let last_body = recorder.last_body().expect("body recorded");
+    assert_eq!(last_body["fields"], json!(["birth_date", "national_id"]));
+    assert_eq!(
+        last_body["query_signature"],
+        json!([{ "field": "national_id", "op": "eq" }])
+    );
+    assert_eq!(
+        last_body["items"],
+        json!([
+            { "id": "0", "values": ["person-000"] },
+            { "id": "1", "values": ["person-001"] },
+            { "id": "2", "values": ["person-002"] }
+        ])
+    );
+    assert!(last_body.get("target").is_none());
+    assert!(last_body.get("requester").is_none());
+    assert!(last_body.get("relationship").is_none());
+    assert!(last_body.get("claims").is_none());
+    assert!(last_body.get("disclosure").is_none());
+
+    let response_body: Value = response.json();
+    let items = response_body["items"].as_array().expect("items array");
+    assert_eq!(items.len(), 3);
+    for (idx, item) in items.iter().enumerate() {
+        assert_eq!(item["status"], "succeeded", "item {idx} should succeed");
+    }
+}
+
+#[tokio::test]
+async fn openfn_sidecar_batch_groups_query_fields_into_one_batch_match_post() {
+    setup_env();
+    let recorder = UpstreamRecorder::new();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route(
+                "/v1/datasets/civil_registry/entities/civil_person/records:batchMatch",
+                post(openfn_batch_match_handler),
+            )
+            .with_state(recorder.clone()),
+    );
+    let base_url = upstream.server_address().expect("upstream address");
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+
+    let app = standalone_router(openfn_sidecar_bulk_config(
+        base_url.to_string().trim_end_matches('/'),
+        audit_path.to_str().expect("utf-8 path"),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let subjects = [
+        person_target_with_attributes("person-001", "Amina", "Diallo", "1990-01-01"),
+        person_target_with_attributes("person-002", "Bao", "Tran", "1988-02-03"),
+        person_target_with_attributes("person-003", "Carla", "Ndiaye", "1992-04-05"),
+    ];
+    let body = json!({
+        "claims": ["date-of-birth"],
+        "items": subjects.iter().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
+        "disclosure": "value",
+    });
+    let response = server
+        .post("/v1/batch-evaluations")
+        .add_header("x-api-key", "api-token")
+        .add_header("data-purpose", "https://purpose.example.test/eligibility")
+        .json(&body)
+        .await;
+    response.assert_status_ok();
+
+    assert_eq!(
+        recorder.total(),
+        1,
+        "expected exactly one OpenFn sidecar batchMatch POST, got {}",
+        recorder.total(),
+    );
+    let requests = recorder.snapshot();
+    assert_eq!(requests.len(), 1, "one upstream request is captured");
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(
+        requests[0].path,
+        "/v1/datasets/civil_registry/entities/civil_person/records:batchMatch"
+    );
+
+    let last_body = recorder.last_body().expect("body recorded");
+    assert_eq!(
+        last_body["query_signature"],
+        json!([
+            { "field": "given_name", "op": "eq" },
+            { "field": "family_name", "op": "eq" },
+            { "field": "birth_date", "op": "eq" }
+        ])
+    );
+    assert_eq!(
+        last_body["items"],
+        json!([
+            { "id": "0", "values": ["Amina", "Diallo", "1990-01-01"] },
+            { "id": "1", "values": ["Bao", "Tran", "1988-02-03"] },
+            { "id": "2", "values": ["Carla", "Ndiaye", "1992-04-05"] }
+        ])
+    );
+    assert!(last_body.get("target").is_none());
+    assert!(last_body.get("requester").is_none());
+    assert!(last_body.get("relationship").is_none());
+    assert!(last_body.get("assurance").is_none());
+
+    let response_body: Value = response.json();
+    let items = response_body["items"].as_array().expect("items array");
+    assert_eq!(items.len(), 3);
+    for (idx, item) in items.iter().enumerate() {
+        assert_eq!(item["status"], "succeeded", "item {idx} should succeed");
+    }
+    assert!(
+        !response_body.to_string().contains("unrequested_secret"),
+        "OpenFn sidecar response must be projected before Notary uses it"
+    );
+}
+
+#[tokio::test]
+async fn openfn_sidecar_batch_supports_relationship_derived_query_fields() {
+    setup_env();
+    let recorder = UpstreamRecorder::new();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route(
+                "/v1/datasets/civil_registry/entities/civil_person/records:batchMatch",
+                post(openfn_batch_match_handler),
+            )
+            .with_state(recorder.clone()),
+    );
+    let base_url = upstream.server_address().expect("upstream address");
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+
+    let app = standalone_router(openfn_sidecar_relationship_bulk_config(
+        base_url.to_string().trim_end_matches('/'),
+        audit_path.to_str().expect("utf-8 path"),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let subjects = build_subjects(2);
+    let body = json!({
+        "claims": ["date-of-birth"],
+        "items": subjects.iter().enumerate().map(|(idx, subject)| {
+            json!({
+                "target": subject,
+                "relationship": {
+                    "type": "case_worker",
+                    "attributes": {
+                        "case_id": format!("case-{idx:03}"),
+                        "internal_note": "must-not-reach-sidecar"
+                    }
+                }
+            })
+        }).collect::<Vec<_>>(),
+        "disclosure": "value",
+    });
+    let response = server
+        .post("/v1/batch-evaluations")
+        .add_header("x-api-key", "api-token")
+        .add_header("data-purpose", "https://purpose.example.test/eligibility")
+        .json(&body)
+        .await;
+    response.assert_status_ok();
+
+    assert_eq!(
+        recorder.total(),
+        1,
+        "relationship query fields should still use one OpenFn batchMatch POST"
+    );
+    let last_body = recorder.last_body().expect("body recorded");
+    assert_eq!(
+        last_body["query_signature"],
+        json!([{ "field": "case_id", "op": "eq" }])
+    );
+    assert_eq!(
+        last_body["items"],
+        json!([
+            { "id": "0", "values": ["case-000"] },
+            { "id": "1", "values": ["case-001"] }
+        ])
+    );
+    assert!(last_body.get("relationship").is_none());
+    assert!(
+        !last_body.to_string().contains("internal_note"),
+        "only configured query values should leave Notary"
+    );
+}
+
+#[tokio::test]
+async fn openfn_sidecar_batch_supports_requester_derived_query_fields() {
+    setup_env();
+    let recorder = UpstreamRecorder::new();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route(
+                "/v1/datasets/civil_registry/entities/civil_person/records:batchMatch",
+                post(openfn_batch_match_handler),
+            )
+            .with_state(recorder.clone()),
+    );
+    let base_url = upstream.server_address().expect("upstream address");
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+
+    let app = standalone_router(openfn_sidecar_requester_bulk_config(
+        base_url.to_string().trim_end_matches('/'),
+        audit_path.to_str().expect("utf-8 path"),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let subjects = build_subjects(2);
+    let body = json!({
+        "claims": ["date-of-birth"],
+        "items": subjects.iter().enumerate().map(|(idx, subject)| {
+            json!({
+                "target": subject,
+                "requester": {
+                    "type": "Person",
+                    "identifiers": [{
+                        "scheme": "worker_id",
+                        "value": format!("worker-{idx:03}")
+                    }],
+                    "attributes": {
+                        "office": "district-7",
+                        "private_note": "must-not-reach-sidecar"
+                    }
+                }
+            })
+        }).collect::<Vec<_>>(),
+        "disclosure": "value",
+    });
+    let response = server
+        .post("/v1/batch-evaluations")
+        .add_header("x-api-key", "api-token")
+        .add_header("data-purpose", "https://purpose.example.test/eligibility")
+        .json(&body)
+        .await;
+    response.assert_status_ok();
+
+    assert_eq!(
+        recorder.total(),
+        1,
+        "requester query fields should still use one OpenFn batchMatch POST"
+    );
+    let last_body = recorder.last_body().expect("body recorded");
+    assert_eq!(
+        last_body["query_signature"],
+        json!([{ "field": "worker_id", "op": "eq" }])
+    );
+    assert_eq!(
+        last_body["items"],
+        json!([
+            { "id": "0", "values": ["worker-000"] },
+            { "id": "1", "values": ["worker-001"] }
+        ])
+    );
+    assert!(last_body.get("requester").is_none());
+    assert!(
+        !last_body.to_string().contains("private_note"),
+        "only configured requester query values should leave Notary"
     );
 }
 

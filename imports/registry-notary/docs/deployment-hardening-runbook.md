@@ -221,7 +221,25 @@ Deployment checks:
 - Keep `field_paths` and claim `fields` to the minimum data needed.
 
 When using OpenFn sidecars, isolate worker execution, pin adaptor versions, and
-avoid retrying non-idempotent jobs.
+avoid retrying non-idempotent jobs. The sidecar must be reachable only from
+Notary over localhost or a private pod network. Do not expose it publicly, put
+it behind an internet-facing ingress, or allow callers to invoke OpenFn worker
+execution directly.
+
+For OpenFn sidecar source connections:
+
+- Use `connector: openfn_sidecar` on the binding.
+- Use `token_env` for the Notary-to-sidecar bearer token and keep
+  target-service credentials in the sidecar environment or secret store.
+- Set `retry_on_5xx: false`; Notary does not retry OpenFn worker execution
+  failures unless a future explicit retry policy is added.
+- Use `bulk_mode: openfn_sidecar_batch` only when the sidecar supports
+  `POST /v1/datasets/{dataset}/entities/{entity}/records:batchMatch` and tests
+  cover per-item not found, exact match, ambiguity, worker failure, timeout, and
+  output projection.
+- Keep Notary responsible for policy, minimization, audit, disclosure, and
+  credential issuance. Keep the sidecar responsible for adaptor execution,
+  target credentials, normalization, source comparison, and worker isolation.
 
 ## Signing Keys
 

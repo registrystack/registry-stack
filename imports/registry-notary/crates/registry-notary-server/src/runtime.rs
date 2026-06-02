@@ -173,6 +173,7 @@ fn cache_key_for_binding(
     let connector = match binding.connector {
         SourceConnectorKind::RegistryDataApi => "rda",
         SourceConnectorKind::Dci => "dci",
+        SourceConnectorKind::OpenFnSidecar => "openfn_sidecar",
     };
     // Sorted projected fields set (what the upstream is asked to return).
     let mut fields: Vec<String> = binding.fields.values().map(|f| f.field.clone()).collect();
@@ -430,11 +431,11 @@ async fn prefetch_bulk_bindings(
     };
     let claim_closure: Vec<String> = levels.into_iter().flatten().collect();
 
-    // Group key: (connection_id, dataset, entity, lookup_field, projected_fields_sorted).
+    // Group key: (connection_id, dataset, entity, query_signature, projected_fields_sorted).
     // Two bindings in different claims that share this tuple AND target the
     // same connection produce identical wire requests and may be batched
     // together. The lookup_op and purpose are uniform within a batch.
-    type GroupKey = (String, String, String, String, Vec<String>);
+    type GroupKey = (String, String, String, Vec<(String, String)>, Vec<String>);
     let mut groups: BTreeMap<GroupKey, Vec<(SourceBindingConfig, EvidenceRequestContext, String)>> =
         BTreeMap::new();
     for claim_id in &claim_closure {
@@ -453,8 +454,19 @@ async fn prefetch_bulk_bindings(
             }
             let mut fields: Vec<String> =
                 binding.fields.values().map(|f| f.field.clone()).collect();
-            if !fields.iter().any(|f| f == &binding.lookup.field) {
-                fields.push(binding.lookup.field.clone());
+            let query_signature: Vec<(String, String)> = if binding.query_fields.is_empty() {
+                vec![(binding.lookup.field.clone(), binding.lookup.op.clone())]
+            } else {
+                binding
+                    .query_fields
+                    .iter()
+                    .map(|field| (field.field.clone(), field.op.clone()))
+                    .collect()
+            };
+            for (field, _) in &query_signature {
+                if !fields.iter().any(|projected| projected == field) {
+                    fields.push(field.clone());
+                }
             }
             fields.sort();
             fields.dedup();
@@ -462,7 +474,7 @@ async fn prefetch_bulk_bindings(
                 connection_id.to_string(),
                 binding.dataset.clone(),
                 binding.entity.clone(),
-                binding.lookup.field.clone(),
+                query_signature,
                 fields,
             );
             for context in contexts {
@@ -473,7 +485,7 @@ async fn prefetch_bulk_bindings(
                 // Compute the per-target cache key and ensure the same
                 // (binding, target) pair is not enqueued twice (e.g. two
                 // claims sharing a binding).
-                let lookup_value = match binding_lookup_value_for_context(binding, context) {
+                let lookup_value = match binding_cache_value_for_context(binding, context) {
                     Ok(v) => v,
                     Err(_) => continue,
                 };
@@ -2236,7 +2248,7 @@ async fn load_one_binding(
     // Compute the lookup value to build the cache key. If this fails (e.g.
     // unsupported lookup op) we skip the memo entirely and fall through to a
     // direct fetch; the connector will surface the same error there.
-    let lookup_value_for_key = binding_lookup_value_for_context(binding, context).ok();
+    let lookup_value_for_key = binding_cache_value_for_context(binding, context).ok();
 
     if let (Some(memo), Some(ref lv)) = (fetch_memo, &lookup_value_for_key) {
         let key = cache_key_for_binding(binding, lv, purpose);
@@ -2484,6 +2496,30 @@ fn binding_lookup_value_for_context(
     }
 }
 
+fn binding_cache_value_for_context(
+    binding: &registry_notary_core::SourceBindingConfig,
+    context: &EvidenceRequestContext,
+) -> Result<Value, EvidenceError> {
+    if binding.query_fields.is_empty() {
+        return binding_lookup_value_for_context(binding, context);
+    }
+    let mut values = Vec::with_capacity(binding.query_fields.len());
+    for query_field in &binding.query_fields {
+        if query_field.op != "eq" {
+            return Err(EvidenceError::InvalidRequest);
+        }
+        let value = context
+            .lookup_value(query_field.input.as_str())
+            .ok_or_else(|| missing_context_error(query_field.input.as_str()))?;
+        values.push(serde_json::json!({
+            "field": query_field.field.clone(),
+            "op": query_field.op.clone(),
+            "value": value,
+        }));
+    }
+    Ok(Value::Array(values))
+}
+
 fn validate_matching_policy(
     binding: &registry_notary_core::SourceBindingConfig,
     context: &EvidenceRequestContext,
@@ -2583,6 +2619,9 @@ fn minimized_context_for_binding(
 ) -> EvidenceRequestContext {
     let mut paths = BTreeSet::new();
     paths.insert(binding.lookup.input.clone());
+    for query_field in &binding.query_fields {
+        paths.insert(query_field.input.clone());
+    }
     for group in &binding.matching.sufficient_target_inputs {
         for path in group {
             paths.insert(path.clone());
@@ -2872,6 +2911,7 @@ fn cel_meta(evidence: &EvidenceConfig, claim: &ClaimDefinition) -> Value {
                 "registry_data_api"
             }
             registry_notary_core::config::SourceConnectorKind::Dci => "dci",
+            registry_notary_core::config::SourceConnectorKind::OpenFnSidecar => "openfn_sidecar",
         };
         sources.insert(
             alias.clone(),

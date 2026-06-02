@@ -54,6 +54,7 @@ fn structured_logs_do_not_disclose_credentials_or_request_state() {
             let (_tmp, server) = contract_server().await;
             authorized_lookup(&server, "person-123").await;
             authorized_lookup(&server, "stderr-leak").await;
+            authorized_batch_match(&server, "log-sensitive-batch-value").await;
         });
     });
 
@@ -61,12 +62,14 @@ fn structured_logs_do_not_disclose_credentials_or_request_state() {
         String::from_utf8(logs.lock().expect("log buffer lock").clone()).expect("logs are UTF-8");
     assert!(logs.contains("sidecar lookup completed"));
     assert!(logs.contains("sidecar lookup failed"));
+    assert!(logs.contains("sidecar batch match completed"));
     assert!(logs.contains("openfn_crvs"));
     assert!(!logs.contains("fixture-token"));
     assert!(!logs.contains("opencrvs.example.test"));
     assert!(!logs.contains(CREDENTIAL_ENV));
     assert!(!logs.contains(TOKEN));
     assert!(!logs.contains("stderr-leak"));
+    assert!(!logs.contains("log-sensitive-batch-value"));
 }
 
 async fn contract_server() -> (TempDir, TestServer) {
@@ -143,6 +146,26 @@ async fn authorized_lookup(server: &TestServer, lookup_value: &str) {
         .add_header("authorization", format!("Bearer {TOKEN}"))
         .add_header("data-purpose", PURPOSE)
         .add_header("x-correlation-id", "contract-correlation")
+        .await;
+}
+
+async fn authorized_batch_match(server: &TestServer, lookup_value: &str) {
+    server
+        .post(&format!(
+            "/v1/datasets/{DATASET}/entities/{ENTITY}/records:batchMatch"
+        ))
+        .add_header("authorization", format!("Bearer {TOKEN}"))
+        .add_header("data-purpose", PURPOSE)
+        .add_header("x-correlation-id", "contract-correlation")
+        .json(&serde_json::json!({
+            "fields": ["national_id", "birth_date"],
+            "query_signature": [
+                { "field": "national_id", "op": "eq" }
+            ],
+            "items": [
+                { "id": "0", "values": [lookup_value] }
+            ]
+        }))
         .await;
 }
 

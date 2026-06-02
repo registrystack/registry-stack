@@ -1,0 +1,255 @@
+{
+  "version": 1,
+  "service": "registry-notary",
+  "routes": [
+    {
+      "listener": "public",
+      "path": "/healthz",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/ready",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/admin/v1/reload",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/openapi.json",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/.well-known/evidence-service",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/.well-known/evidence/jwks.json",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/.well-known/openid-credential-issuer",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/credentials/{*vct_path}",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/.well-known/vct/{*vct_path}",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/oid4vci/credential-offer",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/oid4vci/offer/start",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/oid4vci/offer/callback",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/oid4vci/token",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/oid4vci/nonce",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/oid4vci/credential",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/v1/claims",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/v1/claims/{claim_id}",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/v1/formats",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/v1/evaluations",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/v1/batch-evaluations",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/v1/evaluations/{evaluation_id}/render",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/v1/credentials",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/v1/credentials/{credential_id}/status",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/admin/v1/credentials/{credential_id}/status",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/federation/v1/evaluations",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/federation/mod.rs",
+      "feature": "federation.enabled"
+    },
+    {
+      "listener": "metrics",
+      "path": "/metrics",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/standalone.rs"
+    },
+    {
+      "listener": "sidecar",
+      "path": "/healthz",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-openfn-sidecar/src/sidecar.rs"
+    },
+    {
+      "listener": "sidecar",
+      "path": "/ready",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-openfn-sidecar/src/sidecar.rs"
+    },
+    {
+      "listener": "sidecar",
+      "path": "/metrics",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-openfn-sidecar/src/sidecar.rs"
+    },
+    {
+      "listener": "sidecar",
+      "path": "/v1/datasets/{dataset}/entities/{entity}/records",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-openfn-sidecar/src/sidecar.rs"
+    },
+    {
+      "listener": "sidecar",
+      "path": "/v1/datasets/{dataset}/entities/{entity}/records:batchMatch",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-openfn-sidecar/src/sidecar.rs"
+    }
+  ]
+}

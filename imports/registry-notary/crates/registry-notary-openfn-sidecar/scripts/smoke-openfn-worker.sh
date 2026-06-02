@@ -87,6 +87,30 @@ output="$(
 printf '%s\n' "$output" |
   jq -e '.data | length == 1 and .[0].national_id == "person-123" and .[0].birth_date == "1990-01-01"' >/dev/null
 
+batch_request="$(printf '%s\n' "$request" | jq -c '
+  del(.lookup) |
+  .mode = "batch_match" |
+  .query_signature = [{field: "national_id", op: "eq"}] |
+  .items = [
+    {id: "hit", values: ["person-123"]},
+    {id: "miss", values: ["missing-person"]}
+  ]
+')"
+batch_output="$(
+  printf '%s\n' "$batch_request" |
+    node --experimental-vm-modules "$worker"
+)"
+printf '%s\n' "$batch_output" |
+  jq -e '
+    (.items | length == 2) and
+    (.items[0].id == "hit") and
+    (.items[0].data | length == 1) and
+    (.items[0].data[0].national_id == "person-123") and
+    (.items[0].data[0].birth_date == "1990-01-01") and
+    (.items[1].id == "miss") and
+    (.items[1].data | length == 0)
+  ' >/dev/null
+
 auth_request="$(printf '%s\n' "$request" | jq -c '.lookup.value = "target-auth"')"
 auth_output="$(
   printf '%s\n' "$auth_request" |

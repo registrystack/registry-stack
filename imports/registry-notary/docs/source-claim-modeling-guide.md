@@ -25,8 +25,8 @@ Keep source connectors narrow and keep claim semantics in Notary config.
 | Connector | Use when | Config value |
 | --- | --- | --- |
 | DCI | The upstream speaks a DCI-style search envelope | `connector: dci` |
-| Registry Data API | The upstream or sidecar exposes `/v1/datasets/{dataset}/entities/{entity}/records` lookups | `connector: registry_data_api` |
-| OpenFn sidecar | An adaptor or workflow must normalize a system into the Registry Data API shape | Configure Notary with `registry_data_api` pointing at the sidecar |
+| Registry Data API | The upstream exposes `/v1/datasets/{dataset}/entities/{entity}/records` lookups | `connector: registry_data_api` |
+| OpenFn sidecar | A pinned OpenFn adaptor or workflow must execute outside Notary for single reads or batch matching | `connector: openfn_sidecar` |
 
 Prefer the simplest direct source. Add an OpenFn sidecar when the target system
 needs adaptor code, request shaping, credential handling, or normalization that
@@ -65,6 +65,8 @@ Design rules:
 - Leave `retry_on_5xx: true` for idempotent reads.
 - Set `retry_on_5xx: false` for sidecar worker flows that must not repeat.
 - Use `bulk_mode: none` until the source contract has been tested.
+- Use `bulk_mode: openfn_sidecar_batch` only for OpenFn sidecar batch matching,
+  after the sidecar contract and per-item cardinality have been tested.
 - Keep `field_paths` and claim-level `fields` limited to what claims need.
 
 ## DCI Sources
@@ -110,7 +112,8 @@ sidecar normalizes a target system into that shape.
 ## OpenFn Sidecar Sources
 
 The OpenFn sidecar is a separate process that runs pinned worker code and
-returns a Registry Data API-shaped response. Notary still models it as:
+normalizes a target system into Notary's source-read contracts. Use the
+first-class connector for new configs:
 
 ```yaml
 evidence:
@@ -119,6 +122,39 @@ evidence:
       base_url: http://127.0.0.1:9191
       allow_insecure_localhost: true
       token_env: OPENFN_SIDECAR_TOKEN
+      retry_on_5xx: false
+
+  claims:
+    - id: date-of-birth
+      title: Date of birth
+      version: 2026-06
+      subject_type: person
+      value:
+        type: date
+      inputs:
+        - name: target.identifiers.national_id
+          type: string
+      source_bindings:
+        crvs:
+          connector: openfn_sidecar
+          connection: openfn_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person
+          lookup:
+            input: target.identifiers.national_id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+      rule:
+        type: extract
+        source: crvs
+        field: birth_date
 ```
 
 Use the sidecar when the target system needs:
@@ -129,18 +165,178 @@ Use the sidecar when the target system needs:
 - A private worker process boundary.
 - Per-source smoke checks before Notary depends on it.
 
-Sidecar rules:
+Boundary rules:
 
-- Do not expose the sidecar publicly.
+- Notary owns caller policy, matching policy, minimization, error collapsing,
+  audit, disclosure, credential issuance, and the decision about whether a
+  source result satisfies a claim.
+- The sidecar owns adaptor execution, target-service credentials, source
+  comparison, output normalization, runtime/adaptor pinning, and worker
+  isolation.
+- OpenFn sidecar batch matching is a source-read optimization. It is not a new
+  matching model, authorization model, disclosure model, identity proof model,
+  or credential issuance path. A batch match is semantically equivalent to
+  running the same source binding as single reads for each item.
+- The sidecar must be reachable only over localhost or a private pod network
+  from Notary. Do not expose it publicly or place it behind an internet-facing
+  ingress.
 - Pin worker runtime and adaptor versions.
 - Store sidecar target credentials in sidecar env, not in Notary config.
 - Return no more than two records for a lookup.
 - Return only normalized fields needed by Notary.
 - Do not put claim logic in the sidecar.
+- Set `retry_on_5xx: false` on the Notary source connection. Notary does not
+  retry OpenFn worker execution failures unless a future explicit retry policy
+  is added.
 
 See
 [`../crates/registry-notary-openfn-sidecar/README.md`](../crates/registry-notary-openfn-sidecar/README.md)
 for sidecar manifest and worker details.
+
+### OpenFn Batch Matching Contract
+
+OpenFn sidecar batch matching uses a POST contract, not Registry Data API `.in`
+filter semantics:
+
+```text
+POST /v1/datasets/{dataset}/entities/{entity}/records:batchMatch
+Authorization: Bearer <notary-to-sidecar-token>
+Data-Purpose: <purpose>
+Content-Type: application/json
+```
+
+Request body:
+
+```json
+{
+  "fields": ["national_id", "birth_date"],
+  "query_signature": [
+    { "field": "given_name", "op": "eq" },
+    { "field": "family_name", "op": "eq" },
+    { "field": "birthdate", "op": "eq" }
+  ],
+  "items": [
+    { "id": "0", "values": ["Amina", "Diallo", "1990-01-01"] }
+  ]
+}
+```
+
+Response body:
+
+```json
+{
+  "items": [
+    {
+      "id": "0",
+      "data": [
+        {
+          "national_id": "12345",
+          "birth_date": "1990-01-01"
+        }
+      ]
+    }
+  ]
+}
+```
+
+The batch request must include `fields`, `query_signature`, and `items`; the
+headers must include `Authorization` and `Data-Purpose`. The v1
+`query_signature` supports `op: eq` only, and every item in the request uses the
+same ordered signature. Each item `values` array must have the same length as
+`query_signature`.
+
+Response item ids must correspond exactly to request item ids. A duplicate item
+id or invalid worker output rejects the whole sidecar response. A missing item is
+treated by Notary as source unavailable for that item. `data: []` means not
+found, `data: [record]` means an exact source match, and `data` with two records
+means ambiguous. If a target system returns more than two records for one item,
+the sidecar normalizes the result to two records before returning it, so Notary
+can preserve the same cardinality rule used for single reads.
+
+### OpenFn Batch Config
+
+Use `bulk_mode: openfn_sidecar_batch` on the source connection and
+`connector: openfn_sidecar` on every binding that points to that connection.
+The binding may use either single-field `lookup` or multi-field `query_fields`.
+
+```yaml
+evidence:
+  source_connections:
+    openfn_crvs:
+      base_url: http://127.0.0.1:9191
+      allow_insecure_localhost: true
+      token_env: OPENFN_SIDECAR_TOKEN
+      retry_on_5xx: false
+      bulk_mode: openfn_sidecar_batch
+      bulk_timeout_max_ms: 30000
+
+  claims:
+    - id: birth-record-exists
+      title: Birth record exists
+      version: 2026-06
+      subject_type: person
+      value:
+        type: boolean
+      operations:
+        batch_evaluate:
+          enabled: true
+          max_subjects: 100
+      inputs:
+        - name: target.attributes.given_name
+          type: string
+        - name: target.attributes.family_name
+          type: string
+        - name: target.attributes.birthdate
+          type: date
+      source_bindings:
+        crvs:
+          connector: openfn_sidecar
+          connection: openfn_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person
+          lookup:
+            input: target.attributes.birthdate
+            field: birthdate
+            op: eq
+            cardinality: one
+          query_fields:
+            - input: target.attributes.given_name
+              field: given_name
+              op: eq
+            - input: target.attributes.family_name
+              field: family_name
+              op: eq
+            - input: target.attributes.birthdate
+              field: birthdate
+              op: eq
+          matching:
+            policy_id: civil-person-name-birthdate-v1
+            method: exact_name_birthdate
+            target_type: Person
+            allowed_purposes:
+              - benefit_eligibility_check
+            sufficient_target_inputs:
+              - [target.attributes.given_name, target.attributes.family_name, target.attributes.birthdate]
+            allowed_target_inputs:
+              - target.attributes.given_name
+              - target.attributes.family_name
+              - target.attributes.birthdate
+            collapse_matching_errors: true
+            confidence: high
+          fields:
+            national_id:
+              field: national_id
+              type: string
+              required: true
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+      rule:
+        type: exists
+        source: crvs
+```
 
 ## Claim Boundaries
 
@@ -314,9 +510,14 @@ Bulk source modes are separate from API batch evaluation:
 - `dci_batched_search`: DCI source supports a batched search envelope.
 - `rda_in_filter`: Registry Data API source supports an `in` style filter and
   the operator attests that each lookup is unique.
+- `openfn_sidecar_batch`: OpenFn sidecar source supports
+  `POST /v1/datasets/{dataset}/entities/{entity}/records:batchMatch` with a
+  shared `query_signature`.
 
 Do not enable bulk modes until contract tests prove response shape,
-cardinality, and source limits.
+cardinality, and source limits. OpenFn worker execution failures are not
+retried in v1; keep `retry_on_5xx: false` on OpenFn sidecar connections unless
+a future explicit retry policy is added.
 
 ## Purpose Propagation
 
@@ -342,6 +543,8 @@ deployment's policy review, source-owner agreement, and audit review.
 - Credential issuance is explicitly allowed by both claim and profile.
 - Batch and bulk modes are disabled until source contracts are tested.
 - OpenFn sidecars normalize data only and do not decide claims.
+- OpenFn sidecars run on localhost or a private pod network, never as a public
+  endpoint.
 - `doctor --live` passes against a controlled test target.
 
 ## Testing With Doctor

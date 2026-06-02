@@ -1,0 +1,8 @@
+title = "registry-notary gitleaks config"
+
+[allowlist]
+description = "Generated and local build output are not source review surfaces."
+paths = [
+  '''^target/''',
+  '''^demo/var/''',
+]

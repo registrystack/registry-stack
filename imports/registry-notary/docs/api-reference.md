@@ -41,6 +41,94 @@ that route.
 | `POST /oid4vci/credential` | `oid4vci_credential` | `oid4vci_credential` | `oid4vciCredential` |
 | `POST /federation/v1/evaluations` | `federation_evaluate_jws` | `federation_evaluate_jws` | `federationEvaluateJws` |
 
+## OpenFn Sidecar Source API
+
+This section documents the private sidecar API that Registry Notary calls when a
+source binding uses `connector: openfn_sidecar`. It is not a caller-facing
+Registry Notary route. The sidecar must run on localhost or a private pod
+network and must not be publicly exposed.
+
+Single reads use the Registry Data API-shaped source route:
+
+```text
+GET /v1/datasets/{dataset}/entities/{entity}/records?{lookup_field}={lookup_value}&fields=a,b&limit=2
+Authorization: Bearer <notary-to-sidecar-token>
+Data-Purpose: <purpose>
+```
+
+OpenFn sidecar batch matching uses this stable route and an explicit POST body.
+It is semantically equivalent to running the same source binding as single reads
+for each request item.
+
+```text
+POST /v1/datasets/{dataset}/entities/{entity}/records:batchMatch
+Authorization: Bearer <notary-to-sidecar-token>
+Data-Purpose: <purpose>
+Content-Type: application/json
+```
+
+Request body:
+
+```json
+{
+  "fields": ["national_id", "birth_date"],
+  "query_signature": [
+    { "field": "given_name", "op": "eq" },
+    { "field": "family_name", "op": "eq" },
+    { "field": "birthdate", "op": "eq" }
+  ],
+  "items": [
+    { "id": "0", "values": ["Amina", "Diallo", "1990-01-01"] }
+  ]
+}
+```
+
+Successful response body:
+
+```json
+{
+  "items": [
+    {
+      "id": "0",
+      "data": [
+        {
+          "national_id": "12345",
+          "birth_date": "1990-01-01"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Contract rules:
+
+- `Authorization`, `Data-Purpose`, `fields`, `query_signature`, and `items` are
+  required.
+- The v1 `query_signature` supports `op: eq` only.
+- Every item in a batch uses the same ordered `query_signature`; each
+  `items[].values` array must have the same length as that signature.
+- The request does not include full Notary target, requester, relationship,
+  assurance, claim config, disclosure config, or unrelated request attributes.
+- Response item ids must correspond exactly to request item ids.
+- A duplicate response item id rejects the whole sidecar response as invalid
+  output.
+- A missing response item maps to `source.unavailable` for that item.
+- `data: []` maps to source not found, `data: [record]` maps to a successful
+  source match, and `data` with two records maps to source ambiguous.
+- Returned records are projected to the requested `fields`; extra worker output
+  fields are not returned to Notary.
+- Documented per-item sidecar error codes are `target_auth` and
+  `target_rate_limit`; unknown per-item error codes map to source unavailable.
+- OpenFn worker execution failures, invalid worker output, oversized output,
+  worker crashes, and timeouts are not retried for the same batch request.
+
+The sidecar rejects missing or malformed bearer tokens with `401` and a
+`WWW-Authenticate: Bearer` header, rejected tokens with `403`, missing
+`Data-Purpose` with `400`, unknown source routes with `404`, unsupported query
+operations with `400`, worker pool saturation with `503` plus `Retry-After`,
+worker timeout with `504`, and invalid worker execution/output with `502`.
+
 ## Problem Code Registry
 
 These application problem `code` values are part of the stable client contract
@@ -83,3 +171,27 @@ Profiles may collapse granular matching outcomes to public
 `evidence.not_available` when revealing cardinality, state, or relationship
 policy would create an oracle. Operators can still inspect the granular audit
 code in the server audit trail.
+
+### Matching outcomes
+
+These codes report how a request resolved to a source record. The model behind
+them, including the cardinality rule and the collapse behavior, is described in
+[identity and record matching](identity-and-record-matching.md).
+
+| Code | When it is returned |
+| --- | --- |
+| `target.not_found` | The source returned no record for the target |
+| `target.match_ambiguous` | The source returned more than one record |
+| `target.identifier_missing` | A required target identifier was not supplied |
+| `target.attributes_insufficient` | The target attributes did not satisfy the binding's required input set |
+| `target.matching_policy_rejected` | The request shape is outside the binding's matching policy |
+| `target.match_low_confidence` | The source reported a match it considers too weak |
+| `target.not_in_valid_state` | The matched target is in a state the source rejects |
+
+The `requester` codes (`requester.not_found`, `requester.match_ambiguous`,
+`requester.identifier_missing`, `requester.attributes_insufficient`,
+`requester.matching_policy_rejected`, `requester.reauthentication_required`) and the
+`relationship` codes (`relationship.not_established`, `relationship.match_ambiguous`,
+`relationship.attributes_insufficient`, `relationship.policy_rejected`) report the
+same outcomes for the requester and relationship contexts. A successful match
+returns `target_ref` and `matching` metadata instead of a problem code.

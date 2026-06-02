@@ -20,6 +20,21 @@ repeat_x() {
 while IFS= read -r line; do
   printf '%s\n' "$line" >> "$attempt_log"
   case "$line" in
+    *batch-missing-response*)
+      printf '%s\n' '{"items":[{"id":"0","data":[{"national_id":"batch-missing-response","birth_date":"1990-01-01"}]},{"id":"2","data":[]}]}'
+      ;;
+    *batch-duplicate-response*)
+      printf '%s\n' '{"items":[{"id":"0","data":[]},{"id":"0","data":[]}]}'
+      ;;
+    *batch-extra-response*)
+      printf '%s\n' '{"items":[{"id":"0","data":[]},{"id":"1","data":[]},{"id":"2","data":[]},{"id":"unexpected","data":[]}]}'
+      ;;
+    *batch-item-errors*)
+      printf '%s\n' '{"items":[{"id":"0","error":{"code":"target_auth","message":"request value must not be echoed"}},{"id":"1","error":{"code":"target_rate_limit","retry_after_seconds":7}},{"id":"2","error":{"code":"unknown","raw":"batch-item-errors"}}]}'
+      ;;
+    *'"mode":"batch_match"'*)
+      printf '%s\n' '{"items":[{"id":"0","data":[{"national_id":"person-123","birth_date":"1990-01-01","ignored_extra":"must not appear in sidecar response"}]},{"id":"1","data":[]},{"id":"2","data":[{"national_id":"ambiguous-person","birth_date":"1990-01-01"},{"national_id":"ambiguous-person","birth_date":"1992-02-02"},{"national_id":"ambiguous-person","birth_date":"1999-09-09"}]}]}'
+      ;;
     *person-123*)
       printf '%s\n' '{"data":[{"national_id":"person-123","birth_date":"1990-01-01","ignored_extra":"must not appear in sidecar response"}]}'
       ;;

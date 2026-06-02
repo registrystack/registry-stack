@@ -1,0 +1,673 @@
+{
+  "version": 1,
+  "generated_at": "manual-baseline",
+  "service": "registry-notary",
+  "endpoints": [
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "GET",
+      "path": "/healthz",
+      "feature": null,
+      "audience": "health",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "not_applicable",
+      "openapi": false,
+      "stability": "beta",
+      "data_classification": "metadata",
+      "notes": "Intentionally unauthenticated public route with route-local or protocol-specific controls.",
+      "source": "manual",
+      "enforcement_tests": [],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "GET",
+      "path": "/ready",
+      "feature": null,
+      "audience": "health",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "not_applicable",
+      "openapi": false,
+      "stability": "beta",
+      "data_classification": "metadata",
+      "notes": "Intentionally unauthenticated public route with route-local or protocol-specific controls.",
+      "source": "manual",
+      "enforcement_tests": [],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "POST",
+      "path": "/admin/v1/reload",
+      "feature": null,
+      "audience": "operator",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "registry_notary:admin"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "admin",
+      "data_classification": "operational",
+      "notes": "Protected Registry Notary route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "GET",
+      "path": "/openapi.json",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "beta",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Notary route; route boundary requires an authenticated principal but no fixed scope.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "GET",
+      "path": "/.well-known/evidence-service",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "evidence:metadata"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "beta",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Notary route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "GET",
+      "path": "/.well-known/evidence/jwks.json",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "evidence:metadata"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "beta",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Notary route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "GET",
+      "path": "/.well-known/openid-credential-issuer",
+      "feature": null,
+      "audience": "external",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "not_applicable",
+      "openapi": true,
+      "stability": "beta",
+      "data_classification": "credential",
+      "notes": "Intentionally unauthenticated public route; auth/audit middleware bypass is exact-match allowlisted and route-local controls apply where relevant.",
+      "source": "manual",
+      "enforcement_tests": [],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "GET",
+      "path": "/credentials/{*vct_path}",
+      "feature": null,
+      "audience": "external",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "not_applicable",
+      "openapi": true,
+      "stability": "beta",
+      "data_classification": "credential",
+      "notes": "Intentionally unauthenticated public route; auth/audit middleware bypass is exact-match allowlisted and route-local controls apply where relevant.",
+      "source": "manual",
+      "enforcement_tests": [],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "GET",
+      "path": "/.well-known/vct/{*vct_path}",
+      "feature": null,
+      "audience": "external",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "not_applicable",
+      "openapi": true,
+      "stability": "beta",
+      "data_classification": "credential",
+      "notes": "Intentionally unauthenticated public SD-JWT VC Type Metadata well-known route; auth/audit middleware bypass is exact prefix allowlisted.",
+      "source": "manual",
+      "enforcement_tests": [],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "GET",
+      "path": "/oid4vci/credential-offer",
+      "feature": null,
+      "audience": "external",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "not_applicable",
+      "openapi": true,
+      "stability": "beta",
+      "data_classification": "credential",
+      "notes": "Intentionally unauthenticated public route; auth/audit middleware bypass is exact-match allowlisted and route-local controls apply where relevant.",
+      "source": "manual",
+      "enforcement_tests": [],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "GET",
+      "path": "/oid4vci/offer/start",
+      "feature": null,
+      "audience": "external",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "not_applicable",
+      "openapi": true,
+      "stability": "beta",
+      "data_classification": "credential",
+      "notes": "Intentionally unauthenticated public OID4VCI pre-authorized-code browser start route. The route reserves bounded login state and redirects to the configured IdP without minting a credential offer.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::preauth_offer_start_redirects_to_esignet_and_mints_nothing",
+        "crates/registry-notary-server/tests/standalone_http.rs::preauth_disabled_returns_404_and_offer_is_authorization_code"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "GET",
+      "path": "/oid4vci/offer/callback",
+      "feature": null,
+      "audience": "external",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "beta",
+      "data_classification": "secret-adjacent",
+      "notes": "Intentionally unauthenticated public OID4VCI pre-authorized-code callback route. Route-local state, nonce, IdP token exchange, subject binding, and hashed-only audit controls apply.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::preauth_callback_mints_pre_authorized_offer_with_tx_code",
+        "crates/registry-notary-server/tests/standalone_http.rs::preauth_callback_and_token_audit_events_carry_only_hashes"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "POST",
+      "path": "/oid4vci/token",
+      "feature": null,
+      "audience": "external",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": "preauth_token",
+      "audit": "required",
+      "openapi": true,
+      "stability": "beta",
+      "data_classification": "secret-adjacent",
+      "notes": "Intentionally unauthenticated public OID4VCI pre-authorized-code token route. Route-local code, PIN, replay, flood-throttle, and hashed-only audit controls apply before access-token issuance.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::preauth_token_endpoint_issues_access_token_and_c_nonce",
+        "crates/registry-notary-server/tests/standalone_http.rs::preauth_token_rejects_wrong_and_missing_tx_code",
+        "crates/registry-notary-server/tests/standalone_http.rs::preauth_random_code_flood_is_throttled_per_client_address",
+        "crates/registry-notary-server/tests/standalone_http.rs::preauth_callback_and_token_audit_events_carry_only_hashes"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "POST",
+      "path": "/oid4vci/nonce",
+      "feature": null,
+      "audience": "external",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": "self_attestation",
+      "audit": "not_applicable",
+      "openapi": true,
+      "stability": "beta",
+      "data_classification": "credential",
+      "notes": "Intentionally unauthenticated public route; auth/audit middleware bypass is exact-match allowlisted and route-local controls apply where relevant.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::oid4vci_metadata_offer_and_nonce_are_public"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "POST",
+      "path": "/oid4vci/credential",
+      "feature": null,
+      "audience": "external",
+      "auth": "bearer",
+      "scopes": [
+        "self_attestation"
+      ],
+      "rate_limit": "self_attestation",
+      "audit": "required",
+      "openapi": true,
+      "stability": "beta",
+      "data_classification": "credential",
+      "notes": "Protected OID4VCI credential endpoint. The proof precheck validates holder proof shape before bearer-token self-attestation auth.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::oid4vci_malformed_proof_is_rejected_before_oidc_auth",
+        "crates/registry-notary-server/tests/standalone_http.rs::oid4vci_credential_route_issues_holder_bound_sd_jwt"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "GET",
+      "path": "/v1/claims",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "beta",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Notary route; route boundary requires an authenticated principal but no fixed scope.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "GET",
+      "path": "/v1/claims/{claim_id}",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "beta",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Notary route; route boundary requires an authenticated principal but no fixed scope.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "GET",
+      "path": "/v1/formats",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "beta",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Notary route; route boundary requires an authenticated principal but no fixed scope.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "POST",
+      "path": "/v1/evaluations",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "evidence:evaluate"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "beta",
+      "data_classification": "personal",
+      "notes": "Protected Registry Notary route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "POST",
+      "path": "/v1/batch-evaluations",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "evidence:evaluate"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "beta",
+      "data_classification": "personal",
+      "notes": "Protected Registry Notary route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "POST",
+      "path": "/v1/evaluations/{evaluation_id}/render",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "evidence:evaluate"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "beta",
+      "data_classification": "personal",
+      "notes": "Protected Registry Notary route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "POST",
+      "path": "/v1/credentials",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "credential:issue"
+      ],
+      "rate_limit": "self_attestation",
+      "audit": "required",
+      "openapi": true,
+      "stability": "beta",
+      "data_classification": "credential",
+      "notes": "Protected Registry Notary route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "GET",
+      "path": "/v1/credentials/{credential_id}/status",
+      "feature": null,
+      "audience": "external",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "not_applicable",
+      "openapi": true,
+      "stability": "beta",
+      "data_classification": "credential",
+      "notes": "Intentionally unauthenticated public route; auth/audit middleware bypass is exact-match allowlisted and route-local controls apply where relevant.",
+      "source": "manual",
+      "enforcement_tests": [],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "POST",
+      "path": "/admin/v1/credentials/{credential_id}/status",
+      "feature": null,
+      "audience": "operator",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "registry_notary:admin"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "admin",
+      "data_classification": "credential",
+      "notes": "Protected Registry Notary route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "POST",
+      "path": "/federation/v1/evaluations",
+      "feature": "federation.enabled",
+      "audience": "external",
+      "auth": "jws",
+      "scopes": [
+        "trusted_peer"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "beta",
+      "data_classification": "personal",
+      "notes": "Public federation ingress protected by signed peer JWS and replay checks.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::federation_evaluation_returns_signed_response_and_rejects_replay",
+        "crates/registry-notary-server/tests/standalone_http.rs::federation_denial_happens_before_source_read"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "metrics",
+      "method": "GET",
+      "path": "/metrics",
+      "feature": null,
+      "audience": "operator",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "registry_notary:admin"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": false,
+      "stability": "admin",
+      "data_classification": "operational",
+      "notes": "Admin metrics route mounted on the main listener but handler-enforced by admin scope.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "sidecar",
+      "method": "GET",
+      "path": "/healthz",
+      "feature": null,
+      "audience": "internal",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "not_applicable",
+      "openapi": false,
+      "stability": "beta",
+      "data_classification": "operational",
+      "notes": "Intentionally unauthenticated OpenFn sidecar operational route.",
+      "source": "manual",
+      "enforcement_tests": [],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "sidecar",
+      "method": "GET",
+      "path": "/ready",
+      "feature": null,
+      "audience": "internal",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "not_applicable",
+      "openapi": false,
+      "stability": "beta",
+      "data_classification": "operational",
+      "notes": "Intentionally unauthenticated OpenFn sidecar operational route.",
+      "source": "manual",
+      "enforcement_tests": [],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "sidecar",
+      "method": "GET",
+      "path": "/metrics",
+      "feature": null,
+      "audience": "internal",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "not_applicable",
+      "openapi": false,
+      "stability": "beta",
+      "data_classification": "operational",
+      "notes": "Intentionally unauthenticated OpenFn sidecar operational route.",
+      "source": "manual",
+      "enforcement_tests": [],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "sidecar",
+      "method": "GET",
+      "path": "/v1/datasets/{dataset}/entities/{entity}/records",
+      "feature": null,
+      "audience": "internal",
+      "auth": "bearer",
+      "scopes": [
+        "sidecar:read"
+      ],
+      "rate_limit": null,
+      "audit": "not_applicable",
+      "openapi": false,
+      "stability": "beta",
+      "data_classification": "personal",
+      "notes": "OpenFn sidecar route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-openfn-sidecar/tests/rda_contract.rs::health_ready_and_metrics_are_available_without_secret_disclosure",
+        "crates/registry-notary-openfn-sidecar/tests/rda_contract.rs::missing_purpose_is_rejected_before_worker_dispatch"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "sidecar",
+      "method": "POST",
+      "path": "/v1/datasets/{dataset}/entities/{entity}/records:batchMatch",
+      "feature": null,
+      "audience": "internal",
+      "auth": "bearer",
+      "scopes": [
+        "sidecar:read"
+      ],
+      "rate_limit": null,
+      "audit": "not_applicable",
+      "openapi": false,
+      "stability": "beta",
+      "data_classification": "personal",
+      "notes": "OpenFn sidecar batch-match route. Bearer auth, data-purpose validation, request minimization, and worker-dispatch guards are enforced before source access.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-openfn-sidecar/tests/rda_contract.rs::batch_match_returns_per_item_projected_rda_data_and_sends_minimized_worker_request",
+        "crates/registry-notary-openfn-sidecar/tests/rda_contract.rs::batch_match_requires_auth_and_purpose_before_worker_dispatch"
+      ],
+      "waiver": null
+    }
+  ]
+}

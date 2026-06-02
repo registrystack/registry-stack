@@ -1,0 +1,95 @@
+name: Security Assurance
+
+on:
+  pull_request:
+    branches: ["**"]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: true
+  REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
+  REGISTRY_PLATFORM_REF: ${{ (github.head_ref || github.ref_name) == 'commons-release-cleanup' && 'commons-release-cleanup' || 'main' }}
+  CROSSWALK_REPOSITORY: PublicSchema/crosswalk
+  CROSSWALK_REF: 54e0f537830837fcd0c9efa87990987b1846931c
+
+defaults:
+  run:
+    working-directory: registry-notary
+
+jobs:
+  security:
+    name: security
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout registry-notary
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          path: registry-notary
+          persist-credentials: false
+
+      - name: Checkout registry-platform
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          path: registry-platform
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          persist-credentials: false
+
+      - name: Checkout crosswalk
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          repository: ${{ env.CROSSWALK_REPOSITORY }}
+          ref: ${{ env.CROSSWALK_REF }}
+          path: cel-mapping
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+      - name: Install Go security tools
+        run: |
+          go install github.com/zricethezav/gitleaks/v8@v8.24.3
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Run contract checks
+        run: python3 scripts/check_security_assurance.py
+
+      - name: Run gitleaks
+        run: gitleaks detect --source . --redact --no-banner --no-git --config .gitleaks.toml
+
+      - name: Run actionlint
+        working-directory: ${{ github.workspace }}/registry-notary
+        run: actionlint
+
+      - name: Run zizmor
+        run: uvx zizmor --no-exit-codes .
+
+      - name: Run hadolint
+        run: |
+          docker run --rm -i hadolint/hadolint:v2.12.0 /bin/hadolint --ignore DL3022 - < Dockerfile
+          docker run --rm -i hadolint/hadolint:v2.12.0 /bin/hadolint --ignore DL3022 - < Dockerfile.openfn-sidecar
+
+      - name: Run Semgrep
+        run: uvx semgrep --config .semgrep.yml --error .
+
+      - name: Generate security assurance report
+        run: ./scripts/check-security.sh
+
+      - name: Upload security assurance report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: registry-notary-security-assurance-report
+          path: registry-notary/target/security/security-assurance-report.md

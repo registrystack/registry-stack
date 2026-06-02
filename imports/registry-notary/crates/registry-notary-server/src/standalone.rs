@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Standalone Registry Notary assembly, auth, audit, and HTTP source connectors.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -24,9 +24,9 @@ use jsonwebtoken::Algorithm;
 use registry_notary_core::sd_jwt::EvidenceIssuer;
 use registry_notary_core::{
     AccessMode, BoundedCorrelationId, BoundedVerifiedClaims, BulkMode, DciSourceConnectionConfig,
-    EvidenceAuditEvent, EvidenceConfig, EvidenceCredentialConfig, EvidenceError, EvidencePrincipal,
-    EvidenceRequestContext, Hashed, Oauth2ClientCredentialsSourceAuthConfig, PrincipalIdentifier,
-    RateLimitBucket, RequestIdentifier, SelfAttestationAssuranceClaimSource,
+    EvidenceAuditEvent, EvidenceConfig, EvidenceCredentialConfig, EvidenceEntity, EvidenceError,
+    EvidencePrincipal, EvidenceRequestContext, Hashed, Oauth2ClientCredentialsSourceAuthConfig,
+    PrincipalIdentifier, RateLimitBucket, RequestIdentifier, SelfAttestationAssuranceClaimSource,
     SelfAttestationClaimSource, SelfAttestationDenialCode, SigningKeyConfig,
     SigningKeyProviderConfig, SourceAuthConfig, SourceBindingConfig, SourceConnectionConfig,
     SourceConnectorKind, StandaloneRegistryNotaryConfig, SubjectRequest, VerifiedClaimName,
@@ -776,6 +776,10 @@ impl SourceReader for HttpEvidenceSources {
                     read_remote_registry_data_api_one(self, connection, binding, subject, purpose)
                         .await
                 }
+                SourceConnectorKind::OpenFnSidecar => {
+                    read_remote_registry_data_api_one(self, connection, binding, subject, purpose)
+                        .await
+                }
                 SourceConnectorKind::Dci => {
                     read_external_dci_http_one(self, connection, binding, subject, purpose).await
                 }
@@ -795,6 +799,12 @@ impl SourceReader for HttpEvidenceSources {
                 .ok_or(EvidenceError::SourceUnavailable)?;
             match binding.connector {
                 SourceConnectorKind::RegistryDataApi => {
+                    read_remote_registry_data_api_one_for_context(
+                        self, connection, binding, context, purpose,
+                    )
+                    .await
+                }
+                SourceConnectorKind::OpenFnSidecar => {
                     read_remote_registry_data_api_one_for_context(
                         self, connection, binding, context, purpose,
                     )
@@ -867,6 +877,46 @@ impl SourceReader for HttpEvidenceSources {
                     );
                     read_external_dci_http_many(self, connection, &bindings, purpose).await
                 }
+                BulkMode::OpenFnSidecarBatch => {
+                    tracing::info!(
+                        target: "registry_notary_server::bulk",
+                        connection_id = %connection.id,
+                        path = "bulk",
+                        "bulk_vs_fallback",
+                    );
+                    if bindings
+                        .iter()
+                        .all(|(binding, _)| binding.connector == SourceConnectorKind::OpenFnSidecar)
+                    {
+                        let context_bindings: Vec<(SourceBindingConfig, EvidenceRequestContext)> =
+                            bindings
+                                .iter()
+                                .map(|(binding, subject)| {
+                                    (
+                                        binding.clone(),
+                                        EvidenceRequestContext {
+                                            requester: None,
+                                            target: EvidenceEntity::from_subject_request(
+                                                binding.lookup.input.as_str(),
+                                                subject.clone(),
+                                            ),
+                                            relationship: None,
+                                            on_behalf_of: None,
+                                        },
+                                    )
+                                })
+                                .collect();
+                        read_remote_openfn_sidecar_many_context(
+                            self,
+                            connection,
+                            &context_bindings,
+                            purpose,
+                        )
+                        .await
+                    } else {
+                        fallback_concurrent_read_one(self, &bindings, purpose).await
+                    }
+                }
             };
             outcome
         })
@@ -878,6 +928,26 @@ impl SourceReader for HttpEvidenceSources {
         purpose: &'a str,
     ) -> Pin<Box<dyn Future<Output = Vec<Result<Value, EvidenceError>>> + Send + 'a>> {
         Box::pin(async move {
+            if !bindings.is_empty() {
+                if let Some(connection) = self.source_connection(&bindings[0].0) {
+                    if connection.bulk_mode == BulkMode::OpenFnSidecarBatch
+                        && bindings.iter().all(|(binding, _)| {
+                            binding.connector == SourceConnectorKind::OpenFnSidecar
+                        })
+                    {
+                        tracing::info!(
+                            target: "registry_notary_server::bulk",
+                            connection_id = %connection.id,
+                            path = "bulk",
+                            "bulk_vs_fallback",
+                        );
+                        return read_remote_openfn_sidecar_many_context(
+                            self, connection, &bindings, purpose,
+                        )
+                        .await;
+                    }
+                }
+            }
             if let Some(subject_bindings) = canonical_subject_bindings(&bindings) {
                 return self.read_many(subject_bindings, purpose).await;
             }
@@ -2888,9 +2958,8 @@ fn is_public_probe_path(path: &str) -> bool {
             | "/oid4vci/nonce"
             | "/federation/v1/evaluations"
             | "/credentials/{*vct_path}"
-    ) || path.starts_with("/credentials/")
-        || path.starts_with("/.well-known/vct/")
-        || path.starts_with("/v1/credentials/")
+            | "/v1/credentials/{credential_id}/status"
+    ) || path.starts_with("/.well-known/vct/")
 }
 
 async fn admin_metrics_handler(
@@ -3976,6 +4045,213 @@ async fn read_remote_registry_data_api_many(
         }
     }
     results
+}
+
+async fn read_remote_openfn_sidecar_many_context(
+    sources: &HttpEvidenceSources,
+    connection: &ResolvedEvidenceSourceConnection,
+    bindings: &[(SourceBindingConfig, EvidenceRequestContext)],
+    purpose: &str,
+) -> Vec<Result<Value, EvidenceError>> {
+    if bindings.is_empty() {
+        return Vec::new();
+    }
+    let url = match openfn_sidecar_batch_url(&connection.base_url, &bindings[0].0) {
+        Ok(url) => url,
+        Err(_) => {
+            return bindings
+                .iter()
+                .map(|_| Err(EvidenceError::SourceUnavailable))
+                .collect()
+        }
+    };
+
+    let mut query_values: Vec<Result<Vec<SourceQueryValue>, EvidenceError>> =
+        Vec::with_capacity(bindings.len());
+    for (binding, context) in bindings {
+        query_values.push(source_query_values_for_context(binding, context));
+    }
+    let Some((first_binding, _)) = bindings.first() else {
+        return Vec::new();
+    };
+    let first_values = match query_values.iter().find_map(|values| values.as_ref().ok()) {
+        Some(values) => values,
+        None => {
+            return query_values
+                .into_iter()
+                .map(|values| match values {
+                    Err(error) => Err(error),
+                    Ok(_) => Err(EvidenceError::SourceUnavailable),
+                })
+                .collect()
+        }
+    };
+    if first_values.iter().any(|value| value.op != "eq") {
+        return bindings
+            .iter()
+            .map(|_| Err(EvidenceError::InvalidRequest))
+            .collect();
+    }
+    let query_signature: Vec<Value> = first_values
+        .iter()
+        .map(|value| json!({ "field": value.field, "op": value.op }))
+        .collect();
+    let fields = projected_source_fields_with_query_values(first_binding, first_values);
+    let mut items = Vec::new();
+    let mut item_ids: Vec<Option<String>> = Vec::with_capacity(bindings.len());
+    for (idx, values_result) in query_values.iter().enumerate() {
+        match values_result {
+            Err(_) => item_ids.push(None),
+            Ok(values) => {
+                let signature_matches = values.len() == first_values.len()
+                    && values.iter().zip(first_values).all(|(value, expected)| {
+                        value.field == expected.field && value.op == expected.op
+                    });
+                if !signature_matches || values.iter().any(|value| value.op != "eq") {
+                    item_ids.push(None);
+                    continue;
+                }
+                let id = idx.to_string();
+                items.push(json!({
+                    "id": id,
+                    "values": values.iter().map(|value| value.value.clone()).collect::<Vec<_>>(),
+                }));
+                item_ids.push(Some(id));
+            }
+        }
+    }
+    if items.is_empty() {
+        return query_values
+            .into_iter()
+            .map(|values| match values {
+                Err(error) => Err(error),
+                Ok(_) => Err(EvidenceError::SourceUnavailable),
+            })
+            .collect();
+    }
+    let request_body = json!({
+        "fields": fields,
+        "query_signature": query_signature,
+        "items": items,
+    });
+    let timeout_budget = bulk_timeout(connection, items.len());
+    let body_result = send_request_with_retry(
+        sources,
+        connection,
+        "openfn_sidecar",
+        &url,
+        reqwest::Method::POST,
+        timeout_budget,
+        move |request, token| {
+            add_correlation_header(
+                request
+                    .bearer_auth(token)
+                    .header("accept", "application/json")
+                    .header("content-type", "application/json")
+                    .header("data-purpose", purpose),
+            )
+            .json(&request_body)
+        },
+    )
+    .await;
+    let body = match body_result {
+        Ok(body) => body,
+        Err(error) => {
+            tracing::warn!(
+                target: "registry_notary_server::bulk",
+                connection_id = %connection.id,
+                error = %error,
+                "openfn_sidecar_batch_request_failed",
+            );
+            return query_values
+                .into_iter()
+                .map(|values| match values {
+                    Err(error) => Err(error),
+                    Ok(_) => Err(EvidenceError::SourceUnavailable),
+                })
+                .collect();
+        }
+    };
+    let response_items = body
+        .get("items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut by_id: BTreeMap<String, Value> = BTreeMap::new();
+    let requested_ids = item_ids
+        .iter()
+        .filter_map(|id| id.as_deref())
+        .collect::<BTreeSet<_>>();
+    for item in response_items {
+        let Some(id) = item.get("id").and_then(Value::as_str) else {
+            return bindings
+                .iter()
+                .map(|_| Err(EvidenceError::SourceUnavailable))
+                .collect();
+        };
+        if !requested_ids.contains(id) {
+            return bindings
+                .iter()
+                .map(|_| Err(EvidenceError::SourceUnavailable))
+                .collect();
+        }
+        if by_id.insert(id.to_string(), item).is_some() {
+            return bindings
+                .iter()
+                .map(|_| Err(EvidenceError::SourceUnavailable))
+                .collect();
+        }
+    }
+
+    let mut results = Vec::with_capacity(bindings.len());
+    for (idx, values_result) in query_values.into_iter().enumerate() {
+        match (values_result, item_ids.get(idx).cloned().flatten()) {
+            (Err(error), _) => results.push(Err(error)),
+            (Ok(_), None) => results.push(Err(EvidenceError::SourceUnavailable)),
+            (Ok(_), Some(id)) => {
+                let Some(item) = by_id.get(&id) else {
+                    results.push(Err(EvidenceError::SourceUnavailable));
+                    continue;
+                };
+                if let Some(error) = item.get("error").and_then(Value::as_object) {
+                    results.push(Err(openfn_item_error(error)));
+                    continue;
+                }
+                let rows = item
+                    .get("data")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let outcome = match rows.len() {
+                    0 => Err(EvidenceError::SourceNotFound),
+                    1 => rows
+                        .first()
+                        .cloned()
+                        .ok_or(EvidenceError::SourceUnavailable),
+                    _ => Err(EvidenceError::SourceAmbiguous),
+                };
+                results.push(outcome);
+            }
+        }
+    }
+    results
+}
+
+fn openfn_item_error(error: &Map<String, Value>) -> EvidenceError {
+    match error.get("code").and_then(Value::as_str) {
+        Some("target_auth") | Some("target_rate_limit") => EvidenceError::SourceUnavailable,
+        _ => EvidenceError::SourceUnavailable,
+    }
+}
+
+fn openfn_sidecar_batch_url(
+    base_url: &str,
+    binding: &SourceBindingConfig,
+) -> Result<reqwest::Url, EvidenceError> {
+    let mut url = registry_data_api_url(base_url, binding)?;
+    let path = format!("{}:batchMatch", url.path());
+    url.set_path(&path);
+    Ok(url)
 }
 
 /// DCI bulk specialization: one POST with N `search_request` entries, each
@@ -5558,7 +5834,7 @@ claims:
         type: string
     source_bindings:
       crvs:
-        connector: registry_data_api
+        connector: openfn_sidecar
         connection: openfn_crvs
         required_scope: civil_registry:evidence_verification
         dataset: civil_registry
@@ -5641,6 +5917,67 @@ sources:
             job.display()
         );
         serde_norway::from_str(&raw).expect("sidecar test config parses")
+    }
+
+    async fn fixed_openfn_batch_response_handler(
+        State(response): State<Value>,
+        Json(_request): Json<Value>,
+    ) -> Response {
+        Json(response).into_response()
+    }
+
+    async fn read_openfn_batch_from_fixed_response(
+        response: Value,
+    ) -> Vec<Result<Value, EvidenceError>> {
+        std::env::set_var(OPENFN_SIDECAR_TOKEN_ENV, OPENFN_SIDECAR_TOKEN);
+        let upstream = TestServer::builder().http_transport().build(
+            Router::new()
+                .route(
+                    "/v1/datasets/civil_registry/entities/civil_person/records:batchMatch",
+                    post(fixed_openfn_batch_response_handler),
+                )
+                .with_state(response),
+        );
+        let evidence = openfn_sidecar_spike_config(
+            upstream
+                .server_address()
+                .expect("HTTP transport exposes upstream address")
+                .as_str(),
+        );
+        let source = HttpEvidenceSources::from_config(&evidence, Arc::new(AppMetrics::default()))
+            .expect("source config resolves");
+        let binding = evidence.claims[0].source_bindings["crvs"].clone();
+        let connection = source
+            .source_connection(&binding)
+            .expect("source connection exists");
+        let bindings = ["person-0", "person-1"]
+            .into_iter()
+            .map(|id| {
+                (
+                    binding.clone(),
+                    EvidenceRequestContext {
+                        requester: None,
+                        target: registry_notary_core::EvidenceEntity::from_subject_request(
+                            "Person",
+                            SubjectRequest {
+                                id: id.to_string(),
+                                id_type: None,
+                            },
+                        ),
+                        relationship: None,
+                        on_behalf_of: None,
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+
+        read_remote_openfn_sidecar_many_context(
+            &source,
+            connection,
+            &bindings,
+            OPENFN_SPIKE_PURPOSE,
+        )
+        .await
     }
 
     #[test]
@@ -5935,6 +6272,59 @@ sources:
             .filter(|line| line.contains("retry-sentinel"))
             .count();
         assert_eq!(attempts, 1, "Notary must not retry sidecar failures");
+    }
+
+    #[tokio::test]
+    async fn openfn_sidecar_batch_client_rejects_malformed_response_item_ids() {
+        let cases = [
+            json!({
+                "items": [
+                    { "id": "0", "data": [{ "national_id": "person-0", "birth_date": "1990-01-01" }] },
+                    { "id": "1", "data": [{ "national_id": "person-1", "birth_date": "1991-01-01" }] },
+                    { "id": "unexpected", "data": [] }
+                ]
+            }),
+            json!({
+                "items": [
+                    { "id": "0", "data": [{ "national_id": "person-0", "birth_date": "1990-01-01" }] },
+                    { "id": "0", "data": [] }
+                ]
+            }),
+            json!({
+                "items": [
+                    { "id": "0", "data": [{ "national_id": "person-0", "birth_date": "1990-01-01" }] },
+                    { "data": [] }
+                ]
+            }),
+        ];
+
+        for response in cases {
+            let results = read_openfn_batch_from_fixed_response(response).await;
+
+            assert_eq!(results.len(), 2);
+            assert!(
+                results
+                    .iter()
+                    .all(|result| matches!(result, Err(EvidenceError::SourceUnavailable))),
+                "malformed batch response ids must reject the whole batch result: {results:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn openfn_sidecar_batch_client_maps_missing_response_item_per_subject() {
+        let results = read_openfn_batch_from_fixed_response(json!({
+            "items": [
+                { "id": "0", "data": [{ "national_id": "person-0", "birth_date": "1990-01-01" }] }
+            ]
+        }))
+        .await;
+
+        assert_eq!(results.len(), 2);
+        assert!(results[0]
+            .as_ref()
+            .is_ok_and(|row| row.get("birth_date") == Some(&json!("1990-01-01"))));
+        assert!(matches!(results[1], Err(EvidenceError::SourceUnavailable)));
     }
 
     #[tokio::test]

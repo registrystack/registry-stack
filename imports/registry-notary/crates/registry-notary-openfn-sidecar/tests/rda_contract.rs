@@ -29,6 +29,7 @@ struct HarnessOptions {
     worker_timeout_ms: u64,
     max_output_bytes: usize,
     liveness_window_ms: u64,
+    max_batch_items: usize,
 }
 
 impl Default for HarnessOptions {
@@ -38,6 +39,7 @@ impl Default for HarnessOptions {
             worker_timeout_ms: 250,
             max_output_bytes: 4096,
             liveness_window_ms: 30_000,
+            max_batch_items: 100,
         }
     }
 }
@@ -85,6 +87,7 @@ limits:
   max_request_bytes: 2048
   max_query_parameter_bytes: 128
   liveness_window_ms: {liveness_window_ms}
+  max_batch_items: {max_batch_items}
   max_worker_memory_mb: 256
 openfn:
   cli_build_tool: "1.36.0"
@@ -117,6 +120,7 @@ sources:
         worker_timeout_ms = options.worker_timeout_ms,
         max_output_bytes = options.max_output_bytes,
         liveness_window_ms = options.liveness_window_ms,
+        max_batch_items = options.max_batch_items,
         worker = yaml_path(&worker),
         attempt_log = yaml_path(attempt_log),
         job = yaml_path(&job),
@@ -186,6 +190,40 @@ fn assert_problem_details(response: &TestResponse, status: StatusCode) -> Value 
     body
 }
 
+async fn authorized_batch_match(server: &TestServer) -> TestResponse {
+    batch_match_request(server)
+        .json(&valid_batch_match_body())
+        .await
+}
+
+fn batch_match_request(server: &TestServer) -> axum_test::TestRequest {
+    server
+        .post(&format!(
+            "/v1/datasets/{DATASET}/entities/{ENTITY}/records:batchMatch"
+        ))
+        .add_header("authorization", format!("Bearer {TOKEN}"))
+        .add_header("data-purpose", PURPOSE)
+        .add_header("x-correlation-id", "contract-correlation")
+}
+
+fn valid_batch_match_body() -> Value {
+    batch_match_body_with_values(["person-123", "missing-person", "ambiguous-person"])
+}
+
+fn batch_match_body_with_values(values: [&str; 3]) -> Value {
+    json!({
+        "fields": ["national_id", "birth_date"],
+        "query_signature": [
+            { "field": "national_id", "op": "eq" }
+        ],
+        "items": [
+            { "id": "0", "values": [values[0]] },
+            { "id": "1", "values": [values[1]] },
+            { "id": "2", "values": [values[2]] }
+        ]
+    })
+}
+
 fn attempt_count(harness: &ContractHarness) -> usize {
     std::fs::read_to_string(&harness.attempt_log)
         .unwrap_or_default()
@@ -216,6 +254,283 @@ async fn exact_match_returns_single_projected_record() {
         !response.text().contains("ignored_extra"),
         "sidecar trims fields outside the requested projection"
     );
+}
+
+#[tokio::test]
+async fn batch_match_returns_per_item_projected_rda_data_and_sends_minimized_worker_request() {
+    let harness = contract_harness(HarnessOptions::default()).await;
+
+    let response = authorized_batch_match(&harness.server).await;
+
+    response.assert_status_ok();
+    let body: Value = response.json();
+    assert_eq!(
+        body,
+        json!({
+            "items": [
+                {
+                    "id": "0",
+                    "data": [{
+                        "national_id": "person-123",
+                        "birth_date": "1990-01-01"
+                    }]
+                },
+                {
+                    "id": "1",
+                    "data": []
+                },
+                {
+                    "id": "2",
+                    "data": [
+                        {
+                            "national_id": "ambiguous-person",
+                            "birth_date": "1990-01-01"
+                        },
+                        {
+                            "national_id": "ambiguous-person",
+                            "birth_date": "1992-02-02"
+                        }
+                    ]
+                }
+            ]
+        })
+    );
+
+    let attempts = fs::read_to_string(&harness.attempt_log).expect("attempt log is written");
+    let batch_request = attempts
+        .lines()
+        .find(|line| line.contains(r#""mode":"batch_match""#))
+        .expect("batch worker request is logged");
+    let request: Value = serde_json::from_str(batch_request).expect("worker request is JSON");
+    assert_eq!(request["mode"], json!("batch_match"));
+    assert_eq!(
+        request["query_signature"],
+        json!([{ "field": "national_id", "op": "eq" }])
+    );
+    assert!(request.get("target").is_none());
+    assert!(request.get("requester").is_none());
+    assert!(request.get("relationship").is_none());
+    assert!(
+        !response.text().contains("ignored_extra"),
+        "sidecar trims fields outside the requested projection"
+    );
+    assert_eq!(
+        attempt_count(&harness),
+        1,
+        "batch dispatches exactly one non-smoke worker execution"
+    );
+}
+
+#[tokio::test]
+async fn batch_match_rejects_unknown_request_fields_before_worker_dispatch() {
+    let harness = contract_harness(HarnessOptions::default()).await;
+
+    let mut top_level = valid_batch_match_body();
+    top_level["target"] = json!({ "must": "not be accepted" });
+    let response = batch_match_request(&harness.server).json(&top_level).await;
+    assert_problem_details(&response, StatusCode::BAD_REQUEST);
+
+    let mut term = valid_batch_match_body();
+    term["query_signature"][0]["ignored"] = json!(true);
+    let response = batch_match_request(&harness.server).json(&term).await;
+    assert_problem_details(&response, StatusCode::BAD_REQUEST);
+
+    let mut item = valid_batch_match_body();
+    item["items"][0]["ignored"] = json!(true);
+    let response = batch_match_request(&harness.server).json(&item).await;
+    assert_problem_details(&response, StatusCode::BAD_REQUEST);
+
+    assert_eq!(attempt_count(&harness), 0);
+}
+
+#[tokio::test]
+async fn batch_match_enforces_raw_request_body_limit_before_worker_dispatch() {
+    let harness = contract_harness(HarnessOptions::default()).await;
+    let body = json!({
+        "fields": ["national_id"],
+        "query_signature": [{ "field": "national_id", "op": "eq" }],
+        "items": [{ "id": "0", "values": ["x".repeat(4096)] }]
+    })
+    .to_string();
+
+    let response = batch_match_request(&harness.server)
+        .content_type("application/json")
+        .text(body)
+        .await;
+
+    assert_problem_details(&response, StatusCode::BAD_REQUEST);
+    assert_eq!(attempt_count(&harness), 0);
+}
+
+#[tokio::test]
+async fn batch_match_request_validation_rejects_limits_and_signature_errors_before_dispatch() {
+    let harness = contract_harness(HarnessOptions {
+        max_batch_items: 2,
+        ..HarnessOptions::default()
+    })
+    .await;
+
+    let too_many_items = valid_batch_match_body();
+    let response = batch_match_request(&harness.server)
+        .json(&too_many_items)
+        .await;
+    assert_problem_details(&response, StatusCode::BAD_REQUEST);
+
+    let mut unsupported_op = valid_batch_match_body();
+    unsupported_op["query_signature"][0]["op"] = json!("contains");
+    let response = batch_match_request(&harness.server)
+        .json(&unsupported_op)
+        .await;
+    assert_problem_details(&response, StatusCode::BAD_REQUEST);
+
+    let mut value_length_mismatch = valid_batch_match_body();
+    value_length_mismatch["items"][0]["values"] = json!(["person-123", "extra"]);
+    let response = batch_match_request(&harness.server)
+        .json(&value_length_mismatch)
+        .await;
+    assert_problem_details(&response, StatusCode::BAD_REQUEST);
+
+    let mut overlong_field = valid_batch_match_body();
+    overlong_field["fields"][0] = json!("x".repeat(129));
+    let response = batch_match_request(&harness.server)
+        .json(&overlong_field)
+        .await;
+    assert_problem_details(&response, StatusCode::BAD_REQUEST);
+
+    let mut overlong_value = valid_batch_match_body();
+    overlong_value["items"][0]["values"][0] = json!("x".repeat(129));
+    let response = batch_match_request(&harness.server)
+        .json(&overlong_value)
+        .await;
+    assert_problem_details(&response, StatusCode::BAD_REQUEST);
+
+    assert_eq!(attempt_count(&harness), 0);
+}
+
+#[tokio::test]
+async fn batch_match_requires_auth_and_purpose_before_worker_dispatch() {
+    let harness = contract_harness(HarnessOptions::default()).await;
+
+    let missing_token = harness
+        .server
+        .post(&format!(
+            "/v1/datasets/{DATASET}/entities/{ENTITY}/records:batchMatch"
+        ))
+        .add_header("data-purpose", PURPOSE)
+        .json(&valid_batch_match_body())
+        .await;
+    assert_problem_details(&missing_token, StatusCode::UNAUTHORIZED);
+    assert!(
+        missing_token.headers().contains_key("www-authenticate"),
+        "401 responses include a WWW-Authenticate challenge"
+    );
+
+    let malformed_token = harness
+        .server
+        .post(&format!(
+            "/v1/datasets/{DATASET}/entities/{ENTITY}/records:batchMatch"
+        ))
+        .add_header("authorization", "Basic not-bearer")
+        .add_header("data-purpose", PURPOSE)
+        .json(&valid_batch_match_body())
+        .await;
+    assert_problem_details(&malformed_token, StatusCode::UNAUTHORIZED);
+
+    let rejected_token = harness
+        .server
+        .post(&format!(
+            "/v1/datasets/{DATASET}/entities/{ENTITY}/records:batchMatch"
+        ))
+        .add_header("authorization", "Bearer wrong-token")
+        .add_header("data-purpose", PURPOSE)
+        .json(&valid_batch_match_body())
+        .await;
+    assert_problem_details(&rejected_token, StatusCode::FORBIDDEN);
+
+    let missing_purpose = harness
+        .server
+        .post(&format!(
+            "/v1/datasets/{DATASET}/entities/{ENTITY}/records:batchMatch"
+        ))
+        .add_header("authorization", format!("Bearer {TOKEN}"))
+        .json(&valid_batch_match_body())
+        .await;
+    assert_problem_details(&missing_purpose, StatusCode::BAD_REQUEST);
+
+    assert_eq!(attempt_count(&harness), 0);
+}
+
+#[tokio::test]
+async fn batch_match_worker_response_item_ids_are_normalized_or_rejected_per_contract() {
+    let harness = contract_harness(HarnessOptions::default()).await;
+
+    let missing = batch_match_body_with_values([
+        "batch-missing-response",
+        "missing-person",
+        "ambiguous-person",
+    ]);
+    let response = batch_match_request(&harness.server).json(&missing).await;
+    let attempts = fs::read_to_string(&harness.attempt_log).expect("attempt log is written");
+    assert!(
+        attempts.contains("batch-missing-response"),
+        "worker request must include the batch marker; attempts: {attempts}"
+    );
+    response.assert_status_ok();
+    let body: Value = response.json();
+    assert_eq!(
+        body["items"][1],
+        json!({ "id": "1", "error": { "code": "source_unavailable" } })
+    );
+
+    let duplicate = batch_match_body_with_values([
+        "batch-duplicate-response",
+        "missing-person",
+        "ambiguous-person",
+    ]);
+    let response = batch_match_request(&harness.server).json(&duplicate).await;
+    assert_problem_details(&response, StatusCode::BAD_GATEWAY);
+
+    let extra = batch_match_body_with_values([
+        "batch-extra-response",
+        "missing-person",
+        "ambiguous-person",
+    ]);
+    let response = batch_match_request(&harness.server).json(&extra).await;
+    assert_problem_details(&response, StatusCode::BAD_GATEWAY);
+}
+
+#[tokio::test]
+async fn batch_match_worker_per_item_errors_are_documented_and_sanitized() {
+    let harness = contract_harness(HarnessOptions::default()).await;
+    let request =
+        batch_match_body_with_values(["batch-item-errors", "missing-person", "ambiguous-person"]);
+
+    let response = batch_match_request(&harness.server).json(&request).await;
+    let attempts = fs::read_to_string(&harness.attempt_log).expect("attempt log is written");
+    assert!(
+        attempts.contains("batch-item-errors"),
+        "worker request must include the batch marker; attempts: {attempts}"
+    );
+
+    response.assert_status_ok();
+    let body: Value = response.json();
+    assert_eq!(
+        body,
+        json!({
+            "items": [
+                { "id": "0", "error": { "code": "target_auth" } },
+                {
+                    "id": "1",
+                    "error": {
+                        "code": "target_rate_limit",
+                        "retry_after_seconds": 7
+                    }
+                },
+                { "id": "2", "error": { "code": "source_unavailable" } }
+            ]
+        })
+    );
+    assert!(!response.text().contains("batch-item-errors"));
 }
 
 #[tokio::test]
@@ -430,6 +745,8 @@ async fn health_ready_and_metrics_are_available_without_secret_disclosure() {
 
     let lookup = authorized_lookup(&harness.server, "person-123").await;
     lookup.assert_status_ok();
+    let batch = authorized_batch_match(&harness.server).await;
+    batch.assert_status_ok();
 
     let health = harness.server.get("/healthz").await;
     health.assert_status_ok();
@@ -441,8 +758,13 @@ async fn health_ready_and_metrics_are_available_without_secret_disclosure() {
 
     assert!(metrics_body.contains("registry_notary_openfn_sidecar_workers"));
     assert!(metrics_body.contains("source_id=\"openfn_crvs\",outcome=\"success\""));
+    assert!(metrics_body.contains("source_id=\"openfn_crvs\",outcome=\"batch_success\""));
     assert!(!metrics_body.contains("fixture-token"));
     assert!(!metrics_body.contains("opencrvs.example.test"));
+    assert!(!metrics_body.contains("person-123"));
+    assert!(!metrics_body.contains("missing-person"));
+    assert!(!metrics_body.contains("ambiguous-person"));
+    assert!(!metrics_body.contains("contract-correlation"));
     assert!(!metrics_body.contains(TOKEN));
 }
 
@@ -453,6 +775,7 @@ async fn liveness_does_not_fail_a_new_request_after_idle_time() {
         worker_timeout_ms: 1_000,
         max_output_bytes: 4096,
         liveness_window_ms: 10,
+        ..HarnessOptions::default()
     })
     .await;
 
