@@ -4986,6 +4986,108 @@ async fn preauth_callback_mints_pre_authorized_offer_with_tx_code() {
     idp.stop().await;
 }
 
+/// eSignet signs ID Tokens with a JOSE header that omits the optional `typ`
+/// member (observed live: `{"alg":"PS256","kid":...}`). The pre-auth callback
+/// must accept such an id_token and mint the offer. Regression guard for the
+/// Wave 5 hosted blocker where a typ-less id_token was rejected as
+/// `invalid_token` before the nonce/userinfo checks ran.
+#[tokio::test]
+async fn preauth_callback_accepts_esignet_id_token_without_typ_header() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(self_attestation_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let start = server
+        .get("/oid4vci/offer/start?credential_configuration_id=person_is_alive_sd_jwt")
+        .await;
+    start.assert_status(StatusCode::SEE_OTHER);
+    let location = start
+        .headers()
+        .get("location")
+        .expect("offer start redirects")
+        .to_str()
+        .expect("location is valid")
+        .to_string();
+    let state = query_param(&location, "state").expect("redirect carries state");
+    let nonce = query_param(&location, "nonce").expect("redirect carries nonce");
+
+    // Mint the eSignet id_token WITHOUT a `typ` header, as eSignet does.
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let id_token = idp.mint_token_without_typ(json!({
+        "sub": "esignet-citizen-subject",
+        "aud": ESIGNET_RP_CLIENT_ID,
+        "nonce": nonce,
+        "national_id": "person-1",
+        "scope": "openid self_attestation",
+        "acr": "urn:example:loa:substantial",
+        "auth_time": now,
+        "iat": now,
+        "exp": now + 300,
+        "nbf": now,
+    }));
+    // The test id_token must genuinely omit `typ` for this to exercise the fix.
+    let header_b64 = id_token
+        .split('.')
+        .next()
+        .expect("jwt has a header segment");
+    let header: Value = serde_json::from_slice(
+        &URL_SAFE_NO_PAD
+            .decode(header_b64)
+            .expect("header is base64url"),
+    )
+    .expect("header is JSON");
+    assert!(
+        header.get("typ").is_none(),
+        "test id_token must omit the typ header"
+    );
+
+    token_upstream
+        .expect("POST", "/token")
+        .respond_json(
+            200,
+            json!({
+                "access_token": "esignet-access-token",
+                "token_type": "Bearer",
+                "id_token": id_token,
+                "expires_in": 300,
+            }),
+        )
+        .await;
+
+    let callback = server
+        .get(&format!(
+            "/oid4vci/offer/callback?code=esignet-code-123&state={state}"
+        ))
+        .await;
+    callback.assert_status_ok();
+    let html = callback.text();
+    let offer_uri = extract_between(&html, "href=\"", "\"").expect("offer href present");
+    let offer_json =
+        query_param(&offer_uri, "credential_offer").expect("offer carries credential_offer");
+    let offer: Value = serde_json::from_str(&offer_json).expect("offer is JSON");
+    let code = offer["grants"]["urn:ietf:params:oauth:grant-type:pre-authorized_code"]
+        ["pre-authorized_code"]
+        .as_str()
+        .expect("offer carries pre-authorized_code");
+    assert!(
+        !code.is_empty(),
+        "a typ-less eSignet id_token still mints a pre-authorized_code"
+    );
+    idp.stop().await;
+}
+
 /// When the eSignet RP client signing key is RS256, the `private_key_jwt`
 /// client assertion the Notary sends to the eSignet token endpoint must carry
 /// header `alg: RS256` and verify against the RP RSA public key. This proves the
