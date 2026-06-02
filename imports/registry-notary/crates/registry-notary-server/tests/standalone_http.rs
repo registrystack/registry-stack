@@ -4426,3 +4426,966 @@ fn audit_hash_secret_env_is_required_for_runtime_config() {
         StandaloneServerError::MissingAuditHashSecretEnv
     ));
 }
+
+// ---------------------------------------------------------------------------
+// Pre-authorized-code flow (PR3): offer/start, offer/callback, token endpoint,
+// the second trust anchor, abuse controls, and audit redaction.
+// ---------------------------------------------------------------------------
+
+// Dedicated access-token signing key, distinct from the credential key
+// (TEST_ISSUER_JWK). Config validation rejects reusing a credential key.
+const TEST_ACCESS_TOKEN_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"8jFBgUJxaaQimd4NjzxhvPYyNbcOnnZsqOntZbpP3Xk","x":"XvW-aWwJCWSYoYudTB9OZqNHURKElnnyGNa6DQNjzZk","alg":"EdDSA"}"#;
+// eSignet RP client signing key (signs the private_key_jwt client assertion).
+const TEST_ESIGNET_RP_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"EOLPz23yGd5Ju5e-PYybLE-YyvjgXLhGzS6XgmszzXs","x":"3v5jZ5rAf7KGvcC3zuKh6-ujgtA0ABa4jqmAWXq-S_c","alg":"EdDSA"}"#;
+
+const NOTARY_ISSUER: &str = "http://127.0.0.1:4325";
+const NOTARY_AUDIENCE: &str = "registry-notary-citizen";
+const ESIGNET_RP_CLIENT_ID: &str = "registry-lab-live-client";
+
+fn set_preauth_env() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_ACCESS_TOKEN_JWK", TEST_ACCESS_TOKEN_JWK);
+    std::env::set_var("TEST_ESIGNET_RP_JWK", TEST_ESIGNET_RP_JWK);
+}
+
+fn local_jwk_signing_key(private_jwk_env: &str, kid: &str) -> SigningKeyConfig {
+    SigningKeyConfig {
+        provider: SigningKeyProviderConfig::LocalJwkEnv,
+        alg: SD_JWT_VC_SIGNING_ALG.to_string(),
+        kid: kid.to_string(),
+        status: SigningKeyStatus::Active,
+        private_jwk_env: private_jwk_env.to_string(),
+        public_jwk_env: String::new(),
+        module_path: String::new(),
+        token_label: String::new(),
+        pin_env: String::new(),
+        key_label: String::new(),
+        key_id_hex: String::new(),
+        path: String::new(),
+        password_env: String::new(),
+    }
+}
+
+/// A pre-auth-enabled config. eSignet `issuer`/`jwks_uri` point at the MockIdp;
+/// the token endpoint points at `token_url` (a wiremock upstream). The
+/// access-token signing key is dedicated (distinct from the credential key).
+fn self_attestation_preauth_config(
+    base_url: &str,
+    audit_path: &str,
+    esignet_issuer: &str,
+    esignet_jwks_uri: &str,
+    esignet_authorize_url: &str,
+    esignet_token_url: &str,
+) -> StandaloneRegistryNotaryConfig {
+    // Reuse the eSignet issuer/jwks as the primary OIDC auth issuer so the
+    // credential endpoint still accepts eSignet tokens on the unchanged path.
+    let mut config =
+        self_attestation_oid4vci_config(base_url, audit_path, esignet_issuer, esignet_jwks_uri);
+    // The credential endpoint must be allowed to issue credentials for the
+    // pre-auth happy path.
+    config.self_attestation.allowed_operations.issue_credential = true;
+    // The person-is-alive claim must support the SD-JWT VC format for OID4VCI
+    // issuance (the base config only lists the claim-result format).
+    for claim in config.evidence.claims.iter_mut() {
+        if claim.id == "person-is-alive" {
+            claim
+                .formats
+                .push(registry_notary_core::FORMAT_SD_JWT_VC.to_string());
+        }
+    }
+    config
+        .self_attestation
+        .rate_limits
+        .tx_code_attempts_per_code_per_minute = 3;
+    config
+        .self_attestation
+        .rate_limits
+        .invalid_token_per_client_address_per_minute = 50;
+    // The Notary RP client id must be an accepted citizen client + audience so a
+    // Notary-minted token classifies as self-attestation.
+    config
+        .self_attestation
+        .citizen_clients
+        .allowed_client_ids
+        .push(ESIGNET_RP_CLIENT_ID.to_string());
+    config
+        .oid4vci
+        .accepted_token_audiences
+        .push(NOTARY_AUDIENCE.to_string());
+    if let Some(oidc) = config.auth.oidc.as_mut() {
+        oidc.allowed_clients.push(ESIGNET_RP_CLIENT_ID.to_string());
+    }
+
+    // Dedicated access-token signing key.
+    config.evidence.signing_keys.insert(
+        "access-token-key".to_string(),
+        local_jwk_signing_key(
+            "TEST_ACCESS_TOKEN_JWK",
+            "did:web:issuer.example#access-token-key",
+        ),
+    );
+    // eSignet RP client signing key.
+    config.evidence.signing_keys.insert(
+        "esignet-rp-key".to_string(),
+        local_jwk_signing_key("TEST_ESIGNET_RP_JWK", "did:web:rp.example#esignet-rp-key"),
+    );
+
+    config.auth.access_token_signing = serde_norway::from_str(&format!(
+        r#"
+enabled: true
+issuer: {NOTARY_ISSUER}
+audiences:
+  - {NOTARY_AUDIENCE}
+allowed_algorithms:
+  - EdDSA
+token_typ: registry-notary-access+jwt
+signing_key_id: access-token-key
+access_token_ttl_seconds: 300
+"#
+    ))
+    .expect("access-token signing config parses");
+
+    config.oid4vci.pre_authorized_code = serde_norway::from_str(&format!(
+        r#"
+enabled: true
+tx_code:
+  required: true
+  input_mode: numeric
+  length: 6
+esignet:
+  client_id: {ESIGNET_RP_CLIENT_ID}
+  client_signing_key_id: esignet-rp-key
+  redirect_uri: http://127.0.0.1:4325/oid4vci/offer/callback
+  authorize_url: {esignet_authorize_url}
+  token_url: {esignet_token_url}
+  issuer: {esignet_issuer}
+  jwks_uri: {esignet_jwks_uri}
+  scopes:
+    - openid
+  login_state_ttl_seconds: 300
+  allow_insecure_localhost: true
+pre_authorized_code_ttl_seconds: 300
+"#
+    ))
+    .expect("pre-auth config parses");
+    config
+}
+
+/// Extract a query parameter from a URL.
+fn query_param(url: &str, name: &str) -> Option<String> {
+    let query = url.split_once('?')?.1;
+    for pair in query.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if key == name {
+            return Some(percent_decode(value));
+        }
+    }
+    None
+}
+
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                out.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < bytes.len() => {
+                let hex = &value[index + 1..index + 3];
+                if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                    out.push(byte);
+                    index += 3;
+                } else {
+                    out.push(bytes[index]);
+                    index += 1;
+                }
+            }
+            other => {
+                out.push(other);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(out).unwrap_or_default()
+}
+
+/// Mint an eSignet id_token bound to the login nonce, with the civil-id claim.
+fn esignet_id_token(idp: &MockIdp, nonce: &str, national_id: &str) -> String {
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    idp.mint_token(json!({
+        "sub": "esignet-citizen-subject",
+        "aud": ESIGNET_RP_CLIENT_ID,
+        "nonce": nonce,
+        "national_id": national_id,
+        "scope": "openid self_attestation",
+        "acr": "urn:example:loa:substantial",
+        "auth_time": now,
+        "iat": now,
+        "exp": now + 300,
+        "nbf": now,
+    }))
+}
+
+/// Drive offer/start + offer/callback, returning (pre_authorized_code, tx_code).
+async fn drive_offer_to_code(
+    server: &TestServer,
+    token_upstream: &MockHttpUpstream,
+    idp: &MockIdp,
+    national_id: &str,
+) -> (String, String) {
+    let start = server
+        .get("/oid4vci/offer/start?credential_configuration_id=person_is_alive_sd_jwt")
+        .await;
+    start.assert_status(StatusCode::SEE_OTHER);
+    let location = start
+        .headers()
+        .get("location")
+        .expect("offer start redirects")
+        .to_str()
+        .expect("location is valid")
+        .to_string();
+    let state = query_param(&location, "state").expect("redirect carries state");
+    let nonce = query_param(&location, "nonce").expect("redirect carries nonce");
+
+    let id_token = esignet_id_token(idp, &nonce, national_id);
+    token_upstream
+        .expect("POST", "/token")
+        .respond_json(
+            200,
+            json!({
+                "access_token": "esignet-access-token",
+                "token_type": "Bearer",
+                "id_token": id_token,
+                "expires_in": 300,
+            }),
+        )
+        .await;
+
+    let callback = server
+        .get(&format!(
+            "/oid4vci/offer/callback?code=esignet-code-123&state={state}"
+        ))
+        .await;
+    callback.assert_status_ok();
+    let html = callback.text();
+    let offer_uri = extract_between(&html, "href=\"", "\"").expect("offer href present");
+    let offer_json =
+        query_param(&offer_uri, "credential_offer").expect("offer carries credential_offer");
+    let offer: Value = serde_json::from_str(&offer_json).expect("offer is JSON");
+    let code = offer["grants"]["urn:ietf:params:oauth:grant-type:pre-authorized_code"]
+        ["pre-authorized_code"]
+        .as_str()
+        .expect("offer carries pre-authorized_code")
+        .to_string();
+    let pin = extract_between(&html, "id=\"tx-code\">", "<").expect("offer page shows PIN");
+    (code, pin)
+}
+
+fn extract_between(haystack: &str, start: &str, end: &str) -> Option<String> {
+    let after = haystack.split_once(start)?.1;
+    let value = after.split_once(end)?.0;
+    Some(value.to_string())
+}
+
+async fn redeem_token(server: &TestServer, code: &str, pin: &str) -> axum_test::TestResponse {
+    server
+        .post("/oid4vci/token")
+        .add_header("content-type", "application/x-www-form-urlencoded")
+        .text(format!(
+            "grant_type=urn:ietf:params:oauth:grant-type:pre-authorized_code&pre-authorized_code={}&tx_code={}",
+            urlencode(code),
+            urlencode(pin),
+        ))
+        .await
+}
+
+fn urlencode(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char)
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
+
+#[tokio::test]
+async fn preauth_offer_start_redirects_to_esignet_and_mints_nothing() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(self_attestation_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let start = server
+        .get("/oid4vci/offer/start?credential_configuration_id=person_is_alive_sd_jwt")
+        .await;
+    start.assert_status(StatusCode::SEE_OTHER);
+    let location = start
+        .headers()
+        .get("location")
+        .expect("redirect location")
+        .to_str()
+        .expect("location is valid")
+        .to_string();
+    assert!(location.starts_with(&format!("{}/authorize", idp.issuer())));
+    assert_eq!(
+        query_param(&location, "response_type").as_deref(),
+        Some("code")
+    );
+    assert_eq!(
+        query_param(&location, "client_id").as_deref(),
+        Some(ESIGNET_RP_CLIENT_ID)
+    );
+    assert_eq!(
+        query_param(&location, "code_challenge_method").as_deref(),
+        Some("S256")
+    );
+    assert!(query_param(&location, "state").is_some());
+    assert!(query_param(&location, "nonce").is_some());
+    // No code or PIN is in the redirect; nothing is minted.
+    assert!(!location.contains("pre-authorized_code"));
+
+    // The audit log carries no minted material from a start.
+    let audit = std::fs::read_to_string(&audit_path).unwrap_or_default();
+    assert!(!audit.contains("pre-authorized_code"));
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn preauth_offer_start_rejects_unknown_configuration_id() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(self_attestation_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let start = server
+        .get("/oid4vci/offer/start?credential_configuration_id=unknown_config")
+        .await;
+    start.assert_status(StatusCode::BAD_REQUEST);
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn preauth_callback_mints_pre_authorized_offer_with_tx_code() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(self_attestation_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let (code, pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
+    assert!(!code.is_empty(), "callback mints a pre-authorized_code");
+    assert_eq!(pin.len(), 6, "tx_code is a 6-digit PIN");
+    assert!(pin.chars().all(|c| c.is_ascii_digit()));
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn preauth_token_endpoint_issues_access_token_and_c_nonce() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(self_attestation_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let (code, pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
+    let token = redeem_token(&server, &code, &pin).await;
+    token.assert_status_ok();
+    let body: Value = token.json();
+    assert!(body["access_token"].is_string());
+    assert_eq!(body["token_type"], json!("Bearer"));
+    assert!(body["c_nonce"].is_string());
+    assert_eq!(body["expires_in"], json!(300));
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn preauth_code_is_single_use() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(self_attestation_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let (code, pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
+    redeem_token(&server, &code, &pin).await.assert_status_ok();
+    let second = redeem_token(&server, &code, &pin).await;
+    second.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = second.json();
+    assert_eq!(body["error"], json!("invalid_grant"));
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn preauth_token_rejects_wrong_and_missing_tx_code() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(self_attestation_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let (code, _pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
+
+    let wrong_pin = redeem_token(&server, &code, "000000").await;
+    wrong_pin.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        wrong_pin.json::<Value>()["error"],
+        json!("invalid_grant"),
+        "a wrong tx_code is rejected"
+    );
+
+    let missing_pin = server
+        .post("/oid4vci/token")
+        .add_header("content-type", "application/x-www-form-urlencoded")
+        .text(format!(
+            "grant_type=urn:ietf:params:oauth:grant-type:pre-authorized_code&pre-authorized_code={}",
+            urlencode(&code)
+        ))
+        .await;
+    missing_pin.assert_status(StatusCode::BAD_REQUEST);
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn preauth_repeated_wrong_pins_lock_the_code() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    );
+    config
+        .self_attestation
+        .rate_limits
+        .tx_code_attempts_per_code_per_minute = 2;
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let (code, pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
+
+    // Two wrong attempts are within the cap; the third trips the limiter and the
+    // code is locked, so even the correct PIN now fails.
+    redeem_token(&server, &code, "111111")
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    redeem_token(&server, &code, "222222")
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    let locked = redeem_token(&server, &code, &pin).await;
+    locked.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    let body: Value = locked.json();
+    assert_eq!(body["error"], json!("slow_down"));
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn preauth_token_rejects_wrong_and_missing_grant_cleanly() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(self_attestation_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let other_grant = server
+        .post("/oid4vci/token")
+        .add_header("content-type", "application/x-www-form-urlencoded")
+        .text("grant_type=authorization_code&code=abc")
+        .await;
+    other_grant.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        other_grant.json::<Value>()["error"],
+        json!("unsupported_grant_type")
+    );
+
+    let missing_grant = server
+        .post("/oid4vci/token")
+        .add_header("content-type", "application/x-www-form-urlencoded")
+        .text("foo=bar")
+        .await;
+    missing_grant.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        missing_grant.json::<Value>()["error"],
+        json!("invalid_request")
+    );
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn preauth_random_code_flood_is_throttled_per_client_address() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    );
+    config
+        .self_attestation
+        .rate_limits
+        .invalid_token_per_client_address_per_minute = 2;
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    // Random codes from one client address: the per-address limiter trips.
+    let flood = |code: &str| {
+        server
+            .post("/oid4vci/token")
+            .add_header("content-type", "application/x-www-form-urlencoded")
+            .add_header("x-forwarded-for", "203.0.113.50")
+            .text(format!(
+                "grant_type=urn:ietf:params:oauth:grant-type:pre-authorized_code&pre-authorized_code={code}&tx_code=000000"
+            ))
+    };
+    flood("random-a")
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    flood("random-b")
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    let throttled = flood("random-c").await;
+    throttled.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn preauth_disabled_returns_404_and_offer_is_authorization_code() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    // Default config: pre-auth disabled.
+    let app = standalone_router(self_attestation_oid4vci_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    server
+        .get("/oid4vci/offer/start?credential_configuration_id=person_is_alive_sd_jwt")
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    server
+        .get("/oid4vci/offer/callback?code=x&state=y")
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    server
+        .post("/oid4vci/token")
+        .add_header("content-type", "application/x-www-form-urlencoded")
+        .text("grant_type=urn:ietf:params:oauth:grant-type:pre-authorized_code&pre-authorized_code=x&tx_code=1")
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    // Offers fall back to authorization_code.
+    let offer = server.get("/oid4vci/credential-offer").await;
+    offer.assert_status_ok();
+    let body: Value = offer.json();
+    assert!(body["grants"]["authorization_code"].is_object());
+    assert!(body["grants"]
+        .get("urn:ietf:params:oauth:grant-type:pre-authorized_code")
+        .is_none());
+    idp.stop().await;
+}
+
+/// Manually mint a Notary access token (header.payload.signature) so trust-anchor
+/// tests can sign with the access-token key, the credential key, or a wrong key.
+fn mint_notary_access_token(
+    private_jwk: &str,
+    kid: &str,
+    typ: &str,
+    issuer: &str,
+    national_id: &str,
+) -> String {
+    let key = PrivateJwk::parse(private_jwk).expect("test JWK parses");
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let header = json!({ "alg": "EdDSA", "typ": typ, "kid": kid });
+    let payload = json!({
+        "iss": issuer,
+        "aud": NOTARY_AUDIENCE,
+        "sub": "esignet-citizen-subject",
+        "client_id": ESIGNET_RP_CLIENT_ID,
+        "scope": "self_attestation",
+        "national_id": national_id,
+        "token_type": "Bearer",
+        "credential_configuration_id": "person_is_alive_sd_jwt",
+        "iat": now,
+        "nbf": now,
+        "exp": now + 300,
+    });
+    let header_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).expect("header"));
+    let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).expect("payload"));
+    let signing_input = format!("{header_b64}.{payload_b64}");
+    let signature = sign(signing_input.as_bytes(), &key).expect("token signs");
+    format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
+}
+
+fn preauth_test_config(
+    base_url: &str,
+    audit_path: &str,
+    idp: &MockIdp,
+    token_upstream: &MockHttpUpstream,
+) -> StandaloneRegistryNotaryConfig {
+    self_attestation_preauth_config(
+        base_url,
+        audit_path,
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    )
+}
+
+#[tokio::test]
+async fn preauth_trust_anchor_rejects_wrong_key_and_credential_key_notary_tokens() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(preauth_test_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp,
+        &token_upstream,
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    // Use a protected route without a proof precheck (the credential endpoint
+    // validates the proof before auth), so the trust-anchor verification alone
+    // decides the outcome.
+    // A Notary-issuer token signed by the WRONG key (the holder key) is rejected.
+    let wrong_key_token = mint_notary_access_token(
+        TEST_HOLDER_JWK,
+        "did:web:issuer.example#access-token-key",
+        "registry-notary-access+jwt",
+        NOTARY_ISSUER,
+        "person-1",
+    );
+    server
+        .get("/.well-known/evidence/jwks.json")
+        .add_header("authorization", format!("Bearer {wrong_key_token}"))
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    // A Notary-issuer token signed by the CREDENTIAL key is rejected (the second
+    // anchor verifies only against the dedicated access-token key).
+    let credential_key_token = mint_notary_access_token(
+        TEST_ISSUER_JWK,
+        "did:web:issuer.example#access-token-key",
+        "registry-notary-access+jwt",
+        NOTARY_ISSUER,
+        "person-1",
+    );
+    server
+        .get("/.well-known/evidence/jwks.json")
+        .add_header("authorization", format!("Bearer {credential_key_token}"))
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn preauth_trust_anchor_isolates_esignet_and_notary_paths() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(preauth_test_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp,
+        &token_upstream,
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    // A token claiming the Notary issuer but actually an eSignet-minted token
+    // fails: the Notary anchor verifies it against the access-token key only.
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let esignet_token_claiming_notary_iss = idp.mint_token(json!({
+        "iss": NOTARY_ISSUER,
+        "sub": "esignet-citizen-subject",
+        "aud": NOTARY_AUDIENCE,
+        "azp": ESIGNET_RP_CLIENT_ID,
+        "scope": "self_attestation",
+        "national_id": "person-1",
+        "iat": now,
+        "exp": now + 300,
+        "nbf": now,
+    }));
+    server
+        .get("/.well-known/evidence/jwks.json")
+        .add_header(
+            "authorization",
+            format!("Bearer {esignet_token_claiming_notary_iss}"),
+        )
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn preauth_existing_esignet_token_still_authenticates_credential_endpoint() {
+    // The unchanged eSignet single-issuer path still accepts an eSignet token.
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route(
+            "/v1/datasets/people/entities/person/records",
+            get(self_attestation_registry_data_api),
+        ));
+    let base_url = upstream
+        .server_address()
+        .expect("upstream address")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(preauth_test_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp,
+        &token_upstream,
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    // An eSignet-issued token (issuer == eSignet) on the unchanged path.
+    let esignet_token = idp.mint_token(json!({
+        "sub": "citizen-subject",
+        "aud": NOTARY_AUDIENCE,
+        "azp": "citizen-portal",
+        "scope": "self_attestation",
+        "national_id": "person-1",
+        "auth_time": now,
+        "iat": now,
+        "exp": now + 300,
+        "nbf": now,
+    }));
+    // It passes the protected JWKS route (auth succeeds) on the eSignet path.
+    let jwks = server
+        .get("/.well-known/evidence/jwks.json")
+        .add_header("authorization", format!("Bearer {esignet_token}"))
+        .await;
+    jwks.assert_status_ok();
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn preauth_end_to_end_issues_sd_jwt_vc_bound_to_holder() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route(
+            "/v1/datasets/people/entities/person/records",
+            get(self_attestation_registry_data_api),
+        ));
+    let base_url = upstream
+        .server_address()
+        .expect("upstream address")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(preauth_test_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp,
+        &token_upstream,
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let (code, pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
+    let token = redeem_token(&server, &code, &pin).await;
+    token.assert_status_ok();
+    let token_body: Value = token.json();
+    let access_token = token_body["access_token"]
+        .as_str()
+        .expect("access token issued")
+        .to_string();
+    let c_nonce = token_body["c_nonce"]
+        .as_str()
+        .expect("c_nonce issued")
+        .to_string();
+
+    // The Notary-minted token is accepted at the credential endpoint and issues
+    // an SD-JWT VC bound to the holder's did:jwk proof.
+    let proof = sign_oid4vci_proof(NOTARY_ISSUER, &c_nonce);
+    let credential = server
+        .post("/oid4vci/credential")
+        .add_header("authorization", format!("Bearer {access_token}"))
+        .json(&json!({
+            "format": "dc+sd-jwt",
+            "credential_configuration_id": "person_is_alive_sd_jwt",
+            "proof": { "proof_type": "jwt", "jwt": proof }
+        }))
+        .await;
+    credential.assert_status_ok();
+    let credential_body: Value = credential.json();
+    let sd_jwt = credential_body["credential"]
+        .as_str()
+        .expect("credential issued");
+    assert!(sd_jwt.contains('~'), "an SD-JWT VC carries disclosures");
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn preauth_callback_and_token_audit_events_carry_only_hashes() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(preauth_test_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp,
+        &token_upstream,
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let (code, pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
+    redeem_token(&server, &code, &pin).await.assert_status_ok();
+
+    let audit = std::fs::read_to_string(&audit_path).expect("audit written");
+    // The raw code, PIN, civil id, and eSignet code never appear in the audit.
+    assert!(
+        !audit.contains(&code),
+        "raw pre-authorized_code must not be logged"
+    );
+    assert!(!audit.contains(&pin), "raw tx_code must not be logged");
+    assert!(!audit.contains("person-1"), "civil id must not be logged");
+    assert!(
+        !audit.contains("esignet-code-123"),
+        "eSignet code must not be logged"
+    );
+
+    // The callback and token audit events are present, hashed-only.
+    let records = audit_envelopes(&audit_path)
+        .into_iter()
+        .map(|envelope| envelope.record)
+        .collect::<Vec<_>>();
+    let callback = records
+        .iter()
+        .find(|record| {
+            record["path"] == json!("/oid4vci/offer/callback")
+                && record["decision"] == json!("preauth_offer_minted")
+        })
+        .expect("callback audit event exists");
+    assert_eq!(callback["status"], json!(200));
+    assert_eq!(
+        callback["credential_configuration_id"],
+        json!("person_is_alive_sd_jwt")
+    );
+    let token_event = records
+        .iter()
+        .find(|record| {
+            record["path"] == json!("/oid4vci/token")
+                && record["decision"] == json!("preauth_token_issued")
+        })
+        .expect("token audit event exists");
+    assert_eq!(token_event["status"], json!(200));
+    idp.stop().await;
+}

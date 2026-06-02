@@ -1360,9 +1360,23 @@ pub struct Oid4vciEsignetRpConfig {
     /// eSignet token endpoint.
     #[serde(default)]
     pub token_url: String,
+    /// eSignet OIDC issuer, pinned when validating the returned `id_token`.
+    #[serde(default)]
+    pub issuer: String,
+    /// eSignet JWKS URI, used to resolve the `id_token` signing key by `kid`.
+    #[serde(default)]
+    pub jwks_uri: String,
     /// OAuth scopes requested at eSignet.
     #[serde(default)]
     pub scopes: Vec<String>,
+    /// Lifetime of the short-lived login state (PKCE verifier + nonce +
+    /// selection) reserved between `offer/start` and `offer/callback`.
+    #[serde(default = "default_login_state_ttl_seconds")]
+    pub login_state_ttl_seconds: u64,
+    /// Allow `http` loopback URLs for the eSignet endpoints and JWKS transport.
+    /// For local development and tests only.
+    #[serde(default)]
+    pub allow_insecure_localhost: bool,
 }
 
 impl Oid4vciEsignetRpConfig {
@@ -1384,9 +1398,20 @@ impl Oid4vciEsignetRpConfig {
             &self.authorize_url,
         )?;
         validate_oid4vci_public_url("pre_authorized_code.esignet.token_url", &self.token_url)?;
+        validate_oid4vci_public_url("pre_authorized_code.esignet.issuer", &self.issuer)?;
+        validate_oid4vci_public_url("pre_authorized_code.esignet.jwks_uri", &self.jwks_uri)?;
         validate_oid4vci_non_empty_entries("pre_authorized_code.esignet.scopes", &self.scopes)?;
+        if self.login_state_ttl_seconds == 0 || self.login_state_ttl_seconds > 600 {
+            return invalid_oid4vci(
+                "pre_authorized_code.esignet.login_state_ttl_seconds must be between 1 and 600",
+            );
+        }
         Ok(())
     }
+}
+
+const fn default_login_state_ttl_seconds() -> u64 {
+    300
 }
 
 const TX_CODE_INPUT_MODE_NUMERIC: &str = "numeric";
@@ -6903,6 +6928,8 @@ esignet:
   redirect_uri: http://127.0.0.1:4325/oid4vci/offer/callback
   authorize_url: https://id.example.gov/authorize
   token_url: https://id.example.gov/oauth/v2/token
+  issuer: https://id.example.gov
+  jwks_uri: https://id.example.gov/oauth/.well-known/jwks.json
   scopes:
     - openid
 pre_authorized_code_ttl_seconds: 300

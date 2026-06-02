@@ -18,6 +18,8 @@ use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use jsonwebtoken::Algorithm;
 use registry_notary_core::sd_jwt::EvidenceIssuer;
 use registry_notary_core::{
@@ -48,6 +50,7 @@ use registry_platform_oidc::{
     TokenVerifier, TokenVerifierConfig, VerifiedToken,
 };
 use serde_json::{json, Map, Value};
+use subtle::ConstantTimeEq;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use ulid::Ulid;
@@ -142,21 +145,27 @@ pub fn standalone_router(
     cors_policy.validate()?;
     let wallet_cors_policy = SelfAttestationWalletCorsPolicy::from_config(&config);
     let auth_state = Arc::new(AuthAuditState::from_config(&config, Arc::clone(&metrics))?);
-    let api_state = Arc::new(RegistryNotaryApiState::new_with_federation(
-        evidence,
-        self_attestation,
-        oid4vci,
-        federation,
-        auth_state.audit.profile.key_hasher(),
-        config.federation.enabled.then(|| auth_state.audit.clone()),
-        replay,
-        credential_status,
-        Arc::clone(&metrics),
-        source,
-        store,
-        issuers,
-        federation_signing_provider,
-    )?);
+    let preauth_runtime =
+        PreAuthRuntime::from_config(&config, &signing_keys, auth_state.audit.clone())?
+            .map(Arc::new);
+    let api_state = Arc::new(
+        RegistryNotaryApiState::new_with_federation(
+            evidence,
+            self_attestation,
+            oid4vci,
+            federation,
+            auth_state.audit.profile.key_hasher(),
+            config.federation.enabled.then(|| auth_state.audit.clone()),
+            replay,
+            credential_status,
+            Arc::clone(&metrics),
+            source,
+            store,
+            issuers,
+            federation_signing_provider,
+        )?
+        .with_preauth_runtime(preauth_runtime),
+    );
     let mut routes = router();
     if config.federation.enabled {
         routes = routes.merge(crate::api::federation_router());
@@ -1130,6 +1139,15 @@ impl SigningKeyRegistry {
     fn signing_provider(&self, key_id: &str) -> Option<Arc<dyn SigningProvider>> {
         self.providers.get(key_id).cloned()
     }
+
+    /// The public JWK for an active signing key, resolved by its config
+    /// `key_id`. Used to seed the in-process Notary token verifier without an
+    /// HTTP JWKS round-trip.
+    fn public_jwk_for_key_id(&self, key_id: &str) -> Option<PublicJwk> {
+        self.providers
+            .get(key_id)
+            .map(|provider| provider.public_jwk())
+    }
 }
 
 fn build_local_jwk_signer(
@@ -1202,6 +1220,575 @@ fn invalid_signing_key(key: &str, reason: &str) -> StandaloneServerError {
     StandaloneServerError::InvalidSigningKey {
         key: key.to_string(),
         reason: reason.to_string(),
+    }
+}
+
+/// The eSignet-verified subject extracted at the offer callback.
+///
+/// `subject_binding_value` (the civil ID) is load-bearing; `Debug` redacts the
+/// civil ID and the eSignet subject so they never reach logs.
+pub(crate) struct EsignetSubject {
+    pub(crate) subject: String,
+    pub(crate) subject_binding_value: String,
+    pub(crate) client_id: String,
+    pub(crate) scopes: Vec<String>,
+    pub(crate) acr: Option<String>,
+    pub(crate) auth_time: Option<i64>,
+}
+
+impl std::fmt::Debug for EsignetSubject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EsignetSubject")
+            .field("subject", &"[redacted]")
+            .field("subject_binding_value", &"[redacted]")
+            .field("client_id", &self.client_id)
+            .field("scopes", &self.scopes)
+            .field("acr", &self.acr)
+            .field("auth_time", &self.auth_time)
+            .finish()
+    }
+}
+
+/// Runtime for the pre-authorized-code flow: the dedicated access-token signer
+/// (never the credential key), the eSignet RP credentials and verifier for the
+/// citizen login leg, and the short-lived login-state store.
+///
+/// Built only when both `oid4vci.pre_authorized_code.enabled` and
+/// `auth.access_token_signing.enabled` are set; otherwise the flow's endpoints
+/// stay `404`.
+pub(crate) struct PreAuthRuntime {
+    /// Dedicated access-token signing key (mints the pre-authorized code and
+    /// the access token). Distinct from the SD-JWT VC credential key (enforced
+    /// by config validation).
+    access_token_signer: Arc<dyn SigningProvider>,
+    /// Public JWK of the access-token key, for the in-process second verifier.
+    access_token_public_jwk: PublicJwk,
+    /// Notary issuer stamped into and pinned for Notary-minted tokens.
+    notary_issuer: String,
+    /// Audiences stamped into Notary access tokens.
+    notary_audiences: Vec<String>,
+    /// Header `typ` for the Notary access token.
+    access_token_typ: String,
+    /// Pre-authorized code lifetime, seconds.
+    pre_authorized_code_ttl_seconds: u64,
+    /// Access-token lifetime, seconds.
+    access_token_ttl_seconds: u64,
+    /// `tx_code` length (numeric PIN).
+    tx_code_length: u64,
+    /// eSignet confidential client id presented by the Notary RP.
+    esignet_client_id: String,
+    /// eSignet RP signer for the `private_key_jwt` client assertion.
+    esignet_client_signer: Arc<dyn SigningProvider>,
+    esignet_authorize_url: String,
+    esignet_token_url: String,
+    esignet_redirect_uri: String,
+    esignet_scopes: Vec<String>,
+    /// eSignet `id_token` verifier (pins eSignet `iss`, `aud`=RP client_id,
+    /// signature via the eSignet JWKS, `exp`/`nbf`).
+    esignet_id_token_verifier: Arc<TokenVerifier>,
+    fetch_url_policy: FetchUrlPolicy,
+    login_state_ttl_seconds: u64,
+    login_states: crate::preauth_state::SingleUseStore<crate::preauth_state::LoginState>,
+    /// Per-code `tx_code` PIN sessions keyed by the pre-authorized code `jti`.
+    tx_code_sessions: crate::preauth_state::SingleUseStore<crate::preauth_state::TxCodeSession>,
+    /// Audit pipeline so the callback and token endpoints (public, so not
+    /// covered by the auth-audit middleware) can emit hashed audit events.
+    audit: AuditPipeline,
+}
+
+impl std::fmt::Debug for PreAuthRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreAuthRuntime")
+            .field("notary_issuer", &self.notary_issuer)
+            .field("notary_audiences", &self.notary_audiences)
+            .field("access_token_typ", &self.access_token_typ)
+            .field("esignet_client_id", &self.esignet_client_id)
+            .field("esignet_authorize_url", &self.esignet_authorize_url)
+            .field("esignet_token_url", &self.esignet_token_url)
+            .finish_non_exhaustive()
+    }
+}
+
+const ESIGNET_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const ESIGNET_MAX_RESPONSE_BYTES: u64 = 64 * 1024;
+const PRIVATE_KEY_JWT_CLIENT_ASSERTION_TYPE: &str =
+    "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
+
+impl PreAuthRuntime {
+    fn from_config(
+        config: &StandaloneRegistryNotaryConfig,
+        signing_keys: &SigningKeyRegistry,
+        audit: AuditPipeline,
+    ) -> Result<Option<Self>, StandaloneServerError> {
+        let pre_auth = &config.oid4vci.pre_authorized_code;
+        let signing = &config.auth.access_token_signing;
+        if !pre_auth.enabled {
+            return Ok(None);
+        }
+        if !signing.enabled {
+            return Err(StandaloneServerError::InvalidOidcConfig(
+                "oid4vci.pre_authorized_code.enabled requires auth.access_token_signing.enabled"
+                    .to_string(),
+            ));
+        }
+        let access_token_signer = signing_keys
+            .signing_provider(signing.signing_key_id.as_str())
+            .ok_or_else(|| {
+                invalid_signing_key(
+                    signing.signing_key_id.as_str(),
+                    "active access-token signing key was not built",
+                )
+            })?;
+        let access_token_public_jwk = access_token_signer.public_jwk();
+        let esignet = &pre_auth.esignet;
+        let esignet_client_signer = signing_keys
+            .signing_provider(esignet.client_signing_key_id.as_str())
+            .ok_or_else(|| {
+                invalid_signing_key(
+                    esignet.client_signing_key_id.as_str(),
+                    "active eSignet RP client signing key was not built",
+                )
+            })?;
+        let fetch_url_policy = if esignet.allow_insecure_localhost {
+            FetchUrlPolicy::dev()
+        } else {
+            FetchUrlPolicy::strict()
+        };
+        let id_token_fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
+            esignet.jwks_uri.clone(),
+            JwksFetcherConfig::defaults(),
+            fetch_url_policy.clone(),
+        ));
+        // The id_token's `aud` is the RP client_id; pin eSignet's issuer and the
+        // RP client_id as the only accepted audience.
+        let esignet_id_token_verifier = Arc::new(TokenVerifier::new(
+            TokenVerifierConfig::access_token_profile(
+                esignet.issuer.clone(),
+                vec![esignet.client_id.clone()],
+                vec![
+                    Algorithm::EdDSA,
+                    Algorithm::RS256,
+                    Algorithm::PS256,
+                    Algorithm::ES256,
+                ],
+                vec!["JWT".to_string()],
+            ),
+            id_token_fetcher,
+        ));
+        Ok(Some(Self {
+            access_token_signer,
+            access_token_public_jwk,
+            notary_issuer: signing.issuer.clone(),
+            notary_audiences: signing.audiences.clone(),
+            access_token_typ: signing.token_typ.clone(),
+            pre_authorized_code_ttl_seconds: pre_auth.pre_authorized_code_ttl_seconds,
+            access_token_ttl_seconds: signing.access_token_ttl_seconds,
+            tx_code_length: pre_auth.tx_code.length,
+            esignet_client_id: esignet.client_id.clone(),
+            esignet_client_signer,
+            esignet_authorize_url: esignet.authorize_url.clone(),
+            esignet_token_url: esignet.token_url.clone(),
+            esignet_redirect_uri: esignet.redirect_uri.clone(),
+            esignet_scopes: esignet.scopes.clone(),
+            esignet_id_token_verifier,
+            fetch_url_policy,
+            login_state_ttl_seconds: esignet.login_state_ttl_seconds,
+            login_states: crate::preauth_state::SingleUseStore::new(),
+            tx_code_sessions: crate::preauth_state::SingleUseStore::new(),
+            audit,
+        }))
+    }
+
+    /// Emit a hashed pre-auth audit event. Returns an error if emission fails so
+    /// callers fail closed rather than silently dropping the audit trail.
+    pub(crate) async fn emit_audit(&self, event: &EvidenceAuditEvent) -> Result<(), AuditError> {
+        self.audit.emit(event).await
+    }
+
+    pub(crate) fn access_token_signer(&self) -> &dyn SigningProvider {
+        self.access_token_signer.as_ref()
+    }
+
+    pub(crate) fn access_token_public_jwk(&self) -> &PublicJwk {
+        &self.access_token_public_jwk
+    }
+
+    pub(crate) fn notary_issuer(&self) -> &str {
+        &self.notary_issuer
+    }
+
+    pub(crate) fn notary_audiences(&self) -> &[String] {
+        &self.notary_audiences
+    }
+
+    pub(crate) fn access_token_typ(&self) -> &str {
+        &self.access_token_typ
+    }
+
+    pub(crate) fn pre_authorized_code_ttl_seconds(&self) -> u64 {
+        self.pre_authorized_code_ttl_seconds
+    }
+
+    pub(crate) fn access_token_ttl_seconds(&self) -> u64 {
+        self.access_token_ttl_seconds
+    }
+
+    pub(crate) fn tx_code_length(&self) -> u64 {
+        self.tx_code_length
+    }
+
+    pub(crate) fn login_state_ttl_seconds(&self) -> u64 {
+        self.login_state_ttl_seconds
+    }
+
+    pub(crate) fn login_states(
+        &self,
+    ) -> &crate::preauth_state::SingleUseStore<crate::preauth_state::LoginState> {
+        &self.login_states
+    }
+
+    pub(crate) fn tx_code_sessions(
+        &self,
+    ) -> &crate::preauth_state::SingleUseStore<crate::preauth_state::TxCodeSession> {
+        &self.tx_code_sessions
+    }
+
+    /// Build the eSignet authorization redirect URL for the citizen browser.
+    ///
+    /// PKCE S256, the confidential RP `client_id`, the configured redirect URI
+    /// and scopes, plus the caller-provided `state` and `nonce`.
+    pub(crate) fn authorize_redirect_url(
+        &self,
+        state: &str,
+        nonce: &str,
+        pkce_challenge: &str,
+    ) -> Result<String, EvidenceError> {
+        let scope = if self.esignet_scopes.is_empty() {
+            "openid".to_string()
+        } else {
+            self.esignet_scopes.join(" ")
+        };
+        let mut url = reqwest::Url::parse(&self.esignet_authorize_url)
+            .map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
+        url.query_pairs_mut()
+            .append_pair("response_type", "code")
+            .append_pair("client_id", &self.esignet_client_id)
+            .append_pair("redirect_uri", &self.esignet_redirect_uri)
+            .append_pair("scope", &scope)
+            .append_pair("state", state)
+            .append_pair("nonce", nonce)
+            .append_pair("code_challenge", pkce_challenge)
+            .append_pair("code_challenge_method", "S256");
+        Ok(url.to_string())
+    }
+
+    /// Exchange the eSignet authorization `code` for an `id_token` using
+    /// `private_key_jwt` client authentication, validate the `id_token`
+    /// (signature against the eSignet JWKS, `iss`, `aud`==RP client_id, `exp`,
+    /// `nonce`==`expected_nonce`), then extract the subject claims.
+    ///
+    /// Every failure maps to `EvidenceError::MissingCredential` so the callback
+    /// leaks no detail about why the login failed.
+    pub(crate) async fn exchange_code_for_subject(
+        &self,
+        code: &str,
+        pkce_verifier: &str,
+        expected_nonce: &str,
+        subject_binding_claim: &str,
+    ) -> Result<EsignetSubject, EvidenceError> {
+        let id_token = self
+            .esignet_token_exchange(code, pkce_verifier)
+            .await
+            .map_err(|_| EvidenceError::MissingCredential)?;
+        let verified = self
+            .esignet_id_token_verifier
+            .verify_related_token(&id_token)
+            .await
+            .map_err(|_| EvidenceError::MissingCredential)?;
+        // Bind the id_token to this login: the nonce must equal the one this
+        // Notary generated at offer/start. This is the CSRF/replay guard.
+        let nonce = verified
+            .claims
+            .extra
+            .get("nonce")
+            .and_then(Value::as_str)
+            .ok_or(EvidenceError::MissingCredential)?;
+        if !constant_time_eq(nonce.as_bytes(), expected_nonce.as_bytes()) {
+            return Err(EvidenceError::MissingCredential);
+        }
+        self.subject_from_id_token(&verified, subject_binding_claim)
+    }
+
+    fn subject_from_id_token(
+        &self,
+        verified: &VerifiedToken,
+        subject_binding_claim: &str,
+    ) -> Result<EsignetSubject, EvidenceError> {
+        let subject = verified
+            .claims
+            .sub
+            .clone()
+            .ok_or(EvidenceError::MissingCredential)?;
+        let subject_binding_value = if subject_binding_claim == "sub" {
+            subject.clone()
+        } else {
+            verified
+                .claims
+                .extra
+                .get(subject_binding_claim)
+                .and_then(Value::as_str)
+                .ok_or(EvidenceError::MissingCredential)?
+                .to_string()
+        };
+        if subject_binding_value.trim().is_empty() {
+            return Err(EvidenceError::MissingCredential);
+        }
+        let scopes = if verified.scopes.is_empty() {
+            verified
+                .claims
+                .extra
+                .get("scope")
+                .and_then(Value::as_str)
+                .map(|scope| {
+                    scope
+                        .split(' ')
+                        .filter(|s| !s.is_empty())
+                        .map(ToString::to_string)
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            verified.scopes.clone()
+        };
+        let acr = verified
+            .claims
+            .extra
+            .get("acr")
+            .and_then(Value::as_str)
+            .map(ToString::to_string);
+        let auth_time = verified
+            .claims
+            .extra
+            .get("auth_time")
+            .and_then(Value::as_i64);
+        Ok(EsignetSubject {
+            subject,
+            subject_binding_value,
+            // The credential's citizen client is the Notary RP client that
+            // authenticated the citizen at eSignet.
+            client_id: self.esignet_client_id.clone(),
+            scopes,
+            acr,
+            auth_time,
+        })
+    }
+
+    async fn esignet_token_exchange(
+        &self,
+        code: &str,
+        pkce_verifier: &str,
+    ) -> Result<String, EvidenceError> {
+        let token_url = reqwest::Url::parse(&self.esignet_token_url)
+            .map_err(|_| EvidenceError::MissingCredential)?;
+        let validated_url = self
+            .fetch_url_policy
+            .validate_for_immediate_fetch_with_timeout(&token_url, ESIGNET_REQUEST_TIMEOUT)
+            .await
+            .map_err(|_| EvidenceError::MissingCredential)?;
+        if validated_url.url() != &token_url {
+            return Err(EvidenceError::MissingCredential);
+        }
+        let request = pinned_request_builder(
+            &validated_url,
+            reqwest::Method::POST,
+            ESIGNET_REQUEST_TIMEOUT,
+        )
+        .map_err(|_| EvidenceError::MissingCredential)?
+        .timeout(ESIGNET_REQUEST_TIMEOUT)
+        .header("accept", "application/json");
+        let client_assertion = self.client_assertion_jwt().await?;
+        let mut params: BTreeMap<&str, &str> = BTreeMap::new();
+        params.insert("grant_type", "authorization_code");
+        params.insert("code", code);
+        params.insert("redirect_uri", self.esignet_redirect_uri.as_str());
+        params.insert("client_id", self.esignet_client_id.as_str());
+        params.insert("code_verifier", pkce_verifier);
+        params.insert(
+            "client_assertion_type",
+            PRIVATE_KEY_JWT_CLIENT_ASSERTION_TYPE,
+        );
+        params.insert("client_assertion", client_assertion.as_str());
+        let response = request
+            .form(&params)
+            .send()
+            .await
+            .map_err(|_| EvidenceError::MissingCredential)?;
+        if !response.status().is_success() {
+            return Err(EvidenceError::MissingCredential);
+        }
+        let body = read_bounded(response, ESIGNET_MAX_RESPONSE_BYTES)
+            .await
+            .map_err(|_| EvidenceError::MissingCredential)?;
+        let body: Value =
+            serde_json::from_slice(&body).map_err(|_| EvidenceError::MissingCredential)?;
+        body.get("id_token")
+            .and_then(Value::as_str)
+            .filter(|id_token| !id_token.is_empty())
+            .map(ToString::to_string)
+            .ok_or(EvidenceError::MissingCredential)
+    }
+
+    /// Build the `private_key_jwt` client assertion the eSignet token endpoint
+    /// requires (`aud`==token endpoint, `iss`/`sub`==RP client_id, short-lived,
+    /// unique `jti`), signed with the RP client signing key.
+    async fn client_assertion_jwt(&self) -> Result<String, EvidenceError> {
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let jti = generate_opaque_token().map_err(|_| EvidenceError::MissingCredential)?;
+        let payload = json!({
+            "iss": self.esignet_client_id,
+            "sub": self.esignet_client_id,
+            "aud": self.esignet_token_url,
+            "iat": now,
+            "exp": now + 120,
+            "jti": jti,
+        });
+        let public_jwk = self.esignet_client_signer.public_jwk();
+        let kid = public_jwk
+            .kid
+            .clone()
+            .filter(|kid| kid == self.esignet_client_signer.key_id())
+            .ok_or(EvidenceError::MissingCredential)?;
+        let alg = public_jwk
+            .alg
+            .clone()
+            .unwrap_or_else(|| "EdDSA".to_string());
+        let header = json!({ "alg": alg, "typ": "JWT", "kid": kid });
+        let header_b64 = base64_url_no_pad(
+            &serde_json::to_vec(&header).map_err(|_| EvidenceError::MissingCredential)?,
+        );
+        let payload_b64 = base64_url_no_pad(
+            &serde_json::to_vec(&payload).map_err(|_| EvidenceError::MissingCredential)?,
+        );
+        let signing_input = format!("{header_b64}.{payload_b64}");
+        let signature = self
+            .esignet_client_signer
+            .sign(signing_input.as_bytes())
+            .await
+            .map_err(|_| EvidenceError::MissingCredential)?;
+        Ok(format!("{signing_input}.{}", base64_url_no_pad(&signature)))
+    }
+}
+
+/// Constant-time byte comparison so secret comparisons (nonce, `tx_code`) do
+/// not leak length-prefix timing.
+pub(crate) fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    left.ct_eq(right).into()
+}
+
+fn base64_url_no_pad(bytes: &[u8]) -> String {
+    BASE64_URL_SAFE_NO_PAD.encode(bytes)
+}
+
+/// 32 bytes of randomness, base64url-encoded; used for opaque `state`, PKCE
+/// verifier, and `jti` values.
+pub(crate) fn generate_opaque_token() -> Result<String, EvidenceError> {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes).map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
+    Ok(base64_url_no_pad(&bytes))
+}
+
+/// Derive the PKCE S256 challenge from a verifier.
+pub(crate) fn pkce_s256_challenge(verifier: &str) -> String {
+    let digest = <sha2::Sha256 as sha2::Digest>::digest(verifier.as_bytes());
+    base64_url_no_pad(&digest)
+}
+
+/// Generate a numeric `tx_code` (PIN) of the requested length.
+///
+/// Uses rejection sampling (discarding bytes >= 250) so each digit 0-9 is
+/// uniformly likely; `byte % 10` alone would bias toward 0-5 since 256 is not a
+/// multiple of 10.
+pub(crate) fn generate_numeric_tx_code(length: u64) -> Result<String, EvidenceError> {
+    let length = usize::try_from(length).map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
+    let mut pin = String::with_capacity(length);
+    while pin.len() < length {
+        let mut buf = [0_u8; 32];
+        getrandom::fill(&mut buf).map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
+        for byte in buf {
+            if byte < 250 {
+                pin.push((b'0' + (byte % 10)) as char);
+                if pin.len() == length {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(pin)
+}
+
+/// Hashed/metadata-only fields for a pre-auth audit event. Carries no raw code,
+/// PIN, or token; only hashes and config metadata.
+#[derive(Debug, Default)]
+pub(crate) struct PreAuthAuditFields {
+    pub(crate) principal_id_hash: Option<Hashed<PrincipalIdentifier>>,
+    pub(crate) correlation_id_hash: Option<Hashed<RequestIdentifier>>,
+    pub(crate) credential_configuration_id: Option<registry_notary_core::ConfigMetadata>,
+    pub(crate) denial_code: Option<SelfAttestationDenialCode>,
+    pub(crate) rate_limit_bucket: Option<RateLimitBucket>,
+}
+
+/// Build a hashed pre-auth audit event for a public endpoint. The pre-auth
+/// `offer/callback` and `/oid4vci/token` paths skip the auth-audit middleware
+/// (they are public), so they emit their own audit events.
+pub(crate) fn pre_auth_audit_event(
+    method: &str,
+    path: &str,
+    status: u16,
+    decision: &str,
+    fields: PreAuthAuditFields,
+) -> EvidenceAuditEvent {
+    let occurred_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
+    EvidenceAuditEvent {
+        event_id: Ulid::new().to_string(),
+        occurred_at,
+        principal_id_hash: fields.principal_id_hash,
+        decision: decision.to_string(),
+        method: method.to_string(),
+        path: path.to_string(),
+        status,
+        verification_id: None,
+        claim_hash: None,
+        purposes: None,
+        row_count: None,
+        error_code: None,
+        access_mode: Some(AccessMode::SelfAttestation),
+        federation_peer_id_hash: None,
+        federation_issuer: None,
+        federation_profile: None,
+        federation_purpose: None,
+        federation_request_jti_hash: None,
+        federation_subject_ref_hash: None,
+        denial_code: fields.denial_code,
+        token_claim_name: None,
+        correlation_id_hash: fields.correlation_id_hash,
+        credential_profile: None,
+        protocol: registry_notary_core::ConfigMetadata::new("openid4vci").ok(),
+        credential_configuration_id: fields.credential_configuration_id,
+        holder_binding_mode: None,
+        rate_limit_bucket: fields.rate_limit_bucket,
+        policy_version: None,
+        policy_hash: None,
+        target_type: None,
+        target_ref_hash: None,
+        requester_type: None,
+        requester_ref_hash: None,
+        matching_policy_id: None,
+        matching_method: None,
+        matching_outcome: None,
+        matching_error_code: None,
+        batch_items: None,
     }
 }
 
@@ -1612,7 +2199,36 @@ enum Authenticator {
         assurance_claim_source: SelfAttestationAssuranceClaimSource,
         userinfo_endpoint: Option<String>,
         userinfo_issuers: Vec<String>,
+        /// Second, separately-keyed trust anchor for the Notary's own issuer
+        /// (the pre-authorized-code access tokens). `None` unless self-issuance
+        /// is enabled. Dispatched by the UNVERIFIED `iss` (route-only) and fully
+        /// verified against its own key + issuer + typ. Boxed to keep the enum
+        /// variants similarly sized.
+        notary_anchor: Option<Box<NotaryTokenAnchor>>,
     },
+}
+
+/// The Notary's own self-issuance trust anchor: its access-token public key,
+/// pinned issuer, header `typ`, and accepted audiences. Verification is fully
+/// in-process (no self-HTTP-call to a JWKS endpoint).
+#[derive(Clone)]
+struct NotaryTokenAnchor {
+    public_jwk: PublicJwk,
+    issuer: String,
+    token_typ: String,
+    audiences: Vec<String>,
+    principal_claim: String,
+    subject_binding_claim: Option<String>,
+}
+
+impl std::fmt::Debug for NotaryTokenAnchor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NotaryTokenAnchor")
+            .field("issuer", &self.issuer)
+            .field("token_typ", &self.token_typ)
+            .field("audiences", &self.audiences)
+            .finish_non_exhaustive()
+    }
 }
 
 impl AuthAuditState {
@@ -1708,15 +2324,21 @@ impl Authenticator {
                 } else {
                     oidc.userinfo_issuers.clone()
                 };
+                let subject_binding_claim = config
+                    .self_attestation
+                    .enabled
+                    .then(|| config.self_attestation.subject_binding.token_claim.clone())
+                    .filter(|claim| !claim.is_empty());
+                let notary_anchor = Self::build_notary_anchor(
+                    config,
+                    oidc.principal_claim.clone(),
+                    subject_binding_claim.clone(),
+                )?;
                 Ok(Self::Oidc {
                     verifier: Arc::new(verifier),
                     fetch_url_policy,
                     principal_claim: oidc.principal_claim.clone(),
-                    subject_binding_claim: config
-                        .self_attestation
-                        .enabled
-                        .then(|| config.self_attestation.subject_binding.token_claim.clone())
-                        .filter(|claim| !claim.is_empty()),
+                    subject_binding_claim,
                     subject_binding_claim_source: config
                         .self_attestation
                         .subject_binding
@@ -1727,6 +2349,7 @@ impl Authenticator {
                         .assurance_claim_source,
                     userinfo_endpoint: oidc.userinfo_endpoint.clone(),
                     userinfo_issuers,
+                    notary_anchor,
                 })
             }
             mode => Err(StandaloneServerError::InvalidOidcConfig(format!(
@@ -1756,7 +2379,19 @@ impl Authenticator {
                 assurance_claim_source,
                 userinfo_endpoint,
                 userinfo_issuers,
+                notary_anchor,
             } => {
+                // Route by the UNVERIFIED `iss` (never trusted before signature
+                // verification): a token claiming the Notary's own issuer is
+                // verified against the separate, separately-keyed Notary anchor;
+                // everything else takes the existing eSignet path unchanged.
+                if let Some(anchor) = notary_anchor {
+                    if let Some(token) = credentials.bearer_token.as_deref() {
+                        if unverified_issuer(token).as_deref() == Some(anchor.issuer.as_str()) {
+                            return authenticate_notary_token(token, anchor);
+                        }
+                    }
+                }
                 authenticate_oidc(
                     &credentials,
                     verifier,
@@ -1771,6 +2406,39 @@ impl Authenticator {
                 .await
             }
         }
+    }
+
+    /// Build the Notary self-issuance anchor from the access-token signing
+    /// config and the dedicated signing key's public JWK.
+    fn build_notary_anchor(
+        config: &StandaloneRegistryNotaryConfig,
+        principal_claim: String,
+        subject_binding_claim: Option<String>,
+    ) -> Result<Option<Box<NotaryTokenAnchor>>, StandaloneServerError> {
+        let signing = &config.auth.access_token_signing;
+        if !signing.enabled {
+            return Ok(None);
+        }
+        // Resolve the access-token key's public JWK by loading the signing-key
+        // registry (the same loader the issuer registry uses). Config
+        // validation already enforces this key is distinct from credential keys.
+        let signing_keys = SigningKeyRegistry::from_config(&config.evidence)?;
+        let public_jwk = signing_keys
+            .public_jwk_for_key_id(signing.signing_key_id.as_str())
+            .ok_or_else(|| {
+                invalid_signing_key(
+                    signing.signing_key_id.as_str(),
+                    "access-token signing key public JWK was not built",
+                )
+            })?;
+        Ok(Some(Box::new(NotaryTokenAnchor {
+            public_jwk,
+            issuer: signing.issuer.clone(),
+            token_typ: signing.token_typ.clone(),
+            audiences: signing.audiences.clone(),
+            principal_claim,
+            subject_binding_claim,
+        })))
     }
 }
 
@@ -2109,6 +2777,9 @@ fn is_public_probe_path(path: &str) -> bool {
             | "/ready"
             | "/.well-known/openid-credential-issuer"
             | "/oid4vci/credential-offer"
+            | "/oid4vci/offer/start"
+            | "/oid4vci/offer/callback"
+            | "/oid4vci/token"
             | "/oid4vci/nonce"
             | "/federation/v1/evaluations"
             | "/credentials/{*vct_path}"
@@ -2396,6 +3067,83 @@ async fn authenticate_oidc(
         assurance_claim_source,
     )
     .ok_or(EvidenceError::MissingCredential)
+}
+
+/// Read the `iss` claim from a JWT WITHOUT verifying the signature. Used only to
+/// ROUTE to the correct verifier; the value is never trusted before the chosen
+/// anchor fully verifies the token (signature, alg, typ, iss, aud, exp/nbf).
+fn unverified_issuer(token: &str) -> Option<String> {
+    let payload_b64 = token.split('.').nth(1)?;
+    let bytes = BASE64_URL_SAFE_NO_PAD.decode(payload_b64).ok()?;
+    let payload: Value = serde_json::from_slice(&bytes).ok()?;
+    payload
+        .get("iss")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+}
+
+/// Verify a Notary-issued access token against the separate, separately-keyed
+/// Notary anchor and map it to an `EvidencePrincipal` via `principal_from_oidc`,
+/// identically to an eSignet token.
+///
+/// Verification pins alg (EdDSA), the access-token `typ`, the Notary `iss`, the
+/// configured audiences, the signature against the dedicated access-token key,
+/// and `exp`/`nbf`. Every failure collapses to `EvidenceError::MissingCredential`,
+/// matching `oidc_auth_error` (no info leak).
+fn authenticate_notary_token(
+    token: &str,
+    anchor: &NotaryTokenAnchor,
+) -> Result<EvidencePrincipal, EvidenceError> {
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let verified_notary = registry_notary_core::tokens::verify_notary_token(
+        token,
+        &anchor.public_jwk,
+        &anchor.token_typ,
+        &anchor.issuer,
+        &anchor.audiences,
+        now,
+    )?;
+    let verified = verified_token_from_notary_payload(&verified_notary.payload)
+        .ok_or(EvidenceError::MissingCredential)?;
+    // Notary tokens carry the assurance and subject-binding claims in the access
+    // token itself, so both claim sources are AccessToken. This mirrors what an
+    // eSignet access token would provide and reuses the consumption path
+    // unchanged.
+    principal_from_oidc(
+        &verified,
+        None,
+        None,
+        verified_claim_value(&anchor.token_typ),
+        &anchor.principal_claim,
+        anchor.subject_binding_claim.as_deref(),
+        SelfAttestationClaimSource::AccessToken,
+        SelfAttestationAssuranceClaimSource::AccessToken,
+    )
+    .ok_or(EvidenceError::MissingCredential)
+}
+
+/// Adapt a verified Notary token payload into the platform `VerifiedToken` the
+/// `principal_from_oidc` mapping consumes.
+fn verified_token_from_notary_payload(
+    payload: &Value,
+) -> Option<registry_platform_oidc::VerifiedToken> {
+    let claims: registry_platform_oidc::Claims = serde_json::from_value(payload.clone()).ok()?;
+    let scopes = payload
+        .get("scope")
+        .and_then(Value::as_str)
+        .map(|scope| {
+            scope
+                .split(' ')
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(registry_platform_oidc::VerifiedToken {
+        claims,
+        matched_client: None,
+        scopes,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
