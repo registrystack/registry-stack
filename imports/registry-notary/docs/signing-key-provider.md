@@ -133,7 +133,9 @@ reuse creates ambiguous verification behavior.
 
 ## PKCS#11 Active Key
 
-Enable the server feature `pkcs11` to use an HSM-backed signing key.
+Enable the server feature `pkcs11` to use an HSM-backed Ed25519 signing key.
+Published product binaries and container images compile this feature, but they
+do not bundle vendor PKCS#11 modules or token state.
 
 ```yaml
 evidence:
@@ -156,18 +158,22 @@ checks CKM_EDDSA support, finds exactly one private key by `key_label` and
 `key_id_hex`, then signs and verifies a self-test payload against
 `public_jwk_env`.
 
-Each provider enforces a five-second signing timeout and allows only one
-in-flight sign call at a time. These limits affect capacity planning: a slow or
-stuck HSM call blocks subsequent signing requests for that provider until the
-timeout elapses. Startup opens a session, authenticates, and locates the private
-key; that session is reused for subsequent signatures. If a sign call fails, the
-provider reopens the session and retries once before returning an error.
-PIN values are read from the environment and are not logged.
+Each provider enforces a five-second end-to-end signing timeout and allows only
+one in-flight sign call at a time. These limits affect capacity planning: a slow
+or stuck HSM call blocks subsequent signing requests for that provider until the
+timeout elapses. Startup opens a session, authenticates, locates the private
+key, and runs a bounded sign-and-verify self-test. That session is reused for
+subsequent signatures. If a sign call fails, the provider reopens the session
+and retries once before returning an error. PIN values are read from the
+environment and are not logged.
 
 PKCS#11 module calls cannot be cancelled once the module is executing.
 Production HSM deployments must configure vendor driver network, session, and
 request timeouts below the five-second service-level signing timeout, so a stuck
-module call releases the single per-provider signing slot before that deadline.
+module call returns before that deadline. If Registry Notary reaches its own
+timeout first, the provider is marked unhealthy and `/ready` fails for that
+process so traffic can drain while the vendor call finishes or the process is
+restarted.
 
 ### SoftHSM Smoke Setup
 

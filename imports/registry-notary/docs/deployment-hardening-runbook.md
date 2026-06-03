@@ -255,6 +255,11 @@ Operational rules:
 - Keep `kid` stable for a key version and unique among published keys.
 - Do not configure a private JWK for `publish_only`.
 - For PKCS#11, keep `module_path` absolute and store the PIN through `pin_env`.
+- Before rollout, run `registry-notary build-info` and confirm
+  `capabilities.signing_providers.pkcs11` is `true`.
+- Before routing production traffic, run `registry-notary doctor --config <path>`
+  with the same PKCS#11 module, token label, key lookup, public JWK, and PIN
+  environment used by the service.
 
 Use [`signing-key-provider.md`](signing-key-provider.md) for key generation,
 PKCS#11 setup, and rotation examples.

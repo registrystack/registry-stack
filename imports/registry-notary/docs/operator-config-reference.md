@@ -68,6 +68,12 @@ Use `registry-notary hash-api-key --print-secret` to generate a local API key
 and its hash. Store only the hash in the environment variable referenced by
 config; give the plaintext key only to the caller.
 
+`registry-notary doctor --config <path>` validates active PKCS#11 signing keys
+by loading the configured module, opening the token, checking the private-key
+lookup, and running the startup self-test. Run `registry-notary build-info` on
+the deployed artifact to confirm the `pkcs11` capability is compiled in before
+debugging token or vendor module configuration.
+
 For local development, the binary accepts `--env-file`. For shared
 environments, prefer the platform secret store and avoid checking dotenv files
 into the repository.

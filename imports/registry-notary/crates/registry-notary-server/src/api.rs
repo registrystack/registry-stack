@@ -60,7 +60,7 @@ use crate::{
     runtime::claim_ids,
     standalone::{
         constant_time_eq, generate_numeric_tx_code, generate_opaque_token, pkce_s256_challenge,
-        pre_auth_audit_event, PreAuthAuditFields, PreAuthRuntime,
+        pre_auth_audit_event, PreAuthAuditFields, PreAuthRuntime, SignerReadiness,
     },
     BatchEvaluateOptions, EvidenceStore, RegistryNotaryRuntime, SelfAttestationRateLimitBucket,
     SelfAttestationRateLimitError, SelfAttestationRateLimitKeys, SelfAttestationRateLimiter,
@@ -181,19 +181,24 @@ async fn healthz() -> Response {
 }
 
 async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Response {
-    let (ready, degraded) = match state.as_ref() {
+    let (ready, degraded, signer_total, signer_ok, signer_failed) = match state.as_ref() {
         Some(Extension(state)) if state.enabled_evidence().is_ok() => {
             let replay_readiness = state.replay.check_ready().await;
             let credential_status_ready = state.credential_status.check_ready().await.is_ok();
             let replay_ready = matches!(replay_readiness, Ok(ReplayReadiness::Ready));
+            let signer_ready = state.signer_readiness.is_ready();
             let degraded = matches!(replay_readiness, Ok(ReplayReadiness::Degraded))
-                && credential_status_ready;
+                && credential_status_ready
+                && signer_ready;
             (
-                replay_ready && credential_status_ready && !degraded,
+                replay_ready && credential_status_ready && signer_ready && !degraded,
                 degraded,
+                state.signer_readiness.total(),
+                state.signer_readiness.ready_count(),
+                state.signer_readiness.failed_count(),
             )
         }
-        _ => (false, false),
+        _ => (false, false, 0, 0, 0),
     };
     let status = if ready {
         StatusCode::OK
@@ -210,10 +215,15 @@ async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Respons
         Json(json!({
             "status": status_text,
             "checks": {
-                "total": 1,
-                "ok": u8::from(ready),
+                "total": 1 + signer_total,
+                "ok": usize::from(ready) + signer_ok,
                 "degraded": u8::from(degraded),
-                "failed": u8::from(!ready && !degraded),
+                "failed": usize::from(!ready && !degraded) + signer_failed,
+                "signing_providers": {
+                    "total": signer_total,
+                    "ok": signer_ok,
+                    "failed": signer_failed,
+                },
             },
         })),
     )
@@ -399,6 +409,7 @@ pub struct RegistryNotaryApiState {
     pub(crate) source: Arc<dyn SourceReader>,
     pub(crate) store: Arc<EvidenceStore>,
     issuers: Arc<dyn EvidenceIssuerResolver>,
+    pub(crate) signer_readiness: SignerReadiness,
     /// Pre-authorized-code flow runtime. `None` unless the flow is enabled and
     /// the dedicated access-token signing key plus eSignet RP settings loaded.
     pub(crate) preauth: Option<Arc<PreAuthRuntime>>,
@@ -507,6 +518,7 @@ impl RegistryNotaryApiState {
             source,
             store,
             issuers,
+            SignerReadiness::default(),
         )
     }
 
@@ -557,6 +569,7 @@ impl RegistryNotaryApiState {
             source,
             store,
             issuers,
+            SignerReadiness::default(),
         ))
     }
 
@@ -574,6 +587,7 @@ impl RegistryNotaryApiState {
         source: Arc<dyn SourceReader>,
         store: Arc<EvidenceStore>,
         issuers: Arc<dyn EvidenceIssuerResolver>,
+        signer_readiness: SignerReadiness,
     ) -> Self {
         let self_attestation_rate_limiter = Arc::new(SelfAttestationRateLimiter::new(
             self_attestation.rate_limits.clone(),
@@ -593,6 +607,7 @@ impl RegistryNotaryApiState {
             source,
             store,
             issuers,
+            signer_readiness,
             preauth: None,
         }
     }
@@ -600,6 +615,11 @@ impl RegistryNotaryApiState {
     #[must_use]
     pub(crate) fn with_preauth_runtime(mut self, preauth: Option<Arc<PreAuthRuntime>>) -> Self {
         self.preauth = preauth;
+        self
+    }
+
+    pub(crate) fn with_signer_readiness(mut self, signer_readiness: SignerReadiness) -> Self {
+        self.signer_readiness = signer_readiness;
         self
     }
 
@@ -923,10 +943,10 @@ async fn oid4vci_credential(
             Err(error) => return oid4vci_error_response(error),
         };
     let expected_nonce = if state.oid4vci.nonce.enabled {
-        match oid4vci_proof_nonce(&request.proof.jwt) {
-            Ok(nonce) => Some(nonce),
-            Err(error) => return oid4vci_error_response(error),
-        }
+        let Some(nonce) = validated_proof.nonce.as_deref() else {
+            return oid4vci_error_response(Oid4vciWireError::InvalidProof);
+        };
+        Some(nonce)
     } else {
         None
     };
@@ -944,7 +964,7 @@ async fn oid4vci_credential(
     if holder_key_matches_issuer_key(&validated_proof.holder_jwk, &issuer.public_jwk()) {
         return oid4vci_error_response(Oid4vciWireError::InvalidProof);
     }
-    if let Some(nonce) = expected_nonce.as_deref() {
+    if let Some(nonce) = expected_nonce {
         let key = match state.self_attestation_rate_keys.oid4vci_nonce(
             &state.oid4vci.credential_issuer,
             configuration_id,
@@ -5232,7 +5252,7 @@ mod tests {
     use registry_platform_testing::{assert_json_absent_strings, sign_openid4vci_proof_jwt};
     use std::future::Future;
     use std::pin::Pin;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
 
     // Ed25519 keypair: `d` is the seed, `x` is the corresponding public key,
@@ -5585,6 +5605,41 @@ mod tests {
         let missing_nonce_body: Value =
             serde_json::from_slice(&missing_nonce_body).expect("error body parses");
         assert_eq!(missing_nonce_body["error"], "invalid_proof");
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+
+        let proof_without_nonce =
+            sign_oid4vci_proof_without_nonce(&state.oid4vci.credential_issuer);
+        let missing_validated_nonce = oid4vci_credential(
+            Some(Extension(Arc::clone(&state))),
+            Some(Extension(fresh_oidc_principal(
+                Some("client_id:citizen-portal"),
+                &["self_attestation"],
+            ))),
+            Some(Extension(validated_oid4vci_proof(
+                &state,
+                &proof_without_nonce,
+                None,
+            ))),
+            Json(Oid4vciCredentialRequest {
+                format: SD_JWT_VC_FORMAT.to_string(),
+                credential_identifier: Some("person_is_alive_sd_jwt".to_string()),
+                credential_configuration_id: None,
+                vct: None,
+                proof: registry_platform_oid4vci::CredentialRequestProof {
+                    proof_type: PROOF_TYPE_JWT.to_string(),
+                    jwt: proof_without_nonce,
+                },
+            }),
+        )
+        .await;
+        assert_eq!(missing_validated_nonce.status(), StatusCode::BAD_REQUEST);
+        let missing_validated_nonce_body =
+            axum::body::to_bytes(missing_validated_nonce.into_body(), usize::MAX)
+                .await
+                .expect("body reads");
+        let missing_validated_nonce_body: Value =
+            serde_json::from_slice(&missing_validated_nonce_body).expect("error body parses");
+        assert_eq!(missing_validated_nonce_body["error"], "invalid_proof");
         assert_eq!(reads.load(Ordering::SeqCst), 0);
 
         let nonce = "nonce-1";
@@ -6108,6 +6163,34 @@ mod tests {
             context.source_capability,
             SourceCapability::SelfAttestation { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn readiness_fails_when_signer_readiness_fails() {
+        let state = Arc::new(
+            RegistryNotaryApiState::new(
+                Arc::new(evidence_config()),
+                AuditKeyHasher::unkeyed_dev_only(),
+                Arc::new(CountingSource::default()),
+                Arc::new(EvidenceStore::default()),
+                Arc::new(NoopIssuerResolver),
+            )
+            .with_signer_readiness(SignerReadiness::from_provider_flags(vec![
+                Arc::new(AtomicBool::new(false)),
+            ])),
+        );
+
+        let response = ready(Some(Extension(state))).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("ready body reads");
+        let value: Value = serde_json::from_slice(&body).expect("ready body is JSON");
+
+        assert_eq!(value["status"], "not_ready");
+        assert_eq!(value["checks"]["signing_providers"]["total"], json!(1));
+        assert_eq!(value["checks"]["signing_providers"]["ok"], json!(0));
+        assert_eq!(value["checks"]["signing_providers"]["failed"], json!(1));
     }
 
     #[test]

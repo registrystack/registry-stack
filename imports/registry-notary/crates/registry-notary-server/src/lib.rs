@@ -31,4 +31,4 @@ pub use self_attestation_rate_limit::{
     SelfAttestationRateLimitBucket, SelfAttestationRateLimitError, SelfAttestationRateLimitKeys,
     SelfAttestationRateLimiter,
 };
-pub use standalone::{standalone_router, StandaloneServerError};
+pub use standalone::{standalone_router, EvidenceIssuerRegistry, StandaloneServerError};

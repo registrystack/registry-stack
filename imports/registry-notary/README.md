@@ -55,10 +55,12 @@ Registry Notary currently issues SD-JWT VC credentials using
 `application/dc+sd-jwt`, EdDSA over named Ed25519 signing keys, and `did:jwk`
 holder binding. Credential profiles reference keys from `evidence.signing_keys`
 instead of carrying key material themselves. Local JWK keys support development
-and mounted-secret deployments; PKCS#11 keys are available behind the optional
-server feature for HSM-backed signing. Credential profiles default to a
-short-lived 600-second validity when `validity_seconds` is omitted, and explicit
-values remain bounded by `evidence.max_credential_validity_seconds`.
+and mounted-secret deployments. Published product binaries and container images
+compile the optional `pkcs11` signing provider so operators can attach vendor
+HSM modules at runtime; vendor PKCS#11 modules and token configuration are not
+bundled. Credential profiles default to a short-lived 600-second validity when
+`validity_seconds` is omitted, and explicit values remain bounded by
+`evidence.max_credential_validity_seconds`.
 Self-attestation credential profiles are additionally bounded by
 `self_attestation.token_policy.max_credential_validity_seconds`.
 
@@ -300,19 +302,20 @@ docker build \
   -t registry-notary .
 ```
 
-Default Docker builds match the default Cargo feature set. Lab or integration
-builds that need CEL can opt in without changing the default image:
+Default Docker builds compile the `pkcs11` feature. Lab or integration builds
+that need CEL should keep PKCS#11 enabled and add CEL explicitly:
 
 ```bash
 docker build \
   --build-context registry-platform=../registry-platform \
   --build-context cel-mapping=../cel-mapping \
-  --build-arg REGISTRY_NOTARY_FEATURES=registry-notary-cel \
+  --build-arg REGISTRY_NOTARY_FEATURES=registry-notary-cel,pkcs11 \
   -t registry-notary:cel .
 ```
 
-The product container workflow publishes CI images as `main` / `sha-<commit>`
-and the CEL-enabled lab image as `main-cel` / `sha-<commit>-cel` under
+The product container workflow publishes the default image as `main` /
+`sha-<commit>` with PKCS#11 compiled in, and the CEL-enabled lab image as
+`main-cel` / `sha-<commit>-cel` with both CEL and PKCS#11 enabled under
 `ghcr.io/jeremi/registry-notary`. First serious release readiness is checked
 through the coordinated pre-tag release plan. Lab deployments should consume the
 selected CEL-enabled image by immutable digest for rollback.

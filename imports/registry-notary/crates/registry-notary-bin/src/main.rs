@@ -21,7 +21,7 @@ use registry_notary_core::{
     Oauth2ClientCredentialsSourceAuthConfig, SigningKeyProviderConfig, SourceAuthConfig,
     StandaloneRegistryNotaryConfig,
 };
-use registry_notary_server::{openapi_document, standalone_router};
+use registry_notary_server::{openapi_document, standalone_router, EvidenceIssuerRegistry};
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk};
 use registry_platform_httputil::{url as httputil_url, FetchUrlPolicy};
 use serde_json::{json, Value};
@@ -121,6 +121,8 @@ enum Command {
         )]
         timeout_ms: u64,
     },
+    /// Print machine-readable build metadata and compiled capabilities.
+    BuildInfo,
     /// Print a lightweight JSON schema for top-level config discovery.
     Schema,
 }
@@ -328,6 +330,10 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
             println!("registry-notary healthcheck ok");
             Ok(ExitCode::SUCCESS)
         }
+        Some(Command::BuildInfo) => {
+            println!("{}", serde_json::to_string_pretty(&build_info())?);
+            Ok(ExitCode::SUCCESS)
+        }
         Some(Command::Schema) => {
             println!("{}", serde_json::to_string_pretty(&lightweight_schema())?);
             Ok(ExitCode::SUCCESS)
@@ -364,7 +370,11 @@ async fn run_server(
     ));
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let local_addr: SocketAddr = listener.local_addr()?;
-    tracing::info!(%local_addr, "registry notary listening");
+    tracing::info!(
+        %local_addr,
+        build_features = ?compiled_build_features(),
+        "registry notary listening"
+    );
 
     axum::serve(
         listener,
@@ -377,6 +387,32 @@ async fn run_server(
 
 fn required_config_path(path: Option<&Path>) -> Result<&Path, Box<dyn std::error::Error>> {
     path.ok_or_else(|| "--config is required for this command".into())
+}
+
+fn compiled_build_features() -> Vec<&'static str> {
+    let mut features = Vec::new();
+    if cfg!(feature = "pkcs11") {
+        features.push("pkcs11");
+    }
+    if cfg!(feature = "registry-notary-cel") {
+        features.push("registry-notary-cel");
+    }
+    features
+}
+
+fn build_info() -> Value {
+    json!({
+        "package": env!("CARGO_PKG_NAME"),
+        "version": env!("CARGO_PKG_VERSION"),
+        "build_features": compiled_build_features(),
+        "capabilities": {
+            "signing_providers": {
+                "local_jwk_env": true,
+                "pkcs11": cfg!(feature = "pkcs11"),
+            },
+            "cel": cfg!(feature = "registry-notary-cel"),
+        },
+    })
 }
 
 async fn run_healthcheck(url: &str, timeout: Duration) -> Result<(), Box<dyn std::error::Error>> {
@@ -626,6 +662,9 @@ async fn doctor(
     };
     if let Some(config) = &config {
         diagnostics.extend(local_env_diagnostics(config, env_report));
+        if let Some(diagnostic) = pkcs11_preflight_diagnostic(config) {
+            diagnostics.push(diagnostic);
+        }
         diagnostics.extend(vc_diagnostics(config, options.issue_demo_vc));
         diagnostics.extend(dci_diagnostics(config, options.target_id_type.as_deref()));
         if options.live {
@@ -647,6 +686,24 @@ async fn doctor(
     }
     print_diagnostics(&diagnostics);
     Ok(diagnostics.iter().all(|diag| diag.ok))
+}
+
+fn pkcs11_preflight_diagnostic(config: &StandaloneRegistryNotaryConfig) -> Option<Diagnostic> {
+    let has_active_pkcs11 = config.evidence.signing_keys.values().any(|key| {
+        matches!(key.provider, SigningKeyProviderConfig::Pkcs11) && key.status.may_sign()
+    });
+    if !has_active_pkcs11 {
+        return None;
+    }
+    match EvidenceIssuerRegistry::from_config(&config.evidence) {
+        Ok(_) => Some(Diagnostic::ok(
+            "PKCS#11 signing providers loaded and self-tested",
+        )),
+        Err(err) => Some(Diagnostic::fail(
+            format!("PKCS#11 signing preflight failed: {err}"),
+            "check module_path, token_label, pin_env, key_label, key_id_hex, public_jwk_env, and whether this binary was built with pkcs11",
+        )),
+    }
 }
 
 fn print_diagnostics(diagnostics: &[Diagnostic]) {
@@ -2106,6 +2163,29 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
         assert!(err.to_string().contains("invalid value"));
     }
 
+    #[test]
+    fn build_info_cli_parses() {
+        let args = Args::try_parse_from(["registry-notary", "build-info"]).expect("args parse");
+        assert!(matches!(args.command, Some(Command::BuildInfo)));
+    }
+
+    #[test]
+    fn build_info_reports_compiled_pkcs11_capability() {
+        let info = build_info();
+        assert_eq!(info["package"], "registry-notary-bin");
+        assert_eq!(
+            info["capabilities"]["signing_providers"]["pkcs11"],
+            json!(cfg!(feature = "pkcs11"))
+        );
+        let features = info["build_features"]
+            .as_array()
+            .expect("build_features is an array");
+        assert_eq!(
+            features.iter().any(|feature| feature == "pkcs11"),
+            cfg!(feature = "pkcs11")
+        );
+    }
+
     #[tokio::test]
     async fn healthcheck_succeeds_for_success_status() {
         let upstream = TestServer::builder()
@@ -2253,6 +2333,53 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
             .as_deref()
             .expect("warning has next action")
             .contains("off-host"));
+    }
+
+    #[test]
+    fn doctor_pkcs11_preflight_attempts_module_loading() {
+        let _guard = ENV_LOCK.lock().expect("env lock is not poisoned");
+        std::env::set_var(
+            "TEST_DOCTOR_PKCS11_PUBLIC_JWK",
+            r#"{"kty":"OKP","crv":"Ed25519","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:web:issuer.example#hsm"}"#,
+        );
+        std::env::set_var("TEST_DOCTOR_PKCS11_PIN", "1234");
+        let mut config = doctor_live_test_config("http://127.0.0.1:1");
+        config.evidence.signing_keys.insert(
+            "hsm-key".to_string(),
+            registry_notary_core::SigningKeyConfig {
+                provider: SigningKeyProviderConfig::Pkcs11,
+                alg: "EdDSA".to_string(),
+                kid: "did:web:issuer.example#hsm".to_string(),
+                status: registry_notary_core::SigningKeyStatus::Active,
+                private_jwk_env: String::new(),
+                public_jwk_env: "TEST_DOCTOR_PKCS11_PUBLIC_JWK".to_string(),
+                module_path: "/definitely/missing/pkcs11.so".to_string(),
+                token_label: "registry-notary".to_string(),
+                pin_env: "TEST_DOCTOR_PKCS11_PIN".to_string(),
+                key_label: "issuer-signing-key".to_string(),
+                key_id_hex: "01ab23cd".to_string(),
+                path: String::new(),
+                password_env: String::new(),
+            },
+        );
+
+        let diagnostic =
+            pkcs11_preflight_diagnostic(&config).expect("active PKCS#11 key triggers preflight");
+
+        assert!(!diagnostic.ok);
+        assert!(diagnostic
+            .label
+            .contains("PKCS#11 signing preflight failed"));
+        assert!(
+            diagnostic.label.contains("could not load PKCS#11 module")
+                || diagnostic
+                    .label
+                    .contains("provider 'pkcs11' is not enabled"),
+            "unexpected diagnostic: {}",
+            diagnostic.label
+        );
+        std::env::remove_var("TEST_DOCTOR_PKCS11_PUBLIC_JWK");
+        std::env::remove_var("TEST_DOCTOR_PKCS11_PIN");
     }
 
     #[test]

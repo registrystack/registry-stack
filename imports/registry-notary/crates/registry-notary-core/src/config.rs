@@ -4248,6 +4248,9 @@ impl SigningKeyConfig {
                 validate_signing_key_absent(key_id, "password_env", &self.password_env)?;
             }
             SigningKeyProviderConfig::Pkcs11 => {
+                if self.alg != CREDENTIAL_SIGNING_ALG_EDDSA {
+                    return invalid_signing_key(key_id, "pkcs11 provider supports only EdDSA");
+                }
                 if self.status.may_publish() {
                     validate_signing_key_non_empty(key_id, "public_jwk_env", &self.public_jwk_env)?;
                 }
@@ -5367,6 +5370,36 @@ issuer-hsm:
             .expect_err("relative module path must fail validation");
         assert!(
             err.to_string().contains("module_path must be absolute"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn pkcs11_signing_key_rejects_rs256_algorithm() {
+        let mut config = minimal_config();
+        config.evidence.signing_keys = serde_norway::from_str(
+            r#"
+issuer-hsm:
+  provider: pkcs11
+  module_path: /usr/lib/softhsm/libsofthsm2.so
+  token_label: registry-notary
+  pin_env: REGISTRY_NOTARY_PKCS11_PIN
+  key_label: issuer-signing-key
+  key_id_hex: 01ab23cd
+  public_jwk_env: REGISTRY_NOTARY_ISSUER_PUBLIC_JWK
+  alg: RS256
+  kid: did:web:issuer.example#issuer-hsm
+  status: active
+"#,
+        )
+        .expect("signing key YAML is valid");
+
+        let err = config
+            .validate()
+            .expect_err("PKCS#11 signing only supports EdDSA");
+        assert!(
+            err.to_string()
+                .contains("pkcs11 provider supports only EdDSA"),
             "unexpected error: {err}"
         );
     }

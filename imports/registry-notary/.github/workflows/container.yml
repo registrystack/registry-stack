@@ -53,6 +53,7 @@ jobs:
           docker build \
             --build-context registry-platform=registry-platform \
             --build-context cel-mapping=cel-mapping \
+            --build-arg REGISTRY_NOTARY_FEATURES=pkcs11 \
             --file registry-notary/Dockerfile \
             --tag "$NOTARY_IMAGE:sha-${GITHUB_SHA}" \
             --tag "$NOTARY_IMAGE:main" \
@@ -62,7 +63,7 @@ jobs:
           docker build \
             --build-context registry-platform=registry-platform \
             --build-context cel-mapping=cel-mapping \
-            --build-arg REGISTRY_NOTARY_FEATURES=registry-notary-cel \
+            --build-arg REGISTRY_NOTARY_FEATURES=registry-notary-cel,pkcs11 \
             --file registry-notary/Dockerfile \
             --tag "$NOTARY_IMAGE:sha-${GITHUB_SHA}-cel" \
             --tag "$NOTARY_IMAGE:main-cel" \

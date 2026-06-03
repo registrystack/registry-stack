@@ -12,12 +12,14 @@ The crate builds the `registry-notary` binary.
 - Axum listener startup and graceful shutdown.
 - OpenAPI document printing through `registry-notary openapi`.
 - Container liveness probing through `registry-notary healthcheck`.
+- Machine-readable build capability reporting through `registry-notary build-info`.
 
 ## Subcommands
 
 | Subcommand | Purpose |
 |---|---|
 | `openapi` | Print the OpenAPI document as JSON. |
+| `build-info` | Print package, version, compiled features, and runtime capabilities as JSON. |
 | `doctor` | Validate config, env-backed secrets, source auth, and VC wiring. |
 | `explain-config` | Print resolved config and required env vars. |
 | `init dci` | Generate a generic DCI source starter skeleton. |
@@ -49,6 +51,7 @@ cargo run -p registry-notary-bin -- healthcheck --url http://127.0.0.1:8080/heal
 ## Features
 
 - Default: no CEL runtime.
+- `pkcs11`: enables the server crate's PKCS#11 signing provider.
 - `registry-notary-cel`: enables the server crate's CEL runtime feature.
 
 ## Testing

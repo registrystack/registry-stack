@@ -6,6 +6,7 @@ use std::env;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -118,6 +119,7 @@ pub fn standalone_router(
     )?);
     let store = Arc::new(EvidenceStore::default());
     let signing_keys = Arc::new(SigningKeyRegistry::from_config(&config.evidence)?);
+    let signer_readiness = signing_keys.signer_readiness();
     let issuers = Arc::new(EvidenceIssuerRegistry::from_signing_keys(
         &config.evidence,
         &signing_keys,
@@ -164,7 +166,8 @@ pub fn standalone_router(
             issuers,
             federation_signing_provider,
         )?
-        .with_preauth_runtime(preauth_runtime),
+        .with_preauth_runtime(preauth_runtime)
+        .with_signer_readiness(signer_readiness),
     );
     let mut routes = router();
     if config.federation.enabled {
@@ -1121,11 +1124,44 @@ impl EvidenceIssuerResolver for EvidenceIssuerRegistry {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SignerReadiness {
+    providers: Arc<Vec<Arc<AtomicBool>>>,
+}
+
+impl SignerReadiness {
+    pub(crate) fn from_provider_flags(providers: Vec<Arc<AtomicBool>>) -> Self {
+        Self {
+            providers: Arc::new(providers),
+        }
+    }
+
+    pub(crate) fn total(&self) -> usize {
+        self.providers.len()
+    }
+
+    pub(crate) fn ready_count(&self) -> usize {
+        self.providers
+            .iter()
+            .filter(|provider| provider.load(Ordering::SeqCst))
+            .count()
+    }
+
+    pub(crate) fn failed_count(&self) -> usize {
+        self.total().saturating_sub(self.ready_count())
+    }
+
+    pub(crate) fn is_ready(&self) -> bool {
+        self.failed_count() == 0
+    }
+}
+
 #[derive(Clone, Default)]
 struct SigningKeyRegistry {
     issuers: BTreeMap<String, EvidenceIssuer>,
     providers: BTreeMap<String, Arc<dyn SigningProvider>>,
     public_jwks: Vec<Value>,
+    readiness_flags: Vec<Arc<AtomicBool>>,
 }
 
 impl SigningKeyRegistry {
@@ -1133,6 +1169,8 @@ impl SigningKeyRegistry {
         let mut issuers = BTreeMap::new();
         let mut providers = BTreeMap::new();
         let mut public_jwks_by_kid = BTreeMap::new();
+        #[cfg_attr(not(feature = "pkcs11"), allow(unused_mut))]
+        let mut readiness_flags = Vec::new();
         for (key_id, key) in &config.signing_keys {
             if !key.status.may_publish() {
                 continue;
@@ -1158,8 +1196,9 @@ impl SigningKeyRegistry {
                     if key.status.may_sign() {
                         #[cfg(feature = "pkcs11")]
                         {
-                            let provider: Arc<dyn SigningProvider> =
-                                Arc::new(pkcs11::Pkcs11SigningProvider::from_config(key_id, key)?);
+                            let provider = pkcs11::Pkcs11SigningProvider::from_config(key_id, key)?;
+                            readiness_flags.push(provider.readiness_flag());
+                            let provider: Arc<dyn SigningProvider> = Arc::new(provider);
                             let issuer =
                                 EvidenceIssuer::from_signing_provider(Arc::clone(&provider))
                                     .map_err(|_| {
@@ -1195,6 +1234,7 @@ impl SigningKeyRegistry {
             issuers,
             providers,
             public_jwks: public_jwks_by_kid.into_values().collect(),
+            readiness_flags,
         })
     }
 
@@ -1217,6 +1257,10 @@ impl SigningKeyRegistry {
         self.providers
             .get(key_id)
             .map(|provider| provider.public_jwk())
+    }
+
+    fn signer_readiness(&self) -> SignerReadiness {
+        SignerReadiness::from_provider_flags(self.readiness_flags.clone())
     }
 }
 
@@ -2001,8 +2045,9 @@ pub(crate) fn pre_auth_audit_event(
 #[cfg(feature = "pkcs11")]
 mod pkcs11 {
     use std::fmt;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use async_trait::async_trait;
     use cryptoki::context::{CInitializeArgs, CInitializeFlags, Pkcs11};
@@ -2034,6 +2079,7 @@ mod pkcs11 {
         pin: Arc<Zeroizing<String>>,
         session: Arc<std::sync::Mutex<Pkcs11SessionState>>,
         sign_permit: Arc<Semaphore>,
+        ready: Arc<AtomicBool>,
         key_label: String,
         key_id_bytes: Vec<u8>,
     }
@@ -2104,6 +2150,7 @@ mod pkcs11 {
                     private_key,
                 })),
                 sign_permit: Arc::new(Semaphore::new(1)),
+                ready: Arc::new(AtomicBool::new(true)),
                 key_label: config.key_label.clone(),
                 key_id_bytes,
             };
@@ -2111,10 +2158,25 @@ mod pkcs11 {
             Ok(provider)
         }
 
+        pub(super) fn readiness_flag(&self) -> Arc<AtomicBool> {
+            Arc::clone(&self.ready)
+        }
+
         fn self_test(&self, config_key_id: &str) -> Result<(), StandaloneServerError> {
-            let signature = self.sign_sync(SELF_TEST_PAYLOAD).map_err(|_| {
-                invalid_signing_key(config_key_id, "PKCS#11 signer self-test failed")
-            })?;
+            let provider = self.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(provider.sign_sync(SELF_TEST_PAYLOAD));
+            });
+            let signature = rx
+                .recv_timeout(SIGN_TIMEOUT)
+                .map_err(|_| {
+                    self.mark_unhealthy();
+                    invalid_signing_key(config_key_id, "PKCS#11 signer self-test timed out")
+                })?
+                .map_err(|_| {
+                    invalid_signing_key(config_key_id, "PKCS#11 signer self-test failed")
+                })?;
             verify(SELF_TEST_PAYLOAD, &signature, &self.public_jwk).map_err(|_| {
                 invalid_signing_key(
                     config_key_id,
@@ -2123,11 +2185,20 @@ mod pkcs11 {
             })
         }
 
+        fn mark_unhealthy(&self) {
+            self.ready.store(false, Ordering::SeqCst);
+        }
+
         fn sign_sync(&self, payload: &[u8]) -> Result<Vec<u8>, SigningError> {
             if let Ok(signature) = self.sign_with_current_session(payload) {
                 return Ok(signature);
             }
 
+            tracing::warn!(
+                provider = "pkcs11",
+                key_id = %self.key_id,
+                "PKCS#11 sign failed with current session; reopening session"
+            );
             let session = open_logged_in_session_for_signing(&self.context, self.slot, &self.pin)?;
             let private_key =
                 find_private_key_for_signing(&session, &self.key_label, &self.key_id_bytes)?;
@@ -2139,7 +2210,15 @@ mod pkcs11 {
                 state.session = session;
                 state.private_key = private_key;
             }
-            self.sign_with_current_session(payload)
+            let result = self.sign_with_current_session(payload);
+            if result.is_ok() {
+                tracing::info!(
+                    provider = "pkcs11",
+                    key_id = %self.key_id,
+                    "PKCS#11 sign succeeded after session reopen"
+                );
+            }
+            result
         }
 
         fn sign_with_current_session(&self, payload: &[u8]) -> Result<Vec<u8>, SigningError> {
@@ -2179,21 +2258,64 @@ mod pkcs11 {
         }
 
         async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, SigningError> {
+            if !self.ready.load(Ordering::SeqCst) {
+                tracing::warn!(
+                    provider = "pkcs11",
+                    key_id = %self.key_id,
+                    "PKCS#11 signer is unhealthy"
+                );
+                return Err(SigningError::external("PKCS#11 signer is unhealthy"));
+            }
+            let started_at = Instant::now();
             let permit =
                 tokio::time::timeout(SIGN_TIMEOUT, self.sign_permit.clone().acquire_owned())
                     .await
-                    .map_err(|_| SigningError::external("PKCS#11 sign timed out"))?
+                    .map_err(|_| {
+                        tracing::warn!(
+                            provider = "pkcs11",
+                            key_id = %self.key_id,
+                            "PKCS#11 sign timed out while waiting for signing permit"
+                        );
+                        SigningError::external("PKCS#11 sign timed out")
+                    })?
                     .map_err(|_| SigningError::external("PKCS#11 signing gate was closed"))?;
+            let remaining = SIGN_TIMEOUT.saturating_sub(started_at.elapsed());
+            if remaining.is_zero() {
+                return Err(SigningError::external("PKCS#11 sign timed out"));
+            }
             let provider = self.clone();
             let payload = payload.to_vec();
             let task = tokio::task::spawn_blocking(move || {
                 let _permit = permit;
                 provider.sign_sync(&payload)
             });
-            tokio::time::timeout(SIGN_TIMEOUT, task)
+            let result = tokio::time::timeout(remaining, task)
                 .await
-                .map_err(|_| SigningError::external("PKCS#11 sign timed out"))?
-                .map_err(|_| SigningError::external("PKCS#11 sign task failed"))?
+                .map_err(|_| {
+                    self.mark_unhealthy();
+                    tracing::error!(
+                        provider = "pkcs11",
+                        key_id = %self.key_id,
+                        "PKCS#11 sign timed out and signer was marked unhealthy"
+                    );
+                    SigningError::external("PKCS#11 sign timed out")
+                })?
+                .map_err(|_| SigningError::external("PKCS#11 sign task failed"))?;
+            match &result {
+                Ok(_) => tracing::debug!(
+                    provider = "pkcs11",
+                    key_id = %self.key_id,
+                    duration_ms = started_at.elapsed().as_millis() as u64,
+                    "PKCS#11 sign succeeded"
+                ),
+                Err(_) => tracing::warn!(
+                    provider = "pkcs11",
+                    key_id = %self.key_id,
+                    duration_ms = started_at.elapsed().as_millis() as u64,
+                    "PKCS#11 sign failed"
+                ),
+            }
+            result
         }
     }
 
@@ -5178,6 +5300,8 @@ mod tests {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     #[cfg(feature = "pkcs11")]
     use base64::Engine;
+    #[cfg(feature = "pkcs11")]
+    use registry_notary_core::{ClaimProvenance, ClaimResultView, TargetRefView};
     use registry_notary_core::{
         EvaluateRequest, SelfAttestationDenialCode, SelfAttestationRateLimitsConfig,
         SourceConnectionConfig, SourceLookupConfig, SourceQueryFieldConfig,
@@ -5196,7 +5320,7 @@ mod tests {
     const TEST_OLD_ISSUER_PUBLIC_JWK: &str = r##"{"kty":"OKP","crv":"Ed25519","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:web:issuer.example#old"}"##;
     const TEST_OLD_HSM_PUBLIC_JWK: &str = r##"{"kty":"OKP","crv":"Ed25519","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:web:issuer.example#hsm-old"}"##;
     #[cfg(feature = "pkcs11")]
-    static SOFTHSM_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static SOFTHSM_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     #[test]
     fn cached_source_token_debug_redacts_access_token() {
@@ -5501,9 +5625,9 @@ credential_profiles:
     }
 
     #[cfg(feature = "pkcs11")]
-    #[test]
-    fn pkcs11_signing_key_signs_with_softhsm_when_available() {
-        let _guard = SOFTHSM_ENV_LOCK.lock().expect("SoftHSM env lock");
+    #[tokio::test]
+    async fn pkcs11_signing_key_signs_with_softhsm_when_available() {
+        let _guard = SOFTHSM_ENV_LOCK.lock().await;
         let Some(module_path) = softhsm_module_path() else {
             assert!(
                 !require_softhsm(),
@@ -5665,8 +5789,54 @@ credential_profiles:
         assert!(jwks
             .iter()
             .any(|jwk| jwk["kid"] == "did:web:issuer.example#softhsm-secondary"));
-        assert!(registry.issuer("profile-a").is_ok());
+        let issuer = registry
+            .issuer("profile-a")
+            .expect("profile-a issuer resolves");
         assert!(registry.issuer("profile-b").is_ok());
+        let profile = evidence
+            .credential_profiles
+            .get("profile-a")
+            .expect("profile-a exists");
+        let results = vec![ClaimResultView {
+            evaluation_id: "eval-softhsm".to_string(),
+            claim_id: "claim-a".to_string(),
+            claim_version: "1.0.0".to_string(),
+            subject_type: "person".to_string(),
+            requester_ref: None,
+            target_ref: TargetRefView {
+                entity_type: "person".to_string(),
+                handle: "subject-ref".to_string(),
+                identifier_schemes: vec!["registry-subject-ref".to_string()],
+                profile: None,
+            },
+            matching: None,
+            value: Some(serde_json::json!({ "verified": true })),
+            satisfied: Some(true),
+            disclosure: "value".to_string(),
+            format: FORMAT_CLAIM_RESULT_JSON.to_string(),
+            issued_at: "2026-05-23T00:00:00Z".to_string(),
+            expires_at: None,
+            provenance: ClaimProvenance {
+                source_count: 0,
+                source_versions: BTreeMap::new(),
+                computed_by: "softhsm-test".to_string(),
+            },
+        }];
+        let signed = registry_notary_core::sd_jwt::issue(
+            profile,
+            &issuer,
+            &results,
+            "subject-ref",
+            None,
+            time::OffsetDateTime::now_utc(),
+            registry_notary_core::sd_jwt::IssueOptions::default(),
+        )
+        .await
+        .expect("SoftHSM-backed credential issues");
+        assert!(
+            signed.compact.contains('~'),
+            "issued credential includes SD-JWT disclosure separators"
+        );
     }
 
     #[cfg(feature = "pkcs11")]

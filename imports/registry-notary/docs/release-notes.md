@@ -11,6 +11,9 @@
 - Added named SD-JWT VC signing keys under `evidence.signing_keys`, including
   local JWK signing, publish-only rotation keys, disabled keys, and optional
   PKCS#11-backed Ed25519 signing.
+- Product binaries and container images now compile the PKCS#11 provider by
+  default, while vendor modules, token state, labels, and PIN handling remain
+  operator-supplied runtime configuration.
 - Hardened SD-JWT VC conformance for `dc+sd-jwt`, holder binding, proof
   validation, and OpenAPI documentation.
 - Replaced fake Problem Details type URLs with
