@@ -28,6 +28,12 @@ pub(crate) struct ReplayStores {
     redis_ready: Option<Arc<RedisReplayStore>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReplayReadiness {
+    Ready,
+    Degraded,
+}
+
 impl std::fmt::Debug for ReplayStores {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ReplayStores")
@@ -92,10 +98,10 @@ impl ReplayStores {
         Arc::clone(&self.nonce_store)
     }
 
-    pub(crate) async fn check_ready(&self) -> Result<(), ReplayStoreError> {
+    pub(crate) async fn check_ready(&self) -> Result<ReplayReadiness, ReplayStoreError> {
         match &self.redis_ready {
-            Some(redis) => redis.check_ready().await,
-            None => Ok(()),
+            Some(redis) => redis.check_ready().await.map(|()| ReplayReadiness::Ready),
+            None => Ok(ReplayReadiness::Degraded),
         }
     }
 }
@@ -191,6 +197,16 @@ mod tests {
             require_replay_insert(stores.store().as_ref(), &scope, &key, expires_at).await,
             Err(RequiredReplayError::AlreadySeen)
         ));
+    }
+
+    #[tokio::test]
+    async fn memory_replay_store_reports_degraded_readiness() {
+        let stores = ReplayStores::memory();
+
+        assert_eq!(
+            stores.check_ready().await.expect("memory store reports"),
+            ReplayReadiness::Degraded
+        );
     }
 
     #[tokio::test]

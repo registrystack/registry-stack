@@ -1,10 +1,11 @@
 # Security Assurance
 
-Registry Notary treats the current push to `main` as the release signal until a
-tagged release workflow exists. The container workflow publishes
+Registry Notary's container workflow publishes
 `ghcr.io/jeremi/registry-notary:sha-${GITHUB_SHA}` and
-`ghcr.io/jeremi/registry-notary-openfn-sidecar:sha-${GITHUB_SHA}`; security
-evidence is tied to those immutable SHA image tags.
+`ghcr.io/jeremi/registry-notary-openfn-sidecar:sha-${GITHUB_SHA}`. Those
+immutable SHA image tags are CI artifacts used for evidence gathering. First
+serious release readiness is established through the coordinated pre-tag release
+plan; final deployments should pin the selected images by digest.
 
 The CEL-enabled lab image is published as
 `ghcr.io/jeremi/registry-notary:sha-${GITHUB_SHA}-cel` and is covered by the
@@ -46,6 +47,14 @@ cargo run -p registry-notary-bin -- openapi
 CI compares that generated output with
 `openapi/registry-notary.openapi.json`. Any difference is treated as API drift
 and must be committed intentionally with review.
+
+## Image signing status
+
+Registry Notary release images are not signed with `cosign` or another image
+signature workflow yet. The current release evidence relies on immutable
+`sha-${GITHUB_SHA}` tags, digest pinning, SBOM generation, and Grype image
+vulnerability reports. Operators should pin the selected image by digest and
+treat image-signature verification as not available for this release.
 
 ## Local security command
 

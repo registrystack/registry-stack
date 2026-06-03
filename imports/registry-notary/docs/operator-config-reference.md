@@ -517,6 +517,8 @@ Signing keys are covered in detail in
 `replay.storage: in_memory` is acceptable for a single process in local
 development. It is not acceptable for active-active serving because two
 processes cannot see the same nonce or proof replay decisions.
+When the in-memory backend is selected, `/ready` returns HTTP 503 with
+`status: degraded` so operators do not miss the single-process replay posture.
 
 Use Redis for multi-instance deployments:
 
@@ -531,7 +533,7 @@ replay:
 ```
 
 The router fails to build when the named Redis URL environment variable is
-missing. `/ready` fails closed when the replay backend is unavailable.
+missing. `/ready` fails closed when the Redis replay backend is unavailable.
 
 ## Credential Status
 

@@ -54,7 +54,7 @@ fn build_openapi_document() -> OpenApi {
                     "responses": {
                         "200": { "description": "Evidence runtime is ready" },
                         "4XX": { "description": "Client error" },
-                        "503": { "description": "Evidence runtime is not ready" }
+                        "503": { "description": "Evidence runtime is not ready or is degraded" }
                     }
                 }
             },
@@ -858,6 +858,7 @@ fn add_response_examples(document: &mut Value) {
             "checks": {
                 "total": 1,
                 "ok": 1,
+                "degraded": 0,
                 "failed": 0
             }
         }),
@@ -908,13 +909,14 @@ fn add_response_examples(document: &mut Value) {
         "/ready",
         "get",
         "503",
-        "Evidence runtime is not ready",
+        "Evidence runtime is not ready or is degraded",
         json!({
-            "status": "not_ready",
+            "status": "degraded",
             "checks": {
                 "total": 1,
                 "ok": 0,
-                "failed": 1
+                "degraded": 1,
+                "failed": 0
             }
         }),
     );

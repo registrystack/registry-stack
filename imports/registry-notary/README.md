@@ -2,6 +2,8 @@
 
 > **Experimental:** This codebase is under active development. Its APIs are evolving quickly and may be unstable.
 
+Release label: pre-1.0 technical release for evaluation and integration pilots.
+
 Standalone Registry Notary workspace, claim evaluation, federated delegated
 evaluation, credential issuance, and attestation service.
 
@@ -309,10 +311,11 @@ docker build \
   -t registry-notary:cel .
 ```
 
-The product container workflow publishes the default image as `main` /
-`sha-<commit>` and the CEL-enabled lab image as `main-cel` /
-`sha-<commit>-cel` under `ghcr.io/jeremi/registry-notary`. Lab deployments
-should consume the CEL-enabled tag family and pin by digest for rollback.
+The product container workflow publishes CI images as `main` / `sha-<commit>`
+and the CEL-enabled lab image as `main-cel` / `sha-<commit>-cel` under
+`ghcr.io/jeremi/registry-notary`. First serious release readiness is checked
+through the coordinated pre-tag release plan. Lab deployments should consume the
+selected CEL-enabled image by immutable digest for rollback.
 
 Native runs default to `127.0.0.1:8081`. The Docker image sets
 `REGISTRY_NOTARY_BIND=0.0.0.0:8080` and exposes port `8080`; override it with

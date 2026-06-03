@@ -39,6 +39,62 @@ For the full configuration, including the `auth.oidc`, `self_attestation`, and
 gate that binds a request to the token subject, see the
 [self-attestation operator guide](self-attestation-operator-guide.md).
 
+## Integration Quick Check
+
+For a public holder wallet, the normal human-facing entry point is:
+
+```text
+GET /oid4vci/offer/start?credential_configuration_id=<id>
+```
+
+Open that URL in the citizen browser, complete the configured identity-provider
+login, then use the rendered offer page:
+
+- scan or paste the `openid-credential-offer://` URI into the wallet;
+- enter the displayed numeric PIN when the wallet asks for the `tx_code`;
+- let the wallet redeem the offer at the Notary `token_endpoint`;
+- confirm the wallet stores a `dc+sd-jwt` credential.
+
+A successful wallet run should leave these externally visible facts:
+
+- issuer metadata is reachable at `/.well-known/openid-credential-issuer`;
+- the configured Type Metadata is reachable at
+  `/.well-known/vct/{vct_path}` without authentication;
+- issuer metadata advertises `token_endpoint` only when the authenticated
+  pre-authorized-code flow is enabled;
+- the offer contains the
+  `urn:ietf:params:oauth:grant-type:pre-authorized_code` grant and a `tx_code`
+  object;
+- the issued SD-JWT VC payload has `vct` equal to the requested configuration,
+  `iss` equal to the Notary issuer DID, and holder binding in `cnf.jwk` /
+  `cnf.kid` for the wallet's `did:jwk`;
+- the only selectively disclosable claim disclosures are represented through
+  `_sd` and `_sd_alg: "sha-256"` in the payload.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Citizen
+    participant Browser
+    participant Notary as Registry Notary
+    participant IdP as Identity provider
+    participant Wallet
+
+    Citizen->>Browser: Open /oid4vci/offer/start
+    Browser->>Notary: Start offer for credential configuration
+    Notary-->>Browser: Redirect to identity provider
+    Browser->>IdP: Authenticate citizen
+    IdP-->>Browser: Redirect to /oid4vci/offer/callback
+    Browser->>Notary: Send code and state
+    Notary->>IdP: Exchange code and validate subject
+    Notary-->>Browser: Render offer URI plus PIN
+    Citizen->>Wallet: Scan or paste offer, enter PIN
+    Wallet->>Notary: POST /oid4vci/token with code plus tx_code
+    Notary-->>Wallet: Access token plus c_nonce
+    Wallet->>Notary: POST /oid4vci/credential with holder proof
+    Notary-->>Wallet: Holder-bound dc+sd-jwt credential
+```
+
 ## Wallet Flow
 
 The current wallet-facing flow is:
@@ -108,6 +164,11 @@ When enabled, the flow is:
    `access_token` and a `did:jwk` holder proof, exactly as in the flow above. The
    issued SD-JWT VC is bound to the eSignet-authenticated subject (the civil id
    determines whose claim is evaluated) and to the holder's `did:jwk` key.
+
+The browser callback URL itself is not the wallet input. The callback renders an
+HTML offer page after identity-provider authentication succeeds; the wallet
+receives the `openid-credential-offer://` URI from that page and the citizen
+enters the displayed PIN separately.
 
 The `pre-authorized_code` is single-use and short-lived: a second redemption
 fails, and the code expires after `pre_authorized_code_ttl_seconds`. When
@@ -258,6 +319,8 @@ For each wallet product or SDK:
 - Can it request or accept a credential offer for a specific configuration id?
 - Can it obtain an access token with the configured audience and scopes?
 - Does the access token carry the subject-binding claim Notary expects?
+- For public wallets, can it redeem `pre-authorized_code` offers with a numeric
+  `tx_code` at the Notary `token_endpoint`?
 - Can it generate a JWT proof using EdDSA and a `did:jwk` holder key?
 - Does it include and refresh nonces according to issuer responses?
 - Does it accept short-lived credentials?
@@ -290,6 +353,9 @@ configuration overrides in your deployment notes.
 | Metadata route is unavailable | `oid4vci.enabled` is false or self-attestation is disabled | Expanded config and startup logs |
 | Config fails validation | OID4VCI references a claim or credential profile outside self-attestation allow-lists | `credential_configurations`, `self_attestation.allowed_claims`, `self_attestation.credential_profiles` |
 | Wallet token rejected | Audience, issuer, client id, scope, or algorithm mismatch | `auth.oidc`, `oid4vci.accepted_token_audiences`, wallet token header and claims |
+| Wallet never asks for PIN | Offer is still `authorization_code`, pre-authorized-code flow is disabled, or wallet ignored the grant | Issuer metadata `token_endpoint`, offer `grants`, `oid4vci.pre_authorized_code.enabled` |
+| PIN is rejected | Wrong `tx_code`, expired code, reused code, or rate-limit lockout | Offer age, token endpoint response, `tx_code_attempts_per_code_per_minute` |
+| Wallet aborts before login or PIN | Wallet cannot resolve SD-JWT VC Type Metadata | `GET /.well-known/vct/{vct_path}` returns `200` JSON without auth |
 | Subject mismatch | Token claim does not exactly match the requested subject context | `self_attestation.subject_binding` and identity-provider claims |
 | Nonce rejected | Nonce expired, reused, or from another configuration | Nonce TTL, replay store, credential configuration id |
 | Proof rejected | Unsupported alg, wrong holder binding, stale proof, or clock skew | Wallet proof JWT and `oid4vci.proof` |

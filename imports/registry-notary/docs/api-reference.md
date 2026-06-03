@@ -35,8 +35,12 @@ that route.
 | `GET /v1/credentials/{id}/status` | `credential_status` | `credential_status` | `credentialStatus` |
 | `POST /admin/v1/credentials/{id}/status` | `update_credential_status` | not exposed | not exposed |
 | `GET /.well-known/openid-credential-issuer` | `oid4vci_issuer_metadata` | `oid4vci_issuer_metadata` | `oid4vciIssuerMetadata` |
+| `GET /.well-known/vct/{*vct_path}` | not exposed | not exposed | not exposed |
 | `GET /credentials/{vct_path}` | not exposed | not exposed | not exposed |
 | `GET /oid4vci/credential-offer` | `oid4vci_credential_offer` | `oid4vci_credential_offer` | `oid4vciCredentialOffer` |
+| `GET /oid4vci/offer/start` | not exposed | not exposed | not exposed |
+| `GET /oid4vci/offer/callback` | not exposed | not exposed | not exposed |
+| `POST /oid4vci/token` | not exposed | not exposed | not exposed |
 | `POST /oid4vci/nonce` | `oid4vci_nonce` | `oid4vci_nonce` | `oid4vciNonce` |
 | `POST /oid4vci/credential` | `oid4vci_credential` | `oid4vci_credential` | `oid4vciCredential` |
 | `POST /federation/v1/evaluations` | `federation_evaluate_jws` | `federation_evaluate_jws` | `federationEvaluateJws` |

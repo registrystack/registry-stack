@@ -2577,7 +2577,11 @@ async fn public_probe_routes_remain_public_except_metrics() {
     let server = TestServer::builder().http_transport().build(app);
 
     server.get("/healthz").await.assert_status_ok();
-    server.get("/ready").await.assert_status_ok();
+    let ready = server.get("/ready").await;
+    ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let ready_body: Value = ready.json();
+    assert_eq!(ready_body["status"], json!("degraded"));
+    assert_eq!(ready_body["checks"]["degraded"], json!(1));
     server
         .get("/.well-known/openid-credential-issuer")
         .await

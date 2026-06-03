@@ -119,6 +119,7 @@ deploys that overlap traffic, public wallet flows, or federation.
 
 Operational expectations:
 
+- In-memory replay makes `/ready` return HTTP 503 with `status: degraded`.
 - The service should fail readiness when Redis is unavailable.
 - Redis keys are scoped and hashed, but the Redis database is still operational
   security material.

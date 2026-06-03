@@ -647,6 +647,7 @@
               "application/json": {
                 "example": {
                   "checks": {
+                    "degraded": 0,
                     "failed": 0,
                     "ok": 1,
                     "total": 1
@@ -1213,16 +1214,17 @@
             }
           },
           "503": {
-            "description": "Evidence runtime is not ready",
+            "description": "Evidence runtime is not ready or is degraded",
             "content": {
               "application/json": {
                 "example": {
                   "checks": {
-                    "failed": 1,
+                    "degraded": 1,
+                    "failed": 0,
                     "ok": 0,
                     "total": 1
                   },
-                  "status": "not_ready"
+                  "status": "degraded"
                 }
               }
             }
