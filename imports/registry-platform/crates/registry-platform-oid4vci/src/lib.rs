@@ -32,6 +32,8 @@ pub struct CredentialIssuerMetadata {
     pub nonce_endpoint: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub authorization_servers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub display: Vec<DisplayMetadata>,
     pub credential_configurations_supported: BTreeMap<String, CredentialConfigurationMetadata>,
 }
 
@@ -49,6 +51,7 @@ impl CredentialIssuerMetadata {
             token_endpoint: None,
             nonce_endpoint,
             authorization_servers,
+            display: Vec::new(),
             credential_configurations_supported,
         }
     }
@@ -56,6 +59,12 @@ impl CredentialIssuerMetadata {
     #[must_use]
     pub fn with_token_endpoint(mut self, token_endpoint: impl Into<String>) -> Self {
         self.token_endpoint = Some(token_endpoint.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_display(mut self, display: Vec<DisplayMetadata>) -> Self {
+        self.display = display;
         self
     }
 }
@@ -97,10 +106,7 @@ impl CredentialConfigurationMetadata {
                     ],
                 },
             )]),
-            display: vec![DisplayMetadata {
-                name: display_name.into(),
-                locale: None,
-            }],
+            display: vec![DisplayMetadata::new(display_name)],
             vct: Some(vct.into()),
         }
     }
@@ -111,6 +117,43 @@ pub struct DisplayMetadata {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locale: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logo: Option<DisplayImageMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_image: Option<DisplayImageMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_image: Option<DisplayImageMetadata>,
+}
+
+impl DisplayMetadata {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            locale: None,
+            logo: None,
+            description: None,
+            background_color: None,
+            text_color: None,
+            background_image: None,
+            secondary_image: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DisplayImageMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alt_text: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -986,6 +1029,44 @@ mod tests {
         assert!(round_tripped
             .proof_types_supported
             .contains_key(PROOF_TYPE_JWT));
+    }
+
+    #[test]
+    fn display_metadata_serialises_issuer_and_credential_branding_fields() {
+        let display = DisplayMetadata {
+            name: "Identity Credential".to_string(),
+            locale: Some("en-US".to_string()),
+            logo: Some(DisplayImageMetadata {
+                uri: None,
+                url: Some("https://issuer.example/logo.png".to_string()),
+                alt_text: Some("Issuer logo".to_string()),
+            }),
+            description: Some("Proof of identity".to_string()),
+            background_color: Some("#0057B8".to_string()),
+            text_color: Some("#FFFFFF".to_string()),
+            background_image: None,
+            secondary_image: None,
+        };
+        let metadata = CredentialIssuerMetadata::new(
+            "https://issuer.example",
+            "https://issuer.example/credential",
+            None,
+            Vec::new(),
+            BTreeMap::new(),
+        )
+        .with_display(vec![display.clone()]);
+        let value = serde_json::to_value(&metadata).expect("serializes");
+
+        assert_eq!(value["display"][0]["name"], "Identity Credential");
+        assert_eq!(
+            value["display"][0]["logo"]["url"],
+            "https://issuer.example/logo.png"
+        );
+        assert_eq!(value["display"][0]["background_color"], "#0057B8");
+
+        let round_tripped: CredentialIssuerMetadata =
+            serde_json::from_value(value).expect("round-trip deserializes");
+        assert_eq!(round_tripped.display, vec![display]);
     }
 
     #[test]

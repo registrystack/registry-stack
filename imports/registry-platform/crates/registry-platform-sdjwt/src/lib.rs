@@ -9,7 +9,7 @@ use registry_platform_crypto::{
 };
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -59,6 +59,9 @@ impl SdJwtIssuer {
         payload.insert("_sd_alg".to_string(), Value::String("sha-256".to_string()));
         if let Some(status) = input.status {
             payload.insert("status".to_string(), status);
+        }
+        for (name, value) in input.public_claims {
+            payload.insert(name, value);
         }
 
         if let Some(cnf) = input.cnf {
@@ -123,6 +126,7 @@ pub struct SdJwtIssuanceInput {
     pub exp: i64,
     pub vct: String,
     pub status: Option<Value>,
+    pub public_claims: BTreeMap<String, Value>,
     pub cnf: Option<HolderConfirmation>,
     pub disclosures: Vec<Disclosure>,
 }
@@ -143,9 +147,16 @@ impl SdJwtIssuanceInput {
         {
             return Err(SdJwtError::InvalidInput);
         }
+        for name in self.public_claims.keys() {
+            if invalid_public_claim_name(name) {
+                return Err(SdJwtError::InvalidInput);
+            }
+        }
         let mut names = BTreeSet::new();
         for disclosure in &self.disclosures {
-            if invalid_disclosure_name(&disclosure.name) || !names.insert(disclosure.name.as_str())
+            if invalid_disclosure_name(&disclosure.name)
+                || self.public_claims.contains_key(&disclosure.name)
+                || !names.insert(disclosure.name.as_str())
             {
                 return Err(SdJwtError::InvalidInput);
             }
@@ -166,6 +177,10 @@ fn invalid_disclosure_name(value: &str) -> bool {
     value.trim().is_empty()
         || value.chars().any(|ch| ch.is_ascii_control())
         || PROTECTED_NAMES.contains(&value)
+}
+
+fn invalid_public_claim_name(value: &str) -> bool {
+    invalid_disclosure_name(value)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -479,6 +494,7 @@ mod tests {
                 exp: 1_700_000_600,
                 vct: "https://vct.example/test".to_string(),
                 status: None,
+                public_claims: BTreeMap::new(),
                 cnf: Some(HolderConfirmation {
                     jwk: holder.public(),
                     kid: Some("did:jwk:holder#key-1".to_string()),
@@ -542,6 +558,43 @@ mod tests {
         assert_eq!(payload["id"], credential_id);
         assert_eq!(payload["jti"], credential_id);
         assert_eq!(payload["status"], status);
+    }
+
+    #[tokio::test]
+    async fn sd_jwt_issuance_accepts_public_compatibility_claims() {
+        let issuer =
+            SdJwtIssuer::from_jwk(PrivateJwk::parse(RAW_JWK).expect("jwk")).expect("issuer builds");
+
+        let signed = issuer
+            .issue(SdJwtIssuanceInput {
+                public_claims: BTreeMap::from([
+                    ("issuanceDate".to_string(), json!("2023-11-14T22:13:20Z")),
+                    ("expirationDate".to_string(), json!("2023-11-14T22:23:20Z")),
+                ]),
+                ..issue_input(None)
+            })
+            .await
+            .expect("issues");
+        let payload = jwt_payload(&signed.jwt);
+
+        assert_eq!(payload["issuanceDate"], "2023-11-14T22:13:20Z");
+        assert_eq!(payload["expirationDate"], "2023-11-14T22:23:20Z");
+    }
+
+    #[tokio::test]
+    async fn sd_jwt_issuance_rejects_public_claims_that_override_registered_claims() {
+        let issuer =
+            SdJwtIssuer::from_jwk(PrivateJwk::parse(RAW_JWK).expect("jwk")).expect("issuer builds");
+
+        let err = issuer
+            .issue(SdJwtIssuanceInput {
+                public_claims: BTreeMap::from([("exp".to_string(), json!("shadow"))]),
+                ..issue_input(None)
+            })
+            .await
+            .expect_err("registered claim names reject");
+
+        assert!(matches!(err, SdJwtError::InvalidInput));
     }
 
     #[tokio::test]
@@ -910,6 +963,7 @@ mod tests {
             exp: 1_700_000_600,
             vct: "https://vct.example/test".to_string(),
             status: None,
+            public_claims: BTreeMap::new(),
             cnf,
             disclosures: Vec::new(),
         }
