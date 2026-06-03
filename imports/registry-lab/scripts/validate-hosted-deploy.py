@@ -27,6 +27,7 @@ REQUIRED_SERVICES = {
         "social-protection-registry-relay",
         "health-registry-relay",
         "static-metadata-publisher",
+        "lab-homepage",
         "zitadel",
         "openfn-dhis2-sidecar",
         "dhis2-health-notary",
@@ -39,6 +40,12 @@ REQUIRED_SERVICES = {
         "esignet",
         "esignet-ui",
     },
+    "walt": {
+        "walt-postgres",
+        "wallet-api",
+        "waltid-demo-wallet",
+        "caddy",
+    },
 }
 
 REQUIRED_DOMAINS = {
@@ -48,6 +55,7 @@ REQUIRED_DOMAINS = {
         "social-protection-registry-relay": f"social-relay.{LAB_DOMAIN}",
         "health-registry-relay": f"health-relay.{LAB_DOMAIN}",
         "static-metadata-publisher": f"metadata.{LAB_DOMAIN}",
+        "lab-homepage": LAB_DOMAIN,
         "zitadel": f"zitadel.{LAB_DOMAIN}",
         "dhis2-health-notary": f"dhis2-notary.{LAB_DOMAIN}",
         "opencrvs-dci-notary": f"opencrvs-notary.{LAB_DOMAIN}",
@@ -55,6 +63,9 @@ REQUIRED_DOMAINS = {
     "esignet": {
         "esignet": f"esignet.{LAB_DOMAIN}",
         "esignet-ui": f"esignet-ui.{LAB_DOMAIN}",
+    },
+    "walt": {
+        "caddy": f"wallet.{LAB_DOMAIN}",
     },
 }
 
@@ -64,7 +75,22 @@ REQUIRED_HOSTED_VARIABLES = {
         "ZITADEL_MASTERKEY",
         "REGISTRY_NOTARY_AUDIT_HASH_SECRET",
         "REGISTRY_NOTARY_ISSUER_JWK",
+        "REGISTRY_NOTARY_ACCESS_TOKEN_JWK",
+        "REGISTRY_NOTARY_ESIGNET_RP_JWK",
         "CIVIL_EVIDENCE_SOURCE_RAW",
+        "CIVIL_METADATA_CLIENT_RAW",
+        "CIVIL_EVIDENCE_ONLY_RAW",
+        "CIVIL_ROW_READER_RAW",
+        "SOCIAL_METADATA_CLIENT_RAW",
+        "SOCIAL_EVIDENCE_ONLY_RAW",
+        "SOCIAL_ROW_READER_RAW",
+        "SOCIAL_AGGREGATE_READER_RAW",
+        "HEALTH_METADATA_CLIENT_RAW",
+        "HEALTH_EVIDENCE_ONLY_RAW",
+        "HEALTH_ROW_READER_RAW",
+        "DHIS2_EVIDENCE_CLIENT_TOKEN",
+        "DHIS2_EVIDENCE_CLIENT_BEARER",
+        "OPENCRVS_EVIDENCE_CLIENT_TOKEN",
         "OPENFN_SIDECAR_TOKEN_HASH",
         "OPENFN_SIDECAR_TOKEN_RAW",
         "OPENFN_DHIS2_HOST_URL",
@@ -98,6 +124,14 @@ REQUIRED_HOSTED_VARIABLES = {
     "esignet": {
         "REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD",
         "REGISTRY_LAB_ESIGNET_CLIENT_REDIRECT_URIS_JSON",
+    },
+    "walt": {
+        "WALT_DB_PASSWORD",
+        "WALT_AUTH_ENCRYPTION_KEY",
+        "WALT_AUTH_SIGN_KEY",
+        "WALT_AUTH_TOKEN_KEY",
+        "WALT_KTOR_SIGNING_KEY",
+        "WALT_KTOR_VERIFICATION_KEY",
     },
 }
 
@@ -838,7 +872,24 @@ def collect_service_contract_text(compose: dict[str, Any], root: Path, service: 
         chunks.append(json.dumps(service_config, sort_keys=True))
         for _path, text in iter_referenced_file_texts(root, service_config):
             chunks.append(text)
+        config_path = hosted_notary_config_path(root, service_config)
+        if config_path and config_path.exists():
+            chunks.append(config_path.read_text(encoding="utf-8"))
     return "\n".join(chunks)
+
+
+def hosted_notary_config_path(root: Path, service_config: dict[str, Any]) -> Path | None:
+    command = service_config.get("command")
+    if not isinstance(command, list):
+        return None
+    for index, value in enumerate(command[:-1]):
+        if value != "--config":
+            continue
+        config_path = str(command[index + 1])
+        name = Path(config_path).name
+        if name:
+            return root / "config" / "coolify" / "notary" / name
+    return None
 
 
 def extract_citizen_esignet_issuer(compose: dict[str, Any], root: Path) -> str | None:
@@ -978,6 +1029,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="hosted eSignet compose file",
     )
     parser.add_argument(
+        "--walt-compose",
+        type=Path,
+        default=Path("compose.walt-hosted.yaml"),
+        help="hosted walt.id wallet compose file",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="print validation issues as JSON",
@@ -1000,6 +1057,7 @@ def main(argv: list[str]) -> int:
     for artifact, path in (
         ("registry-lab", args.registry_lab_compose),
         ("esignet", args.esignet_compose),
+        ("walt", args.walt_compose),
     ):
         if not path.exists():
             issues.append(

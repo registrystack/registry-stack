@@ -5,14 +5,51 @@ x-hosted-domains:
   esignet-ui: esignet-ui.lab.registrystack.org
 
 services:
+  # Coolify does not seed compose bind mounts from the git repo. This one-shot
+  # init clones the public repo and populates named config volumes that the
+  # database, esignet-ui, and seed services mount at their expected paths.
+  config-loader:
+    image: ${CONFIG_LOADER_IMAGE:-alpine:3.20}
+    restart: "no"
+    environment:
+      CONFIG_REPO_URL: ${CONFIG_REPO_URL:-https://github.com/jeremi/registry-lab}
+      CONFIG_REPO_REF: ${CONFIG_REPO_REF:-main}
+    entrypoint: ["/bin/sh", "-euc"]
+    command:
+      - |
+        apk add --no-cache git >/dev/null
+        rm -rf /tmp/repo
+        git clone --depth 1 --branch "$$CONFIG_REPO_REF" "$$CONFIG_REPO_URL" /tmp/repo
+        for d in pginit uiconf seed; do
+          mkdir -p "/out/$$d"
+          find "/out/$$d" -mindepth 1 -delete 2>/dev/null || true
+        done
+        cp -a /tmp/repo/config/esignet/init.sql /out/pginit/
+        cp -a /tmp/repo/config/esignet/nginx-hosted.conf /out/uiconf/
+        cp -a /tmp/repo/scripts/seed-esignet-live.py /out/seed/
+        echo "config-loader: populated esignet config volumes from $$CONFIG_REPO_REF"
+    volumes:
+      - es-pginit:/out/pginit
+      - es-uiconf:/out/uiconf
+      - es-seed:/out/seed
+
   database:
-    image: postgres:bookworm
+    image: ${REGISTRY_LAB_ESIGNET_POSTGRES_IMAGE:-postgres:16}
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:-replace-in-coolify}
+    depends_on:
+      config-loader:
+        condition: service_completed_successfully
     volumes:
-      - esignet-postgres-data:/var/lib/postgresql/data
-      - ./config/esignet/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # Postgres holds the MOSIP keymanager key *aliases*; the matching key
+      # material (the master key) persists in the mock-keystore / esignet-keystore
+      # volumes. These three form a consistent set: a keystore without its DB
+      # aliases (or vice versa) fails startup with "No such alias". To force a
+      # clean reset, bump this suffix AND recreate the two keystore volumes
+      # together so all three are reinitialized as a set.
+      - esignet-pgdata-v3:/var/lib/postgresql/data
+      - es-pginit:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
       interval: 5s
@@ -50,8 +87,24 @@ services:
       SPRING_DATASOURCE_USERNAME: postgres
       SPRING_DATASOURCE_PASSWORD: ${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:-replace-in-coolify}
       MOSIP_ESIGNET_HOST: esignet.lab.registrystack.org
+      # The `local` profile (active_profile_env: default,local) hardcodes
+      # mosip.mockidentitysystem.esignet.issuer-id=http://localhost:8088/v1/esignet,
+      # which it stamps as the `iss` of the signed userinfo JWS, ignoring
+      # MOSIP_ESIGNET_HOST. RPs validate the userinfo `iss` against the OP's
+      # discovery issuer, so override it (OS env outranks the profile property)
+      # to the bare discovery issuer the id_token also uses.
+      MOSIP_MOCKIDENTITYSYSTEM_ESIGNET_ISSUER_ID: https://esignet.lab.registrystack.org
       MOSIP_MOCK_IDA_KYC_TRANSACTION_TIMEOUT_SECS: "900"
       MOSIP_MOCK_IDA_IDENTITY_OPENID_CLAIMS_MAPPING: '{"individualId":"individual_id","fullName":"name","givenName":"given_name","familyName":"family_name","email":"email","phone":"phone_number","gender":"gender","dateOfBirth":"birthdate","encodedPhoto":"picture","preferredUsername":"preferred_username","middleName":"middle_name","nickName":"nickname","streetAddress":"address.street_address","locality":"address.locality","region":"address.region","country":"address.country","postalCode":"address.postal_code","preferredLang":"locale","zoneInfo":"address.zoneinfo"}'
+      # Relocate the PKCS12 keymanager keystore (the master key) onto a named
+      # volume so it survives container recreates and stays consistent with the
+      # key aliases persisted in postgres. Default is /home/mosip/mock_local.p12
+      # on the ephemeral container layer, which a recreate wipes -> "No such
+      # alias" crash. Spring relaxed binding maps this env to
+      # mosip.kernel.keymanager.hsm.config-path (no -D override in the launcher).
+      MOSIP_KERNEL_KEYMANAGER_HSM_CONFIG_PATH: /home/mosip/keystore/mock_local.p12
+    volumes:
+      - mock-keystore:/home/mosip/keystore
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://mock-identity-system:8082/v1/mock-identity-system/actuator/health"]
       interval: 10s
@@ -89,16 +142,21 @@ services:
       SPRING_REDIS_PASSWORD: ""
       MOSIP_ESIGNET_HOST: esignet.lab.registrystack.org
       MOSIP_ESIGNET_DISCOVERY_ISSUER_ID: https://esignet.lab.registrystack.org
-      MOSIP_ESIGNET_DISCOVERY_KEY_VALUES: "{'issuer':'https://esignet.lab.registrystack.org','authorization_endpoint':'https://esignet-ui.lab.registrystack.org/authorize','token_endpoint':'https://esignet.lab.registrystack.org/v1/esignet/oauth/v2/token','userinfo_endpoint':'https://esignet.lab.registrystack.org/v1/esignet/oidc/userinfo','jwks_uri':'https://esignet.lab.registrystack.org/v1/esignet/oauth/.well-known/jwks.json'}"
-      MOSIP_ESIGNET_OAUTH_KEY_VALUES: "{'issuer':'https://esignet.lab.registrystack.org','authorization_endpoint':'https://esignet-ui.lab.registrystack.org/authorize','token_endpoint':'https://esignet.lab.registrystack.org/v1/esignet/oauth/v2/token','jwks_uri':'https://esignet.lab.registrystack.org/v1/esignet/oauth/.well-known/jwks.json'}"
+      MOSIP_ESIGNET_DISCOVERY_KEY_VALUES: "{'issuer':'https://esignet.lab.registrystack.org','authorization_endpoint':'https://esignet-ui.lab.registrystack.org/authorize','token_endpoint':'https://esignet.lab.registrystack.org/v1/esignet/oauth/v2/token','userinfo_endpoint':'https://esignet.lab.registrystack.org/v1/esignet/oidc/userinfo','jwks_uri':'https://esignet.lab.registrystack.org/v1/esignet/oauth/.well-known/jwks.json','token_endpoint_auth_methods_supported':{'private_key_jwt'},'token_endpoint_auth_signing_alg_values_supported':{'RS256','PS256','ES256'}}"
+      MOSIP_ESIGNET_OAUTH_KEY_VALUES: "{'issuer':'https://esignet.lab.registrystack.org','authorization_endpoint':'https://esignet-ui.lab.registrystack.org/authorize','token_endpoint':'https://esignet.lab.registrystack.org/v1/esignet/oauth/v2/token','jwks_uri':'https://esignet.lab.registrystack.org/v1/esignet/oauth/.well-known/jwks.json','token_endpoint_auth_methods_supported':{'private_key_jwt'},'token_endpoint_auth_signing_alg_values_supported':{'RS256','PS256','ES256'}}"
       MOSIP_ESIGNET_DATABASE_URL: jdbc:postgresql://database:5432/mosip_esignet?currentSchema=esignet
       MOSIP_ESIGNET_DATABASE_USERNAME: postgres
       MOSIP_ESIGNET_DATABASE_PASSWORD: ${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:-replace-in-coolify}
       MOSIP_ESIGNET_INTEGRATION_KEY_BINDER: MockKeyBindingWrapperService
       MOSIP_ESIGNET_MOCK_DOMAIN_URL: http://mock-identity-system:8082
       MOSIP_ESIGNET_OPENID_SCOPE_CLAIMS: "{'profile' : {'name','address','gender','birthdate','picture','email','phone_number','phone_number_verified','registration_type','updated_at','individual_id'},'email' : {'email'}, 'phone' : {'phone_number','phone_number_verified'}, 'address': {'address'}}"
+      # Persist the PKCS12 keymanager keystore on a named volume; see the same
+      # setting on mock-identity-system for the rationale.
+      MOSIP_KERNEL_KEYMANAGER_HSM_CONFIG_PATH: /home/mosip/keystore/esignet_local.p12
     expose:
       - "8088"
+    volumes:
+      - esignet-keystore:/home/mosip/keystore
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://esignet:8088/v1/esignet/oidc/.well-known/openid-configuration"]
       interval: 10s
@@ -112,6 +170,8 @@ services:
     depends_on:
       esignet:
         condition: service_healthy
+      config-loader:
+        condition: service_completed_successfully
     environment:
       container_user: mosip
       DEFAULT_WELLKNOWN: "%5B%7B%22name%22%3A%22OpenID%20Configuration%22%2C%22value%22%3A%22%2F.well-known%2Fopenid-configuration%22%7D%2C%7B%22name%22%3A%22Jwks%20Json%22%2C%22value%22%3A%22%2F.well-known%2Fjwks.json%22%7D%2C%7B%22name%22%3A%22Authorization%20Server%22%2C%22value%22%3A%22%2F.well-known%2Foauth-authorization-server%22%7D%5D"
@@ -121,8 +181,13 @@ services:
       images_url_env: ""
     expose:
       - "3000"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        cp /lab-uiconf/nginx-hosted.conf /etc/nginx/nginx.conf
+        exec sh configure_start.sh nginx -g "daemon off;"
     volumes:
-      - ./config/esignet/nginx-hosted.conf:/etc/nginx/nginx.conf:ro
+      - es-uiconf:/lab-uiconf:ro
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://esignet-ui:3000/.well-known/openid-configuration"]
       interval: 10s
@@ -139,6 +204,8 @@ services:
         condition: service_healthy
       mock-identity-system:
         condition: service_healthy
+      config-loader:
+        condition: service_completed_successfully
     environment:
       PGHOST: database
       PGPORT: "5432"
@@ -147,7 +214,7 @@ services:
       ESIGNET_CLIENT_PRIVATE_KEY_FILE: /var/lib/esignet-seed/client-private.pem
       REGISTRY_LAB_ESIGNET_CLIENT_REDIRECT_URIS_JSON: '${REGISTRY_LAB_ESIGNET_CLIENT_REDIRECT_URIS_JSON:-["https://esignet-ui.lab.registrystack.org/callback"]}'
     volumes:
-      - ./scripts/seed-esignet-live.py:/seed/seed-esignet-live.py:ro
+      - es-seed:/seed:ro
       - esignet-seed-data:/var/lib/esignet-seed
     entrypoint: ["/bin/sh", "-euc"]
     command:
@@ -184,6 +251,11 @@ services:
     restart: "no"
 
 volumes:
-  esignet-postgres-data:
+  esignet-pgdata-v3:
+  mock-keystore:
+  esignet-keystore:
   esignet-redis-data:
   esignet-seed-data:
+  es-pginit:
+  es-uiconf:
+  es-seed:

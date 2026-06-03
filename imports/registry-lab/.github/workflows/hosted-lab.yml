@@ -6,9 +6,11 @@ on:
       - ".github/workflows/hosted-lab.yml"
       - "compose.coolify.yaml"
       - "compose.esignet-hosted.yaml"
+      - "compose.walt-hosted.yaml"
       - "config/coolify/**"
-      - "config/lab-homepage/public-demo-credentials.env"
+      - "config/lab-homepage/**"
       - "config/esignet/nginx-hosted.conf"
+      - "config/walt/**"
       - "docs/README.md"
       - "docs/public-api-workspace.md"
       - "requests/registry-lab/**"
@@ -25,9 +27,11 @@ on:
       - ".github/workflows/hosted-lab.yml"
       - "compose.coolify.yaml"
       - "compose.esignet-hosted.yaml"
+      - "compose.walt-hosted.yaml"
       - "config/coolify/**"
-      - "config/lab-homepage/public-demo-credentials.env"
+      - "config/lab-homepage/**"
       - "config/esignet/nginx-hosted.conf"
+      - "config/walt/**"
       - "docs/README.md"
       - "docs/public-api-workspace.md"
       - "requests/registry-lab/**"
@@ -62,9 +66,11 @@ jobs:
             .github/workflows/hosted-lab.yml \
             compose.coolify.yaml \
             compose.esignet-hosted.yaml \
+            compose.walt-hosted.yaml \
             config/coolify \
-            config/lab-homepage/public-demo-credentials.env \
+            config/lab-homepage \
             config/esignet/nginx-hosted.conf \
+            config/walt \
             docs/README.md \
             docs/public-api-workspace.md \
             requests/registry-lab \
@@ -79,12 +85,23 @@ jobs:
         run: |
           test -f compose.coolify.yaml
           test -f compose.esignet-hosted.yaml
+          test -f compose.walt-hosted.yaml
 
       - name: Render Registry Lab hosted compose
         run: docker compose -f compose.coolify.yaml config >/tmp/compose.coolify.config.yaml
 
       - name: Render hosted eSignet compose
         run: docker compose -f compose.esignet-hosted.yaml config >/tmp/compose.esignet-hosted.config.yaml
+
+      - name: Render hosted walt compose
+        env:
+          WALT_AUTH_ENCRYPTION_KEY: hosted-validation-placeholder
+          WALT_AUTH_SIGN_KEY: hosted-validation-placeholder
+          WALT_AUTH_TOKEN_KEY: hosted-validation-placeholder
+          WALT_DB_PASSWORD: hosted-validation-placeholder
+          WALT_KTOR_SIGNING_KEY: hosted-validation-placeholder
+          WALT_KTOR_VERIFICATION_KEY: hosted-validation-placeholder
+        run: docker compose -f compose.walt-hosted.yaml config >/tmp/compose.walt-hosted.config.yaml
 
       - name: Run hosted deploy validator tests
         run: python3 scripts/test_validate_hosted_deploy.py
@@ -101,18 +118,28 @@ jobs:
   deploy-coolify:
     needs: validate-hosted-artifacts
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     permissions: {}
     concurrency:
       group: hosted-lab-coolify-deploy
       cancel-in-progress: false
     steps:
-      - name: Trigger Coolify deploy webhook
+      - name: Trigger Coolify deploys
         env:
-          COOLIFY_DEPLOY_WEBHOOK_URL: ${{ secrets.COOLIFY_DEPLOY_WEBHOOK_URL }}
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          COOLIFY_API_BASE_URL: https://cool.pitgenius.com/api/v1
         run: |
-          if [ -z "$COOLIFY_DEPLOY_WEBHOOK_URL" ]; then
-            echo "COOLIFY_DEPLOY_WEBHOOK_URL is not configured; skipping Coolify deploy."
-            exit 0
+          if [ -z "$COOLIFY_API_TOKEN" ]; then
+            echo "::error::COOLIFY_API_TOKEN is not configured; hosted deploy cannot run."
+            exit 1
           fi
-          curl -fsS -X POST "$COOLIFY_DEPLOY_WEBHOOK_URL"
+          for app in \
+            klhnsuoye8lwuamp0bko387t \
+            cewwn93kknzsfzicen9nul6v \
+            uvqfk8gwqdbdse4v871xfv56
+          do
+            curl -fsS \
+              -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+              "${COOLIFY_API_BASE_URL}/deploy?uuid=${app}&force=false"
+            echo
+          done
