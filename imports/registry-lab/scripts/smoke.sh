@@ -232,7 +232,11 @@ PY
 
 mkdir -p "${output_dir}"
 
-check "service-first sibling dependencies" "${script_dir}/check-service-first-deps.sh" all
+if [[ "${REGISTRY_LAB_CHECK_ATLAS:-1}" == "1" ]]; then
+  check "service-first sibling dependencies" "${script_dir}/check-service-first-deps.sh" all
+else
+  check "service-first manifest dependency" "${script_dir}/check-service-first-deps.sh" manifest
+fi
 
 wait_http "civil relay health" http://127.0.0.1:4311/healthz "${CIVIL_METADATA_CLIENT_RAW}"
 wait_http "social relay health" http://127.0.0.1:4312/healthz "${SOCIAL_METADATA_CLIENT_RAW}"
@@ -324,7 +328,9 @@ form_schemas = index.get("form_schemas", [])
 if not any(item.get("form") == "health_linked_child_support_form" for item in form_schemas):
     raise SystemExit("metadata index does not link the service form JSON Schema")
 PY
-check "Atlas service graph discovery" atlas_service_view
+if [[ "${REGISTRY_LAB_CHECK_ATLAS:-1}" == "1" ]]; then
+  check "Atlas service graph discovery" atlas_service_view
+fi
 
 status="$(curl_status GET http://127.0.0.1:4312/v1/datasets/social_protection_registry/entities/household/records?limit=1 "${SOCIAL_EVIDENCE_ONLY_RAW}" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo")"
 [[ "${status}" == "403" ]] || fail "row denial with evidence-only credential expected 403, got ${status}"

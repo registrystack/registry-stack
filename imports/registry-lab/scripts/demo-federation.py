@@ -192,10 +192,7 @@ def federation_payload(
         "profile": profile,
         "purpose": purpose,
         "request": {
-            "target": {
-                "type": "Person",
-                "identifiers": [{"scheme": target_identifier_scheme, "value": target_id}],
-            },
+            "subject": {"id": target_id, "id_type": target_identifier_scheme},
             "claims": [claim_id],
         },
     }

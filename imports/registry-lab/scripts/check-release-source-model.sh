@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+lab_root="$(cd "${script_dir}/.." && pwd)"
+mode="${1:-${REGISTRY_LAB_RELEASE_SOURCE_MODE:-vendor}}"
+allow_pending_pins="${REGISTRY_LAB_ALLOW_PENDING_PINS:-0}"
+
+resolve_dir() {
+  local raw="$1"
+  local candidate
+  if [[ "${raw}" = /* ]]; then
+    candidate="${raw}"
+  else
+    candidate="${lab_root}/${raw}"
+  fi
+  python3 - "${candidate}" <<'PY'
+import sys
+from pathlib import Path
+
+print(Path(sys.argv[1]).expanduser().resolve(strict=False))
+PY
+}
+
+repo_head() {
+  git -C "$1" rev-parse HEAD
+}
+
+dirty_count() {
+  git -C "$1" status --short | wc -l | tr -d ' '
+}
+
+require_cargo_repo() {
+  local name="$1"
+  local path="$2"
+  if [[ ! -f "${path}/Cargo.toml" ]]; then
+    echo "release source model failed: ${name} checkout not found at ${path}" >&2
+    exit 2
+  fi
+}
+
+expect_path() {
+  local name="$1"
+  local configured="$2"
+  local expected="$3"
+  local resolved_configured
+  local resolved_expected
+  resolved_configured="$(resolve_dir "${configured}")"
+  resolved_expected="$(resolve_dir "${expected}")"
+  if [[ "${resolved_configured}" != "${resolved_expected}" ]]; then
+    echo "release source model failed: ${name} must use ${resolved_expected}, got ${resolved_configured}" >&2
+    exit 2
+  fi
+  require_cargo_repo "${name}" "${resolved_configured}"
+  printf 'release-source %s %s %s\n' "${name}" "${resolved_configured}" "$(repo_head "${resolved_configured}")"
+}
+
+compare_pin() {
+  local name="$1"
+  local source_dir="$2"
+  local vendor_dir="$3"
+  local source_head
+  local vendor_head
+  local source_dirty
+  source_head="$(repo_head "${source_dir}")"
+  vendor_head="$(repo_head "${vendor_dir}")"
+  source_dirty="$(dirty_count "${source_dir}")"
+  printf 'release-source %s source %s %s dirty=%s\n' "${name}" "${source_dir}" "${source_head}" "${source_dirty}"
+  printf 'release-source %s vendor %s %s\n' "${name}" "${vendor_dir}" "${vendor_head}"
+  if [[ "${source_head}" != "${vendor_head}" ]]; then
+    pending=1
+    echo "pending-pin ${name}: vendor ${vendor_head} does not match source ${source_head}" >&2
+  fi
+  if [[ "${source_dirty}" != "0" ]]; then
+    pending=1
+    echo "pending-source-clean ${name}: source checkout has ${source_dirty} dirty path(s)" >&2
+  fi
+}
+
+atlas_enabled() {
+  [[ "${REGISTRY_LAB_CHECK_ATLAS:-0}" == "1" || "${REGISTRY_LAB_RUN_LIVE_STORIES:-0}" == "1" ]]
+}
+
+vendor_platform="${lab_root}/vendor/registry-platform"
+vendor_relay="${lab_root}/vendor/registry-relay"
+vendor_notary="${lab_root}/vendor/registry-notary"
+vendor_manifest="${lab_root}/vendor/registry-manifest"
+vendor_atlas="${lab_root}/vendor/registry-atlas"
+vendor_cel_mapping="${lab_root}/vendor/cel-mapping"
+
+case "${mode}" in
+  vendor)
+    expect_path "registry-platform" "${REGISTRY_PLATFORM_SOURCE_DIR:-${vendor_platform}}" "${vendor_platform}"
+    expect_path "registry-relay-platform" "${REGISTRY_RELAY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-${vendor_platform}}}" "${vendor_platform}"
+    expect_path "registry-notary-platform" "${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-${vendor_platform}}}" "${vendor_platform}"
+    expect_path "registry-relay" "${REGISTRY_RELAY_SOURCE_DIR:-${vendor_relay}}" "${vendor_relay}"
+    expect_path "registry-notary" "${REGISTRY_NOTARY_SOURCE_DIR:-${vendor_notary}}" "${vendor_notary}"
+    expect_path "registry-openfn-notary" "${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-${vendor_notary}}}" "${vendor_notary}"
+    expect_path "registry-manifest" "${REGISTRY_MANIFEST_REPO:-${vendor_manifest}}" "${vendor_manifest}"
+    expect_path "cel-mapping" "${CEL_MAPPING_SOURCE_DIR:-${vendor_cel_mapping}}" "${vendor_cel_mapping}"
+    if atlas_enabled; then
+      expect_path "registry-atlas" "${REGISTRY_ATLAS_SOURCE_DIR:-${vendor_atlas}}" "${vendor_atlas}"
+    else
+      echo "release-source registry-atlas excluded"
+    fi
+    ;;
+  source)
+    platform_dir="$(resolve_dir "${REGISTRY_PLATFORM_SOURCE_DIR:-../registry-platform}")"
+    relay_dir="$(resolve_dir "${REGISTRY_RELAY_SOURCE_DIR:-../registry-relay}")"
+    notary_dir="$(resolve_dir "${REGISTRY_NOTARY_SOURCE_DIR:-../registry-notary}")"
+    relay_platform_dir="$(resolve_dir "${REGISTRY_RELAY_PLATFORM_SOURCE_DIR:-${platform_dir}}")"
+    notary_platform_dir="$(resolve_dir "${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${platform_dir}}")"
+    openfn_notary_dir="$(resolve_dir "${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${notary_dir}}")"
+    manifest_dir="$(resolve_dir "${REGISTRY_MANIFEST_REPO:-${vendor_manifest}}")"
+    cel_mapping_dir="$(resolve_dir "${CEL_MAPPING_SOURCE_DIR:-${vendor_cel_mapping}}")"
+
+    require_cargo_repo "registry-platform" "${platform_dir}"
+    require_cargo_repo "registry-relay" "${relay_dir}"
+    require_cargo_repo "registry-notary" "${notary_dir}"
+    expect_path "registry-relay-platform" "${relay_platform_dir}" "${platform_dir}"
+    expect_path "registry-notary-platform" "${notary_platform_dir}" "${platform_dir}"
+    expect_path "registry-openfn-notary" "${openfn_notary_dir}" "${notary_dir}"
+    require_cargo_repo "registry-manifest" "${manifest_dir}"
+    require_cargo_repo "cel-mapping" "${cel_mapping_dir}"
+
+    pending=0
+    compare_pin "registry-platform" "${platform_dir}" "${vendor_platform}"
+    compare_pin "registry-relay" "${relay_dir}" "${vendor_relay}"
+    compare_pin "registry-notary" "${notary_dir}" "${vendor_notary}"
+    printf 'release-source registry-manifest %s %s\n' "${manifest_dir}" "$(repo_head "${manifest_dir}")"
+    printf 'release-source cel-mapping %s %s\n' "${cel_mapping_dir}" "$(repo_head "${cel_mapping_dir}")"
+
+    if atlas_enabled; then
+      atlas_dir="$(resolve_dir "${REGISTRY_ATLAS_SOURCE_DIR:-../registry-atlas}")"
+      require_cargo_repo "registry-atlas" "${atlas_dir}"
+      printf 'release-source registry-atlas %s %s\n' "${atlas_dir}" "$(repo_head "${atlas_dir}")"
+    else
+      echo "release-source registry-atlas excluded"
+    fi
+
+    if [[ "${pending}" != "0" && "${allow_pending_pins}" != "1" ]]; then
+      echo "release source model failed: source proof has pending Lab pin or dirty source state; set REGISTRY_LAB_ALLOW_PENDING_PINS=1 only before the final Lab pin/tag update" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "usage: REGISTRY_LAB_RELEASE_SOURCE_MODE=vendor|source scripts/check-release-source-model.sh [vendor|source]" >&2
+    exit 2
+    ;;
+esac

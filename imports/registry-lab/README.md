@@ -2,6 +2,8 @@
 
 > **Experimental:** This codebase is under active development. Its APIs are evolving quickly and may be unstable.
 
+Release label: pre-1.0 technical release for evaluation and integration pilots.
+
 This demo runs three independent Registry Relay authorities, four Registry
 Notary verifiers, a live Postgres source, a live Zitadel IdP, a default OpenFn
 sidecar scenario, a static metadata publisher, and a narrated client. It uses
@@ -65,12 +67,13 @@ just smoke
 just client
 ```
 
-The service-first story uses the `vendor/registry-manifest` and
-`vendor/registry-atlas` submodules by default. Override `REGISTRY_MANIFEST_REPO`
-and `REGISTRY_ATLAS_SOURCE_DIR` when you want to test sibling checkouts or other
-local paths. `just generate` fails early when `registry-manifest` is missing,
-while `just smoke`, `just live-stories`, and `just release` fail early when
-either service-first checkout is missing.
+The service-first story uses the `vendor/registry-manifest` submodule by
+default. Atlas-backed service graph checks are optional for the first release
+proof path and run when `REGISTRY_LAB_CHECK_ATLAS=1` or live stories are
+enabled. Override `REGISTRY_MANIFEST_REPO` and `REGISTRY_ATLAS_SOURCE_DIR` when
+you want to test sibling checkouts or other local paths. `just generate` fails
+early when `registry-manifest` is missing. `just smoke` fails early for Atlas
+only when Atlas checks are enabled.
 
 `just generate` writes `.env`, fixture files, and static metadata. Run it before
 `just up` the first time, and run it again after pulling demo changes that add
@@ -103,6 +106,23 @@ just commons-check
 `commons-check` intentionally uses source dirs instead of `vendor/` pins. Update
 Lab vendor or submodule pins only after Platform, Manifest, Relay, and Notary
 source changes are committed.
+
+For the first release, keep the two proof paths separate:
+
+- Source proof: run against sibling Platform, Relay, and Notary checkouts with
+  `REGISTRY_LAB_RELEASE_SOURCE_MODE=source`. If the sibling commits are not yet
+  reflected in Lab `vendor/` pins, also set
+  `REGISTRY_LAB_ALLOW_PENDING_PINS=1`; the release source model check will print
+  each pending pin or dirty source checkout. This is a pre-tag proof only.
+- Lab pin proof: run `scripts/release-check.sh` without
+  `REGISTRY_LAB_RELEASE_SOURCE_MODE`. The script forces Platform, Relay, Notary,
+  Manifest, and CEL Mapping to the committed `vendor/` submodules even when
+  sibling checkouts exist. This is the clean-clone/no-sibling release proof.
+
+Atlas is not part of the first release proof path unless explicitly opted in.
+Set `REGISTRY_LAB_CHECK_ATLAS=1` for the Atlas-backed smoke slice, and set both
+`REGISTRY_LAB_RUN_LIVE_STORIES=1` and `REGISTRY_LAB_CHECK_ATLAS=1` for the live
+story proof.
 
 ## Demo commands
 
@@ -298,8 +318,8 @@ The `justfile` defaults `REGISTRY_RELAY_SOURCE_DIR`,
 checkouts when present, otherwise to the pinned `vendor/` submodules.
 `REGISTRY_OPENFN_NOTARY_SOURCE_DIR` follows `REGISTRY_NOTARY_SOURCE_DIR` by
 default. `REGISTRY_ATLAS_SOURCE_DIR` follows the same sibling-then-vendor
-pattern for the service-first smoke. Override those variables when you want to
-build from another local path.
+pattern for optional Atlas-backed service-first checks. Override those variables
+when you want to build from another local path.
 
 ## Live Notary Redis checks
 
@@ -610,8 +630,8 @@ submodules under `vendor/`:
 - `vendor/registry-notary`: Registry Notary source used by
   `Dockerfile.registry-notary`.
 - `vendor/registry-manifest`: static metadata publishing CLI and profiles.
-- `vendor/registry-atlas`: service-first discovery CLI used by smoke and live
-  stories.
+- `vendor/registry-atlas`: service-first discovery CLI used by optional
+  Atlas-backed smoke checks and live stories.
 
 The Compose build uses Docker named contexts so local source checkouts can be
 used without changing `compose.yaml`:
@@ -636,6 +656,14 @@ OpenFn image builds can use `REGISTRY_OPENFN_NOTARY_SOURCE_DIR` separately from
 the core Notary image. The lab default points OpenFn at the selected Notary
 source, so local source checkouts can be tested before the lab submodule pin
 moves.
+
+`scripts/check-release-source-model.sh source` compares sibling Platform,
+Relay, and Notary SHAs with the Lab `vendor/` pins and fails on mismatches or
+dirty source checkouts. Use `REGISTRY_LAB_ALLOW_PENDING_PINS=1` only while the
+final source commits are still waiting for the Lab submodule pin update.
+`scripts/check-release-source-model.sh vendor` proves that the selected release
+paths resolve to committed Lab pins and that Atlas is excluded unless explicitly
+enabled.
 
 `just notary-client` imports the Registry Notary Python client directly from a
 source checkout and runs it against the default lab Notary services. It looks at
@@ -685,8 +713,10 @@ Expected Registry Notary outcomes:
 | `eligible-for-combined-support` | `NID-1001`, `NID-1004`, `NID-1006`, `NID-1008` | `NID-1002`, `NID-1003`, `NID-1005`, `NID-1007`, `NID-1009`, `NID-1010` |
 
 Regenerate aligned local fixtures with `just generate`. For release validation,
-run `just generate`, `just build`, `just up`, `just smoke`, and
-`just notary-client`.
+run `scripts/release-check.sh`. The release check runs the default smoke,
+federation, Notary client, narrated client, and selected live-service checks.
+Atlas-backed live stories are opt-in for the first release through
+`REGISTRY_LAB_RUN_LIVE_STORIES=1 REGISTRY_LAB_CHECK_ATLAS=1`.
 
 ## Credentials
 
