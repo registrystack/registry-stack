@@ -464,10 +464,6 @@ pub fn parse_did_jwk(s: &str) -> Result<PublicJwk, DidError> {
     let value: Value = serde_json::from_slice(&jwk_json).map_err(|_| DidError::InvalidDidJwk)?;
     reject_private_members(&value).map_err(|_| DidError::InvalidDidJwk)?;
     let minimal = minimal_did_jwk_value_from_value(&value).map_err(|_| DidError::InvalidDidJwk)?;
-    let canonical = canonicalize_json(&minimal).map_err(|_| DidError::InvalidDidJwk)?;
-    if URL_SAFE_NO_PAD.encode(&canonical) != identifier {
-        return Err(DidError::InvalidDidJwk);
-    }
     let jwk: PublicJwk = serde_json::from_value(minimal).map_err(|_| DidError::InvalidDidJwk)?;
     jwk.validate_public().map_err(|_| DidError::InvalidDidJwk)?;
     Ok(jwk)
@@ -690,7 +686,7 @@ fn minimal_did_jwk_value(jwk: &PublicJwk) -> Result<Value, JwkError> {
 }
 
 fn minimal_did_jwk_value_from_value(value: &Value) -> Result<Value, JwkError> {
-    const DID_JWK_MEMBERS: [&str; 3] = ["kty", "crv", "x"];
+    const DID_JWK_MEMBERS: [&str; 5] = ["kty", "crv", "x", "kid", "alg"];
     let Some(object) = value.as_object() else {
         return Err(JwkError::Invalid("JWK must be an object"));
     };
@@ -700,14 +696,8 @@ fn minimal_did_jwk_value_from_value(value: &Value) -> Result<Value, JwkError> {
     {
         return Err(JwkError::Invalid("did:jwk contains unsupported members"));
     }
-    let kty = required_thumbprint_member(value.get("kty").and_then(Value::as_str), "kty")?;
-    let crv = required_thumbprint_member(value.get("crv").and_then(Value::as_str), "crv")?;
-    let x = required_thumbprint_member(value.get("x").and_then(Value::as_str), "x")?;
-    if kty != "OKP" || crv != "Ed25519" {
-        return Err(JwkError::UnsupportedAlgorithm);
-    }
-    decode_fixed(Some(x), 32, "x")?;
-    Ok(json_object(&[("crv", crv), ("kty", kty), ("x", x)]))
+    let jwk = PublicJwk::deserialize(value).map_err(JwkError::Json)?;
+    minimal_did_jwk_value(&jwk)
 }
 
 fn required_thumbprint_member<'a>(
@@ -1311,17 +1301,22 @@ mod tests {
     }
 
     #[test]
-    fn did_jwk_rejects_non_canonical_or_unsupported_payload_members() {
+    fn did_jwk_accepts_public_metadata_and_rejects_unsupported_members() {
         let public = PrivateJwk::parse(RAW_JWK)
             .expect("private jwk parses")
             .public();
-        let noncanonical = format!(
+        let wallet_did = format!(
             "did:jwk:{}",
             URL_SAFE_NO_PAD.encode(
                 br#"{"x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","kty":"OKP","crv":"Ed25519","alg":"EdDSA","kid":"did:web:issuer.test#key-1"}"#
             )
         );
-        assert_eq!(parse_did_jwk(&noncanonical), Err(DidError::InvalidDidJwk));
+        let parsed = parse_did_jwk(&wallet_did).expect("wallet did:jwk parses");
+        assert_eq!(parsed.kty, public.kty);
+        assert_eq!(parsed.crv, public.crv);
+        assert_eq!(parsed.x, public.x);
+        assert_eq!(parsed.alg, None);
+        assert_eq!(parsed.kid, None);
 
         let unsupported_member = format!(
             "did:jwk:{}",

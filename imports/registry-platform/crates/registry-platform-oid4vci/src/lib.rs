@@ -676,6 +676,27 @@ mod tests {
     }
 
     #[test]
+    fn validates_did_jwk_kid_proof_with_wallet_public_metadata() {
+        let key = PrivateJwk::parse(RAW_JWK).expect("key parses");
+        let did = format!(
+            "did:jwk:{}",
+            URL_SAFE_NO_PAD.encode(
+                br#"{"x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","kty":"OKP","crv":"Ed25519","alg":"EdDSA","kid":"wallet-key-1"}"#
+            )
+        );
+        let proof = sign_proof(
+            json!({"alg":"EdDSA","typ":PROOF_JWT_TYPE,"kid": format!("{did}#0")}),
+            json!({"aud":"https://issuer.example","iat":1000,"nonce":"n-1"}),
+            &key,
+        );
+
+        let validated = validate_proof_jwt(&proof, &policy(Some("n-1")), 1001)
+            .expect("wallet did:jwk proof validates");
+
+        assert_eq!(validated.holder_id, did);
+    }
+
+    #[test]
     fn rejects_wrong_type_remote_key_and_wrong_nonce() {
         let key = PrivateJwk::parse(RAW_JWK).expect("key parses");
         let holder_id = did_jwk_from_public_jwk(&key.public()).expect("did:jwk encodes");
