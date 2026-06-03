@@ -2,6 +2,8 @@
 
 > **Experimental:** This codebase is under active development. Its APIs are evolving quickly and may be unstable.
 
+Release label: pre-1.0 technical release for evaluation and integration pilots.
+
 Registry Manifest is the commons contract and schema kernel for registry
 metadata. It is a portable Rust workspace for modeling, validating, and
 rendering standards-facing registry metadata without running Registry Relay.
