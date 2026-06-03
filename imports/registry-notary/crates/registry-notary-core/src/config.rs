@@ -1230,13 +1230,14 @@ impl Oid4vciConfig {
             );
         }
         if self.pre_authorized_code.enabled
+            && self.pre_authorized_code.tx_code.required
             && self_attestation
                 .rate_limits
                 .tx_code_attempts_per_code_per_minute
                 == 0
         {
             return invalid_oid4vci(
-                "self_attestation.rate_limits.tx_code_attempts_per_code_per_minute must be greater than zero when pre_authorized_code.enabled = true",
+                "self_attestation.rate_limits.tx_code_attempts_per_code_per_minute must be greater than zero when pre_authorized_code.enabled = true and tx_code.required = true",
             );
         }
         if !self.enabled {
@@ -1468,9 +1469,7 @@ impl Default for Oid4vciTxCodeConfig {
 impl Oid4vciTxCodeConfig {
     fn validate(&self) -> Result<(), EvidenceConfigError> {
         if !self.required {
-            return invalid_oid4vci(
-                "pre_authorized_code.tx_code.required must be true; an offer without a PIN is a bearer credential",
-            );
+            return Ok(());
         }
         if self.input_mode != TX_CODE_INPUT_MODE_NUMERIC {
             return invalid_oid4vci("pre_authorized_code.tx_code.input_mode must be numeric");
@@ -7817,11 +7816,12 @@ access_token_ttl_seconds: 300
     }
 
     #[test]
-    fn pre_auth_rejects_optional_tx_code() {
+    fn pre_auth_allows_optional_tx_code() {
         let mut config = valid_pre_auth_config();
         config.oid4vci.pre_authorized_code.tx_code.required = false;
-        let reason = expect_oid4vci_error(&config);
-        assert!(reason.contains("tx_code.required must be true"));
+        config
+            .validate()
+            .expect("operators may explicitly disable tx_code when required for wallet interop");
     }
 
     #[test]
@@ -7852,6 +7852,19 @@ access_token_ttl_seconds: 300
             .tx_code_attempts_per_code_per_minute = 0;
         let reason = expect_oid4vci_error(&config);
         assert!(reason.contains("tx_code_attempts_per_code_per_minute"));
+    }
+
+    #[test]
+    fn pre_auth_optional_tx_code_does_not_require_tx_code_rate_limit() {
+        let mut config = valid_pre_auth_config();
+        config.oid4vci.pre_authorized_code.tx_code.required = false;
+        config
+            .self_attestation
+            .rate_limits
+            .tx_code_attempts_per_code_per_minute = 0;
+        config
+            .validate()
+            .expect("tx_code attempt limits are only required when tx_code is required");
     }
 
     #[test]

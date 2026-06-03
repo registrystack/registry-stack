@@ -4791,13 +4791,20 @@ fn esignet_id_token(idp: &MockIdp, nonce: &str, national_id: &str) -> String {
     }))
 }
 
-/// Drive offer/start + offer/callback, returning (pre_authorized_code, tx_code).
-async fn drive_offer_to_code(
+struct PreauthOfferPage {
+    code: String,
+    pin: Option<String>,
+    offer: Value,
+    html: String,
+}
+
+/// Drive offer/start + offer/callback, returning the rendered offer details.
+async fn drive_offer_to_page(
     server: &TestServer,
     token_upstream: &MockHttpUpstream,
     idp: &MockIdp,
     national_id: &str,
-) -> (String, String) {
+) -> PreauthOfferPage {
     let start = server
         .get("/oid4vci/offer/start?credential_configuration_id=person_is_alive_sd_jwt")
         .await;
@@ -4842,8 +4849,25 @@ async fn drive_offer_to_code(
         .as_str()
         .expect("offer carries pre-authorized_code")
         .to_string();
-    let pin = extract_between(&html, "id=\"tx-code\">", "<").expect("offer page shows PIN");
-    (code, pin)
+    let pin = extract_between(&html, "id=\"tx-code\">", "<");
+    PreauthOfferPage {
+        code,
+        pin,
+        offer,
+        html,
+    }
+}
+
+/// Drive offer/start + offer/callback, returning (pre_authorized_code, tx_code).
+async fn drive_offer_to_code(
+    server: &TestServer,
+    token_upstream: &MockHttpUpstream,
+    idp: &MockIdp,
+    national_id: &str,
+) -> (String, String) {
+    let page = drive_offer_to_page(server, token_upstream, idp, national_id).await;
+    let pin = page.pin.expect("offer page shows PIN");
+    (page.code, pin)
 }
 
 fn extract_between(haystack: &str, start: &str, end: &str) -> Option<String> {
@@ -4860,6 +4884,17 @@ async fn redeem_token(server: &TestServer, code: &str, pin: &str) -> axum_test::
             "grant_type=urn:ietf:params:oauth:grant-type:pre-authorized_code&pre-authorized_code={}&tx_code={}",
             urlencode(code),
             urlencode(pin),
+        ))
+        .await
+}
+
+async fn redeem_token_without_pin(server: &TestServer, code: &str) -> axum_test::TestResponse {
+    server
+        .post("/oid4vci/token")
+        .add_header("content-type", "application/x-www-form-urlencoded")
+        .text(format!(
+            "grant_type=urn:ietf:params:oauth:grant-type:pre-authorized_code&pre-authorized_code={}",
+            urlencode(code)
         ))
         .await
 }
@@ -5008,6 +5043,47 @@ async fn preauth_callback_mints_pre_authorized_offer_with_tx_code() {
     assert!(!code.is_empty(), "callback mints a pre-authorized_code");
     assert_eq!(pin.len(), 6, "tx_code is a 6-digit PIN");
     assert!(pin.chars().all(|c| c.is_ascii_digit()));
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn preauth_callback_omits_tx_code_when_optional() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    );
+    config.oid4vci.pre_authorized_code.tx_code.required = false;
+    config
+        .self_attestation
+        .rate_limits
+        .tx_code_attempts_per_code_per_minute = 0;
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let page = drive_offer_to_page(&server, &token_upstream, &idp, "person-1").await;
+    assert!(
+        !page.code.is_empty(),
+        "callback mints a pre-authorized_code"
+    );
+    assert!(page.pin.is_none(), "offer page does not show a PIN");
+    assert!(
+        !page.html.contains("id=\"tx-code\""),
+        "optional tx_code mode omits the PIN block"
+    );
+    assert!(
+        page.offer["grants"]["urn:ietf:params:oauth:grant-type:pre-authorized_code"]["tx_code"]
+            .is_null(),
+        "credential offer omits the tx_code object"
+    );
     idp.stop().await;
 }
 
@@ -5430,6 +5506,44 @@ async fn preauth_token_rejects_wrong_and_missing_tx_code() {
         ))
         .await;
     missing_pin.assert_status(StatusCode::BAD_REQUEST);
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn preauth_token_accepts_missing_tx_code_when_optional() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    );
+    config.oid4vci.pre_authorized_code.tx_code.required = false;
+    config
+        .self_attestation
+        .rate_limits
+        .tx_code_attempts_per_code_per_minute = 0;
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let page = drive_offer_to_page(&server, &token_upstream, &idp, "person-1").await;
+    assert!(
+        page.pin.is_none(),
+        "optional tx_code mode does not mint a PIN"
+    );
+    redeem_token_without_pin(&server, &page.code)
+        .await
+        .assert_status_ok();
+
+    let second = redeem_token_without_pin(&server, &page.code).await;
+    second.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(second.json::<Value>()["error"], json!("invalid_grant"));
     idp.stop().await;
 }
 

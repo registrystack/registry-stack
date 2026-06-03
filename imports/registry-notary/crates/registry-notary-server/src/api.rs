@@ -1243,7 +1243,7 @@ struct Oid4vciOfferCallbackQuery {
 
 /// `GET /oid4vci/offer/callback` (public): consume the login state, exchange the
 /// eSignet code via `private_key_jwt`, validate the `id_token`, mint a single-use
-/// `pre-authorized_code` + numeric `tx_code`, and render the offer page.
+/// `pre-authorized_code`, and render the offer page.
 async fn oid4vci_offer_callback(
     state: Option<Extension<Arc<RegistryNotaryApiState>>>,
     Query(query): Query<Oid4vciOfferCallbackQuery>,
@@ -1342,31 +1342,47 @@ async fn oid4vci_offer_callback(
             .await;
         }
     };
-    let Ok(tx_code_pin) = generate_numeric_tx_code(preauth.tx_code_length()) else {
-        return preauth_server_error(&preauth, path, "GET", &stored.credential_configuration_id)
+    let tx_code_pin = if preauth.tx_code_required() {
+        let Ok(pin) = generate_numeric_tx_code(preauth.tx_code_length()) else {
+            return preauth_server_error(
+                &preauth,
+                path,
+                "GET",
+                &stored.credential_configuration_id,
+            )
             .await;
+        };
+        // Persist the PIN keyed by the code's jti so the token endpoint can verify
+        // the holder-presented tx_code. The PIN is never embedded in the offer code
+        // JWT (otherwise the code holder would know it).
+        if !preauth.tx_code_sessions().reserve(
+            &jti,
+            crate::preauth_state::TxCodeSession { pin: pin.clone() },
+            preauth.pre_authorized_code_ttl_seconds(),
+        ) {
+            return preauth_server_error(
+                &preauth,
+                path,
+                "GET",
+                &stored.credential_configuration_id,
+            )
+            .await;
+        }
+        Some(pin)
+    } else {
+        None
     };
-    // Persist the PIN keyed by the code's jti so the token endpoint can verify
-    // the holder-presented tx_code. The PIN is never embedded in the offer code
-    // JWT (otherwise the code holder would know it).
-    if !preauth.tx_code_sessions().reserve(
-        &jti,
-        crate::preauth_state::TxCodeSession {
-            pin: tx_code_pin.clone(),
-        },
-        preauth.pre_authorized_code_ttl_seconds(),
-    ) {
-        return preauth_server_error(&preauth, path, "GET", &stored.credential_configuration_id)
-            .await;
-    }
+    let tx_code = tx_code_pin.as_ref().map(|_| {
+        TxCode::new(
+            preauth.tx_code_length(),
+            Some("Enter the PIN shown by the issuer".to_string()),
+        )
+    });
     let offer = CredentialOffer::pre_authorized_code(
         state.oid4vci.credential_issuer.clone(),
         vec![stored.credential_configuration_id.clone()],
         signed_code.compact.clone(),
-        Some(TxCode::new(
-            preauth.tx_code_length(),
-            Some("Enter the PIN shown by the issuer".to_string()),
-        )),
+        tx_code,
     );
     let offer_uri = match offer_request_uri(&offer) {
         Ok(uri) => uri,
@@ -1399,11 +1415,11 @@ async fn oid4vci_offer_callback(
     state
         .metrics
         .record_credential("openid4vci_preauth", "offer_minted");
-    Html(offer_page_html(&offer_uri, &tx_code_pin)).into_response()
+    Html(offer_page_html(&offer_uri, tx_code_pin.as_deref())).into_response()
 }
 
 /// `POST /oid4vci/token` (public): the OID4VCI token endpoint for the
-/// pre-authorized-code grant. Verifies the code + `tx_code`, then mints a
+/// pre-authorized-code grant. Verifies the code and optional `tx_code`, then mints a
 /// short-TTL Notary access token + `c_nonce`.
 async fn oid4vci_token(
     state: Option<Extension<Arc<RegistryNotaryApiState>>>,
@@ -1474,40 +1490,42 @@ async fn oid4vci_token(
         )
         .await;
     };
-    // tx_code: required. Cap wrong-PIN attempts per code (brute-force guard).
-    // A locked code (attempts over the cap) is rejected before the PIN compare.
-    if check_tx_code_attempt(&state, code).is_err() {
-        return token_error_after_invalid_attempt(
-            &state,
-            &preauth,
-            path,
-            &client_address,
-            configuration_id.as_deref(),
-            TokenWireError::SlowDown,
-        )
-        .await;
-    }
-    let tx_code = request.tx_code.as_deref().unwrap_or("");
-    // Read (do not consume) the per-code PIN by jti. Missing means the code was
-    // already redeemed or expired. A wrong PIN does not consume the code, so it
-    // can be retried until the rate cap locks it.
-    let session_pin = preauth
-        .tx_code_sessions()
-        .peek(&jti)
-        .map(|session| session.pin);
-    let pin_ok = session_pin.as_deref().is_some_and(|pin| {
-        !tx_code.is_empty() && constant_time_eq(tx_code.as_bytes(), pin.as_bytes())
-    });
-    if !pin_ok {
-        return token_error_after_invalid_attempt(
-            &state,
-            &preauth,
-            path,
-            &client_address,
-            configuration_id.as_deref(),
-            TokenWireError::InvalidGrant,
-        )
-        .await;
+    if preauth.tx_code_required() {
+        // Cap wrong-PIN attempts per code (brute-force guard). A locked code
+        // (attempts over the cap) is rejected before the PIN compare.
+        if check_tx_code_attempt(&state, code).is_err() {
+            return token_error_after_invalid_attempt(
+                &state,
+                &preauth,
+                path,
+                &client_address,
+                configuration_id.as_deref(),
+                TokenWireError::SlowDown,
+            )
+            .await;
+        }
+        let tx_code = request.tx_code.as_deref().unwrap_or("");
+        // Read (do not consume) the per-code PIN by jti. Missing means the code was
+        // already redeemed or expired. A wrong PIN does not consume the code, so it
+        // can be retried until the rate cap locks it.
+        let session_pin = preauth
+            .tx_code_sessions()
+            .peek(&jti)
+            .map(|session| session.pin);
+        let pin_ok = session_pin.as_deref().is_some_and(|pin| {
+            !tx_code.is_empty() && constant_time_eq(tx_code.as_bytes(), pin.as_bytes())
+        });
+        if !pin_ok {
+            return token_error_after_invalid_attempt(
+                &state,
+                &preauth,
+                path,
+                &client_address,
+                configuration_id.as_deref(),
+                TokenWireError::InvalidGrant,
+            )
+            .await;
+        }
     }
     // Single-use: claim the code's jti in the replay store now that the PIN
     // matched. A second redemption fails AlreadySeen.
@@ -1525,7 +1543,8 @@ async fn oid4vci_token(
         )
         .await;
     }
-    // The code is now spent; drop its PIN session.
+    // The code is now spent; drop its PIN session. This is a safe no-op when
+    // optional tx_code mode did not create one.
     preauth.tx_code_sessions().remove(&jti);
     let Some(bound_subject) = bound_subject_from_code(&verified, &state) else {
         return token_error_response(TokenWireError::InvalidGrant);
@@ -1685,20 +1704,26 @@ fn url_percent_encode(value: &str) -> String {
     out
 }
 
-/// Render the citizen-facing offer page: the QR-encodable offer URI plus the
-/// out-of-band PIN.
-fn offer_page_html(offer_uri: &str, pin: &str) -> String {
+/// Render the citizen-facing offer page: the QR-encodable offer URI plus an
+/// out-of-band PIN when the offer requires one.
+fn offer_page_html(offer_uri: &str, pin: Option<&str>) -> String {
     let offer_uri = html_escape(offer_uri);
-    let pin = html_escape(pin);
+    let pin_html = pin.map(|pin| {
+        let pin = html_escape(pin);
+        format!(
+            "<p>Then enter this PIN when your wallet asks:</p>\
+<p><strong id=\"tx-code\">{pin}</strong></p>"
+        )
+    });
     format!(
         "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">\
 <title>Credential offer</title></head><body>\
 <h1>Scan to receive your credential</h1>\
 <p>Scan this offer in your wallet:</p>\
 <p><a id=\"credential-offer\" href=\"{offer_uri}\">{offer_uri}</a></p>\
-<p>Then enter this PIN when your wallet asks:</p>\
-<p><strong id=\"tx-code\">{pin}</strong></p>\
-</body></html>"
+{}\
+</body></html>",
+        pin_html.unwrap_or_default()
     )
 }
 

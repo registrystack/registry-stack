@@ -82,16 +82,17 @@ When enabled, the flow is:
    The Notary exchanges the code with eSignet using `private_key_jwt`, validates
    the returned `id_token`, captures the exact `self_attestation.subject_binding`
    claim value (the civil id), and only then mints one single-use
-   `pre-authorized_code` plus one numeric `tx_code` (a PIN). It renders an HTML
-   offer page carrying the `openid-credential-offer://` URI (the QR payload) and
-   the PIN shown out-of-band from the QR.
+   `pre-authorized_code`. By default it also mints one numeric `tx_code` (a PIN).
+   It renders an HTML offer page carrying the `openid-credential-offer://` URI
+   (the QR payload) and, when enabled, the PIN shown out-of-band from the QR.
 3. The wallet reads the offer. Its `grants` carry
    `urn:ietf:params:oauth:grant-type:pre-authorized_code` with the
-   `pre-authorized_code` and a `tx_code` object. The citizen enters the PIN.
+   `pre-authorized_code`. When the offer includes a `tx_code` object, the citizen
+   enters the PIN.
 4. The wallet redeems the offer at `POST /oid4vci/token` (public,
-   unauthenticated). A `tx_code` is mandatory: a code without a PIN is a bearer
-   credential, so the token endpoint rejects a missing or wrong PIN. The request
-   is form-encoded or JSON:
+   unauthenticated). A `tx_code` is required when the offer includes a `tx_code`
+   object; the token endpoint rejects a missing or wrong PIN in that mode. The
+   request is form-encoded or JSON:
 
    ```sh
    curl -fsS -X POST https://notary.example.gov/oid4vci/token \
@@ -109,11 +110,16 @@ When enabled, the flow is:
    determines whose claim is evaluated) and to the holder's `did:jwk` key.
 
 The `pre-authorized_code` is single-use and short-lived: a second redemption
-fails, and the code expires after `pre_authorized_code_ttl_seconds`. Repeated
-wrong-PIN attempts on one code hit
-`self_attestation.rate_limits.tx_code_attempts_per_code_per_minute` and lock the
-code, and a flood of random codes from one client address is throttled by the
+fails, and the code expires after `pre_authorized_code_ttl_seconds`. When
+`tx_code.required` is true (the default), repeated wrong-PIN attempts on one code
+hit `self_attestation.rate_limits.tx_code_attempts_per_code_per_minute` and lock
+the code. A flood of random codes from one client address is throttled by the
 existing per-address invalid-attempt limiter.
+
+Operators may set `oid4vci.pre_authorized_code.tx_code.required: false` for
+wallets that cannot present a transaction code. This makes the pre-authorized
+code a bearer credential until it is redeemed, so keep a short TTL and use this
+only for controlled deployments.
 
 The Notary mints its access token with a dedicated signing key separate from the
 SD-JWT VC credential key, with its own issuer, audience, and a distinct header

@@ -1343,6 +1343,8 @@ pub(crate) struct PreAuthRuntime {
     pre_authorized_code_ttl_seconds: u64,
     /// Access-token lifetime, seconds.
     access_token_ttl_seconds: u64,
+    /// Whether the offer includes a wallet-entered `tx_code` PIN.
+    tx_code_required: bool,
     /// `tx_code` length (numeric PIN).
     tx_code_length: u64,
     /// eSignet confidential client id presented by the Notary RP.
@@ -1513,6 +1515,7 @@ impl PreAuthRuntime {
             access_token_typ: signing.token_typ.clone(),
             pre_authorized_code_ttl_seconds: pre_auth.pre_authorized_code_ttl_seconds,
             access_token_ttl_seconds: signing.access_token_ttl_seconds,
+            tx_code_required: pre_auth.tx_code.required,
             tx_code_length: pre_auth.tx_code.length,
             esignet_client_id: esignet.client_id.clone(),
             esignet_client_signer,
@@ -1567,6 +1570,10 @@ impl PreAuthRuntime {
 
     pub(crate) fn access_token_ttl_seconds(&self) -> u64 {
         self.access_token_ttl_seconds
+    }
+
+    pub(crate) fn tx_code_required(&self) -> bool {
+        self.tx_code_required
     }
 
     pub(crate) fn tx_code_length(&self) -> u64 {

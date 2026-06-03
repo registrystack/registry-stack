@@ -386,7 +386,7 @@ fn build_openapi_document() -> OpenApi {
                 "get": {
                     "summary": "Complete eSignet login and render a pre-authorized-code offer",
                     "operationId": "completeOid4vciOffer",
-                    "description": "Public and unauthenticated. Consumes the login state, exchanges the eSignet code with private_key_jwt, validates the id_token, and mints one single-use pre-authorized_code plus one numeric tx_code (PIN). Renders an HTML offer page carrying the credential offer URI and the PIN out-of-band from the QR. Returns 404 when the pre-authorized-code flow is disabled.",
+                    "description": "Public and unauthenticated. Consumes the login state, exchanges the eSignet code with private_key_jwt, validates the id_token, and mints one single-use pre-authorized_code. When configured, the offer also includes one numeric tx_code (PIN) shown out-of-band from the QR. Returns 404 when the pre-authorized-code flow is disabled.",
                     "security": [],
                     "parameters": [
                         {
@@ -404,7 +404,7 @@ fn build_openapi_document() -> OpenApi {
                     ],
                     "responses": {
                         "200": {
-                            "description": "Offer page with the credential offer URI and tx_code PIN",
+                            "description": "Offer page with the credential offer URI and optional tx_code PIN",
                             "content": {
                                 "text/html": {
                                     "schema": { "type": "string" }
@@ -435,7 +435,7 @@ fn build_openapi_document() -> OpenApi {
                 "post": {
                     "summary": "Redeem a pre-authorized-code for an access token",
                     "operationId": "redeemOid4vciToken",
-                    "description": "Public and unauthenticated OID4VCI token endpoint for the pre-authorized-code grant. Accepts only grant_type=urn:ietf:params:oauth:grant-type:pre-authorized_code with a valid, unexpired, single-use pre-authorized_code and a matching tx_code (the PIN is mandatory). Mints a short-TTL Notary-signed access token plus a c_nonce. Returns 404 when the pre-authorized-code flow is disabled. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
+                    "description": "Public and unauthenticated OID4VCI token endpoint for the pre-authorized-code grant. Accepts only grant_type=urn:ietf:params:oauth:grant-type:pre-authorized_code with a valid, unexpired, single-use pre-authorized_code. A matching tx_code is required when the credential offer includes a tx_code object. Mints a short-TTL Notary-signed access token plus a c_nonce. Returns 404 when the pre-authorized-code flow is disabled. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
                     "security": [],
                     "requestBody": {
                         "required": true,
@@ -2262,7 +2262,7 @@ fn credential_response_schema() -> Value {
 fn token_request_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["grant_type", "pre-authorized_code", "tx_code"],
+        "required": ["grant_type", "pre-authorized_code"],
         "properties": {
             "grant_type": {
                 "type": "string",
@@ -2271,7 +2271,7 @@ fn token_request_schema() -> Value {
             "pre-authorized_code": { "type": "string" },
             "tx_code": {
                 "type": "string",
-                "description": "The numeric PIN shown on the offer page; mandatory for this grant."
+                "description": "The numeric PIN shown on the offer page. Required when the credential offer includes a tx_code object."
             }
         }
     })
@@ -3120,7 +3120,7 @@ mod tests {
                 ["application/json"]["schema"]["$ref"],
             json!("#/components/schemas/Oid4vciError")
         );
-        // The token endpoint documents its grant, the mandatory tx_code, and the
+        // The token endpoint documents its grant, the conditional tx_code, and the
         // public/unauthenticated nature.
         let token_description = doc["paths"]["/oid4vci/token"]["post"]["description"]
             .as_str()
@@ -3130,8 +3130,8 @@ mod tests {
             "token endpoint documents the pre-authorized-code grant"
         );
         assert!(
-            token_description.contains("tx_code") && token_description.contains("mandatory"),
-            "token endpoint documents the mandatory tx_code"
+            token_description.contains("tx_code") && token_description.contains("offer includes"),
+            "token endpoint documents when tx_code is required"
         );
         assert!(
             token_description.contains("unauthenticated"),
