@@ -223,7 +223,11 @@
                       ],
                       "display": [
                         {
-                          "name": "Person is alive"
+                          "background_color": "#0057B8",
+                          "description": "Proof that the civil registry currently records this person as alive.",
+                          "locale": "en-US",
+                          "name": "Person is alive",
+                          "text_color": "#FFFFFF"
                         }
                       ],
                       "format": "dc+sd-jwt",
@@ -240,6 +244,12 @@
                   },
                   "credential_endpoint": "https://issuer.example.gov/oid4vci/credential",
                   "credential_issuer": "https://issuer.example.gov",
+                  "display": [
+                    {
+                      "locale": "en-US",
+                      "name": "Civil Registry Notary"
+                    }
+                  ],
                   "nonce_endpoint": "https://issuer.example.gov/oid4vci/nonce"
                 }
               }
@@ -307,8 +317,11 @@
                   ],
                   "display": [
                     {
+                      "background_color": "#0057B8",
+                      "description": "Proof that the civil registry currently records this person as alive.",
                       "locale": "en-US",
-                      "name": "Person is alive"
+                      "name": "Person is alive",
+                      "text_color": "#FFFFFF"
                     }
                   ],
                   "name": "Person is alive",
@@ -549,8 +562,11 @@
                   ],
                   "display": [
                     {
+                      "background_color": "#0057B8",
+                      "description": "Proof that the civil registry currently records this person as alive.",
                       "locale": "en-US",
-                      "name": "Person is alive"
+                      "name": "Person is alive",
+                      "text_color": "#FFFFFF"
                     }
                   ],
                   "name": "Person is alive",
@@ -2755,7 +2771,18 @@
             "type": "string",
             "format": "uri"
           },
+          "display": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
           "nonce_endpoint": {
+            "type": "string",
+            "format": "uri"
+          },
+          "token_endpoint": {
             "type": "string",
             "format": "uri"
           }

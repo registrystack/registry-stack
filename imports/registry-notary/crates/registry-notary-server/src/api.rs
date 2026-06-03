@@ -24,10 +24,11 @@ use registry_notary_core::{
     CredentialIssueRequest, CredentialProfileConfig, EvaluateRequest, EvidenceBatchItemAuditEvent,
     EvidenceConfig, EvidenceEntity, EvidenceEntityReference, EvidenceError, EvidencePrincipal,
     EvidenceRelationship, FederationConfig, Hashed, HolderRequest, Oid4vciConfig,
-    Oid4vciCredentialConfigurationConfig, PolicyIdentifier, RateLimitBucket,
-    RenderEvaluationRequest, SelfAttestationConfig, SelfAttestationDenialCode,
-    SelfAttestationScopePolicy, SourceCapability, StoredSelfAttestationMetadata, SubjectRequest,
-    VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
+    Oid4vciCredentialConfigurationConfig, Oid4vciDisplayImageConfig, Oid4vciIssuerDisplayConfig,
+    PolicyIdentifier, RateLimitBucket, RenderEvaluationRequest, SelfAttestationConfig,
+    SelfAttestationDenialCode, SelfAttestationScopePolicy, SourceCapability,
+    StoredSelfAttestationMetadata, SubjectRequest, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON,
+    FORMAT_SD_JWT_VC,
 };
 use registry_platform_audit::AuditKeyHasher;
 use registry_platform_crypto::PublicJwk;
@@ -35,10 +36,10 @@ use registry_platform_crypto::SigningProvider;
 use registry_platform_oid4vci::{
     consume_validated_proof_nonce_once, validate_proof_jwt, CredentialConfigurationMetadata,
     CredentialIssuerMetadata, CredentialOffer, CredentialRequest as Oid4vciCredentialRequest,
-    CredentialResponse as Oid4vciCredentialResponse, NonceRequest as Oid4vciNonceRequest,
-    NonceResponse, ProofValidationPolicy, TokenRequest as Oid4vciTokenRequest,
-    TokenResponse as Oid4vciTokenResponse, TxCode, WireError, PRE_AUTHORIZED_CODE_GRANT_TYPE,
-    PROOF_TYPE_JWT, SD_JWT_VC_FORMAT,
+    CredentialResponse as Oid4vciCredentialResponse, DisplayImageMetadata, DisplayMetadata,
+    NonceRequest as Oid4vciNonceRequest, NonceResponse, ProofValidationPolicy,
+    TokenRequest as Oid4vciTokenRequest, TokenResponse as Oid4vciTokenResponse, TxCode, WireError,
+    PRE_AUTHORIZED_CODE_GRANT_TYPE, PROOF_TYPE_JWT, SD_JWT_VC_FORMAT,
 };
 use registry_platform_replay::{ReplayKey, ReplayScope, RequiredReplayError};
 use registry_platform_sdjwt::{validate_holder_proof, HolderProofBindings, HolderProofPolicy};
@@ -3028,7 +3029,8 @@ fn oid4vci_metadata(config: &Oid4vciConfig) -> CredentialIssuerMetadata {
             .iter()
             .map(|(id, configuration)| (id.clone(), oid4vci_configuration_metadata(configuration)))
             .collect(),
-    );
+    )
+    .with_display(oid4vci_issuer_display_metadata(&config.display));
     // When the pre-authorized-code flow is enabled the Notary is its own
     // authorization server for that grant, so issuer metadata advertises its
     // token endpoint. Per OID4VCI, the credential offer's `grants` carries the
@@ -3058,39 +3060,104 @@ fn oid4vci_token_endpoint_url(config: &Oid4vciConfig) -> Option<String> {
 fn oid4vci_configuration_metadata(
     configuration: &Oid4vciCredentialConfigurationConfig,
 ) -> CredentialConfigurationMetadata {
-    CredentialConfigurationMetadata::sd_jwt_vc(
+    let mut metadata = CredentialConfigurationMetadata::sd_jwt_vc(
         configuration.scope.clone(),
         configuration
             .cryptographic_binding_methods_supported
             .clone(),
         configuration.display_name.clone(),
         configuration.vct.clone(),
-    )
+    );
+    metadata.display = vec![oid4vci_credential_display_metadata(configuration)];
+    metadata
 }
 
 fn oid4vci_type_metadata_document(configuration: &Oid4vciCredentialConfigurationConfig) -> Value {
-    json!({
+    let display = oid4vci_credential_type_display_metadata(configuration);
+    let mut document = json!({
         "vct": configuration.vct,
         "name": configuration.display_name,
-        "display": [
-            {
-                "locale": "en-US",
-                "name": configuration.display_name,
-            }
-        ],
+        "display": [display],
         "claims": [
             {
                 "path": [configuration.claim_id],
                 "display": [
                     {
-                        "locale": "en-US",
+                        "locale": configuration.display.locale.as_deref().unwrap_or("en-US"),
                         "label": configuration.display_name,
                     }
                 ],
                 "sd": "always",
             }
         ],
-    })
+    });
+    if let Some(description) = configuration.display.description.as_deref() {
+        document["description"] = json!(description);
+    }
+    document
+}
+
+fn oid4vci_issuer_display_metadata(
+    displays: &[Oid4vciIssuerDisplayConfig],
+) -> Vec<DisplayMetadata> {
+    displays
+        .iter()
+        .map(|display| {
+            let mut metadata = DisplayMetadata::new(display.name.clone());
+            metadata.locale = display.locale.clone();
+            metadata.logo = display.logo.as_ref().map(oid4vci_display_image_metadata);
+            metadata
+        })
+        .collect()
+}
+
+fn oid4vci_credential_display_metadata(
+    configuration: &Oid4vciCredentialConfigurationConfig,
+) -> DisplayMetadata {
+    let mut metadata = DisplayMetadata::new(configuration.display_name.clone());
+    metadata.locale = configuration.display.locale.clone();
+    metadata.logo = configuration
+        .display
+        .logo
+        .as_ref()
+        .map(oid4vci_display_image_metadata);
+    metadata.description = configuration.display.description.clone();
+    metadata.background_color = configuration.display.background_color.clone();
+    metadata.text_color = configuration.display.text_color.clone();
+    metadata.background_image = configuration
+        .display
+        .background_image
+        .as_ref()
+        .map(oid4vci_display_image_metadata);
+    metadata.secondary_image = configuration
+        .display
+        .secondary_image
+        .as_ref()
+        .map(oid4vci_display_image_metadata);
+    metadata
+}
+
+fn oid4vci_display_image_metadata(image: &Oid4vciDisplayImageConfig) -> DisplayImageMetadata {
+    DisplayImageMetadata {
+        uri: image.uri.clone(),
+        url: image.url.clone(),
+        alt_text: image.alt_text.clone(),
+    }
+}
+
+fn oid4vci_credential_type_display_metadata(
+    configuration: &Oid4vciCredentialConfigurationConfig,
+) -> Value {
+    let display = oid4vci_credential_display_metadata(configuration);
+    let mut value = serde_json::to_value(display).expect("display metadata serializes");
+    if value
+        .get("locale")
+        .and_then(|value| value.as_str())
+        .is_none()
+    {
+        value["locale"] = json!("en-US");
+    }
+    value
 }
 
 fn oid4vci_requested_absolute_url_for_path(
@@ -5206,6 +5273,14 @@ mod tests {
             "offer_endpoint": "http://127.0.0.1:4325/oid4vci/credential-offer",
             "nonce_endpoint": "http://127.0.0.1:4325/oid4vci/nonce",
             "nonce": { "enabled": true, "ttl_seconds": 300 },
+            "display": [{
+                "name": "Civil Registry Notary",
+                "locale": "en-US",
+                "logo": {
+                    "uri": "https://issuer.example/assets/notary-logo.png",
+                    "alt_text": "Civil Registry Notary logo"
+                }
+            }],
             "credential_configurations": {
                 "person_is_alive_sd_jwt": {
                     "claim_id": "person-is-alive",
@@ -5213,7 +5288,17 @@ mod tests {
                     "format": "dc+sd-jwt",
                     "scope": "person_is_alive",
                     "vct": "https://issuer.example/credentials/civil-status",
-                    "display_name": "Person is alive"
+                    "display_name": "Person is alive",
+                    "display": {
+                        "locale": "en-US",
+                        "description": "Proof that the civil registry currently records this person as alive.",
+                        "background_color": "#0057B8",
+                        "text_color": "#FFFFFF",
+                        "logo": {
+                            "url": "https://issuer.example/assets/person-is-alive.png",
+                            "alt_text": "Person is alive credential logo"
+                        }
+                    }
                 }
             }
         }))
@@ -5238,6 +5323,26 @@ mod tests {
                 ["name"],
             "Person is alive"
         );
+        assert_eq!(metadata["display"][0]["name"], "Civil Registry Notary");
+        assert_eq!(
+            metadata["display"][0]["logo"]["uri"],
+            "https://issuer.example/assets/notary-logo.png"
+        );
+        assert_eq!(
+            metadata["credential_configurations_supported"]["person_is_alive_sd_jwt"]["display"][0]
+                ["description"],
+            "Proof that the civil registry currently records this person as alive."
+        );
+        assert_eq!(
+            metadata["credential_configurations_supported"]["person_is_alive_sd_jwt"]["display"][0]
+                ["background_color"],
+            "#0057B8"
+        );
+        assert_eq!(
+            metadata["credential_configurations_supported"]["person_is_alive_sd_jwt"]["display"][0]
+                ["logo"]["url"],
+            "https://issuer.example/assets/person-is-alive.png"
+        );
         assert_eq!(
             metadata["credential_configurations_supported"]["person_is_alive_sd_jwt"]["scope"],
             "person_is_alive"
@@ -5256,6 +5361,21 @@ mod tests {
         assert!(!text.contains("token_env"));
         assert!(!text.contains("source_connections"));
         assert!(!text.contains("NAT-123"));
+    }
+
+    #[test]
+    fn oid4vci_type_metadata_defaults_display_locale_when_unconfigured() {
+        let mut oid4vci = oid4vci_config();
+        let configuration = oid4vci
+            .credential_configurations
+            .get_mut("person_is_alive_sd_jwt")
+            .expect("configuration exists");
+        configuration.display.locale = None;
+
+        let metadata = oid4vci_type_metadata_document(configuration);
+
+        assert_eq!(metadata["display"][0]["locale"], "en-US");
+        assert_eq!(metadata["claims"][0]["display"][0]["locale"], "en-US");
     }
 
     #[test]

@@ -2106,8 +2106,10 @@ fn credential_issuer_metadata_schema() -> Value {
         "properties": {
             "credential_issuer": { "type": "string", "format": "uri" },
             "credential_endpoint": { "type": "string", "format": "uri" },
+            "token_endpoint": { "type": "string", "format": "uri" },
             "nonce_endpoint": { "type": "string", "format": "uri" },
             "authorization_servers": { "type": "array", "items": { "type": "string", "format": "uri" } },
+            "display": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
             "credential_configurations_supported": {
                 "type": "object",
                 "additionalProperties": { "$ref": "#/components/schemas/CredentialConfigurationMetadata" }
@@ -2459,6 +2461,12 @@ fn oid4vci_issuer_metadata_example() -> Value {
         "credential_endpoint": "https://issuer.example.gov/oid4vci/credential",
         "nonce_endpoint": "https://issuer.example.gov/oid4vci/nonce",
         "authorization_servers": ["https://id.example.gov"],
+        "display": [
+            {
+                "name": "Civil Registry Notary",
+                "locale": "en-US"
+            }
+        ],
         "credential_configurations_supported": {
             "person_is_alive_sd_jwt": {
                 "format": "dc+sd-jwt",
@@ -2471,7 +2479,13 @@ fn oid4vci_issuer_metadata_example() -> Value {
                     }
                 },
                 "display": [
-                    { "name": "Person is alive" }
+                    {
+                        "name": "Person is alive",
+                        "locale": "en-US",
+                        "description": "Proof that the civil registry currently records this person as alive.",
+                        "background_color": "#0057B8",
+                        "text_color": "#FFFFFF"
+                    }
                 ],
                 "vct": "https://issuer.example.gov/credentials/person-is-alive"
             }
@@ -2486,7 +2500,10 @@ fn sd_jwt_vc_type_metadata_example() -> Value {
         "display": [
             {
                 "locale": "en-US",
-                "name": "Person is alive"
+                "name": "Person is alive",
+                "description": "Proof that the civil registry currently records this person as alive.",
+                "background_color": "#0057B8",
+                "text_color": "#FFFFFF"
             }
         ],
         "claims": [

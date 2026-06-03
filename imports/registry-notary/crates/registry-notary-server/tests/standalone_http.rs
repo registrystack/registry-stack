@@ -5864,6 +5864,15 @@ async fn preauth_end_to_end_issues_sd_jwt_vc_bound_to_holder() {
         .as_str()
         .expect("credential issued");
     assert!(sd_jwt.contains('~'), "an SD-JWT VC carries disclosures");
+    let payload = decode_sd_jwt_payload(sd_jwt);
+    assert!(
+        payload["issuanceDate"].as_str().is_some(),
+        "wallet-compatible issuance date alias is present"
+    );
+    assert!(
+        payload["expirationDate"].as_str().is_some(),
+        "wallet-compatible expiration date alias is present"
+    );
     idp.stop().await;
 }
 

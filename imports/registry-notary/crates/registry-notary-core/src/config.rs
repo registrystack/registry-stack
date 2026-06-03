@@ -1167,6 +1167,8 @@ pub struct Oid4vciConfig {
     #[serde(default)]
     pub pre_authorized_code: Oid4vciPreAuthorizedCodeConfig,
     #[serde(default)]
+    pub display: Vec<Oid4vciIssuerDisplayConfig>,
+    #[serde(default)]
     pub credential_configurations: BTreeMap<String, Oid4vciCredentialConfigurationConfig>,
 }
 
@@ -1290,6 +1292,9 @@ impl Oid4vciConfig {
         self.nonce.validate()?;
         self.authorization.validate()?;
         self.proof.validate()?;
+        for display in &self.display {
+            display.validate("oid4vci.display")?;
+        }
 
         let claim_ids: HashSet<&str> = evidence
             .claims
@@ -1625,6 +1630,8 @@ pub struct Oid4vciCredentialConfigurationConfig {
     pub scope: String,
     pub vct: String,
     pub display_name: String,
+    #[serde(default)]
+    pub display: Oid4vciCredentialDisplayConfig,
     #[serde(default = "default_oid4vci_proof_signing_alg_values_supported")]
     pub proof_signing_alg_values_supported: Vec<String>,
     #[serde(default = "default_oid4vci_cryptographic_binding_methods_supported")]
@@ -1654,6 +1661,7 @@ impl Oid4vciCredentialConfigurationConfig {
             "credential_configurations.display_name",
             &self.display_name,
         )?;
+        self.display.validate("credential_configurations.display")?;
         if !claim_ids.contains(self.claim_id.as_str()) {
             return invalid_oid4vci(format!(
                 "credential configuration '{configuration_id}' references unknown claim '{}'",
@@ -1768,6 +1776,84 @@ impl Oid4vciCredentialConfigurationConfig {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Oid4vciIssuerDisplayConfig {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logo: Option<Oid4vciDisplayImageConfig>,
+}
+
+impl Oid4vciIssuerDisplayConfig {
+    fn validate(&self, name: &str) -> Result<(), EvidenceConfigError> {
+        validate_oid4vci_non_empty_value(&format!("{name}.name"), &self.name)?;
+        validate_optional_oid4vci_non_empty_value(
+            &format!("{name}.locale"),
+            self.locale.as_deref(),
+        )?;
+        validate_oid4vci_display_image(&format!("{name}.logo"), &self.logo)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Oid4vciCredentialDisplayConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logo: Option<Oid4vciDisplayImageConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_image: Option<Oid4vciDisplayImageConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_image: Option<Oid4vciDisplayImageConfig>,
+}
+
+impl Oid4vciCredentialDisplayConfig {
+    fn validate(&self, name: &str) -> Result<(), EvidenceConfigError> {
+        validate_optional_oid4vci_non_empty_value(
+            &format!("{name}.locale"),
+            self.locale.as_deref(),
+        )?;
+        validate_optional_oid4vci_non_empty_value(
+            &format!("{name}.description"),
+            self.description.as_deref(),
+        )?;
+        validate_optional_oid4vci_non_empty_value(
+            &format!("{name}.background_color"),
+            self.background_color.as_deref(),
+        )?;
+        validate_optional_oid4vci_non_empty_value(
+            &format!("{name}.text_color"),
+            self.text_color.as_deref(),
+        )?;
+        validate_oid4vci_display_image(&format!("{name}.logo"), &self.logo)?;
+        validate_oid4vci_display_image(
+            &format!("{name}.background_image"),
+            &self.background_image,
+        )?;
+        validate_oid4vci_display_image(&format!("{name}.secondary_image"), &self.secondary_image)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Oid4vciDisplayImageConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alt_text: Option<String>,
+}
+
 fn default_oid4vci_proof_signing_alg_values_supported() -> Vec<String> {
     vec![CREDENTIAL_SIGNING_ALG_EDDSA.to_string()]
 }
@@ -1867,6 +1953,43 @@ fn validate_oid4vci_non_empty_value(name: &str, value: &str) -> Result<(), Evide
         return invalid_oid4vci(format!("{name} must not contain blank entries"));
     }
     Ok(())
+}
+
+fn validate_optional_oid4vci_non_empty_value(
+    name: &str,
+    value: Option<&str>,
+) -> Result<(), EvidenceConfigError> {
+    if let Some(value) = value {
+        validate_oid4vci_non_empty_value(name, value)?;
+    }
+    Ok(())
+}
+
+fn validate_oid4vci_display_image(
+    name: &str,
+    image: &Option<Oid4vciDisplayImageConfig>,
+) -> Result<(), EvidenceConfigError> {
+    let Some(image) = image else {
+        return Ok(());
+    };
+    validate_optional_oid4vci_non_empty_value(&format!("{name}.uri"), image.uri.as_deref())?;
+    validate_optional_oid4vci_non_empty_value(&format!("{name}.url"), image.url.as_deref())?;
+    validate_optional_oid4vci_non_empty_value(
+        &format!("{name}.alt_text"),
+        image.alt_text.as_deref(),
+    )?;
+    match (image.uri.as_deref(), image.url.as_deref()) {
+        (None, None) => invalid_oid4vci(format!("{name} must include uri or url")),
+        (uri, url) => {
+            if let Some(uri) = uri {
+                validate_oid4vci_public_url(&format!("{name}.uri"), uri)?;
+            }
+            if let Some(url) = url {
+                validate_oid4vci_public_url(&format!("{name}.url"), url)?;
+            }
+            Ok(())
+        }
+    }
 }
 
 fn invalid_oid4vci<T>(reason: impl Into<String>) -> Result<T, EvidenceConfigError> {

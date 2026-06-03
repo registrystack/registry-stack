@@ -7,6 +7,7 @@ use registry_platform_sdjwt::{
     SdJwtIssuanceInput, SdJwtIssuer,
 };
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 use time::format_description::well_known::Rfc3339;
@@ -124,6 +125,10 @@ pub async fn issue(
         return Err(EvidenceError::InvalidRequest);
     }
     let expires_at = iat + time::Duration::seconds(profile.validity_seconds);
+    let public_claims = BTreeMap::from([
+        ("issuanceDate".to_string(), json!(format_time(iat))),
+        ("expirationDate".to_string(), json!(format_time(expires_at))),
+    ]);
     let disclosures = results
         .iter()
         .map(|result| Disclosure {
@@ -148,6 +153,7 @@ pub async fn issue(
             exp: expires_at.unix_timestamp(),
             vct: profile.vct.clone(),
             status: options.status,
+            public_claims,
             cnf: holder_confirmation,
             disclosures,
         })
@@ -587,6 +593,14 @@ mod tests {
         let exp_1 = payload(&signed_1)["exp"].as_i64().expect("exp decodes");
         let exp_2 = payload(&signed_2)["exp"].as_i64().expect("exp decodes");
         assert_eq!(exp_1, exp_2, "exp must be derived from the threaded iat");
+        assert_eq!(
+            payload(&signed_1)["issuanceDate"],
+            json!("2023-11-14T22:13:20Z")
+        );
+        assert_eq!(
+            payload(&signed_1)["expirationDate"],
+            json!("2023-11-14T22:14:20Z")
+        );
     }
 
     #[test]
