@@ -1,0 +1,23 @@
+meta {
+  name: Lab homepage health
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{lab_homepage_url}}/healthz
+  body: none
+  auth: none
+}
+
+script:post-response {
+  const body = res.getBody();
+
+  test("status is 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("homepage reports ok", function () {
+    expect(body).to.have.property("ok");
+  });
+}

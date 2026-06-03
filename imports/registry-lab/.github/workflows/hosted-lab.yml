@@ -7,9 +7,15 @@ on:
       - "compose.coolify.yaml"
       - "compose.esignet-hosted.yaml"
       - "config/coolify/**"
+      - "config/lab-homepage/public-demo-credentials.env"
       - "config/esignet/nginx-hosted.conf"
+      - "docs/README.md"
+      - "docs/public-api-workspace.md"
+      - "requests/registry-lab/**"
       - "scripts/validate-hosted-deploy.py"
       - "scripts/test_validate_hosted_deploy.py"
+      - "scripts/validate-public-api-workspace.py"
+      - "scripts/test_validate_public_api_workspace.py"
       - "justfile"
   push:
     branches:
@@ -20,9 +26,15 @@ on:
       - "compose.coolify.yaml"
       - "compose.esignet-hosted.yaml"
       - "config/coolify/**"
+      - "config/lab-homepage/public-demo-credentials.env"
       - "config/esignet/nginx-hosted.conf"
+      - "docs/README.md"
+      - "docs/public-api-workspace.md"
+      - "requests/registry-lab/**"
       - "scripts/validate-hosted-deploy.py"
       - "scripts/test_validate_hosted_deploy.py"
+      - "scripts/validate-public-api-workspace.py"
+      - "scripts/test_validate_public_api_workspace.py"
       - "justfile"
   workflow_dispatch:
 
@@ -45,14 +57,21 @@ jobs:
 
       - name: Check whitespace
         run: |
+          # shellcheck disable=SC2016
           git ls-files -z \
             .github/workflows/hosted-lab.yml \
             compose.coolify.yaml \
             compose.esignet-hosted.yaml \
             config/coolify \
+            config/lab-homepage/public-demo-credentials.env \
             config/esignet/nginx-hosted.conf \
+            docs/README.md \
+            docs/public-api-workspace.md \
+            requests/registry-lab \
             scripts/validate-hosted-deploy.py \
             scripts/test_validate_hosted_deploy.py \
+            scripts/validate-public-api-workspace.py \
+            scripts/test_validate_public_api_workspace.py \
             justfile \
             | xargs -0 perl -ne 'if (/[ \t]$/) { print "$ARGV:$.: trailing whitespace\n"; $bad = 1 } END { exit($bad || 0) }'
 
@@ -72,6 +91,12 @@ jobs:
 
       - name: Validate hosted deploy artifacts
         run: python3 scripts/validate-hosted-deploy.py
+
+      - name: Run public API workspace validator tests
+        run: python3 scripts/test_validate_public_api_workspace.py
+
+      - name: Validate public API workspace
+        run: python3 scripts/validate-public-api-workspace.py
 
   deploy-coolify:
     needs: validate-hosted-artifacts

@@ -141,6 +141,14 @@ hosted-validate-strict:
 hosted-validate-test:
     python3 scripts/test_validate_hosted_deploy.py
 
+# Validate the committed public Bruno API workspace.
+api-workspace-validate:
+    python3 scripts/validate-public-api-workspace.py
+
+# Run focused tests for public API workspace validation.
+api-workspace-validate-test:
+    python3 scripts/test_validate_public_api_workspace.py
+
 # Print the local eSignet authorization URL and save PKCE state.
 citizen-self-attestation-esignet-login:
     @set +e; \

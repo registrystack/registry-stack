@@ -39,6 +39,14 @@ available `just` commands. The tutorials below focus on one working path each.
 - [Service-first discovery](service-first-discovery.md): how the lab walks from
   static metadata to service and evidence discovery.
 
+## Public API workspace
+
+- [Public API workspace spec](public-api-workspace.md): definition of done and
+  delivery plan for the Bruno workspace that exercises the hosted and local demo
+  APIs.
+- [Public API workspace](../requests/registry-lab/README.md): Bruno collection
+  for human-operated hosted and local API exploration.
+
 ## Maintainer notes
 
 - [Commons release cleanup plan](commons-release-cleanup-plan.md): maintainer

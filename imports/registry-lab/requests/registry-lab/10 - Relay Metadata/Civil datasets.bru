@@ -1,0 +1,28 @@
+meta {
+  name: Civil datasets
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{civil_relay_url}}/v1/datasets
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{CIVIL_METADATA_CLIENT_RAW}}
+}
+
+script:post-response {
+  const body = res.getBody();
+
+  test("status is 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("civil registry dataset is advertised", function () {
+    expect(body).to.have.property("data");
+    expect(body.data.some((item) => item.dataset_id === "civil_registry")).to.be.true;
+  });
+}

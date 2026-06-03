@@ -1,0 +1,28 @@
+meta {
+  name: OpenCRVS claims discovery
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{opencrvs_notary_url}}/v1/claims
+  body: none
+  auth: none
+}
+
+headers {
+  x-api-key: {{OPENCRVS_EVIDENCE_CLIENT_TOKEN}}
+}
+
+script:post-response {
+  const body = res.getBody();
+
+  test("status is 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("OpenCRVS claims include birth record existence", function () {
+    expect(body).to.have.property("data");
+    expect(body.data.some((item) => item.id === "opencrvs-birth-record-exists")).to.be.true;
+  });
+}
