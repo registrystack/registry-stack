@@ -1,0 +1,28 @@
+meta {
+  name: Health datasets
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{health_relay_url}}/v1/datasets
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{HEALTH_METADATA_CLIENT_RAW}}
+}
+
+script:post-response {
+  const body = res.getBody();
+
+  test("status is 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("health registry dataset is advertised", function () {
+    expect(body).to.have.property("data");
+    expect(body.data.some((item) => item.dataset_id === "health_registry")).to.be.true;
+  });
+}

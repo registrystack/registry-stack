@@ -1,0 +1,24 @@
+meta {
+  name: Static metadata root
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{metadata_url}}/
+  body: none
+  auth: none
+}
+
+script:post-response {
+  const body = res.getBody();
+
+  test("status is 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("metadata publisher responds with content", function () {
+    expect(String(body).length).to.be.greaterThan(0);
+    expect(String(body)).to.include("Directory listing for /");
+  });
+}
