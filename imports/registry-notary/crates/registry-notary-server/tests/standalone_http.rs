@@ -86,6 +86,31 @@ fn sign_oid4vci_proof(audience: &str, nonce: &str) -> String {
     sign_openid4vci_proof_jwt(TEST_HOLDER_JWK, audience, Some(nonce), now)
 }
 
+fn sign_oid4vci_proof_without_iss(audience: &str, nonce: &str) -> String {
+    let holder = PrivateJwk::parse(TEST_HOLDER_JWK).expect("holder JWK parses");
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let header_b64 = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&json!({
+            "alg": "EdDSA",
+            "typ": "openid4vci-proof+jwt",
+            "jwk": holder.public(),
+        }))
+        .expect("header serializes"),
+    );
+    let payload_b64 = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&json!({
+            "aud": audience,
+            "iat": now,
+            "exp": now + 60,
+            "nonce": nonce,
+        }))
+        .expect("payload serializes"),
+    );
+    let signing_input = format!("{header_b64}.{payload_b64}");
+    let signature = sign(signing_input.as_bytes(), &holder).expect("holder signs proof");
+    format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
+}
+
 fn sign_direct_holder_proof(holder_id: &str, evaluation_id: &str, jti: &str) -> String {
     let holder = PrivateJwk::parse(TEST_HOLDER_JWK).expect("holder JWK parses");
     let now = OffsetDateTime::now_utc().unix_timestamp();
@@ -3394,7 +3419,7 @@ async fn oid4vci_malformed_proof_is_rejected_before_oidc_auth() {
         .await;
     response.assert_status(StatusCode::BAD_REQUEST);
     let body: Value = response.json();
-    assert_eq!(body["error"], json!("invalid_request"));
+    assert_eq!(body["error"], json!("invalid_proof"));
 
     idp.stop().await;
 }
@@ -6035,14 +6060,21 @@ async fn preauth_credential_subject_and_evaluation_match_esignet_token_path() {
         .as_str()
         .expect("c_nonce issued")
         .to_string();
-    let preauth_proof = sign_oid4vci_proof(NOTARY_ISSUER, &c_nonce);
+    let preauth_proof = sign_oid4vci_proof_without_iss(NOTARY_ISSUER, &c_nonce);
     let preauth_credential = preauth_server
         .post("/oid4vci/credential")
         .add_header("authorization", format!("Bearer {access_token}"))
         .json(&json!({
             "format": "dc+sd-jwt",
             "credential_configuration_id": "person_is_alive_sd_jwt",
-            "proof": { "proof_type": "jwt", "jwt": preauth_proof }
+            "vct": "http://127.0.0.1:4325/credentials/civil-status",
+            "display": [{ "name": "Person is alive" }],
+            "credential_signing_alg_values_supported": ["EdDSA"],
+            "proof": {
+                "proof_type": "jwt",
+                "jwt": preauth_proof,
+                "subject": "person-1"
+            }
         }))
         .await;
     preauth_credential.assert_status_ok();
