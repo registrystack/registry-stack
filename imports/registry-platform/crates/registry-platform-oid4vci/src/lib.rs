@@ -229,7 +229,6 @@ pub struct NonceResponse {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct CredentialRequest {
     pub format: String,
     #[serde(default)]
@@ -242,7 +241,6 @@ pub struct CredentialRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct CredentialRequestProof {
     #[serde(rename = "proof_type")]
     pub proof_type: String,
@@ -369,9 +367,9 @@ pub enum ProofError {
 /// Validate an OID4VCI proof JWT presented at the credential endpoint.
 ///
 /// Validates structure, `typ` (`openid4vci-proof+jwt`), EdDSA signature,
-/// audience, optional nonce, time bounds, and holder binding (`did:jwk` or
-/// inline `jwk` header). Returns the verified holder JWK, holder DID, and
-/// raw claims on success.
+/// audience, optional nonce, optional issuer claim shape, time bounds, and
+/// holder binding (`did:jwk` or inline `jwk` header). Returns the verified
+/// holder JWK, holder DID, and raw claims on success.
 ///
 /// **Nonce replay is a caller responsibility.** This function validates that the
 /// nonce in the proof matches `policy.expected_nonce`, but it does NOT track
@@ -435,7 +433,7 @@ pub fn validate_proof_jwt(
         }
         None => did_jwk_from_public_jwk(&holder_jwk).expect("public jwk encodes"),
     };
-    if claims.get("iss").and_then(Value::as_str) != Some(holder_id.as_str()) {
+    if claims.get("iss").is_some_and(|issuer| !issuer.is_string()) {
         return Err(ProofError::InvalidClaims);
     }
 
@@ -637,6 +635,21 @@ mod tests {
     }
 
     #[test]
+    fn validates_pyjwt_public_jwk_proof_without_iss() {
+        let proof = concat!(
+            "eyJhbGciOiJFZERTQSIsImp3ayI6eyJhbGciOiJFZERTQSIsImNydiI6IkVkMjU1MT",
+            "kiLCJrdHkiOiJPS1AiLCJ4IjoiMWFqX3JMSnNHRmd3LTV2OTI1RU1tZVpqNUp",
+            "xUDQ0eGVnYWZFS2ZaYmR4YyJ9LCJ0eXAiOiJvcGVuaWQ0dmNpLXByb29",
+            "mK2p3dCJ9.eyJhdWQiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiaWF",
+            "0IjoxMDAwLCJub25jZSI6Im4tMSJ9.fIyoaSjcCVbtOuSql0Wj5WfmdKBzY",
+            "jIDyU26kCixkwXM2QcKiNJicQMp4yBO5mNEsSp3qiDn09Bqbrx0EhMFBg"
+        );
+
+        validate_proof_jwt(proof, &policy(Some("n-1")), 1001)
+            .expect("PyJWT EdDSA proof without iss validates");
+    }
+
+    #[test]
     fn validates_did_jwk_kid_proof() {
         let key = PrivateJwk::parse(RAW_JWK).expect("key parses");
         let did = did_jwk_from_public_jwk(&key.public()).expect("did:jwk encodes");
@@ -748,25 +761,31 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_or_wrong_proof_issuer() {
+    fn accepts_optional_proof_issuer_and_rejects_invalid_shape() {
         let key = PrivateJwk::parse(RAW_JWK).expect("key parses");
         let missing_iss = sign_proof(
             json!({"alg":"EdDSA","typ":PROOF_JWT_TYPE,"jwk": key.public()}),
             json!({"aud":"https://issuer.example","iat":1000,"nonce":"n-1"}),
             &key,
         );
-        assert_eq!(
-            validate_proof_jwt(&missing_iss, &policy(Some("n-1")), 1001),
-            Err(ProofError::InvalidClaims)
-        );
+        validate_proof_jwt(&missing_iss, &policy(Some("n-1")), 1001)
+            .expect("anonymous pre-authorized-code proof accepts omitted iss");
 
-        let wrong_iss = sign_proof(
+        let client_iss = sign_proof(
             json!({"alg":"EdDSA","typ":PROOF_JWT_TYPE,"jwk": key.public()}),
-            json!({"iss":"did:jwk:attacker","aud":"https://issuer.example","iat":1000,"nonce":"n-1"}),
+            json!({"iss":"wallet-client-1","aud":"https://issuer.example","iat":1000,"nonce":"n-1"}),
+            &key,
+        );
+        validate_proof_jwt(&client_iss, &policy(Some("n-1")), 1001)
+            .expect("proof issuer is an optional client identifier");
+
+        let invalid_iss = sign_proof(
+            json!({"alg":"EdDSA","typ":PROOF_JWT_TYPE,"jwk": key.public()}),
+            json!({"iss":{"id":"wallet-client-1"},"aud":"https://issuer.example","iat":1000,"nonce":"n-1"}),
             &key,
         );
         assert_eq!(
-            validate_proof_jwt(&wrong_iss, &policy(Some("n-1")), 1001),
+            validate_proof_jwt(&invalid_iss, &policy(Some("n-1")), 1001),
             Err(ProofError::InvalidClaims)
         );
     }
@@ -785,21 +804,26 @@ mod tests {
     }
 
     #[test]
-    fn credential_request_rejects_unknown_fields() {
+    fn credential_request_ignores_unknown_fields() {
         let request = json!({
             "format": SD_JWT_VC_FORMAT,
             "credential_configuration_id": "person_is_alive_sd_jwt",
             "subject": {"id": "NID-1002"},
             "proof": {"proof_type": PROOF_TYPE_JWT, "jwt": "a.b.c"}
         });
-        assert!(serde_json::from_value::<CredentialRequest>(request).is_err());
+        let parsed = serde_json::from_value::<CredentialRequest>(request).expect("request parses");
+        assert_eq!(
+            parsed.credential_configuration_id.as_deref(),
+            Some("person_is_alive_sd_jwt")
+        );
 
         let request = json!({
             "format": SD_JWT_VC_FORMAT,
             "credential_configuration_id": "person_is_alive_sd_jwt",
             "proof": {"proof_type": PROOF_TYPE_JWT, "jwt": "a.b.c", "subject": "NID-1002"}
         });
-        assert!(serde_json::from_value::<CredentialRequest>(request).is_err());
+        let parsed = serde_json::from_value::<CredentialRequest>(request).expect("request parses");
+        assert_eq!(parsed.proof.jwt, "a.b.c");
     }
 
     #[test]
