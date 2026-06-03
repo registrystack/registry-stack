@@ -25,7 +25,7 @@ use registry_platform_crypto::pairwise_subject_ref_hash;
 use registry_platform_replay::{ReplayKey, ReplayScope, RequiredReplayError};
 use time::OffsetDateTime;
 
-use crate::{api::RegistryNotaryApiState, replay::require_replay_insert, RegistryNotaryRuntime};
+use crate::{api::RegistryNotaryApiState, replay::require_replay_insert};
 
 use audit::{federation_audit_event, FederationAuditOutcome};
 use claims::{
@@ -273,9 +273,7 @@ async fn handle_federated_evaluate(
         &subject.id,
     )
     .map_err(|_| FederationProblem::server_error("failed to hash subject reference"))?;
-    let runtime_eval = RegistryNotaryRuntime::new_with_self_attestation_rate_keys(Arc::clone(
-        &state.self_attestation_rate_keys,
-    ));
+    let runtime_eval = state.runtime();
     let results = runtime_eval
         .evaluate_with_source_capability(
             Arc::clone(&state.evidence),

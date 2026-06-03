@@ -6,8 +6,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-#[cfg(feature = "registry-notary-cel")]
-use std::time::Duration;
 
 // ---------------------------------------------------------------------------
 // Per-batch fetch memoization (Stage 2)
@@ -217,7 +215,7 @@ fn cache_key_for_binding(
 
 #[cfg(feature = "registry-notary-cel")]
 use crosswalk_core::{
-    MappingRuntime, RuntimeOptions, SecurityLimits, StandaloneEvalError, StandaloneExpressionInput,
+    ErrorSeverity, MappingRuntime, RuntimeOptions, SecurityLimits, StandaloneExpressionInput,
 };
 use registry_notary_core::{
     missing_context_error, AccessMode, BatchClaimResultView, BatchEvaluateRequest,
@@ -240,14 +238,20 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
-#[cfg(feature = "registry-notary-cel")]
-use tokio::time::timeout;
 use ulid::Ulid;
 
+#[cfg(feature = "registry-notary-cel")]
+use crate::cel_worker::{CelWorker, CelWorkerError};
 use crate::self_attestation_rate_limit::SelfAttestationRateLimitKeys;
 
 #[cfg(feature = "registry-notary-cel")]
-const CEL_EVALUATION_TIMEOUT: Duration = Duration::from_millis(500);
+const MAX_CEL_OBJECT_DEPTH: usize = 64;
+#[cfg(feature = "registry-notary-cel")]
+const MAX_CEL_OBJECT_KEYS: usize = 2048;
+#[cfg(feature = "registry-notary-cel")]
+const MAX_CEL_CLAIM_BINDINGS: usize = 64;
+#[cfg(feature = "registry-notary-cel")]
+const MAX_CEL_VAR_BINDINGS: usize = 64;
 
 pub trait SourceReader: Send + Sync {
     fn map_target<'a>(
@@ -724,6 +728,8 @@ struct ClaimEvaluationContext {
     // subjects to share results with.
     fetch_memo: Option<FetchMemo>,
     claim_versions: ClaimVersionSelections,
+    #[cfg(feature = "registry-notary-cel")]
+    cel_worker: Option<Arc<CelWorker>>,
 }
 
 #[cfg_attr(not(feature = "registry-notary-cel"), allow(dead_code))]
@@ -736,6 +742,8 @@ struct CelEvaluationContext<'a> {
     sources: &'a BTreeMap<String, Value>,
     subject: &'a SubjectRequest,
     purpose: &'a str,
+    #[cfg(feature = "registry-notary-cel")]
+    worker: Option<&'a CelWorker>,
 }
 
 impl EvidenceStore {
@@ -814,6 +822,8 @@ impl EvidenceStore {
 #[derive(Debug, Clone)]
 pub struct RegistryNotaryRuntime {
     self_attestation_rate_keys: Arc<SelfAttestationRateLimitKeys>,
+    #[cfg(feature = "registry-notary-cel")]
+    cel_worker: Option<Arc<CelWorker>>,
 }
 
 impl Default for RegistryNotaryRuntime {
@@ -841,7 +851,16 @@ impl RegistryNotaryRuntime {
     ) -> Self {
         Self {
             self_attestation_rate_keys,
+            #[cfg(feature = "registry-notary-cel")]
+            cel_worker: None,
         }
+    }
+
+    #[cfg(feature = "registry-notary-cel")]
+    #[must_use]
+    pub fn with_cel_worker(mut self, cel_worker: Option<Arc<CelWorker>>) -> Self {
+        self.cel_worker = cel_worker;
+        self
     }
 
     pub fn service_document(evidence: &EvidenceConfig) -> Value {
@@ -1539,6 +1558,8 @@ impl RegistryNotaryRuntime {
                     binding_concurrency: Arc::clone(&binding_concurrency),
                     fetch_memo: fetch_memo.as_ref().map(Arc::clone),
                     claim_versions: claim_versions.clone(),
+                    #[cfg(feature = "registry-notary-cel")]
+                    cel_worker: self.cel_worker.as_ref().map(Arc::clone),
                 };
                 let prior_for_task = Arc::clone(&prior);
                 // We do not acquire a permit here. The `bindings` cap applies to
@@ -1682,7 +1703,7 @@ async fn evaluate_claim_task(
                 .context
                 .target_subject()
                 .ok_or(EvidenceError::TargetAttributesInsufficient)?;
-            evaluate_cel_expression(&CelEvaluationContext {
+            let value = evaluate_cel_expression(&CelEvaluationContext {
                 evidence: &ctx.evidence,
                 claim: &claim,
                 expression,
@@ -1691,8 +1712,12 @@ async fn evaluate_claim_task(
                 sources: &sources,
                 subject: &target_subject,
                 purpose: ctx.purpose.as_str(),
+                #[cfg(feature = "registry-notary-cel")]
+                worker: ctx.cel_worker.as_deref(),
             })
-            .await?
+            .await?;
+            validate_claim_value_type(&value, &claim.value.value_type)?;
+            value
         }
         RuleConfig::Plugin { .. } => return Err(EvidenceError::OperationUnsupported),
     };
@@ -2798,24 +2823,294 @@ async fn evaluate_cel_expression(ctx: &CelEvaluationContext<'_>) -> Result<Value
     }
 }
 
+#[cfg(feature = "registry-notary-cel")]
+pub(crate) fn validate_cel_claims_for_startup(
+    evidence: &EvidenceConfig,
+) -> Result<(), EvidenceError> {
+    let runtime = MappingRuntime::new(RuntimeOptions::default());
+    for claim in &evidence.claims {
+        let RuleConfig::Cel {
+            expression,
+            bindings,
+        } = &claim.rule
+        else {
+            continue;
+        };
+        validate_cel_policy(expression, bindings, claim)?;
+        validate_cel_expression_roots(expression)?;
+        if contains_cel_regex_usage(expression) {
+            return Err(EvidenceError::InvalidRequest);
+        }
+        let input = StandaloneExpressionInput::new(
+            cel_preflight_root_bindings(evidence, claim, bindings)
+                .into_iter()
+                .collect(),
+        );
+        let preview = runtime.preview_cel_expression_with_input(expression, input);
+        if preview
+            .issues
+            .iter()
+            .any(|issue| issue.severity == ErrorSeverity::Error)
+        {
+            return Err(EvidenceError::InvalidRequest);
+        }
+        if let Some(value) = preview.value.as_ref() {
+            validate_claim_value_type(value, &claim.value.value_type)?;
+        }
+    }
+    Ok(())
+}
+
 fn validate_cel_policy(
     expression: &str,
     bindings: &CelBindingsConfig,
     claim: &ClaimDefinition,
 ) -> Result<(), EvidenceError> {
-    let _ = (bindings, claim);
     if expression.trim().is_empty() {
         return Err(EvidenceError::InvalidRequest);
     }
+    #[cfg(feature = "registry-notary-cel")]
+    {
+        SecurityLimits::default()
+            .check_expr(expression)
+            .map_err(|_| EvidenceError::InvalidRequest)?;
+        if bindings.claims.len() > MAX_CEL_CLAIM_BINDINGS
+            || bindings.vars.len() > MAX_CEL_VAR_BINDINGS
+        {
+            return Err(EvidenceError::InvalidRequest);
+        }
+        for (alias, binding) in &bindings.claims {
+            if !is_cel_identifier(alias) || !claim.depends_on.contains(&binding.claim) {
+                return Err(EvidenceError::InvalidRequest);
+            }
+        }
+        for alias in bindings.vars.keys() {
+            if !is_cel_identifier(alias) {
+                return Err(EvidenceError::InvalidRequest);
+            }
+        }
+    }
     #[cfg(not(feature = "registry-notary-cel"))]
     {
-        let _ = expression;
+        let _ = (expression, bindings, claim);
+    }
+    Ok(())
+}
+
+fn validate_claim_value_type(value: &Value, value_type: &str) -> Result<(), EvidenceError> {
+    let valid = match value_type.trim() {
+        "" | "unknown" => true,
+        "boolean" | "bool" => value.is_boolean(),
+        "number" | "float" | "double" => value.is_number(),
+        "integer" | "int" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "string" | "date" | "datetime" | "date-time" | "uri" => value.is_string(),
+        "array" | "list" => value.is_array(),
+        "object" => value.is_object(),
+        "null" => value.is_null(),
+        _ => return Err(EvidenceError::InvalidRequest),
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(EvidenceError::RuleEvaluationFailed)
+    }
+}
+
+#[cfg(feature = "registry-notary-cel")]
+async fn evaluate_with_cel(ctx: &CelEvaluationContext<'_>) -> Result<Value, EvidenceError> {
+    let root_bindings = cel_root_bindings(ctx)?;
+    let value = if let Some(worker) = ctx.worker {
+        worker
+            .evaluate(
+                ctx.expression,
+                Value::Object(root_bindings.into_iter().collect()),
+            )
+            .await
+            .map_err(cel_worker_error)?
+    } else {
+        #[cfg(test)]
+        {
+            evaluate_cel_in_process_for_unit_tests(ctx.expression, root_bindings)?
+        }
+        #[cfg(not(test))]
+        {
+            return Err(EvidenceError::OperationUnsupported);
+        }
+    };
+    validate_cel_result_limits(&value, &SecurityLimits::default())?;
+    Ok(value)
+}
+
+#[cfg(feature = "registry-notary-cel")]
+#[cfg(test)]
+fn evaluate_cel_in_process_for_unit_tests(
+    expression: &str,
+    root_bindings: BTreeMap<String, Value>,
+) -> Result<Value, EvidenceError> {
+    MappingRuntime::new(RuntimeOptions::default())
+        .evaluate_cel_expression_with_input(
+            expression,
+            StandaloneExpressionInput::new(root_bindings.into_iter().collect()),
+        )
+        .map_err(|error| match error {
+            crosswalk_core::StandaloneEvalError::Compile(_)
+            | crosswalk_core::StandaloneEvalError::InvalidBindingName { .. } => {
+                EvidenceError::InvalidRequest
+            }
+            crosswalk_core::StandaloneEvalError::Evaluate { .. } => {
+                EvidenceError::RuleEvaluationFailed
+            }
+        })
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn cel_preflight_root_bindings(
+    evidence: &EvidenceConfig,
+    claim: &ClaimDefinition,
+    bindings: &CelBindingsConfig,
+) -> BTreeMap<String, Value> {
+    let mut sources = Map::new();
+    for (alias, binding) in &claim.source_bindings {
+        let mut source = Map::new();
+        for (field_alias, field) in &binding.fields {
+            source.insert(
+                field_alias.clone(),
+                cel_dummy_value_for_type(field.field_type.as_deref().unwrap_or("string")),
+            );
+        }
+        sources.insert(alias.clone(), Value::Object(source));
+    }
+
+    let mut claims = Map::new();
+    for (alias, binding) in &bindings.claims {
+        let value_type = evidence
+            .claims
+            .iter()
+            .find(|candidate| candidate.id == binding.claim)
+            .map(|candidate| candidate.value.value_type.as_str())
+            .unwrap_or("boolean");
+        let value = cel_dummy_value_for_type(value_type);
+        claims.insert(
+            alias.clone(),
+            json!({
+                "value": value,
+                "satisfied": value.as_bool().unwrap_or(true),
+                "claim_id": binding.claim,
+                "version": "preflight",
+            }),
+        );
+    }
+
+    BTreeMap::from([
+        ("source".to_string(), Value::Object(sources)),
+        ("claims".to_string(), Value::Object(claims)),
+        (
+            "ctx".to_string(),
+            json!({
+                "purpose": "preflight",
+                "subject": { "id": "preflight-subject" },
+            }),
+        ),
+        (
+            "vars".to_string(),
+            Value::Object(bindings.vars.clone().into_iter().collect()),
+        ),
+        ("meta".to_string(), cel_meta(evidence, claim)),
+    ])
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn cel_dummy_value_for_type(value_type: &str) -> Value {
+    match value_type {
+        "boolean" | "bool" => Value::Bool(true),
+        "number" => json!(1.0),
+        "integer" | "int" => json!(1),
+        "array" | "list" => json!([]),
+        "object" => json!({}),
+        "null" => Value::Null,
+        _ => json!("preflight"),
+    }
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn validate_cel_expression_roots(expression: &str) -> Result<(), EvidenceError> {
+    for root in cel_root_references(expression) {
+        if !matches!(root.as_str(), "source" | "claims" | "ctx" | "vars" | "meta") {
+            return Err(EvidenceError::InvalidRequest);
+        }
     }
     Ok(())
 }
 
 #[cfg(feature = "registry-notary-cel")]
-async fn evaluate_with_cel(ctx: &CelEvaluationContext<'_>) -> Result<Value, EvidenceError> {
+fn contains_cel_regex_usage(expression: &str) -> bool {
+    expression.contains(".matches(") || expression.contains("matches(") || expression.contains("=~")
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn cel_root_references(expression: &str) -> BTreeSet<String> {
+    let bytes = expression.as_bytes();
+    let mut roots = BTreeSet::new();
+    let mut index = 0;
+    let mut quote: Option<u8> = None;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if let Some(active_quote) = quote {
+            if byte == b'\\' {
+                index = index.saturating_add(2);
+                continue;
+            }
+            if byte == active_quote {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        if matches!(byte, b'\'' | b'"' | b'`') {
+            quote = Some(byte);
+            index += 1;
+            continue;
+        }
+        if !is_cel_identifier_start_byte(byte) {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        index += 1;
+        while index < bytes.len() && is_cel_identifier_continue_byte(bytes[index]) {
+            index += 1;
+        }
+        let mut lookahead = index;
+        while lookahead < bytes.len() && bytes[lookahead].is_ascii_whitespace() {
+            lookahead += 1;
+        }
+        let previous = start
+            .checked_sub(1)
+            .and_then(|previous| bytes.get(previous))
+            .copied();
+        let is_member = previous == Some(b'.');
+        let is_root = matches!(bytes.get(lookahead), Some(b'.' | b'[')) && !is_member;
+        if is_root {
+            roots.insert(expression[start..index].to_string());
+        }
+    }
+    roots
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn is_cel_identifier_start_byte(byte: u8) -> bool {
+    byte == b'_' || byte.is_ascii_alphabetic()
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn is_cel_identifier_continue_byte(byte: u8) -> bool {
+    byte == b'_' || byte.is_ascii_alphanumeric()
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn cel_root_bindings(
+    ctx: &CelEvaluationContext<'_>,
+) -> Result<BTreeMap<String, Value>, EvidenceError> {
     let mut claim_values = Map::new();
     for (alias, binding) in &ctx.bindings.claims {
         let result = ctx
@@ -2856,22 +3151,17 @@ async fn evaluate_with_cel(ctx: &CelEvaluationContext<'_>) -> Result<Value, Evid
         &Value::Object(root_bindings.clone().into_iter().collect()),
         &limits,
     )?;
-    let expression = ctx.expression.to_string();
-    let input = StandaloneExpressionInput::new(root_bindings);
-    let handle = tokio::task::spawn_blocking(move || {
-        let runtime = MappingRuntime::new(RuntimeOptions::default());
-        runtime.evaluate_cel_expression_with_input(&expression, input)
-    });
-    let result = timeout(CEL_EVALUATION_TIMEOUT, handle)
-        .await
-        .map_err(|_| EvidenceError::RuleEvaluationFailed)?
-        .map_err(|_| EvidenceError::RuleEvaluationFailed)?;
-    result.map_err(|error| match error {
-        StandaloneEvalError::Compile(_) | StandaloneEvalError::InvalidBindingName { .. } => {
-            EvidenceError::InvalidRequest
+    Ok(root_bindings)
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn cel_worker_error(error: CelWorkerError) -> EvidenceError {
+    match error {
+        CelWorkerError::Compile | CelWorkerError::Protocol => EvidenceError::InvalidRequest,
+        CelWorkerError::Evaluate | CelWorkerError::Harness(_) => {
+            EvidenceError::RuleEvaluationFailed
         }
-        StandaloneEvalError::Evaluate { .. } => EvidenceError::RuleEvaluationFailed,
-    })
+    }
 }
 
 #[cfg(feature = "registry-notary-cel")]
@@ -2879,27 +3169,57 @@ fn validate_cel_binding_limits(
     value: &Value,
     limits: &SecurityLimits,
 ) -> Result<(), EvidenceError> {
-    match value {
-        Value::String(value) if value.len() > limits.max_string_bytes => {
-            Err(EvidenceError::RuleEvaluationFailed)
+    let mut stack = vec![(value, 0_usize)];
+    while let Some((value, depth)) = stack.pop() {
+        if depth > MAX_CEL_OBJECT_DEPTH {
+            return Err(EvidenceError::RuleEvaluationFailed);
         }
-        Value::Array(values) => {
-            if values.len() > limits.max_list_len {
+        match value {
+            Value::String(value) if value.len() > limits.max_string_bytes => {
                 return Err(EvidenceError::RuleEvaluationFailed);
             }
-            for value in values {
-                validate_cel_binding_limits(value, limits)?;
+            Value::Array(values) => {
+                if values.len() > limits.max_list_len {
+                    return Err(EvidenceError::RuleEvaluationFailed);
+                }
+                for value in values {
+                    stack.push((value, depth + 1));
+                }
             }
-            Ok(())
-        }
-        Value::Object(values) => {
-            for value in values.values() {
-                validate_cel_binding_limits(value, limits)?;
+            Value::Object(values) => {
+                if values.len() > MAX_CEL_OBJECT_KEYS {
+                    return Err(EvidenceError::RuleEvaluationFailed);
+                }
+                for value in values.values() {
+                    stack.push((value, depth + 1));
+                }
             }
-            Ok(())
+            _ => {}
         }
-        _ => Ok(()),
     }
+    Ok(())
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn validate_cel_result_limits(value: &Value, limits: &SecurityLimits) -> Result<(), EvidenceError> {
+    validate_cel_binding_limits(value, limits)?;
+    let bytes = serde_json::to_vec(value).map_err(|_| EvidenceError::RuleEvaluationFailed)?;
+    if bytes.len() > limits.max_output_json_bytes {
+        return Err(EvidenceError::RuleEvaluationFailed);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn is_cel_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first == '_' || first.is_ascii_alphabetic()) {
+        return false;
+    }
+    chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
 }
 
 #[cfg(feature = "registry-notary-cel")]
@@ -4138,6 +4458,125 @@ mod tests {
         ));
         assert!(matches!(
             validate_cel_binding_limits(&json!({ "items": [1, 2, 3] }), &limits),
+            Err(EvidenceError::RuleEvaluationFailed)
+        ));
+    }
+
+    #[cfg(feature = "registry-notary-cel")]
+    #[test]
+    fn cel_policy_validation_rejects_invalid_alias_and_unlisted_dependency() {
+        let claim = test_claim("cel-claim", vec!["dependency"], false);
+        let invalid_alias = CelBindingsConfig {
+            claims: BTreeMap::from([(
+                "not-valid-alias".to_string(),
+                registry_notary_core::ClaimBindingConfig {
+                    claim: "dependency".to_string(),
+                    binding_type: None,
+                },
+            )]),
+            vars: BTreeMap::new(),
+        };
+        assert!(matches!(
+            validate_cel_policy("true", &invalid_alias, &claim),
+            Err(EvidenceError::InvalidRequest)
+        ));
+
+        let unlisted_dependency = CelBindingsConfig {
+            claims: BTreeMap::from([(
+                "dep".to_string(),
+                registry_notary_core::ClaimBindingConfig {
+                    claim: "other".to_string(),
+                    binding_type: None,
+                },
+            )]),
+            vars: BTreeMap::new(),
+        };
+        assert!(matches!(
+            validate_cel_policy("true", &unlisted_dependency, &claim),
+            Err(EvidenceError::InvalidRequest)
+        ));
+    }
+
+    #[cfg(feature = "registry-notary-cel")]
+    #[test]
+    fn cel_startup_validation_rejects_unknown_roots_and_regex_usage() {
+        assert!(validate_cel_expression_roots(
+            "source.farmer.total_farmed_area < 4 && claims.prior.satisfied"
+        )
+        .is_ok());
+        assert!(matches!(
+            validate_cel_expression_roots("credential.level == 'gold'"),
+            Err(EvidenceError::InvalidRequest)
+        ));
+        assert!(contains_cel_regex_usage("source.person.name.matches('^A')"));
+    }
+
+    #[test]
+    fn claim_value_type_validation_matches_declared_json_shape() {
+        assert!(validate_claim_value_type(&json!(true), "boolean").is_ok());
+        assert!(validate_claim_value_type(&json!(1.5), "number").is_ok());
+        assert!(validate_claim_value_type(&json!(1), "integer").is_ok());
+        assert!(validate_claim_value_type(&json!("value"), "string").is_ok());
+        assert!(validate_claim_value_type(&json!("2026-06-03"), "date").is_ok());
+        assert!(validate_claim_value_type(&json!([1]), "array").is_ok());
+        assert!(validate_claim_value_type(&json!({ "k": "v" }), "object").is_ok());
+        assert!(validate_claim_value_type(&Value::Null, "null").is_ok());
+        assert!(validate_claim_value_type(&json!("value"), "").is_ok());
+
+        assert!(matches!(
+            validate_claim_value_type(&json!("value"), "boolean"),
+            Err(EvidenceError::RuleEvaluationFailed)
+        ));
+        assert!(matches!(
+            validate_claim_value_type(&json!(1.5), "integer"),
+            Err(EvidenceError::RuleEvaluationFailed)
+        ));
+        assert!(matches!(
+            validate_claim_value_type(&json!(true), "unsupported"),
+            Err(EvidenceError::InvalidRequest)
+        ));
+    }
+
+    #[cfg(feature = "registry-notary-cel")]
+    #[test]
+    fn cel_binding_limits_reject_deep_json_without_recursive_walk() {
+        let limits = SecurityLimits::default();
+        let mut value = json!(true);
+        for _ in 0..=MAX_CEL_OBJECT_DEPTH {
+            value = json!({ "nested": value });
+        }
+
+        assert!(matches!(
+            validate_cel_binding_limits(&value, &limits),
+            Err(EvidenceError::RuleEvaluationFailed)
+        ));
+    }
+
+    #[cfg(feature = "registry-notary-cel")]
+    #[test]
+    fn cel_result_limits_reject_oversized_serialized_output() {
+        let limits = SecurityLimits {
+            max_output_json_bytes: 4,
+            ..SecurityLimits::default()
+        };
+
+        assert!(matches!(
+            validate_cel_result_limits(&json!("12345"), &limits),
+            Err(EvidenceError::RuleEvaluationFailed)
+        ));
+    }
+
+    #[cfg(feature = "registry-notary-cel")]
+    #[test]
+    fn cel_result_limits_reject_deep_worker_output_without_recursive_walk() {
+        let limits = SecurityLimits::default();
+        let mut value = json!(true);
+        for _ in 0..=MAX_CEL_OBJECT_DEPTH {
+            value = json!({ "nested": value });
+        }
+
+        assert!(matches!(
+            validate_cel_result_limits(&value, &limits),
             Err(EvidenceError::RuleEvaluationFailed)
         ));
     }

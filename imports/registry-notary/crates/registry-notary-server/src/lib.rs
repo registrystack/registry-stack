@@ -6,6 +6,8 @@
 #![recursion_limit = "256"]
 
 pub mod api;
+#[cfg(feature = "registry-notary-cel")]
+pub mod cel_worker;
 pub(crate) mod credential_status;
 pub(crate) mod federation;
 pub(crate) mod metrics;

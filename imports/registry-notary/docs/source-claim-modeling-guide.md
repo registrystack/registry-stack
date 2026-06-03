@@ -442,9 +442,9 @@ rule:
         claim: farmed-land-size
 ```
 
-CEL-enabled builds are experimental for beta because the timeout bounds request
-latency but is not a hard CPU or step limit. Prefer `exists` or `extract` when
-they express the claim clearly.
+CEL-enabled builds evaluate expressions in a hardened worker process and apply
+Notary-owned limits to expressions, root bindings, and worker frames. Prefer
+`exists` or `extract` when they express the claim clearly.
 
 ## Disclosure And Formats
 

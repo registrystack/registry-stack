@@ -286,9 +286,12 @@ when the Crosswalk checkout is not available at `../cel-mapping`.
 
 CEL is disabled in default beta builds. It remains available through the
 explicit `registry-notary-cel` feature and is implemented through the local
-`crosswalk-core` crate at `../cel-mapping/crates/crosswalk-core`. The current
-CEL timeout bounds request latency but is not a hard CPU or step limit, so
-CEL-enabled builds are experimental until hardened subprocess isolation lands.
+`crosswalk-core` crate at `../cel-mapping/crates/crosswalk-core`. CEL-enabled
+builds evaluate expressions in a hardened worker process with environment
+scrubbing, bounded request and response frames, capped stderr capture, resource
+limits where supported, timeout kill, worker replacement, startup policy
+preflight, declared result-type checks, and a deterministic policy hash echoed
+across the worker protocol.
 
 ## Docker
 
@@ -314,11 +317,11 @@ docker build \
 ```
 
 The product container workflow publishes the default image as `main` /
-`sha-<commit>` with PKCS#11 compiled in, and the CEL-enabled lab image as
+`sha-<commit>` with PKCS#11 compiled in, and the optional CEL-enabled image as
 `main-cel` / `sha-<commit>-cel` with both CEL and PKCS#11 enabled under
 `ghcr.io/jeremi/registry-notary`. First serious release readiness is checked
-through the coordinated pre-tag release plan. Lab deployments should consume the
-selected CEL-enabled image by immutable digest for rollback.
+through the coordinated pre-tag release plan. CEL deployments should consume
+the selected CEL-enabled image by immutable digest for rollback.
 
 Native runs default to `127.0.0.1:8081`. The Docker image sets
 `REGISTRY_NOTARY_BIND=0.0.0.0:8080` and exposes port `8080`; override it with

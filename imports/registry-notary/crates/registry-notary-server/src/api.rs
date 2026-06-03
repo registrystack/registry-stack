@@ -49,6 +49,8 @@ use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
+#[cfg(feature = "registry-notary-cel")]
+use crate::cel_worker::CelWorker;
 use crate::{
     credential_profile_for,
     credential_status::{is_mutable_status, CredentialStatusStore},
@@ -181,7 +183,7 @@ async fn healthz() -> Response {
 }
 
 async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Response {
-    let (ready, degraded, signer_total, signer_ok, signer_failed) = match state.as_ref() {
+    let (base_ready, base_degraded, signer_total, signer_ok, signer_failed) = match state.as_ref() {
         Some(Extension(state)) if state.enabled_evidence().is_ok() => {
             let replay_readiness = state.replay.check_ready().await;
             let credential_status_ready = state.credential_status.check_ready().await.is_ok();
@@ -200,12 +202,39 @@ async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Respons
         }
         _ => (false, false, 0, 0, 0),
     };
+    let degraded = usize::from(base_degraded);
+    #[cfg(feature = "registry-notary-cel")]
+    let (total, ok, failed) = {
+        let mut total = 1 + signer_total;
+        let mut ok = usize::from(base_ready) + signer_ok;
+        let mut failed = usize::from(!base_ready && !base_degraded) + signer_failed;
+        if let Some(Extension(state)) = state.as_ref() {
+            if let Some(cel_worker) = &state.cel_worker {
+                total += 1;
+                if cel_worker.check_ready().await {
+                    ok += 1;
+                } else {
+                    failed += 1;
+                }
+            }
+        }
+        (total, ok, failed)
+    };
+    #[cfg(not(feature = "registry-notary-cel"))]
+    let (total, ok, failed) = (
+        1 + signer_total,
+        usize::from(base_ready) + signer_ok,
+        usize::from(!base_ready && !base_degraded) + signer_failed,
+    );
+
+    let ready = ok == total;
+    let is_degraded = !ready && failed == 0 && degraded > 0;
     let status = if ready {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     };
-    let status_text = match (ready, degraded) {
+    let status_text = match (ready, is_degraded) {
         (true, _) => "ready",
         (false, true) => "degraded",
         (false, false) => "not_ready",
@@ -215,10 +244,10 @@ async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Respons
         Json(json!({
             "status": status_text,
             "checks": {
-                "total": 1 + signer_total,
-                "ok": usize::from(ready) + signer_ok,
-                "degraded": u8::from(degraded),
-                "failed": usize::from(!ready && !degraded) + signer_failed,
+                "total": total,
+                "ok": ok,
+                "degraded": degraded,
+                "failed": failed,
                 "signing_providers": {
                     "total": signer_total,
                     "ok": signer_ok,
@@ -413,6 +442,8 @@ pub struct RegistryNotaryApiState {
     /// Pre-authorized-code flow runtime. `None` unless the flow is enabled and
     /// the dedicated access-token signing key plus eSignet RP settings loaded.
     pub(crate) preauth: Option<Arc<PreAuthRuntime>>,
+    #[cfg(feature = "registry-notary-cel")]
+    pub(crate) cel_worker: Option<Arc<CelWorker>>,
 }
 
 impl RegistryNotaryApiState {
@@ -609,6 +640,8 @@ impl RegistryNotaryApiState {
             issuers,
             signer_readiness,
             preauth: None,
+            #[cfg(feature = "registry-notary-cel")]
+            cel_worker: None,
         }
     }
 
@@ -621,6 +654,27 @@ impl RegistryNotaryApiState {
     pub(crate) fn with_signer_readiness(mut self, signer_readiness: SignerReadiness) -> Self {
         self.signer_readiness = signer_readiness;
         self
+    }
+
+    #[cfg(feature = "registry-notary-cel")]
+    #[must_use]
+    pub(crate) fn with_cel_worker(mut self, cel_worker: Option<Arc<CelWorker>>) -> Self {
+        self.cel_worker = cel_worker;
+        self
+    }
+
+    pub(crate) fn runtime(&self) -> RegistryNotaryRuntime {
+        let runtime = RegistryNotaryRuntime::new_with_self_attestation_rate_keys(Arc::clone(
+            &self.self_attestation_rate_keys,
+        ));
+        #[cfg(feature = "registry-notary-cel")]
+        {
+            runtime.with_cel_worker(self.cel_worker.as_ref().map(Arc::clone))
+        }
+        #[cfg(not(feature = "registry-notary-cel"))]
+        {
+            runtime
+        }
     }
 
     pub(crate) fn enabled_evidence(&self) -> Result<&EvidenceConfig, EvidenceError> {
@@ -1064,21 +1118,20 @@ async fn oid4vci_credential(
             return response;
         }
     };
-    let results = match RegistryNotaryRuntime::new_with_self_attestation_rate_keys(Arc::clone(
-        &state.self_attestation_rate_keys,
-    ))
-    .evaluate_with_source_capability(
-        Arc::clone(&state.evidence),
-        Arc::clone(&state.source),
-        &state.store,
-        &principal,
-        context.source_capability,
-        request,
-        None,
-        Some(context.metadata.clone()),
-        None,
-    )
-    .await
+    let results = match state
+        .runtime()
+        .evaluate_with_source_capability(
+            Arc::clone(&state.evidence),
+            Arc::clone(&state.source),
+            &state.store,
+            &principal,
+            context.source_capability,
+            request,
+            None,
+            Some(context.metadata.clone()),
+            None,
+        )
+        .await
     {
         Ok(results) => results,
         Err(error) => {
@@ -2361,9 +2414,7 @@ async fn evaluate(
             }
         }
     }
-    let runtime = RegistryNotaryRuntime::new_with_self_attestation_rate_keys(Arc::clone(
-        &state.self_attestation_rate_keys,
-    ));
+    let runtime = state.runtime();
     let requested_claims = request_claim_ids;
     let self_attestation_policy_hash = self_attestation_context
         .as_ref()
@@ -2518,9 +2569,7 @@ async fn batch_evaluate(
         );
         return response;
     }
-    let runtime = RegistryNotaryRuntime::new_with_self_attestation_rate_keys(Arc::clone(
-        &state.self_attestation_rate_keys,
-    ));
+    let runtime = state.runtime();
     let requested_claims = request_claim_ids;
     let requested_subject_count = request.items.len();
     let audit_purposes = resolved_batch_audit_purposes(
@@ -2652,9 +2701,7 @@ async fn render(
     {
         return evidence_error_response(error);
     }
-    let runtime = RegistryNotaryRuntime::new_with_self_attestation_rate_keys(Arc::clone(
-        &state.self_attestation_rate_keys,
-    ));
+    let runtime = state.runtime();
     let runtime_principal = runtime_principal_for_stored_evaluation(&principal, &evaluation);
     match runtime.render(evidence, &state.store, &runtime_principal, request) {
         Ok(value) => {

@@ -57,6 +57,10 @@ use time::OffsetDateTime;
 use ulid::Ulid;
 use zeroize::Zeroizing;
 
+#[cfg(feature = "registry-notary-cel")]
+use crate::cel_worker::{CelWorker, CelWorkerConfig};
+#[cfg(feature = "registry-notary-cel")]
+use crate::runtime::validate_cel_claims_for_startup;
 use crate::{
     api::ADMIN_SCOPE,
     credential_status::{CredentialStatusBuildError, CredentialStatusStore},
@@ -147,28 +151,31 @@ pub fn standalone_router(
     cors_policy.validate()?;
     let wallet_cors_policy = SelfAttestationWalletCorsPolicy::from_config(&config);
     let auth_state = Arc::new(AuthAuditState::from_config(&config, Arc::clone(&metrics))?);
+    #[cfg(feature = "registry-notary-cel")]
+    let cel_worker = build_cel_worker(&config.evidence, Arc::clone(&metrics))?;
     let preauth_runtime =
         PreAuthRuntime::from_config(&config, &signing_keys, auth_state.audit.clone())?
             .map(Arc::new);
-    let api_state = Arc::new(
-        RegistryNotaryApiState::new_with_federation(
-            evidence,
-            self_attestation,
-            oid4vci,
-            federation,
-            auth_state.audit.profile.key_hasher(),
-            config.federation.enabled.then(|| auth_state.audit.clone()),
-            replay,
-            credential_status,
-            Arc::clone(&metrics),
-            source,
-            store,
-            issuers,
-            federation_signing_provider,
-        )?
-        .with_preauth_runtime(preauth_runtime)
-        .with_signer_readiness(signer_readiness),
-    );
+    let api_state = RegistryNotaryApiState::new_with_federation(
+        evidence,
+        self_attestation,
+        oid4vci,
+        federation,
+        auth_state.audit.profile.key_hasher(),
+        config.federation.enabled.then(|| auth_state.audit.clone()),
+        replay,
+        credential_status,
+        Arc::clone(&metrics),
+        source,
+        store,
+        issuers,
+        federation_signing_provider,
+    )?
+    .with_preauth_runtime(preauth_runtime)
+    .with_signer_readiness(signer_readiness);
+    #[cfg(feature = "registry-notary-cel")]
+    let api_state = api_state.with_cel_worker(cel_worker);
+    let api_state = Arc::new(api_state);
     let mut routes = router();
     if config.federation.enabled {
         routes = routes.merge(crate::api::federation_router());
@@ -379,6 +386,35 @@ pub enum StandaloneServerError {
     InvalidOidcConfig(String),
     #[error("invalid federation configuration: {0}")]
     InvalidFederationConfig(String),
+    #[cfg(feature = "registry-notary-cel")]
+    #[error("invalid CEL worker configuration: {0}")]
+    InvalidCelConfig(String),
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn build_cel_worker(
+    evidence: &EvidenceConfig,
+    metrics: Arc<AppMetrics>,
+) -> Result<Option<Arc<CelWorker>>, StandaloneServerError> {
+    if !evidence_uses_cel(evidence) {
+        return Ok(None);
+    }
+    validate_cel_claims_for_startup(evidence)
+        .map_err(|_| StandaloneServerError::InvalidCelConfig("invalid CEL policy".to_string()))?;
+    let worker =
+        CelWorker::lazy(CelWorkerConfig::for_current_exe_subcommand()).with_metrics(metrics);
+    worker
+        .validate_config()
+        .map_err(|error| StandaloneServerError::InvalidCelConfig(error.to_string()))?;
+    Ok(Some(Arc::new(worker)))
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn evidence_uses_cel(evidence: &EvidenceConfig) -> bool {
+    evidence
+        .claims
+        .iter()
+        .any(|claim| matches!(&claim.rule, registry_notary_core::RuleConfig::Cel { .. }))
 }
 
 #[derive(Clone)]

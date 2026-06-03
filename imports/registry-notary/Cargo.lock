@@ -2618,6 +2618,7 @@ dependencies = [
  "axum-test",
  "clap",
  "libc",
+ "registry-notary-worker-harness",
  "registry-platform-authcommon",
  "serde",
  "serde_json",
@@ -2645,6 +2646,7 @@ dependencies = [
  "jsonwebtoken",
  "registry-notary-core",
  "registry-notary-openfn-sidecar",
+ "registry-notary-worker-harness",
  "registry-platform-audit",
  "registry-platform-authcommon",
  "registry-platform-cache",
@@ -2670,6 +2672,18 @@ dependencies = [
  "ulid",
  "utoipa",
  "zeroize",
+]
+
+[[package]]
+name = "registry-notary-worker-harness"
+version = "0.3.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

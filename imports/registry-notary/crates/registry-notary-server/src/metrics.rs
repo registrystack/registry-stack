@@ -24,6 +24,8 @@ struct MetricsState {
     audit: BTreeMap<OutcomeKey, u64>,
     replay: BTreeMap<ReplayKey, u64>,
     credentials: BTreeMap<CredentialKey, u64>,
+    cel_evaluations: BTreeMap<CelEvaluationKey, CountDuration>,
+    cel_worker_pools: BTreeMap<CelWorkerStateKey, u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -59,6 +61,16 @@ struct ReplayKey {
 struct CredentialKey {
     protocol: &'static str,
     outcome: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct CelEvaluationKey {
+    outcome: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct CelWorkerStateKey {
+    state: &'static str,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -139,6 +151,25 @@ impl AppMetrics {
         *value = value.saturating_add(1);
     }
 
+    #[cfg_attr(not(feature = "registry-notary-cel"), allow(dead_code))]
+    pub(crate) fn record_cel_evaluation(&self, outcome: &'static str, duration_ms: u64) {
+        let mut metrics = self.inner.lock().expect("metrics mutex is healthy");
+        let value = metrics
+            .cel_evaluations
+            .entry(CelEvaluationKey { outcome })
+            .or_default();
+        value.count = value.count.saturating_add(1);
+        value.duration_ms_total = value.duration_ms_total.saturating_add(duration_ms);
+    }
+
+    #[cfg_attr(not(feature = "registry-notary-cel"), allow(dead_code))]
+    pub(crate) fn set_cel_worker_pool(&self, state: &'static str, value: u64) {
+        let mut metrics = self.inner.lock().expect("metrics mutex is healthy");
+        metrics
+            .cel_worker_pools
+            .insert(CelWorkerStateKey { state }, value);
+    }
+
     fn render(&self) -> String {
         let metrics = self.inner.lock().expect("metrics mutex is healthy");
         let mut body = String::new();
@@ -205,6 +236,25 @@ impl AppMetrics {
             body.push_str(&format!(
                 "registry_notary_credential_issuance_total{{protocol=\"{}\",outcome=\"{}\"}} {}\n",
                 key.protocol, key.outcome, value
+            ));
+        }
+        body.push_str("# TYPE registry_notary_cel_evaluations_total counter\n");
+        body.push_str("# TYPE registry_notary_cel_evaluation_duration_ms_total counter\n");
+        for (key, value) in &metrics.cel_evaluations {
+            body.push_str(&format!(
+                "registry_notary_cel_evaluations_total{{outcome=\"{}\"}} {}\n",
+                key.outcome, value.count
+            ));
+            body.push_str(&format!(
+                "registry_notary_cel_evaluation_duration_ms_total{{outcome=\"{}\"}} {}\n",
+                key.outcome, value.duration_ms_total
+            ));
+        }
+        body.push_str("# TYPE registry_notary_cel_worker_pool gauge\n");
+        for (key, value) in &metrics.cel_worker_pools {
+            body.push_str(&format!(
+                "registry_notary_cel_worker_pool{{state=\"{}\"}} {}\n",
+                key.state, value
             ));
         }
         body
@@ -308,5 +358,30 @@ mod tests {
         ));
         assert!(!rendered.contains("BREW1"));
         assert!(!rendered.contains("BREW2"));
+    }
+
+    #[test]
+    fn cel_metrics_are_low_cardinality_and_do_not_include_policy_text() {
+        let metrics = AppMetrics::default();
+
+        metrics.record_cel_evaluation("success", 7);
+        metrics.record_cel_evaluation("compile_error", 3);
+        metrics.set_cel_worker_pool("max", 2);
+        metrics.set_cel_worker_pool("idle", 1);
+        metrics.set_cel_worker_pool("replacements_total", 4);
+        metrics.set_cel_worker_pool("circuit_open", 1);
+
+        let rendered = metrics.render();
+        assert!(rendered.contains("registry_notary_cel_evaluations_total{outcome=\"success\"} 1"));
+        assert!(rendered.contains(
+            "registry_notary_cel_evaluation_duration_ms_total{outcome=\"compile_error\"} 3"
+        ));
+        assert!(rendered.contains("registry_notary_cel_worker_pool{state=\"max\"} 2"));
+        assert!(
+            rendered.contains("registry_notary_cel_worker_pool{state=\"replacements_total\"} 4")
+        );
+        assert!(rendered.contains("registry_notary_cel_worker_pool{state=\"circuit_open\"} 1"));
+        assert!(!rendered.contains("source.age"));
+        assert!(!rendered.contains("secret-source-value"));
     }
 }

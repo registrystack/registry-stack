@@ -20,8 +20,28 @@ use std::path::{Path, PathBuf};
 const DEMO_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
 const TEST_AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
 
+fn cel_worker_bin() -> PathBuf {
+    let env_path = PathBuf::from(env!("CARGO_BIN_EXE_registry-notary-cel-worker"));
+    if env_path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .is_some_and(|file_name| file_name == "deps")
+    {
+        let candidate = env_path
+            .parent()
+            .and_then(|parent| parent.parent())
+            .expect("target debug dir")
+            .join("registry-notary-cel-worker");
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    env_path
+}
+
 fn set_audit_secret() {
     std::env::set_var("REGISTRY_NOTARY_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
+    std::env::set_var("REGISTRY_NOTARY_CEL_WORKER_COMMAND", cel_worker_bin());
 }
 
 async fn civil_source(
@@ -286,19 +306,34 @@ fn decentralized_demo_evidence_configs_load_validate_and_build_router() {
         );
         return;
     };
-    for config_path in [
-        "demo/decentralized/config/evidence/civil-evidence-server.yaml",
-        "demo/decentralized/config/evidence/social-protection-evidence-server.yaml",
-        "demo/decentralized/config/evidence/shared-eligibility-evidence-server.yaml",
+    for config_paths in [
+        [
+            "demo/decentralized/config/evidence/civil-registry-notary.yaml",
+            "demo/decentralized/config/evidence/civil-evidence-server.yaml",
+        ],
+        [
+            "demo/decentralized/config/evidence/social-protection-registry-notary.yaml",
+            "demo/decentralized/config/evidence/social-protection-evidence-server.yaml",
+        ],
+        [
+            "demo/decentralized/config/evidence/shared-eligibility-registry-notary.yaml",
+            "demo/decentralized/config/evidence/shared-eligibility-evidence-server.yaml",
+        ],
     ] {
-        let raw = std::fs::read_to_string(root.join(config_path)).expect("config is readable");
+        let config_path = config_paths
+            .iter()
+            .map(|config_path| root.join(config_path))
+            .find(|config_path| config_path.is_file())
+            .expect("config is readable");
+        let raw = std::fs::read_to_string(&config_path).expect("config is readable");
         let auth_block = raw
             .split_once("\naudit:")
             .map(|(before_audit, _)| before_audit)
             .unwrap_or(&raw);
         if auth_block.contains("token_env:") {
             eprintln!(
-                "skipping stale registry-relay decentralized demo config with pre-hash auth schema: {config_path}"
+                "skipping stale registry-relay decentralized demo config with pre-hash auth schema: {}",
+                config_path.display()
             );
             continue;
         }

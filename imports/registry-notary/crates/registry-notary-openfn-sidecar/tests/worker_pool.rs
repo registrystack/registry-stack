@@ -24,6 +24,9 @@ fn pool_config(max_workers: usize) -> WorkerPoolConfig {
         max_stdout_bytes: 4096,
         max_stderr_bytes: 128,
         max_memory_bytes: None,
+        replacement_window: Duration::from_secs(60),
+        max_replacements_per_window: 64,
+        circuit_breaker_cooldown: Duration::from_secs(30),
     }
 }
 

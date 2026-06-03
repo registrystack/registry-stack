@@ -58,7 +58,7 @@ jobs:
             --tag "$NOTARY_IMAGE:sha-${GITHUB_SHA}" \
             --tag "$NOTARY_IMAGE:main" \
             registry-notary
-      - name: Build registry-notary lab image
+      - name: Build registry-notary CEL image
         run: |
           docker build \
             --build-context registry-platform=registry-platform \
@@ -68,6 +68,27 @@ jobs:
             --tag "$NOTARY_IMAGE:sha-${GITHUB_SHA}-cel" \
             --tag "$NOTARY_IMAGE:main-cel" \
             registry-notary
+      - name: Smoke default registry-notary image excludes CEL worker
+        run: |
+          if docker run --rm --entrypoint /usr/local/bin/registry-notary "$NOTARY_IMAGE:sha-${GITHUB_SHA}" cel-worker; then
+            echo "default image unexpectedly accepted the CEL worker command"
+            exit 1
+          fi
+      - name: Smoke registry-notary CEL image worker protocol
+        run: |
+          output="$(
+            printf '%s\n' '{"protocol":"registry-notary-cel-worker/v1","expression":"source.age >= 18","root_bindings":{"source":{"age":21},"claims":{},"ctx":{},"vars":{},"meta":{}}}' \
+              | docker run --rm -i --entrypoint /usr/local/bin/registry-notary "$NOTARY_IMAGE:sha-${GITHUB_SHA}-cel" cel-worker
+          )"
+          python3 - "$output" <<'PY'
+          import json
+          import sys
+
+          response = json.loads(sys.argv[1])
+          assert response["protocol"] == "registry-notary-cel-worker/v1"
+          assert response["value"] is True
+          assert response["policy_hash"].startswith("sha256:")
+          PY
       - name: Build OpenFn sidecar image
         run: |
           docker build \

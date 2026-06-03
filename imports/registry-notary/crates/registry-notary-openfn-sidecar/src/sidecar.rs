@@ -265,6 +265,9 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
             .limits
             .max_worker_memory_mb
             .map(|megabytes| megabytes.saturating_mul(1024 * 1024)),
+        replacement_window: Duration::from_secs(60),
+        max_replacements_per_window: config.limits.max_workers.saturating_mul(4).max(4),
+        circuit_breaker_cooldown: Duration::from_secs(30),
     })
     .await?;
 
@@ -816,6 +819,7 @@ async fn run_smoke_lookups(state: &Arc<AppState>) -> Result<(), SidecarError> {
 fn smoke_error_reason(error: &WorkerError) -> String {
     match error {
         WorkerError::Saturated { .. } => "worker pool saturated".to_string(),
+        WorkerError::CircuitOpen { .. } => "worker replacement circuit breaker is open".to_string(),
         WorkerError::Timeout { .. } => "worker timed out".to_string(),
         WorkerError::RequestTooLarge { .. } => "worker request too large".to_string(),
         WorkerError::StdoutTooLarge { .. } => "worker output exceeded byte limit".to_string(),
@@ -853,8 +857,7 @@ async fn healthz(State(state): State<Arc<AppState>>) -> Response {
 }
 
 async fn ready(State(state): State<Arc<AppState>>) -> Response {
-    let snapshot = state.pool.snapshot().await;
-    if snapshot.idle_workers + snapshot.in_flight == snapshot.max_workers {
+    if state.pool.check_ready().await {
         (StatusCode::OK, Json(json!({ "status": "ready" }))).into_response()
     } else {
         problem(
@@ -873,9 +876,18 @@ async fn metrics(State(state): State<Arc<AppState>>) -> Response {
             "registry_notary_openfn_sidecar_workers{{state=\"idle\"}} {}\n",
             "registry_notary_openfn_sidecar_workers{{state=\"in_flight\"}} {}\n",
             "# TYPE registry_notary_openfn_sidecar_worker_completions_total counter\n",
-            "registry_notary_openfn_sidecar_worker_completions_total {}\n"
+            "registry_notary_openfn_sidecar_worker_completions_total {}\n",
+            "# TYPE registry_notary_openfn_sidecar_worker_replacements_total counter\n",
+            "registry_notary_openfn_sidecar_worker_replacements_total {}\n",
+            "# TYPE registry_notary_openfn_sidecar_worker_circuit_open gauge\n",
+            "registry_notary_openfn_sidecar_worker_circuit_open {}\n"
         ),
-        snapshot.max_workers, snapshot.idle_workers, snapshot.in_flight, snapshot.completed_total
+        snapshot.max_workers,
+        snapshot.idle_workers,
+        snapshot.in_flight,
+        snapshot.completed_total,
+        snapshot.replacements_total,
+        u8::from(snapshot.circuit_open)
     );
     let metrics = state.metrics.lock().await;
     if !metrics.is_empty() {
@@ -1532,6 +1544,16 @@ fn worker_error_response(error: WorkerError, retry_after_seconds: u64) -> Respon
     match error {
         WorkerError::Saturated { .. } => {
             let mut response = problem(StatusCode::SERVICE_UNAVAILABLE, "worker pool saturated");
+            if let Ok(value) = HeaderValue::from_str(&retry_after_seconds.to_string()) {
+                response.headers_mut().insert(header::RETRY_AFTER, value);
+            }
+            response
+        }
+        WorkerError::CircuitOpen { .. } => {
+            let mut response = problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "worker replacement circuit breaker is open",
+            );
             if let Ok(value) = HeaderValue::from_str(&retry_after_seconds.to_string()) {
                 response.headers_mut().insert(header::RETRY_AFTER, value);
             }

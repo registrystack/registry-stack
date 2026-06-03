@@ -121,9 +121,32 @@ jobs:
       - name: Build Docker image
         working-directory: ${{ github.workspace }}
         run: docker build --build-context registry-platform=registry-platform --build-context cel-mapping=cel-mapping --build-arg REGISTRY_NOTARY_FEATURES=pkcs11 --file registry-notary/Dockerfile --tag registry-notary:ci registry-notary
-      - name: Build Docker image with lab feature flags
+      - name: Build Docker image with CEL feature
         working-directory: ${{ github.workspace }}
         run: docker build --build-context registry-platform=registry-platform --build-context cel-mapping=cel-mapping --build-arg REGISTRY_NOTARY_FEATURES=registry-notary-cel,pkcs11 --file registry-notary/Dockerfile --tag registry-notary:ci-cel registry-notary
+      - name: Smoke default Docker image excludes CEL worker
+        working-directory: ${{ github.workspace }}
+        run: |
+          if docker run --rm --entrypoint /usr/local/bin/registry-notary registry-notary:ci cel-worker; then
+            echo "default image unexpectedly accepted the CEL worker command"
+            exit 1
+          fi
+      - name: Smoke CEL Docker image worker protocol
+        working-directory: ${{ github.workspace }}
+        run: |
+          output="$(
+            printf '%s\n' '{"protocol":"registry-notary-cel-worker/v1","expression":"source.age >= 18","root_bindings":{"source":{"age":21},"claims":{},"ctx":{},"vars":{},"meta":{}}}' \
+              | docker run --rm -i --entrypoint /usr/local/bin/registry-notary registry-notary:ci-cel cel-worker
+          )"
+          python3 - "$output" <<'PY'
+          import json
+          import sys
+
+          response = json.loads(sys.argv[1])
+          assert response["protocol"] == "registry-notary-cel-worker/v1"
+          assert response["value"] is True
+          assert response["policy_hash"].startswith("sha256:")
+          PY
       - name: Build OpenFn sidecar Docker image
         working-directory: ${{ github.workspace }}
         run: docker build --build-context registry-platform=registry-platform --build-context cel-mapping=cel-mapping --file registry-notary/Dockerfile.openfn-sidecar --tag registry-notary-openfn-sidecar:ci registry-notary

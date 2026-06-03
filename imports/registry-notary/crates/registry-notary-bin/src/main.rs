@@ -121,6 +121,10 @@ enum Command {
         )]
         timeout_ms: u64,
     },
+    /// Run the internal CEL worker line protocol.
+    #[cfg(feature = "registry-notary-cel")]
+    #[command(hide = true)]
+    CelWorker,
     /// Print machine-readable build metadata and compiled capabilities.
     BuildInfo,
     /// Print a lightweight JSON schema for top-level config discovery.
@@ -328,6 +332,11 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
         Some(Command::Healthcheck { url, timeout_ms }) => {
             run_healthcheck(&url, Duration::from_millis(timeout_ms)).await?;
             println!("registry-notary healthcheck ok");
+            Ok(ExitCode::SUCCESS)
+        }
+        #[cfg(feature = "registry-notary-cel")]
+        Some(Command::CelWorker) => {
+            registry_notary_server::cel_worker::run_stdio_worker();
             Ok(ExitCode::SUCCESS)
         }
         Some(Command::BuildInfo) => {

@@ -8,6 +8,9 @@
   metadata, SD-JWT VC Type Metadata at configured `vct` URLs, credential offers,
   nonce creation, and credential issuance.
 - Added the OpenFn sidecar source for isolated worker execution.
+- Kept CEL out of default builds while adding an opt-in CEL production image
+  profile with hardened worker execution, startup expression preflight,
+  declared result-type enforcement, and policy-hash worker protocol checks.
 - Added named SD-JWT VC signing keys under `evidence.signing_keys`, including
   local JWK signing, publish-only rotation keys, disabled keys, and optional
   PKCS#11-backed Ed25519 signing.

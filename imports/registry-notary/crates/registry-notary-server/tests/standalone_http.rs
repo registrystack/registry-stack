@@ -21,6 +21,8 @@ use registry_notary_core::{
     SigningKeyConfig, SigningKeyProviderConfig, SigningKeyStatus, StandaloneRegistryNotaryConfig,
     SD_JWT_VC_SIGNING_ALG,
 };
+#[cfg(feature = "registry-notary-cel")]
+use registry_notary_server::cel_worker::{CelWorker, CelWorkerConfig};
 use registry_notary_server::{standalone_router, StandaloneServerError};
 use registry_platform_audit::{
     verify_jsonl_lines, verify_jsonl_lines_with_hasher, AuditChainHasher, AuditEnvelope,
@@ -36,6 +38,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+#[cfg(feature = "registry-notary-cel")]
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 #[cfg(feature = "registry-notary-cel")]
@@ -77,8 +81,30 @@ fn person_identifier_target(scheme: &str, value: &str) -> Value {
     })
 }
 
+#[cfg(feature = "registry-notary-cel")]
+fn cel_worker_bin() -> PathBuf {
+    let env_path = PathBuf::from(env!("CARGO_BIN_EXE_registry-notary-cel-worker"));
+    if env_path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .is_some_and(|file_name| file_name == "deps")
+    {
+        let candidate = env_path
+            .parent()
+            .and_then(|parent| parent.parent())
+            .expect("target debug dir")
+            .join("registry-notary-cel-worker");
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    env_path
+}
+
 fn set_audit_secret() {
     std::env::set_var("REGISTRY_NOTARY_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
+    #[cfg(feature = "registry-notary-cel")]
+    std::env::set_var("REGISTRY_NOTARY_CEL_WORKER_COMMAND", cel_worker_bin());
 }
 
 fn sign_oid4vci_proof(audience: &str, nonce: &str) -> String {
@@ -438,6 +464,7 @@ fn registry_data_api_target_identifier_config(
 }
 
 fn set_federation_env() {
+    set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
@@ -4007,6 +4034,19 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
     assert!(metrics_body
         .contains("registry_notary_source_requests_total{connector=\"rda\",outcome=\"success\"}"));
     assert!(metrics_body.contains("registry_notary_audit_events_total{outcome=\"success\"}"));
+    #[cfg(feature = "registry-notary-cel")]
+    {
+        assert!(
+            metrics_body.contains("registry_notary_cel_evaluations_total{outcome=\"success\"} 1")
+        );
+        assert!(metrics_body.contains("registry_notary_cel_worker_pool{state=\"max\"}"));
+        assert!(metrics_body.contains("registry_notary_cel_worker_pool{state=\"idle\"}"));
+        assert!(metrics_body.contains("registry_notary_cel_worker_pool{state=\"in_flight\"}"));
+        assert!(
+            metrics_body.contains("registry_notary_cel_worker_pool{state=\"replacements_total\"}")
+        );
+        assert!(metrics_body.contains("registry_notary_cel_worker_pool{state=\"circuit_open\"}"));
+    }
     assert!(!metrics_body.contains("api-token"));
     assert!(!metrics_body.contains("source-token"));
     assert!(!metrics_body.contains("person-1"));
@@ -4192,6 +4232,90 @@ async fn audit_chain_detects_inserted_envelope() {
     assert_eq!(body["code"], json!("audit.write_failed"));
 }
 
+#[test]
+#[cfg(feature = "registry-notary-cel")]
+fn cel_worker_config_rejects_missing_command_without_path_leak() {
+    let worker = CelWorker::lazy(CelWorkerConfig {
+        command: "/registry-notary-test/missing-cel-worker".into(),
+        ..CelWorkerConfig::for_current_exe_subcommand()
+    });
+    let error = worker
+        .validate_config()
+        .expect_err("worker rejects missing command path");
+
+    let text = error.to_string();
+    assert!(!text.contains("missing-cel-worker"));
+}
+
+#[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
+async fn standalone_startup_rejects_cel_expression_compile_error() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    let bad_expression = "claims.farmed_land_size.value <";
+    let claim = config
+        .evidence
+        .claims
+        .iter_mut()
+        .find(|claim| claim.id == "farmer-under-4ha")
+        .expect("CEL claim exists");
+    let registry_notary_core::RuleConfig::Cel { expression, .. } = &mut claim.rule else {
+        panic!("expected CEL claim");
+    };
+    *expression = bad_expression.to_string();
+
+    let error = standalone_router(config).expect_err("router rejects invalid CEL expression");
+    let text = error.to_string();
+    assert!(text.contains("invalid CEL"));
+    assert!(!text.contains(bad_expression));
+    assert!(!text.contains("source-token"));
+}
+
+#[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
+async fn standalone_startup_rejects_cel_unknown_root_reference() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    let claim = config
+        .evidence
+        .claims
+        .iter_mut()
+        .find(|claim| claim.id == "farmer-under-4ha")
+        .expect("CEL claim exists");
+    let registry_notary_core::RuleConfig::Cel { expression, .. } = &mut claim.rule else {
+        panic!("expected CEL claim");
+    };
+    *expression = "credential.level == 'gold'".to_string();
+
+    let error = standalone_router(config).expect_err("router rejects unsupported CEL root");
+    let text = error.to_string();
+    assert!(text.contains("invalid CEL"));
+    assert!(!text.contains("credential.level"));
+    assert!(!text.contains("source-token"));
+}
+
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
 async fn standalone_server_reads_dci_source_and_evaluates_cel_claim() {
@@ -4266,6 +4390,62 @@ async fn standalone_server_reads_dci_source_and_evaluates_cel_claim() {
         observed["message"]["search_request"][0]["search_criteria"]["query"]["value"],
         "person-1"
     );
+}
+
+#[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
+async fn standalone_server_rejects_cel_result_type_mismatch() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route(
+            "/v1/datasets/farmer_registry/entities/farmer/records",
+            get(registry_data_api),
+        ));
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    let claim = config
+        .evidence
+        .claims
+        .iter_mut()
+        .find(|claim| claim.id == "farmer-under-4ha")
+        .expect("CEL claim exists");
+    let registry_notary_core::RuleConfig::Cel { expression, .. } = &mut claim.rule else {
+        panic!("expected CEL claim");
+    };
+    *expression = "claims.farmed_land_size.value > 3.0 ? 'bad-type' : true".to_string();
+
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let response = server
+        .post("/v1/evaluations")
+        .add_header("x-api-key", "api-token")
+        .add_header("data-purpose", "https://purpose.example.test/eligibility")
+        .json(&json!({
+            "target": person_target("person-1"),
+            "claims": ["farmer-under-4ha"],
+            "disclosure": "predicate"
+        }))
+        .await;
+
+    response.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    let body: Value = response.json();
+    assert_eq!(body["code"], json!("claim.rule_evaluation_failed"));
+    assert!(body["results"].is_null());
 }
 
 #[tokio::test]

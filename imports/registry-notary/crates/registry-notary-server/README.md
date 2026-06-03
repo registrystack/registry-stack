@@ -31,8 +31,9 @@ fn app(config: StandaloneRegistryNotaryConfig) -> Result<axum::Router, Standalon
 
 - Default: no CEL runtime.
 - `registry-notary-cel`: enables CEL-backed claim expression evaluation through
-  `crosswalk-core`. CEL-enabled builds are experimental for beta because the
-  current timeout is not a hard CPU or step limit.
+  `crosswalk-core` in a hardened worker process with bounded IO, environment
+  scrubbing, resource limits where supported, timeout kill, and worker
+  replacement.
 - `pkcs11`: enables HSM-backed SD-JWT VC issuer signing through PKCS#11. The
   provider supports Ed25519 EdDSA keys and is configured through
   `evidence.signing_keys`. See

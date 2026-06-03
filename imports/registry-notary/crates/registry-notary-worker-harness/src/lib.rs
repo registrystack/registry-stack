@@ -78,6 +78,9 @@ pub struct WorkerPoolConfig {
     pub max_stdout_bytes: usize,
     pub max_stderr_bytes: usize,
     pub max_memory_bytes: Option<u64>,
+    pub replacement_window: Duration,
+    pub max_replacements_per_window: usize,
+    pub circuit_breaker_cooldown: Duration,
 }
 
 impl WorkerPoolConfig {
@@ -100,6 +103,21 @@ impl WorkerPoolConfig {
         if self.max_stdout_bytes == 0 {
             return Err(WorkerError::InvalidConfig {
                 reason: "max_stdout_bytes must be greater than zero",
+            });
+        }
+        if self.replacement_window.is_zero() {
+            return Err(WorkerError::InvalidConfig {
+                reason: "replacement_window must be greater than zero",
+            });
+        }
+        if self.max_replacements_per_window == 0 {
+            return Err(WorkerError::InvalidConfig {
+                reason: "max_replacements_per_window must be greater than zero",
+            });
+        }
+        if self.circuit_breaker_cooldown.is_zero() {
+            return Err(WorkerError::InvalidConfig {
+                reason: "circuit_breaker_cooldown must be greater than zero",
             });
         }
         if self
@@ -166,6 +184,8 @@ pub enum WorkerError {
     InvalidConfig { reason: &'static str },
     #[error("worker pool saturated: all {max_workers} workers are busy")]
     Saturated { max_workers: usize },
+    #[error("worker replacement circuit breaker is open; retry after {retry_after:?}")]
+    CircuitOpen { retry_after: Duration },
     #[error("worker request too large: {bytes} bytes exceeds limit {limit}")]
     RequestTooLarge { bytes: usize, limit: usize },
     #[error("failed to encode worker request: {source}")]
@@ -232,6 +252,10 @@ impl fmt::Debug for WorkerError {
             Self::Saturated { max_workers } => f
                 .debug_struct("Saturated")
                 .field("max_workers", max_workers)
+                .finish(),
+            Self::CircuitOpen { retry_after } => f
+                .debug_struct("CircuitOpen")
+                .field("retry_after", retry_after)
                 .finish(),
             Self::RequestTooLarge { bytes, limit } => f
                 .debug_struct("RequestTooLarge")
@@ -394,6 +418,7 @@ impl WorkerError {
     }
 }
 
+#[derive(Clone)]
 pub struct WorkerPool {
     inner: Arc<WorkerPoolInner>,
 }
@@ -404,9 +429,12 @@ struct WorkerPoolInner {
     next_worker_id: AtomicU64,
     in_flight: AtomicUsize,
     completed_total: AtomicU64,
+    replacements_total: AtomicU64,
     started_at: Instant,
     active_since: Mutex<Option<Instant>>,
     last_completed: Mutex<Option<Instant>>,
+    replacement_events: Mutex<VecDeque<Instant>>,
+    circuit_open_until: Mutex<Option<Instant>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -415,6 +443,8 @@ pub struct WorkerPoolSnapshot {
     pub idle_workers: usize,
     pub in_flight: usize,
     pub completed_total: u64,
+    pub replacements_total: u64,
+    pub circuit_open: bool,
     pub active_for: Option<Duration>,
     pub completed_within: Option<Duration>,
     pub pool_age: Duration,
@@ -436,9 +466,12 @@ impl WorkerPool {
             next_worker_id: AtomicU64::new(1),
             in_flight: AtomicUsize::new(0),
             completed_total: AtomicU64::new(0),
+            replacements_total: AtomicU64::new(0),
             started_at: Instant::now(),
             active_since: Mutex::new(None),
             last_completed: Mutex::new(None),
+            replacement_events: Mutex::new(VecDeque::new()),
+            circuit_open_until: Mutex::new(None),
         });
 
         for _ in 0..inner.config.max_workers {
@@ -459,6 +492,9 @@ impl WorkerPool {
         &self,
         request: impl Serialize,
     ) -> Result<WorkerExecution, WorkerError> {
+        if let Some(retry_after) = self.inner.circuit_retry_after().await {
+            return Err(WorkerError::CircuitOpen { retry_after });
+        }
         let request_line = encode_request(request, self.inner.config.max_request_bytes)?;
         let Some(mut worker) = self.inner.idle.lock().await.pop_front() else {
             return Err(WorkerError::Saturated {
@@ -500,6 +536,46 @@ impl WorkerPool {
     pub async fn snapshot(&self) -> WorkerPoolSnapshot {
         self.inner.snapshot().await
     }
+
+    pub async fn check_ready(&self) -> bool {
+        if self.inner.circuit_retry_after().await.is_some() {
+            return false;
+        }
+        let mut missing_workers = 0_usize;
+        let mut running_workers = VecDeque::new();
+        {
+            let mut idle = self.inner.idle.lock().await;
+            while let Some(mut worker) = idle.pop_front() {
+                match worker.is_running() {
+                    Ok(true) => running_workers.push_back(worker),
+                    Ok(false) | Err(_) => {
+                        missing_workers = missing_workers.saturating_add(1);
+                        tokio::spawn(async move {
+                            let _ = worker.finish_failed_worker().await;
+                        });
+                    }
+                }
+            }
+            *idle = running_workers;
+        }
+
+        for _ in 0..missing_workers {
+            self.inner.replace_worker().await;
+        }
+
+        if missing_workers > 0 {
+            return false;
+        }
+        let snapshot = self.snapshot().await;
+        let current_workers = snapshot.idle_workers + snapshot.in_flight;
+        if current_workers < snapshot.max_workers {
+            for _ in 0..snapshot.max_workers - current_workers {
+                self.inner.replace_worker().await;
+            }
+            return false;
+        }
+        current_workers == snapshot.max_workers
+    }
 }
 
 impl WorkerPoolInner {
@@ -509,13 +585,53 @@ impl WorkerPoolInner {
     }
 
     async fn replace_worker(&self) {
+        if self.circuit_retry_after().await.is_some() {
+            return;
+        }
+        if self.record_replacement_and_maybe_open_circuit().await {
+            return;
+        }
         match self.spawn_worker().await {
             Ok(worker) => {
+                self.replacements_total.fetch_add(1, Ordering::Relaxed);
                 self.idle.lock().await.push_back(worker);
             }
             Err(error) => {
-                error!(error = ?error, "failed to replace OpenFn sidecar worker");
+                error!(error = ?error, "failed to replace worker process");
             }
+        }
+    }
+
+    async fn circuit_retry_after(&self) -> Option<Duration> {
+        let now = Instant::now();
+        let mut open_until = self.circuit_open_until.lock().await;
+        match *open_until {
+            Some(until) if until > now => Some(until.saturating_duration_since(now)),
+            Some(_) => {
+                *open_until = None;
+                None
+            }
+            None => None,
+        }
+    }
+
+    async fn record_replacement_and_maybe_open_circuit(&self) -> bool {
+        let now = Instant::now();
+        let cutoff = now
+            .checked_sub(self.config.replacement_window)
+            .unwrap_or(now);
+        let mut events = self.replacement_events.lock().await;
+        while events.front().is_some_and(|instant| *instant <= cutoff) {
+            events.pop_front();
+        }
+        events.push_back(now);
+        if events.len() > self.config.max_replacements_per_window {
+            *self.circuit_open_until.lock().await =
+                Some(now + self.config.circuit_breaker_cooldown);
+            events.clear();
+            true
+        } else {
+            false
         }
     }
 
@@ -529,11 +645,14 @@ impl WorkerPoolInner {
         let idle_workers = self.idle.lock().await.len();
         let active_since = *self.active_since.lock().await;
         let last_completed = *self.last_completed.lock().await;
+        let circuit_open = self.circuit_retry_after().await.is_some();
         WorkerPoolSnapshot {
             max_workers: self.config.max_workers,
             idle_workers,
             in_flight: self.in_flight.load(Ordering::Relaxed),
             completed_total: self.completed_total.load(Ordering::Relaxed),
+            replacements_total: self.replacements_total.load(Ordering::Relaxed),
+            circuit_open,
             active_for: active_since.map(|instant| now.saturating_duration_since(instant)),
             completed_within: last_completed.map(|instant| now.saturating_duration_since(instant)),
             pool_age: now.saturating_duration_since(self.started_at),

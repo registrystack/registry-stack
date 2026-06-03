@@ -7,9 +7,9 @@ immutable SHA image tags are CI artifacts used for evidence gathering. First
 serious release readiness is established through the coordinated pre-tag release
 plan; final deployments should pin the selected images by digest.
 
-The CEL-enabled lab image is published as
+The optional CEL-enabled image is published as
 `ghcr.io/jeremi/registry-notary:sha-${GITHUB_SHA}-cel` and is covered by the
-same SBOM and Grype critical-vulnerability gate.
+same worker-protocol smoke, SBOM, and Grype critical-vulnerability gate.
 
 Security waivers live in `security/waivers.yml` when needed. Each waiver must
 name an owner, rationale, review trigger, and expiration. The default owner is

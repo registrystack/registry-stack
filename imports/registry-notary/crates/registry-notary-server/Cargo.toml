@@ -10,7 +10,7 @@ publish = false
 
 [features]
 default = []
-registry-notary-cel = ["dep:crosswalk-core"]
+registry-notary-cel = ["dep:crosswalk-core", "dep:registry-notary-worker-harness"]
 pkcs11 = ["dep:cryptoki", "dep:hex", "dep:async-trait"]
 
 [dependencies]
@@ -29,6 +29,7 @@ axum.workspace = true
 async-trait = { workspace = true, optional = true }
 base64.workspace = true
 crosswalk-core = { workspace = true, optional = true }
+registry-notary-worker-harness = { workspace = true, optional = true }
 cryptoki = { workspace = true, optional = true }
 getrandom.workspace = true
 hex = { workspace = true, optional = true }
@@ -67,3 +68,15 @@ harness = false
 [[bench]]
 name = "json_bench"
 harness = false
+
+[[bin]]
+name = "registry-notary-cel-worker"
+path = "src/bin/registry_notary_cel_worker.rs"
+required-features = ["registry-notary-cel"]
+test = false
+
+[[bin]]
+name = "registry-notary-cel-worker-fixture"
+path = "src/bin/registry_notary_cel_worker_fixture.rs"
+required-features = ["registry-notary-cel"]
+test = false
