@@ -933,9 +933,13 @@ accepted_audience_lines = "\n".join(f"    - {json.dumps(value)}" for value in ac
 oid4vci_config_id = os.environ.get("CITIZEN_OID4VCI_CREDENTIAL_CONFIGURATION_ID", "person_is_alive_sd_jwt")
 oid4vci_vct = os.environ.get(
     "CITIZEN_OID4VCI_VCT",
-    "https://demo.example/credentials/citizen-civil-status/v1",
+    f"{credential_issuer.rstrip('/')}/credentials/citizen-civil-status/v1",
 )
 oid4vci_display_name = os.environ.get("CITIZEN_OID4VCI_DISPLAY_NAME", "Person is alive")
+oid4vci_display_description = os.environ.get(
+    "CITIZEN_OID4VCI_DISPLAY_DESCRIPTION",
+    "Proof that the civil registry currently records this person as alive.",
+)
 oid4vci_scope = os.environ.get("CITIZEN_OID4VCI_SCOPE", "person-is-alive")
 oid4vci_issue_credential = "true" if oid4vci_enabled else "false"
 oid4vci_block = ""
@@ -952,6 +956,9 @@ oid4vci:
   credential_endpoint: {json.dumps(credential_endpoint)}
   offer_endpoint: {json.dumps(offer_endpoint)}
   nonce_endpoint: {json.dumps(nonce_endpoint)}
+  display:
+    - name: "Civil Registry Notary"
+      locale: en-US
   nonce:
     enabled: true
     ttl_seconds: 300
@@ -968,6 +975,11 @@ oid4vci:
       scope: {json.dumps(oid4vci_scope)}
       vct: {json.dumps(oid4vci_vct)}
       display_name: {json.dumps(oid4vci_display_name)}
+      display:
+        locale: en-US
+        description: {json.dumps(oid4vci_display_description)}
+        background_color: "#0057B8"
+        text_color: "#FFFFFF"
       proof_signing_alg_values_supported:
         - EdDSA
       cryptographic_binding_methods_supported:
@@ -1033,7 +1045,7 @@ evidence:
       format: application/dc+sd-jwt
       issuer: did:web:citizen-civil-notary.demo.example
       signing_key: citizen-civil-demo
-      vct: https://demo.example/credentials/citizen-civil-status/v1
+      vct: {json.dumps(oid4vci_vct)}
       validity_seconds: 600
       allowed_claims:
         - person-is-alive

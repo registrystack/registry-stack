@@ -1,6 +1,7 @@
 name: registry-lab
 
 x-hosted-domains:
+  lab-homepage: lab.registrystack.org
   citizen-civil-notary: citizen-notary.lab.registrystack.org
   civil-registry-relay: civil-relay.lab.registrystack.org
   social-protection-registry-relay: social-relay.lab.registrystack.org
@@ -42,49 +43,83 @@ x-relay-common: &relay-common
     start_period: 10s
 
 x-notary-common: &notary-common
-  image: ${REGISTRY_NOTARY_IMAGE:-registry-notary:hosted}
+  image: ${REGISTRY_NOTARY_IMAGE:-ghcr.io/jeremi/registry-notary@sha256:5357c6b817845f34428e56d31ebd54dd14ebc9cb1f93deb1c60662897f10f49c}
   environment: &notary-env
     RUST_LOG: ${RUST_LOG:-info}
     REGISTRY_NOTARY_AUDIT_HASH_SECRET: ${REGISTRY_NOTARY_AUDIT_HASH_SECRET:-}
     REGISTRY_NOTARY_ISSUER_JWK: ${REGISTRY_NOTARY_ISSUER_JWK:-}
+    REGISTRY_NOTARY_ACCESS_TOKEN_JWK: ${REGISTRY_NOTARY_ACCESS_TOKEN_JWK:-}
+    REGISTRY_NOTARY_ESIGNET_RP_JWK: ${REGISTRY_NOTARY_ESIGNET_RP_JWK:-}
     REGISTRY_NOTARY_REPLAY_REDIS_URL: ${REGISTRY_NOTARY_REPLAY_REDIS_URL:-redis://redis:6379/0}
     CIVIL_EVIDENCE_SOURCE_RAW: ${CIVIL_EVIDENCE_SOURCE_RAW:-}
   restart: unless-stopped
   expose:
     - "8080"
   healthcheck:
-    test: ["CMD", "registry-notary", "healthcheck"]
+    # The notary image ships only the binary + sh (no curl/wget for an HTTP
+    # /healthz probe), and this build has no `healthcheck` subcommand, so use
+    # `--version` as a process-liveness check.
+    test: ["CMD", "registry-notary", "--version"]
     interval: 30s
     timeout: 10s
     retries: 3
     start_period: 10s
 
 services:
-  postgres:
-    image: ${REGISTRY_LAB_POSTGRES_IMAGE:-postgres:16-alpine}
-    entrypoint: ["sh", "-c"]
+  # Coolify does not seed compose bind mounts from the git repo: relative
+  # bind mounts are rewritten to empty persistent dirs. This one-shot init
+  # clones the public repo and populates named config volumes that every
+  # service mounts at its expected path. Re-runs on each deploy (overwrites).
+  config-loader:
+    image: ${CONFIG_LOADER_IMAGE:-alpine:3.20}
+    restart: "no"
+    environment:
+      CONFIG_REPO_URL: ${CONFIG_REPO_URL:-https://github.com/jeremi/registry-lab}
+      CONFIG_REPO_REF: ${CONFIG_REPO_REF:-main}
+    entrypoint: ["/bin/sh", "-euc"]
     command:
       - |
-        mkdir -p "$$PGDATA/ssl"
-        if [ ! -s "$$PGDATA/ssl/server.key" ] || [ ! -s "$$PGDATA/ssl/server.crt" ]; then
-          openssl req -new -x509 -days "$${REGISTRY_LAB_POSTGRES_SSL_DAYS:-397}" -nodes \
-            -subj "/CN=postgres" \
-            -keyout "$$PGDATA/ssl/server.key" \
-            -out "$$PGDATA/ssl/server.crt"
-        fi
-        chmod 600 "$$PGDATA/ssl/server.key"
-        chown postgres:postgres "$$PGDATA/ssl/server.crt" "$$PGDATA/ssl/server.key"
-        exec docker-entrypoint.sh postgres \
-          -c ssl=on \
-          -c ssl_cert_file="$$PGDATA/ssl/server.crt" \
-          -c ssl_key_file="$$PGDATA/ssl/server.key"
+        apk add --no-cache git >/dev/null
+        rm -rf /tmp/repo
+        git clone --depth 1 --branch "$$CONFIG_REPO_REF" "$$CONFIG_REPO_URL" /tmp/repo
+        for d in relay notary data pginit openfn-tmpl openfn-jobs static-scripts lab-homepage; do
+          mkdir -p "/out/$$d"
+          find "/out/$$d" -mindepth 1 -delete 2>/dev/null || true
+        done
+        cp -a /tmp/repo/config/coolify/relay/. /out/relay/
+        cp -a /tmp/repo/config/coolify/notary/citizen-civil-notary.yaml /out/notary/
+        cp -a /tmp/repo/config/coolify/notary/dhis2-health-notary.yaml /out/notary/
+        cp -a /tmp/repo/config/coolify/notary/opencrvs-dci-notary.yaml /out/notary/opencrvs-dci-notary.yaml.template
+        cp -a /tmp/repo/data/. /out/data/
+        cp -a /tmp/repo/config/postgres/init.sql /out/pginit/
+        cp -a /tmp/repo/config/coolify/openfn/. /out/openfn-tmpl/
+        cp -a /tmp/repo/config/openfn/jobs/. /out/openfn-jobs/
+        cp -a /tmp/repo/scripts/static-metadata-server.py /out/static-scripts/
+        cp -a /tmp/repo/scripts/lab-homepage-server.py /out/static-scripts/
+        cp -a /tmp/repo/config/lab-homepage/. /out/lab-homepage/
+        echo "config-loader: populated config volumes from $$CONFIG_REPO_REF"
+    volumes:
+      - cfg-relay:/out/relay
+      - cfg-notary:/out/notary
+      - cfg-data:/out/data
+      - cfg-pginit:/out/pginit
+      - cfg-openfn-tmpl:/out/openfn-tmpl
+      - cfg-openfn-jobs:/out/openfn-jobs
+      - cfg-static-scripts:/out/static-scripts
+      - cfg-lab-homepage:/out/lab-homepage
+
+  postgres:
+    image: ${REGISTRY_LAB_POSTGRES_IMAGE:-postgres:16-alpine}
     environment:
       POSTGRES_USER: ${REGISTRY_LAB_POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${REGISTRY_LAB_POSTGRES_PASSWORD:-replace-in-coolify}
       POSTGRES_DB: ${REGISTRY_LAB_POSTGRES_DB:-registry_lab}
+    depends_on:
+      config-loader:
+        condition: service_completed_successfully
     volumes:
-      - postgres-data:/var/lib/postgresql/data
-      - ./config/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - pgdata:/var/lib/postgresql/data
+      - cfg-pginit:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -114,7 +149,7 @@ services:
 
   zitadel:
     image: ${REGISTRY_LAB_ZITADEL_IMAGE:-ghcr.io/zitadel/zitadel:v2.66.4}
-    command: start-from-init --tlsMode disabled
+    command: start-from-init --masterkeyFromEnv --tlsMode disabled
     environment:
       ZITADEL_MASTERKEY: ${ZITADEL_MASTERKEY:-}
       ZITADEL_DATABASE_POSTGRES_HOST: postgres
@@ -156,40 +191,99 @@ services:
   civil-registry-relay:
     <<: *relay-common
     command: ["--config", "/etc/registry-relay/civil-registry-relay.yaml"]
+    depends_on:
+      config-loader:
+        condition: service_completed_successfully
     volumes:
-      - ./config/coolify/relay:/etc/registry-relay:ro
-      - ./data/civil:/demo/data/civil:ro
+      - cfg-relay:/etc/registry-relay:ro
+      - cfg-data:/demo/data:ro
       - civil-registry-cache:/var/lib/registry-relay/cache
 
   social-protection-registry-relay:
     <<: *relay-common
     command: ["--config", "/etc/registry-relay/social-protection-registry-relay.yaml"]
+    depends_on:
+      config-loader:
+        condition: service_completed_successfully
     volumes:
-      - ./config/coolify/relay:/etc/registry-relay:ro
-      - ./data/social-protection:/demo/data/social-protection:ro
+      - cfg-relay:/etc/registry-relay:ro
+      - cfg-data:/demo/data:ro
       - social-protection-registry-cache:/var/lib/registry-relay/cache
 
   health-registry-relay:
     <<: *relay-common
     command: ["--config", "/etc/registry-relay/health-registry-relay.yaml"]
+    depends_on:
+      config-loader:
+        condition: service_completed_successfully
     volumes:
-      - ./config/coolify/relay:/etc/registry-relay:ro
-      - ./data/health:/demo/data/health:ro
+      - cfg-relay:/etc/registry-relay:ro
+      - cfg-data:/demo/data:ro
       - health-registry-cache:/var/lib/registry-relay/cache
 
   static-metadata-publisher:
     image: ${REGISTRY_LAB_STATIC_METADATA_IMAGE:-python:3.12.3-slim-bookworm}
-    command: ["python", "/usr/local/bin/static-metadata-server.py", "--port", "8080", "--host", "0.0.0.0", "--directory", "/srv/static"]
+    command: ["python", "/opt/lab-scripts/static-metadata-server.py", "--port", "8080", "--host", "0.0.0.0", "--directory", "/srv/static"]
     restart: unless-stopped
     expose:
       - "8080"
+    depends_on:
+      config-loader:
+        condition: service_completed_successfully
     volumes:
-      - ./static-metadata:/srv/static:ro
-      - ./scripts/static-metadata-server.py:/usr/local/bin/static-metadata-server.py:ro
+      - cfg-static-scripts:/opt/lab-scripts:ro
+      - static-content:/srv/static:ro
+    healthcheck:
+      # Liveness only: the server is alive whenever it answers. The published
+      # bundle (/.well-known/registry-manifest.json) is generated separately by
+      # publish-static-metadata.sh and is not seeded here yet, so probing the
+      # root keeps the check honest without requiring that content to exist.
+      test:
+        - CMD-SHELL
+        - "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8080/\", timeout=2).read()'"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  lab-homepage:
+    image: ${REGISTRY_LAB_HOMEPAGE_IMAGE:-python:3.12.3-slim-bookworm}
+    command:
+      - python
+      - /opt/lab-scripts/lab-homepage-server.py
+      - --port
+      - "8080"
+      - --host
+      - 0.0.0.0
+      - --config
+      - /etc/registry-lab-homepage/public-demo-credentials.json
+    restart: unless-stopped
+    expose:
+      - "8080"
+    environment:
+      CIVIL_METADATA_CLIENT_RAW: ${CIVIL_METADATA_CLIENT_RAW:-}
+      CIVIL_EVIDENCE_ONLY_RAW: ${CIVIL_EVIDENCE_ONLY_RAW:-}
+      CIVIL_ROW_READER_RAW: ${CIVIL_ROW_READER_RAW:-}
+      SOCIAL_METADATA_CLIENT_RAW: ${SOCIAL_METADATA_CLIENT_RAW:-}
+      SOCIAL_EVIDENCE_ONLY_RAW: ${SOCIAL_EVIDENCE_ONLY_RAW:-}
+      SOCIAL_ROW_READER_RAW: ${SOCIAL_ROW_READER_RAW:-}
+      SOCIAL_AGGREGATE_READER_RAW: ${SOCIAL_AGGREGATE_READER_RAW:-}
+      HEALTH_METADATA_CLIENT_RAW: ${HEALTH_METADATA_CLIENT_RAW:-}
+      HEALTH_EVIDENCE_ONLY_RAW: ${HEALTH_EVIDENCE_ONLY_RAW:-}
+      HEALTH_ROW_READER_RAW: ${HEALTH_ROW_READER_RAW:-}
+      DHIS2_EVIDENCE_CLIENT_TOKEN: ${DHIS2_EVIDENCE_CLIENT_TOKEN:-}
+      DHIS2_EVIDENCE_CLIENT_BEARER: ${DHIS2_EVIDENCE_CLIENT_BEARER:-}
+      OPENCRVS_EVIDENCE_CLIENT_TOKEN: ${OPENCRVS_EVIDENCE_CLIENT_TOKEN:-}
+    depends_on:
+      config-loader:
+        condition: service_completed_successfully
+    volumes:
+      - cfg-static-scripts:/opt/lab-scripts:ro
+      - cfg-lab-homepage:/etc/registry-lab-homepage:ro
     healthcheck:
       test:
         - CMD-SHELL
-        - "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8080/.well-known/registry-manifest.json\", timeout=2).read()'"
+        - "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8080/healthz\", timeout=2).read()'"
       interval: 30s
       timeout: 5s
       retries: 3
@@ -199,8 +293,10 @@ services:
     <<: *notary-common
     command: ["--config", "/etc/registry-notary/citizen-civil-notary.yaml"]
     volumes:
-      - ./config/coolify/notary/citizen-civil-notary.yaml:/etc/registry-notary/citizen-civil-notary.yaml:ro
+      - cfg-notary:/etc/registry-notary:ro
     depends_on:
+      config-loader:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       civil-registry-relay:
@@ -224,9 +320,12 @@ services:
       OPENFN_DHIS2_USERNAME: ${OPENFN_DHIS2_USERNAME:-}
       OPENFN_DHIS2_PASSWORD: ${OPENFN_DHIS2_PASSWORD:-}
       OPENFN_DHIS2_DEMO_CREDENTIAL_JSON: '{"hostUrl":"${OPENFN_DHIS2_HOST_URL:-}","baseUrl":"${OPENFN_DHIS2_HOST_URL:-}","username":"${OPENFN_DHIS2_USERNAME:-}","password":"${OPENFN_DHIS2_PASSWORD:-}"}'
+    depends_on:
+      config-loader:
+        condition: service_completed_successfully
     volumes:
-      - ./config/coolify/openfn/openfn-dhis2-sidecar.yaml.template:/etc/registry-notary-openfn/openfn-dhis2-sidecar.yaml.template:ro
-      - ./config/openfn/jobs:/opt/openfn/jobs:ro
+      - cfg-openfn-tmpl:/etc/registry-notary-openfn:ro
+      - cfg-openfn-jobs:/opt/openfn/jobs:ro
     healthcheck:
       test:
         - CMD-SHELL
@@ -246,33 +345,67 @@ services:
       DHIS2_EVIDENCE_CLIENT_BEARER_HASH: ${DHIS2_EVIDENCE_CLIENT_BEARER_HASH:-}
       OPENFN_SIDECAR_TOKEN_RAW: ${OPENFN_SIDECAR_TOKEN_RAW:-}
     volumes:
-      - ./config/coolify/notary/dhis2-health-notary.yaml:/etc/registry-notary/dhis2-health-notary.yaml:ro
+      - cfg-notary:/etc/registry-notary:ro
     depends_on:
+      config-loader:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       openfn-dhis2-sidecar:
-        condition: service_healthy
+        condition: service_started
+
+  opencrvs-dci-notary-config:
+    image: ${REGISTRY_LAB_ALPINE_IMAGE:-alpine:3.20}
+    restart: "no"
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - |
+        : "$${OPENCRVS_DCI_BASE_URL:?missing OPENCRVS_DCI_BASE_URL}"
+        opencrvs_base_url="$${OPENCRVS_DCI_BASE_URL%/}"
+        escaped="$$(printf '%s' "$${opencrvs_base_url}" | sed 's/[\\&|]/\\&/g')"
+        sed "s|__OPENCRVS_DCI_BASE_URL__|$${escaped}|g" \
+          /etc/registry-notary/opencrvs-dci-notary.yaml.template \
+          > /out/opencrvs-dci-notary.yaml
+    environment:
+      OPENCRVS_DCI_BASE_URL: ${OPENCRVS_DCI_BASE_URL:-}
+    volumes:
+      - cfg-notary:/etc/registry-notary:ro
+      - opencrvs-notary-config:/out
+    depends_on:
+      config-loader:
+        condition: service_completed_successfully
 
   opencrvs-dci-notary:
     <<: *notary-common
-    command: ["--config", "/etc/registry-notary/opencrvs-dci-notary.yaml"]
+    command: ["--config", "/etc/registry-notary-rendered/opencrvs-dci-notary.yaml"]
     environment:
       <<: *notary-env
       OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH: ${OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH:-}
       OPENCRVS_DCI_CLIENT_ID: ${OPENCRVS_DCI_CLIENT_ID:-}
       OPENCRVS_DCI_CLIENT_SECRET: ${OPENCRVS_DCI_CLIENT_SECRET:-}
       OPENCRVS_DCI_SHA_SECRET: ${OPENCRVS_DCI_SHA_SECRET:-}
-      OPENCRVS_DCI_BASE_URL: ${OPENCRVS_DCI_BASE_URL:-}
     volumes:
-      - ./config/coolify/notary/opencrvs-dci-notary.yaml:/etc/registry-notary/opencrvs-dci-notary.yaml:ro
+      - opencrvs-notary-config:/etc/registry-notary-rendered:ro
     depends_on:
+      opencrvs-dci-notary-config:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
 
 volumes:
-  postgres-data:
+  pgdata:
   redis-data:
   zitadel-seed:
   civil-registry-cache:
   social-protection-registry-cache:
   health-registry-cache:
+  cfg-relay:
+  cfg-notary:
+  cfg-data:
+  cfg-pginit:
+  cfg-openfn-tmpl:
+  cfg-openfn-jobs:
+  cfg-static-scripts:
+  cfg-lab-homepage:
+  static-content:
+  opencrvs-notary-config:

@@ -161,12 +161,12 @@ Never mount eSignet seed output under repository `./output` in hosted mode.
 Configure this GitHub repository secret:
 
 ```text
-COOLIFY_DEPLOY_WEBHOOK_URL
+COOLIFY_API_TOKEN
 ```
 
-The `hosted-lab` workflow validates both compose files and the mounted hosted
-configs. On `main`, after validation passes, it calls the Coolify deploy webhook
-exactly once.
+The `hosted-lab` workflow validates the hosted compose files and mounted hosted
+configs. On `main`, after validation passes, it calls the Coolify REST API to
+redeploy the registry-lab, hosted-esignet, and hosted-walt applications.
 
 Local preflight:
 

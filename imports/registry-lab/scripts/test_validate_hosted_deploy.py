@@ -193,6 +193,14 @@ class HostedDeployValidationTest(unittest.TestCase):
         self.assertRegex(workflow, r"(?m)^permissions:\n\s+contents: read$")
         self.assertRegex(workflow, r"(?m)^  deploy-coolify:\n(?:.*\n)*?    permissions: \{\}$")
 
+    def test_hosted_workflow_deploys_all_coolify_apps_by_api(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        self.assertIn("COOLIFY_API_TOKEN", workflow)
+        self.assertNotIn("COOLIFY_DEPLOY_WEBHOOK_URL", workflow)
+        self.assertIn("klhnsuoye8lwuamp0bko387t", workflow)
+        self.assertIn("cewwn93kknzsfzicen9nul6v", workflow)
+        self.assertIn("uvqfk8gwqdbdse4v871xfv56", workflow)
+
     def test_rejects_esignet_issuer_mismatch(self) -> None:
         compose = self._valid_registry_lab()
         compose["services"]["citizen-civil-notary"]["environment"][
@@ -215,6 +223,42 @@ class HostedDeployValidationTest(unittest.TestCase):
         ] = "jwt_vc_json"
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "missing-oid4vci-format")
+
+    def test_reads_named_volume_notary_config_for_oid4vci_assertions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_dir = root / "config" / "coolify" / "notary"
+            config_dir.mkdir(parents=True)
+            (config_dir / "citizen-civil-notary.yaml").write_text(
+                """
+oid4vci:
+  credential_configurations:
+    person_is_alive_sd_jwt:
+      format: dc+sd-jwt
+""",
+                encoding="utf-8",
+            )
+            compose = self._valid_registry_lab()
+            env = compose["services"]["citizen-civil-notary"]["environment"]
+            del env["CITIZEN_OID4VCI_CREDENTIAL_CONFIGURATION_ID"]
+            del env["CITIZEN_OID4VCI_FORMAT"]
+            compose["services"]["citizen-civil-notary"]["command"] = [
+                "--config",
+                "/etc/registry-notary/citizen-civil-notary.yaml",
+            ]
+            compose["services"]["citizen-civil-notary"]["volumes"] = [
+                "cfg-notary:/etc/registry-notary:ro"
+            ]
+            issues = self.validator.validate_artifacts(
+                {
+                    "registry-lab": compose,
+                    "esignet": self._valid_esignet(),
+                },
+                {"registry-lab": root, "esignet": root},
+            )
+
+        self.assertNoIssue(issues, "missing-credential-configuration")
+        self.assertNoIssue(issues, "missing-oid4vci-format")
 
     def test_rejects_relay_healthcheck_that_calls_notary_binary(self) -> None:
         compose = self._valid_registry_lab()
@@ -246,9 +290,47 @@ class HostedDeployValidationTest(unittest.TestCase):
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "missing-openfn-job-mount")
 
+    def test_valid_walt_artifact_passes(self) -> None:
+        issues = self._validate_walt(self._valid_walt())
+        self.assertEqual(issues, [], [str(issue) for issue in issues])
+
+    def test_rejects_missing_walt_service(self) -> None:
+        walt = self._valid_walt()
+        del walt["services"]["wallet-api"]
+        issues = self._validate_walt(walt)
+        self.assertIssue(issues, "missing-service")
+
+    def test_rejects_missing_walt_domain(self) -> None:
+        walt = self._valid_walt()
+        walt["x-hosted-domains"] = {}
+        issues = self._validate_walt(walt)
+        self.assertIssue(issues, "missing-domain")
+
+    def test_rejects_missing_walt_auth_secret_reference(self) -> None:
+        walt = self._valid_walt()
+        del walt["services"]["wallet-api"]["environment"]["WALT_AUTH_SIGN_KEY"]
+        issues = self._validate_walt(walt)
+        self.assertIssue(issues, "missing-required-variable")
+
+    def test_rejects_missing_walt_ktor_secret_reference(self) -> None:
+        walt = self._valid_walt()
+        del walt["services"]["wallet-api"]["environment"]["WALT_KTOR_SIGNING_KEY"]
+        issues = self._validate_walt(walt)
+        self.assertIssue(issues, "missing-required-variable")
+
+    def test_rejects_walt_host_ports(self) -> None:
+        walt = self._valid_walt()
+        walt["services"]["caddy"]["ports"] = ["7101:7101"]
+        issues = self._validate_walt(walt)
+        self.assertIssue(issues, "host-ports")
+
     def assertIssue(self, issues, code: str) -> None:
         codes = [issue.code for issue in issues]
         self.assertIn(code, codes, [str(issue) for issue in issues])
+
+    def assertNoIssue(self, issues, code: str) -> None:
+        codes = [issue.code for issue in issues]
+        self.assertNotIn(code, codes, [str(issue) for issue in issues])
 
     def _validate(self, registry_lab: dict, esignet: dict):
         return self.validator.validate_artifacts(
@@ -258,6 +340,9 @@ class HostedDeployValidationTest(unittest.TestCase):
             }
         )
 
+    def _validate_walt(self, walt: dict):
+        return self.validator.validate_artifacts({"walt": copy.deepcopy(walt)})
+
     @staticmethod
     def _valid_registry_lab() -> dict:
         lab = "lab.registrystack.org"
@@ -266,7 +351,22 @@ class HostedDeployValidationTest(unittest.TestCase):
             "ZITADEL_MASTERKEY": "${ZITADEL_MASTERKEY:-}",
             "REGISTRY_NOTARY_AUDIT_HASH_SECRET": "${REGISTRY_NOTARY_AUDIT_HASH_SECRET:-}",
             "REGISTRY_NOTARY_ISSUER_JWK": "${REGISTRY_NOTARY_ISSUER_JWK:-}",
+            "REGISTRY_NOTARY_ACCESS_TOKEN_JWK": "${REGISTRY_NOTARY_ACCESS_TOKEN_JWK:-}",
+            "REGISTRY_NOTARY_ESIGNET_RP_JWK": "${REGISTRY_NOTARY_ESIGNET_RP_JWK:-}",
             "CIVIL_EVIDENCE_SOURCE_RAW": "${CIVIL_EVIDENCE_SOURCE_RAW:-}",
+            "CIVIL_METADATA_CLIENT_RAW": "${CIVIL_METADATA_CLIENT_RAW:-}",
+            "CIVIL_EVIDENCE_ONLY_RAW": "${CIVIL_EVIDENCE_ONLY_RAW:-}",
+            "CIVIL_ROW_READER_RAW": "${CIVIL_ROW_READER_RAW:-}",
+            "SOCIAL_METADATA_CLIENT_RAW": "${SOCIAL_METADATA_CLIENT_RAW:-}",
+            "SOCIAL_EVIDENCE_ONLY_RAW": "${SOCIAL_EVIDENCE_ONLY_RAW:-}",
+            "SOCIAL_ROW_READER_RAW": "${SOCIAL_ROW_READER_RAW:-}",
+            "SOCIAL_AGGREGATE_READER_RAW": "${SOCIAL_AGGREGATE_READER_RAW:-}",
+            "HEALTH_METADATA_CLIENT_RAW": "${HEALTH_METADATA_CLIENT_RAW:-}",
+            "HEALTH_EVIDENCE_ONLY_RAW": "${HEALTH_EVIDENCE_ONLY_RAW:-}",
+            "HEALTH_ROW_READER_RAW": "${HEALTH_ROW_READER_RAW:-}",
+            "DHIS2_EVIDENCE_CLIENT_TOKEN": "${DHIS2_EVIDENCE_CLIENT_TOKEN:-}",
+            "DHIS2_EVIDENCE_CLIENT_BEARER": "${DHIS2_EVIDENCE_CLIENT_BEARER:-}",
+            "OPENCRVS_EVIDENCE_CLIENT_TOKEN": "${OPENCRVS_EVIDENCE_CLIENT_TOKEN:-}",
             "OPENFN_SIDECAR_TOKEN_HASH": "${OPENFN_SIDECAR_TOKEN_HASH:-}",
             "OPENFN_SIDECAR_TOKEN_RAW": "${OPENFN_SIDECAR_TOKEN_RAW:-}",
             "OPENFN_DHIS2_HOST_URL": "${OPENFN_DHIS2_HOST_URL:-}",
@@ -341,6 +441,11 @@ class HostedDeployValidationTest(unittest.TestCase):
                     "image": "python:3.12.3-slim-bookworm",
                     "expose": ["8080"],
                 },
+                "lab-homepage": {
+                    "image": "python:3.12.3-slim-bookworm",
+                    "expose": ["8080"],
+                    "environment": required_env,
+                },
                 "zitadel": {
                     "image": "ghcr.io/zitadel/zitadel:v2.66.4",
                     "expose": ["8080"],
@@ -389,6 +494,7 @@ class HostedDeployValidationTest(unittest.TestCase):
                 "social-protection-registry-relay": f"social-relay.{lab}",
                 "health-registry-relay": f"health-relay.{lab}",
                 "static-metadata-publisher": f"metadata.{lab}",
+                "lab-homepage": lab,
                 "zitadel": f"zitadel.{lab}",
                 "dhis2-health-notary": f"dhis2-notary.{lab}",
                 "opencrvs-dci-notary": f"opencrvs-notary.{lab}",
@@ -447,6 +553,47 @@ class HostedDeployValidationTest(unittest.TestCase):
             "x-hosted-domains": {
                 "esignet": f"esignet.{lab}",
                 "esignet-ui": f"esignet-ui.{lab}",
+            },
+        }
+
+    @staticmethod
+    def _valid_walt() -> dict:
+        lab = "lab.registrystack.org"
+        return {
+            "services": {
+                "walt-postgres": {
+                    "image": "postgres:16-alpine",
+                    "environment": {
+                        "POSTGRES_PASSWORD": "${WALT_DB_PASSWORD:-replace-in-coolify}",
+                    },
+                },
+                "wallet-api": {
+                    "image": "docker.io/waltid/wallet-api:0.20.2",
+                    "expose": ["7001"],
+                    "environment": {
+                        "SERVICE_HOST": f"wallet.{lab}",
+                        "DB_PASSWORD": "${WALT_DB_PASSWORD:-replace-in-coolify}",
+                        "WALT_AUTH_ENCRYPTION_KEY": "${WALT_AUTH_ENCRYPTION_KEY:?set it}",
+                        "WALT_AUTH_SIGN_KEY": "${WALT_AUTH_SIGN_KEY:?set it}",
+                        "WALT_AUTH_TOKEN_KEY": "${WALT_AUTH_TOKEN_KEY:?set it}",
+                        "WALT_KTOR_SIGNING_KEY": "${WALT_KTOR_SIGNING_KEY:?set it}",
+                        "WALT_KTOR_VERIFICATION_KEY": "${WALT_KTOR_VERIFICATION_KEY:?set it}",
+                    },
+                },
+                "waltid-demo-wallet": {
+                    "image": "docker.io/waltid/waltid-demo-wallet:0.20.2",
+                    "expose": ["7101"],
+                    "environment": {
+                        "NUXT_PUBLIC_ISSUER_CALLBACK_URL": f"https://wallet.{lab}",
+                    },
+                },
+                "caddy": {
+                    "image": "docker.io/caddy:2",
+                    "expose": ["7101"],
+                },
+            },
+            "x-hosted-domains": {
+                "caddy": f"wallet.{lab}",
             },
         }
 

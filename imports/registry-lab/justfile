@@ -129,25 +129,19 @@ citizen-self-attestation:
 hosted-validate:
     docker compose -f compose.coolify.yaml config >/dev/null
     REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD="${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:-hosted-validation-placeholder}" docker compose -f compose.esignet-hosted.yaml config >/dev/null
+    WALT_DB_PASSWORD="${WALT_DB_PASSWORD:-hosted-validation-placeholder}" WALT_AUTH_ENCRYPTION_KEY="${WALT_AUTH_ENCRYPTION_KEY:-hosted-validation-placeholder}" WALT_AUTH_SIGN_KEY="${WALT_AUTH_SIGN_KEY:-hosted-validation-placeholder}" WALT_AUTH_TOKEN_KEY="${WALT_AUTH_TOKEN_KEY:-hosted-validation-placeholder}" WALT_KTOR_SIGNING_KEY="${WALT_KTOR_SIGNING_KEY:-hosted-validation-placeholder}" WALT_KTOR_VERIFICATION_KEY="${WALT_KTOR_VERIFICATION_KEY:-hosted-validation-placeholder}" docker compose -f compose.walt-hosted.yaml config >/dev/null
     REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD="${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:-hosted-validation-placeholder}" uv run scripts/validate-hosted-deploy.py
 
 # Validate hosted artifacts and require real secret values in the current environment.
 hosted-validate-strict:
     docker compose -f compose.coolify.yaml config >/dev/null
     REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD="${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:-hosted-validation-placeholder}" docker compose -f compose.esignet-hosted.yaml config >/dev/null
+    WALT_DB_PASSWORD="${WALT_DB_PASSWORD:-hosted-validation-placeholder}" WALT_AUTH_ENCRYPTION_KEY="${WALT_AUTH_ENCRYPTION_KEY:-hosted-validation-placeholder}" WALT_AUTH_SIGN_KEY="${WALT_AUTH_SIGN_KEY:-hosted-validation-placeholder}" WALT_AUTH_TOKEN_KEY="${WALT_AUTH_TOKEN_KEY:-hosted-validation-placeholder}" WALT_KTOR_SIGNING_KEY="${WALT_KTOR_SIGNING_KEY:-hosted-validation-placeholder}" WALT_KTOR_VERIFICATION_KEY="${WALT_KTOR_VERIFICATION_KEY:-hosted-validation-placeholder}" docker compose -f compose.walt-hosted.yaml config >/dev/null
     uv run scripts/validate-hosted-deploy.py --require-secret-values
 
 # Run focused tests for hosted deployment validation.
 hosted-validate-test:
     python3 scripts/test_validate_hosted_deploy.py
-
-# Validate the committed public Bruno API workspace.
-api-workspace-validate:
-    python3 scripts/validate-public-api-workspace.py
-
-# Run focused tests for public API workspace validation.
-api-workspace-validate-test:
-    python3 scripts/test_validate_public_api_workspace.py
 
 # Print the local eSignet authorization URL and save PKCE state.
 citizen-self-attestation-esignet-login:

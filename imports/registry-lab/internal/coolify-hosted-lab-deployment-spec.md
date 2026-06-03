@@ -923,8 +923,8 @@ Initial hosted deployment artifacts have been implemented:
   `scripts/test_validate_hosted_deploy.py` enforce the hosted deployment
   contract before deploy.
 - `.github/workflows/hosted-lab.yml` runs whitespace checks, compose rendering,
-  validation tests, hosted artifact validation, and a single
-  `COOLIFY_DEPLOY_WEBHOOK_URL` deploy call on pushes to `main`.
+  validation tests, hosted artifact validation, and Coolify REST API deploy calls
+  for the three hosted applications on pushes to `main`.
 - `just hosted-validate` and `just hosted-validate-test` run the focused local
   validation path.
 - `just hosted-validate-strict` additionally requires every hosted secret value
@@ -957,9 +957,9 @@ Pitfalls recorded during implementation:
   `DHIS2_EVIDENCE_CLIENT_TOKEN_HASH` and
   `DHIS2_EVIDENCE_CLIENT_BEARER_HASH`; an empty default can let deployment
   succeed while all evidence-client authentication fails.
-- The workflow requires the repository secret `COOLIFY_DEPLOY_WEBHOOK_URL` for
-  `main` deploys. Coolify must still be configured with the selected image refs
-  for strict rollout and rollback.
+- The workflow requires the repository secret `COOLIFY_API_TOKEN` for `main`
+  deploys. Coolify must still be configured with the selected image refs for
+  strict rollout and rollback.
 - Registry Lab CI intentionally does not publish canonical product images.
   Relay and Notary images are owned by their source repositories; Registry Lab
   only validates and consumes selected refs. Any Coolify-local `:hosted` build is
