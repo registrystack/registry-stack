@@ -212,7 +212,7 @@ services:
     command:
       - |
         : "$${OPENFN_DHIS2_HOST_URL:?missing OPENFN_DHIS2_HOST_URL}"
-        escaped="$$(printf '%s' "$${OPENFN_DHIS2_HOST_URL%/}" | sed 's/[&|]/\\&/g')"
+        escaped="$$(printf '%s' "$${OPENFN_DHIS2_HOST_URL%/}" | sed 's/[\\&|]/\\&/g')"
         sed "s|__OPENFN_DHIS2_HOST_URL__|$${escaped}|g" \
           /etc/registry-notary-openfn/openfn-dhis2-sidecar.yaml.template \
           > /tmp/openfn-dhis2-sidecar.yaml
