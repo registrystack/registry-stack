@@ -21,6 +21,7 @@ env:
   CEL_MAPPING_REPOSITORY: PublicSchema/crosswalk
   CEL_MAPPING_REF: ca7411d735f1507b9db0db637f79aff7e4ae4611
   REGISTRY_RELAY_IMAGE: ghcr.io/jeremi/registry-relay
+  REGISTRY_RELAY_RELEASE_FEATURES: spdci-api-standards,standards-cel-mapping,ogcapi-features,ogcapi-edr,ogcapi-records
 
 jobs:
   image:
@@ -67,10 +68,62 @@ jobs:
             --build-context registry-platform=registry-platform \
             --build-context registry-manifest=registry-manifest \
             --build-context cel-mapping=cel-mapping \
+            --build-arg "REGISTRY_RELAY_FEATURES=$REGISTRY_RELAY_RELEASE_FEATURES" \
             --file registry-relay/Dockerfile \
             --tag "$REGISTRY_RELAY_IMAGE:sha-${GITHUB_SHA}" \
             --tag "$REGISTRY_RELAY_IMAGE:main" \
             registry-relay
+      - name: Verify registry-relay image can run hosted feature surfaces
+        run: |
+          set -euo pipefail
+          run_config() {
+            config="$1"
+            shift
+            cid="$(docker run -d \
+              -e REGISTRY_RELAY_AUDIT_HASH_SECRET=release-image-contract-secret-32-bytes \
+              "$@" \
+              -v "$PWD/registry-relay/demo/decentralized:/demo:ro" \
+              -w /demo/config/relay \
+              "$REGISTRY_RELAY_IMAGE:sha-${GITHUB_SHA}" \
+              --config "$config")"
+            for _ in $(seq 1 30); do
+              logs="$(docker logs "$cid" 2>&1 || true)"
+              if echo "$logs" | grep -E "feature disabled|config\\.feature_disabled"; then
+                docker rm -f "$cid" >/dev/null 2>&1 || true
+                echo "$logs"
+                exit 1
+              fi
+              if echo "$logs" | grep -E "registry-relay listening" >/dev/null; then
+                docker rm -f "$cid" >/dev/null 2>&1 || true
+                echo "verified $config"
+                return 0
+              fi
+              if [ "$(docker inspect --format '{{.State.Running}}' "$cid")" != "true" ]; then
+                docker rm -f "$cid" >/dev/null 2>&1 || true
+                echo "$logs"
+                exit 1
+              fi
+              sleep 1
+            done
+            docker logs "$cid" 2>&1 || true
+            docker rm -f "$cid" >/dev/null 2>&1 || true
+            echo "$config did not reach registry-relay listening" >&2
+            exit 1
+          }
+          run_config civil-registry-relay.yaml \
+            -e CIVIL_METADATA_CLIENT_HASH=sha256:bd40fc0d7a779c4853ebec99382b39332fed8d321475a5903931b892f617425d \
+            -e CIVIL_EVIDENCE_SOURCE_HASH=sha256:72ed7a3a27764c1412f15b275071b0e4c31617fb165c3bb461a330706114c7e8 \
+            -e CIVIL_EVIDENCE_ONLY_HASH=sha256:d84339b69a53f727908d3bec667143dbd06d6197248f9d33700b0ce02d0b8692 \
+            -e CIVIL_ROW_READER_HASH=sha256:ceccb012571617538e3c47693e1d7d09e84a26d7f6a033534e638fafc52f06f7 \
+            -e SHARED_CIVIL_EVIDENCE_SOURCE_HASH=sha256:531fa4aafc18c2b700b43f8103dc1ccf01dd2dc46969778f3f3a104c6f58bbeb
+          run_config social-protection-registry-relay.yaml \
+            -e SOCIAL_METADATA_CLIENT_HASH=sha256:bd40fc0d7a779c4853ebec99382b39332fed8d321475a5903931b892f617425d \
+            -e SOCIAL_EVIDENCE_SOURCE_HASH=sha256:72ed7a3a27764c1412f15b275071b0e4c31617fb165c3bb461a330706114c7e8 \
+            -e SOCIAL_EVIDENCE_ONLY_HASH=sha256:d84339b69a53f727908d3bec667143dbd06d6197248f9d33700b0ce02d0b8692 \
+            -e SOCIAL_ROW_READER_HASH=sha256:ceccb012571617538e3c47693e1d7d09e84a26d7f6a033534e638fafc52f06f7 \
+            -e SOCIAL_AGGREGATE_READER_HASH=sha256:531fa4aafc18c2b700b43f8103dc1ccf01dd2dc46969778f3f3a104c6f58bbeb \
+            -e SHARED_SOCIAL_EVIDENCE_SOURCE_HASH=sha256:f573de5cd190351a911ec6578c1cf44f0f80c093d25230a6183e8cca0e216eb1
+          docker run --rm --entrypoint curl "$REGISTRY_RELAY_IMAGE:sha-${GITHUB_SHA}" --version >/dev/null
       - name: Generate image SBOM and advisory vulnerability report
         run: |
           set -o pipefail

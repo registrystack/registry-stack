@@ -354,6 +354,8 @@ jobs:
             registry-platform=./registry-platform
             registry-manifest=./registry-manifest
             cel-mapping=./cel-mapping
+          build-args: |
+            REGISTRY_RELAY_FEATURES=spdci-api-standards,standards-cel-mapping,ogcapi-features,ogcapi-edr,ogcapi-records
           tags: registry-relay:ci
           load: false
           push: false

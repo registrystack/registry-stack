@@ -32,7 +32,7 @@ RUN groupadd --system --gid 10001 registry_relay && \
     mkdir -p /etc/registry-relay /var/lib/registry-relay/cache /var/lib/registry-relay/data /var/log/registry-relay && \
     chown -R registry_relay:registry_relay /var/lib/registry-relay /var/log/registry-relay && \
     apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates && \
+    apt-get install -y --no-install-recommends ca-certificates curl && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local/bin/registry-relay /usr/local/bin/registry-relay

@@ -23,6 +23,8 @@ def require(path: Path, needle: str, detail: str) -> list[str]:
 def main() -> int:
     dockerfile = ROOT / "Dockerfile"
     build_script = ROOT / "scripts" / "build-image.sh"
+    ci_workflow = ROOT / ".github" / "workflows" / "ci.yml"
+    container_workflow = ROOT / ".github" / "workflows" / "container.yml"
 
     failures: list[str] = []
     failures.extend(
@@ -48,6 +50,13 @@ def main() -> int:
     )
     failures.extend(
         require(
+            dockerfile,
+            "apt-get install -y --no-install-recommends ca-certificates curl",
+            "curl in runtime image for compose healthchecks",
+        )
+    )
+    failures.extend(
+        require(
             build_script,
             'manifest_dir="${REGISTRY_MANIFEST_DIR:-../registry-manifest}"',
             "registry-manifest build context override",
@@ -65,6 +74,49 @@ def main() -> int:
             build_script,
             '--build-arg "REGISTRY_RELAY_FEATURES=$REGISTRY_RELAY_FEATURES"',
             "optional feature build arg forwarding",
+        )
+    )
+    release_features = "spdci-api-standards,standards-cel-mapping,ogcapi-features,ogcapi-edr,ogcapi-records"
+    failures.extend(
+        require(
+            container_workflow,
+            "REGISTRY_RELAY_RELEASE_FEATURES",
+            "official image release feature variable",
+        )
+    )
+    failures.extend(
+        require(
+            container_workflow,
+            release_features,
+            "official image release feature list",
+        )
+    )
+    failures.extend(
+        require(
+            container_workflow,
+            '--build-arg "REGISTRY_RELAY_FEATURES=$REGISTRY_RELAY_RELEASE_FEATURES"',
+            "official image feature build arg forwarding",
+        )
+    )
+    failures.extend(
+        require(
+            container_workflow,
+            "Verify registry-relay image can run hosted feature surfaces",
+            "official image hosted feature verification step",
+        )
+    )
+    failures.extend(
+        require(
+            ci_workflow,
+            "REGISTRY_RELAY_FEATURES",
+            "CI container build release feature variable",
+        )
+    )
+    failures.extend(
+        require(
+            ci_workflow,
+            release_features,
+            "CI container build release feature list",
         )
     )
 
