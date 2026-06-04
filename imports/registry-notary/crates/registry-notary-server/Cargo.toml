@@ -11,6 +11,7 @@ publish = false
 [features]
 default = []
 registry-notary-cel = ["dep:crosswalk-core", "dep:registry-notary-worker-harness"]
+cel-worker-fixture = ["registry-notary-cel"]
 pkcs11 = ["dep:cryptoki", "dep:hex", "dep:async-trait"]
 
 [dependencies]
@@ -78,5 +79,5 @@ test = false
 [[bin]]
 name = "registry-notary-cel-worker-fixture"
 path = "src/bin/registry_notary_cel_worker_fixture.rs"
-required-features = ["registry-notary-cel"]
+required-features = ["cel-worker-fixture"]
 test = false

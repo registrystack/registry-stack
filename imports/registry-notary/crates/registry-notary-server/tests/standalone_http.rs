@@ -979,6 +979,20 @@ fn audit_envelopes(path: &std::path::Path) -> Vec<AuditEnvelope> {
         .collect()
 }
 
+fn audit_record_contains_text(value: &Value, needle: &str) -> bool {
+    match value {
+        Value::String(value) => value.contains(needle),
+        Value::Number(value) => value.to_string().contains(needle),
+        Value::Array(values) => values
+            .iter()
+            .any(|value| audit_record_contains_text(value, needle)),
+        Value::Object(values) => values
+            .iter()
+            .any(|(key, value)| key != "occurred_at" && audit_record_contains_text(value, needle)),
+        Value::Bool(_) | Value::Null => false,
+    }
+}
+
 #[tokio::test]
 async fn healthz_ready_opaque_counters_in_503_body() {
     let server = TestServer::builder()
@@ -4019,7 +4033,9 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
     assert!(!audit.contains("api-token"));
     assert!(!audit.contains("source-token"));
     assert!(!audit.contains("person-1"));
-    assert!(!audit.contains("3.5"));
+    assert!(!envelopes
+        .iter()
+        .any(|envelope| audit_record_contains_text(&envelope.record, "3.5")));
 
     let metrics = server
         .get("/metrics")

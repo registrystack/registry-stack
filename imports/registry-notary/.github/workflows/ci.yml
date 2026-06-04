@@ -136,7 +136,7 @@ jobs:
         run: |
           output="$(
             printf '%s\n' '{"protocol":"registry-notary-cel-worker/v1","expression":"source.age >= 18","root_bindings":{"source":{"age":21},"claims":{},"ctx":{},"vars":{},"meta":{}}}' \
-              | docker run --rm -i --entrypoint /usr/local/bin/registry-notary registry-notary:ci-cel cel-worker
+              | docker run --rm -i --entrypoint /usr/local/bin/registry-notary-cel-worker registry-notary:ci-cel
           )"
           python3 - "$output" <<'PY'
           import json

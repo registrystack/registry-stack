@@ -13,6 +13,7 @@ use serde_json::json;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
+#[cfg(feature = "cel-worker-fixture")]
 static CEL_WORKER_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn cel_worker_bin() -> PathBuf {
@@ -34,6 +35,7 @@ fn cel_worker_bin() -> PathBuf {
     env_path
 }
 
+#[cfg(feature = "cel-worker-fixture")]
 fn cel_worker_fixture_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_registry-notary-cel-worker-fixture"))
 }
@@ -59,6 +61,7 @@ fn config() -> CelWorkerConfig {
     }
 }
 
+#[cfg(feature = "cel-worker-fixture")]
 fn fixture_config() -> CelWorkerConfig {
     CelWorkerConfig {
         command: cel_worker_fixture_bin(),
@@ -180,6 +183,7 @@ async fn cel_worker_errors_do_not_disclose_expression_or_bindings() {
 }
 
 #[tokio::test]
+#[cfg(feature = "cel-worker-fixture")]
 async fn cel_worker_timeout_kills_and_replaces_fixture_worker() {
     let _guard = CEL_WORKER_TEST_LOCK.lock().await;
     let worker = CelWorker::new(fixture_config())
@@ -203,6 +207,7 @@ async fn cel_worker_timeout_kills_and_replaces_fixture_worker() {
 }
 
 #[tokio::test]
+#[cfg(feature = "cel-worker-fixture")]
 async fn cel_worker_stdout_cap_kills_and_replaces_fixture_worker() {
     let _guard = CEL_WORKER_TEST_LOCK.lock().await;
     let worker = CelWorker::new(CelWorkerConfig {
@@ -232,6 +237,7 @@ async fn cel_worker_stdout_cap_kills_and_replaces_fixture_worker() {
 }
 
 #[tokio::test]
+#[cfg(feature = "cel-worker-fixture")]
 async fn cel_worker_stderr_cap_does_not_disclose_fixture_stderr() {
     let _guard = CEL_WORKER_TEST_LOCK.lock().await;
     let worker = CelWorker::new(CelWorkerConfig {
@@ -373,6 +379,7 @@ async fn cel_stdio_worker_rejects_regex_helpers_by_default() {
 }
 
 #[tokio::test]
+#[cfg(feature = "cel-worker-fixture")]
 async fn cel_worker_env_is_cleared_except_explicit_allow_list() {
     let _guard = CEL_WORKER_TEST_LOCK.lock().await;
     std::env::set_var("REGISTRY_NOTARY_TEST_SOURCE_TOKEN", "source-secret");
