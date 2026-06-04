@@ -1,0 +1,89 @@
+{
+  "schema": "registry.ops.posture.v1",
+  "observed_at": "2026-06-04T10:00:00Z",
+  "component": "registry-relay",
+  "tier": "default",
+  "instance": {
+    "id": "civil-relay-prod",
+    "environment": "production",
+    "owner": "Ministry of Interior",
+    "jurisdiction": "example-country",
+    "public_base_url": "https://civil-registry.example.gov"
+  },
+  "build": {
+    "package": "registry-relay",
+    "version": "0.1.0"
+  },
+  "runtime": {
+    "auth_mode": "oidc",
+    "admin_enabled": true,
+    "readiness": "ready"
+  },
+  "configuration": {
+    "source": "local_file",
+    "dynamic_reload_supported": false,
+    "last_config_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "last_bundle_id": null,
+    "last_bundle_sequence": null,
+    "last_apply_result": null,
+    "last_apply_at": null,
+    "restart_required": false
+  },
+  "standards_artifacts": {
+    "metadata_index": {
+      "url": "https://civil-registry.example.gov/metadata/index.json",
+      "media_type": "application/json",
+      "sha256": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "observed_status": "available"
+    },
+    "bregdcat_ap": {
+      "url": "https://civil-registry.example.gov/metadata/dcat/bregdcat-ap",
+      "media_type": "application/ld+json",
+      "sha256": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "observed_status": "available",
+      "standard_family": "DCAT-AP",
+      "profile_id": "BRegDCAT-AP",
+      "profile_version": "2.1.0",
+      "claim_kind": "profile_claim",
+      "validation_status": "not_checked",
+      "validator": null,
+      "reviewed_claim_ref": null
+    }
+  },
+  "posture": {
+    "warnings": [],
+    "findings": [],
+    "audit": {
+      "configured": true,
+      "sink_type": "file",
+      "checkpoint_status": "available",
+      "latest_tail_hash": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "latest_sequence": 42,
+      "verified_at": "2026-06-04T09:59:30Z",
+      "verification_status": "verified"
+    }
+  },
+  "relay": {
+    "dataset_count": 3,
+    "entity_count": 12,
+    "aggregate_count": 5,
+    "evidence_offering_count": 4,
+    "metadata_manifest": {
+      "configured": true,
+      "sha256": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "provenance": {
+      "enabled": true,
+      "issuer": "did:web:civil-registry.example.gov",
+      "active_kid": "did:web:civil-registry.example.gov#relay-2026q2",
+      "retired_kids": []
+    },
+    "standards_adapters": {
+      "ogcapi_records": "enabled",
+      "ogcapi_features": "disabled",
+      "ogcapi_edr": "disabled",
+      "spdci": "disabled",
+      "publicschema_cel": "disabled"
+    }
+  }
+}

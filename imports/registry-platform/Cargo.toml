@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/registry-platform-ops",
     "crates/registry-platform-cache",
     "crates/registry-platform-httputil",
     "crates/registry-platform-authcommon",
@@ -52,6 +53,7 @@ url = { version = "2" }
 wiremock = { version = "0.6" }
 zeroize = { version = "1", features = ["derive"] }
 redis = { version = "1.2.1", default-features = false, features = ["aio", "tokio-comp"] }
+jsonschema = { version = "0.46.5", default-features = false }
 
 [profile.release]
 codegen-units = 1

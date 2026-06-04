@@ -18,6 +18,11 @@
 - (Issue #10) Added provider-backed EdDSA signing via
   `SigningProvider`/`LocalJwkSigner`; SD-JWT issuance is now async and uses the
   provider `kid` as the JWT header source of truth.
+- Added `registry-platform-ops` with the public
+  `registry.ops.posture.v1` JSON Schema, Relay and Notary examples, shared
+  finding/artifact/audit summary shapes, and sensitivity-tier redaction
+  fixtures. Runtime services currently emit default posture; restricted posture
+  is a contract tier for future/admin-gated surfaces, not runtime-emitted yet.
 - (F-oid4vci-1) Remove `pub const PKCE_METHOD_S256`. Callers use the
   literal `"S256"`; the constant added no value and implied ownership of
   the PKCE method name.
@@ -54,6 +59,12 @@
   (authorization_code flow).
 - (F-P8-1) `#[ignore]` micro-benchmarks added for EdDSA sign and verify;
   doc comments cite measured µs/op on M5 Max (release mode).
+- Focused posture contract tests validate the Relay and Notary examples, reject
+  malformed posture documents including missing `posture.audit` and invalid
+  artifact SHA-256 references, and prove the default redaction fixture omits
+  secrets, subject ids, raw rows, claim values, SD-JWT disclosures, token hashes,
+  private key material, private source URLs, and restricted topology while the
+  restricted fixture may include restricted-only contract fields.
 
 ### Docs
 

@@ -1,0 +1,147 @@
+{
+  "description": "Sensitive runtime source material used only to test emit-only default posture allowlisting.",
+  "source_runtime_state": {
+    "secrets": {
+      "database_url": "postgres://registry:super-secret-db-password@private-db.internal:5432/registry",
+      "bearer_token": "Bearer eyJsecret.source.token",
+      "oauth_client_secret": "oauth-client-secret-value",
+      "redis_url": "redis://:redis-secret@private-redis.internal:6379/0",
+      "audit_hmac_secret_env_value": "audit-hmac-secret-value"
+    },
+    "subject_ids": [
+      "did:example:person:123",
+      "national-id-123456789"
+    ],
+    "raw_rows": [
+      {
+        "subject_id": "national-id-123456789",
+        "claim": "income",
+        "value": 42000
+      }
+    ],
+    "claim_values": {
+      "income": 42000,
+      "eligibility": true
+    },
+    "sd_jwt_disclosures": [
+      "WyJzYWx0IiwiaW5jb21lIiw0MjAwMF0"
+    ],
+    "token_hashes": [
+      "sha256:tokenhash000000000000000000000000000000000000000000000000000000"
+    ],
+    "private_key_material": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "kid": "notary-private-key",
+      "d": "private-ed25519-seed-value"
+    },
+    "private_source_urls": [
+      "https://source.internal.example.gov/api/people"
+    ],
+    "restricted_topology": {
+      "admin_url": "https://admin.internal.example.gov",
+      "federation_peers": [
+        "did:web:peer-a.internal.example.gov"
+      ],
+      "trusted_root_id": "root-private-2026",
+      "signer_kid": "did:web:ops.internal.example.gov#root-signer"
+    },
+    "safe_posture_projection": {
+      "schema": "registry.ops.posture.v1",
+      "observed_at": "2026-06-04T10:00:00Z",
+      "component": "registry-notary",
+      "tier": "default",
+      "instance": {
+        "id": "civil-notary-prod",
+        "environment": "production",
+        "owner": "Ministry of Interior",
+        "jurisdiction": "example-country"
+      },
+      "build": {
+        "package": "registry-notary",
+        "version": "0.1.0"
+      },
+      "runtime": {
+        "auth_mode": "oidc",
+        "admin_enabled": true,
+        "readiness": "degraded"
+      },
+      "configuration": {
+        "source": "local_file",
+        "dynamic_reload_supported": false,
+        "last_config_hash": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "last_bundle_id": null,
+        "last_bundle_sequence": null,
+        "last_apply_result": null,
+        "last_apply_at": null,
+        "restart_required": false
+      },
+      "standards_artifacts": {
+        "jwks": {
+          "media_type": "application/jwk-set+json",
+          "sha256": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "observed_status": "available"
+        }
+      },
+      "posture": {
+        "warnings": [
+          "audit checkpoint unavailable"
+        ],
+        "findings": [
+          {
+            "id": "notary.replay.in_memory.production",
+            "severity": "high",
+            "title": "Production Notary uses in-memory replay storage",
+            "detail": "Multiple instances cannot share replay decisions.",
+            "evidence": [
+              {
+                "field": "notary.replay.storage",
+                "value": "in_memory"
+              }
+            ],
+            "standards_refs": [],
+            "recommended_action": "Use Redis replay storage before enabling active-active production traffic."
+          }
+        ],
+        "audit": {
+          "configured": true,
+          "sink_type": "stdout",
+          "checkpoint_status": "unavailable",
+          "latest_tail_hash": null,
+          "latest_sequence": null,
+          "verified_at": null,
+          "verification_status": "not_supported"
+        }
+      },
+      "notary": {
+        "claim_count": 6,
+        "credential_profile_count": 2,
+        "source_connection_counts": {
+          "http": 2,
+          "postgres": 1
+        },
+        "replay": {
+          "storage": "in_memory",
+          "ready": true
+        },
+        "credential_status": {
+          "enabled": true,
+          "storage": "in_memory"
+        },
+        "federation": {
+          "enabled": true,
+          "peer_count": 1,
+          "supported_protocol_versions": [
+            "registry-notary-federation/v0.1"
+          ],
+          "allowed_profile_count": 2,
+          "allowed_purpose_count": 3
+        },
+        "oid4vci": {
+          "enabled": true,
+          "credential_configuration_count": 1
+        }
+      }
+    }
+  }
+}

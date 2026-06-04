@@ -10,7 +10,8 @@ Notary, and related registry services.
 The workspace is consumed by applications through a pinned git tag. It centralizes
 the pieces that should behave identically across services: outbound HTTP policy,
 authentication helpers, OIDC verification, audit chaining, browser-facing HTTP
-security, SD-JWT VC support, crypto primitives, and integration-test fixtures.
+security, SD-JWT VC support, crypto primitives, operations posture contracts,
+and integration-test fixtures.
 
 ## Crates
 
@@ -23,6 +24,7 @@ security, SD-JWT VC support, crypto primitives, and integration-test fixtures.
 | [`registry-platform-httpsec`](crates/registry-platform-httpsec/README.md) | Axum/Tower HTTP security middleware, CORS policy validation, body limits, and RFC 9457 Problem Details responses. |
 | [`registry-platform-httputil`](crates/registry-platform-httputil/README.md) | Outbound HTTP clients, bounded response reads, URL construction, and SSRF-resistant fetch validation. |
 | [`registry-platform-oidc`](crates/registry-platform-oidc/README.md) | OIDC discovery, JWKS caching, and JWT verifier configuration shared by registry services. |
+| [`registry-platform-ops`](crates/registry-platform-ops/README.md) | Shared public operations posture schemas, examples, and redaction fixtures. |
 | [`registry-platform-replay`](crates/registry-platform-replay/README.md) | Shared replay and consumable nonce semantics over cache stores for nonce and JWT `jti` rejection. |
 | [`registry-platform-sdjwt`](crates/registry-platform-sdjwt/README.md) | SD-JWT VC issuance and holder-proof validation helpers. |
 | [`registry-platform-testing`](crates/registry-platform-testing/README.md) | Mock IdP, mock HTTP upstreams, key fixtures, and cross-crate assertions for consumers. |

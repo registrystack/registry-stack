@@ -1,0 +1,89 @@
+{
+  "schema": "registry.ops.posture.v1",
+  "observed_at": "2026-06-04T10:00:00Z",
+  "component": "registry-notary",
+  "tier": "default",
+  "instance": {
+    "id": "civil-notary-prod",
+    "environment": "production",
+    "owner": "Ministry of Interior",
+    "jurisdiction": "example-country",
+    "public_base_url": "https://civil-notary.example.gov"
+  },
+  "build": {
+    "package": "registry-notary",
+    "version": "0.1.0"
+  },
+  "runtime": {
+    "auth_mode": "oidc",
+    "admin_enabled": true,
+    "readiness": "ready"
+  },
+  "configuration": {
+    "source": "local_file",
+    "dynamic_reload_supported": false,
+    "last_config_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "last_bundle_id": null,
+    "last_bundle_sequence": null,
+    "last_apply_result": null,
+    "last_apply_at": null,
+    "restart_required": false
+  },
+  "standards_artifacts": {
+    "evidence_service_discovery": {
+      "url": "https://civil-notary.example.gov/.well-known/registry-notary/evidence-service",
+      "media_type": "application/json",
+      "sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "observed_status": "available"
+    },
+    "jwks": {
+      "url": "https://civil-notary.example.gov/.well-known/jwks.json",
+      "media_type": "application/jwk-set+json",
+      "sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "observed_status": "available"
+    }
+  },
+  "posture": {
+    "warnings": [],
+    "findings": [],
+    "audit": {
+      "configured": true,
+      "sink_type": "file",
+      "checkpoint_status": "available",
+      "latest_tail_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "latest_sequence": 88,
+      "verified_at": "2026-06-04T09:59:30Z",
+      "verification_status": "verified"
+    }
+  },
+  "notary": {
+    "claim_count": 6,
+    "credential_profile_count": 2,
+    "source_connection_counts": {
+      "http": 2,
+      "postgres": 1
+    },
+    "replay": {
+      "storage": "redis",
+      "ready": true
+    },
+    "credential_status": {
+      "enabled": true,
+      "storage": "redis"
+    },
+    "federation": {
+      "enabled": true,
+      "node_id": "did:web:civil-notary.example.gov",
+      "peer_count": 2,
+      "supported_protocol_versions": [
+        "registry-notary-federation/v0.1"
+      ],
+      "allowed_profile_count": 3,
+      "allowed_purpose_count": 4
+    },
+    "oid4vci": {
+      "enabled": true,
+      "credential_configuration_count": 1
+    }
+  }
+}
