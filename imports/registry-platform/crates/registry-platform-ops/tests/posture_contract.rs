@@ -112,6 +112,12 @@ fn malformed_posture_documents_fail_validation() {
         json!("sha256:not-a-hex-digest");
     assert_invalid(&validator, &invalid_artifact_hash);
 
+    let mut uppercase_artifact_hash =
+        parse(registry_platform_ops::DEFAULT_REDACTED_POSTURE_FIXTURE_V1);
+    uppercase_artifact_hash["standards_artifacts"]["jwks"]["sha256"] =
+        json!("sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    assert_valid(&validator, &uppercase_artifact_hash);
+
     let mut secret_passthrough = parse(registry_platform_ops::DEFAULT_REDACTED_POSTURE_FIXTURE_V1);
     secret_passthrough["configuration"]["database_url"] =
         json!("postgres://registry:secret@private-db.internal/registry");
