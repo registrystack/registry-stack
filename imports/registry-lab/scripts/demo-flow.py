@@ -37,6 +37,9 @@ V1_MATRIX = [
     {"id": "NID-1009", "alive": True, "health": True, "combined": False},
     {"id": "NID-1010", "alive": True, "health": False, "combined": False},
 ]
+# The full matrix above covers all subjects. Keep the batch proof smaller so a
+# single request does not saturate Notary's intentional no-queue CEL worker pool.
+BATCH_MATRIX = V1_MATRIX[:3]
 PRIMARY_SUBJECT = V1_MATRIX[0]["id"]
 
 DEMO_HOLDER_PRIVATE_KEY = """-----BEGIN PRIVATE KEY-----
@@ -571,7 +574,7 @@ def main() -> int:
                             "identifiers": [{"scheme": "national_id", "value": subject}],
                         }
                     }
-                    for subject in [case["id"] for case in V1_MATRIX]
+                    for subject in [case["id"] for case in BATCH_MATRIX]
                 ],
                 "claims": ["eligible-for-combined-support"],
                 "disclosure": "predicate",
@@ -585,9 +588,9 @@ def main() -> int:
     save(out, step, "batch-evaluation", batch)
     step += 1
     batch_items = batch.get("items") if isinstance(batch, dict) else None
-    if not isinstance(batch_items, list) or len(batch_items) < len(V1_MATRIX):
-        raise DemoError(f"batch evaluation expected at least {len(V1_MATRIX)} items, got {len(batch_items or [])}")
-    for index, case in enumerate(V1_MATRIX):
+    if not isinstance(batch_items, list) or len(batch_items) < len(BATCH_MATRIX):
+        raise DemoError(f"batch evaluation expected at least {len(BATCH_MATRIX)} items, got {len(batch_items or [])}")
+    for index, case in enumerate(BATCH_MATRIX):
         item = batch_items[index]
         if not isinstance(item, dict) or item.get("status") != "succeeded":
             raise DemoError(f"batch evaluation for {case['id']} did not succeed: {item}")
