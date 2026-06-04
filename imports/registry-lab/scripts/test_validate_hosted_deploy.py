@@ -268,6 +268,17 @@ oid4vci:
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "unsupported-relay-healthcheck")
 
+    def test_allows_relay_command_that_mentions_notary_outside_healthcheck(self) -> None:
+        compose = self._valid_registry_lab()
+        compose["services"]["civil-registry-relay"]["command"] = [
+            "--config",
+            "/etc/registry-relay/config.yaml",
+            "--note",
+            "registry-notary",
+        ]
+        issues = self._validate(compose, self._valid_esignet())
+        self.assertNoIssue(issues, "unsupported-relay-healthcheck")
+
     def test_rejects_relay_healthcheck_that_requires_curl(self) -> None:
         compose = self._valid_registry_lab()
         compose["services"]["civil-registry-relay"]["healthcheck"] = {

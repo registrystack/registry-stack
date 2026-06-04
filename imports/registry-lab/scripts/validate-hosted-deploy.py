@@ -402,17 +402,9 @@ def validate_runtime_commands(artifact: str, services: dict[str, Any]) -> list[I
         if not isinstance(config, dict):
             continue
         image = str(config.get("image", ""))
-        command_text = json.dumps(
-            {
-                "entrypoint": config.get("entrypoint"),
-                "command": config.get("command"),
-                "healthcheck": config.get("healthcheck"),
-            },
-            sort_keys=True,
-        )
         if is_registry_relay_service(service, image):
             healthcheck_text = json.dumps(config.get("healthcheck"), sort_keys=True)
-            if "registry-notary" in command_text:
+            if "registry-notary" in healthcheck_text:
                 issues.append(
                     Issue(
                         "unsupported-relay-healthcheck",
