@@ -4,9 +4,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use registry_notary_core::{
-    BulkMode, CredentialStatusConfig, EvidenceAuditConfig, StandaloneRegistryNotaryConfig,
+    BulkMode, CredentialStatusConfig, EvidenceAuditConfig, SelfAttestationConfig,
+    SelfAttestationRateLimitMode, SigningKeyStatus, StandaloneRegistryNotaryConfig,
     CREDENTIAL_STATUS_STORAGE_REDIS, REPLAY_STORAGE_IN_MEMORY, REPLAY_STORAGE_REDIS,
 };
+use registry_platform_ops::{filter_posture_for_tier, PostureFilterError, PostureTier};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
@@ -25,6 +27,8 @@ pub(crate) struct PostureContext {
     credential_status_storage: String,
     audit: AuditPosture,
     source_connections: SourceConnectionPosture,
+    signing_keys: SigningKeyPosture,
+    self_attestation: SelfAttestationPosture,
 }
 
 #[derive(Clone, Debug)]
@@ -45,6 +49,23 @@ struct AuditPosture {
 #[derive(Clone, Debug)]
 struct SourceConnectionPosture {
     by_kind: BTreeMap<String, usize>,
+}
+
+#[derive(Clone, Debug)]
+struct SigningKeyPosture {
+    active: Vec<String>,
+    publish_only: Vec<String>,
+    disabled: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct SelfAttestationPosture {
+    enabled: bool,
+    allowed_claim_count: usize,
+    allowed_purpose_count: usize,
+    credential_profile_count: usize,
+    wallet_origin_count: usize,
+    rate_limit_mode: String,
 }
 
 impl PostureContext {
@@ -71,13 +92,17 @@ impl PostureContext {
             source_connections: SourceConnectionPosture {
                 by_kind: source_connection_counts_by_kind(config),
             },
+            signing_keys: signing_key_posture(config),
+            self_attestation: self_attestation_posture(&config.self_attestation),
         }
     }
 }
 
-pub(crate) async fn posture_document(state: &RegistryNotaryApiState) -> Value {
+pub(crate) async fn posture_document(
+    state: &RegistryNotaryApiState,
+) -> Result<Value, PostureFilterError> {
     let replay_ready = state.replay.check_ready().await;
-    let replay_ready_bool = replay_ready.is_ok();
+    let replay_ready_bool = matches!(replay_ready, Ok(ReplayReadiness::Ready));
     let credential_status_ready = state.credential_status.check_ready().await.is_ok();
     let signer_ready = state.signer_readiness.is_ready();
     let readiness = if replay_ready_bool && credential_status_ready && signer_ready {
@@ -138,7 +163,7 @@ pub(crate) async fn posture_document(state: &RegistryNotaryApiState) -> Value {
         instance.insert("public_base_url".to_string(), json!(public_base_url));
     }
 
-    json!({
+    let posture = json!({
         "schema": "registry.ops.posture.v1",
         "observed_at": format_time(OffsetDateTime::now_utc()),
         "component": "registry-notary",
@@ -167,6 +192,11 @@ pub(crate) async fn posture_document(state: &RegistryNotaryApiState) -> Value {
         "notary": {
             "claim_count": state.evidence.claims.len(),
             "source_connection_counts": context.source_connections.by_kind,
+            "signing_keys": {
+                "active": context.signing_keys.active,
+                "publish_only": context.signing_keys.publish_only,
+                "disabled": context.signing_keys.disabled,
+            },
             "credential_profile_count": state.evidence.credential_profiles.len(),
             "replay": {
                 "storage": context.replay_storage,
@@ -180,6 +210,14 @@ pub(crate) async fn posture_document(state: &RegistryNotaryApiState) -> Value {
             "oid4vci": {
                 "enabled": state.oid4vci.enabled,
                 "credential_configuration_count": state.oid4vci.credential_configurations.len(),
+            },
+            "self_attestation": {
+                "enabled": context.self_attestation.enabled,
+                "allowed_claim_count": context.self_attestation.allowed_claim_count,
+                "allowed_purpose_count": context.self_attestation.allowed_purpose_count,
+                "credential_profile_count": context.self_attestation.credential_profile_count,
+                "wallet_origin_count": context.self_attestation.wallet_origin_count,
+                "rate_limit_mode": context.self_attestation.rate_limit_mode,
             },
         },
         "posture": {
@@ -195,7 +233,8 @@ pub(crate) async fn posture_document(state: &RegistryNotaryApiState) -> Value {
                 "verification_status": "not_supported",
             },
         },
-    })
+    });
+    filter_posture_for_tier(posture, PostureTier::Default)
 }
 
 fn default_posture_context() -> PostureContext {
@@ -219,6 +258,19 @@ fn default_posture_context() -> PostureContext {
         },
         source_connections: SourceConnectionPosture {
             by_kind: BTreeMap::new(),
+        },
+        signing_keys: SigningKeyPosture {
+            active: Vec::new(),
+            publish_only: Vec::new(),
+            disabled: Vec::new(),
+        },
+        self_attestation: SelfAttestationPosture {
+            enabled: false,
+            allowed_claim_count: 0,
+            allowed_purpose_count: 0,
+            credential_profile_count: 0,
+            wallet_origin_count: 0,
+            rate_limit_mode: "disabled".to_string(),
         },
     }
 }
@@ -288,7 +340,6 @@ fn audit_posture(config: &EvidenceAuditConfig) -> AuditPosture {
 fn source_connection_counts_by_kind(
     config: &StandaloneRegistryNotaryConfig,
 ) -> BTreeMap<String, usize> {
-    let mut seen = BTreeSet::new();
     let mut seen_connections = BTreeSet::new();
     let mut counts = BTreeMap::new();
     for claim in &config.evidence.claims {
@@ -296,16 +347,23 @@ fn source_connection_counts_by_kind(
             let Some(connection) = binding.connection.as_deref() else {
                 continue;
             };
-            seen_connections.insert(connection.to_string());
-            if !seen.insert((
-                connection.to_string(),
-                source_connector_kind(binding.connector),
-            )) {
+            if seen_connections.contains(connection) {
                 continue;
             }
-            *counts
-                .entry(source_connector_kind(binding.connector).to_string())
-                .or_insert(0) += 1;
+            seen_connections.insert(connection.to_string());
+            let kind = config
+                .evidence
+                .source_connections
+                .get(connection)
+                .map(|source_connection| {
+                    if source_connection.bulk_mode == BulkMode::None {
+                        source_connector_kind(binding.connector)
+                    } else {
+                        unused_source_connection_kind(source_connection.bulk_mode)
+                    }
+                })
+                .unwrap_or_else(|| source_connector_kind(binding.connector));
+            *counts.entry(kind.to_string()).or_insert(0) += 1;
         }
     }
     for (connection_id, connection) in &config.evidence.source_connections {
@@ -317,6 +375,45 @@ fn source_connection_counts_by_kind(
             .or_insert(0) += 1;
     }
     counts
+}
+
+fn signing_key_posture(config: &StandaloneRegistryNotaryConfig) -> SigningKeyPosture {
+    let mut active = Vec::new();
+    let mut publish_only = Vec::new();
+    let mut disabled = Vec::new();
+    for (key_id, key) in &config.evidence.signing_keys {
+        match key.status {
+            SigningKeyStatus::Active => active.push(key_id.clone()),
+            SigningKeyStatus::PublishOnly => publish_only.push(key_id.clone()),
+            SigningKeyStatus::Disabled => disabled.push(key_id.clone()),
+        }
+    }
+    SigningKeyPosture {
+        active,
+        publish_only,
+        disabled,
+    }
+}
+
+fn self_attestation_posture(config: &SelfAttestationConfig) -> SelfAttestationPosture {
+    SelfAttestationPosture {
+        enabled: config.enabled,
+        allowed_claim_count: config.allowed_claims.len(),
+        allowed_purpose_count: config.allowed_purposes.len(),
+        credential_profile_count: config.credential_profiles.len(),
+        wallet_origin_count: config.allowed_wallet_origins.len(),
+        rate_limit_mode: if config.enabled {
+            rate_limit_mode_label(config.rate_limits.mode).to_string()
+        } else {
+            "disabled".to_string()
+        },
+    }
+}
+
+fn rate_limit_mode_label(mode: SelfAttestationRateLimitMode) -> &'static str {
+    match mode {
+        SelfAttestationRateLimitMode::InProcess => "in_process",
+    }
 }
 
 fn unused_source_connection_kind(bulk_mode: BulkMode) -> &'static str {
@@ -467,5 +564,52 @@ mod tests {
         assert!(production_like("STAGING"));
         assert!(production_like("production-like"));
         assert!(!production_like("development"));
+    }
+
+    #[test]
+    fn source_connection_counts_count_each_connection_once() {
+        let config: StandaloneRegistryNotaryConfig = serde_norway::from_str(
+            r#"
+auth: {}
+evidence:
+  source_connections:
+    shared:
+      base_url: http://127.0.0.1:1
+      allow_insecure_localhost: true
+      token_env: TEST_TOKEN
+      bulk_mode: rda_in_filter
+  claims:
+    - id: person-age
+      title: Person age
+      version: "2026-06"
+      subject_type: person
+      source_bindings:
+        registry:
+          connector: registry_data_api
+          connection: shared
+          dataset: people
+          entity: person
+          lookup:
+            input: target.id
+            field: id
+        dci:
+          connector: dci
+          connection: shared
+          dataset: people
+          entity: person
+          lookup:
+            input: target.id
+            field: id
+      rule:
+        type: exists
+        source: registry
+"#,
+        )
+        .expect("posture count fixture parses");
+
+        let counts = source_connection_counts_by_kind(&config);
+
+        assert_eq!(counts.get("registry_data_api"), Some(&1));
+        assert_eq!(counts.get("dci"), None);
     }
 }

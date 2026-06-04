@@ -43,6 +43,7 @@ use registry_platform_oid4vci::{
     TokenRequest as Oid4vciTokenRequest, TokenResponse as Oid4vciTokenResponse, TxCode,
     ValidatedProof, WireError, PRE_AUTHORIZED_CODE_GRANT_TYPE, PROOF_TYPE_JWT, SD_JWT_VC_FORMAT,
 };
+use registry_platform_ops::PostureFilterError;
 use registry_platform_replay::{ReplayKey, ReplayScope, RequiredReplayError};
 use registry_platform_sdjwt::{validate_holder_proof, HolderProofBindings, HolderProofPolicy};
 use serde::Deserialize;
@@ -79,6 +80,7 @@ pub(crate) const OPS_READ_SCOPE: &str = "registry_notary:ops_read";
 const OID4VCI_CREDENTIAL_PATH: &str = "/oid4vci/credential";
 // SD-JWT VC Type Metadata well-known prefix inserted between host and vct path.
 const WELL_KNOWN_VCT_PREFIX: &str = "/.well-known/vct";
+const POSTURE_FILTER_FAILED_CODE: &str = "posture.filter_failed";
 
 pub use crate::federation::federation_router;
 
@@ -303,7 +305,10 @@ async fn admin_posture(
         )
             .into_response();
     };
-    Json(posture_document(&state).await).into_response()
+    match posture_document(&state).await {
+        Ok(posture) => Json(posture).into_response(),
+        Err(error) => posture_filter_failed(error),
+    }
 }
 
 async fn get_credential_status(
@@ -425,6 +430,30 @@ fn credential_status_problem(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/problem+json"),
     );
+    response
+}
+
+fn posture_filter_failed(error: PostureFilterError) -> Response {
+    tracing::error!(error = %error, "failed to filter admin posture");
+    let status = StatusCode::INTERNAL_SERVER_ERROR;
+    let mut response = (
+        status,
+        Json(json!({
+            "type": format!("{}/posture/filter_failed", crate::PROBLEM_TYPE_BASE_URL),
+            "title": "Admin posture unavailable",
+            "status": status.as_u16(),
+            "detail": "admin posture could not be filtered for the requested tier",
+            "code": POSTURE_FILTER_FAILED_CODE,
+        })),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/problem+json"),
+    );
+    response.extensions_mut().insert(EvidenceErrorCodeContext(
+        POSTURE_FILTER_FAILED_CODE.to_string(),
+    ));
     response
 }
 

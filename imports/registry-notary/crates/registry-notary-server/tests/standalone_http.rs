@@ -1810,10 +1810,77 @@ async fn admin_posture_reports_configured_instance_override() {
     assert_eq!(body["instance"]["environment"], json!("production"));
     assert_eq!(body["instance"]["owner"], json!("trust-ops"));
     assert_eq!(body["instance"]["jurisdiction"], json!("TH"));
-    assert_eq!(
-        body["instance"]["public_base_url"],
-        json!("https://notary.example.test")
+    assert!(body["instance"].get("public_base_url").is_none());
+}
+
+#[tokio::test]
+async fn admin_posture_reports_self_attestation_summary_and_redacts_signing_key_ids() {
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let issuer = MockIdp::start().await;
+    let issuer_url = issuer.issuer();
+    let jwks_uri = issuer.jwks_uri();
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_oid4vci_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &issuer_url,
+        &jwks_uri,
     );
+    config
+        .auth
+        .oidc
+        .as_mut()
+        .expect("oidc config exists")
+        .scope_map
+        .insert(
+            "ops_read".to_string(),
+            vec!["registry_notary:ops_read".to_string()],
+        );
+    let ops_token = issuer.mint_token(json!({
+        "sub": "trust-ops",
+        "aud": "registry-notary-citizen",
+        "azp": "citizen-portal",
+        "scope": "ops_read",
+    }));
+
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let posture = server
+        .get("/admin/v1/posture")
+        .add_header("authorization", format!("Bearer {ops_token}"))
+        .await;
+    posture.assert_status_ok();
+    let body: Value = posture.json();
+    assert_matches_posture_schema(&body);
+    assert_eq!(body["notary"]["self_attestation"]["enabled"], json!(true));
+    assert_eq!(
+        body["notary"]["self_attestation"]["allowed_claim_count"],
+        json!(1)
+    );
+    assert_eq!(
+        body["notary"]["self_attestation"]["allowed_purpose_count"],
+        json!(1)
+    );
+    assert_eq!(
+        body["notary"]["self_attestation"]["credential_profile_count"],
+        json!(1)
+    );
+    assert_eq!(
+        body["notary"]["self_attestation"]["wallet_origin_count"],
+        json!(1)
+    );
+    assert_eq!(
+        body["notary"]["self_attestation"]["rate_limit_mode"],
+        json!("in_process")
+    );
+    assert!(body["notary"].get("signing_keys").is_none());
+
+    let rendered = serde_json::to_string(&body).expect("posture serializes");
+    assert!(!rendered.contains("issuer-key"));
+    assert!(!rendered.contains("did:web:issuer.example#key-1"));
 }
 
 #[tokio::test]
@@ -2030,6 +2097,7 @@ async fn admin_posture_warns_for_production_like_in_memory_replay() {
         body["posture"]["findings"][0]["id"],
         json!("notary.replay.in_memory.production")
     );
+    assert_eq!(body["runtime"]["readiness"], json!("degraded"));
 }
 
 #[tokio::test]
@@ -2055,10 +2123,7 @@ async fn admin_posture_federation_summary_omits_peer_private_data() {
     let body: Value = posture.json();
     assert_matches_posture_schema(&body);
     assert_eq!(body["notary"]["federation"]["enabled"], json!(true));
-    assert_eq!(
-        body["notary"]["federation"]["node_id"],
-        json!("did:web:agency-a.example.gov")
-    );
+    assert!(body["notary"]["federation"].get("node_id").is_none());
     assert_eq!(body["notary"]["federation"]["peer_count"], json!(1));
     assert!(body["notary"]["federation"].get("peers").is_none());
 

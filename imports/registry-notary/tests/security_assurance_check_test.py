@@ -91,6 +91,23 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
         self.write_contracts(self.entry())
         self.module.validate_manifest()
 
+    def test_posture_exposure_documents_single_listener_acl_boundary(self):
+        manifest = json.loads(
+            (Path(__file__).resolve().parents[1] / "security" / "exposure-manifest.json")
+            .read_text()
+        )
+        posture = next(
+            endpoint
+            for endpoint in manifest["endpoints"]
+            if endpoint["method"] == "GET" and endpoint["path"] == "/admin/v1/posture"
+        )
+
+        self.assertEqual(posture["listener"], "public")
+        self.assertEqual(posture["audience"], "operator")
+        self.assertEqual(posture["scopes"], ["registry_notary:ops_read"])
+        self.assertIn("reverse-proxy", posture["notes"])
+        self.assertIn("network ACL", posture["notes"])
+
     def test_missing_route_manifest_entry_fails(self):
         self.write_contracts(self.entry(path="/other"))
         with self.assertRaises(SystemExit):
