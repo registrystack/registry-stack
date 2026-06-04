@@ -3045,8 +3045,10 @@ fn cel_preflight_root_bindings(
 fn cel_dummy_value_for_type(value_type: &str) -> Value {
     match value_type {
         "boolean" | "bool" => Value::Bool(true),
-        "number" => json!(1.0),
+        "number" | "float" | "double" => json!(1.0),
         "integer" | "int" => json!(1),
+        "date" => json!("2000-01-01"),
+        "datetime" | "date-time" => json!("2000-01-01T00:00:00Z"),
         "array" | "list" => json!([]),
         "object" => json!({}),
         "null" => Value::Null,
@@ -3057,7 +3059,10 @@ fn cel_dummy_value_for_type(value_type: &str) -> Value {
 #[cfg(feature = "registry-notary-cel")]
 fn validate_cel_expression_roots(expression: &str) -> Result<(), EvidenceError> {
     for root in cel_root_references(expression) {
-        if !matches!(root.as_str(), "source" | "claims" | "ctx" | "vars" | "meta") {
+        if !matches!(
+            root.as_str(),
+            "source" | "claims" | "ctx" | "vars" | "meta" | "date" | "person"
+        ) {
             return Err(EvidenceError::InvalidRequest);
         }
     }
@@ -4562,6 +4567,89 @@ mod tests {
             ),
             Err(EvidenceError::InvalidRequest)
         ));
+    }
+
+    #[cfg(feature = "registry-notary-cel")]
+    #[test]
+    fn cel_startup_validation_accepts_date_helper_against_date_source_field() {
+        let mut source_binding = test_source_binding();
+        source_binding.fields.insert(
+            "birth_date".to_string(),
+            registry_notary_core::SourceFieldConfig {
+                field: "birth_date".to_string(),
+                field_type: Some("date".to_string()),
+                unit: None,
+                required: true,
+                semantic_term: None,
+            },
+        );
+
+        let mut claim = test_claim("age-band", Vec::new(), false);
+        claim.value.value_type = "string".to_string();
+        claim.source_bindings = BTreeMap::from([("civil".to_string(), source_binding)]);
+        claim.rule = RuleConfig::Cel {
+            expression:
+                "date.age_on(source.civil.birth_date, vars.as_of_date) < 18 ? 'child' : 'adult'"
+                    .to_string(),
+            bindings: CelBindingsConfig {
+                claims: BTreeMap::new(),
+                vars: BTreeMap::from([("as_of_date".to_string(), json!("2026-05-27"))]),
+            },
+        };
+        let evidence = EvidenceConfig {
+            enabled: true,
+            service_id: "runtime.test".to_string(),
+            claims: vec![claim],
+            ..EvidenceConfig::default()
+        };
+
+        validate_cel_claims_for_startup(&evidence, &RegistryNotaryCelConfig::default())
+            .expect("date-based CEL helpers should preflight with valid dummy dates");
+    }
+
+    #[cfg(feature = "registry-notary-cel")]
+    #[test]
+    fn cel_startup_validation_accepts_numeric_source_field_aliases() {
+        let mut source_binding = test_source_binding();
+        source_binding.fields.insert(
+            "farm_area".to_string(),
+            registry_notary_core::SourceFieldConfig {
+                field: "farm_area".to_string(),
+                field_type: Some("float".to_string()),
+                unit: None,
+                required: true,
+                semantic_term: None,
+            },
+        );
+        source_binding.fields.insert(
+            "risk_score".to_string(),
+            registry_notary_core::SourceFieldConfig {
+                field: "risk_score".to_string(),
+                field_type: Some("double".to_string()),
+                unit: None,
+                required: true,
+                semantic_term: None,
+            },
+        );
+
+        let mut claim = test_claim("small-farm-low-risk", Vec::new(), false);
+        claim.source_bindings = BTreeMap::from([("farm".to_string(), source_binding)]);
+        claim.rule = RuleConfig::Cel {
+            expression: "source.farm.farm_area < 4.0 && source.farm.risk_score <= 1.0".to_string(),
+            bindings: CelBindingsConfig {
+                claims: BTreeMap::new(),
+                vars: BTreeMap::new(),
+            },
+        };
+        let evidence = EvidenceConfig {
+            enabled: true,
+            service_id: "runtime.test".to_string(),
+            claims: vec![claim],
+            ..EvidenceConfig::default()
+        };
+
+        validate_cel_claims_for_startup(&evidence, &RegistryNotaryCelConfig::default())
+            .expect("numeric CEL source field aliases should preflight as numbers");
     }
 
     #[cfg(feature = "registry-notary-cel")]

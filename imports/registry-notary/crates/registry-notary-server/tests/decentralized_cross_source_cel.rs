@@ -126,6 +126,8 @@ auth:
 audit:
   sink: stdout
   hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+cel:
+  worker_count: 4
 evidence:
   enabled: true
   service_id: shared-eligibility-registry-notary
