@@ -153,6 +153,7 @@ services:
     command: ["--config", "/etc/registry-relay/civil-registry-relay.yaml"]
     ports:
       - "4311:8080"
+      - "4319:8081"
     volumes:
       - ./config/relay:/etc/registry-relay:ro
       - ./data/civil:/demo/data/civil:ro

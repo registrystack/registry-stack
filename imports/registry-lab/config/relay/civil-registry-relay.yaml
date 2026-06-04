@@ -2,6 +2,7 @@
 
 server:
   bind: 0.0.0.0:8080
+  admin_bind: 0.0.0.0:8081
   cache_dir: /var/lib/registry-relay/cache
 
 metadata:
@@ -20,6 +21,10 @@ vocabularies:
 auth:
   mode: api_key
   api_keys:
+    - id: civil_relay_ops
+      hash_env: CIVIL_RELAY_OPS_HASH
+      scopes:
+        - registry_relay:ops_read
     - id: metadata_client
       hash_env: CIVIL_METADATA_CLIENT_HASH
       scopes:

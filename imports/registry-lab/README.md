@@ -17,6 +17,7 @@ profile explicitly says otherwise.
 Use this README for setup, service ports, and command reference. Use
 [`docs/README.md`](docs/README.md) to choose a guided tutorial:
 
+- [Operations posture lab contract](docs/ops-posture-lab-contract.md)
 - [OpenFn sidecar Notary tutorial](docs/openfn-sidecar-notary-tutorial.md)
 - [OpenCRVS DCI Notary tutorial](docs/opencrvs-dci-notary-tutorial.md)
 - [DHIS2 OpenFn Notary tutorial](docs/dhis2-openfn-notary-tutorial.md)

@@ -6,6 +6,10 @@ server:
 auth:
   mode: api_key
   api_keys:
+    - id: civil_notary_ops
+      hash_env: CIVIL_NOTARY_OPS_TOKEN_HASH
+      scopes:
+        - registry_notary:ops_read
     - id: civil_evidence_client
       hash_env: CIVIL_EVIDENCE_CLIENT_TOKEN_HASH
       scopes:
