@@ -25,6 +25,30 @@ Container defaults:
 
 The binary exits non-zero if config parsing or validation fails, if required API-key hash environment variables are missing, or if listeners cannot bind.
 
+```mermaid
+flowchart TB
+  Client["API clients"] --> Ingress["Ingress or service mesh<br/>TLS, WAF, external auth"]
+  Mon["Monitoring network"] -. "scrape /metrics" .-> Admin
+  AdminNet["Private admin network"] --> Admin
+
+  subgraph Proc["registry-relay process or container"]
+    direction TB
+    Data["Data-plane listener<br/>server.bind"]
+    Admin["Admin listener<br/>server.admin_bind, /metrics, reload"]
+  end
+
+  Ingress --> Data
+  Data --> Src[("Source files<br/>read-only mount")]
+  Data --> Cache[("server.cache_dir<br/>writable")]
+  Data -. "audit JSONL" .-> Sink["Audit sink<br/>stdout, file, or syslog"]
+  Admin -. "audit JSONL" .-> Sink
+```
+
+*Recommended production topology. TLS, WAF, and external auth sit at the
+ingress. The admin listener carries metrics and reload and is reachable only
+from the private admin and monitoring networks. Source files are read-only; the
+cache is writable; the public data-plane listener does not mount `/metrics`.*
+
 ## Build And Release
 
 Build a local release binary:
@@ -50,13 +74,16 @@ or:
 scripts/build-image.sh registry-relay:<version>
 ```
 
-The default image is built with no optional Cargo features. Builds that need
-standards adapters must opt in explicitly:
+The base image is built with no optional Cargo features. Standards-enabled
+release or lab images must opt in explicitly:
 
 ```sh
 REGISTRY_RELAY_FEATURES=spdci-api-standards,standards-cel-mapping,ogcapi-edr \
-  scripts/build-image.sh registry-relay:<version>-lab
+  scripts/build-image.sh registry-relay:<version>-standards
 ```
+
+If release notes claim SP DCI, standards CEL mapping, or OGC EDR support, record
+the standards-enabled image tag or digest in the release evidence.
 
 The build requires the pinned `registry-platform`, `registry-manifest`, and
 `cel-mapping` source trees because Relay uses sibling path dependencies. For

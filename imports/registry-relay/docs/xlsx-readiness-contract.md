@@ -185,3 +185,19 @@ A workbook version is ready when:
 
 If any item fails, keep serving the previous known-good version until the
 source file or Relay config is fixed.
+
+```mermaid
+flowchart TD
+  WB["New workbook version"] --> Pre{"Preflight validation<br/>file size, sheets, columns, unique keys, FKs resolve, types parse"}
+  Pre -- "fail" --> Keep["Keep serving the previous known-good version"]
+  Pre -- "pass" --> Ingest{"Relay ingests every table<br/>/ready reports resources ready"}
+  Ingest -- "fail" --> Keep
+  Ingest -- "pass" --> API{"Focused API checks<br/>allowed access succeeds, denials enforced"}
+  API -- "fail" --> Keep
+  API -- "pass" --> Audit{"Audit redacts sensitive fields<br/>row counts match the promotion record"}
+  Audit -- "fail" --> Keep
+  Audit -- "pass" --> Promote["Promote the new version"]
+```
+
+*The promotion pipeline. A workbook version is promoted only when every gate
+passes; any failure keeps the previous known-good version in service.*

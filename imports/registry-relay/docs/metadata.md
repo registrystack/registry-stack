@@ -127,6 +127,53 @@ codelists:
       - code: unknown
 ```
 
+```mermaid
+classDiagram
+  class Manifest {
+    schema_version
+  }
+  class Catalog {
+    id
+    base_url
+    publisher
+    standards
+  }
+  class Dataset {
+    id
+    title
+    access_rights
+  }
+  class Entity {
+    name
+    title
+  }
+  class Field {
+    name
+    type
+    required
+  }
+  Manifest "1" *-- "1" Catalog
+  Manifest "1" *-- "0..*" Dataset
+  Manifest "1" *-- "0..*" Vocabulary
+  Manifest "1" *-- "0..*" Codelist
+  Catalog "1" *-- "0..*" ApplicationProfile
+  Dataset "1" *-- "0..1" Policy
+  Dataset "1" *-- "1..*" Entity
+  Entity "1" *-- "1..*" Identifier
+  Entity "1" *-- "1..*" Field
+  Entity "1" *-- "0..*" Relationship
+  Field ..> Codelist : references by id
+  Policy "1" *-- "0..*" Permission
+  Policy "1" *-- "0..*" Prohibition
+  Permission "1" *-- "0..*" Constraint
+  Permission "1" *-- "0..*" Duty
+```
+
+*The portable metadata manifest hierarchy. The catalog, datasets, vocabularies,
+and codelists are top-level. Each dataset owns an optional ODRL policy and its
+entities; each entity owns its identifiers, fields, and relationships; fields
+reference codelists by id.*
+
 ## ODRL Policy Metadata
 
 Datasets may include an optional `policy` block. Registry Relay publishes this

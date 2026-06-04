@@ -125,6 +125,32 @@ serve `/.well-known/did.json`; the ministry owns that surface.
 Both modes use the same `signer:` shape. Switching modes requires a
 config change and a process restart.
 
+```mermaid
+flowchart TB
+  V["Verifier with a DID Web resolver"]
+
+  subgraph GW["gateway mode"]
+    direction TB
+    GS["Gateway signs the VC under its own DID"] --> GD["Gateway serves /.well-known/did.json"]
+  end
+
+  subgraph DG["delegated mode"]
+    direction TB
+    DS["Gateway signs the VC under the ministry DID"] --> DD["Ministry serves /.well-known/did.json<br/>gateway returns 404 for did.json"]
+  end
+
+  SC["Gateway serves /schemas and /contexts in both modes"]
+
+  V -. "fetch DID Document" .-> GD
+  V -. "fetch DID Document" .-> DD
+  V -. "fetch schema and context" .-> SC
+```
+
+*The two issuer modes differ only in who hosts the DID Document. In gateway mode
+the gateway signs under its own DID and serves the document; in delegated mode
+the gateway signs under the ministry DID and the ministry serves the document.
+The gateway serves schemas and contexts in both modes.*
+
 ## Caller Opt-In: Accept Negotiation
 
 The handler returns a signed VC only when the caller asks for one:

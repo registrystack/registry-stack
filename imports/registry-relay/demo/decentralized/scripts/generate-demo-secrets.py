@@ -2,7 +2,7 @@
 """Generate local credentials for the decentralized evidence demo.
 
 The Relay side stores SHA-256 fingerprints in config through hash env vars.
-Raw values are used only by demo clients and Evidence Server source connectors.
+Raw values are used only by demo clients and Registry Notary source connectors.
 """
 
 from __future__ import annotations

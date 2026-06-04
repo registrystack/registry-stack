@@ -116,9 +116,9 @@ check "civil relay OpenAPI" curl_json GET http://127.0.0.1:4311/openapi.json "${
 check "social relay OpenAPI" curl_json GET http://127.0.0.1:4312/openapi.json "${SOCIAL_METADATA_CLIENT_RAW}" "${output_dir}/smoke-social-openapi.json"
 check "health relay OpenAPI" curl_json GET http://127.0.0.1:4313/openapi.json "${HEALTH_METADATA_CLIENT_RAW}" "${output_dir}/smoke-health-openapi.json"
 
-check "civil Evidence Server OpenAPI" curl_json GET http://127.0.0.1:4321/openapi.json "${CIVIL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-civil-evidence-openapi.json"
-check "social Evidence Server OpenAPI" curl_json GET http://127.0.0.1:4322/openapi.json "${SOCIAL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-social-evidence-openapi.json"
-check "shared Evidence Server OpenAPI" curl_json GET http://127.0.0.1:4323/openapi.json "${SHARED_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-shared-evidence-openapi.json"
+check "civil Registry Notary OpenAPI" curl_json GET http://127.0.0.1:4321/openapi.json "${CIVIL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-civil-evidence-openapi.json"
+check "social Registry Notary OpenAPI" curl_json GET http://127.0.0.1:4322/openapi.json "${SOCIAL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-social-evidence-openapi.json"
+check "shared Registry Notary OpenAPI" curl_json GET http://127.0.0.1:4323/openapi.json "${SHARED_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-shared-evidence-openapi.json"
 
 check "civil relay evidence offerings" curl_json GET http://127.0.0.1:4311/metadata/evidence-offerings "${CIVIL_METADATA_CLIENT_RAW}" "${output_dir}/smoke-civil-offerings.json"
 check "social relay evidence offerings" curl_json GET http://127.0.0.1:4312/metadata/evidence-offerings "${SOCIAL_METADATA_CLIENT_RAW}" "${output_dir}/smoke-social-offerings.json"
@@ -171,9 +171,9 @@ decision_artifact="$(find "${output_dir}" -maxdepth 1 -name '*household-benefit-
 check "household decision has no Relay write-back" json_path_equals "${decision_artifact}" boundary.relay_write_back false
 
 log_file="/tmp/decentralized-smoke-service-logs.txt"
-docker compose -f "${compose_file}" logs --no-color civil-registry-relay social-protection-registry-relay health-registry-relay civil-evidence-server social-protection-evidence-server shared-eligibility-evidence-server > "${log_file}"
+docker compose -f "${compose_file}" logs --no-color civil-registry-relay social-protection-registry-relay health-registry-relay civil-registry-notary social-protection-registry-notary shared-eligibility-registry-notary > "${log_file}"
 grep '"error_code":"auth.scope_denied"' "${log_file}" >/dev/null || fail "Relay denied audit event"
-grep '"decision":"evaluate"' "${log_file}" >/dev/null || fail "Evidence Server evaluation audit event"
+grep '"decision":"evaluate"' "${log_file}" >/dev/null || fail "Registry Notary evaluation audit event"
 grep '"status_code":200' "${log_file}" >/dev/null || fail "Relay positive audit event"
 
 echo "smoke OK"

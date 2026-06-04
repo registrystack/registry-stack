@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Relay regression coverage for the shared Registry Platform SD-JWT helpers.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -176,6 +177,7 @@ async fn issue_sdjwt(
             vct: "https://relay.example/credentials/entity-record/v1".to_string(),
             credential_id: None,
             status: None,
+            public_claims: BTreeMap::new(),
             cnf: Some(HolderConfirmation {
                 jwk: holder.public(),
                 kid: Some("did:key:z6Mkholder#key-1".to_string()),

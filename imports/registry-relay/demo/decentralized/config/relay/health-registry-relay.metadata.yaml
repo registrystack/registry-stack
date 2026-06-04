@@ -51,7 +51,7 @@ datasets:
       - id: health_service_availability_evidence_service
         iri: https://demo.example.gov/evidence-offerings/health-service-availability
         title: Health service availability evidence service
-        description: Evidence Server endpoint that computes facility license and service availability.
+        description: Registry Notary endpoint that computes facility license and service availability.
         evidence_type: health_service_availability_evidence
         issuing_authority:
           id: health_services_authority

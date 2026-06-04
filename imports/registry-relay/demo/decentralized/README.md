@@ -1,7 +1,7 @@
 # Decentralized Evidence Demo
 
 This demo runs three independent Registry Relay authorities, three independent
-Evidence Server verifiers, a static metadata publisher, and a narrated client.
+Registry Notary verifiers, a static metadata publisher, and a narrated client.
 It uses functional domains only. The services simulate civil, social protection,
 and health registry patterns, but they are not real OpenCRVS, OpenSPP, DHIS2,
 OpenIMIS, MOSIP, or other product integrations.
@@ -11,14 +11,14 @@ OpenIMIS, MOSIP, or other product integrations.
 - `civil-registry-relay`: CSV-backed civil registry authority on host port `4311`.
 - `social-protection-registry-relay`: XLSX-backed social protection authority on host port `4312`.
 - `health-registry-relay`: Parquet-backed health authority on host port `4313`.
-- `civil-evidence-server`: civil evidence verifier on host port `4321`.
-- `social-protection-evidence-server`: social protection verifier on host port `4322`.
-- `shared-eligibility-evidence-server`: cross-authority civil, social, and health verifier on host port `4323`.
+- `civil-registry-notary`: civil Registry Notary verifier on host port `4321`.
+- `social-protection-registry-notary`: social protection Registry Notary verifier on host port `4322`.
+- `shared-eligibility-registry-notary`: cross-authority civil, social, and health Registry Notary verifier on host port `4323`.
 - `static-metadata-publisher`: generated static metadata on host port `4331`.
 
 Inside Compose, services use DNS names like
 `http://civil-registry-relay:8080` and
-`http://shared-eligibility-evidence-server:8080`. Evidence Server containers do
+`http://shared-eligibility-registry-notary:8080`. Registry Notary containers do
 not mount source data. They read registry facts over HTTP from Relay. The demo
 client also has no `data/` mount.
 
@@ -66,20 +66,20 @@ demo credentials and matching Relay SHA-256 hashes. The committed
 Credential classes:
 
 - metadata client tokens for each Relay;
-- evidence source tokens used by Evidence Servers when calling Relay;
+- evidence source tokens used by Registry Notary when calling Relay;
 - evidence-only Relay tokens used to prove verification scope does not imply
   row or aggregate access;
 - row-reader tokens for the explicit positive row-read check;
 - aggregate-reader tokens for the aggregate consultation;
-- separate Evidence Server client API keys and bearer tokens;
-- distinct shared Evidence Server source tokens for civil, social, and health.
+- separate Registry Notary client API keys and bearer tokens;
+- distinct shared Registry Notary source tokens for civil, social, and health.
 
 The social protection Relay config keeps row and aggregate scopes on separate
 credentials so the smoke flow can prove row-reader credentials cannot run the
 aggregate endpoint. Civil and health aggregate credentials are generated for
 future symmetry but are not used by the v1 walkthrough.
 
-Relay configs should reference only `*_HASH` env vars. Evidence Server configs
+Relay configs should reference only `*_HASH` env vars. Registry Notary configs
 should reference only `token_env` names. No raw token should be committed.
 
 ## Static Metadata
@@ -102,13 +102,13 @@ or backend runtime details.
 
 `scripts/demo-flow.py` narrates three scenarios:
 
-1. Birth Registration To Child Support: Evidence Server verifies civil facts and
+1. Birth Registration To Child Support: Registry Notary verifies civil facts and
    issues a demo-grade credential without exposing raw civil rows.
 2. Household Benefit Review From Registry Data: the client performs a protected
    Relay row read and aggregate consultation with `Data-Purpose`, then writes a
    demo household-benefit decision artifact without writing back to Relay.
 3. Cross-Authority Conditional Support: static metadata leads the client to a
-   shared Evidence Server claim that depends on civil, social protection, and
+   shared Registry Notary claim that depends on civil, social protection, and
    health authorities.
 
 Every client request sends `x-request-id` using
@@ -119,6 +119,6 @@ Every client request sends `x-request-id` using
 The Relay demo image is built by `Dockerfile.demo` with
 `spdci-api-standards,standards-cel-mapping` so DCI source routes are available.
 
-Evidence Server exposes OpenAPI at `/openapi.json` under the same auth boundary
-as the rest of the Evidence Server API. The demo client and smoke script fetch
-that document from all three Evidence Server instances.
+Registry Notary exposes OpenAPI at `/openapi.json` under the same auth boundary
+as the rest of the Registry Notary API. The demo client and smoke script fetch
+that document from all three Registry Notary instances.

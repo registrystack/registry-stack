@@ -7,6 +7,35 @@ For concrete deployment-specific paths and schemas, fetch the auth-gated
 runtime OpenAPI document from the deployment or use [api.md](api.md) as the
 general contract reference.
 
+```mermaid
+sequenceDiagram
+  participant Client as Application client
+  participant Relay as Registry Relay
+  participant Notary as Registry Notary
+
+  Client->>Relay: Authenticated discovery (OpenAPI, metadata, schemas)
+  Relay-->>Client: Scoped views (ETag, 304 if unchanged)
+  Client->>Relay: Read records (limit, cursor, Data-Purpose)
+  alt transient failure, 429, or 503
+    Relay-->>Client: Problem Details with Retry-After
+    Client->>Relay: Retry idempotent GET with jittered backoff
+  end
+  Relay-->>Client: Entity records (opaque next_cursor)
+  opt provenance enabled and requested
+    Client->>Relay: Read with Accept application/vc+jwt
+    Relay-->>Client: Signed VC-JWT, verified against issuer DID and schema
+  end
+  opt claim or evidence verification needed
+    Client->>Relay: Discover evidence offering
+    Relay-->>Client: access.kind registry-notary endpoint
+    Client->>Notary: Follow Registry Notary client docs
+  end
+```
+
+*The typical client lifecycle: authenticated discovery, scoped reads with
+conservative retries, optional response provenance, and handoff to Registry
+Notary for verification. Each step is detailed in the sections below.*
+
 ## Integration Checklist
 
 Before a client is allowed to consume Relay data, confirm:

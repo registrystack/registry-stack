@@ -51,7 +51,7 @@ datasets:
       - id: household_support_evidence_service
         iri: https://demo.example.gov/evidence-offerings/household-support
         title: Household support evidence service
-        description: Evidence Server endpoint that computes enrollment and eligibility status from social protection data.
+        description: Registry Notary endpoint that computes enrollment and eligibility status from social protection data.
         evidence_type: household_support_evidence
         issuing_authority:
           id: social_protection_authority

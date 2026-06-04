@@ -377,7 +377,7 @@ def main() -> int:
         discovery = require(request("GET", service.url, "/.well-known/evidence-service", token), 200, f"{service.name} discovery")
         save(out, step, f"{service.name}-evidence-discovery", discovery)
         step += 1
-        openapi = require(request("GET", service.url, "/openapi.json", token), 200, f"{service.name} Evidence Server OpenAPI")
+        openapi = require(request("GET", service.url, "/openapi.json", token), 200, f"{service.name} Registry Notary OpenAPI")
         save(out, step, f"{service.name}-evidence-openapi", openapi)
         step += 1
         claims = require(request("GET", service.url, "/claims", token), 200, f"{service.name} claims")
@@ -565,7 +565,7 @@ def main() -> int:
                 "human_journey": "A caregiver applies for support and civil facts are verified without exposing the civil registry row.",
                 "system_lane": [
                     "civil Relay metadata/evidence offering discovery",
-                    "civil Evidence Server discovery and OpenAPI",
+                    "civil Registry Notary discovery and OpenAPI",
                     "DCI-backed civil claim evaluation",
                     "CCCEV render",
                     "demo-grade credential issuance",
@@ -601,7 +601,7 @@ def main() -> int:
                 "human_journey": "Static metadata leads the client to a shared verifier that composes civil, social protection, and health facts.",
                 "system_lane": [
                     "static metadata index/offering/policy discovery",
-                    "shared Evidence Server discovery and OpenAPI",
+                    "shared Registry Notary discovery and OpenAPI",
                     "health-backed claim evaluation",
                     "cross-source CEL evaluation",
                     "batch evaluation with mixed outcomes",
@@ -621,9 +621,9 @@ def main() -> int:
             },
         },
         "notes": [
-            "Evidence Servers call Relay over HTTP only.",
+            "Registry Notaries call Relay over HTTP only.",
             "Static metadata was fetched before shared eligibility evaluation.",
-            "Evidence Server OpenAPI was fetched from the authenticated /openapi.json route on each Evidence Server.",
+            "Registry Notary OpenAPI was fetched from the authenticated /openapi.json route on each Registry Notary.",
         ],
     }
     save(out, step, "scenario-summary", scenario_summary)

@@ -20,8 +20,8 @@ audit:
 
 evidence:
   enabled: true
-  service_id: civil-evidence-server
-  api_base_url: http://civil-evidence-server:8080
+  service_id: civil-registry-notary
+  api_base_url: http://civil-registry-notary:8080
   inline_batch_limit: 20
   source_connections:
     civil:

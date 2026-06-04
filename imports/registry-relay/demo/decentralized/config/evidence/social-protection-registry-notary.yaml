@@ -20,8 +20,8 @@ audit:
 
 evidence:
   enabled: true
-  service_id: social-protection-evidence-server
-  api_base_url: http://social-protection-evidence-server:8080
+  service_id: social-protection-registry-notary
+  api_base_url: http://social-protection-registry-notary:8080
   inline_batch_limit: 20
   source_connections:
     social_protection:

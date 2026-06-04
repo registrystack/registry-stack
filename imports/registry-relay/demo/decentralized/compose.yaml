@@ -16,10 +16,10 @@ x-relay-common: &relay-common
     timeout: 10s
     retries: 3
 
-x-evidence-common: &evidence-common
-  image: evidence-server:demo
+x-notary-common: &notary-common
+  image: registry-notary:demo
   build:
-    context: ../../../evidence-server
+    context: ../../../registry-notary
   env_file:
     - .env
   environment:
@@ -57,29 +57,29 @@ services:
       - ./data/health:/demo/data/health:ro
       - health-registry-cache:/var/lib/registry-relay/cache
 
-  civil-evidence-server:
-    <<: *evidence-common
-    command: ["--config", "/etc/evidence-server/civil-evidence-server.yaml"]
+  civil-registry-notary:
+    <<: *notary-common
+    command: ["--config", "/etc/registry-notary/civil-registry-notary.yaml"]
     ports:
       - "4321:8080"
     volumes:
-      - ./config/evidence/civil-evidence-server.yaml:/etc/evidence-server/civil-evidence-server.yaml:ro
+      - ./config/evidence/civil-registry-notary.yaml:/etc/registry-notary/civil-registry-notary.yaml:ro
 
-  social-protection-evidence-server:
-    <<: *evidence-common
-    command: ["--config", "/etc/evidence-server/social-protection-evidence-server.yaml"]
+  social-protection-registry-notary:
+    <<: *notary-common
+    command: ["--config", "/etc/registry-notary/social-protection-registry-notary.yaml"]
     ports:
       - "4322:8080"
     volumes:
-      - ./config/evidence/social-protection-evidence-server.yaml:/etc/evidence-server/social-protection-evidence-server.yaml:ro
+      - ./config/evidence/social-protection-registry-notary.yaml:/etc/registry-notary/social-protection-registry-notary.yaml:ro
 
-  shared-eligibility-evidence-server:
-    <<: *evidence-common
-    command: ["--config", "/etc/evidence-server/shared-eligibility-evidence-server.yaml"]
+  shared-eligibility-registry-notary:
+    <<: *notary-common
+    command: ["--config", "/etc/registry-notary/shared-eligibility-registry-notary.yaml"]
     ports:
       - "4323:8080"
     volumes:
-      - ./config/evidence/shared-eligibility-evidence-server.yaml:/etc/evidence-server/shared-eligibility-evidence-server.yaml:ro
+      - ./config/evidence/shared-eligibility-registry-notary.yaml:/etc/registry-notary/shared-eligibility-registry-notary.yaml:ro
 
   static-metadata-publisher:
     image: python:3.12.3-slim-bookworm
@@ -99,9 +99,9 @@ services:
       CIVIL_RELAY_URL: http://civil-registry-relay:8080
       SOCIAL_RELAY_URL: http://social-protection-registry-relay:8080
       HEALTH_RELAY_URL: http://health-registry-relay:8080
-      CIVIL_EVIDENCE_URL: http://civil-evidence-server:8080
-      SOCIAL_EVIDENCE_URL: http://social-protection-evidence-server:8080
-      SHARED_EVIDENCE_URL: http://shared-eligibility-evidence-server:8080
+      CIVIL_EVIDENCE_URL: http://civil-registry-notary:8080
+      SOCIAL_EVIDENCE_URL: http://social-protection-registry-notary:8080
+      SHARED_EVIDENCE_URL: http://shared-eligibility-registry-notary:8080
       STATIC_METADATA_URL: http://static-metadata-publisher:8080
       DEMO_OUTPUT_DIR: /demo/output
     working_dir: /workspace
@@ -113,9 +113,9 @@ services:
       - civil-registry-relay
       - social-protection-registry-relay
       - health-registry-relay
-      - civil-evidence-server
-      - social-protection-evidence-server
-      - shared-eligibility-evidence-server
+      - civil-registry-notary
+      - social-protection-registry-notary
+      - shared-eligibility-registry-notary
       - static-metadata-publisher
 
 volumes:

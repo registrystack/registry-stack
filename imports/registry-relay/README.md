@@ -2,6 +2,8 @@
 
 > **Experimental:** This codebase is under active development. Its APIs are evolving quickly and may be unstable.
 
+Release label: pre-1.0 technical release for evaluation and integration pilots.
+
 Registry Relay is a config-driven Rust service that turns sensitive government tabular files and selected database tables into protected, read-only, domain-oriented APIs.
 
 V1 is built around two layers:
@@ -338,21 +340,25 @@ or with the helper:
 scripts/build-image.sh registry-relay:local
 ```
 
-The default image is built with no optional Cargo features. For a lab image
-that needs standards adapters, pass feature flags explicitly:
+The base image is built with no optional Cargo features. For a standards-enabled
+release or lab image, pass feature flags explicitly:
 
 ```sh
 REGISTRY_RELAY_FEATURES=spdci-api-standards,standards-cel-mapping,ogcapi-edr \
-  scripts/build-image.sh registry-relay:lab
+  scripts/build-image.sh registry-relay:standards
 ```
 
 The equivalent direct Docker build argument is
 `--build-arg REGISTRY_RELAY_FEATURES=spdci-api-standards,standards-cel-mapping,ogcapi-edr`.
 
-The product repository publishes canonical images to
-`ghcr.io/jeremi/registry-relay` on `main`, tagged as `main` and
-`sha-<commit>`. Downstream deployments should consume those refs directly and
-pin by digest when they need rollback guarantees.
+When the release story claims SP DCI, standards CEL mapping, or OGC EDR support,
+the release evidence must identify the standards-enabled image tag or digest,
+not only the no-optional-features base image.
+
+The product repository publishes CI images to `ghcr.io/jeremi/registry-relay`,
+tagged as `main` and `sha-<commit>`. First serious release readiness is checked
+through the coordinated pre-tag release plan. Downstream deployments should
+consume the selected release image by immutable digest for rollback guarantees.
 
 The image:
 

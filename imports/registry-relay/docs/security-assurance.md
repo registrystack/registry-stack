@@ -1,9 +1,10 @@
 # Security Assurance
 
-Registry Relay treats the current push to `main` as the release signal until a
-tagged release workflow exists. The container workflow publishes
-`ghcr.io/jeremi/registry-relay:sha-${GITHUB_SHA}` and `:main`; security evidence
-is tied to the immutable `sha-${GITHUB_SHA}` image.
+Registry Relay's container workflow publishes
+`ghcr.io/jeremi/registry-relay:sha-${GITHUB_SHA}` and `:main`. The immutable
+`sha-${GITHUB_SHA}` image is the CI artifact used for evidence gathering.
+First serious release readiness is established through the coordinated pre-tag
+release plan; final deployments should pin the selected image by digest.
 
 Security waivers live in `security/waivers.yml` when needed. Each waiver must
 name an owner, rationale, review trigger, and expiration. The default owner is
@@ -44,6 +45,14 @@ curated artifact across revisions and keeps the runtime generator covered by
 existing Rust tests. A future normalizer may replace this with
 generated-vs-normalized comparison once both shapes can be canonicalized without
 losing security scheme or route semantics.
+
+## Image signing status
+
+Registry Relay release images are not signed with `cosign` or another image
+signature workflow yet. The current release evidence relies on immutable
+`sha-${GITHUB_SHA}` tags, digest pinning, SBOM generation, and Grype image
+vulnerability reports. Operators should pin the selected image by digest and
+treat image-signature verification as not available for this release.
 
 ## Local security command
 

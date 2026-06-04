@@ -38,6 +38,7 @@ Local files under `docs/internal/` capture review findings and work planning. Th
 
 ## Missing Documentation Backlog
 
-- A final REST route and static OpenAPI refresh after the active API design changes settle.
+- Static OpenAPI review whenever public route families, scopes, payloads, or
+  error contracts change.
 - Language-specific client examples or SDKs, if Relay grows a supported client package.
 - Deeper feature-specific conformance notes for standards adapters once each adapter has external consumer feedback.
