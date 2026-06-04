@@ -310,11 +310,15 @@ Runtime behavior remains config-gated: PKCS#11 activates only when signing
 configuration selects a PKCS#11 provider, and CEL activates only when trusted
 operator config defines CEL rules.
 
-The product container workflow publishes one Registry Notary image as `main` /
-`sha-<commit>` with both CEL and PKCS#11 compiled in under
-`ghcr.io/jeremi/registry-notary`. First serious release readiness is checked
-through the coordinated pre-tag release plan. Deployments should consume the
-selected image by immutable digest for rollback.
+The product container workflow publishes release images only from stable
+`vX.Y.Z` tags to `ghcr.io/jeremi/registry-notary`. Release tags also update
+`vX.Y`, `vX`, and `latest`; `latest` means latest stable release. Pull requests
+and `main` pushes build validation images with both CEL and PKCS#11 compiled
+in, but do not push those validation images. Nightly or manual development
+snapshots may publish `snapshot`, `snapshot-YYYYMMDD`, and
+`snapshot-<shortsha>` unless both existing snapshot images already point at the
+current `main` revision. Deployments should consume specific version tags, such
+as `vX.Y.Z`, or immutable digests for rollback.
 
 Native runs default to `127.0.0.1:8081`. The Docker image sets
 `REGISTRY_NOTARY_BIND=0.0.0.0:8080` and exposes port `8080`; override it with

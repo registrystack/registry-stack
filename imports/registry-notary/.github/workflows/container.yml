@@ -4,7 +4,16 @@ on:
   pull_request:
   push:
     branches: [main]
+    tags: ["v*"]
+  schedule:
+    - cron: "43 3 * * *"
   workflow_dispatch:
+    inputs:
+      publish_snapshot:
+        description: "Publish development snapshots from main if they differ from :snapshot"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -28,12 +37,97 @@ jobs:
       contents: read
       packages: write
     steps:
+      - name: Decide image channel
+        id: channel
+        env:
+          PUBLISH_SNAPSHOT_INPUT: ${{ inputs.publish_snapshot || false }}
+        run: |
+          set -euo pipefail
+
+          build=true
+          publish=false
+          channel=validation
+          notary_tags=("$NOTARY_IMAGE:ci-${GITHUB_SHA}")
+          sidecar_tags=("$OPENFN_SIDECAR_IMAGE:ci-${GITHUB_SHA}")
+
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF_TYPE" == "tag" ]]; then
+            if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Release image tags must be stable semver tags like v0.1.2." >&2
+              exit 1
+            fi
+            version="${GITHUB_REF_NAME#v}"
+            IFS=. read -r major minor patch <<< "$version"
+            channel=release
+            publish=true
+            notary_tags=(
+              "$NOTARY_IMAGE:v${major}.${minor}.${patch}"
+              "$NOTARY_IMAGE:v${major}.${minor}"
+              "$NOTARY_IMAGE:v${major}"
+              "$NOTARY_IMAGE:latest"
+            )
+            sidecar_tags=(
+              "$OPENFN_SIDECAR_IMAGE:v${major}.${minor}.${patch}"
+              "$OPENFN_SIDECAR_IMAGE:v${major}.${minor}"
+              "$OPENFN_SIDECAR_IMAGE:v${major}"
+              "$OPENFN_SIDECAR_IMAGE:latest"
+            )
+          elif [[ "$GITHUB_EVENT_NAME" == "schedule" || "$PUBLISH_SNAPSHOT_INPUT" == "true" ]]; then
+            if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+              echo "Snapshot publishing is only allowed from refs/heads/main; got $GITHUB_REF."
+              build=false
+            else
+              existing_notary_revision="$(
+                docker buildx imagetools inspect "$NOTARY_IMAGE:snapshot" \
+                  --format '{{if .Image.Config.Labels}}{{index .Image.Config.Labels "org.opencontainers.image.revision"}}{{end}}' \
+                  2>/dev/null || true
+              )"
+              existing_sidecar_revision="$(
+                docker buildx imagetools inspect "$OPENFN_SIDECAR_IMAGE:snapshot" \
+                  --format '{{if .Image.Config.Labels}}{{index .Image.Config.Labels "org.opencontainers.image.revision"}}{{end}}' \
+                  2>/dev/null || true
+              )"
+              if [[ "$existing_notary_revision" == "$GITHUB_SHA" && "$existing_sidecar_revision" == "$GITHUB_SHA" ]]; then
+                echo "Snapshots already point at $GITHUB_SHA; skipping rebuild."
+                build=false
+              else
+                short_sha="${GITHUB_SHA::12}"
+                snapshot_date="$(date -u +%Y%m%d)"
+                channel=snapshot
+                publish=true
+                notary_tags=(
+                  "$NOTARY_IMAGE:snapshot"
+                  "$NOTARY_IMAGE:snapshot-${snapshot_date}"
+                  "$NOTARY_IMAGE:snapshot-${short_sha}"
+                )
+                sidecar_tags=(
+                  "$OPENFN_SIDECAR_IMAGE:snapshot"
+                  "$OPENFN_SIDECAR_IMAGE:snapshot-${snapshot_date}"
+                  "$OPENFN_SIDECAR_IMAGE:snapshot-${short_sha}"
+                )
+              fi
+            fi
+          fi
+
+          {
+            echo "build=$build"
+            echo "publish=$publish"
+            echo "channel=$channel"
+            echo "notary_tags<<EOF"
+            printf '%s\n' "${notary_tags[@]}"
+            echo "EOF"
+            echo "sidecar_tags<<EOF"
+            printf '%s\n' "${sidecar_tags[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Checkout registry-notary
+        if: steps.channel.outputs.build == 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: registry-notary
           persist-credentials: false
       - name: Checkout registry-platform
+        if: steps.channel.outputs.build == 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
@@ -42,6 +136,7 @@ jobs:
           token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
           persist-credentials: false
       - name: Checkout crosswalk
+        if: steps.channel.outputs.build == 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           repository: ${{ env.CROSSWALK_REPOSITORY }}
@@ -49,20 +144,35 @@ jobs:
           path: cel-mapping
           persist-credentials: false
       - name: Build registry-notary image
+        if: steps.channel.outputs.build == 'true'
         run: |
+          tag_args=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && tag_args+=(--tag "$tag")
+          done <<'EOF'
+          ${{ steps.channel.outputs.notary_tags }}
+          EOF
+
           docker build \
             --build-context registry-platform=registry-platform \
             --build-context cel-mapping=cel-mapping \
             --build-arg REGISTRY_NOTARY_FEATURES=registry-notary-cel,pkcs11 \
             --file registry-notary/Dockerfile \
-            --tag "$NOTARY_IMAGE:sha-${GITHUB_SHA}" \
-            --tag "$NOTARY_IMAGE:main" \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.version=${GITHUB_REF_NAME}" \
+            "${tag_args[@]}" \
             registry-notary
       - name: Smoke registry-notary image worker protocol
+        if: steps.channel.outputs.build == 'true'
         run: |
+          notary_image_ref="$(cat <<'EOF' | head -n 1
+          ${{ steps.channel.outputs.notary_tags }}
+          EOF
+          )"
           output="$(
             printf '%s\n' '{"protocol":"registry-notary-cel-worker/v1","expression":"source.age >= 18","root_bindings":{"source":{"age":21},"claims":{},"ctx":{},"vars":{},"meta":{}}}' \
-              | docker run --rm -i --entrypoint /usr/local/bin/registry-notary-cel-worker "$NOTARY_IMAGE:sha-${GITHUB_SHA}"
+              | docker run --rm -i --entrypoint /usr/local/bin/registry-notary-cel-worker "$notary_image_ref"
           )"
           python3 - "$output" <<'PY'
           import json
@@ -74,56 +184,81 @@ jobs:
           assert response["policy_hash"].startswith("sha256:")
           PY
       - name: Build OpenFn sidecar image
+        if: steps.channel.outputs.build == 'true'
         run: |
+          tag_args=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && tag_args+=(--tag "$tag")
+          done <<'EOF'
+          ${{ steps.channel.outputs.sidecar_tags }}
+          EOF
+
           docker build \
             --build-context registry-platform=registry-platform \
             --build-context cel-mapping=cel-mapping \
             --file registry-notary/Dockerfile.openfn-sidecar \
-            --tag "$OPENFN_SIDECAR_IMAGE:sha-${GITHUB_SHA}" \
-            --tag "$OPENFN_SIDECAR_IMAGE:main" \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.version=${GITHUB_REF_NAME}" \
+            "${tag_args[@]}" \
             registry-notary
       - name: Generate image SBOMs and advisory vulnerability reports
+        if: steps.channel.outputs.build == 'true'
         run: |
           set -o pipefail
+          notary_image_ref="$(cat <<'EOF' | head -n 1
+          ${{ steps.channel.outputs.notary_tags }}
+          EOF
+          )"
+          sidecar_image_ref="$(cat <<'EOF' | head -n 1
+          ${{ steps.channel.outputs.sidecar_tags }}
+          EOF
+          )"
           mkdir -p registry-notary/target/security
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$PWD/registry-notary/target/security:/out" \
-            anchore/syft:v1.18.1@sha256:b8c170b8e51bfc4779ec3ef4399942c57290f5ce76a9c3af564c9d00d4946a6b "$NOTARY_IMAGE:sha-${GITHUB_SHA}" \
+            anchore/syft:v1.18.1@sha256:b8c170b8e51bfc4779ec3ef4399942c57290f5ce76a9c3af564c9d00d4946a6b "$notary_image_ref" \
             -o spdx-json=/out/registry-notary-image.spdx.json
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$PWD/registry-notary/target/security:/out" \
-            anchore/syft:v1.18.1@sha256:b8c170b8e51bfc4779ec3ef4399942c57290f5ce76a9c3af564c9d00d4946a6b "$OPENFN_SIDECAR_IMAGE:sha-${GITHUB_SHA}" \
+            anchore/syft:v1.18.1@sha256:b8c170b8e51bfc4779ec3ef4399942c57290f5ce76a9c3af564c9d00d4946a6b "$sidecar_image_ref" \
             -o spdx-json=/out/registry-notary-openfn-sidecar-image.spdx.json
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$PWD/registry-notary/target/security:/out" \
-            anchore/grype:v0.85.0@sha256:8d7a54c4281e334a60c2d1616269411a940efad44c2cc1533ddc76689b9268af "$NOTARY_IMAGE:sha-${GITHUB_SHA}" \
+            anchore/grype:v0.85.0@sha256:8d7a54c4281e334a60c2d1616269411a940efad44c2cc1533ddc76689b9268af "$notary_image_ref" \
             -o json > registry-notary/target/security/registry-notary-image-vulnerabilities.json
           python3 registry-notary/scripts/check_advisory_baselines.py grype \
             registry-notary/target/security/registry-notary-image-vulnerabilities.json \
             --subject registry-notary-image
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$PWD/registry-notary/target/security:/out" \
-            anchore/grype:v0.85.0@sha256:8d7a54c4281e334a60c2d1616269411a940efad44c2cc1533ddc76689b9268af "$OPENFN_SIDECAR_IMAGE:sha-${GITHUB_SHA}" \
+            anchore/grype:v0.85.0@sha256:8d7a54c4281e334a60c2d1616269411a940efad44c2cc1533ddc76689b9268af "$sidecar_image_ref" \
             -o json > registry-notary/target/security/registry-notary-openfn-sidecar-image-vulnerabilities.json
           python3 registry-notary/scripts/check_advisory_baselines.py grype \
             registry-notary/target/security/registry-notary-openfn-sidecar-image-vulnerabilities.json \
             --subject registry-notary-openfn-sidecar-image
       - name: Upload image security evidence
-        if: always()
+        if: always() && steps.channel.outputs.build == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: registry-notary-image-security-evidence
           path: registry-notary/target/security/
       - name: Login to GHCR
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: steps.channel.outputs.publish == 'true'
         env:
           GHCR_ACTOR: ${{ github.actor }}
           GHCR_TOKEN: ${{ github.token }}
         run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin
       - name: Push images
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: steps.channel.outputs.publish == 'true'
         run: |
-          docker push "$NOTARY_IMAGE:sha-${GITHUB_SHA}"
-          docker push "$NOTARY_IMAGE:main"
-          docker push "$OPENFN_SIDECAR_IMAGE:sha-${GITHUB_SHA}"
-          docker push "$OPENFN_SIDECAR_IMAGE:main"
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && docker push "$tag"
+          done <<'EOF'
+          ${{ steps.channel.outputs.notary_tags }}
+          EOF
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && docker push "$tag"
+          done <<'EOF'
+          ${{ steps.channel.outputs.sidecar_tags }}
+          EOF
