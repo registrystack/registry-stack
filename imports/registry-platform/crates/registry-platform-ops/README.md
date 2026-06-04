@@ -2,10 +2,10 @@
 
 Shared public operations contracts for Registry runtimes.
 
-This crate packages versioned JSON Schemas, valid examples, and redaction
-fixtures for admin-scoped posture documents. It does not implement Relay or
-Notary endpoints and does not depend on private control-plane or internal
-planning repositories.
+This crate packages versioned JSON Schemas, valid examples, redaction fixtures,
+and the shared emit-only sensitivity-tier filter for admin-scoped posture
+documents. It does not implement Relay or Notary endpoints and does not depend
+on private control-plane or internal planning repositories.
 
 Runtime services currently emit the default posture projection. The restricted
 tier is a schema and fixture contract for future/admin-gated posture surfaces;

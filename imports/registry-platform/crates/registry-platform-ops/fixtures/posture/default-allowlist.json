@@ -73,7 +73,13 @@
     "/notary/federation/allowed_profile_count",
     "/notary/federation/allowed_purpose_count",
     "/notary/oid4vci/enabled",
-    "/notary/oid4vci/credential_configuration_count"
+    "/notary/oid4vci/credential_configuration_count",
+    "/notary/self_attestation/enabled",
+    "/notary/self_attestation/allowed_claim_count",
+    "/notary/self_attestation/allowed_purpose_count",
+    "/notary/self_attestation/credential_profile_count",
+    "/notary/self_attestation/wallet_origin_count",
+    "/notary/self_attestation/rate_limit_mode"
   ],
   "restricted_json_pointers_excluded_by_default": [
     "/instance/public_base_url",

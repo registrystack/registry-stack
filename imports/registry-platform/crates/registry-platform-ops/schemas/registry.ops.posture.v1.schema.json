@@ -791,6 +791,46 @@
               "minimum": 0
             }
           }
+        },
+        "self_attestation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "allowed_claim_count",
+            "allowed_purpose_count",
+            "credential_profile_count",
+            "wallet_origin_count",
+            "rate_limit_mode"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "allowed_claim_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "allowed_purpose_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "credential_profile_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "wallet_origin_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "rate_limit_mode": {
+              "enum": [
+                "in_process",
+                "disabled",
+                "unknown"
+              ]
+            }
+          }
         }
       }
     },

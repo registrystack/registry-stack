@@ -163,13 +163,98 @@ fn redaction_fixture_default_posture_is_allowlist_projection() {
     }
 }
 
+#[test]
+fn default_examples_are_allowlist_projections() {
+    let allowlist = parse(registry_platform_ops::DEFAULT_POSTURE_ALLOWLIST_FIXTURE_V1);
+    let allowed = allowlist["allowed_json_pointers"]
+        .as_array()
+        .expect("allowlist pointers are array")
+        .iter()
+        .map(|value| value.as_str().expect("pointer is string"))
+        .collect::<Vec<_>>();
+
+    for example in [
+        registry_platform_ops::RELAY_POSTURE_EXAMPLE_V1,
+        registry_platform_ops::NOTARY_POSTURE_EXAMPLE_V1,
+    ] {
+        let posture = parse(example);
+        assert_eq!(posture["tier"], "default");
+        for pointer in collect_leaf_pointers(&posture) {
+            assert!(
+                pointer_is_allowed(&pointer, &allowed),
+                "default example contains a leaf outside the default allowlist: {pointer}"
+            );
+        }
+    }
+}
+
+#[test]
+fn shared_filter_enforces_default_tier_allowlist() {
+    let validator = posture_validator();
+    let restricted_posture = parse(registry_platform_ops::RESTRICTED_POSTURE_FIXTURE_V1);
+    let filtered = registry_platform_ops::filter_posture_for_tier(
+        restricted_posture,
+        registry_platform_ops::PostureTier::Default,
+    )
+    .expect("default posture filters");
+
+    assert_valid(&validator, &filtered);
+    assert_eq!(filtered["tier"], "default");
+    for restricted_pointer in [
+        "/instance/public_base_url",
+        "/build/git_sha",
+        "/build/features",
+        "/configuration/trusted_roots",
+        "/standards_artifacts/jwks/url",
+        "/notary/signing_keys",
+        "/notary/federation/node_id",
+        "/notary/federation/issuer",
+        "/notary/federation/peers",
+    ] {
+        assert!(
+            filtered.pointer(restricted_pointer).is_none(),
+            "default filter retained restricted pointer: {restricted_pointer}"
+        );
+    }
+}
+
+#[test]
+fn shared_filter_preserves_restricted_tier() {
+    let restricted_posture = parse(registry_platform_ops::RESTRICTED_POSTURE_FIXTURE_V1);
+    let filtered = registry_platform_ops::filter_posture_for_tier(
+        restricted_posture.clone(),
+        registry_platform_ops::PostureTier::Restricted,
+    )
+    .expect("restricted posture filters");
+
+    assert_eq!(filtered["tier"], "restricted");
+    assert_eq!(filtered, restricted_posture);
+}
+
 fn pointer_is_allowed(pointer: &str, allowed: &[&str]) -> bool {
     allowed.iter().any(|pattern| {
         pointer_segments_match(pointer, pattern)
+            || pointer_is_allowed_container(pointer, pattern)
             || pointer
                 .strip_suffix("/*")
                 .is_some_and(|parent| pointer_segments_match(parent, pattern))
     })
+}
+
+fn pointer_is_allowed_container(pointer: &str, pattern: &str) -> bool {
+    let pointer_segments = pointer
+        .trim_start_matches('/')
+        .split('/')
+        .collect::<Vec<_>>();
+    let pattern_segments = pattern
+        .trim_start_matches('/')
+        .split('/')
+        .collect::<Vec<_>>();
+    pattern_segments.len() > pointer_segments.len()
+        && pattern_segments
+            .iter()
+            .zip(pointer_segments)
+            .all(|(pattern, segment)| *pattern == "*" || *pattern == segment)
 }
 
 fn pointer_segments_match(pointer: &str, pattern: &str) -> bool {

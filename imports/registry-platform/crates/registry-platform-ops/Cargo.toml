@@ -8,7 +8,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+serde_json.workspace = true
 
 [dev-dependencies]
 jsonschema.workspace = true
-serde_json.workspace = true
