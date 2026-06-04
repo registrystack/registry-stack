@@ -18,6 +18,7 @@ COPY src ./src
 ARG REGISTRY_RELAY_FEATURES=""
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/workspace/registry_relay/target \
+    find src benches resources -type f -exec touch {} + && \
     if [ -n "$REGISTRY_RELAY_FEATURES" ]; then \
         cargo build --release --locked --features "$REGISTRY_RELAY_FEATURES"; \
     else \

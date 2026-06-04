@@ -94,6 +94,7 @@ jobs:
                 exit 1
               fi
               if echo "$logs" | grep -E "registry-relay listening" >/dev/null; then
+                docker exec "$cid" /usr/local/bin/registry-relay healthcheck
                 docker rm -f "$cid" >/dev/null 2>&1 || true
                 echo "verified $config"
                 return 0
@@ -123,7 +124,6 @@ jobs:
             -e SOCIAL_ROW_READER_HASH=sha256:ceccb012571617538e3c47693e1d7d09e84a26d7f6a033534e638fafc52f06f7 \
             -e SOCIAL_AGGREGATE_READER_HASH=sha256:531fa4aafc18c2b700b43f8103dc1ccf01dd2dc46969778f3f3a104c6f58bbeb \
             -e SHARED_SOCIAL_EVIDENCE_SOURCE_HASH=sha256:f573de5cd190351a911ec6578c1cf44f0f80c093d25230a6183e8cca0e216eb1
-          docker run --rm --entrypoint curl "$REGISTRY_RELAY_IMAGE:sha-${GITHUB_SHA}" --version >/dev/null
       - name: Generate image SBOM and advisory vulnerability report
         run: |
           set -o pipefail

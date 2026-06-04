@@ -49,6 +49,17 @@ def forbid_runtime(path: Path, needle: str, detail: str) -> list[str]:
     return [f"{path.relative_to(ROOT)} runtime stage: forbidden {detail}: {needle!r}"]
 
 
+def forbid(path: Path, needle: str, detail: str) -> list[str]:
+    if path not in _CONTENT_CACHE:
+        _CONTENT_CACHE[path] = path.read_text(encoding="utf-8")
+    text_without_comments = "\n".join(
+        line.split("#", 1)[0] for line in _CONTENT_CACHE[path].splitlines()
+    )
+    if needle not in text_without_comments:
+        return []
+    return [f"{path.relative_to(ROOT)}: forbidden {detail}: {needle!r}"]
+
+
 def main() -> int:
     dockerfile = ROOT / "Dockerfile"
     build_script = ROOT / "scripts" / "build-image.sh"
@@ -75,6 +86,13 @@ def main() -> int:
             dockerfile,
             "cargo build --release --locked",
             "default cargo build path",
+        )
+    )
+    failures.extend(
+        require(
+            dockerfile,
+            "find src benches resources -type f -exec touch {} +",
+            "package rebuild guard for cached Docker target dirs",
         )
     )
     failures.extend(
@@ -125,6 +143,13 @@ def main() -> int:
             container_workflow,
             "Verify registry-relay image can run hosted feature surfaces",
             "official image hosted feature verification step",
+        )
+    )
+    failures.extend(
+        require(
+            container_workflow,
+            'docker exec "$cid" /usr/local/bin/registry-relay healthcheck',
+            "official image shell-free healthcheck verification",
         )
     )
     failures.extend(
@@ -186,6 +211,13 @@ def main() -> int:
         ("wget", "wget dependency in runtime"),
     ]:
         failures.extend(forbid_runtime(dockerfile, needle, detail))
+    failures.extend(
+        forbid(
+            container_workflow,
+            "--entrypoint curl",
+            "curl-based official image verification",
+        )
+    )
 
     if failures:
         print("Docker build contract check failed:", file=sys.stderr)
