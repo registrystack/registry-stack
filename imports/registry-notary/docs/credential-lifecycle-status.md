@@ -101,6 +101,31 @@ The public status response can report:
 Only `valid`, `suspended`, and `revoked` are mutable lifecycle states. `expired`
 is derived from time.
 
+```mermaid
+stateDiagram-v2
+  [*] --> valid: issuance creates status record
+  valid --> suspended: admin suspend
+  suspended --> valid: admin reinstate
+  valid --> revoked: admin revoke
+  suspended --> revoked: admin revoke
+  valid --> expired: validity window passes
+  suspended --> expired: validity window passes
+  revoked --> [*]
+  expired --> [*]
+
+  note right of revoked
+    Permanent, no return path
+  end note
+  note right of expired
+    Derived from stored expiry,
+    not an admin action
+  end note
+```
+
+*Credential status lifecycle. Admin mutation moves a credential between `valid`,
+`suspended`, and `revoked`; `expired` is derived from the stored expiry rather
+than set by an operator.*
+
 ## Privacy Boundary
 
 Status records intentionally contain lifecycle metadata only:

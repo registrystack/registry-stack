@@ -66,6 +66,25 @@ current implementation, resolution and record location are not two separate call
 a single gated source read does both, and the cardinality of its result is what
 distinguishes a match from a miss or an ambiguity.
 
+```mermaid
+flowchart TD
+  Req["Request: target, optional requester and relationship"] --> Gate{"Policy gate<br/>required inputs, allowed inputs, entity type, purpose"}
+  Gate -- "request shape not allowed" --> Rej["Stop: target.matching_policy_rejected"]
+  Gate -- "allowed" --> Min{"Minimization<br/>forward only allowed request paths"}
+  Min -- "extra attributes present" --> Over["Stop: overprovisioned request rejected"]
+  Min -- "minimized" --> Read["Gated source read through connector or sidecar"]
+  Read --> Card{"Records returned"}
+  Card -- "0" --> NF["Not found: target.not_found"]
+  Card -- "1" --> Match["Match: bind the record"]
+  Card -- "2 or more" --> Amb["Ambiguous: target.match_ambiguous"]
+  Match --> Eval["Evaluate the claim rule on the matched record"]
+  Eval --> Result["Result: target_ref and matching metadata"]
+```
+
+*How a matching request flows from the policy gate through one gated source read
+to claim evaluation. Record cardinality decides found, match, or ambiguous; the
+granular outcome codes and error collapsing are covered below.*
+
 ## Request identity model
 
 A request carries a required `target` and, optionally, a `requester` and a

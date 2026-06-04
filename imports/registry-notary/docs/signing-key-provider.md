@@ -131,6 +131,29 @@ public key id.
 Do not reuse a `kid` for new key material. Verifiers cache keys by `kid`, and
 reuse creates ambiguous verification behavior.
 
+```mermaid
+stateDiagram-v2
+  [*] --> active: add key with new kid
+  active --> publish_only: rotate out
+  publish_only --> disabled: old credentials expired, verifier caches cleared
+  disabled --> [*]: remove key and secret material
+
+  note right of active
+    Signs new credentials,
+    published in JWKS
+  end note
+  note right of publish_only
+    Cannot sign,
+    published in JWKS for verification
+  end note
+  note right of disabled
+    Ignored by issuance and JWKS
+  end note
+```
+
+*Signing key status through a rotation. The notes restate the runtime contract
+for each status; the numbered steps above walk the same transitions.*
+
 ## PKCS#11 Active Key
 
 Enable the server feature `pkcs11` to use an HSM-backed Ed25519 signing key.

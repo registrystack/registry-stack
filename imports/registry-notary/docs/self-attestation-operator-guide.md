@@ -24,6 +24,24 @@ Notary validates the token, checks client and audience policy, checks subject
 binding, checks scopes and operation allow-lists, then reads sources. Source
 reads should not happen before those gates pass.
 
+```mermaid
+flowchart TD
+  Tok["Citizen OIDC token"] --> V{"Validate token<br/>issuer, audience, algorithm, lifetime"}
+  V -- "ok" --> C{"Client and audience policy"}
+  C -- "ok" --> S{"Subject binding<br/>derive subject from token claim"}
+  S -- "ok" --> Sc{"Scopes and operation allow-lists"}
+  Sc -- "ok" --> Read["Read configured source for the bound subject"]
+  Read --> Op["Evaluate, render, or issue within the allow-lists"]
+  V -- "fail" --> X["Reject before any source read"]
+  C -- "fail" --> X
+  S -- "conflicting caller identity" --> X
+  Sc -- "fail" --> X
+```
+
+*Self-attestation gates a request through token validation, client and audience
+policy, subject binding, and scope and operation allow-lists. Any gate failure
+rejects the request before a source is read.*
+
 For `/v1/evaluations`, citizen callers do not need to send their own target
 identity. Registry Notary derives `requester`, `target`, and
 `relationship: self` from the verified subject-binding token claim. Conflicting

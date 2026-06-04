@@ -53,6 +53,23 @@ request before the next one runs.
 6. **Emit audit.** Notary writes a redacted, hash-chained audit envelope that
    records the decision without subject ids, claim values, or source rows.
 
+```mermaid
+flowchart TD
+  Caller["Caller request"] --> Auth{"1. Authenticate and authorize"}
+  Auth -- "no or invalid credential" --> Stop["Stop: fail closed"]
+  Auth -- "principal and scopes" --> Read["2. Read the source<br/>matching policy, minimization"]
+  Read --> Eval["3. Evaluate the claim<br/>exists, extract, or cel"]
+  Eval --> Disc["4. Apply disclosure<br/>value, redacted, or predicate"]
+  Disc --> Out{"5. Return or issue"}
+  Out -- "claim result or rendered format" --> Result["Claim result"]
+  Out -- "claim and profile allow" --> Cred["Short-lived SD-JWT VC"]
+  Result --> Audit["6. Emit redacted, hash-chained audit"]
+  Cred --> Audit
+```
+
+*The request lifecycle. Authentication fails closed; any earlier step can also
+stop the request before the next one runs.*
+
 ## The layers
 
 The product is organized into layers, each with its own surface and its own
@@ -65,6 +82,43 @@ operator guide.
 | Federation | Delegate one claim evaluation to a trusted static peer | `POST /federation/v1/evaluations` |
 | Administration | Mutate credential status and other guarded state | `/admin/v1/*`, scope `registry_notary:admin` |
 | Operations | Expose metrics, audit, and replay protection | `/metrics`, audit sinks, replay store |
+
+```mermaid
+flowchart TB
+  Int["Integrator or service portal"]
+  Wallet["Holder wallet"]
+  Peer["Trusted peer Notary"]
+  OpTool["Operator tooling"]
+
+  subgraph Notary["Registry Notary"]
+    direction TB
+    Cons["Consultation and evaluation<br/>evaluate routes under /v1"]
+    Cred["Credential<br/>OID4VCI facade"]
+    Fed["Federation<br/>/federation/v1/evaluations"]
+    Admin["Administration<br/>/admin/v1/*"]
+    Ops["Operations<br/>metrics, audit, replay"]
+  end
+
+  Src[("Source registry")]
+
+  Int --> Cons
+  Wallet --> Cred
+  Peer --> Fed
+  OpTool --> Admin
+
+  Cons --> Src
+  Cred --> Src
+  Fed --> Src
+
+  Cons -. audit .-> Ops
+  Cred -. audit .-> Ops
+  Fed -. audit .-> Ops
+  Admin -. audit .-> Ops
+```
+
+*How the layers relate. Callers reach Notary through layer-specific surfaces.
+Consultation, credential, and federation read the source registry, which stays
+the system of record; every layer emits a redacted audit record to operations.*
 
 Credentials use `application/dc+sd-jwt`, EdDSA over named Ed25519 keys, and
 `did:jwk` holder binding. The OID4VCI surface is a profiled subset of Draft 13;

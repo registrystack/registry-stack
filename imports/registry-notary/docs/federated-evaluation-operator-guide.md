@@ -17,6 +17,24 @@ Agency B <- signed response JWT <- Agency A
 The serving Notary verifies the request, enforces local peer policy, reads its
 own source only after policy passes, emits audit, and returns a signed result.
 
+```mermaid
+sequenceDiagram
+  participant B as Agency B (requesting Notary)
+  participant A as Agency A (serving Notary)
+  participant Src as Source registry
+  participant Audit as Audit sink
+
+  B->>A: POST /federation/v1/evaluations (signed request JWT)
+  A->>A: Verify signature, audience, time window, profile, purpose, replay, denylist, body limit
+  A->>Src: Source read, only after policy passes
+  Src-->>A: Source facts
+  A->>Audit: Chained audit record
+  A-->>B: Signed response JWT, or signed error, or Problem Details denial
+```
+
+*The delegated evaluation exchange. Every check runs before any source read, and
+an audit write failure prevents a successful signed response.*
+
 ## Required Environment
 
 Set these before starting the serving Notary:
