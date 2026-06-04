@@ -12,7 +12,7 @@ COPY --from=cel-mapping Cargo.toml /workspace/cel-mapping/
 COPY --from=cel-mapping crates /workspace/cel-mapping/crates
 COPY . .
 
-ARG REGISTRY_NOTARY_FEATURES="pkcs11"
+ARG REGISTRY_NOTARY_FEATURES="registry-notary-cel,pkcs11"
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/workspace/target \
     if [ -n "$REGISTRY_NOTARY_FEATURES" ]; then \

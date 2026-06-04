@@ -7,9 +7,9 @@ immutable SHA image tags are CI artifacts used for evidence gathering. First
 serious release readiness is established through the coordinated pre-tag release
 plan; final deployments should pin the selected images by digest.
 
-The optional CEL-enabled image is published as
-`ghcr.io/jeremi/registry-notary:sha-${GITHUB_SHA}-cel` and is covered by the
-same worker-protocol smoke, SBOM, and Grype critical-vulnerability gate.
+The Registry Notary image is built with CEL and PKCS#11 compiled in. Runtime
+use remains config-gated, and the image is covered by the CEL worker-protocol
+smoke, SBOM, and Grype critical-vulnerability gate.
 
 Security waivers live in `security/waivers.yml` when needed. Each waiver must
 name an owner, rationale, review trigger, and expiration. The default owner is

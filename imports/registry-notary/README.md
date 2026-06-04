@@ -305,23 +305,16 @@ docker build \
   -t registry-notary .
 ```
 
-Default Docker builds compile the `pkcs11` feature. Lab or integration builds
-that need CEL should keep PKCS#11 enabled and add CEL explicitly:
+Default Docker builds compile CEL and PKCS#11 into one release-capable image.
+Runtime behavior remains config-gated: PKCS#11 activates only when signing
+configuration selects a PKCS#11 provider, and CEL activates only when trusted
+operator config defines CEL rules.
 
-```bash
-docker build \
-  --build-context registry-platform=../registry-platform \
-  --build-context cel-mapping=../cel-mapping \
-  --build-arg REGISTRY_NOTARY_FEATURES=registry-notary-cel,pkcs11 \
-  -t registry-notary:cel .
-```
-
-The product container workflow publishes the default image as `main` /
-`sha-<commit>` with PKCS#11 compiled in, and the optional CEL-enabled image as
-`main-cel` / `sha-<commit>-cel` with both CEL and PKCS#11 enabled under
+The product container workflow publishes one Registry Notary image as `main` /
+`sha-<commit>` with both CEL and PKCS#11 compiled in under
 `ghcr.io/jeremi/registry-notary`. First serious release readiness is checked
-through the coordinated pre-tag release plan. CEL deployments should consume
-the selected CEL-enabled image by immutable digest for rollback.
+through the coordinated pre-tag release plan. Deployments should consume the
+selected image by immutable digest for rollback.
 
 Native runs default to `127.0.0.1:8081`. The Docker image sets
 `REGISTRY_NOTARY_BIND=0.0.0.0:8080` and exposes port `8080`; override it with

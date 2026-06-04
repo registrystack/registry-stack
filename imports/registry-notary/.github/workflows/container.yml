@@ -53,32 +53,16 @@ jobs:
           docker build \
             --build-context registry-platform=registry-platform \
             --build-context cel-mapping=cel-mapping \
-            --build-arg REGISTRY_NOTARY_FEATURES=pkcs11 \
+            --build-arg REGISTRY_NOTARY_FEATURES=registry-notary-cel,pkcs11 \
             --file registry-notary/Dockerfile \
             --tag "$NOTARY_IMAGE:sha-${GITHUB_SHA}" \
             --tag "$NOTARY_IMAGE:main" \
             registry-notary
-      - name: Build registry-notary CEL image
-        run: |
-          docker build \
-            --build-context registry-platform=registry-platform \
-            --build-context cel-mapping=cel-mapping \
-            --build-arg REGISTRY_NOTARY_FEATURES=registry-notary-cel,pkcs11 \
-            --file registry-notary/Dockerfile \
-            --tag "$NOTARY_IMAGE:sha-${GITHUB_SHA}-cel" \
-            --tag "$NOTARY_IMAGE:main-cel" \
-            registry-notary
-      - name: Smoke default registry-notary image excludes CEL worker
-        run: |
-          if docker run --rm --entrypoint /usr/local/bin/registry-notary "$NOTARY_IMAGE:sha-${GITHUB_SHA}" cel-worker; then
-            echo "default image unexpectedly accepted the CEL worker command"
-            exit 1
-          fi
-      - name: Smoke registry-notary CEL image worker protocol
+      - name: Smoke registry-notary image worker protocol
         run: |
           output="$(
             printf '%s\n' '{"protocol":"registry-notary-cel-worker/v1","expression":"source.age >= 18","root_bindings":{"source":{"age":21},"claims":{},"ctx":{},"vars":{},"meta":{}}}' \
-              | docker run --rm -i --entrypoint /usr/local/bin/registry-notary-cel-worker "$NOTARY_IMAGE:sha-${GITHUB_SHA}-cel"
+              | docker run --rm -i --entrypoint /usr/local/bin/registry-notary-cel-worker "$NOTARY_IMAGE:sha-${GITHUB_SHA}"
           )"
           python3 - "$output" <<'PY'
           import json
@@ -108,10 +92,6 @@ jobs:
             -o spdx-json=/out/registry-notary-image.spdx.json
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$PWD/registry-notary/target/security:/out" \
-            anchore/syft:v1.18.1@sha256:b8c170b8e51bfc4779ec3ef4399942c57290f5ce76a9c3af564c9d00d4946a6b "$NOTARY_IMAGE:sha-${GITHUB_SHA}-cel" \
-            -o spdx-json=/out/registry-notary-cel-image.spdx.json
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-            -v "$PWD/registry-notary/target/security:/out" \
             anchore/syft:v1.18.1@sha256:b8c170b8e51bfc4779ec3ef4399942c57290f5ce76a9c3af564c9d00d4946a6b "$OPENFN_SIDECAR_IMAGE:sha-${GITHUB_SHA}" \
             -o spdx-json=/out/registry-notary-openfn-sidecar-image.spdx.json
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
@@ -121,13 +101,6 @@ jobs:
           python3 registry-notary/scripts/check_advisory_baselines.py grype \
             registry-notary/target/security/registry-notary-image-vulnerabilities.json \
             --subject registry-notary-image
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-            -v "$PWD/registry-notary/target/security:/out" \
-            anchore/grype:v0.85.0@sha256:8d7a54c4281e334a60c2d1616269411a940efad44c2cc1533ddc76689b9268af "$NOTARY_IMAGE:sha-${GITHUB_SHA}-cel" \
-            -o json > registry-notary/target/security/registry-notary-cel-image-vulnerabilities.json
-          python3 registry-notary/scripts/check_advisory_baselines.py grype \
-            registry-notary/target/security/registry-notary-cel-image-vulnerabilities.json \
-            --subject registry-notary-cel-image
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$PWD/registry-notary/target/security:/out" \
             anchore/grype:v0.85.0@sha256:8d7a54c4281e334a60c2d1616269411a940efad44c2cc1533ddc76689b9268af "$OPENFN_SIDECAR_IMAGE:sha-${GITHUB_SHA}" \
@@ -152,7 +125,5 @@ jobs:
         run: |
           docker push "$NOTARY_IMAGE:sha-${GITHUB_SHA}"
           docker push "$NOTARY_IMAGE:main"
-          docker push "$NOTARY_IMAGE:sha-${GITHUB_SHA}-cel"
-          docker push "$NOTARY_IMAGE:main-cel"
           docker push "$OPENFN_SIDECAR_IMAGE:sha-${GITHUB_SHA}"
           docker push "$OPENFN_SIDECAR_IMAGE:main"
