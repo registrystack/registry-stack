@@ -63,6 +63,14 @@ class HostedDeployValidationTest(unittest.TestCase):
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "floating-product-image-tag")
 
+    def test_rejects_hardcoded_product_image_digests(self) -> None:
+        compose = self._valid_registry_lab()
+        compose["services"]["civil-registry-relay"][
+            "image"
+        ] = "ghcr.io/jeremi/registry-relay@sha256:abc"
+        issues = self._validate(compose, self._valid_esignet())
+        self.assertIssue(issues, "product-image-env-var")
+
     def test_allows_interim_local_hosted_product_tags(self) -> None:
         compose = self._valid_registry_lab()
         compose["services"]["civil-registry-relay"]["image"] = "registry-relay:hosted"
@@ -436,7 +444,7 @@ oid4vci:
                 "postgres": {"image": "postgres:16-alpine", "environment": required_env},
                 "redis": {"image": "redis:7.4-alpine"},
                 "citizen-civil-notary": {
-                    "image": "ghcr.io/registrystack/registry-notary@sha256:abc",
+                    "image": "${REGISTRY_NOTARY_IMAGE:-ghcr.io/registrystack/registry-notary@sha256:abc}",
                     "expose": ["8080"],
                     "environment": {
                         "CITIZEN_OID4VCI_CREDENTIAL_ISSUER": f"https://citizen-notary.{lab}",
@@ -457,18 +465,18 @@ oid4vci:
                     },
                 },
                 "civil-registry-relay": {
-                    "image": "ghcr.io/registrystack/registry-relay@sha256:abc",
+                    "image": "${REGISTRY_RELAY_IMAGE:-ghcr.io/registrystack/registry-relay@sha256:abc}",
                     "expose": ["8080"],
                     "healthcheck": {
                         "test": ["CMD", "/usr/local/bin/registry-relay", "healthcheck"]
                     },
                 },
                 "social-protection-registry-relay": {
-                    "image": "ghcr.io/registrystack/registry-relay@sha256:abc",
+                    "image": "${REGISTRY_RELAY_IMAGE:-ghcr.io/registrystack/registry-relay@sha256:abc}",
                     "expose": ["8080"],
                 },
                 "health-registry-relay": {
-                    "image": "ghcr.io/registrystack/registry-relay@sha256:abc",
+                    "image": "${REGISTRY_RELAY_IMAGE:-ghcr.io/registrystack/registry-relay@sha256:abc}",
                     "expose": ["8080"],
                 },
                 "static-metadata-publisher": {
@@ -490,7 +498,7 @@ oid4vci:
                     },
                 },
                 "openfn-dhis2-sidecar": {
-                    "image": "ghcr.io/registrystack/registry-notary-openfn-sidecar@sha256:abc",
+                    "image": "${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE:-ghcr.io/registrystack/registry-notary-openfn-sidecar@sha256:abc}",
                     "environment": {
                         "OPENFN_DHIS2_HOST_URL": "https://play.im.dhis2.org/stable-2-43-0"
                     },
@@ -500,7 +508,7 @@ oid4vci:
                     ],
                 },
                 "dhis2-health-notary": {
-                    "image": "ghcr.io/registrystack/registry-notary@sha256:abc",
+                    "image": "${REGISTRY_NOTARY_IMAGE:-ghcr.io/registrystack/registry-notary@sha256:abc}",
                     "expose": ["8080"],
                     "environment": {
                         "REGISTRY_NOTARY_PUBLIC_API_BASE_URL": f"https://dhis2-notary.{lab}",
@@ -512,7 +520,7 @@ oid4vci:
                     },
                 },
                 "opencrvs-dci-notary": {
-                    "image": "ghcr.io/registrystack/registry-notary@sha256:abc",
+                    "image": "${REGISTRY_NOTARY_IMAGE:-ghcr.io/registrystack/registry-notary@sha256:abc}",
                     "expose": ["8080"],
                     "environment": {
                         "REGISTRY_NOTARY_PUBLIC_API_BASE_URL": f"https://opencrvs-notary.{lab}"
