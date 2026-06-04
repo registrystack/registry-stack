@@ -12,7 +12,7 @@ x-hosted-domains:
   opencrvs-dci-notary: opencrvs-notary.lab.registrystack.org
 
 x-relay-common: &relay-common
-  image: ghcr.io/jeremi/registry-relay@sha256:d3637632aec717b8212ae3a4f2dc0d59d581ad0b9b52bddc4bac1019977b5f3e
+  image: ${REGISTRY_RELAY_IMAGE:-ghcr.io/jeremi/registry-relay@sha256:84258e385a00e4777a45574026b885e4e9602191a77626613fecd15d9ea3b3eb}
   environment: &relay-env
     RUST_LOG: ${RUST_LOG:-info}
     REGISTRY_RELAY_AUDIT_HASH_SECRET: ${REGISTRY_RELAY_AUDIT_HASH_SECRET:-}
@@ -43,7 +43,7 @@ x-relay-common: &relay-common
     start_period: 10s
 
 x-notary-common: &notary-common
-  image: ghcr.io/jeremi/registry-notary@sha256:4705721671235e12ddcbd3cc6b2c8bc71f40764cca17599c2a7dbb25aa544137
+  image: ${REGISTRY_NOTARY_IMAGE:-ghcr.io/jeremi/registry-notary@sha256:4705721671235e12ddcbd3cc6b2c8bc71f40764cca17599c2a7dbb25aa544137}
   environment: &notary-env
     RUST_LOG: ${RUST_LOG:-info}
     REGISTRY_NOTARY_AUDIT_HASH_SECRET: ${REGISTRY_NOTARY_AUDIT_HASH_SECRET:-}
@@ -303,7 +303,7 @@ services:
         condition: service_healthy
 
   openfn-dhis2-sidecar:
-    image: ghcr.io/jeremi/registry-notary-openfn-sidecar@sha256:28b6c8f3673a12b45cfae97ed5d1c82505ed9eaccf7ee699c396eab7c0987d3f
+    image: ${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE:-ghcr.io/jeremi/registry-notary-openfn-sidecar@sha256:28b6c8f3673a12b45cfae97ed5d1c82505ed9eaccf7ee699c396eab7c0987d3f}
     entrypoint: ["/bin/sh", "-eu", "-c"]
     command:
       - |

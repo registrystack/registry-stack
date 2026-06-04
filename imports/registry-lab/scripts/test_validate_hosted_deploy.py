@@ -73,6 +73,21 @@ class HostedDeployValidationTest(unittest.TestCase):
         issues = self._validate(compose, self._valid_esignet())
         self.assertEqual([], issues)
 
+    def test_allows_env_overridable_digest_pinned_product_images(self) -> None:
+        compose = self._valid_registry_lab()
+        compose["services"]["civil-registry-relay"][
+            "image"
+        ] = "${REGISTRY_RELAY_IMAGE:-ghcr.io/jeremi/registry-relay@sha256:abc}"
+        compose["services"]["citizen-civil-notary"][
+            "image"
+        ] = "${REGISTRY_NOTARY_IMAGE:-ghcr.io/jeremi/registry-notary@sha256:abc}"
+        compose["services"]["openfn-dhis2-sidecar"][
+            "image"
+        ] = "${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE:-ghcr.io/jeremi/registry-notary-openfn-sidecar@sha256:abc}"
+
+        issues = self._validate(compose, self._valid_esignet())
+        self.assertEqual([], issues)
+
     def test_rejects_localhost_public_urls(self) -> None:
         compose = self._valid_registry_lab()
         compose["services"]["citizen-civil-notary"]["environment"][
