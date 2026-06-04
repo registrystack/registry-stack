@@ -4,7 +4,16 @@ on:
   pull_request:
   push:
     branches: [main]
+    tags: ["v*"]
+  schedule:
+    - cron: "17 3 * * *"
   workflow_dispatch:
+    inputs:
+      publish_snapshot:
+        description: "Publish a development snapshot from main if it differs from :snapshot"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -30,13 +39,78 @@ jobs:
       contents: read
       packages: write
     steps:
+      - name: Decide image channel
+        id: channel
+        env:
+          PUBLISH_SNAPSHOT_INPUT: ${{ inputs.publish_snapshot || false }}
+        run: |
+          set -euo pipefail
+
+          build=true
+          publish=false
+          channel=validation
+          tags=("$REGISTRY_RELAY_IMAGE:ci-${GITHUB_SHA}")
+
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF_TYPE" == "tag" ]]; then
+            if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Release image tags must be stable semver tags like v0.1.2." >&2
+              exit 1
+            fi
+            version="${GITHUB_REF_NAME#v}"
+            IFS=. read -r major minor patch <<< "$version"
+            channel=release
+            publish=true
+            tags=(
+              "$REGISTRY_RELAY_IMAGE:v${major}.${minor}.${patch}"
+              "$REGISTRY_RELAY_IMAGE:v${major}.${minor}"
+              "$REGISTRY_RELAY_IMAGE:v${major}"
+              "$REGISTRY_RELAY_IMAGE:latest"
+            )
+          elif [[ "$GITHUB_EVENT_NAME" == "schedule" || "$PUBLISH_SNAPSHOT_INPUT" == "true" ]]; then
+            if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+              echo "Snapshot publishing is only allowed from refs/heads/main; got $GITHUB_REF."
+              build=false
+            else
+              existing_revision="$(
+                docker buildx imagetools inspect "$REGISTRY_RELAY_IMAGE:snapshot" \
+                  --format '{{if .Image.Config.Labels}}{{index .Image.Config.Labels "org.opencontainers.image.revision"}}{{end}}' \
+                  2>/dev/null || true
+              )"
+              if [[ "$existing_revision" == "$GITHUB_SHA" ]]; then
+                echo "Snapshot already points at $GITHUB_SHA; skipping rebuild."
+                build=false
+              else
+                short_sha="${GITHUB_SHA::12}"
+                snapshot_date="$(date -u +%Y%m%d)"
+                channel=snapshot
+                publish=true
+                tags=(
+                  "$REGISTRY_RELAY_IMAGE:snapshot"
+                  "$REGISTRY_RELAY_IMAGE:snapshot-${snapshot_date}"
+                  "$REGISTRY_RELAY_IMAGE:snapshot-${short_sha}"
+                )
+              fi
+            fi
+          fi
+
+          {
+            echo "build=$build"
+            echo "publish=$publish"
+            echo "channel=$channel"
+            echo "tags<<EOF"
+            printf '%s\n' "${tags[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Checkout registry-relay
+        if: steps.channel.outputs.build == 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           path: registry-relay
           persist-credentials: false
 
       - name: Checkout registry-platform
+        if: steps.channel.outputs.build == 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
@@ -46,6 +120,7 @@ jobs:
           persist-credentials: false
 
       - name: Checkout registry-manifest
+        if: steps.channel.outputs.build == 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ env.REGISTRY_MANIFEST_REPOSITORY }}
@@ -55,6 +130,7 @@ jobs:
           persist-credentials: false
 
       - name: Checkout cel-mapping
+        if: steps.channel.outputs.build == 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ env.CEL_MAPPING_REPOSITORY }}
@@ -63,19 +139,34 @@ jobs:
           persist-credentials: false
 
       - name: Build registry-relay image
+        if: steps.channel.outputs.build == 'true'
         run: |
+          tag_args=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && tag_args+=(--tag "$tag")
+          done <<'EOF'
+          ${{ steps.channel.outputs.tags }}
+          EOF
+
           docker build \
             --build-context registry-platform=registry-platform \
             --build-context registry-manifest=registry-manifest \
             --build-context cel-mapping=cel-mapping \
             --build-arg "REGISTRY_RELAY_FEATURES=$REGISTRY_RELAY_RELEASE_FEATURES" \
             --file registry-relay/Dockerfile \
-            --tag "$REGISTRY_RELAY_IMAGE:sha-${GITHUB_SHA}" \
-            --tag "$REGISTRY_RELAY_IMAGE:main" \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.version=${GITHUB_REF_NAME}" \
+            "${tag_args[@]}" \
             registry-relay
       - name: Verify registry-relay image can run hosted feature surfaces
+        if: steps.channel.outputs.build == 'true'
         run: |
           set -euo pipefail
+          image_ref="$(cat <<'EOF' | head -n 1
+          ${{ steps.channel.outputs.tags }}
+          EOF
+          )"
           run_config() {
             config="$1"
             shift
@@ -84,7 +175,7 @@ jobs:
               "$@" \
               -v "$PWD/registry-relay/demo/decentralized:/demo:ro" \
               -w /demo/config/relay \
-              "$REGISTRY_RELAY_IMAGE:sha-${GITHUB_SHA}" \
+              "$image_ref" \
               --config "$config")"
             for _ in $(seq 1 30); do
               logs="$(docker logs "$cid" 2>&1 || true)"
@@ -125,36 +216,44 @@ jobs:
             -e SOCIAL_AGGREGATE_READER_HASH=sha256:531fa4aafc18c2b700b43f8103dc1ccf01dd2dc46969778f3f3a104c6f58bbeb \
             -e SHARED_SOCIAL_EVIDENCE_SOURCE_HASH=sha256:f573de5cd190351a911ec6578c1cf44f0f80c093d25230a6183e8cca0e216eb1
       - name: Generate image SBOM and advisory vulnerability report
+        if: steps.channel.outputs.build == 'true'
         run: |
           set -o pipefail
+          image_ref="$(cat <<'EOF' | head -n 1
+          ${{ steps.channel.outputs.tags }}
+          EOF
+          )"
           mkdir -p registry-relay/target/security
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$PWD/registry-relay/target/security:/out" \
-            anchore/syft:v1.18.1@sha256:b8c170b8e51bfc4779ec3ef4399942c57290f5ce76a9c3af564c9d00d4946a6b "$REGISTRY_RELAY_IMAGE:sha-${GITHUB_SHA}" \
+            anchore/syft:v1.18.1@sha256:b8c170b8e51bfc4779ec3ef4399942c57290f5ce76a9c3af564c9d00d4946a6b "$image_ref" \
             -o spdx-json=/out/registry-relay-image.spdx.json
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$PWD/registry-relay/target/security:/out" \
-            anchore/grype:v0.85.0@sha256:8d7a54c4281e334a60c2d1616269411a940efad44c2cc1533ddc76689b9268af "$REGISTRY_RELAY_IMAGE:sha-${GITHUB_SHA}" \
+            anchore/grype:v0.85.0@sha256:8d7a54c4281e334a60c2d1616269411a940efad44c2cc1533ddc76689b9268af "$image_ref" \
             -o json > registry-relay/target/security/registry-relay-image-vulnerabilities.json
           python3 registry-relay/scripts/check_advisory_baselines.py grype \
             registry-relay/target/security/registry-relay-image-vulnerabilities.json \
             --subject registry-relay-image
       - name: Upload image security evidence
-        if: always()
+        if: always() && steps.channel.outputs.build == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: registry-relay-image-security-evidence
           path: registry-relay/target/security/
 
       - name: Login to GHCR
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: steps.channel.outputs.publish == 'true'
         env:
           GHCR_ACTOR: ${{ github.actor }}
           GHCR_TOKEN: ${{ github.token }}
         run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin
 
       - name: Push image
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: steps.channel.outputs.publish == 'true'
         run: |
-          docker push "$REGISTRY_RELAY_IMAGE:sha-${GITHUB_SHA}"
-          docker push "$REGISTRY_RELAY_IMAGE:main"
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && docker push "$tag"
+          done <<'EOF'
+          ${{ steps.channel.outputs.tags }}
+          EOF

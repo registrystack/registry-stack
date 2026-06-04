@@ -355,10 +355,15 @@ When the release story claims SP DCI, standards CEL mapping, or OGC EDR support,
 the release evidence must identify the standards-enabled image tag or digest,
 not only the no-optional-features base image.
 
-The product repository publishes CI images to `ghcr.io/jeremi/registry-relay`,
-tagged as `main` and `sha-<commit>`. First serious release readiness is checked
-through the coordinated pre-tag release plan. Downstream deployments should
-consume the selected release image by immutable digest for rollback guarantees.
+The product repository publishes release images to
+`ghcr.io/jeremi/registry-relay` only from stable `vX.Y.Z` tags. Release tags
+also update `vX.Y`, `vX`, and `latest`; `latest` means latest stable release.
+The container workflow still builds images on pull requests and `main` pushes
+for validation, but does not push those validation images. Nightly or manual
+development snapshots may publish `snapshot`, `snapshot-YYYYMMDD`, and
+`snapshot-<shortsha>` only when the existing snapshot does not already point at
+the current `main` revision. Downstream deployments should consume specific
+version tags, such as `vX.Y.Z`, or immutable digests for rollback guarantees.
 
 The production image:
 
