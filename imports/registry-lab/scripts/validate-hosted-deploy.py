@@ -141,10 +141,15 @@ ALLOWED_INTERIM_PRODUCT_IMAGES = {
     "registry-notary-openfn-sidecar:hosted",
 }
 
-PRODUCT_IMAGE_NAMES = {
+PRODUCT_IMAGE_NAMES = (
+    "registry-notary-openfn-sidecar",
     "registry-relay",
     "registry-notary",
-    "registry-notary-openfn-sidecar",
+)
+PRODUCT_IMAGE_ENV_BY_NAME = {
+    "registry-relay": "REGISTRY_RELAY_IMAGE",
+    "registry-notary": "REGISTRY_NOTARY_IMAGE",
+    "registry-notary-openfn-sidecar": "REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE",
 }
 
 PUBLIC_KEYWORDS = (
@@ -244,7 +249,9 @@ def validate_artifacts(
         )
         issues.extend(validate_service_ports(artifact, services))
         issues.extend(validate_build_inputs(artifact, compose))
-        issues.extend(validate_image_refs(artifact, services))
+        issues.extend(
+            validate_image_refs(artifact, services, artifact_texts.get(artifact, ""))
+        )
         issues.extend(validate_runtime_commands(artifact, services))
         issues.extend(validate_repo_output_binds(artifact, services))
         issues.extend(validate_public_urls(artifact, compose, root))
@@ -365,7 +372,9 @@ def validate_build_inputs(artifact: str, compose: dict[str, Any]) -> list[Issue]
     return issues
 
 
-def validate_image_refs(artifact: str, services: dict[str, Any]) -> list[Issue]:
+def validate_image_refs(
+    artifact: str, services: dict[str, Any], artifact_text: str = ""
+) -> list[Issue]:
     issues = []
     for service, config in services.items():
         if not isinstance(config, dict):
@@ -391,6 +400,21 @@ def validate_image_refs(artifact: str, services: dict[str, Any]) -> list[Issue]:
                     "canonical product images must be digest-pinned; use only local :hosted tags as interim",
                 )
             )
+        if artifact == "registry-lab":
+            product_name = product_image_name(image)
+            if product_name is not None and not artifact_uses_product_env_fallback(
+                artifact_text, image, PRODUCT_IMAGE_ENV_BY_NAME[product_name]
+            ):
+                issues.append(
+                    Issue(
+                        "product-image-env-var",
+                        artifact,
+                        f"services.{service}.image",
+                        "hosted product image must use "
+                        f"{PRODUCT_IMAGE_ENV_BY_NAME[product_name]} "
+                        "with a digest-pinned fallback",
+                    )
+                )
     return issues
 
 
@@ -720,6 +744,37 @@ def image_uses_floating_product_tag(image: str) -> bool:
     image_ref = image.split("@", 1)[0]
     name = image_ref.rsplit("/", 1)[-1].split(":", 1)[0]
     return name in PRODUCT_IMAGE_NAMES
+
+
+def product_image_name(image: str) -> str | None:
+    if image in ALLOWED_INTERIM_PRODUCT_IMAGES:
+        return None
+    for name in PRODUCT_IMAGE_NAMES:
+        if name in image:
+            return name
+    return None
+
+
+def image_uses_product_env_fallback(image: str, env_var: str) -> bool:
+    prefix = "${" + env_var + ":-"
+    return image.startswith(prefix) and image.endswith("}") and "@sha256:" in image
+
+
+def artifact_uses_product_env_fallback(artifact_text: str, image: str, env_var: str) -> bool:
+    if image_uses_product_env_fallback(image, env_var):
+        return True
+    if not artifact_text:
+        return False
+    return image_uses_product_env_fallback_marker(artifact_text, env_var)
+
+
+def image_uses_product_env_fallback_marker(text: str, env_var: str) -> bool:
+    marker = "${" + env_var + ":-"
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("image:") and marker in stripped and "@sha256:" in stripped:
+            return True
+    return False
 
 
 def is_registry_relay_service(service: str, image: str) -> bool:
