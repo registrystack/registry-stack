@@ -37,11 +37,13 @@ Recommended controls:
 - Set `evidence.api_base_url`, `credential_status.base_url`, and OID4VCI public
   URLs to the externally reachable HTTPS issuer origin.
 - Keep `/metrics` and admin actions behind normal network controls and require
-  `registry_notary:admin`. The application provides no separate admin listener:
-  `/metrics` and `/admin/v1/*` are served on the same listener as all other
-  traffic, so isolating them from the public data plane is entirely the
+  `registry_notary:admin`. Keep `/admin/v1/posture` behind the same proxy,
+  service-mesh, or network ACL boundary and require the dedicated read-only
+  `registry_notary:ops_read` scope. The application provides no separate admin
+  listener: `/metrics` and `/admin/v1/*` are served on the same listener as all
+  other traffic, so isolating them from the public data plane is entirely the
   operator's responsibility (ingress rules, reverse-proxy routing, or firewall).
-  The only built-in gate is the `registry_notary:admin` scope check.
+  The built-in gates are application scopes, not network segmentation.
 - Use proxy limits for body size, header size, connection count, idle timeout,
   and request rate.
 - Do not expose demo source services, sidecar worker endpoints, local Redis, or

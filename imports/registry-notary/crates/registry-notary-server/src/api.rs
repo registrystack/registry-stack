@@ -59,6 +59,7 @@ use crate::{
     format_time,
     metrics::AppMetrics,
     openapi_document,
+    posture::{posture_document, PostureContext},
     preauth_state::LoginState,
     replay::{require_replay_insert, ReplayReadiness, ReplayStores},
     runtime::claim_ids,
@@ -74,6 +75,7 @@ use crate::{
 const DATA_PURPOSE_HEADER: &str = "data-purpose";
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 pub(crate) const ADMIN_SCOPE: &str = "registry_notary:admin";
+pub(crate) const OPS_READ_SCOPE: &str = "registry_notary:ops_read";
 const OID4VCI_CREDENTIAL_PATH: &str = "/oid4vci/credential";
 // SD-JWT VC Type Metadata well-known prefix inserted between host and vct path.
 const WELL_KNOWN_VCT_PREFIX: &str = "/.well-known/vct";
@@ -87,6 +89,7 @@ where
     Router::new()
         .route("/healthz", get(healthz))
         .route("/ready", get(ready))
+        .route("/admin/v1/posture", get(admin_posture))
         .route("/admin/v1/reload", post(admin_reload))
         .route("/openapi.json", get(openapi_json))
         .route("/.well-known/evidence-service", get(service_document))
@@ -278,6 +281,31 @@ async fn admin_reload(principal: Option<Extension<EvidencePrincipal>>) -> Respon
     .into_response()
 }
 
+async fn admin_posture(
+    state: Option<Extension<Arc<RegistryNotaryApiState>>>,
+    principal: Option<Extension<EvidencePrincipal>>,
+) -> Response {
+    let Some(Extension(principal)) = principal else {
+        return evidence_error_response(EvidenceError::MissingCredential);
+    };
+    if !principal.has_scope(OPS_READ_SCOPE) {
+        return evidence_error_response(EvidenceError::ScopeDenied {
+            required: OPS_READ_SCOPE.to_string(),
+        });
+    }
+    let Some(Extension(state)) = state else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "code": "posture.unavailable",
+                "detail": "posture state is unavailable",
+            })),
+        )
+            .into_response();
+    };
+    Json(posture_document(&state).await).into_response()
+}
+
 async fn get_credential_status(
     Path(credential_id): Path<String>,
     state: Option<Extension<Arc<RegistryNotaryApiState>>>,
@@ -428,8 +456,8 @@ pub trait EvidenceIssuerResolver: Send + Sync {
 #[derive(Clone)]
 pub struct RegistryNotaryApiState {
     pub(crate) evidence: Arc<EvidenceConfig>,
-    self_attestation: Arc<SelfAttestationConfig>,
-    oid4vci: Arc<Oid4vciConfig>,
+    pub(crate) self_attestation: Arc<SelfAttestationConfig>,
+    pub(crate) oid4vci: Arc<Oid4vciConfig>,
     pub(crate) federation: Arc<FederationConfig>,
     pub(crate) federation_runtime: Option<Arc<crate::federation::FederationRuntimeState>>,
     self_attestation_rate_limiter: Arc<SelfAttestationRateLimiter>,
@@ -441,6 +469,7 @@ pub struct RegistryNotaryApiState {
     pub(crate) store: Arc<EvidenceStore>,
     issuers: Arc<dyn EvidenceIssuerResolver>,
     pub(crate) signer_readiness: SignerReadiness,
+    pub(crate) posture: Option<Arc<PostureContext>>,
     /// Pre-authorized-code flow runtime. `None` unless the flow is enabled and
     /// the dedicated access-token signing key plus eSignet RP settings loaded.
     pub(crate) preauth: Option<Arc<PreAuthRuntime>>,
@@ -643,6 +672,7 @@ impl RegistryNotaryApiState {
             store,
             issuers,
             signer_readiness,
+            posture: None,
             preauth: None,
             #[cfg(feature = "registry-notary-cel")]
             cel_worker: None,
@@ -659,6 +689,11 @@ impl RegistryNotaryApiState {
 
     pub(crate) fn with_signer_readiness(mut self, signer_readiness: SignerReadiness) -> Self {
         self.signer_readiness = signer_readiness;
+        self
+    }
+
+    pub(crate) fn with_posture_context(mut self, posture: PostureContext) -> Self {
+        self.posture = Some(Arc::new(posture));
         self
     }
 

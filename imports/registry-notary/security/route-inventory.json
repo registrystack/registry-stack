@@ -28,6 +28,14 @@
     },
     {
       "listener": "public",
+      "path": "/admin/v1/posture",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
       "path": "/openapi.json",
       "methods": [
         "GET"

@@ -28,6 +28,8 @@ pub const CLIENT_ASSERTION_SIGNING_ALG_RS256: &str = "RS256";
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct StandaloneRegistryNotaryConfig {
+    #[serde(default, skip_serializing_if = "instance_config_is_default")]
+    pub instance: NotaryInstanceConfig,
     #[serde(default)]
     pub server: RegistryNotaryHttpConfig,
     pub evidence: EvidenceConfig,
@@ -46,6 +48,45 @@ pub struct StandaloneRegistryNotaryConfig {
     pub oid4vci: Oid4vciConfig,
     #[serde(default, skip_serializing_if = "federation_config_is_default")]
     pub federation: FederationConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotaryInstanceConfig {
+    #[serde(default = "default_instance_id")]
+    pub id: String,
+    #[serde(default = "default_instance_environment")]
+    pub environment: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jurisdiction: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_base_url: Option<String>,
+}
+
+impl Default for NotaryInstanceConfig {
+    fn default() -> Self {
+        Self {
+            id: default_instance_id(),
+            environment: default_instance_environment(),
+            owner: None,
+            jurisdiction: None,
+            public_base_url: None,
+        }
+    }
+}
+
+fn instance_config_is_default(config: &NotaryInstanceConfig) -> bool {
+    config == &NotaryInstanceConfig::default()
+}
+
+fn default_instance_id() -> String {
+    "registry-notary-standalone".to_string()
+}
+
+fn default_instance_environment() -> String {
+    "development".to_string()
 }
 
 impl StandaloneRegistryNotaryConfig {

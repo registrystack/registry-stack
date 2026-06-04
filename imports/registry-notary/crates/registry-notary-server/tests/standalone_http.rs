@@ -17,9 +17,9 @@ use base64::Engine;
 #[cfg(feature = "registry-notary-cel")]
 use registry_notary_core::FEDERATION_RESPONSE_JWT_TYP;
 use registry_notary_core::{
-    EvidenceCredentialConfig, EvidenceOidcAuthConfig, Oid4vciConfig, SelfAttestationClaimSource,
-    SigningKeyConfig, SigningKeyProviderConfig, SigningKeyStatus, StandaloneRegistryNotaryConfig,
-    SD_JWT_VC_SIGNING_ALG,
+    BulkMode, EvidenceCredentialConfig, EvidenceOidcAuthConfig, Oid4vciConfig,
+    SelfAttestationClaimSource, SigningKeyConfig, SigningKeyProviderConfig, SigningKeyStatus,
+    StandaloneRegistryNotaryConfig, SD_JWT_VC_SIGNING_ALG,
 };
 #[cfg(feature = "registry-notary-cel")]
 use registry_notary_server::cel_worker::{CelWorker, CelWorkerConfig};
@@ -193,6 +193,33 @@ fn add_admin_api_key(config: &mut StandaloneRegistryNotaryConfig) {
         hash_env: "TEST_EVIDENCE_ADMIN_KEY_HASH".to_string(),
         scopes: vec!["registry_notary:admin".to_string()],
     });
+}
+
+fn add_ops_read_api_key(config: &mut StandaloneRegistryNotaryConfig) {
+    std::env::set_var(
+        "TEST_EVIDENCE_OPS_KEY_HASH",
+        "sha256:d9310c002af91822beb0b3487d8b04f85bf6bf1f8a5496bff7d35fc7c5a29def",
+    );
+    config.auth.api_keys.push(EvidenceCredentialConfig {
+        id: "ops".to_string(),
+        hash_env: "TEST_EVIDENCE_OPS_KEY_HASH".to_string(),
+        scopes: vec!["registry_notary:ops_read".to_string()],
+    });
+}
+
+fn assert_matches_posture_schema(body: &Value) {
+    let schema: Value = serde_json::from_str(registry_platform_ops::POSTURE_SCHEMA_V1)
+        .expect("posture schema parses");
+    let compiled = jsonschema::JSONSchema::compile(&schema).expect("posture schema compiles");
+    let errors = compiled
+        .validate(body)
+        .err()
+        .map(|errors| errors.map(|error| error.to_string()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    assert!(
+        errors.is_empty(),
+        "posture response did not match registry.ops.posture.v1: {errors:?}\n{body:#}"
+    );
 }
 
 fn sample_manifest_path(path: &str) -> String {
@@ -1687,6 +1714,357 @@ async fn admin_reload_401_unauth_403_wrong_scope_200_admin() {
     let admin_body: Value = admin.json();
     assert_eq!(admin_body["reloaded"], json!(false));
     assert_eq!(admin_body["status"], json!("noop"));
+}
+
+#[tokio::test]
+async fn admin_posture_requires_ops_read_not_admin_and_ops_cannot_reload() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    add_admin_api_key(&mut config);
+    add_ops_read_api_key(&mut config);
+
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    server
+        .get("/admin/v1/posture")
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    server
+        .get("/admin/v1/posture")
+        .add_header("x-api-key", "admin-token")
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    server
+        .post("/admin/v1/reload")
+        .add_header("x-api-key", "ops-token")
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    server
+        .post("/admin/v1/credentials/urn:ulid:01HX0000000000000000000000/status")
+        .add_header("x-api-key", "ops-token")
+        .json(&json!({ "status": "revoked" }))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    let posture = server
+        .get("/admin/v1/posture")
+        .add_header("x-api-key", "ops-token")
+        .await;
+    posture.assert_status_ok();
+    let body: Value = posture.json();
+    assert_matches_posture_schema(&body);
+    assert_eq!(body["schema"], json!("registry.ops.posture.v1"));
+    assert_eq!(body["component"], json!("registry-notary"));
+    assert_eq!(body["instance"]["id"], json!("registry-notary-standalone"));
+    assert_eq!(body["instance"]["environment"], json!("development"));
+    assert_eq!(body["build"]["package"], json!("registry-notary"));
+    assert_eq!(body["build"]["version"], json!(env!("CARGO_PKG_VERSION")));
+    assert!(body["build"].get("git_sha").is_none());
+    assert!(body["build"].get("features").is_none());
+}
+
+#[tokio::test]
+async fn admin_posture_reports_configured_instance_override() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    config.instance.id = "notary-prod-a".to_string();
+    config.instance.environment = "production".to_string();
+    config.instance.owner = Some("trust-ops".to_string());
+    config.instance.jurisdiction = Some("TH".to_string());
+    config.instance.public_base_url = Some("https://notary.example.test".to_string());
+    add_ops_read_api_key(&mut config);
+
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let posture = server
+        .get("/admin/v1/posture")
+        .add_header("x-api-key", "ops-token")
+        .await;
+    posture.assert_status_ok();
+    let body: Value = posture.json();
+    assert_matches_posture_schema(&body);
+    assert_eq!(body["instance"]["id"], json!("notary-prod-a"));
+    assert_eq!(body["instance"]["environment"], json!("production"));
+    assert_eq!(body["instance"]["owner"], json!("trust-ops"));
+    assert_eq!(body["instance"]["jurisdiction"], json!("TH"));
+    assert_eq!(
+        body["instance"]["public_base_url"],
+        json!("https://notary.example.test")
+    );
+}
+
+#[tokio::test]
+async fn admin_posture_redacts_runtime_config_secrets_and_private_topology() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "very-secret-source-token");
+    std::env::set_var("TEST_UNUSED_SOURCE_TOKEN", "unused-secret-source-token");
+    std::env::set_var("TEST_POSTURE_PRIVATE_JWK", TEST_ISSUER_JWK);
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1/private-source?token=source-url-secret",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    let mut unused_connection = config.evidence.source_connections["farmer_registry"].clone();
+    unused_connection.base_url =
+        "http://10.24.0.9/internal/openfn?token=unused-url-secret".to_string();
+    unused_connection.token_env = "TEST_UNUSED_SOURCE_TOKEN".to_string();
+    unused_connection.bulk_mode = BulkMode::OpenFnSidecarBatch;
+    config
+        .evidence
+        .source_connections
+        .insert("private_unused_openfn".to_string(), unused_connection);
+    config.evidence.signing_keys.insert(
+        "issuer".to_string(),
+        SigningKeyConfig {
+            provider: SigningKeyProviderConfig::LocalJwkEnv,
+            alg: SD_JWT_VC_SIGNING_ALG.to_string(),
+            kid: "did:web:evidence.example.test#issuer".to_string(),
+            status: SigningKeyStatus::Active,
+            private_jwk_env: "TEST_POSTURE_PRIVATE_JWK".to_string(),
+            public_jwk_env: String::new(),
+            module_path: String::new(),
+            token_label: String::new(),
+            pin_env: String::new(),
+            key_label: String::new(),
+            key_id_hex: String::new(),
+            path: String::new(),
+            password_env: String::new(),
+        },
+    );
+    let claim = config
+        .evidence
+        .claims
+        .iter_mut()
+        .find(|claim| claim.id == "farmed-land-size")
+        .expect("farmed-land-size claim exists");
+    claim
+        .source_bindings
+        .get_mut("farmer")
+        .expect("farmer source binding exists")
+        .matching
+        .policy_id = Some("civil-id-policy-1234567890123".to_string());
+    add_ops_read_api_key(&mut config);
+
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let posture = server
+        .get("/admin/v1/posture")
+        .add_header("x-api-key", "ops-token")
+        .await;
+    posture.assert_status_ok();
+    let text = posture.text();
+
+    assert!(!text.contains("very-secret-source-token"));
+    assert!(!text.contains("unused-secret-source-token"));
+    assert!(!text.contains("source-url-secret"));
+    assert!(!text.contains("unused-url-secret"));
+    assert!(!text.contains("http://127.0.0.1:1/private-source"));
+    assert!(!text.contains("http://10.24.0.9/internal/openfn"));
+    assert!(!text.contains("TEST_EVIDENCE_SOURCE_TOKEN"));
+    assert!(!text.contains("TEST_UNUSED_SOURCE_TOKEN"));
+    assert!(!text.contains("TEST_EVIDENCE_API_KEY_HASH"));
+    assert!(!text.contains("TEST_POSTURE_PRIVATE_JWK"));
+    assert!(
+        !text.contains("sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51")
+    );
+    assert!(!text.contains("2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw"));
+    assert!(!text.contains("private_jwk"));
+    assert!(!text.contains("\"d\""));
+    assert!(!text.contains("token_env"));
+    assert!(!text.contains("civil-id-policy-1234567890123"));
+    assert!(!text.contains("disclosure"));
+    assert!(!text.contains("predicate"));
+    assert!(!text.contains("redacted"));
+}
+
+#[tokio::test]
+async fn admin_posture_counts_configured_but_unused_source_connections_by_safe_kind() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_UNUSED_DCI_SOURCE_TOKEN", "unused-dci-source-token");
+    std::env::set_var(
+        "TEST_UNUSED_GENERIC_SOURCE_TOKEN",
+        "unused-generic-source-token",
+    );
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    let mut unused_dci = config.evidence.source_connections["farmer_registry"].clone();
+    unused_dci.base_url = "http://127.0.0.1:2/private-dci".to_string();
+    unused_dci.token_env = "TEST_UNUSED_DCI_SOURCE_TOKEN".to_string();
+    unused_dci.bulk_mode = BulkMode::DciBatchedSearch;
+    config
+        .evidence
+        .source_connections
+        .insert("unused_dci".to_string(), unused_dci);
+    let mut unused_generic = config.evidence.source_connections["farmer_registry"].clone();
+    unused_generic.base_url = "http://127.0.0.1:3/private-generic".to_string();
+    unused_generic.token_env = "TEST_UNUSED_GENERIC_SOURCE_TOKEN".to_string();
+    config
+        .evidence
+        .source_connections
+        .insert("unused_generic".to_string(), unused_generic);
+    add_ops_read_api_key(&mut config);
+
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let posture = server
+        .get("/admin/v1/posture")
+        .add_header("x-api-key", "ops-token")
+        .await;
+    posture.assert_status_ok();
+    let body: Value = posture.json();
+    assert_matches_posture_schema(&body);
+    assert_eq!(
+        body["notary"]["source_connection_counts"]["registry_data_api"],
+        json!(1)
+    );
+    assert_eq!(body["notary"]["source_connection_counts"]["dci"], json!(1));
+    assert_eq!(
+        body["notary"]["source_connection_counts"]["unknown"],
+        json!(1)
+    );
+}
+
+#[tokio::test]
+async fn admin_posture_classifies_replay_storage() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_REPLAY_REDIS_URL", "redis://127.0.0.1:6379/0");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    config.replay.storage = "redis".to_string();
+    config.replay.redis.url_env = "TEST_REPLAY_REDIS_URL".to_string();
+    add_ops_read_api_key(&mut config);
+
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let posture = server
+        .get("/admin/v1/posture")
+        .add_header("x-api-key", "ops-token")
+        .await;
+    posture.assert_status_ok();
+    let body: Value = posture.json();
+    assert_matches_posture_schema(&body);
+    assert_eq!(body["notary"]["replay"]["storage"], json!("redis"));
+}
+
+#[tokio::test]
+async fn admin_posture_warns_for_production_like_in_memory_replay() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    config.instance.environment = "production".to_string();
+    add_ops_read_api_key(&mut config);
+
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let posture = server
+        .get("/admin/v1/posture")
+        .add_header("x-api-key", "ops-token")
+        .await;
+    posture.assert_status_ok();
+    let body: Value = posture.json();
+    assert_matches_posture_schema(&body);
+    assert_eq!(
+        body["posture"]["warnings"][0],
+        json!("notary.replay.in_memory.production")
+    );
+    assert_eq!(
+        body["posture"]["findings"][0]["id"],
+        json!("notary.replay.in_memory.production")
+    );
+}
+
+#[tokio::test]
+async fn admin_posture_federation_summary_omits_peer_private_data() {
+    set_federation_env();
+    let peer_jwks = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = federation_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &format!("{}/jwks/private", peer_jwks.url()),
+    );
+    add_ops_read_api_key(&mut config);
+
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let posture = server
+        .get("/admin/v1/posture")
+        .add_header("x-api-key", "ops-token")
+        .await;
+    posture.assert_status_ok();
+    let body: Value = posture.json();
+    assert_matches_posture_schema(&body);
+    assert_eq!(body["notary"]["federation"]["enabled"], json!(true));
+    assert_eq!(
+        body["notary"]["federation"]["node_id"],
+        json!("did:web:agency-a.example.gov")
+    );
+    assert_eq!(body["notary"]["federation"]["peer_count"], json!(1));
+    assert!(body["notary"]["federation"].get("peers").is_none());
+
+    let text = serde_json::to_string(&body).expect("posture serializes");
+    assert!(!text.contains("agency-b.example.gov"));
+    assert!(!text.contains("/jwks/private"));
 }
 
 #[tokio::test]

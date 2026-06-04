@@ -12,6 +12,7 @@ pub(crate) mod credential_status;
 pub(crate) mod federation;
 pub(crate) mod metrics;
 pub mod openapi;
+pub(crate) mod posture;
 pub(crate) mod preauth_state;
 pub(crate) mod replay;
 pub mod runtime;

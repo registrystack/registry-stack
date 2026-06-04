@@ -51,8 +51,10 @@ zeroize.workspace = true
 [dev-dependencies]
 axum-test = { version = "20" }
 registry-platform-testing = { workspace = true, features = ["test-utils"] }
+registry-platform-ops.workspace = true
 registry-notary-openfn-sidecar = { version = "0.3.0", path = "../registry-notary-openfn-sidecar" }
 serde_norway.workspace = true
+jsonschema.workspace = true
 tempfile = { version = "3" }
 # Criterion drives the microbenchmarks under `benches/`. The benches are
 # manually invoked via `cargo bench`; CI smoke-checks `cargo bench --no-run`.

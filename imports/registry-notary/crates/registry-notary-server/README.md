@@ -134,6 +134,19 @@ scrape_configs:
       - targets: ["registry-notary:4325"]
 ```
 
+## Operations Posture
+
+`GET /admin/v1/posture` returns the redacted `registry.ops.posture.v1`
+operations document for fleet polling. It requires an authenticated principal
+with exactly the read-only `registry_notary:ops_read` scope; the write-capable
+`registry_notary:admin` scope does not authorize posture unless the same
+credential also carries `registry_notary:ops_read`.
+
+Registry Notary serves admin and public routes on a single listener. Production
+deployments must place `/admin/v1/posture` behind a reverse-proxy ACL, service
+mesh policy, firewall, or equivalent operator-network control in addition to
+the application scope check.
+
 ## Audit Configuration
 
 `standalone_router` builds the audit pipeline from

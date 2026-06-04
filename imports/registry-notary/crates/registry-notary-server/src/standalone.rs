@@ -65,6 +65,7 @@ use crate::{
     api::ADMIN_SCOPE,
     credential_status::{CredentialStatusBuildError, CredentialStatusStore},
     metrics::{metrics_handler, metrics_middleware, AppMetrics},
+    posture::PostureContext,
     replay::{ReplayBuildError, ReplayStores},
     router, EvidenceAuditContext, EvidenceErrorCodeContext, EvidenceIssuerResolver, EvidenceStore,
     RegistryNotaryApiState, SelfAttestationRateLimitKeys, SelfAttestationRateLimiter, SourceReader,
@@ -151,6 +152,7 @@ pub fn standalone_router(
     cors_policy.validate()?;
     let wallet_cors_policy = SelfAttestationWalletCorsPolicy::from_config(&config);
     let auth_state = Arc::new(AuthAuditState::from_config(&config, Arc::clone(&metrics))?);
+    let posture_context = PostureContext::from_config(&config, &auth_state.audit);
     #[cfg(feature = "registry-notary-cel")]
     let cel_worker = build_cel_worker(&config, Arc::clone(&metrics))?;
     let preauth_runtime =
@@ -172,7 +174,8 @@ pub fn standalone_router(
         federation_signing_provider,
     )?
     .with_preauth_runtime(preauth_runtime)
-    .with_signer_readiness(signer_readiness);
+    .with_signer_readiness(signer_readiness)
+    .with_posture_context(posture_context);
     #[cfg(feature = "registry-notary-cel")]
     let api_state = api_state
         .with_cel_worker(cel_worker)
