@@ -528,30 +528,26 @@ async fn posture_response_has_schema_metadata_and_redacted_public_summaries() {
     assert!(body["build"]["version"]
         .as_str()
         .is_some_and(|version| !version.is_empty()));
-    assert!(body["build"]["git_sha"].is_null());
+    assert!(body["build"].get("git_sha").is_none());
+    assert!(body["build"].get("features").is_none());
     assert_eq!(body["runtime"]["auth_mode"], "api_key");
     assert_eq!(body["configuration"]["source"], "local_file");
     assert_eq!(body["configuration"]["dynamic_reload_supported"], false);
     assert!(body["configuration"]["last_config_hash"]
         .as_str()
         .is_some_and(|hash| hash.starts_with("sha256:")));
-    assert_eq!(
-        body["standards_artifacts"]["metadata_index"]["url"],
-        "https://data.example.test/metadata"
-    );
+    assert!(body["standards_artifacts"]["metadata_index"]
+        .get("url")
+        .is_none());
     assert_eq!(
         body["standards_artifacts"]["bregdcat_ap"]["observed_status"],
         "configured_not_checked"
     );
     assert_eq!(body["relay"]["metadata_manifest"]["configured"], true);
-    assert_eq!(
-        body["relay"]["provenance"]["issuer"],
-        "did:web:data.example.test"
-    );
-    assert_eq!(
-        body["relay"]["provenance"]["active_kid"],
-        "did:web:data.example.test#relay-public-key"
-    );
+    assert!(body["relay"]["provenance"]["enabled"].is_boolean());
+    assert!(body["relay"]["provenance"].get("issuer").is_none());
+    assert!(body["relay"]["provenance"].get("active_kid").is_none());
+    assert!(body["relay"]["provenance"].get("retired_kids").is_none());
     assert!(body["relay"]["provenance"].get("jwk_env").is_none());
     assert!(body["relay"]["provenance"].get("private_jwk").is_none());
 }

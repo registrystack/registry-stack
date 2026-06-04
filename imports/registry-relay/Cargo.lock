@@ -4878,6 +4878,9 @@ dependencies = [
 [[package]]
 name = "registry-platform-ops"
 version = "0.1.2"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "registry-platform-replay"

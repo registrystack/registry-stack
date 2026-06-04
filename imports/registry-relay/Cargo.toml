@@ -114,6 +114,7 @@ ulid = { version = "1" }
 # ─── observability ───────────────────────────────────────────────────────────
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"] }
+registry-platform-ops = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-ops" }
 
 # ─── errors ──────────────────────────────────────────────────────────────────
 thiserror = { version = "2" }
@@ -130,7 +131,6 @@ wkt = { version = "0.12", optional = true, features = ["geo-types"] }
 axum-test = { version = "20" }
 assert-json-diff = { version = "2" }
 registry-platform-testing = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-testing", features = ["test-utils"] }
-registry-platform-ops = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-ops" }
 proptest = { version = "1" }
 tempfile = { version = "3" }
 insta = { version = "1", features = ["json"] }

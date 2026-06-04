@@ -13,6 +13,7 @@ use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Router};
 use registry_manifest_core::CompiledMetadata;
+use registry_platform_ops::{filter_posture_for_tier, PostureFilterError, PostureTier};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -30,6 +31,7 @@ use crate::ingest::{IngestRegistry, ReadinessSnapshot};
 const PROBLEM_JSON: HeaderValue = HeaderValue::from_static("application/problem+json");
 const RELOAD_FAILED_CODE: &str = "admin.reload_failed";
 const RELOAD_UNAVAILABLE_CODE: &str = "admin.reload_unavailable";
+const POSTURE_FILTER_FAILED_CODE: &str = "admin.posture_filter_failed";
 const OPS_READ_SCOPE: &str = "registry_relay:ops_read";
 
 /// Sub-router for admin reload routes.
@@ -140,19 +142,22 @@ async fn posture(
         return Error::from(AdminError::UnknownResource).into_response();
     };
     let snapshot = readiness.map(|Extension(rx)| rx.borrow().clone());
-    Json(build_posture(
+    let posture = match build_posture(
         &config,
         snapshot.as_ref(),
         metadata.as_ref().map(|Extension(m)| m.as_ref()),
-    ))
-    .into_response()
+    ) {
+        Ok(posture) => posture,
+        Err(error) => return posture_filter_failed(error),
+    };
+    Json(posture).into_response()
 }
 
 fn build_posture(
     config: &Config,
     readiness: Option<&ReadinessSnapshot>,
     metadata: Option<&CompiledMetadata>,
-) -> Value {
+) -> Result<Value, PostureFilterError> {
     let warnings = posture_warnings(config, readiness);
     let mut instance = Map::new();
     instance.insert("id".to_string(), json!(config.instance.id));
@@ -171,7 +176,7 @@ fn build_posture(
         "public_base_url".to_string(),
         json!(config.catalog.base_url),
     );
-    json!({
+    let posture = json!({
         "schema": "registry.ops.posture.v1",
         "observed_at": OffsetDateTime::now_utc()
             .format(&Rfc3339)
@@ -221,7 +226,8 @@ fn build_posture(
             "findings": [],
             "audit": audit_summary(config),
         },
-    })
+    });
+    filter_posture_for_tier(posture, PostureTier::Default)
 }
 
 fn posture_warnings(config: &Config, readiness: Option<&ReadinessSnapshot>) -> Vec<String> {
@@ -424,5 +430,28 @@ fn reload_unavailable(detail: &'static str) -> Response {
     response
         .extensions_mut()
         .insert(ErrorCodeExt(RELOAD_UNAVAILABLE_CODE.to_string()));
+    response
+}
+
+fn posture_filter_failed(error: PostureFilterError) -> Response {
+    tracing::error!(error = %error, "failed to filter admin posture");
+    let status = StatusCode::INTERNAL_SERVER_ERROR;
+    let mut response = (
+        status,
+        Json(json!({
+            "type": format!("{}admin/posture_filter_failed", crate::error::PROBLEM_TYPE_BASE),
+            "title": "Admin posture unavailable",
+            "status": status.as_u16(),
+            "detail": "admin posture could not be filtered for the requested tier",
+            "code": POSTURE_FILTER_FAILED_CODE,
+        })),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, PROBLEM_JSON);
+    response
+        .extensions_mut()
+        .insert(ErrorCodeExt(POSTURE_FILTER_FAILED_CODE.to_string()));
     response
 }
