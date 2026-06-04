@@ -12,7 +12,7 @@ x-hosted-domains:
   opencrvs-dci-notary: opencrvs-notary.lab.registrystack.org
 
 x-relay-common: &relay-common
-  image: ${REGISTRY_RELAY_IMAGE:-registry-relay:hosted}
+  image: ghcr.io/jeremi/registry-relay@sha256:d3637632aec717b8212ae3a4f2dc0d59d581ad0b9b52bddc4bac1019977b5f3e
   environment: &relay-env
     RUST_LOG: ${RUST_LOG:-info}
     REGISTRY_RELAY_AUDIT_HASH_SECRET: ${REGISTRY_RELAY_AUDIT_HASH_SECRET:-}
@@ -43,7 +43,7 @@ x-relay-common: &relay-common
     start_period: 10s
 
 x-notary-common: &notary-common
-  image: ${REGISTRY_NOTARY_IMAGE:-ghcr.io/jeremi/registry-notary@sha256:5357c6b817845f34428e56d31ebd54dd14ebc9cb1f93deb1c60662897f10f49c}
+  image: ghcr.io/jeremi/registry-notary@sha256:4705721671235e12ddcbd3cc6b2c8bc71f40764cca17599c2a7dbb25aa544137
   environment: &notary-env
     RUST_LOG: ${RUST_LOG:-info}
     REGISTRY_NOTARY_AUDIT_HASH_SECRET: ${REGISTRY_NOTARY_AUDIT_HASH_SECRET:-}
@@ -75,7 +75,7 @@ services:
     restart: "no"
     environment:
       CONFIG_REPO_URL: ${CONFIG_REPO_URL:-https://github.com/jeremi/registry-lab}
-      CONFIG_REPO_REF: ${CONFIG_REPO_REF:-main}
+      CONFIG_REPO_REF: registry-stack-technical-preview-2026-06-04
     entrypoint: ["/bin/sh", "-euc"]
     command:
       - |
@@ -303,7 +303,7 @@ services:
         condition: service_healthy
 
   openfn-dhis2-sidecar:
-    image: ${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE:-registry-notary-openfn-sidecar:hosted}
+    image: ghcr.io/jeremi/registry-notary-openfn-sidecar@sha256:28b6c8f3673a12b45cfae97ed5d1c82505ed9eaccf7ee699c396eab7c0987d3f
     entrypoint: ["/bin/sh", "-eu", "-c"]
     command:
       - |

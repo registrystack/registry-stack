@@ -13,7 +13,7 @@ services:
     restart: "no"
     environment:
       CONFIG_REPO_URL: ${CONFIG_REPO_URL:-https://github.com/jeremi/registry-lab}
-      CONFIG_REPO_REF: ${CONFIG_REPO_REF:-main}
+      CONFIG_REPO_REF: registry-stack-technical-preview-2026-06-04
     entrypoint: ["/bin/sh", "-euc"]
     command:
       - |

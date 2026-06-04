@@ -82,20 +82,28 @@ HEALTH_ROW_READER_HASH
 SHARED_HEALTH_EVIDENCE_SOURCE_HASH
 ```
 
-Set image references explicitly in Coolify:
+For `registry-stack-technical-preview-2026-06-04`, the hosted compose files pin
+the product images directly by digest:
 
 ```text
-REGISTRY_RELAY_IMAGE
-REGISTRY_NOTARY_IMAGE
-REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE
+ghcr.io/jeremi/registry-relay@sha256:d3637632aec717b8212ae3a4f2dc0d59d581ad0b9b52bddc4bac1019977b5f3e
+ghcr.io/jeremi/registry-notary@sha256:4705721671235e12ddcbd3cc6b2c8bc71f40764cca17599c2a7dbb25aa544137
+ghcr.io/jeremi/registry-notary-openfn-sidecar@sha256:28b6c8f3673a12b45cfae97ed5d1c82505ed9eaccf7ee699c396eab7c0987d3f
 ```
 
-The preferred source for these values is product-owned images published by the
+The hosted config loaders also pin `CONFIG_REPO_REF` to
+`registry-stack-technical-preview-2026-06-04`. Do not set Coolify overrides for
+`REGISTRY_RELAY_IMAGE`, `REGISTRY_NOTARY_IMAGE`,
+`REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE`, or `CONFIG_REPO_REF` for this release
+unless you are deliberately rolling forward or rolling back and recording the
+override.
+
+For future release trains, use product-owned images published by the
 corresponding product repositories:
 
 ```text
 REGISTRY_RELAY_IMAGE=<product-owned-registry-relay-image>
-REGISTRY_NOTARY_IMAGE=<product-owned-registry-notary-image-with-registry-notary-cel>
+REGISTRY_NOTARY_IMAGE=<product-owned-registry-notary-image-with-registry-notary-cel-and-pkcs11>
 REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE=<product-owned-openfn-sidecar-image>
 ```
 
@@ -103,7 +111,7 @@ Pin by digest when available:
 
 ```text
 REGISTRY_RELAY_IMAGE=<product-owned-registry-relay-image>@sha256:...
-REGISTRY_NOTARY_IMAGE=<product-owned-registry-notary-cel-image>@sha256:...
+REGISTRY_NOTARY_IMAGE=<product-owned-registry-notary-image>@sha256:...
 REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE=<product-owned-openfn-sidecar-image>@sha256:...
 ```
 
@@ -113,9 +121,7 @@ use lab-local image tags such as `registry-relay:hosted`,
 publish lab-built wrapper images under the canonical product image names. While
 using those local tags, treat digest rollback as not yet satisfied and record
 the selected Git revisions instead. The notary image used by the lab must be
-built with `REGISTRY_NOTARY_FEATURES=registry-notary-cel`; the product workflow
-publishes this as the `main-cel` / `sha-<commit>-cel` tag family before digest
-pinning.
+built with `REGISTRY_NOTARY_FEATURES=registry-notary-cel,pkcs11`.
 
 ## Required eSignet Secrets
 

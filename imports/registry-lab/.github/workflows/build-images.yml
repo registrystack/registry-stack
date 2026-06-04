@@ -6,9 +6,9 @@ name: build-hosted-images
 # classic PAT with `repo` scope whose owner can read every private vendor
 # submodule, including the cross-org PublicSchema/crosswalk (= vendor/cel-mapping).
 #
-# After a run, copy the three digests from the job summary into the Coolify
-# app env (REGISTRY_RELAY_IMAGE / REGISTRY_NOTARY_IMAGE /
-# REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE) and redeploy.
+# The technical-preview hosted compose consumes product-repo release images by
+# digest. Use this workflow only as a manual fallback for lab-built images, then
+# record any Coolify image override as a deliberate roll-forward or rollback.
 
 on:
   workflow_dispatch:
@@ -18,7 +18,7 @@ on:
         default: "spdci-api-standards,standards-cel-mapping,ogcapi-edr"
       notary_features:
         description: "Cargo features for registry-notary"
-        default: "registry-notary-cel"
+        default: "registry-notary-cel,pkcs11"
 
 permissions:
   contents: read
@@ -115,7 +115,7 @@ jobs:
           {
             echo "## Hosted image digests"
             echo ""
-            echo "Paste these into the Coolify app env, then redeploy:"
+            echo "Manual fallback digests. Use only as explicit Coolify overrides:"
             echo '```'
             echo "REGISTRY_RELAY_IMAGE=ghcr.io/${owner}/registry-relay@${{ steps.relay.outputs.digest }}"
             echo "REGISTRY_NOTARY_IMAGE=ghcr.io/${owner}/registry-notary@${{ steps.notary.outputs.digest }}"

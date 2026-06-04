@@ -654,7 +654,21 @@ push to main
   -> Coolify pulls exact product image tags or digests
 ```
 
-The hosted compose consumes image refs from environment variables:
+For `registry-stack-technical-preview-2026-06-04`, the hosted compose pins the
+product image refs directly:
+
+```text
+ghcr.io/jeremi/registry-relay@sha256:d3637632aec717b8212ae3a4f2dc0d59d581ad0b9b52bddc4bac1019977b5f3e
+ghcr.io/jeremi/registry-notary@sha256:4705721671235e12ddcbd3cc6b2c8bc71f40764cca17599c2a7dbb25aa544137
+ghcr.io/jeremi/registry-notary-openfn-sidecar@sha256:28b6c8f3673a12b45cfae97ed5d1c82505ed9eaccf7ee699c396eab7c0987d3f
+```
+
+The hosted config loaders pin `CONFIG_REPO_REF` to the same release-train tag.
+Do not override those values in Coolify unless the operator is deliberately
+rolling forward or back and records the selected refs.
+
+For future release trains, the hosted compose may consume image refs from
+environment variables:
 
 ```text
 REGISTRY_RELAY_IMAGE=<product-owned-registry-relay-image>
@@ -678,9 +692,8 @@ Canonical image ownership:
 
 - `registry-relay` publishes `ghcr.io/jeremi/registry-relay`.
 - `registry-notary` publishes `ghcr.io/jeremi/registry-notary`.
-- `registry-notary` publishes a lab-compatible CEL-enabled tag family
-  (`main-cel` and `sha-<commit>-cel`) for Registry Lab configs that use CEL
-  predicates.
+- `registry-notary` publishes one product image with CEL and PKCS#11 compiled
+  in for Registry Lab configs that use CEL predicates.
 - `registry-notary` also publishes
   `ghcr.io/jeremi/registry-notary-openfn-sidecar`.
 - `registry-lab` must not publish lab wrapper images under those canonical
@@ -697,7 +710,7 @@ Acceptable first implementation:
 - While using lab-local `:hosted` tags, the digest rollback guarantee is not
   satisfied. Record the exact source revisions used for the Coolify-local build
   and keep this as an interim state only. Any lab-local notary image must be
-  built with `REGISTRY_NOTARY_FEATURES=registry-notary-cel`.
+  built with `REGISTRY_NOTARY_FEATURES=registry-notary-cel,pkcs11`.
 - GitHub App auto-deploy is disabled or treated as temporary until CI gating is
   wired.
 - GitHub Actions triggers the Coolify deploy webhook only after checks pass.
