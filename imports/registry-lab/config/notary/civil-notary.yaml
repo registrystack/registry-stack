@@ -217,7 +217,7 @@ evidence:
               required: true
       rule:
         type: cel
-        expression: "date_age_on(source.civil.birth_date, vars.as_of_date) < 18 ? 'child' : (date_age_on(source.civil.birth_date, vars.as_of_date) >= 65 ? 'elderly' : 'adult')"
+        expression: "date.age_on(source.civil.birth_date, vars.as_of_date) < 18 ? 'child' : (date.age_on(source.civil.birth_date, vars.as_of_date) >= 65 ? 'elderly' : 'adult')"
         bindings:
           vars:
             as_of_date: "2026-05-27"

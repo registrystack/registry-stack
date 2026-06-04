@@ -20,6 +20,9 @@ audit:
   sink: stdout
   hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
 
+cel:
+  worker_count: 12
+
 federation:
   enabled: true
   node_id: did:web:nagdi-agriculture-notary.demo.example.gov
