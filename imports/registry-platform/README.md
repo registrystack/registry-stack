@@ -2,6 +2,8 @@
 
 > **Experimental:** This codebase is under active development. Its APIs are evolving quickly and may be unstable.
 
+Release label: pre-1.0 technical release for evaluation and integration pilots.
+
 Shared Rust security and operational primitives for Registry Relay, Registry
 Notary, and related registry services.
 
