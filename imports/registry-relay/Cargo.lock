@@ -4876,6 +4876,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-platform-ops"
+version = "0.1.2"
+
+[[package]]
 name = "registry-platform-replay"
 version = "0.1.2"
 dependencies = [
@@ -4966,6 +4970,7 @@ dependencies = [
  "registry-platform-httpsec",
  "registry-platform-httputil",
  "registry-platform-oidc",
+ "registry-platform-ops",
  "registry-platform-sdjwt",
  "registry-platform-testing",
  "reqwest",

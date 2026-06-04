@@ -371,13 +371,14 @@ pub fn build_admin_app(
     readiness_tx: tokio::sync::watch::Sender<ReadinessSnapshot>,
     ingest: Arc<IngestRegistry>,
 ) -> Result<Router, ConfigError> {
-    build_admin_app_with_metrics(
+    build_admin_app_with_metadata_and_metrics(
         config,
         auth,
         audit_sink,
         readiness,
         readiness_tx,
         ingest,
+        None,
         RequestMetrics::shared(),
     )
 }
@@ -393,18 +394,45 @@ pub fn build_admin_app_with_metrics(
     ingest: Arc<IngestRegistry>,
     metrics: Arc<RequestMetrics>,
 ) -> Result<Router, ConfigError> {
+    build_admin_app_with_metadata_and_metrics(
+        config,
+        auth,
+        audit_sink,
+        readiness,
+        readiness_tx,
+        ingest,
+        None,
+        metrics,
+    )
+}
+
+/// Same as [`build_admin_app_with_metrics`] but installs compiled split
+/// metadata for operations posture artifact and evidence summaries.
+#[allow(clippy::too_many_arguments)]
+pub fn build_admin_app_with_metadata_and_metrics(
+    config: Arc<Config>,
+    auth: AuthProviderRef,
+    audit_sink: Arc<AuditPipeline>,
+    readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
+    readiness_tx: tokio::sync::watch::Sender<ReadinessSnapshot>,
+    ingest: Arc<IngestRegistry>,
+    metadata: Option<Arc<CompiledMetadata>>,
+    metrics: Arc<RequestMetrics>,
+) -> Result<Router, ConfigError> {
     let public = api::health_router()
         .merge(crate::observability::router())
         .layer(Extension(metrics.clone()));
     let protected = api::admin_router().layer(Extension(ingest));
     let protected = auth_layer(protected, auth);
     let merged: Router<()> = Router::new().merge(public).merge(protected);
-    Ok(
-        apply_cross_cutting_layers_with_metrics(merged, &config, audit_sink, metrics)?
-            .layer(Extension(readiness))
-            .layer(Extension(readiness_tx))
-            .layer(Extension(config)),
-    )
+    let mut router = apply_cross_cutting_layers_with_metrics(merged, &config, audit_sink, metrics)?
+        .layer(Extension(readiness))
+        .layer(Extension(readiness_tx))
+        .layer(Extension(config));
+    if let Some(metadata) = metadata {
+        router = router.layer(Extension(metadata));
+    }
+    Ok(router)
 }
 
 fn apply_cross_cutting_layers_with_metrics(

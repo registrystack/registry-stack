@@ -23,6 +23,9 @@ use tokio::sync::watch;
 
 const ADMIN_KEY: &str = "admin-test-token-0123456789";
 const NON_ADMIN_KEY: &str = "non-admin-test-token-0123456789";
+const OPS_KEY: &str = "ops-test-token-0123456789";
+const AUDIT_SECRET_VALUE: &str = "relay-admin-reload-audit-secret-32-bytes";
+const PRIVATE_JWK_VALUE: &str = r#"{"kty":"OKP","crv":"Ed25519","kid":"relay-private-key","d":"private-jwk-material","x":"public-jwk-material"}"#;
 
 struct AdminFixture {
     _tmp: TempDir,
@@ -53,16 +56,50 @@ fn hex_lower(bytes: &[u8]) -> String {
     out
 }
 
+fn assert_matches_posture_schema(body: &Value) {
+    let schema: Value = serde_json::from_str(registry_platform_ops::POSTURE_SCHEMA_V1)
+        .expect("posture schema parses");
+    let compiled = jsonschema::JSONSchema::compile(&schema).expect("posture schema compiles");
+    let errors = compiled
+        .validate(body)
+        .err()
+        .map(|errors| errors.map(|error| error.to_string()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    assert!(
+        errors.is_empty(),
+        "posture response did not match registry.ops.posture.v1: {errors:?}\n{body:#}"
+    );
+}
+
 fn write_config(tmp: &TempDir) -> std::path::PathBuf {
+    write_config_with_instance(
+        tmp,
+        Some(
+            r#"instance:
+  id: relay-test-instance
+  environment: lab
+  owner: Test Ministry
+  jurisdiction: ZZ
+"#,
+        ),
+    )
+}
+
+fn write_config_with_instance(tmp: &TempDir, instance_block: Option<&str>) -> std::path::PathBuf {
     let cache_dir = tmp.path().join("cache");
     let source_path = tmp.path().join("social_registry.csv");
     std::fs::copy(fixture("social_registry.csv"), &source_path).expect("copy source fixture");
+    let instance_block = instance_block.unwrap_or("");
     let yaml = format!(
         r#"
+{instance_block}
 server:
   bind: 127.0.0.1:0
   admin_bind: 127.0.0.1:0
   cache_dir: "{cache_dir}"
+
+metadata:
+  manifest_path: metadata.yaml
 
 catalog:
   title: Test
@@ -193,7 +230,26 @@ audit:
   sink: stdout
   format: jsonl
   hash_secret_env: REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET
+
+provenance:
+  enabled: false
+  accepted_media_types:
+    - application/vc+jwt
+  schema_base_url: https://data.example.test/schemas
+  context_base_url: https://data.example.test/contexts
+  claim_validity:
+    aggregate_result: 10m
+    entity_record: 10m
+  issuer:
+    mode: gateway
+    did: did:web:data.example.test
+    verification_method_id: did:web:data.example.test#relay-public-key
+    signer:
+      kind: software
+      jwk_env: REGISTRY_RELAY_TEST_PRIVATE_JWK
+      signing_algorithm: EdDSA
 "#,
+        instance_block = instance_block,
         cache_dir = cache_dir.to_string_lossy(),
         source_path = source_path.to_string_lossy(),
     );
@@ -202,33 +258,11 @@ audit:
     path
 }
 
-fn build_auth() -> Arc<ApiKeyAuth> {
-    let entries = vec![
-        ApiKeyEntry::new(
-            "admin".to_string(),
-            ScopeSet::from_iter(["admin", "social_registry:metadata", "social_registry:rows"]),
-            make_fingerprint(ADMIN_KEY),
-        )
-        .expect("admin fingerprint parses"),
-        ApiKeyEntry::new(
-            "reader".to_string(),
-            ScopeSet::from_iter(["social_registry:metadata"]),
-            make_fingerprint(NON_ADMIN_KEY),
-        )
-        .expect("reader fingerprint parses"),
-    ];
-    Arc::new(ApiKeyAuth::new(entries))
-}
-
-fn build_fixture() -> AdminFixture {
-    let tmp = TempDir::new().expect("tempdir");
-    let config_path = write_config(&tmp);
+fn build_fixture_from_config_path(tmp: TempDir, config_path: std::path::PathBuf) -> AdminFixture {
     #[allow(unused_unsafe)]
     unsafe {
-        std::env::set_var(
-            "REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET",
-            "relay-admin-reload-audit-secret-32-bytes",
-        );
+        std::env::set_var("REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET", AUDIT_SECRET_VALUE);
+        std::env::set_var("REGISTRY_RELAY_TEST_PRIVATE_JWK", PRIVATE_JWK_VALUE);
     }
     let config: Arc<Config> = Arc::new(config::load(&config_path).expect("config loads"));
     let df_ctx = Arc::new(SessionContext::new());
@@ -278,6 +312,36 @@ fn build_fixture() -> AdminFixture {
     }
 }
 
+fn build_auth() -> Arc<ApiKeyAuth> {
+    let entries = vec![
+        ApiKeyEntry::new(
+            "admin".to_string(),
+            ScopeSet::from_iter(["admin", "social_registry:metadata", "social_registry:rows"]),
+            make_fingerprint(ADMIN_KEY),
+        )
+        .expect("admin fingerprint parses"),
+        ApiKeyEntry::new(
+            "reader".to_string(),
+            ScopeSet::from_iter(["social_registry:metadata"]),
+            make_fingerprint(NON_ADMIN_KEY),
+        )
+        .expect("reader fingerprint parses"),
+        ApiKeyEntry::new(
+            "ops".to_string(),
+            ScopeSet::from_iter(["registry_relay:ops_read"]),
+            make_fingerprint(OPS_KEY),
+        )
+        .expect("ops fingerprint parses"),
+    ];
+    Arc::new(ApiKeyAuth::new(entries))
+}
+
+fn build_fixture() -> AdminFixture {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(&tmp);
+    build_fixture_from_config_path(tmp, config_path)
+}
+
 async fn assert_problem(resp: axum_test::TestResponse, status: StatusCode, code: &str) -> Value {
     resp.assert_status(status);
     assert!(resp
@@ -288,6 +352,15 @@ async fn assert_problem(resp: axum_test::TestResponse, status: StatusCode, code:
     let body: Value = resp.json();
     assert_eq!(body["code"], code);
     body
+}
+
+fn assert_not_contains_any(haystack: &str, forbidden: &[&str]) {
+    for needle in forbidden {
+        assert!(
+            !haystack.contains(needle),
+            "posture response leaked forbidden material: {needle}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -345,6 +418,176 @@ async fn table_reload_with_admin_key_reaches_registry_reload_path() {
     let dump = body.to_string();
     assert!(!dump.contains("social_registry"));
     assert!(!dump.contains("beneficiaries_csv"));
+}
+
+#[tokio::test]
+async fn posture_requires_ops_read_scope() {
+    let fixture = build_fixture();
+
+    let missing = fixture.server.get("/admin/v1/posture").await;
+    assert_problem(missing, StatusCode::UNAUTHORIZED, "auth.missing_credential").await;
+
+    let admin_only = fixture
+        .server
+        .get("/admin/v1/posture")
+        .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
+        .await;
+    let body = assert_problem(admin_only, StatusCode::FORBIDDEN, "auth.scope_denied").await;
+    assert_eq!(body["detail"], "required scope: registry_relay:ops_read");
+
+    let ops = fixture
+        .server
+        .get("/admin/v1/posture")
+        .add_header("Authorization", format!("Bearer {OPS_KEY}"))
+        .await;
+    ops.assert_status(StatusCode::OK);
+}
+
+#[tokio::test]
+async fn ops_read_key_cannot_reload() {
+    let fixture = build_fixture();
+
+    for route in [
+        "/admin/v1/reload",
+        "/admin/v1/datasets/social_registry/tables/beneficiaries_csv/reload",
+    ] {
+        let resp = fixture
+            .server
+            .post(route)
+            .add_header("Authorization", format!("Bearer {OPS_KEY}"))
+            .await;
+
+        let body = assert_problem(resp, StatusCode::FORBIDDEN, "auth.scope_denied").await;
+        assert_eq!(body["detail"], "required scope: admin", "route: {route}");
+    }
+}
+
+#[tokio::test]
+async fn posture_uses_stable_instance_defaults_when_instance_block_is_omitted() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config_with_instance(&tmp, None);
+    let fixture = build_fixture_from_config_path(tmp, config_path);
+
+    let resp = fixture
+        .server
+        .get("/admin/v1/posture")
+        .add_header("Authorization", format!("Bearer {OPS_KEY}"))
+        .await;
+
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert_matches_posture_schema(&body);
+    assert_eq!(body["instance"]["id"], "registry-relay-local");
+    assert_eq!(body["instance"]["environment"], "development");
+    assert!(body["instance"].get("owner").is_none());
+    assert!(body["instance"].get("jurisdiction").is_none());
+}
+
+#[tokio::test]
+async fn posture_response_has_schema_metadata_and_redacted_public_summaries() {
+    let fixture = build_fixture();
+
+    let resp = fixture
+        .server
+        .get("/admin/v1/posture")
+        .add_header("Authorization", format!("Bearer {OPS_KEY}"))
+        .await;
+
+    resp.assert_status(StatusCode::OK);
+    let raw = resp.text();
+    assert_not_contains_any(
+        &raw,
+        &[
+            AUDIT_SECRET_VALUE,
+            PRIVATE_JWK_VALUE,
+            "private-jwk-material",
+            "REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET",
+            "REGISTRY_RELAY_TEST_PRIVATE_JWK",
+            "hash_secret_env",
+            "api_keys",
+            "fingerprint",
+            "token_env",
+            "jwk_env",
+            "private_jwk",
+            r#""d""#,
+            "beneficiary_id",
+            "food_subsidy",
+            r#""id":1654"#,
+            "social_registry.csv",
+            "admin_bind",
+            "cache_dir",
+            "trusted_roots",
+        ],
+    );
+    let body: Value = serde_json::from_str(&raw).expect("posture is JSON");
+    assert_matches_posture_schema(&body);
+    assert_eq!(body["schema"], "registry.ops.posture.v1");
+    assert_eq!(body["component"], "registry-relay");
+    assert_eq!(body["instance"]["id"], "relay-test-instance");
+    assert_eq!(body["build"]["package"], "registry-relay");
+    assert!(body["build"]["version"]
+        .as_str()
+        .is_some_and(|version| !version.is_empty()));
+    assert!(body["build"]["git_sha"].is_null());
+    assert_eq!(body["runtime"]["auth_mode"], "api_key");
+    assert_eq!(body["configuration"]["source"], "local_file");
+    assert_eq!(body["configuration"]["dynamic_reload_supported"], false);
+    assert!(body["configuration"]["last_config_hash"]
+        .as_str()
+        .is_some_and(|hash| hash.starts_with("sha256:")));
+    assert_eq!(
+        body["standards_artifacts"]["metadata_index"]["url"],
+        "https://data.example.test/metadata"
+    );
+    assert_eq!(
+        body["standards_artifacts"]["bregdcat_ap"]["observed_status"],
+        "configured_not_checked"
+    );
+    assert_eq!(body["relay"]["metadata_manifest"]["configured"], true);
+    assert_eq!(
+        body["relay"]["provenance"]["issuer"],
+        "did:web:data.example.test"
+    );
+    assert_eq!(
+        body["relay"]["provenance"]["active_kid"],
+        "did:web:data.example.test#relay-public-key"
+    );
+    assert!(body["relay"]["provenance"].get("jwk_env").is_none());
+    assert!(body["relay"]["provenance"].get("private_jwk").is_none());
+}
+
+#[tokio::test]
+async fn posture_warns_when_audit_checkpoint_unavailable() {
+    let fixture = build_fixture();
+
+    let resp = fixture
+        .server
+        .get("/admin/v1/posture")
+        .add_header("Authorization", format!("Bearer {OPS_KEY}"))
+        .await;
+
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert_matches_posture_schema(&body);
+    assert_eq!(body["posture"]["audit"]["checkpoint_status"], "unavailable");
+    assert!(body["posture"]["warnings"]
+        .as_array()
+        .expect("warnings array")
+        .iter()
+        .any(|warning| warning == "relay.audit_checkpoint_unavailable"));
+}
+
+#[tokio::test]
+async fn posture_is_not_mounted_on_public_app() {
+    let fixture = build_fixture();
+
+    let resp = fixture
+        .public_server
+        .get("/admin/v1/posture")
+        .add_header("Authorization", format!("Bearer {OPS_KEY}"))
+        .await;
+
+    resp.assert_status(StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

@@ -70,6 +70,7 @@
     {"listener": "admin", "path": "/healthz", "methods": ["GET"], "source": "src/api/health.rs"},
     {"listener": "admin", "path": "/ready", "methods": ["GET"], "source": "src/api/health.rs"},
     {"listener": "admin", "path": "/metrics", "methods": ["GET"], "source": "src/observability.rs"},
+    {"listener": "admin", "path": "/admin/v1/posture", "methods": ["GET"], "source": "src/api/admin.rs"},
     {"listener": "admin", "path": "/admin/v1/reload", "methods": ["POST"], "source": "src/api/admin.rs"},
     {"listener": "admin", "path": "/admin/v1/datasets/{dataset_id}/tables/{table_id}/reload", "methods": ["POST"], "source": "src/api/admin.rs"}
   ]

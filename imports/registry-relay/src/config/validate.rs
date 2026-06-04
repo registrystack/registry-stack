@@ -1524,12 +1524,15 @@ fn validate_scope(
     if scope == ADMIN_SCOPE {
         return Ok(());
     }
+    if scope == "registry_relay:ops_read" {
+        return Ok(());
+    }
     let (dataset, level) = scope.split_once(':').ok_or_else(|| {
         tracing::error!(
             code = "config.validation_error",
             api_key_id = %api_key_id,
             scope = %scope,
-            "scope must be 'admin' or '<dataset_id>:<metadata|aggregate|rows|verify|evidence_verification>'"
+            "scope must be 'admin', 'registry_relay:ops_read', or '<dataset_id>:<metadata|aggregate|rows|verify|evidence_verification>'"
         );
         ConfigError::ValidationError
     })?;

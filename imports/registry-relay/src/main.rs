@@ -224,7 +224,7 @@ async fn run_server(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
             entity_registry,
             query,
             aggregate_query,
-            compiled_metadata,
+            compiled_metadata.clone(),
             provenance_state.clone(),
             Arc::clone(&metrics),
         )?;
@@ -284,13 +284,14 @@ async fn run_server(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
     // the other.
     let result: Result<(), Box<dyn std::error::Error + Send + Sync>> =
         if let Some(admin_listener) = admin_listener {
-            let admin_app = registry_relay::server::build_admin_app_with_metrics(
+            let admin_app = registry_relay::server::build_admin_app_with_metadata_and_metrics(
                 Arc::clone(&config),
                 Arc::clone(&auth),
                 Arc::clone(&audit_sink),
                 readiness_rx.clone(),
                 readiness_tx.clone(),
                 Arc::clone(&ingest),
+                compiled_metadata.clone(),
                 Arc::clone(&metrics),
             )?;
             let admin_serve =

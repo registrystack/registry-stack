@@ -1716,6 +1716,31 @@
     {
       "service": "registry-relay",
       "listener": "admin",
+      "method": "GET",
+      "path": "/admin/v1/posture",
+      "feature": null,
+      "audience": "operator",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "registry_relay:ops_read"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": false,
+      "stability": "admin",
+      "data_classification": "operational",
+      "notes": "Admin listener posture route for dedicated read-only operations credentials.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/admin_reload.rs::posture_requires_ops_read_scope",
+        "tests/admin_reload.rs::ops_read_key_cannot_reload",
+        "tests/admin_reload.rs::posture_is_not_mounted_on_public_app"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "admin",
       "method": "POST",
       "path": "/admin/v1/reload",
       "feature": null,

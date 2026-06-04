@@ -42,6 +42,8 @@ pub use provenance::{
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(default)]
+    pub instance: InstanceConfig,
     pub server: ServerConfig,
     #[serde(default)]
     pub metadata: Option<MetadataConfig>,
@@ -60,6 +62,35 @@ pub struct Config {
     /// stable taxonomy code.
     #[serde(default)]
     pub standards: StandardsConfig,
+}
+
+/// Stable deployment identity surfaced in redacted operations posture.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstanceConfig {
+    #[serde(default = "default_instance_id")]
+    pub id: String,
+    #[serde(default)]
+    pub environment: Option<String>,
+    #[serde(default)]
+    pub owner: Option<String>,
+    #[serde(default)]
+    pub jurisdiction: Option<String>,
+}
+
+impl Default for InstanceConfig {
+    fn default() -> Self {
+        Self {
+            id: default_instance_id(),
+            environment: None,
+            owner: None,
+            jurisdiction: None,
+        }
+    }
+}
+
+fn default_instance_id() -> String {
+    "registry-relay-local".to_string()
 }
 
 /// Optional split metadata manifest loaded alongside the runtime config.
