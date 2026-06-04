@@ -797,8 +797,9 @@ The lab Relay image follows the product distroless runtime policy and its
 healthcheck uses `registry-relay healthcheck`; do not add `curl`, `wget`, or
 shell-dependent probes to the Relay image.
 Before applying `compose.coolify.yaml`, publish a Relay image built from a
-source revision that includes that healthcheck command and refresh the pinned
-`x-relay-common` image digest.
+source revision that includes that healthcheck command and refresh the
+`REGISTRY_RELAY_IMAGE` Coolify env var. The compose digest is only the fallback
+used when that env var is unset.
 
 The social protection walkthrough uses the dataset-scoped aggregate endpoint at
 `/v1/datasets/social_protection_registry/aggregates/households_by_eligibility_band`
