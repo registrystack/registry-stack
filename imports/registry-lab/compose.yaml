@@ -18,7 +18,7 @@ x-relay-common: &relay-common
     RUST_LOG: info
   restart: unless-stopped
   healthcheck:
-    test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+    test: ["CMD", "/usr/local/bin/registry-relay", "healthcheck"]
     interval: 30s
     timeout: 10s
     retries: 3

@@ -410,15 +410,26 @@ def validate_runtime_commands(artifact: str, services: dict[str, Any]) -> list[I
             },
             sort_keys=True,
         )
-        if is_registry_relay_service(service, image) and "registry-notary" in command_text:
-            issues.append(
-                Issue(
-                    "unsupported-relay-healthcheck",
-                    artifact,
-                    f"services.{service}.healthcheck",
-                    "relay healthchecks must use tools available in the relay image, not registry-notary",
+        if is_registry_relay_service(service, image):
+            healthcheck_text = json.dumps(config.get("healthcheck"), sort_keys=True)
+            if "registry-notary" in command_text:
+                issues.append(
+                    Issue(
+                        "unsupported-relay-healthcheck",
+                        artifact,
+                        f"services.{service}.healthcheck",
+                        "relay healthchecks must use tools available in the relay image, not registry-notary",
+                    )
                 )
-            )
+            if "curl" in healthcheck_text:
+                issues.append(
+                    Issue(
+                        "unsupported-relay-healthcheck",
+                        artifact,
+                        f"services.{service}.healthcheck",
+                        "distroless relay healthchecks must use registry-relay healthcheck, not curl",
+                    )
+                )
         if is_registry_notary_service(service, image):
             healthcheck_text = json.dumps(config.get("healthcheck"), sort_keys=True)
             if "curl" in healthcheck_text:
