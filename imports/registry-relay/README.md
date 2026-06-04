@@ -360,14 +360,25 @@ tagged as `main` and `sha-<commit>`. First serious release readiness is checked
 through the coordinated pre-tag release plan. Downstream deployments should
 consume the selected release image by immutable digest for rollback guarantees.
 
-The image:
+The production image:
 
 - builds the Rust release binary in a cargo builder stage;
-- copies only the binary and license into a small Debian runtime stage;
-- runs as the non-root `registry_relay` user;
+- copies only the binary, license, and runtime directory skeleton into a pinned
+  distroless `cc-debian12:nonroot` runtime stage;
+- runs under the distroless non-root UID/GID `65532:65532`;
 - exposes port `8080`;
 - uses `/etc/registry-relay/config.yaml` as the default config path;
-- creates `/var/lib/registry-relay/cache`, `/var/lib/registry-relay/data`, and `/var/log/registry-relay`.
+- creates `/var/lib/registry-relay/cache`, `/var/lib/registry-relay/data`, and `/var/log/registry-relay`;
+- relies on the distroless CA certificate bundle for Relay TLS clients such as
+  OIDC JWKS fetch and PostgreSQL TLS;
+- runs `registry-relay healthcheck` as the Docker healthcheck, probing
+  `http://127.0.0.1:8080/healthz` without `/bin/sh`, `curl`, or `wget`.
+
+`Dockerfile.demo` is a debug/demo-only image for the decentralized evidence demo
+and standards-adapter walkthroughs. It intentionally remains on Debian slim so
+demo-specific runtime inspection and feature combinations stay separate from the
+production image policy. Do not use `Dockerfile.demo` as release evidence for a
+production Relay runtime.
 
 Example run:
 

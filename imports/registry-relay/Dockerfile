@@ -23,26 +23,27 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     else \
         cargo build --release --locked; \
     fi && \
-    cp /workspace/registry_relay/target/release/registry-relay /usr/local/bin/registry-relay
+    cp /workspace/registry_relay/target/release/registry-relay /usr/local/bin/registry-relay && \
+    mkdir -p \
+        /workspace/runtime-root/etc/registry-relay \
+        /workspace/runtime-root/var/lib/registry-relay/cache \
+        /workspace/runtime-root/var/lib/registry-relay/data \
+        /workspace/runtime-root/var/log/registry-relay && \
+    chown -R 65532:65532 /workspace/runtime-root
 
-FROM debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb AS runtime
+# Distroless cc keeps glibc and CA certificates while dropping shell/package tools.
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:bd2899c12b335c827750ccf2359879eab09c09b206023dcebea408947d54127c AS runtime
 
-RUN groupadd --system --gid 10001 registry_relay && \
-    useradd --system --uid 10001 --gid registry_relay --home-dir /var/lib/registry-relay --shell /usr/sbin/nologin registry_relay && \
-    mkdir -p /etc/registry-relay /var/lib/registry-relay/cache /var/lib/registry-relay/data /var/log/registry-relay && \
-    chown -R registry_relay:registry_relay /var/lib/registry-relay /var/log/registry-relay && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates curl && \
-    rm -rf /var/lib/apt/lists/*
-
+COPY --from=builder --chown=65532:65532 /workspace/runtime-root/ /
 COPY --from=builder /usr/local/bin/registry-relay /usr/local/bin/registry-relay
 COPY LICENSE /licenses/registry-relay/LICENSE
 
-USER registry_relay:registry_relay
 WORKDIR /var/lib/registry-relay
 
 ENV REGISTRY_RELAY_CONFIG=/etc/registry-relay/config.yaml
 EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/usr/local/bin/registry-relay", "healthcheck"]
 
 ENTRYPOINT ["/usr/local/bin/registry-relay"]
 CMD ["--config", "/etc/registry-relay/config.yaml"]

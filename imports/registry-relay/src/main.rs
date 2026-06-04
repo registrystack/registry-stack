@@ -27,10 +27,14 @@
 //! also emitted via `tracing::error!` so operators can correlate.
 
 use std::env;
+use std::error::Error as StdError;
+use std::fmt as std_fmt;
+use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 
 use datafusion::execution::context::SessionContext;
 use registry_platform_audit::AuditChainProfile;
@@ -62,8 +66,40 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 /// <path>` positional plus the `REGISTRY_RELAY_CONFIG` env var fallback.
 const CONFIG_FLAG: &str = "--config";
 
+/// Top-level command for shell-free container liveness probing.
+const HEALTHCHECK_COMMAND: &str = "healthcheck";
+
+/// Healthcheck target override flag.
+const HEALTHCHECK_URL_FLAG: &str = "--url";
+
+/// Healthcheck request timeout override flag.
+const HEALTHCHECK_TIMEOUT_FLAG: &str = "--timeout-ms";
+
+/// Default healthcheck endpoint inside the container.
+const DEFAULT_HEALTHCHECK_URL: &str = "http://127.0.0.1:8080/healthz";
+
+/// Default healthcheck timeout in milliseconds.
+const DEFAULT_HEALTHCHECK_TIMEOUT_MS: u64 = 5_000;
+
 /// Last-resort default config path.
 const DEFAULT_CONFIG_PATH: &str = "./config/example.yaml";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CliCommand {
+    Serve { config_path: PathBuf },
+    Healthcheck { url: String, timeout: Duration },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CliError(String);
+
+impl std_fmt::Display for CliError {
+    fn fmt(&self, f: &mut std_fmt::Formatter<'_>) -> std_fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl StdError for CliError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OperationalLogFormat {
@@ -103,7 +139,17 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let config_path = resolve_config_path();
+    match parse_cli_command_from(env::args().collect())? {
+        CliCommand::Serve { config_path } => run_server(config_path).await,
+        CliCommand::Healthcheck { url, timeout } => {
+            run_healthcheck(&url, timeout).await?;
+            println!("registry-relay healthcheck ok");
+            Ok(())
+        }
+    }
+}
+
+async fn run_server(config_path: PathBuf) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!(path = %config_path.display(), "loading registry-relay config");
 
     let loaded = config::load_with_metadata(&config_path)?;
@@ -273,12 +319,89 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     result
 }
 
+fn parse_cli_command_from(args: Vec<String>) -> Result<CliCommand, CliError> {
+    let mut args = args.into_iter();
+    let _program = args.next();
+    let rest: Vec<String> = args.collect();
+    if rest.first().is_some_and(|arg| arg == HEALTHCHECK_COMMAND) {
+        parse_healthcheck_command(&rest[1..])
+    } else {
+        Ok(CliCommand::Serve {
+            config_path: resolve_config_path_from(rest),
+        })
+    }
+}
+
+fn parse_healthcheck_command(args: &[String]) -> Result<CliCommand, CliError> {
+    let mut url = DEFAULT_HEALTHCHECK_URL.to_string();
+    let mut timeout_ms = DEFAULT_HEALTHCHECK_TIMEOUT_MS;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == HEALTHCHECK_URL_FLAG {
+            index += 1;
+            let Some(value) = args.get(index) else {
+                return Err(CliError(format!(
+                    "{HEALTHCHECK_URL_FLAG} requires a non-empty URL"
+                )));
+            };
+            if value.is_empty() {
+                return Err(CliError(format!(
+                    "{HEALTHCHECK_URL_FLAG} requires a non-empty URL"
+                )));
+            }
+            url = value.clone();
+        } else if let Some(value) = arg.strip_prefix(&format!("{HEALTHCHECK_URL_FLAG}=")) {
+            if value.is_empty() {
+                return Err(CliError(format!(
+                    "{HEALTHCHECK_URL_FLAG} requires a non-empty URL"
+                )));
+            }
+            url = value.to_string();
+        } else if arg == HEALTHCHECK_TIMEOUT_FLAG {
+            index += 1;
+            let Some(value) = args.get(index) else {
+                return Err(CliError(format!(
+                    "{HEALTHCHECK_TIMEOUT_FLAG} requires a positive integer"
+                )));
+            };
+            timeout_ms = parse_timeout_ms(value)?;
+        } else if let Some(value) = arg.strip_prefix(&format!("{HEALTHCHECK_TIMEOUT_FLAG}=")) {
+            timeout_ms = parse_timeout_ms(value)?;
+        } else {
+            return Err(CliError(format!(
+                "unknown {HEALTHCHECK_COMMAND} argument: {arg}"
+            )));
+        }
+        index += 1;
+    }
+
+    Ok(CliCommand::Healthcheck {
+        url,
+        timeout: Duration::from_millis(timeout_ms),
+    })
+}
+
+fn parse_timeout_ms(value: &str) -> Result<u64, CliError> {
+    let timeout_ms = value.parse::<u64>().map_err(|_| {
+        CliError(format!(
+            "{HEALTHCHECK_TIMEOUT_FLAG} requires a positive integer"
+        ))
+    })?;
+    if timeout_ms == 0 {
+        return Err(CliError(format!(
+            "{HEALTHCHECK_TIMEOUT_FLAG} requires a positive integer"
+        )));
+    }
+    Ok(timeout_ms)
+}
+
 /// Resolve the config path from (in order):
 /// * the first non-flag positional after `--config`
 /// * the `REGISTRY_RELAY_CONFIG` env var
 /// * the project-relative default `./config/example.yaml`
-fn resolve_config_path() -> PathBuf {
-    let mut args = env::args().skip(1);
+fn resolve_config_path_from(args: Vec<String>) -> PathBuf {
+    let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         if arg == CONFIG_FLAG {
             if let Some(p) = args.next() {
@@ -294,6 +417,30 @@ fn resolve_config_path() -> PathBuf {
         }
     }
     PathBuf::from(DEFAULT_CONFIG_PATH)
+}
+
+async fn run_healthcheck(
+    url: &str,
+    timeout: Duration,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if timeout.is_zero() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "healthcheck timeout must be greater than zero",
+        )
+        .into());
+    }
+    let client = reqwest::Client::builder().timeout(timeout).build()?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|err| io::Error::other(format!("healthcheck request failed: {err}")))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(io::Error::other(format!("healthcheck returned status {status}")).into());
+    }
+    Ok(())
 }
 
 /// Build the configured authentication provider.
@@ -523,14 +670,21 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_audit_sink, OperationalLogFormat};
+    use super::{
+        build_audit_sink, parse_cli_command_from, run_healthcheck, CliCommand,
+        OperationalLogFormat, DEFAULT_HEALTHCHECK_TIMEOUT_MS, DEFAULT_HEALTHCHECK_URL,
+    };
+    use axum::routing::get;
+    use axum::Router;
     use registry_platform_audit::{
         verify_jsonl_lines, verify_jsonl_lines_with_hasher, AuditChainHasher,
     };
     use registry_relay::audit::{AuditRecord, EndpointKind};
     use registry_relay::config::Config;
     use serde_json::json;
+    use std::time::Duration;
     use tempfile::tempdir;
+    use tokio::net::TcpListener;
 
     fn sample_audit_record() -> AuditRecord {
         AuditRecord {
@@ -593,6 +747,159 @@ audit:
             hash_secret_env
         ))
         .expect("test config parses")
+    }
+
+    fn command_args(args: &[&str]) -> Vec<String> {
+        args.iter().map(|arg| (*arg).to_string()).collect()
+    }
+
+    async fn spawn_health_server(app: Router) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener binds");
+        let addr = listener.local_addr().expect("listener has local addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("test health server serves");
+        });
+        format!("http://{addr}/healthz")
+    }
+
+    #[test]
+    fn healthcheck_cli_defaults_to_container_health_endpoint() {
+        let command = parse_cli_command_from(command_args(&["registry-relay", "healthcheck"]))
+            .expect("healthcheck command parses");
+
+        let CliCommand::Healthcheck { url, timeout } = command else {
+            panic!("expected healthcheck command");
+        };
+        assert_eq!(url, DEFAULT_HEALTHCHECK_URL);
+        assert_eq!(
+            timeout,
+            Duration::from_millis(DEFAULT_HEALTHCHECK_TIMEOUT_MS)
+        );
+    }
+
+    #[test]
+    fn healthcheck_cli_accepts_url_and_timeout_overrides() {
+        let command = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "healthcheck",
+            "--url",
+            "http://127.0.0.1:9090/healthz",
+            "--timeout-ms=250",
+        ]))
+        .expect("healthcheck command parses");
+
+        let CliCommand::Healthcheck { url, timeout } = command else {
+            panic!("expected healthcheck command");
+        };
+        assert_eq!(url, "http://127.0.0.1:9090/healthz");
+        assert_eq!(timeout, Duration::from_millis(250));
+    }
+
+    #[test]
+    fn healthcheck_cli_accepts_equals_url_and_split_timeout_overrides() {
+        let command = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "healthcheck",
+            "--url=http://127.0.0.1:9091/healthz",
+            "--timeout-ms",
+            "750",
+        ]))
+        .expect("healthcheck command parses");
+
+        let CliCommand::Healthcheck { url, timeout } = command else {
+            panic!("expected healthcheck command");
+        };
+        assert_eq!(url, "http://127.0.0.1:9091/healthz");
+        assert_eq!(timeout, Duration::from_millis(750));
+    }
+
+    #[test]
+    fn serve_cli_preserves_config_flag_parsing() {
+        let command = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "--config",
+            "/etc/registry-relay/config.yaml",
+        ]))
+        .expect("serve command parses");
+
+        let CliCommand::Serve { config_path } = command else {
+            panic!("expected serve command");
+        };
+        assert_eq!(
+            config_path,
+            std::path::PathBuf::from("/etc/registry-relay/config.yaml")
+        );
+    }
+
+    #[tokio::test]
+    async fn healthcheck_succeeds_for_success_status() {
+        let url = spawn_health_server(
+            Router::new().route("/healthz", get(|| async { axum::http::StatusCode::OK })),
+        )
+        .await;
+
+        run_healthcheck(&url, Duration::from_secs(1))
+            .await
+            .expect("healthcheck succeeds");
+    }
+
+    #[tokio::test]
+    async fn healthcheck_fails_for_non_success_status() {
+        let url = spawn_health_server(Router::new().route(
+            "/healthz",
+            get(|| async { axum::http::StatusCode::SERVICE_UNAVAILABLE }),
+        ))
+        .await;
+
+        let err = run_healthcheck(&url, Duration::from_secs(1))
+            .await
+            .expect_err("healthcheck fails");
+        assert!(
+            err.to_string().contains("status 503"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn healthcheck_fails_for_connection_failure() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener binds");
+        let addr = listener.local_addr().expect("listener has local addr");
+        drop(listener);
+        let url = format!("http://{addr}/healthz");
+
+        let err = run_healthcheck(&url, Duration::from_millis(200))
+            .await
+            .expect_err("healthcheck fails");
+        assert!(
+            err.to_string().contains("request failed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn healthcheck_fails_for_timeout() {
+        let url = spawn_health_server(Router::new().route(
+            "/healthz",
+            get(|| async {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                axum::http::StatusCode::OK
+            }),
+        ))
+        .await;
+
+        let err = run_healthcheck(&url, Duration::from_millis(10))
+            .await
+            .expect_err("healthcheck fails");
+        assert!(
+            err.to_string().contains("request failed"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

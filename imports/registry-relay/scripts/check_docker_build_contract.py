@@ -20,6 +20,35 @@ def require(path: Path, needle: str, detail: str) -> list[str]:
     return [f"{path.relative_to(ROOT)}: missing {detail}: {needle!r}"]
 
 
+def runtime_stage(path: Path) -> str:
+    if path not in _CONTENT_CACHE:
+        _CONTENT_CACHE[path] = path.read_text(encoding="utf-8")
+    text = _CONTENT_CACHE[path]
+    marker = " AS runtime"
+    marker_at = text.find(marker)
+    if marker_at == -1:
+        return ""
+    line_start = text.rfind("\n", 0, marker_at) + 1
+    return text[line_start:]
+
+
+def require_runtime(path: Path, needle: str, detail: str) -> list[str]:
+    stage = runtime_stage(path)
+    if needle in stage:
+        return []
+    return [f"{path.relative_to(ROOT)} runtime stage: missing {detail}: {needle!r}"]
+
+
+def forbid_runtime(path: Path, needle: str, detail: str) -> list[str]:
+    stage = runtime_stage(path)
+    stage_without_comments = "\n".join(
+        line for line in stage.splitlines() if not line.strip().startswith("#")
+    )
+    if needle not in stage_without_comments:
+        return []
+    return [f"{path.relative_to(ROOT)} runtime stage: forbidden {detail}: {needle!r}"]
+
+
 def main() -> int:
     dockerfile = ROOT / "Dockerfile"
     build_script = ROOT / "scripts" / "build-image.sh"
@@ -46,13 +75,6 @@ def main() -> int:
             dockerfile,
             "cargo build --release --locked",
             "default cargo build path",
-        )
-    )
-    failures.extend(
-        require(
-            dockerfile,
-            "apt-get install -y --no-install-recommends ca-certificates curl",
-            "curl in runtime image for compose healthchecks",
         )
     )
     failures.extend(
@@ -119,6 +141,51 @@ def main() -> int:
             "CI container build release feature list",
         )
     )
+    failures.extend(
+        require_runtime(
+            dockerfile,
+            "FROM gcr.io/distroless/cc-debian12:nonroot@sha256:",
+            "distroless nonroot runtime base",
+        )
+    )
+    failures.extend(
+        require_runtime(
+            dockerfile,
+            'HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/usr/local/bin/registry-relay", "healthcheck"]',
+            "shell-free registry-relay healthcheck",
+        )
+    )
+    failures.extend(
+        require_runtime(
+            dockerfile,
+            'COPY --from=builder --chown=65532:65532 /workspace/runtime-root/ /',
+            "numeric nonroot-owned runtime directory skeleton",
+        )
+    )
+    failures.extend(
+        require_runtime(
+            dockerfile,
+            "WORKDIR /var/lib/registry-relay",
+            "registry-relay working directory",
+        )
+    )
+    failures.extend(
+        require_runtime(
+            dockerfile,
+            "ENV REGISTRY_RELAY_CONFIG=/etc/registry-relay/config.yaml",
+            "default config path",
+        )
+    )
+    for needle, detail in [
+        ("debian:bookworm-slim", "Debian slim runtime base"),
+        ("apt-get", "package manager in runtime"),
+        ("groupadd", "runtime group creation"),
+        ("useradd", "runtime user creation"),
+        ("/bin/sh", "shell dependency in runtime"),
+        ("curl", "curl dependency in runtime"),
+        ("wget", "wget dependency in runtime"),
+    ]:
+        failures.extend(forbid_runtime(dockerfile, needle, detail))
 
     if failures:
         print("Docker build contract check failed:", file=sys.stderr)

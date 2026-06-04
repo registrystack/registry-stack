@@ -10,7 +10,8 @@ Recommended production topology:
 - Bind the data plane on `server.bind`, usually `0.0.0.0:8080` in a container.
 - Put TLS, WAF rules, and external auth policy at the ingress or service mesh layer.
 - Keep source files mounted read-only.
-- Keep `server.cache_dir` writable by the `registry_relay` user.
+- Keep `server.cache_dir` writable by the Relay runtime identity. In the
+  production container, that is distroless non-root UID/GID `65532:65532`.
 - Prefer stdout audit records in containers and let the platform log pipeline retain, rotate, and forward them.
 - When `server.admin_bind` is enabled, expose it only on an internal address or private network policy.
 
@@ -341,7 +342,9 @@ Audit records missing:
 
 - In containers, check stdout, not stderr.
 - Confirm `audit.include_health` if expecting health and ready records.
-- For `audit.sink: file`, confirm the parent directory exists or can be created by the `registry_relay` user.
+- For `audit.sink: file`, confirm the parent directory exists or can be created
+  by the Relay runtime identity. In the production container, that is UID/GID
+  `65532:65532`.
 - For `audit.sink: syslog`, confirm the host exposes the expected Unix datagram socket (`/var/run/syslog` on macOS, `/dev/log` on other Unix platforms).
 
 Caller expected a signed VC but received plain JSON:

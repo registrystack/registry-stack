@@ -118,6 +118,8 @@ Every client request sends `x-request-id` using
 
 The Relay demo image is built by `Dockerfile.demo` with
 `spdci-api-standards,standards-cel-mapping` so DCI source routes are available.
+That image is debug/demo-only and intentionally separate from the production
+distroless runtime policy documented in the root README.
 
 Registry Notary exposes OpenAPI at `/openapi.json` under the same auth boundary
 as the rest of the Registry Notary API. The demo client and smoke script fetch
