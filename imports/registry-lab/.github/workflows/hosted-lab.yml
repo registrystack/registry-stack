@@ -130,8 +130,8 @@ jobs:
           COOLIFY_API_BASE_URL: https://cool.pitgenius.com/api/v1
         run: |
           if [ -z "$COOLIFY_API_TOKEN" ]; then
-            echo "::error::COOLIFY_API_TOKEN is not configured; hosted deploy cannot run."
-            exit 1
+            echo "::notice::COOLIFY_API_TOKEN is not configured; hosted deploy trigger skipped."
+            exit 0
           fi
           for app in \
             klhnsuoye8lwuamp0bko387t \
