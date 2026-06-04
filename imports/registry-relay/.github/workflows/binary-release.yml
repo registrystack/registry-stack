@@ -1,0 +1,166 @@
+name: Binary Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: binary-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: true
+  REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
+  REGISTRY_PLATFORM_REF: ${{ (github.head_ref || github.ref_name) == 'codex/audit-hash-helpers' && 'codex/audit-reference-hashing' || ((github.head_ref || github.ref_name) == 'commons-release-cleanup' && 'commons-release-cleanup' || 'main') }}
+  REGISTRY_MANIFEST_REPOSITORY: jeremi/registry-manifest
+  REGISTRY_MANIFEST_REF: main
+  CEL_MAPPING_REPOSITORY: PublicSchema/crosswalk
+  CEL_MAPPING_REF: ca7411d735f1507b9db0db637f79aff7e4ae4611
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            archive_ext: tar.xz
+            bin_ext: ""
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            archive_ext: tar.xz
+            bin_ext: ""
+          - target: x86_64-apple-darwin
+            runner: macos-13
+            archive_ext: tar.xz
+            bin_ext: ""
+          - target: aarch64-apple-darwin
+            runner: macos-15
+            archive_ext: tar.xz
+            bin_ext: ""
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2025
+            archive_ext: zip
+            bin_ext: ".exe"
+    defaults:
+      run:
+        shell: bash
+        working-directory: registry-relay
+    steps:
+      - name: Checkout registry-relay
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: registry-relay
+          persist-credentials: false
+
+      - name: Checkout registry-platform
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          path: registry-platform
+          persist-credentials: false
+
+      - name: Checkout registry-manifest
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.REGISTRY_MANIFEST_REPOSITORY }}
+          ref: ${{ env.REGISTRY_MANIFEST_REF }}
+          token: ${{ secrets.REGISTRY_MANIFEST_TOKEN || github.token }}
+          path: registry-manifest
+          persist-credentials: false
+
+      - name: Checkout cel-mapping
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.CEL_MAPPING_REPOSITORY }}
+          ref: ${{ env.CEL_MAPPING_REF }}
+          path: cel-mapping
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Smoke binary startup
+        run: |
+          set +e
+          "target/release/registry-relay${{ matrix.bin_ext }}" --config __missing_release_smoke_config.yaml > target/release-smoke.log 2>&1
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "registry-relay unexpectedly succeeded with a missing config" >&2
+            exit 1
+          fi
+
+      - name: Package archive
+        env:
+          TARGET: ${{ matrix.target }}
+          ARCHIVE_EXT: ${{ matrix.archive_ext }}
+          BIN_EXT: ${{ matrix.bin_ext }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [ "${GITHUB_REF_TYPE:-}" != "tag" ]; then
+            version="manual-${GITHUB_RUN_NUMBER}"
+          fi
+          package="registry-relay-${version}-${TARGET}"
+          package_dir="target/dist/${package}"
+          mkdir -p "$package_dir"
+          cp "target/release/registry-relay${BIN_EXT}" "$package_dir/"
+          cp README.md LICENSE "$package_dir/"
+          if [ "$ARCHIVE_EXT" = "zip" ]; then
+            pwsh -NoProfile -Command "Compress-Archive -Path '${package_dir}/*' -DestinationPath 'target/dist/${package}.zip' -Force"
+          else
+            tar -C target/dist -cJf "target/dist/${package}.tar.xz" "$package"
+          fi
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: registry-relay-${{ matrix.target }}
+          path: registry-relay/target/dist/*.${{ matrix.archive_ext }}
+          if-no-files-found: error
+
+  release:
+    name: publish GitHub release
+    needs: build
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download binary artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          find dist -type f \( -name '*.tar.xz' -o -name '*.zip' \) -exec cp {} release/ \;
+          cd release
+          sha256sum ./* > SHA256SUMS
+          ls -la
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release/* --clobber
+          else
+            gh release create "$TAG" release/* --verify-tag --title "$TAG" --notes "Binary release for $TAG."
+          fi
