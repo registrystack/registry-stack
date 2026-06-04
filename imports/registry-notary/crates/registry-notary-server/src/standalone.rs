@@ -152,7 +152,7 @@ pub fn standalone_router(
     let wallet_cors_policy = SelfAttestationWalletCorsPolicy::from_config(&config);
     let auth_state = Arc::new(AuthAuditState::from_config(&config, Arc::clone(&metrics))?);
     #[cfg(feature = "registry-notary-cel")]
-    let cel_worker = build_cel_worker(&config.evidence, Arc::clone(&metrics))?;
+    let cel_worker = build_cel_worker(&config, Arc::clone(&metrics))?;
     let preauth_runtime =
         PreAuthRuntime::from_config(&config, &signing_keys, auth_state.audit.clone())?
             .map(Arc::new);
@@ -174,7 +174,9 @@ pub fn standalone_router(
     .with_preauth_runtime(preauth_runtime)
     .with_signer_readiness(signer_readiness);
     #[cfg(feature = "registry-notary-cel")]
-    let api_state = api_state.with_cel_worker(cel_worker);
+    let api_state = api_state
+        .with_cel_worker(cel_worker)
+        .with_cel_config(Arc::new(config.cel.clone()));
     let api_state = Arc::new(api_state);
     let mut routes = router();
     if config.federation.enabled {
@@ -393,16 +395,22 @@ pub enum StandaloneServerError {
 
 #[cfg(feature = "registry-notary-cel")]
 fn build_cel_worker(
-    evidence: &EvidenceConfig,
+    config: &StandaloneRegistryNotaryConfig,
     metrics: Arc<AppMetrics>,
 ) -> Result<Option<Arc<CelWorker>>, StandaloneServerError> {
+    let evidence = &config.evidence;
     if !evidence_uses_cel(evidence) {
         return Ok(None);
     }
-    validate_cel_claims_for_startup(evidence)
+    if config.cel.mode == "disabled" {
+        return Err(StandaloneServerError::InvalidCelConfig(
+            "CEL claims require cel.mode = worker".to_string(),
+        ));
+    }
+    validate_cel_claims_for_startup(evidence, &config.cel)
         .map_err(|_| StandaloneServerError::InvalidCelConfig("invalid CEL policy".to_string()))?;
     let worker =
-        CelWorker::lazy(CelWorkerConfig::for_current_exe_subcommand()).with_metrics(metrics);
+        CelWorker::lazy(CelWorkerConfig::from_standalone_config(&config.cel)).with_metrics(metrics);
     worker
         .validate_config()
         .map_err(|error| StandaloneServerError::InvalidCelConfig(error.to_string()))?;

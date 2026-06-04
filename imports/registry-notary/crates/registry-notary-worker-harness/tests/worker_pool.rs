@@ -312,6 +312,57 @@ async fn repeated_worker_failures_open_circuit_and_recover_after_cooldown() {
     assert_eq!(response["value"], "after-cooldown");
 }
 
+#[tokio::test]
+async fn execute_replenishes_worker_after_circuit_cooldown_without_readiness_probe() {
+    let _guard = WORKER_POOL_TEST_LOCK.lock().await;
+    let mut config = pool_config(1);
+    config.request_timeout = Duration::from_millis(100);
+    config.max_replacements_per_window = 1;
+    config.replacement_window = Duration::from_secs(60);
+    config.circuit_breaker_cooldown = Duration::from_millis(100);
+    let pool = WorkerPool::new(config).await.unwrap();
+
+    pool.execute_json(json!({ "mode": "hang" }))
+        .await
+        .expect_err("first timeout fails");
+    pool.execute_json(json!({ "mode": "hang" }))
+        .await
+        .expect_err("second timeout opens circuit");
+    assert!(pool.snapshot().await.circuit_open);
+
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let response = pool
+        .execute_json(json!({ "value": "after-direct-execute" }))
+        .await
+        .expect("execute path replenishes after cooldown");
+    assert_eq!(response["value"], "after-direct-execute");
+}
+
+#[tokio::test]
+async fn worker_stdout_is_drained_while_large_stdin_request_is_written() {
+    let _guard = WORKER_POOL_TEST_LOCK.lock().await;
+    let mut config = pool_config(1);
+    config.command = fixture_command().env("WORKER_HARNESS_PREWRITE_STDOUT_BYTES", "131072");
+    config.request_timeout = Duration::from_secs(5);
+    config.max_request_bytes = 192 * 1024;
+    config.max_stdout_bytes = 192 * 1024;
+    let pool = WorkerPool::new(config).await.unwrap();
+
+    let response = pool
+        .execute_json(json!({ "value": "x".repeat(128 * 1024) }))
+        .await
+        .expect("duplex request avoids pipe-buffer deadlock");
+
+    assert_eq!(response["ok"], true);
+    assert_eq!(
+        response["prewritten"]
+            .as_str()
+            .expect("prewritten payload is string")
+            .len(),
+        131072
+    );
+}
+
 fn cargo_bin(name: &str) -> PathBuf {
     let env_path = PathBuf::from(env!("CARGO_BIN_EXE_registry-notary-worker-harness-fixture"));
     if env_path

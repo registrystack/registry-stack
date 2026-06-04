@@ -40,6 +40,7 @@ the basic path passes `doctor`.
 | `auth` | Caller authentication and scope mapping | Yes |
 | `audit` | Redacted audit envelope sink and HMAC secret | Recommended for every deployable environment |
 | `evidence` | Claims, sources, rules, formats, signing keys, and credential profiles | Yes |
+| `cel` | Optional CEL worker policy, limits, and regex posture | Defaults are present |
 | `replay` | One-time-use store for federation request JWTs, OID4VCI nonces, and holder proof JWTs | Defaults to in-process memory |
 | `credential_status` | Optional storage-backed lifecycle status URL for issued credentials | No |
 | `self_attestation` | OIDC-bound citizen request policy | Only for citizen or wallet flows |
@@ -393,6 +394,36 @@ For OpenFn sidecar connections:
 - Keep policy, minimization, audit, disclosure, and credential issuance in
   Notary. Keep adaptor execution, target credentials, normalization, source
   comparison, and worker isolation in the sidecar.
+
+## CEL Runtime
+
+CEL rules are evaluated out of process when the binary is built with
+`registry-notary-cel`. The default posture is production-oriented: worker mode,
+no queueing, bounded worker count, bounded frames, and regex disabled.
+
+```yaml
+cel:
+  mode: worker
+  worker_count: 2
+  eval_timeout_ms: 2000
+  queue_max: 0
+  allow_regex: false
+  max_expression_bytes: 8192
+  max_binding_json_bytes: 65536
+  max_result_json_bytes: 16384
+  max_string_bytes: 16384
+  max_list_items: 1024
+  max_object_depth: 16
+  max_object_keys: 256
+  worker_memory_bytes: 134217728
+  worker_stderr_bytes: 1024
+```
+
+Set `mode: disabled` only when no configured claim uses `rule.type: cel`.
+`queue_max` must stay `0`; saturation fails fast so callers can retry or shed
+load explicitly. Keep `allow_regex: false` unless the deployment has a reviewed
+reason to permit regex-capable CEL helpers such as `matches`,
+`text.regex_extract`, `text.regex_replace`, or `validate.matches`.
 
 ## Claims
 

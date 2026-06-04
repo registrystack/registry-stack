@@ -18,6 +18,8 @@ use registry_notary_core::tokens::{
     mint_access_token, mint_pre_authorized_code, verify_notary_token, AccessTokenClaims,
     BoundSubject, PreAuthorizedCodeClaims, PRE_AUTHORIZED_CODE_JWT_TYP,
 };
+#[cfg(feature = "registry-notary-cel")]
+use registry_notary_core::RegistryNotaryCelConfig;
 use registry_notary_core::{
     AccessMode, BatchEvaluateItemRequest, BatchEvaluateRequest, BoundedClaimId,
     BoundedCorrelationId, ClaimRef, ClaimResultView, ClaimSet, ConfigMetadata,
@@ -444,6 +446,8 @@ pub struct RegistryNotaryApiState {
     pub(crate) preauth: Option<Arc<PreAuthRuntime>>,
     #[cfg(feature = "registry-notary-cel")]
     pub(crate) cel_worker: Option<Arc<CelWorker>>,
+    #[cfg(feature = "registry-notary-cel")]
+    pub(crate) cel_config: Arc<RegistryNotaryCelConfig>,
 }
 
 impl RegistryNotaryApiState {
@@ -642,6 +646,8 @@ impl RegistryNotaryApiState {
             preauth: None,
             #[cfg(feature = "registry-notary-cel")]
             cel_worker: None,
+            #[cfg(feature = "registry-notary-cel")]
+            cel_config: Arc::new(RegistryNotaryCelConfig::default()),
         }
     }
 
@@ -663,13 +669,22 @@ impl RegistryNotaryApiState {
         self
     }
 
+    #[cfg(feature = "registry-notary-cel")]
+    #[must_use]
+    pub(crate) fn with_cel_config(mut self, cel_config: Arc<RegistryNotaryCelConfig>) -> Self {
+        self.cel_config = cel_config;
+        self
+    }
+
     pub(crate) fn runtime(&self) -> RegistryNotaryRuntime {
         let runtime = RegistryNotaryRuntime::new_with_self_attestation_rate_keys(Arc::clone(
             &self.self_attestation_rate_keys,
         ));
         #[cfg(feature = "registry-notary-cel")]
         {
-            runtime.with_cel_worker(self.cel_worker.as_ref().map(Arc::clone))
+            runtime
+                .with_cel_worker(self.cel_worker.as_ref().map(Arc::clone))
+                .with_cel_config(Arc::clone(&self.cel_config))
         }
         #[cfg(not(feature = "registry-notary-cel"))]
         {

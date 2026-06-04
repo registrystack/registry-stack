@@ -224,11 +224,11 @@ use registry_notary_core::{
     ClaimDefinition, ClaimProvenance, ClaimRef, ClaimResultView, CredentialProfileConfig,
     DisclosureDowngrade, DisclosureProfile, EvaluateRequest, EvidenceConfig, EvidenceEntity,
     EvidenceEntityRef, EvidenceError, EvidenceFormat, EvidencePrincipal, EvidenceRequestContext,
-    MatchingMetadata, RenderRequest, RuleConfig, SelfAttestationConfig, SelfAttestationDenialCode,
-    SourceBindingConfig, SourceCapability, StoredSelfAttestationMetadata, SubjectRequest,
-    TargetRefView, FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
-    SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_ISSUER_KEY_TYPE, SD_JWT_VC_JWT_TYP,
-    SD_JWT_VC_SIGNING_ALG,
+    MatchingMetadata, RegistryNotaryCelConfig, RenderRequest, RuleConfig, SelfAttestationConfig,
+    SelfAttestationDenialCode, SourceBindingConfig, SourceCapability,
+    StoredSelfAttestationMetadata, SubjectRequest, TargetRefView, FORMAT_CCCEV_JSONLD,
+    FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC, SD_JWT_VC_HOLDER_BINDING_METHOD,
+    SD_JWT_VC_ISSUER_KEY_TYPE, SD_JWT_VC_JWT_TYP, SD_JWT_VC_SIGNING_ALG,
 };
 use registry_platform_audit::AuditKeyHasher;
 #[cfg(feature = "registry-notary-cel")]
@@ -241,13 +241,9 @@ use tokio::task::JoinSet;
 use ulid::Ulid;
 
 #[cfg(feature = "registry-notary-cel")]
-use crate::cel_worker::{CelWorker, CelWorkerError};
+use crate::cel_worker::{cel_expression_uses_regex, CelWorker, CelWorkerError};
 use crate::self_attestation_rate_limit::SelfAttestationRateLimitKeys;
 
-#[cfg(feature = "registry-notary-cel")]
-const MAX_CEL_OBJECT_DEPTH: usize = 64;
-#[cfg(feature = "registry-notary-cel")]
-const MAX_CEL_OBJECT_KEYS: usize = 2048;
 #[cfg(feature = "registry-notary-cel")]
 const MAX_CEL_CLAIM_BINDINGS: usize = 64;
 #[cfg(feature = "registry-notary-cel")]
@@ -730,6 +726,8 @@ struct ClaimEvaluationContext {
     claim_versions: ClaimVersionSelections,
     #[cfg(feature = "registry-notary-cel")]
     cel_worker: Option<Arc<CelWorker>>,
+    #[cfg(feature = "registry-notary-cel")]
+    cel_config: Arc<RegistryNotaryCelConfig>,
 }
 
 #[cfg_attr(not(feature = "registry-notary-cel"), allow(dead_code))]
@@ -744,6 +742,8 @@ struct CelEvaluationContext<'a> {
     purpose: &'a str,
     #[cfg(feature = "registry-notary-cel")]
     worker: Option<&'a CelWorker>,
+    #[cfg(feature = "registry-notary-cel")]
+    config: &'a RegistryNotaryCelConfig,
 }
 
 impl EvidenceStore {
@@ -824,6 +824,8 @@ pub struct RegistryNotaryRuntime {
     self_attestation_rate_keys: Arc<SelfAttestationRateLimitKeys>,
     #[cfg(feature = "registry-notary-cel")]
     cel_worker: Option<Arc<CelWorker>>,
+    #[cfg(feature = "registry-notary-cel")]
+    cel_config: Arc<RegistryNotaryCelConfig>,
 }
 
 impl Default for RegistryNotaryRuntime {
@@ -853,6 +855,8 @@ impl RegistryNotaryRuntime {
             self_attestation_rate_keys,
             #[cfg(feature = "registry-notary-cel")]
             cel_worker: None,
+            #[cfg(feature = "registry-notary-cel")]
+            cel_config: Arc::new(RegistryNotaryCelConfig::default()),
         }
     }
 
@@ -860,6 +864,13 @@ impl RegistryNotaryRuntime {
     #[must_use]
     pub fn with_cel_worker(mut self, cel_worker: Option<Arc<CelWorker>>) -> Self {
         self.cel_worker = cel_worker;
+        self
+    }
+
+    #[cfg(feature = "registry-notary-cel")]
+    #[must_use]
+    pub fn with_cel_config(mut self, cel_config: Arc<RegistryNotaryCelConfig>) -> Self {
+        self.cel_config = cel_config;
         self
     }
 
@@ -1560,6 +1571,8 @@ impl RegistryNotaryRuntime {
                     claim_versions: claim_versions.clone(),
                     #[cfg(feature = "registry-notary-cel")]
                     cel_worker: self.cel_worker.as_ref().map(Arc::clone),
+                    #[cfg(feature = "registry-notary-cel")]
+                    cel_config: Arc::clone(&self.cel_config),
                 };
                 let prior_for_task = Arc::clone(&prior);
                 // We do not acquire a permit here. The `bindings` cap applies to
@@ -1714,6 +1727,8 @@ async fn evaluate_claim_task(
                 purpose: ctx.purpose.as_str(),
                 #[cfg(feature = "registry-notary-cel")]
                 worker: ctx.cel_worker.as_deref(),
+                #[cfg(feature = "registry-notary-cel")]
+                config: &ctx.cel_config,
             })
             .await?;
             validate_claim_value_type(&value, &claim.value.value_type)?;
@@ -2811,7 +2826,11 @@ fn claim_matching_metadata(claim: &ClaimDefinition) -> Option<MatchingMetadata> 
 }
 
 async fn evaluate_cel_expression(ctx: &CelEvaluationContext<'_>) -> Result<Value, EvidenceError> {
-    validate_cel_policy(ctx.expression, ctx.bindings, ctx.claim)?;
+    #[cfg(feature = "registry-notary-cel")]
+    let config = ctx.config;
+    #[cfg(not(feature = "registry-notary-cel"))]
+    let config = &RegistryNotaryCelConfig::default();
+    validate_cel_policy(ctx.expression, ctx.bindings, ctx.claim, config)?;
     #[cfg(feature = "registry-notary-cel")]
     {
         evaluate_with_cel(ctx).await
@@ -2826,8 +2845,10 @@ async fn evaluate_cel_expression(ctx: &CelEvaluationContext<'_>) -> Result<Value
 #[cfg(feature = "registry-notary-cel")]
 pub(crate) fn validate_cel_claims_for_startup(
     evidence: &EvidenceConfig,
+    config: &RegistryNotaryCelConfig,
 ) -> Result<(), EvidenceError> {
-    let runtime = MappingRuntime::new(RuntimeOptions::default());
+    let mut runtime = MappingRuntime::new(RuntimeOptions::default());
+    runtime.limits = cel_security_limits(config);
     for claim in &evidence.claims {
         let RuleConfig::Cel {
             expression,
@@ -2836,9 +2857,9 @@ pub(crate) fn validate_cel_claims_for_startup(
         else {
             continue;
         };
-        validate_cel_policy(expression, bindings, claim)?;
+        validate_cel_policy(expression, bindings, claim, config)?;
         validate_cel_expression_roots(expression)?;
-        if contains_cel_regex_usage(expression) {
+        if !config.allow_regex && cel_expression_uses_regex(expression) {
             return Err(EvidenceError::InvalidRequest);
         }
         let input = StandaloneExpressionInput::new(
@@ -2865,13 +2886,14 @@ fn validate_cel_policy(
     expression: &str,
     bindings: &CelBindingsConfig,
     claim: &ClaimDefinition,
+    _config: &RegistryNotaryCelConfig,
 ) -> Result<(), EvidenceError> {
     if expression.trim().is_empty() {
         return Err(EvidenceError::InvalidRequest);
     }
     #[cfg(feature = "registry-notary-cel")]
     {
-        SecurityLimits::default()
+        cel_security_limits(_config)
             .check_expr(expression)
             .map_err(|_| EvidenceError::InvalidRequest)?;
         if bindings.claims.len() > MAX_CEL_CLAIM_BINDINGS
@@ -2937,7 +2959,7 @@ async fn evaluate_with_cel(ctx: &CelEvaluationContext<'_>) -> Result<Value, Evid
             return Err(EvidenceError::OperationUnsupported);
         }
     };
-    validate_cel_result_limits(&value, &SecurityLimits::default())?;
+    validate_cel_result_limits(&value, ctx.config)?;
     Ok(value)
 }
 
@@ -3043,11 +3065,6 @@ fn validate_cel_expression_roots(expression: &str) -> Result<(), EvidenceError> 
 }
 
 #[cfg(feature = "registry-notary-cel")]
-fn contains_cel_regex_usage(expression: &str) -> bool {
-    expression.contains(".matches(") || expression.contains("matches(") || expression.contains("=~")
-}
-
-#[cfg(feature = "registry-notary-cel")]
 fn cel_root_references(expression: &str) -> BTreeSet<String> {
     let bytes = expression.as_bytes();
     let mut roots = BTreeSet::new();
@@ -3146,10 +3163,9 @@ fn cel_root_bindings(
         ),
         ("meta".to_string(), cel_meta(ctx.evidence, ctx.claim)),
     ]);
-    let limits = SecurityLimits::default();
     validate_cel_binding_limits(
         &Value::Object(root_bindings.clone().into_iter().collect()),
-        &limits,
+        ctx.config,
     )?;
     Ok(root_bindings)
 }
@@ -3167,19 +3183,22 @@ fn cel_worker_error(error: CelWorkerError) -> EvidenceError {
 #[cfg(feature = "registry-notary-cel")]
 fn validate_cel_binding_limits(
     value: &Value,
-    limits: &SecurityLimits,
+    config: &RegistryNotaryCelConfig,
 ) -> Result<(), EvidenceError> {
+    if serialized_json_len(value)? > config.max_binding_json_bytes {
+        return Err(EvidenceError::RuleEvaluationFailed);
+    }
     let mut stack = vec![(value, 0_usize)];
     while let Some((value, depth)) = stack.pop() {
-        if depth > MAX_CEL_OBJECT_DEPTH {
+        if depth > config.max_object_depth {
             return Err(EvidenceError::RuleEvaluationFailed);
         }
         match value {
-            Value::String(value) if value.len() > limits.max_string_bytes => {
+            Value::String(value) if value.len() > config.max_string_bytes => {
                 return Err(EvidenceError::RuleEvaluationFailed);
             }
             Value::Array(values) => {
-                if values.len() > limits.max_list_len {
+                if values.len() > config.max_list_items {
                     return Err(EvidenceError::RuleEvaluationFailed);
                 }
                 for value in values {
@@ -3187,7 +3206,7 @@ fn validate_cel_binding_limits(
                 }
             }
             Value::Object(values) => {
-                if values.len() > MAX_CEL_OBJECT_KEYS {
+                if values.len() > config.max_object_keys {
                     return Err(EvidenceError::RuleEvaluationFailed);
                 }
                 for value in values.values() {
@@ -3201,13 +3220,51 @@ fn validate_cel_binding_limits(
 }
 
 #[cfg(feature = "registry-notary-cel")]
-fn validate_cel_result_limits(value: &Value, limits: &SecurityLimits) -> Result<(), EvidenceError> {
-    validate_cel_binding_limits(value, limits)?;
-    let bytes = serde_json::to_vec(value).map_err(|_| EvidenceError::RuleEvaluationFailed)?;
-    if bytes.len() > limits.max_output_json_bytes {
+fn validate_cel_result_limits(
+    value: &Value,
+    config: &RegistryNotaryCelConfig,
+) -> Result<(), EvidenceError> {
+    validate_cel_binding_limits(value, config)?;
+    if serialized_json_len(value)? > config.max_result_json_bytes {
         return Err(EvidenceError::RuleEvaluationFailed);
     }
     Ok(())
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn serialized_json_len(value: &Value) -> Result<usize, EvidenceError> {
+    struct CountingWriter {
+        count: usize,
+    }
+
+    impl std::io::Write for CountingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.count = self
+                .count
+                .checked_add(buf.len())
+                .ok_or_else(|| std::io::Error::other("serialized JSON length overflow"))?;
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut writer = CountingWriter { count: 0 };
+    serde_json::to_writer(&mut writer, value).map_err(|_| EvidenceError::RuleEvaluationFailed)?;
+    Ok(writer.count)
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn cel_security_limits(config: &RegistryNotaryCelConfig) -> SecurityLimits {
+    SecurityLimits {
+        max_expression_bytes: config.max_expression_bytes,
+        max_output_json_bytes: config.max_result_json_bytes,
+        max_list_len: config.max_list_items,
+        max_string_bytes: config.max_string_bytes,
+        ..SecurityLimits::default()
+    }
 }
 
 #[cfg(feature = "registry-notary-cel")]
@@ -4445,19 +4502,19 @@ mod tests {
     #[cfg(feature = "registry-notary-cel")]
     #[test]
     fn cel_binding_limits_reject_large_strings_and_lists() {
-        let limits = SecurityLimits {
+        let config = RegistryNotaryCelConfig {
             max_string_bytes: 4,
-            max_list_len: 2,
-            ..SecurityLimits::default()
+            max_list_items: 2,
+            ..RegistryNotaryCelConfig::default()
         };
 
-        assert!(validate_cel_binding_limits(&json!({ "value": "abcd" }), &limits).is_ok());
+        assert!(validate_cel_binding_limits(&json!({ "value": "abcd" }), &config).is_ok());
         assert!(matches!(
-            validate_cel_binding_limits(&json!({ "value": "abcde" }), &limits),
+            validate_cel_binding_limits(&json!({ "value": "abcde" }), &config),
             Err(EvidenceError::RuleEvaluationFailed)
         ));
         assert!(matches!(
-            validate_cel_binding_limits(&json!({ "items": [1, 2, 3] }), &limits),
+            validate_cel_binding_limits(&json!({ "items": [1, 2, 3] }), &config),
             Err(EvidenceError::RuleEvaluationFailed)
         ));
     }
@@ -4477,7 +4534,12 @@ mod tests {
             vars: BTreeMap::new(),
         };
         assert!(matches!(
-            validate_cel_policy("true", &invalid_alias, &claim),
+            validate_cel_policy(
+                "true",
+                &invalid_alias,
+                &claim,
+                &RegistryNotaryCelConfig::default()
+            ),
             Err(EvidenceError::InvalidRequest)
         ));
 
@@ -4492,7 +4554,12 @@ mod tests {
             vars: BTreeMap::new(),
         };
         assert!(matches!(
-            validate_cel_policy("true", &unlisted_dependency, &claim),
+            validate_cel_policy(
+                "true",
+                &unlisted_dependency,
+                &claim,
+                &RegistryNotaryCelConfig::default()
+            ),
             Err(EvidenceError::InvalidRequest)
         ));
     }
@@ -4508,7 +4575,27 @@ mod tests {
             validate_cel_expression_roots("credential.level == 'gold'"),
             Err(EvidenceError::InvalidRequest)
         ));
-        assert!(contains_cel_regex_usage("source.person.name.matches('^A')"));
+        assert!(cel_expression_uses_regex(
+            "source.person.name.matches('^A')"
+        ));
+        assert!(cel_expression_uses_regex(
+            "text.regex_replace(source.person.name, '^A', 'B')"
+        ));
+        assert!(cel_expression_uses_regex(
+            "text . regex_replace(source.person.name, '^A', 'B')"
+        ));
+        assert!(cel_expression_uses_regex(
+            "text. regex_extract(source.person.name, '^(.+)$', 1)"
+        ));
+        assert!(cel_expression_uses_regex(
+            "text_regex_extract(source.person.name, '^(.+)$', 1)"
+        ));
+        assert!(cel_expression_uses_regex(
+            "validate.matches(source.person.name, '^A', 'bad')"
+        ));
+        assert!(!cel_expression_uses_regex(
+            "'text.regex_replace(source.person.name, pattern)'"
+        ));
     }
 
     #[test]
@@ -4540,14 +4627,14 @@ mod tests {
     #[cfg(feature = "registry-notary-cel")]
     #[test]
     fn cel_binding_limits_reject_deep_json_without_recursive_walk() {
-        let limits = SecurityLimits::default();
+        let config = RegistryNotaryCelConfig::default();
         let mut value = json!(true);
-        for _ in 0..=MAX_CEL_OBJECT_DEPTH {
+        for _ in 0..=config.max_object_depth {
             value = json!({ "nested": value });
         }
 
         assert!(matches!(
-            validate_cel_binding_limits(&value, &limits),
+            validate_cel_binding_limits(&value, &config),
             Err(EvidenceError::RuleEvaluationFailed)
         ));
     }
@@ -4555,13 +4642,13 @@ mod tests {
     #[cfg(feature = "registry-notary-cel")]
     #[test]
     fn cel_result_limits_reject_oversized_serialized_output() {
-        let limits = SecurityLimits {
-            max_output_json_bytes: 4,
-            ..SecurityLimits::default()
+        let config = RegistryNotaryCelConfig {
+            max_result_json_bytes: 4,
+            ..RegistryNotaryCelConfig::default()
         };
 
         assert!(matches!(
-            validate_cel_result_limits(&json!("12345"), &limits),
+            validate_cel_result_limits(&json!("12345"), &config),
             Err(EvidenceError::RuleEvaluationFailed)
         ));
     }
@@ -4569,14 +4656,14 @@ mod tests {
     #[cfg(feature = "registry-notary-cel")]
     #[test]
     fn cel_result_limits_reject_deep_worker_output_without_recursive_walk() {
-        let limits = SecurityLimits::default();
+        let config = RegistryNotaryCelConfig::default();
         let mut value = json!(true);
-        for _ in 0..=MAX_CEL_OBJECT_DEPTH {
+        for _ in 0..=config.max_object_depth {
             value = json!({ "nested": value });
         }
 
         assert!(matches!(
-            validate_cel_result_limits(&value, &limits),
+            validate_cel_result_limits(&value, &config),
             Err(EvidenceError::RuleEvaluationFailed)
         ));
     }

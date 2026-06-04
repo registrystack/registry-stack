@@ -38,6 +38,8 @@ pub struct StandaloneRegistryNotaryConfig {
     pub replay: ReplayConfig,
     #[serde(default, skip_serializing_if = "credential_status_config_is_default")]
     pub credential_status: CredentialStatusConfig,
+    #[serde(default, skip_serializing_if = "registry_notary_cel_config_is_default")]
+    pub cel: RegistryNotaryCelConfig,
     #[serde(default, skip_serializing_if = "self_attestation_config_is_default")]
     pub self_attestation: SelfAttestationConfig,
     #[serde(default, skip_serializing_if = "oid4vci_config_is_default")]
@@ -79,6 +81,7 @@ impl StandaloneRegistryNotaryConfig {
             }
         }
         self.evidence.concurrency.validate()?;
+        self.cel.validate()?;
         if self.evidence.max_credential_validity_seconds == 0
             || self.evidence.max_credential_validity_seconds > 600
         {
@@ -730,6 +733,167 @@ impl Default for CredentialStatusRedisConfig {
 
 fn credential_status_config_is_default(config: &CredentialStatusConfig) -> bool {
     config == &CredentialStatusConfig::default()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegistryNotaryCelConfig {
+    #[serde(default = "default_cel_mode")]
+    pub mode: String,
+    #[serde(default = "default_cel_worker_count")]
+    pub worker_count: usize,
+    #[serde(default = "default_cel_eval_timeout_ms")]
+    pub eval_timeout_ms: u64,
+    #[serde(default)]
+    pub queue_max: usize,
+    #[serde(default)]
+    pub allow_regex: bool,
+    #[serde(default = "default_cel_max_expression_bytes")]
+    pub max_expression_bytes: usize,
+    #[serde(default = "default_cel_max_binding_json_bytes")]
+    pub max_binding_json_bytes: usize,
+    #[serde(default = "default_cel_max_result_json_bytes")]
+    pub max_result_json_bytes: usize,
+    #[serde(default = "default_cel_max_string_bytes")]
+    pub max_string_bytes: usize,
+    #[serde(default = "default_cel_max_list_items")]
+    pub max_list_items: usize,
+    #[serde(default = "default_cel_max_object_depth")]
+    pub max_object_depth: usize,
+    #[serde(default = "default_cel_max_object_keys")]
+    pub max_object_keys: usize,
+    #[serde(default = "default_cel_worker_memory_bytes")]
+    pub worker_memory_bytes: u64,
+    #[serde(default = "default_cel_worker_stderr_bytes")]
+    pub worker_stderr_bytes: usize,
+}
+
+impl Default for RegistryNotaryCelConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_cel_mode(),
+            worker_count: default_cel_worker_count(),
+            eval_timeout_ms: default_cel_eval_timeout_ms(),
+            queue_max: 0,
+            allow_regex: false,
+            max_expression_bytes: default_cel_max_expression_bytes(),
+            max_binding_json_bytes: default_cel_max_binding_json_bytes(),
+            max_result_json_bytes: default_cel_max_result_json_bytes(),
+            max_string_bytes: default_cel_max_string_bytes(),
+            max_list_items: default_cel_max_list_items(),
+            max_object_depth: default_cel_max_object_depth(),
+            max_object_keys: default_cel_max_object_keys(),
+            worker_memory_bytes: default_cel_worker_memory_bytes(),
+            worker_stderr_bytes: default_cel_worker_stderr_bytes(),
+        }
+    }
+}
+
+impl RegistryNotaryCelConfig {
+    fn validate(&self) -> Result<(), EvidenceConfigError> {
+        if self.mode != "worker" && self.mode != "disabled" {
+            return invalid_cel("cel.mode must be worker or disabled");
+        }
+        if self.worker_count == 0 || self.worker_count > 16 {
+            return invalid_cel("cel.worker_count must be between 1 and 16");
+        }
+        if self.eval_timeout_ms == 0 || self.eval_timeout_ms > 30_000 {
+            return invalid_cel("cel.eval_timeout_ms must be between 1 and 30000");
+        }
+        if self.queue_max != 0 {
+            return invalid_cel(
+                "cel.queue_max must be 0; queued CEL evaluation is not implemented",
+            );
+        }
+        if self.max_expression_bytes == 0 || self.max_expression_bytes > 256 * 1024 {
+            return invalid_cel("cel.max_expression_bytes must be between 1 and 262144");
+        }
+        if self.max_binding_json_bytes == 0 || self.max_binding_json_bytes > 1024 * 1024 {
+            return invalid_cel("cel.max_binding_json_bytes must be between 1 and 1048576");
+        }
+        if self.max_result_json_bytes == 0 || self.max_result_json_bytes > 1024 * 1024 {
+            return invalid_cel("cel.max_result_json_bytes must be between 1 and 1048576");
+        }
+        if self.max_string_bytes == 0 || self.max_string_bytes > 256 * 1024 {
+            return invalid_cel("cel.max_string_bytes must be between 1 and 262144");
+        }
+        if self.max_list_items == 0 || self.max_list_items > 100_000 {
+            return invalid_cel("cel.max_list_items must be between 1 and 100000");
+        }
+        if self.max_object_depth == 0 || self.max_object_depth > 64 {
+            return invalid_cel("cel.max_object_depth must be between 1 and 64");
+        }
+        if self.max_object_keys == 0 || self.max_object_keys > 2048 {
+            return invalid_cel("cel.max_object_keys must be between 1 and 2048");
+        }
+        if self.worker_memory_bytes < 32 * 1024 * 1024
+            || self.worker_memory_bytes > 1024 * 1024 * 1024
+        {
+            return invalid_cel("cel.worker_memory_bytes must be between 33554432 and 1073741824");
+        }
+        if self.worker_stderr_bytes == 0 || self.worker_stderr_bytes > 64 * 1024 {
+            return invalid_cel("cel.worker_stderr_bytes must be between 1 and 65536");
+        }
+        Ok(())
+    }
+}
+
+fn registry_notary_cel_config_is_default(config: &RegistryNotaryCelConfig) -> bool {
+    config == &RegistryNotaryCelConfig::default()
+}
+
+fn invalid_cel<T>(reason: impl Into<String>) -> Result<T, EvidenceConfigError> {
+    Err(EvidenceConfigError::InvalidCelConfig {
+        reason: reason.into(),
+    })
+}
+
+fn default_cel_mode() -> String {
+    "worker".to_string()
+}
+
+const fn default_cel_worker_count() -> usize {
+    2
+}
+
+const fn default_cel_eval_timeout_ms() -> u64 {
+    2_000
+}
+
+const fn default_cel_max_expression_bytes() -> usize {
+    8 * 1024
+}
+
+const fn default_cel_max_binding_json_bytes() -> usize {
+    64 * 1024
+}
+
+const fn default_cel_max_result_json_bytes() -> usize {
+    16 * 1024
+}
+
+const fn default_cel_max_string_bytes() -> usize {
+    16 * 1024
+}
+
+const fn default_cel_max_list_items() -> usize {
+    1024
+}
+
+const fn default_cel_max_object_depth() -> usize {
+    16
+}
+
+const fn default_cel_max_object_keys() -> usize {
+    256
+}
+
+const fn default_cel_worker_memory_bytes() -> u64 {
+    128 * 1024 * 1024
+}
+
+const fn default_cel_worker_stderr_bytes() -> usize {
+    1024
 }
 
 fn default_credential_status_storage() -> String {
@@ -3224,6 +3388,8 @@ pub enum EvidenceConfigError {
     InvalidReplayConfig { reason: String },
     #[error("invalid credential status config: {reason}")]
     InvalidCredentialStatusConfig { reason: String },
+    #[error("invalid cel config: {reason}")]
+    InvalidCelConfig { reason: String },
     #[error("invalid federation config: {reason}")]
     InvalidFederationConfig { reason: String },
     #[error("source_connection '{connection}': invalid source_auth config: {reason}")]
@@ -4465,6 +4631,68 @@ rule:
 "#
         ))
         .expect("minimal claim is valid YAML")
+    }
+
+    #[test]
+    fn cel_config_defaults_and_validates_operator_limits() {
+        let mut config = minimal_config();
+        assert_eq!(config.cel.mode, "worker");
+        assert_eq!(config.cel.worker_count, 2);
+        assert_eq!(config.cel.queue_max, 0);
+        assert!(!config.cel.allow_regex);
+        config.validate().expect("default CEL config validates");
+
+        config.cel.queue_max = 1;
+        let error = config
+            .validate()
+            .expect_err("queueing must be explicit and unsupported");
+        assert!(matches!(
+            error,
+            EvidenceConfigError::InvalidCelConfig { .. }
+        ));
+    }
+
+    #[test]
+    fn cel_config_deserializes_production_surface() {
+        let config: StandaloneRegistryNotaryConfig = serde_norway::from_str(
+            r#"
+evidence:
+  enabled: true
+  signing_keys:
+    issuer-key:
+      provider: local_jwk_env
+      private_jwk_env: ISSUER_KEY
+      alg: EdDSA
+      kid: did:web:issuer.example#key-1
+      status: active
+auth:
+  mode: api_key
+  api_keys:
+    - id: test-key
+      hash_env: TEST_TOKEN_HASH
+cel:
+  mode: worker
+  worker_count: 4
+  eval_timeout_ms: 1500
+  queue_max: 0
+  allow_regex: false
+  max_expression_bytes: 4096
+  max_binding_json_bytes: 32768
+  max_result_json_bytes: 8192
+  max_string_bytes: 4096
+  max_list_items: 128
+  max_object_depth: 8
+  max_object_keys: 64
+  worker_memory_bytes: 67108864
+  worker_stderr_bytes: 512
+"#,
+        )
+        .expect("CEL config deserializes");
+
+        assert_eq!(config.cel.worker_count, 4);
+        assert_eq!(config.cel.eval_timeout_ms, 1500);
+        assert_eq!(config.cel.max_result_json_bytes, 8192);
+        config.validate().expect("CEL config validates");
     }
 
     #[test]

@@ -4318,6 +4318,65 @@ async fn standalone_startup_rejects_cel_unknown_root_reference() {
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
+async fn standalone_startup_rejects_disabled_cel_mode_when_claims_use_cel() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    config.cel.mode = "disabled".to_string();
+
+    let error = standalone_router(config).expect_err("router rejects disabled CEL mode");
+    let text = error.to_string();
+    assert!(text.contains("CEL claims require cel.mode = worker"));
+    assert!(!text.contains("source-token"));
+}
+
+#[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
+async fn standalone_startup_rejects_cel_regex_helpers_by_default() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    let bad_expression = "text.regex_replace(source.farmer.total_farmed_area, '^3', '4') == '4.5'";
+    let claim = config
+        .evidence
+        .claims
+        .iter_mut()
+        .find(|claim| claim.id == "farmer-under-4ha")
+        .expect("CEL claim exists");
+    let registry_notary_core::RuleConfig::Cel { expression, .. } = &mut claim.rule else {
+        panic!("expected CEL claim");
+    };
+    *expression = bad_expression.to_string();
+
+    let error = standalone_router(config).expect_err("router rejects regex helper");
+    let text = error.to_string();
+    assert!(text.contains("invalid CEL"));
+    assert!(!text.contains("text.regex_replace"));
+    assert!(!text.contains("source-token"));
+}
+
+#[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 async fn standalone_server_reads_dci_source_and_evaluates_cel_claim() {
     set_audit_secret();
     std::env::set_var(

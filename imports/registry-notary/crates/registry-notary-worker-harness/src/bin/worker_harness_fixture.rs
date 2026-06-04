@@ -24,6 +24,7 @@ fn main() {
     let stdin = io::stdin();
     let mut stdout = io::stdout();
     let mut stderr = io::stderr();
+    prewrite_stdout_if_configured(&mut stdout);
 
     for line in stdin.lock().lines() {
         let line = match line {
@@ -87,6 +88,23 @@ fn main() {
             }
         }
     }
+}
+
+fn prewrite_stdout_if_configured(stdout: &mut io::Stdout) {
+    let Some(bytes) = env::var("WORKER_HARNESS_PREWRITE_STDOUT_BYTES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+    else {
+        return;
+    };
+    write_json(
+        stdout,
+        json!({
+            "ok": true,
+            "pid": process::id(),
+            "prewritten": "x".repeat(bytes),
+        }),
+    );
 }
 
 fn exit_once_on_start_if_configured() {

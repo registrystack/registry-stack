@@ -10,8 +10,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crosswalk_core::{
-    MappingRuntime, RuntimeOptions, StandaloneEvalError, StandaloneExpressionInput,
+    MappingRuntime, RuntimeOptions, SecurityLimits, StandaloneEvalError, StandaloneExpressionInput,
 };
+use registry_notary_core::RegistryNotaryCelConfig;
 use registry_notary_worker_harness::{
     WorkerCommand, WorkerError, WorkerPool, WorkerPoolConfig, WorkerPoolSnapshot,
 };
@@ -39,6 +40,8 @@ pub struct CelWorkerConfig {
     pub max_response_bytes: usize,
     pub max_stderr_bytes: usize,
     pub max_memory_bytes: Option<u64>,
+    pub allow_regex: bool,
+    pub limits: CelWorkerLimits,
 }
 
 impl CelWorkerConfig {
@@ -71,7 +74,29 @@ impl CelWorkerConfig {
             max_response_bytes: 16 * 1024,
             max_stderr_bytes: 1024,
             max_memory_bytes: Some(128 * 1024 * 1024),
+            allow_regex: false,
+            limits: CelWorkerLimits::default(),
         }
+    }
+
+    #[must_use]
+    pub fn from_standalone_config(config: &RegistryNotaryCelConfig) -> Self {
+        let mut worker = Self::for_current_exe_subcommand();
+        worker.max_workers = config.worker_count;
+        worker.request_timeout = Duration::from_millis(config.eval_timeout_ms);
+        worker.max_request_bytes = config
+            .max_binding_json_bytes
+            .saturating_add(config.max_expression_bytes)
+            .saturating_add(4096);
+        worker.max_response_bytes = config
+            .max_result_json_bytes
+            .saturating_add(2048)
+            .max(config.max_result_json_bytes);
+        worker.max_stderr_bytes = config.worker_stderr_bytes;
+        worker.max_memory_bytes = Some(config.worker_memory_bytes);
+        worker.allow_regex = config.allow_regex;
+        worker.limits = CelWorkerLimits::from(config);
+        worker
     }
 }
 
@@ -141,6 +166,8 @@ impl CelWorker {
             protocol: CEL_WORKER_PROTOCOL_V1,
             expression,
             policy_hash: Some(policy_hash.clone()),
+            allow_regex: self.config.allow_regex,
+            limits: self.config.limits.clone(),
             root_bindings,
         };
         let pool = match self.pool().await {
@@ -343,6 +370,10 @@ pub struct CelWorkerRequest<'a> {
     pub expression: &'a str,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_hash: Option<String>,
+    #[serde(default)]
+    pub allow_regex: bool,
+    #[serde(default)]
+    pub limits: CelWorkerLimits,
     pub root_bindings: Value,
 }
 
@@ -357,8 +388,50 @@ pub struct CelWorkerResponse {
     pub error: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CelWorkerLimits {
+    pub max_expression_bytes: usize,
+    pub max_binding_json_bytes: usize,
+    pub max_output_json_bytes: usize,
+    pub max_list_len: usize,
+    pub max_string_bytes: usize,
+    pub max_object_depth: usize,
+    pub max_object_keys: usize,
+}
+
+impl Default for CelWorkerLimits {
+    fn default() -> Self {
+        Self::from(&RegistryNotaryCelConfig::default())
+    }
+}
+
+impl From<&RegistryNotaryCelConfig> for CelWorkerLimits {
+    fn from(config: &RegistryNotaryCelConfig) -> Self {
+        Self {
+            max_expression_bytes: config.max_expression_bytes,
+            max_binding_json_bytes: config.max_binding_json_bytes,
+            max_output_json_bytes: config.max_result_json_bytes,
+            max_list_len: config.max_list_items,
+            max_string_bytes: config.max_string_bytes,
+            max_object_depth: config.max_object_depth,
+            max_object_keys: config.max_object_keys,
+        }
+    }
+}
+
+impl From<&CelWorkerLimits> for SecurityLimits {
+    fn from(limits: &CelWorkerLimits) -> Self {
+        Self {
+            max_expression_bytes: limits.max_expression_bytes,
+            max_output_json_bytes: limits.max_output_json_bytes,
+            max_list_len: limits.max_list_len,
+            max_string_bytes: limits.max_string_bytes,
+            ..SecurityLimits::default()
+        }
+    }
+}
+
 pub fn run_stdio_worker() {
-    let runtime = MappingRuntime::new(RuntimeOptions::default());
     let stdin = io::stdin();
     let mut stdin = stdin.lock();
     let mut stdout = io::stdout();
@@ -372,7 +445,7 @@ pub fn run_stdio_worker() {
             Err(_) => process::exit(2),
         }
         let response = match serde_json::from_slice::<CelWorkerRequest<'_>>(line.trim_ascii_end()) {
-            Ok(request) => handle_worker_request(&runtime, request),
+            Ok(request) => handle_worker_request(request),
             Err(_) => CelWorkerResponse {
                 protocol: CEL_WORKER_PROTOCOL_V1.to_string(),
                 policy_hash: None,
@@ -425,10 +498,7 @@ fn read_worker_stdin_frame<R: BufRead>(
     }
 }
 
-fn handle_worker_request(
-    runtime: &MappingRuntime,
-    request: CelWorkerRequest<'_>,
-) -> CelWorkerResponse {
+fn handle_worker_request(request: CelWorkerRequest<'_>) -> CelWorkerResponse {
     if request.protocol != CEL_WORKER_PROTOCOL_V1 {
         return worker_error(None, "invalid_request");
     }
@@ -440,9 +510,20 @@ fn handle_worker_request(
     {
         return worker_error(Some(policy_hash), "invalid_request");
     }
+    if !request.allow_regex && cel_expression_uses_regex(request.expression) {
+        return worker_error(Some(policy_hash), "compile");
+    }
+    let security_limits = SecurityLimits::from(&request.limits);
+    if security_limits.check_expr(request.expression).is_err()
+        || validate_worker_json_limits(&request.root_bindings, &request.limits).is_err()
+    {
+        return worker_error(Some(policy_hash), "invalid_request");
+    }
     let Value::Object(bindings) = request.root_bindings else {
         return worker_error(Some(policy_hash), "invalid_request");
     };
+    let mut runtime = MappingRuntime::new(RuntimeOptions::default());
+    runtime.limits = security_limits;
     match runtime.evaluate_cel_expression_with_input(
         request.expression,
         StandaloneExpressionInput::new(bindings.into_iter().collect()),
@@ -467,4 +548,135 @@ fn worker_error(policy_hash: Option<String>, error: &str) -> CelWorkerResponse {
         value: None,
         error: Some(error.to_string()),
     }
+}
+
+#[must_use]
+pub fn cel_expression_uses_regex(expression: &str) -> bool {
+    if expression.contains("=~") {
+        return true;
+    }
+    cel_function_calls(expression).into_iter().any(|call| {
+        let final_segment = call.rsplit('.').next().unwrap_or(call.as_str());
+        matches!(
+            final_segment,
+            "matches"
+                | "regex_replace"
+                | "regex_extract"
+                | "text_matches"
+                | "text_regex_replace"
+                | "text_regex_extract"
+                | "validate_matches"
+                | "id_is_valid"
+        )
+    })
+}
+
+fn cel_function_calls(expression: &str) -> Vec<String> {
+    let bytes = expression.as_bytes();
+    let mut calls = Vec::new();
+    let mut index = 0;
+    let mut quote: Option<u8> = None;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if let Some(active_quote) = quote {
+            if byte == b'\\' {
+                index = index.saturating_add(2);
+                continue;
+            }
+            if byte == active_quote {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        if matches!(byte, b'\'' | b'"' | b'`') {
+            quote = Some(byte);
+            index += 1;
+            continue;
+        }
+        if !is_cel_identifier_start_byte(byte) {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        index += 1;
+        while index < bytes.len()
+            && (is_cel_identifier_continue_byte(bytes[index]) || bytes[index] == b'.')
+        {
+            index += 1;
+        }
+        let mut lookahead = index;
+        while lookahead < bytes.len() && bytes[lookahead].is_ascii_whitespace() {
+            lookahead += 1;
+        }
+        if bytes.get(lookahead) == Some(&b'(') {
+            calls.push(expression[start..index].to_string());
+        }
+    }
+    calls
+}
+
+fn is_cel_identifier_start_byte(byte: u8) -> bool {
+    byte == b'_' || byte.is_ascii_alphabetic()
+}
+
+fn is_cel_identifier_continue_byte(byte: u8) -> bool {
+    byte == b'_' || byte.is_ascii_alphanumeric()
+}
+
+fn validate_worker_json_limits(value: &Value, limits: &CelWorkerLimits) -> Result<(), ()> {
+    if serialized_json_len(value)? > limits.max_binding_json_bytes {
+        return Err(());
+    }
+    let mut stack = vec![(value, 0_usize)];
+    while let Some((value, depth)) = stack.pop() {
+        if depth > limits.max_object_depth {
+            return Err(());
+        }
+        match value {
+            Value::String(value) if value.len() > limits.max_string_bytes => return Err(()),
+            Value::Array(values) => {
+                if values.len() > limits.max_list_len {
+                    return Err(());
+                }
+                for value in values {
+                    stack.push((value, depth + 1));
+                }
+            }
+            Value::Object(values) => {
+                if values.len() > limits.max_object_keys {
+                    return Err(());
+                }
+                for value in values.values() {
+                    stack.push((value, depth + 1));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn serialized_json_len(value: &Value) -> Result<usize, ()> {
+    struct CountingWriter {
+        count: usize,
+    }
+
+    impl std::io::Write for CountingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.count = self
+                .count
+                .checked_add(buf.len())
+                .ok_or_else(|| std::io::Error::other("serialized JSON length overflow"))?;
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut writer = CountingWriter { count: 0 };
+    serde_json::to_writer(&mut writer, value).map_err(|_| ())?;
+    Ok(writer.count)
 }

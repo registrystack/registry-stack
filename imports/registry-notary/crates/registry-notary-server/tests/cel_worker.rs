@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use registry_notary_server::cel_worker::{
-    cel_policy_hash, CelWorker, CelWorkerConfig, CelWorkerError,
+    cel_policy_hash, CelWorker, CelWorkerConfig, CelWorkerError, CelWorkerLimits,
 };
 use registry_notary_worker_harness::WorkerError;
 use serde_json::json;
@@ -50,6 +50,8 @@ fn config() -> CelWorkerConfig {
         max_response_bytes: 8192,
         max_stderr_bytes: 128,
         max_memory_bytes: None,
+        allow_regex: false,
+        limits: CelWorkerLimits::default(),
         forbidden_env_names: BTreeSet::from([
             OsString::from("REGISTRY_NOTARY_TEST_HSM_PIN"),
             OsString::from("REGISTRY_NOTARY_TEST_SOURCE_TOKEN"),
@@ -64,11 +66,13 @@ fn fixture_config() -> CelWorkerConfig {
         command_envs: Vec::new(),
         current_dir: None,
         max_workers: 1,
-        request_timeout: Duration::from_secs(2),
+        request_timeout: Duration::from_secs(5),
         max_request_bytes: 8192,
         max_response_bytes: 8192,
         max_stderr_bytes: 128,
         max_memory_bytes: None,
+        allow_regex: false,
+        limits: CelWorkerLimits::default(),
         forbidden_env_names: BTreeSet::from([
             OsString::from("REGISTRY_NOTARY_TEST_HSM_PIN"),
             OsString::from("REGISTRY_NOTARY_TEST_SOURCE_TOKEN"),
@@ -323,6 +327,49 @@ async fn cel_stdio_worker_echoes_policy_hash() {
         serde_json::from_slice(&output.stdout).expect("worker emits JSON");
     assert_eq!(response["policy_hash"], json!(cel_policy_hash(expression)));
     assert_eq!(response["value"], json!(true));
+}
+
+#[tokio::test]
+async fn cel_stdio_worker_rejects_regex_helpers_by_default() {
+    let expression = "text.regex_extract(source.name, '^A(.+)$', 1)";
+    let mut child = Command::new(cel_worker_bin())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("worker starts");
+    let mut stdin = child.stdin.take().expect("stdin is piped");
+    stdin
+        .write_all(
+            serde_json::to_string(&json!({
+                "protocol": "registry-notary-cel-worker/v1",
+                "policy_hash": cel_policy_hash(expression),
+                "expression": expression,
+                "root_bindings": {
+                    "source": { "name": "Amina" },
+                    "claims": {},
+                    "ctx": {},
+                    "vars": {},
+                    "meta": {}
+                }
+            }))
+            .expect("request serializes")
+            .as_bytes(),
+        )
+        .await
+        .expect("write request");
+    stdin.write_all(b"\n").await.expect("write newline");
+    drop(stdin);
+
+    let output = child
+        .wait_with_output()
+        .await
+        .expect("worker exits after stdin closes");
+    assert!(output.status.success());
+    let response: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("worker emits JSON");
+    assert_eq!(response["policy_hash"], json!(cel_policy_hash(expression)));
+    assert_eq!(response["error"], json!("compile"));
+    assert!(response.get("value").is_none());
 }
 
 #[tokio::test]
