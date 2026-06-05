@@ -9,6 +9,8 @@ Outbound HTTP utilities for registry services.
   URLs; pair it with `FetchUrlPolicy` for user-controlled destinations.
 - `read_bounded` for response bodies with content-length and streaming byte
   limits.
+- `ProxyHeaderPolicy` plus request and response header filters for proxy-safe
+  forwarding.
 - `url::append_path_segments` for safe path construction.
 - `FetchUrlPolicy` for SSRF-resistant outbound URL validation and DNS evidence.
 - `ValidatedFetchUrl` for immediate GET requests pinned to DNS evidence observed

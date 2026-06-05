@@ -3,6 +3,8 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use std::time::{Duration, SystemTime};
 
+use http::header::{HeaderName, AUTHORIZATION, CONNECTION, COOKIE};
+use http::HeaderMap;
 use thiserror::Error;
 
 /// Default timeout for requests built from [`ValidatedFetchUrl`].
@@ -124,6 +126,150 @@ pub async fn read_bounded(
     }
 
     Ok(body)
+}
+
+/// Header forwarding policy for HTTP proxy request filtering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProxyHeaderPolicy {
+    allow_authorization: bool,
+    allow_cookie: bool,
+    private_prefixes: Vec<String>,
+}
+
+impl Default for ProxyHeaderPolicy {
+    fn default() -> Self {
+        Self::strict()
+    }
+}
+
+impl ProxyHeaderPolicy {
+    /// Create a policy that strips hop-by-hop headers, `Connection`-nominated
+    /// headers, `Authorization`, and `Cookie`.
+    #[must_use]
+    pub fn strict() -> Self {
+        Self {
+            allow_authorization: false,
+            allow_cookie: false,
+            private_prefixes: Vec::new(),
+        }
+    }
+
+    /// Allow or deny forwarding the caller's `Authorization` header.
+    #[must_use]
+    pub fn allow_authorization(mut self, allow: bool) -> Self {
+        self.allow_authorization = allow;
+        self
+    }
+
+    /// Allow or deny forwarding the caller's `Cookie` header.
+    #[must_use]
+    pub fn allow_cookie(mut self, allow: bool) -> Self {
+        self.allow_cookie = allow;
+        self
+    }
+
+    /// Strip headers whose names start with this case-insensitive prefix.
+    ///
+    /// This is intended for service-owned private headers that must not be
+    /// accepted from callers before the proxy injects verified values.
+    #[must_use]
+    pub fn strip_private_prefix(mut self, prefix: &str) -> Self {
+        self.private_prefixes.push(prefix.to_ascii_lowercase());
+        self
+    }
+
+    fn strips_private_header(&self, name: &HeaderName) -> bool {
+        self.private_prefixes
+            .iter()
+            .any(|prefix| name.as_str().starts_with(prefix))
+    }
+}
+
+/// Return request headers safe to forward through a generic HTTP proxy.
+///
+/// The filter removes RFC hop-by-hop headers, headers nominated by the request's
+/// `Connection` header, service private prefixes from [`ProxyHeaderPolicy`],
+/// and caller auth material unless explicitly allowed by the policy.
+#[must_use]
+pub fn filter_proxy_request_headers(headers: &HeaderMap, policy: &ProxyHeaderPolicy) -> HeaderMap {
+    let mut out = HeaderMap::with_capacity(headers.len());
+    let connection_tokens = connection_header_tokens(headers);
+    for (name, value) in headers {
+        if is_hop_by_hop(name)
+            || connection_tokens.iter().any(|token| token == name)
+            || policy.strips_private_header(name)
+        {
+            continue;
+        }
+        if !policy.allow_authorization && name == AUTHORIZATION {
+            continue;
+        }
+        if !policy.allow_cookie && name == COOKIE {
+            continue;
+        }
+        out.append(name.clone(), value.clone());
+    }
+    out
+}
+
+/// Return response headers safe to forward through a generic HTTP proxy.
+///
+/// The filter removes RFC hop-by-hop headers and headers nominated by the
+/// response's `Connection` header.
+#[must_use]
+pub fn filter_proxy_response_headers(headers: &HeaderMap) -> HeaderMap {
+    let mut out = HeaderMap::with_capacity(headers.len());
+    let connection_tokens = connection_header_tokens(headers);
+    for (name, value) in headers {
+        if !is_hop_by_hop(name) && !connection_tokens.iter().any(|token| token == name) {
+            out.append(name.clone(), value.clone());
+        }
+    }
+    out
+}
+
+fn is_hop_by_hop(name: &HeaderName) -> bool {
+    matches!(
+        name.as_str(),
+        "connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "proxy-connection"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+    )
+}
+
+fn connection_header_tokens(headers: &HeaderMap) -> Vec<HeaderName> {
+    headers
+        .get_all(CONNECTION)
+        .iter()
+        .flat_map(connection_header_value_tokens)
+        .collect()
+}
+
+fn connection_header_value_tokens(value: &http::HeaderValue) -> Vec<HeaderName> {
+    value
+        .as_bytes()
+        .split(|byte| *byte == b',')
+        .filter_map(|token| {
+            let token = trim_ascii_http_whitespace(token);
+            HeaderName::from_bytes(token).ok()
+        })
+        .collect()
+}
+
+fn trim_ascii_http_whitespace(mut bytes: &[u8]) -> &[u8] {
+    while matches!(bytes.first(), Some(b' ' | b'\t')) {
+        bytes = &bytes[1..];
+    }
+    while matches!(bytes.last(), Some(b' ' | b'\t')) {
+        bytes = &bytes[..bytes.len() - 1];
+    }
+    bytes
 }
 
 /// URL construction helpers.
@@ -604,7 +750,7 @@ mod tests {
     use super::*;
     use axum::{
         body::Body,
-        http::{header, StatusCode},
+        http::{header, HeaderValue, StatusCode},
         response::IntoResponse,
         routing::get,
         Router,
@@ -702,6 +848,114 @@ mod tests {
             err,
             BoundedReadError::ContentLengthExceeded { .. } | BoundedReadError::BodyTooLarge { .. }
         ));
+    }
+
+    #[test]
+    fn proxy_request_policy_strips_hop_by_hop_sensitive_and_private_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            "Bearer caller-secret".parse().unwrap(),
+        );
+        headers.insert(header::COOKIE, "session=caller-secret".parse().unwrap());
+        headers.insert(
+            header::CONNECTION,
+            "x-hop-token, keep-alive".parse().unwrap(),
+        );
+        headers.insert(
+            HeaderName::from_static("keep-alive"),
+            "timeout=5".parse().unwrap(),
+        );
+        headers.insert(
+            HeaderName::from_static("proxy-connection"),
+            "keep-alive".parse().unwrap(),
+        );
+        headers.insert(header::TE, "trailers".parse().unwrap());
+        headers.insert("x-hop-token", "strip-by-connection-token".parse().unwrap());
+        headers.insert("x-service-private-id", "spoofed".parse().unwrap());
+        headers.insert("x-normal", "forwarded".parse().unwrap());
+
+        let policy = ProxyHeaderPolicy::strict().strip_private_prefix("x-service-private-");
+        let filtered = filter_proxy_request_headers(&headers, &policy);
+
+        assert!(!filtered.contains_key(header::AUTHORIZATION));
+        assert!(!filtered.contains_key(header::COOKIE));
+        assert!(!filtered.contains_key(header::CONNECTION));
+        assert!(!filtered.contains_key("keep-alive"));
+        assert!(!filtered.contains_key("proxy-connection"));
+        assert!(!filtered.contains_key(header::TE));
+        assert!(!filtered.contains_key("x-hop-token"));
+        assert!(!filtered.contains_key("x-service-private-id"));
+        assert_eq!(filtered["x-normal"], "forwarded");
+    }
+
+    #[test]
+    fn proxy_request_policy_can_allow_authorization_and_cookie() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            "Bearer caller-token".parse().unwrap(),
+        );
+        headers.insert(header::COOKIE, "session=caller-cookie".parse().unwrap());
+
+        let policy = ProxyHeaderPolicy::strict()
+            .allow_authorization(true)
+            .allow_cookie(true);
+        let filtered = filter_proxy_request_headers(&headers, &policy);
+
+        assert_eq!(filtered[header::AUTHORIZATION], "Bearer caller-token");
+        assert_eq!(filtered[header::COOKIE], "session=caller-cookie");
+    }
+
+    #[test]
+    fn proxy_response_policy_strips_hop_by_hop_and_connection_nominated_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONNECTION,
+            "x-upstream-hop, keep-alive".parse().unwrap(),
+        );
+        headers.insert(
+            HeaderName::from_static("keep-alive"),
+            "timeout=5".parse().unwrap(),
+        );
+        headers.insert(
+            header::PROXY_AUTHENTICATE,
+            "Basic realm=\"upstream\"".parse().unwrap(),
+        );
+        headers.insert(
+            HeaderName::from_static("proxy-connection"),
+            "keep-alive".parse().unwrap(),
+        );
+        headers.insert(
+            "x-upstream-hop",
+            "strip-by-connection-token".parse().unwrap(),
+        );
+        headers.insert("x-normal-response", "forwarded".parse().unwrap());
+
+        let filtered = filter_proxy_response_headers(&headers);
+
+        assert!(!filtered.contains_key(header::CONNECTION));
+        assert!(!filtered.contains_key("keep-alive"));
+        assert!(!filtered.contains_key(header::PROXY_AUTHENTICATE));
+        assert!(!filtered.contains_key("proxy-connection"));
+        assert!(!filtered.contains_key("x-upstream-hop"));
+        assert_eq!(filtered["x-normal-response"], "forwarded");
+    }
+
+    #[test]
+    fn proxy_request_policy_strips_valid_connection_tokens_from_malformed_value() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONNECTION,
+            HeaderValue::from_bytes(b"x-hop-token,\xff").unwrap(),
+        );
+        headers.insert("x-hop-token", "strip-by-connection-token".parse().unwrap());
+        headers.insert("x-normal", "forwarded".parse().unwrap());
+
+        let filtered = filter_proxy_request_headers(&headers, &ProxyHeaderPolicy::strict());
+
+        assert!(!filtered.contains_key("x-hop-token"));
+        assert_eq!(filtered["x-normal"], "forwarded");
     }
 
     #[test]
