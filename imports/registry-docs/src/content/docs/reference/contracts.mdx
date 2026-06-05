@@ -70,7 +70,7 @@ The table is generated from `src/data/contracts.yaml`.
 
 ## Known gaps
 
-- The [Registry Relay](../../projects/registry-relay/) OpenAPI artifact is a hand-authored abstract contract (`hand-authored-abstract-contract`).
+- The [Registry Relay](../../products/registry-relay/) OpenAPI artifact is a hand-authored abstract contract (`hand-authored-abstract-contract`).
   It documents the full surface using templated paths and capability tags, with feature-gate notes in each tag description.
   Registry Relay also exposes a per-instance OpenAPI dump through the auth-gated `GET /openapi.json`, which callers can fetch from a configured gateway to discover the concrete `{dataset_id}` and `{entity}` shape for that deployment.
   A release-grade automated export of the abstract contract from the owning repo does not yet exist; the artifact is kept in sync by hand.

@@ -10,11 +10,11 @@
     "dev": "npm run generate && astro dev",
     "build": "npm run generate && npm run redoc && astro check && astro build",
     "preview": "astro preview",
-    "generate": "node scripts/generate-data.mjs",
+    "generate": "node scripts/generate-data.mjs && node scripts/fetch-openapi.mjs && node scripts/sync-repo-docs.mjs",
     "check:content": "node scripts/check-doc-frontmatter.mjs",
     "check:svg": "node scripts/check-svg-a11y.mjs",
     "check:markdown": "markdownlint-cli2",
-    "check:style": "node scripts/run-vale.mjs --no-exit src/content/docs README.md",
+    "check:style": "node scripts/run-vale.mjs --no-exit --glob=!**/products/** src/content/docs README.md",
     "check:style:fixtures": "node scripts/check-vale-fixtures.mjs",
     "check:openapi": "redocly lint registry-relay registry-notary",
     "check:tutorial": "scripts/check-tutorial.sh",
@@ -29,7 +29,9 @@
     "@astrojs/starlight": "^0.39.2",
     "@fontsource/ibm-plex-mono": "^5.2.7",
     "@fontsource/public-sans": "^5.2.7",
-    "astro": "^6.3.7"
+    "astro": "^6.3.7",
+    "astro-mermaid": "^2.0.2",
+    "mermaid": "^11.15.0"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.9",

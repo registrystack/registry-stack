@@ -1,16 +1,42 @@
 ---
-title: Registry Stack
-description: "Serve the registries you already have, sharing only what each request requires."
+title: Registry Stack docs
+description: "The Diataxis documentation hub for the registry stack: tutorials, how-to guides, product docs, explanation, and reference."
 status: current
 owner: registry-docs
 source_repos: []
-last_reviewed: "2026-05-28"
+last_reviewed: "2026-06-05"
 doc_type: explanation
 locale: en
 standards_referenced: []
-wide: true
 ---
 
-import HomeLanding from '../../components/HomeLanding.astro';
+This site is the documentation hub for the registry stack: the tutorials, how-to guides, product
+docs, explanation, and reference for building with Registry Relay, Registry Notary, Registry
+Manifest, Registry Atlas, Registry Platform, and Registry Lab.
 
-<HomeLanding />
+It is organized as a Diataxis hub. Product detail is owned by each repository and pulled in at
+build time, so the product pages always match the code. For the pitch (why registry surfaces
+matter, who benefits, where the stack fits), see the marketing site at
+[registrystack.org](https://registrystack.org/).
+
+## Where to go
+
+- New here? Start with [Choose where to start](start/quickstart/) to route to the right page, then
+  [When to use Registry Stack](start/when-to-use/) for what it is and when it fits.
+- Want to run something end to end? Follow [First run with Registry Lab](tutorials/first-run-with-registry-lab/)
+  or make [Your first call](start/your-first-call/).
+- Working with one product? Open its docs under Products: [Registry Relay](products/registry-relay/),
+  [Registry Notary](products/registry-notary/), [Registry Manifest](products/registry-manifest/),
+  [Registry Atlas](products/registry-atlas/), [Registry Platform](products/registry-platform/), or
+  [Registry Lab](products/registry-lab/).
+- Need the model? Read the [architecture overview](explanation/architecture/) and
+  [integration patterns](explanation/integration-patterns/).
+- Need the registers? See the [API reference](reference/apis/), [standards register](reference/standards/),
+  [contracts](reference/contracts/), [glossary](reference/glossary/), and
+  [boundaries and map](map/boundaries-and-map/).
+
+## Boundary
+
+The pitch lives on [registrystack.org](https://registrystack.org/). This site keeps one concise
+[when-to-use and non-goals](start/when-to-use/) page; everything else here is a tutorial, how-to,
+product doc, explanation, or reference.

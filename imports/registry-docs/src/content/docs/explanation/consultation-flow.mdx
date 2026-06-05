@@ -68,7 +68,7 @@ The record carries the `principal_id`, `request_id` (a ULID also returned in the
 `x-request-id` response header), `dataset_id`, `entity_name`, `scopes_used`, `query_params`
 (names and operators, never values), `status_code`, and `duration_ms`.
 Registry Platform wraps the record with `prev_hash` and `record_hash` for tamper evidence.
-For the full field list, see the [audit record shape in the Relay reference](../../projects/registry-relay/reference/#audit-record-shape).
+For the full field list, see the [Relay operations runbook](../../products/registry-relay/ops/).
 
 **4. Respond.** Relay returns the entity-shaped response.
 The response body contains only projected fields for the authenticated caller's visible
@@ -90,7 +90,7 @@ The four primary route shapes for row access are:
 
 Metadata routes under `/metadata/*` follow the same auth path but require a `metadata`
 scope, not a `rows` or `aggregate` scope.
-The full route inventory is in the [Registry Relay reference](../../projects/registry-relay/reference/).
+The full route inventory is in the [Registry Relay API guide](../../products/registry-relay/api/).
 
 ## Scope model
 
@@ -139,7 +139,7 @@ records.
 The program system can read records and aggregates.
 The identity verification service can run evidence verification but cannot read rows.
 Full scope configuration and API-key provisioning are in
-[Authorize callers](../../projects/registry-relay/authorize-callers/).
+[Client integration](../../products/registry-relay/client-integration/).
 
 ## Closed surfaces
 

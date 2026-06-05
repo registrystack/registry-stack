@@ -1,14 +1,14 @@
 - id: registry-relay
   name: Registry Relay API
   owner: registry-relay
-  source: Hand-authored abstract contract in `registry-relay/openapi/registry-relay.openapi.json`, cross-checked against `registry-relay/docs/api.md` and the runtime route table.
+  source: Pulled from `registry-relay/openapi/registry-relay.openapi.json` at the pinned ref in `src/data/repo-docs.yaml` by `scripts/fetch-openapi.mjs`. The repo authors an abstract contract that uses templated paths and capability tags, not a per-deployment dump.
   artifact: openapi/registry-relay.openapi.json
-  status: hand-authored abstract contract (templated paths and capability tags, not a per-deployment dump). Use the auth-gated `GET /openapi.json` on a running gateway for the instance-specific shape of `{dataset_id}` and `{entity}`.
+  status: pulled at the pinned ref (build artifact, regenerated each build). Use the auth-gated `GET /openapi.json` on a running gateway for the instance-specific shape of `{dataset_id}` and `{entity}`.
   redoc_path: /api/registry-relay.html
 - id: registry-notary
   name: Registry Notary API
   owner: registry-notary
-  source: "`cargo run -p registry-notary-bin -- openapi`"
+  source: Pulled from `registry-notary/openapi/registry-notary.openapi.json` at the pinned ref in `src/data/repo-docs.yaml` by `scripts/fetch-openapi.mjs`. The repo generates the spec with `cargo run -p registry-notary-bin -- openapi`.
   artifact: openapi/registry-notary.openapi.json
-  status: pinned generated snapshot from the local Registry Notary workspace with federation, OID4VCI, and response examples
+  status: pulled at the pinned ref (build artifact, regenerated each build) with federation, OID4VCI, and response examples
   redoc_path: /api/registry-notary.html

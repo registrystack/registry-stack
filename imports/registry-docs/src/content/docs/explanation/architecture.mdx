@@ -76,6 +76,28 @@ updated policy documents without touching deployment config.
 For what each project does and does not own, see
 [ownership boundaries and map](../../map/boundaries-and-map/).
 
+## Capabilities at a glance
+
+The two-layer design supports one capability sequence: describe what the registry can provide,
+expose protected read-only access, then certify evidence that fits the purpose of the request.
+A caller cannot safely use a registry until its fields, schemas, services, policies, and evidence
+offerings are inspectable, so metadata comes first.
+
+| Capability | Use it when | Primary project |
+| --- | --- | --- |
+| Describe registries | Other teams need to inspect fields, schemas, policies, services, and evidence offerings before integration. | [Registry Manifest](../../products/registry-manifest/) |
+| Expose protected APIs | A file, extract, database, or legacy registry needs a governed read-only API without replacing the source. | [Registry Relay](../../products/registry-relay/) |
+| Certify evidence | A caller needs a status, predicate, selected value, or supported credential instead of the source record. | [Registry Notary](../../products/registry-notary/) |
+
+Two supporting capabilities sit alongside the sequence.
+[Registry Atlas](../../products/registry-atlas/) inspects what a registry actually publishes before
+an integration is built, by reading the generated metadata artifacts and running strict capability
+queries against known machine terms.
+Shared audit and operational behavior makes Registry Relay and Registry Notary reviewable:
+[Registry Platform](../../products/registry-platform/) supplies the shared primitives for
+authentication, HTTP security, audit envelopes, cryptography, and credential support that both
+runtime services compose.
+
 ## Next
 
 - [Publishing pipeline](../publishing-pipeline/) explains the metadata compilation and

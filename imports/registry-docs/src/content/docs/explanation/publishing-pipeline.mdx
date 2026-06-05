@@ -67,7 +67,7 @@ The runtime path invokes them at request time, inside Relay.
 
 You write one `metadata.yaml` and run `registry-manifest-cli publish`.
 The CLI calls every renderer in the table on the
-[Registry Manifest overview](../../projects/registry-manifest/) page and writes each output
+[Registry Manifest overview](../../products/registry-manifest/) page and writes each output
 to a named file in the target directory, plus an `index.json` discovery entry point
 (schema version `registry-manifest-index/v1`).
 
@@ -123,7 +123,7 @@ includes the CPSV public service nodes the manifest declares.
 If the caller's scope covers only one dataset and the manifest has three, the response
 contains only the datasets visible under that scope.
 For the full route inventory (DCAT, SHACL, ODRL, per-dataset, per-entity, OGC Records,
-evidence offerings), see the [Relay reference](../../projects/registry-relay/reference/#metadata-route-inventory).
+evidence offerings), see the [Relay API guide](../../products/registry-relay/api/).
 
 Beyond scoped filtering, Relay adds:
 

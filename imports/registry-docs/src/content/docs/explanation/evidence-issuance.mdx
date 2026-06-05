@@ -20,8 +20,8 @@ standards_referenced:
 
 This page describes how Registry Notary turns a subject identifier and a configured claim into a
 signed evaluation or verifiable credential. It is an explanation, not a how-to: there are no commands here.
-For commands, see [Run Registry Notary locally](../../projects/registry-notary/run-locally/) and
-[Configure a claim](../../projects/registry-notary/configure-a-claim/).
+For commands, see the [Registry Notary documentation](../../products/registry-notary/) and
+[Source and claim modeling](../../products/registry-notary/source-claim-modeling-guide/).
 
 ## Why issue credentials at all
 
@@ -92,7 +92,7 @@ evaluation, or receipt.
    policy, replay state, purpose, profile, and audience before source reads, then returns a compact
    signed JWT response. This path returns a scoped evaluation result, not a credential.
 
-The [Registry Lab](../../projects/registry-lab/) citizen self-attestation scenario uses path 2: a
+The [Registry Lab](../../products/registry-lab/) citizen self-attestation scenario uses path 2: a
 host-side Notary on port `4321` runs against the lab's civil registry, eSignet provides the
 access token, and a wallet completes the OID4VCI flow.
 
@@ -149,7 +149,7 @@ A few things Registry Notary is not.
 
 ## Next
 
-- [Registry Notary overview](../../projects/registry-notary/)
+- [Registry Notary overview](../../products/registry-notary/)
 - [Publishing pipeline](../publishing-pipeline/)
 - [Consultation flow](../consultation-flow/)
 - [Standards register](../../reference/standards/)

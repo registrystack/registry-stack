@@ -1,0 +1,86 @@
+---
+title: When to use Registry Stack
+description: What Registry Stack is, when it fits a registry integration problem, and the non-goals it deliberately leaves to other systems.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-manifest
+  - registry-relay
+  - registry-notary
+  - registry-atlas
+  - registry-platform
+  - registry-lab
+last_reviewed: "2026-06-05"
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+Registry Stack is a registry-facing layer for institutions that already hold authoritative data.
+It does not store records or run a domain registry. It adds a governed service surface over data
+you already operate: a published metadata contract, protected read-only APIs, configured evidence
+answers, and tamper-evident audit records.
+
+This is the one "why" page these docs keep. For the full problem framings, who benefits, and where
+the stack fits in a wider stack, see the marketing site at
+[registrystack.org](https://registrystack.org/).
+
+## What it is
+
+Registry Stack is six repositories with distinct responsibilities, organized around one capability
+sequence: describe what a registry can provide, expose protected read-only access, then certify
+evidence that fits the purpose of the request.
+
+- Registry Manifest describes a registry surface (fields, schemas, services, policies, evidence
+  offerings) as portable metadata, before any integration is written.
+- Registry Relay exposes existing source data (a file, extract, database, or legacy system) through
+  protected, scoped, read-only HTTP routes, without giving callers database access.
+- Registry Notary evaluates configured claims and returns a status, predicate, selected value, or
+  signed credential, instead of the full source record.
+- Registry Atlas inspects what a registry actually publishes before an integration is built.
+- Registry Platform supplies the shared primitives (auth, HTTP security, audit, crypto, SD-JWT)
+  that the runtime services compose.
+- Registry Lab runs the runtime services together as a local compose demo.
+
+For how the six connect at runtime, see the [architecture overview](../../explanation/architecture/)
+and the [boundaries and map](../../map/boundaries-and-map/).
+
+## When to use it
+
+Reach for Registry Stack when a registry that already exists needs a governed read path, and one or
+more of the following is true:
+
+- Data exists in files, extracts, databases, or legacy systems, but other services cannot depend on
+  a clear, approved interface over it.
+- Callers need a status or evidence response, but the available record APIs move more data than the
+  purpose requires.
+- A data-sharing agreement describes intended access on paper, but the API itself has no scopes, no
+  purpose field, no disclosure limits, and no audit record.
+- Other teams need to inspect a registry's fields, schemas, policies, services, and evidence
+  offerings before they integrate.
+- A registry-backed issuer needs to produce SD-JWT VC credentials or run an OID4VCI issuance flow.
+
+For how the stack wires in behind exchange layers, workflow engines, wallets, and domain platforms,
+see [integration patterns](../../explanation/integration-patterns/).
+
+## Non-goals
+
+Registry Stack deliberately leaves these to other systems:
+
+- It does not replace a domain registry platform (such as OpenCRVS, OpenSPP, DHIS2, or OpenIMIS), a
+  workflow engine, an exchange layer, a wallet, or a public-service portal. It provides the
+  registry-facing controls those systems call.
+- It does not solve foundational identity, deduplication, legal authority, semantic governance, or
+  institutional approval by itself. It makes those boundaries explicit so they can be reviewed
+  before data moves.
+- Registry Relay is read-only in v1: write operations (provisioning, inserts, updates) are out of
+  scope.
+- Registry Relay is not an open-data portal: it publishes restricted consultation APIs for
+  authorized systems only.
+
+## Next
+
+- [Choose where to start](../quickstart/)
+- [Architecture overview](../../explanation/architecture/)
+- [Boundaries and map](../../map/boundaries-and-map/)
+- [Integration patterns](../../explanation/integration-patterns/)

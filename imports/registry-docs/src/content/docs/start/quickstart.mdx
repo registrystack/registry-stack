@@ -10,42 +10,45 @@ source_repos:
   - registry-atlas
   - registry-lab
   - registry-platform
-last_reviewed: "2026-05-28"
+last_reviewed: "2026-06-05"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
 Use this page when you are new to Registry Stack and need the shortest route to a useful answer.
-The docs are organized around questions, not around repository names.
+These docs are organized around tasks and the Diataxis types (tutorials, how-to, explanation,
+reference), not around repository names.
 
 ## The short model
 
 Registry Stack has three current product surfaces.
 Registry Relay makes existing registry-like data available through protected, read-only APIs.
-Registry metadata describes the registry surface before an integration is written.
+Registry Manifest describes the registry surface before an integration is written.
 Registry Notary answers configured evidence questions without exposing a full source record.
 
-Stay in these docs for the problem model, product boundaries, cross-project architecture,
-standards evidence, and API contracts.
-Go to an owning repository when you need source code, runtime configuration, contribution
-workflow, or implementation issues.
+Stay in these docs for the cross-project architecture, product boundaries, standards evidence, API
+contracts, and the product docs pulled from each repository.
+Go to the marketing site at [registrystack.org](https://registrystack.org/) for the pitch: why
+registry surfaces matter, who benefits, the sell-form use cases, and ecosystem positioning.
 
 ## Choose by question
 
 | If your question is | Start with | Then read |
 | --- | --- | --- |
-| What exists today, and where are the boundaries? | [capabilities](../../capabilities/) | [project map](../../map/boundaries-and-map/) |
-| Why do safer registry surfaces matter now? | [Why safer registry surfaces matter now](../safer-registry-surfaces/) | [Safeguards need technical enforcement](../../problems/safeguards-need-technical-enforcement/) |
-| How do existing files, extracts, databases, or legacy systems become usable? | [Existing data is not service-ready](../../problems/existing-data-not-service-ready/) | [Legacy registry API use case](../../use-cases/legacy-registry-api/) |
-| How does a caller discover what a registry provides? | [Registry capabilities are hard to discover](../../problems/registry-capabilities-hard-to-discover/) | [Describe registries](../../capabilities/describe-registries/) |
-| How can a service verify a status or claim without receiving the full record? | [APIs over-share records](../../problems/apis-over-share-records/) | [Certify evidence](../../capabilities/certify-evidence/) |
-| How do I review safeguards? | [Safeguards need technical enforcement](../../problems/safeguards-need-technical-enforcement/) | [Audit and operate](../../capabilities/audit-and-operate/) |
-| Which repository owns which part? | [Project map](../../map/boundaries-and-map/) | The relevant project overview |
+| What is Registry Stack, and when should I use it? | [When to use Registry Stack](../when-to-use/) | [Boundaries and map](../../map/boundaries-and-map/) |
+| Why does this matter, and who benefits? | [Why (registrystack.org)](https://registrystack.org/why/) | [Use cases (registrystack.org)](https://registrystack.org/use-cases/) |
+| Why do safer registry surfaces matter now? | [Why now (registrystack.org)](https://registrystack.org/why-now/) | [Status (registrystack.org)](https://registrystack.org/status/) |
+| How do I run the stack end to end? | [First run with Registry Lab](../../tutorials/first-run-with-registry-lab/) | [Your first call](../your-first-call/) |
+| How do existing files, extracts, databases, or legacy systems become usable? | [Registry Relay](../../products/registry-relay/) | [Client integration](../../products/registry-relay/client-integration/) |
+| How does a caller discover what a registry provides? | [Registry Manifest](../../products/registry-manifest/) | [Registry Atlas](../../products/registry-atlas/) |
+| How can a service verify a status or claim without receiving the full record? | [Registry Notary](../../products/registry-notary/) | [Evidence issuance](../../explanation/evidence-issuance/) |
+| How do the pieces fit together? | [Architecture overview](../../explanation/architecture/) | [Integration patterns](../../explanation/integration-patterns/) |
+| Which repository owns which part? | [Boundaries and map](../../map/boundaries-and-map/) | The relevant product docs |
 
 ## Next
 
-- [Capabilities](../../capabilities/)
-- [Why safer registry surfaces matter now](../safer-registry-surfaces/)
-- [Legacy registry API use case](../../use-cases/legacy-registry-api/)
-- [Project map](../../map/boundaries-and-map/)
+- [When to use Registry Stack](../when-to-use/)
+- [First run with Registry Lab](../../tutorials/first-run-with-registry-lab/)
+- [Architecture overview](../../explanation/architecture/)
+- [Boundaries and map](../../map/boundaries-and-map/)

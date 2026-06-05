@@ -35,7 +35,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TUTORIAL="$REPO_ROOT/src/content/docs/tutorials/first-run-with-registry-lab.mdx"
 EXPECTED_STEP_COUNT=9
-EXPECTED_VERIFY_COUNT=1
+EXPECTED_VERIFY_COUNT=4
 EXPECTED_DEMO_ARTIFACTS=3
 EXPECTED_SERVICES=(
 	civil-registry-relay

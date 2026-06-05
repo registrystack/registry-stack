@@ -1,6 +1,6 @@
 ---
-title: Ecosystem
-description: How Registry Stack fits with the systems, standards, and tools already in your stack.
+title: Integration patterns
+description: How Registry Stack wires in behind exchange layers, workflow engines, wallets, and domain registry platforms, and the standards each surface speaks.
 status: current
 owner: registry-docs
 source_repos:
@@ -8,7 +8,7 @@ source_repos:
   - registry-relay
   - registry-notary
   - registry-platform
-last_reviewed: "2026-05-28"
+last_reviewed: "2026-06-05"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -29,92 +29,93 @@ standards_referenced:
   - govstack-digital-registries
 ---
 
-Registry Stack assumes a wider ecosystem and is designed to fit into it, not replicate it.
-This page maps where it sits relative to the systems, standards, and tools already in use.
+Registry Stack is the registry-facing surface that sits behind systems already in a delivery
+stack. This page describes the technical wiring for each neighbor: what the neighbor owns, what
+Registry Stack adds, and the conditions under which a Registry Stack surface belongs in the path.
+For where the registry family sits relative to the wider ecosystem as a product positioning, see
+the marketing [ecosystem page](https://registrystack.org/ecosystem/).
 
-## Neighbor systems
-
-### Domain registry platforms
+## Domain registry platforms
 
 Examples: [OpenCRVS](https://www.opencrvs.org/) (civil registration), [OpenSPP](https://openspp.org/)
 (social-protection household and programme management), [DHIS2](https://dhis2.org/) (health
-management information), [OpenIMIS](https://openimis.org/) (health insurance information), ...
+management information), [OpenIMIS](https://openimis.org/) (health insurance information).
 
 These platforms own storage, business rules, correction workflows, user interfaces, and a runtime
 API for their domain.
 Registry Stack adds standardized metadata description, scoped read-only routes over source data,
 configured evidence responses, and tamper-evident audit records.
 
-Reach for Registry Stack alongside a domain platform when:
+Wire Registry Stack in alongside a domain platform when:
 
 - The platform does not yet publish DCAT/BRegDCAT-AP catalogs or CPSV-AP service descriptions.
 - Callers need evidence-shaped responses (predicate, redacted, selected value) rather than full
   records.
 - A read path is needed for callers that must not be granted direct database access.
 
-### Workflow engines
+## Workflow engines
 
 Examples: [OpenFn](https://www.openfn.org/) (cross-system orchestration popular in humanitarian and
-government data flows), [Camunda](https://camunda.com/), [Flowable](https://www.flowable.com/), ...
+government data flows), [Camunda](https://camunda.com/), [Flowable](https://www.flowable.com/).
 
 Workflow engines own process state, task assignment, timers, branching, retries, escalation, and
 history.
 Registry Stack adds a stable registry contract that workflow steps can call, without learning
 source tables, raw SQL, or full records.
 
-Reach for Registry Stack alongside a workflow engine when:
+Wire Registry Stack in alongside a workflow engine when:
 
 - A workflow step needs an authoritative registry fact (status, predicate, selected value).
 - A workflow step needs an evidence artifact or credential rather than an internal service result.
 - Generated workflow connectors should not depend on source schema details.
 
-### Exchange layers
+## Exchange layers
 
 Examples: [X-Road](https://x-road.global/), [OpenFn](https://www.openfn.org/) (when used as the
-cross-institution data flow), GovStack-style reference exchanges, ...
+cross-institution data flow), GovStack-style reference exchanges.
 
 Exchange layers own participant onboarding, message transport, mutual trust, routing, addressing,
 and cross-institution policy.
 Registry Stack adds the registry-facing surface that sits behind the exchange layer: what entities
 exist, which fields are exposed, what evidence can be requested.
 
-Reach for Registry Stack alongside an exchange layer when:
+Wire Registry Stack in behind an exchange layer when:
 
 - The exchange layer handles network trust but the registry endpoint still needs route-level
   scopes, field projection, and source-specific access controls.
 - An exchange-forwarded request needs a configured evidence response rather than a copied record.
 
-### Wallets
+## Wallets
 
-Examples: SD-JWT VC wallets, OID4VCI-compatible wallets, ...
+Examples: SD-JWT VC wallets, OID4VCI-compatible wallets.
 
 Wallets own key management, credential storage, holder consent, and presentation to relying
 parties.
 Registry Stack adds the server-side issuance path: claim evaluation against registry data, plus
 the metadata describing what a registry-backed issuer offers.
 
-Reach for Registry Stack alongside a wallet when:
+Wire Registry Stack in alongside a wallet when:
 
 - A registry-backed issuer needs to produce SD-JWT VC credentials or an OID4VCI issuance flow.
 - An evidence offering needs to be discoverable before integration begins.
 
-### Public-service platforms
+## Public-service platforms
 
-Examples: citizen portals, casework systems, service catalogue platforms, ...
+Examples: citizen portals, casework systems, service catalogue platforms.
 
 These platforms own the user journey: forms, case queues, notifications, payments, channels.
 Registry Stack adds the narrow registry-facing surface those journeys can call: entity routes,
 evidence responses, scoped metadata, and audit records.
 
-Reach for Registry Stack alongside a service platform when:
+Wire Registry Stack in alongside a service platform when:
 
 - A service platform needs a registry answer during delivery but must not pull the full record.
 - A service catalogue needs to discover an evidence offering before integration.
 
-## Standards we adopt
+## Standards each surface speaks
 
 Registry Stack adopts established standards rather than inventing new ones.
-See the [Standards register](../reference/standards/) for the full table with claim levels (emit,
+See the [standards register](../../reference/standards/) for the full table with claim levels (emit,
 map to, align with, compare against).
 
 Short map:
@@ -129,19 +130,8 @@ Short map:
 
 No universal registry ontology is claimed.
 
-## What's still open
-
-- No production integrations exist with named domain registry platforms. The design is shaped to
-  support such integrations; the work itself is not yet done.
-- AI-assisted integration is treated as context, not as a product pillar. AI tools can read
-  contracts and generate clients faster, which makes narrow, named registry surfaces more
-  valuable, not less.
-- Sector standards adoption is at varying claim levels. Check the standards register before
-  assuming conformance.
-
 ## Next
 
-- [Architecture](../explanation/architecture/)
-- [Standards register](../reference/standards/)
-- [Capabilities overview](../capabilities/)
-- [Use cases](../use-cases/)
+- [Architecture overview](../architecture/)
+- [Standards register](../../reference/standards/)
+- [Boundaries and map](../../map/boundaries-and-map/)

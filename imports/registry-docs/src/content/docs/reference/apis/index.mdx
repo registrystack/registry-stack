@@ -37,13 +37,13 @@ The table is generated from `src/data/openapi-sources.yaml`.
 
 ## Provenance and freshness
 
-[Registry Relay](../../../projects/registry-relay/) ships a hand-authored abstract OpenAPI contract.
+[Registry Relay](../../../products/registry-relay/) ships a hand-authored abstract OpenAPI contract.
 It documents the full route surface using templated paths (`/datasets/{dataset_id}/{entity}/...`) and capability tags, rather than enumerating one deployment's datasets and entities.
 The contract lives in `registry-relay/openapi/registry-relay.openapi.json` and is cross-checked against `registry-relay/docs/api.md` and the runtime route table.
 Feature-gated surfaces (OGC API Features, OGC API Records, OGC API EDR, SP DCI, provenance, VC-JWT) are included with notes in each tag description explaining the build feature that mounts them.
 For the instance-specific shape of `{dataset_id}` and `{entity}` in a given deployment, fetch the auth-gated `GET /openapi.json` from that gateway.
 
-[Registry Notary](../../../projects/registry-notary/) generates its OpenAPI document via a subcommand:
+[Registry Notary](../../../products/registry-notary/) generates its OpenAPI document via a subcommand:
 
 ```sh
 cargo run -p registry-notary-bin -- openapi > openapi/registry-notary.openapi.json
