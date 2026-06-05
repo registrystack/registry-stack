@@ -2874,6 +2874,7 @@ name = "registry-platform-httputil"
 version = "0.1.2"
 dependencies = [
  "bytes",
+ "http",
  "reqwest",
  "thiserror 2.0.18",
  "tokio",
