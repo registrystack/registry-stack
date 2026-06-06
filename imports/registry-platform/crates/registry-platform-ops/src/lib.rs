@@ -19,6 +19,15 @@ use sha2::{Digest, Sha256};
 
 pub const POSTURE_SCHEMA_V1: &str = include_str!("../schemas/registry.ops.posture.v1.schema.json");
 
+pub const ADMIN_ERROR_SCHEMA_V1: &str =
+    include_str!("../schemas/registry.admin.error.v1.schema.json");
+
+pub const ADMIN_CAPABILITIES_SCHEMA_V1: &str =
+    include_str!("../schemas/registry.admin.capabilities.v1.schema.json");
+
+pub const CONFIG_APPLY_REPORT_SCHEMA_V1: &str =
+    include_str!("../schemas/registry.platform.config_apply_report.v1.schema.json");
+
 pub const RELAY_POSTURE_EXAMPLE_V1: &str =
     include_str!("../examples/registry-relay.posture.valid.json");
 
@@ -828,9 +837,13 @@ fn validate_hash(value: &str) -> Result<(), AntiRollbackStoreError> {
     let hex = value.strip_prefix("sha256:").ok_or_else(|| {
         AntiRollbackStoreError::InvalidState("hash must start with sha256:".to_string())
     })?;
-    if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if hex.len() != 64
+        || !hex
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
         return Err(AntiRollbackStoreError::InvalidState(
-            "hash must be sha256 plus 64 hex characters".to_string(),
+            "hash must be sha256 plus 64 lowercase hex characters".to_string(),
         ));
     }
     Ok(())
@@ -849,6 +862,10 @@ pub enum ConfigValueSensitivity {
 /// hash preimages, including posture-safe hashes, are canonicalized separately.
 pub fn internal_config_hash(bytes: &[u8]) -> String {
     sha256_hex(bytes)
+}
+
+pub fn is_sha256_config_hash(value: &str) -> bool {
+    validate_hash(value).is_ok()
 }
 
 pub fn posture_safe_runtime_config_hash(value: &Value) -> String {

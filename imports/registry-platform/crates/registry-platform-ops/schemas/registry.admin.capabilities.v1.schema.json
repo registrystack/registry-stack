@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry-platform.example/schemas/registry.admin.capabilities.v1.schema.json",
+  "title": "Registry Admin Capabilities v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "product",
+    "admin_api_version",
+    "supported_posture_tiers",
+    "config",
+    "break_glass",
+    "root_transition",
+    "hot_swap",
+    "reload"
+  ],
+  "properties": {
+    "schema": {
+      "const": "registry.admin.capabilities.v1"
+    },
+    "product": {
+      "type": "string",
+      "enum": ["registry-relay", "registry-notary"]
+    },
+    "admin_api_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "supported_posture_tiers": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["default", "restricted"]
+      },
+      "contains": {
+        "const": "default"
+      },
+      "uniqueItems": true,
+      "minItems": 1
+    },
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verify", "dry_run", "apply"],
+      "properties": {
+        "verify": {
+          "$ref": "#/$defs/operation_capability"
+        },
+        "dry_run": {
+          "$ref": "#/$defs/operation_capability"
+        },
+        "apply": {
+          "$ref": "#/$defs/config_apply_capability"
+        }
+      }
+    },
+    "break_glass": {
+      "$ref": "#/$defs/break_glass_capability"
+    },
+    "root_transition": {
+      "$ref": "#/$defs/operation_capability"
+    },
+    "hot_swap": {
+      "$ref": "#/$defs/hot_swap_capability"
+    },
+    "reload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resource_reload", "table_reload", "config_reload"],
+      "properties": {
+        "resource_reload": {
+          "$ref": "#/$defs/operation_capability"
+        },
+        "table_reload": {
+          "$ref": "#/$defs/operation_capability"
+        },
+        "config_reload": {
+          "$ref": "#/$defs/operation_capability"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "operation_capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["supported", "currently_available"],
+      "properties": {
+        "supported": {
+          "type": "boolean"
+        },
+        "currently_available": {
+          "type": "boolean"
+        }
+      }
+    },
+    "config_apply_capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "supported",
+        "currently_available",
+        "requires_signed_input",
+        "supported_sources"
+      ],
+      "properties": {
+        "supported": {
+          "type": "boolean"
+        },
+        "currently_available": {
+          "type": "boolean"
+        },
+        "requires_signed_input": {
+          "type": "boolean"
+        },
+        "supported_sources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["tuf_local", "tuf_remote"]
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "break_glass_capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["supported", "currently_available", "rate_limit_scope"],
+      "properties": {
+        "supported": {
+          "type": "boolean"
+        },
+        "currently_available": {
+          "type": "boolean"
+        },
+        "rate_limit_scope": {
+          "type": "string",
+          "enum": ["instance", "fleet", "none"]
+        }
+      }
+    },
+    "hot_swap_capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["supported", "currently_available", "components"],
+      "properties": {
+        "supported": {
+          "type": "boolean"
+        },
+        "currently_available": {
+          "type": "boolean"
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

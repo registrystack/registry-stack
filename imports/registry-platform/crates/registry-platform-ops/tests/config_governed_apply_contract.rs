@@ -2,7 +2,9 @@ use registry_platform_ops::{
     AntiRollbackKey, AntiRollbackProposal, AntiRollbackRecord, AntiRollbackStoreError,
     ApplyReportResult, BreakGlassApproval, BreakGlassRateLimit, FileAntiRollbackStore,
     FileLocalApprovalStore, LocalApprovalStoreError, LocalOperatorApproval, PostureApplyResult,
+    ADMIN_CAPABILITIES_SCHEMA_V1, ADMIN_ERROR_SCHEMA_V1, CONFIG_APPLY_REPORT_SCHEMA_V1,
 };
+use serde_json::{json, Value};
 
 fn key() -> AntiRollbackKey {
     AntiRollbackKey {
@@ -78,35 +80,199 @@ fn loose_rate_limit() -> BreakGlassRateLimit {
 
 #[test]
 fn apply_report_result_projects_to_posture_vocabulary() {
-    assert_eq!(
-        ApplyReportResult::Verified.as_posture_result(),
-        PostureApplyResult::NotApplied
-    );
-    assert_eq!(
-        ApplyReportResult::Applied.as_posture_result(),
-        PostureApplyResult::Accepted
-    );
-    assert_eq!(
-        ApplyReportResult::RejectedRollback.as_posture_result(),
-        PostureApplyResult::Rejected
-    );
-    assert_eq!(
-        ApplyReportResult::RejectedLocalApproval.as_posture_result(),
-        PostureApplyResult::Rejected
-    );
-    assert_eq!(
-        ApplyReportResult::RejectedLocalApproval.as_str(),
-        "rejected_local_approval"
-    );
-    assert_eq!(
-        ApplyReportResult::InternalError.as_posture_result(),
-        PostureApplyResult::Failed
-    );
+    let cases = [
+        (
+            ApplyReportResult::Verified,
+            "verified",
+            PostureApplyResult::NotApplied,
+        ),
+        (
+            ApplyReportResult::Applied,
+            "applied",
+            PostureApplyResult::Accepted,
+        ),
+        (
+            ApplyReportResult::RejectedSignature,
+            "rejected_signature",
+            PostureApplyResult::Rejected,
+        ),
+        (
+            ApplyReportResult::RejectedThreshold,
+            "rejected_threshold",
+            PostureApplyResult::Rejected,
+        ),
+        (
+            ApplyReportResult::RejectedFreshness,
+            "rejected_freshness",
+            PostureApplyResult::Rejected,
+        ),
+        (
+            ApplyReportResult::RejectedRollback,
+            "rejected_rollback",
+            PostureApplyResult::Rejected,
+        ),
+        (
+            ApplyReportResult::RejectedRestartRequired,
+            "rejected_restart_required",
+            PostureApplyResult::Rejected,
+        ),
+        (
+            ApplyReportResult::RejectedReadiness,
+            "rejected_readiness",
+            PostureApplyResult::Rejected,
+        ),
+        (
+            ApplyReportResult::RejectedBreakGlass,
+            "rejected_break_glass",
+            PostureApplyResult::Rejected,
+        ),
+        (
+            ApplyReportResult::RejectedLocalApproval,
+            "rejected_local_approval",
+            PostureApplyResult::Rejected,
+        ),
+        (
+            ApplyReportResult::InternalError,
+            "internal_error",
+            PostureApplyResult::Failed,
+        ),
+    ];
+
+    for (result, label, posture) in cases {
+        assert_eq!(result.as_str(), label);
+        assert_eq!(result.as_posture_result(), posture);
+    }
 
     assert_eq!(PostureApplyResult::Accepted.as_str(), "accepted");
     assert_eq!(PostureApplyResult::Rejected.as_str(), "rejected");
     assert_eq!(PostureApplyResult::Failed.as_str(), "failed");
     assert_eq!(PostureApplyResult::NotApplied.as_str(), "not_applied");
+}
+
+fn validator(schema: &str) -> jsonschema::Validator {
+    let schema: Value = serde_json::from_str(schema).expect("schema parses");
+    jsonschema::validator_for(&schema).expect("schema compiles")
+}
+
+fn assert_valid(schema: &str, document: &Value) {
+    let validator = validator(schema);
+    if let Err(error) = validator.validate(document) {
+        panic!("expected valid document, got {error}: {document:#}");
+    }
+}
+
+fn assert_invalid(schema: &str, document: &Value) {
+    let validator = validator(schema);
+    assert!(
+        validator.validate(document).is_err(),
+        "expected invalid document: {document:#}"
+    );
+}
+
+#[test]
+fn admin_error_schema_accepts_stable_error_envelope() {
+    let document = json!({
+        "schema": "registry.admin.error.v1",
+        "code": "registry.admin.posture.invalid_tier",
+        "message": "invalid posture tier",
+        "details": {
+            "supported_tiers": ["default", "restricted"]
+        }
+    });
+
+    assert_valid(ADMIN_ERROR_SCHEMA_V1, &document);
+
+    let mut invalid = document;
+    invalid["code"] = json!("posture.invalid_tier");
+    assert_invalid(ADMIN_ERROR_SCHEMA_V1, &invalid);
+}
+
+#[test]
+fn admin_capabilities_schema_distinguishes_supported_operations() {
+    let document = json!({
+        "schema": "registry.admin.capabilities.v1",
+        "product": "registry-relay",
+        "admin_api_version": "v1",
+        "supported_posture_tiers": ["default", "restricted"],
+        "config": {
+            "verify": {"supported": true, "currently_available": true},
+            "dry_run": {"supported": true, "currently_available": true},
+            "apply": {
+                "supported": true,
+                "currently_available": true,
+                "requires_signed_input": true,
+                "supported_sources": ["tuf_local"]
+            }
+        },
+        "break_glass": {
+            "supported": true,
+            "currently_available": true,
+            "rate_limit_scope": "instance"
+        },
+        "root_transition": {
+            "supported": true,
+            "currently_available": true
+        },
+        "hot_swap": {
+            "supported": true,
+            "currently_available": true,
+            "components": ["compiled_metadata", "provenance_state"]
+        },
+        "reload": {
+            "resource_reload": {"supported": true, "currently_available": true},
+            "table_reload": {"supported": true, "currently_available": true},
+            "config_reload": {"supported": false, "currently_available": false}
+        }
+    });
+
+    assert_valid(ADMIN_CAPABILITIES_SCHEMA_V1, &document);
+
+    let mut invalid = document;
+    invalid["supported_posture_tiers"] = json!(["restricted"]);
+    assert_invalid(ADMIN_CAPABILITIES_SCHEMA_V1, &invalid);
+}
+
+#[test]
+fn config_apply_report_schema_matches_shared_result_vocabulary() {
+    let base = json!({
+        "schema": "registry.platform.config_apply_report.v1",
+        "attempt_id": "01JZ0000000000000000000000",
+        "component": "registry-relay",
+        "stream_id": "default",
+        "source": "signed_bundle_file",
+        "bundle_id": "01JZ0000000000000000000001",
+        "bundle_sequence": 42,
+        "previous_config_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "config_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "result": "applied",
+        "restart_required": false,
+        "change_classes": ["signing_key_rotation"],
+        "affected_components": ["provenance_state"],
+        "warnings": [],
+        "errors": []
+    });
+
+    for result in [
+        ApplyReportResult::Verified,
+        ApplyReportResult::Applied,
+        ApplyReportResult::RejectedSignature,
+        ApplyReportResult::RejectedThreshold,
+        ApplyReportResult::RejectedFreshness,
+        ApplyReportResult::RejectedRollback,
+        ApplyReportResult::RejectedRestartRequired,
+        ApplyReportResult::RejectedReadiness,
+        ApplyReportResult::RejectedBreakGlass,
+        ApplyReportResult::RejectedLocalApproval,
+        ApplyReportResult::InternalError,
+    ] {
+        let mut document = base.clone();
+        document["result"] = json!(result.as_str());
+        assert_valid(CONFIG_APPLY_REPORT_SCHEMA_V1, &document);
+    }
+
+    let mut invalid = base;
+    invalid["result"] = json!("rejected_compile");
+    assert_invalid(CONFIG_APPLY_REPORT_SCHEMA_V1, &invalid);
 }
 
 #[test]

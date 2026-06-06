@@ -1,6 +1,7 @@
 use registry_platform_ops::{
-    internal_config_hash, posture_safe_config_hash, posture_safe_runtime_config_hash,
-    registry_runtime_config_sensitivity, ConfigProvenance, ConfigSource, ConfigValueSensitivity,
+    internal_config_hash, is_sha256_config_hash, posture_safe_config_hash,
+    posture_safe_runtime_config_hash, registry_runtime_config_sensitivity, ConfigProvenance,
+    ConfigSource, ConfigValueSensitivity,
 };
 use serde_json::{json, Value};
 
@@ -22,6 +23,23 @@ fn internal_hash_tracks_exact_source_bytes() {
     assert_ne!(first, second);
     assert!(first.starts_with("sha256:"));
     assert_eq!(first.len(), "sha256:".len() + 64);
+}
+
+#[test]
+fn config_hash_format_requires_sha256_prefix_and_lowercase_hex_digest() {
+    assert!(is_sha256_config_hash(
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ));
+    assert!(!is_sha256_config_hash(
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ));
+    assert!(!is_sha256_config_hash("sha256:not-a-digest"));
+    assert!(!is_sha256_config_hash(
+        "sha256:gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg"
+    ));
+    assert!(!is_sha256_config_hash(
+        "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    ));
 }
 
 #[test]
