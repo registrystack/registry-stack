@@ -172,12 +172,38 @@ fn validate_prints_source_digest_and_rejects_runtime_only_keys() {
     write_minimal_manifest(&valid, "datasets: []\n");
 
     let output = Command::new(bin())
-        .args(["validate", valid.to_str().unwrap()])
+        .arg("validate")
+        .arg(&valid)
         .output()
         .expect("run cli");
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
     assert!(stdout.contains("source_manifest_digest: sha256:"));
+
+    let federation = dir.join("federation.yaml");
+    write_minimal_manifest(
+        &federation,
+        r#"
+federation:
+  node_id: did:web:registry.example.test
+  issuer: https://registry.example.test
+  jwks_uri: https://registry.example.test/.well-known/jwks.json
+  federation_api: https://registry.example.test/federation
+  supported_protocol_versions:
+    - registry-notary-federation/v0.1
+datasets: []
+"#,
+    );
+    let output = Command::new(bin())
+        .arg("validate")
+        .arg(&federation)
+        .output()
+        .expect("run cli");
+    assert!(
+        output.status.success(),
+        "federation jwks_uri should be source metadata, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let invalid = dir.join("runtime-only.yaml");
     write_minimal_manifest(
@@ -193,7 +219,8 @@ datasets:
 "#,
     );
     let output = Command::new(bin())
-        .args(["validate", invalid.to_str().unwrap()])
+        .arg("validate")
+        .arg(&invalid)
         .output()
         .expect("run cli");
     assert!(!output.status.success());

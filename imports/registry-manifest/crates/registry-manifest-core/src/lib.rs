@@ -56,7 +56,6 @@ pub const RUNTIME_ONLY_KEYS: &[&str] = &[
     "column",
     "config_trust",
     "file_path",
-    "jwks_uri",
     "listener",
     "listeners",
     "peer_allowlist",
