@@ -18,6 +18,17 @@
 - Added governed config apply for signed TUF bundles, including
   `config verify-bundle`, `config apply-bundle`, and the `config_trust`
   operator block for trust roots, local approvals, and anti-rollback state.
+  Governed signed apply can hot-apply signing-key rotations for the credential
+  issuer, pre-authorized access-token, eSignet client-assertion, and federation
+  response signing paths, and can clean up expired publish-only keys with the
+  `signing_key_cleanup` change class; other changes remain restart-required.
+- Added `server.admin_listener` to split admin and public HTTP topology. The
+  `dedicated` mode serves `/admin/v1/*` and `/metrics` on a separate admin bind,
+  `shared_with_public` serves them on the public listener, and `disabled` drops
+  the admin listener entirely. Governed `config_trust` requires `dedicated`.
+- Changed `auth.api_keys[]` and `auth.bearer_tokens[]` to a committed
+  `fingerprint` reference (`provider`, `name`, `commitment`) in place of
+  `hash_env`, so signed config apply can govern caller-credential rotation.
 - Product binaries and container images now compile the PKCS#11 provider by
   default, while vendor modules, token state, labels, and PIN handling remain
   operator-supplied runtime configuration.
