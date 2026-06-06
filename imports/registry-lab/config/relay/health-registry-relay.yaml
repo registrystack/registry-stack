@@ -12,7 +12,9 @@ config_trust:
     window_seconds: 3600
 
 metadata:
-  manifest_path: health-registry-relay.metadata.yaml
+  source:
+    path: health-registry-relay.metadata.yaml
+    digest: sha256:eef478b2e4dd4f30ce50ba9481650f0bc4b8bdb2baeb648143b3a9e22d691cab
 
 catalog:
   title: Health Registry Relay (Decentralized Demo)
@@ -30,14 +32,14 @@ auth:
       fingerprint:
         provider: env
         name: HEALTH_METADATA_CLIENT_HASH
-        commitment: sha256:a69075c9fb52a2da5955c1c9baadf6f9062827dd328c7ab1d66ba27c82e99fe0
+        commitment: sha256:01c348240085780f1478c5ffdc3ee274932862204ff34911388afef15c00e4c3
       scopes:
         - health_registry:metadata
     - id: evidence_source
       fingerprint:
         provider: env
         name: HEALTH_EVIDENCE_SOURCE_HASH
-        commitment: sha256:a45c7d19209177d9e707826c87e438ea2510d0b2c43e141cc987a5fd68b74966
+        commitment: sha256:e5f0ccae7a577fe41a6ecc814001d89c3b2f83bf9f7908b2a9ffe2717a9c66b6
       scopes:
         - health_registry:metadata
         - health_registry:rows
@@ -46,7 +48,7 @@ auth:
       fingerprint:
         provider: env
         name: HEALTH_EVIDENCE_ONLY_HASH
-        commitment: sha256:4318ea5e99439d687551f6a0e98642905ce1523203e2f6cb04cbbe30b8859eac
+        commitment: sha256:328a52475bfc456a3d017ad0e9b2ea5754a7e221a11d8899479d08fb8359fa71
       scopes:
         - health_registry:metadata
         - health_registry:evidence_verification
@@ -54,7 +56,7 @@ auth:
       fingerprint:
         provider: env
         name: HEALTH_ROW_READER_HASH
-        commitment: sha256:c4385c09795102e8ba0e2a58f799791f82a4a5cc90e75a4f4f865664779a3a8e
+        commitment: sha256:18325cdfe158fc1008495cfdf04f60422927ac289a0091f9c3ce3e81e174545e
       scopes:
         - health_registry:metadata
         - health_registry:rows
@@ -62,7 +64,7 @@ auth:
       fingerprint:
         provider: env
         name: SHARED_HEALTH_EVIDENCE_SOURCE_HASH
-        commitment: sha256:eb0caa4f5917cb8126b6dcf1bd6da1af2fc4e85d10e2238046440b8714b124ee
+        commitment: sha256:9f8d7161f9eb839738efad770cfe4ff20b14d9b8687e6ef468106dd67c0e6335
       scopes:
         - health_registry:metadata
         - health_registry:rows

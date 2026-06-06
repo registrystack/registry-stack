@@ -13,7 +13,9 @@ config_trust:
     window_seconds: 3600
 
 metadata:
-  manifest_path: civil-registry-relay.metadata.yaml
+  source:
+    path: civil-registry-relay.metadata.yaml
+    digest: sha256:9b84cb154373d3161e0ff0a26c099896eb64392b6b6f2f124271449ba3c1587d
 
 catalog:
   title: Civil Registry Relay (Decentralized Demo)
@@ -32,21 +34,21 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_RELAY_OPS_HASH
-        commitment: sha256:ecd1c5e65929f0f1745b0cbe9d70fa25991b9a8836cc09cb97d6f59a8e49609c
+        commitment: sha256:53c63551014fdf03c570133016d1985d0b9535bdcbb6a8bc4d5d534dcac4454a
       scopes:
         - registry_relay:ops_read
     - id: metadata_client
       fingerprint:
         provider: env
         name: CIVIL_METADATA_CLIENT_HASH
-        commitment: sha256:fb77b8dd8715d6d2ef6298a7fbb986bbc8d98bd5c75518b42801941573ff75f1
+        commitment: sha256:c8f84ec9824df8649e522c3afcdf1de9faf7e833b982a62e86d9c869cd5d223d
       scopes:
         - civil_registry:metadata
     - id: evidence_source
       fingerprint:
         provider: env
         name: CIVIL_EVIDENCE_SOURCE_HASH
-        commitment: sha256:c736f6aff2f88e3fcf3023548ee19376fca06dec13f33fc5695aa61c8c0f3216
+        commitment: sha256:9a2e787ab4965f7a35cacf7e69b3c438fa2eeb4efbe0cf38141e5ef16cacf426
       scopes:
         - civil_registry:metadata
         - civil_registry:rows
@@ -55,7 +57,7 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_EVIDENCE_ONLY_HASH
-        commitment: sha256:a33b52157bf8000da1af36a112d668c7b3ca99b9f8f28dc151b7d2ab6898371d
+        commitment: sha256:b47c4fcc6e276bd066421184bdadb712bae39306cf605809582f02567b365931
       scopes:
         - civil_registry:metadata
         - civil_registry:evidence_verification
@@ -63,7 +65,7 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_ROW_READER_HASH
-        commitment: sha256:ba9b5fe986b7358858db9cb21ee79b50db2b360ad2348db99458b9ef6630a139
+        commitment: sha256:853526a807e8896c689029a29c2f6fe1d4836e60fc433c762f8a3b8887bdb656
       scopes:
         - civil_registry:metadata
         - civil_registry:rows
@@ -71,7 +73,7 @@ auth:
       fingerprint:
         provider: env
         name: SHARED_CIVIL_EVIDENCE_SOURCE_HASH
-        commitment: sha256:fa5e62049f9495c6ea2b366536496bb1eedf3eb2cc2908391f7f26fbe7189213
+        commitment: sha256:9674b1ecd51e498c3ac94e6033ef418ce30640bbf06e37501993cf4feca7f12a
       scopes:
         - civil_registry:metadata
         - civil_registry:rows

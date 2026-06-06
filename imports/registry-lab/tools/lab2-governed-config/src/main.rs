@@ -72,6 +72,14 @@ struct Manifest {
     artifacts: Vec<ManifestArtifact>,
 }
 
+#[derive(Serialize)]
+struct CredentialCommitmentPayload<'a> {
+    product: &'a str,
+    credential_type: &'a str,
+    credential_id: &'a str,
+    fingerprint: &'a str,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let repo = env::current_dir()?;
@@ -596,7 +604,15 @@ fn render_notary_runtime_config(
     ensure_bearer_token(
         &mut value,
         "civil_notary_ops",
-        "CIVIL_NOTARY_OPS_BEARER_HASH",
+        credential_fingerprint_ref(
+            "CIVIL_NOTARY_OPS_BEARER_HASH",
+            &credential_commitment(
+                "registry-notary",
+                "bearer_token",
+                "civil_notary_ops",
+                "CIVIL_NOTARY_OPS_BEARER_HASH",
+            )?,
+        )?,
         &["registry_notary:ops_read", "registry_notary:admin"],
     )?;
     normalize_credential_entries(
@@ -721,7 +737,7 @@ fn add_admin_scope(
 fn ensure_bearer_token(
     value: &mut Value,
     id: &str,
-    fingerprint_env: &str,
+    fingerprint: Value,
     required_scopes: &[&str],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let entries = value_at_mut(value, &["auth", "bearer_tokens"])?
@@ -754,7 +770,7 @@ fn ensure_bearer_token(
     }
     entries.push(serde_yaml::to_value(json!({
         "id": id,
-        "hash_env": fingerprint_env,
+        "fingerprint": fingerprint,
         "scopes": required_scopes,
     }))?);
     Ok(())
@@ -781,10 +797,47 @@ fn normalize_credential_entries(
         let fingerprint_env = credential_fingerprint_env(map).ok_or_else(|| {
             format!("{product} {credential_type} {id} missing fingerprint env ref")
         })?;
-        map.remove(Value::String("fingerprint".to_string()));
-        set_mapping(map, "hash_env", Value::String(fingerprint_env));
+        if map.get(Value::String("fingerprint".to_string())).is_none() {
+            let commitment =
+                credential_commitment(product, credential_type, &id, &fingerprint_env)?;
+            set_mapping(
+                map,
+                "fingerprint",
+                credential_fingerprint_ref(&fingerprint_env, &commitment)?,
+            );
+        }
+        map.remove(Value::String("hash_env".to_string()));
     }
     Ok(())
+}
+
+fn credential_fingerprint_ref(
+    env_name: &str,
+    commitment: &str,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    Ok(serde_yaml::to_value(json!({
+        "provider": "env",
+        "name": env_name,
+        "commitment": commitment,
+    }))?)
+}
+
+fn credential_commitment(
+    product: &str,
+    credential_type: &str,
+    credential_id: &str,
+    fingerprint_env: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let fingerprint = env::var(fingerprint_env)
+        .map_err(|_| format!("{fingerprint_env} is required to render governed config"))?;
+    let payload = CredentialCommitmentPayload {
+        product,
+        credential_type,
+        credential_id,
+        fingerprint: &fingerprint,
+    };
+    let encoded = serde_json::to_vec(&payload)?;
+    Ok(format!("sha256:{}", hex_lower(&Sha256::digest(&encoded))))
 }
 
 fn credential_fingerprint_env(map: &Mapping) -> Option<String> {

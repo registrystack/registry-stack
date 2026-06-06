@@ -8,6 +8,7 @@ values are used only by demo clients and Evidence Server source connectors.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -15,8 +16,6 @@ import re
 import shlex
 import sys
 from pathlib import Path
-
-import yaml
 
 DEMO_ROOT = Path(__file__).resolve().parents[1]
 RELAY_ROOT = Path(os.environ.get("REGISTRY_RELAY_SOURCE_DIR", DEMO_ROOT / "vendor" / "registry-relay")).resolve()
@@ -331,10 +330,18 @@ def leading_spaces(line: str) -> int:
 
 
 def yaml_scalar(value: str) -> str:
-    parsed = yaml.safe_load(value)
-    if not isinstance(parsed, str):
-        raise TypeError(f"expected YAML string scalar, got {parsed!r}")
-    return parsed
+    value = value.strip()
+    if not value:
+        return ""
+    if value[0] in {"'", '"'}:
+        try:
+            parsed = ast.literal_eval(value)
+        except (SyntaxError, ValueError) as exc:
+            raise ValueError(f"invalid quoted YAML string scalar: {value!r}") from exc
+        if not isinstance(parsed, str):
+            raise TypeError(f"expected YAML string scalar, got {parsed!r}")
+        return parsed
+    return value
 
 
 def main() -> int:

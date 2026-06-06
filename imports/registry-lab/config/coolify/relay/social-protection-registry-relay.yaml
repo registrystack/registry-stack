@@ -12,7 +12,9 @@ config_trust:
     window_seconds: 3600
 
 metadata:
-  manifest_path: social-protection-registry-relay.metadata.yaml
+  source:
+    path: social-protection-registry-relay.metadata.yaml
+    digest: sha256:c1b4b2e8e22670270d2445b661b6324816719ecb4cbd5e7f00fd68082f39b0d0
 
 catalog:
   title: Social Protection Registry Relay (Decentralized Demo)
@@ -30,14 +32,14 @@ auth:
       fingerprint:
         provider: env
         name: SOCIAL_METADATA_CLIENT_HASH
-        commitment: sha256:c5246d00e666cdfa8170466bbe9bfda51033dd21dff180482c2f3fcc952664f7
+        commitment: sha256:599ca4ec28beea7c2681b28f3198703672802951560966ac3fda3cb8572cfd2f
       scopes:
         - social_protection_registry:metadata
     - id: evidence_source
       fingerprint:
         provider: env
         name: SOCIAL_EVIDENCE_SOURCE_HASH
-        commitment: sha256:93920def341888e5a07764f68a9b1ac7bcd701fc40a2dbf6e2082ba8071d5859
+        commitment: sha256:e5e10693e3884581aa6348bbe5f6245058bd43511c929ed39657e80ae517bac5
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:rows
@@ -46,7 +48,7 @@ auth:
       fingerprint:
         provider: env
         name: SOCIAL_EVIDENCE_ONLY_HASH
-        commitment: sha256:f131e738abebba9c414230cc6eabf5afcb96201a13858a51e36412c353ef4efd
+        commitment: sha256:0a2ce24e1d4adef9ca7367ed84ff55f2fac31678651e6fb03b3b11e165bc23e7
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:evidence_verification
@@ -54,7 +56,7 @@ auth:
       fingerprint:
         provider: env
         name: SOCIAL_ROW_READER_HASH
-        commitment: sha256:26d9c9f3607ba34b8d8fa3edd00a439122fe12b5911c811cbd039121ee6d6f28
+        commitment: sha256:6fc1271eaf4476049aa0bb87285397ee0dfe73bcb6f96057ebeff0ddff68f107
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:rows
@@ -62,7 +64,7 @@ auth:
       fingerprint:
         provider: env
         name: SOCIAL_AGGREGATE_READER_HASH
-        commitment: sha256:c68698ce212137e170c1fb0cbfdb35beea1944c776b13582f626bc1c22d8097c
+        commitment: sha256:4f3e1f7027f806d54a548431793728393db305d1d5a33d2c390fd81a1b1df7fe
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:aggregate
@@ -70,7 +72,7 @@ auth:
       fingerprint:
         provider: env
         name: SHARED_SOCIAL_EVIDENCE_SOURCE_HASH
-        commitment: sha256:98c3f82642a31c07077eedf346ace40505c7770746b1d79b57b239c8939854cd
+        commitment: sha256:876754185781407d161214881a9947e4ce35337dcf275560763407910533490e
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:rows
