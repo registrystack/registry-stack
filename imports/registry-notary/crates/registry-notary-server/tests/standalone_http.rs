@@ -20,14 +20,15 @@ use chrono::Utc;
 use registry_notary_core::FEDERATION_RESPONSE_JWT_TYP;
 use registry_notary_core::{
     BulkMode, ConfigTrustConfig, ConfigTrustRateLimit, EvidenceCredentialConfig,
-    EvidenceOidcAuthConfig, Oid4vciConfig, SelfAttestationClaimSource, SigningKeyConfig,
-    SigningKeyProviderConfig, SigningKeyStatus, StandaloneRegistryNotaryConfig,
-    SD_JWT_VC_SIGNING_ALG,
+    EvidenceOidcAuthConfig, Oid4vciConfig, RegistryNotaryAdminListenerMode,
+    SelfAttestationClaimSource, SigningKeyConfig, SigningKeyProviderConfig, SigningKeyStatus,
+    StandaloneRegistryNotaryConfig, SD_JWT_VC_SIGNING_ALG,
 };
 #[cfg(feature = "registry-notary-cel")]
 use registry_notary_server::cel_worker::{CelWorker, CelWorkerConfig};
 use registry_notary_server::{
-    compile_notary_runtime, openapi_document, standalone_router, StandaloneServerError,
+    compile_notary_runtime, notary_routers_from_runtime, openapi_document, standalone_router,
+    StandaloneServerError,
 };
 use registry_platform_audit::{
     verify_jsonl_lines, verify_jsonl_lines_with_hasher, AuditChainHasher, AuditEnvelope,
@@ -481,6 +482,7 @@ fn add_config_trust_with_local_approval_path(
         &fs::read(tough_fixture("simple-rsa").join("root.json"))
             .expect("trusted TUF root fixture reads"),
     );
+    config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::Dedicated;
     config.config_trust = Some(ConfigTrustConfig {
         antirollback_state_path: antirollback_path,
         local_approval_state_path: local_approval_path,
@@ -5740,6 +5742,22 @@ async fn admin_capabilities_requires_ops_read_and_reports_notary_surface() {
         json!(["tuf_local", "tuf_remote"])
     );
     assert_eq!(body["break_glass"]["rate_limit_scope"], json!("instance"));
+    assert_eq!(
+        body["listeners"],
+        json!({
+            "admin": {
+                "mode": "shared_with_public",
+                "public_admin_routes": true
+            },
+            "metrics": {
+                "mode": "shared_with_public",
+                "requires_admin_scope": true
+            }
+        })
+    );
+    assert!(!serde_json::to_string(&body["listeners"])
+        .expect("listeners serialize")
+        .contains("127.0.0.1"));
     assert_eq!(body["root_transition"]["supported"], json!(true));
     assert_eq!(
         body["hot_swap"]["components"],
@@ -5752,6 +5770,103 @@ async fn admin_capabilities_requires_ops_read_and_reports_notary_surface() {
     assert_eq!(body["reload"]["resource_reload"]["supported"], json!(false));
     assert_eq!(body["reload"]["table_reload"]["supported"], json!(false));
     assert_eq!(body["reload"]["config_reload"]["supported"], json!(false));
+}
+
+#[tokio::test]
+async fn dedicated_topology_splits_admin_routes_and_reports_capabilities() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::Dedicated;
+    add_ops_read_api_key(&mut config);
+
+    let routers = notary_routers_from_runtime(
+        compile_notary_runtime(config).expect("runtime compiles for dedicated topology"),
+    );
+    let public = TestServer::builder().http_transport().build(routers.public);
+    let admin = TestServer::builder().http_transport().build(routers.admin);
+
+    public.get("/healthz").await.assert_status_ok();
+    public
+        .get("/admin/v1/capabilities")
+        .add_header("x-api-key", "ops-token")
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    public
+        .get("/metrics")
+        .add_header("x-api-key", "ops-token")
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    let response = admin
+        .get("/admin/v1/capabilities")
+        .add_header("x-api-key", "ops-token")
+        .await;
+    response.assert_status_ok();
+    let body: Value = response.json();
+    assert_matches_admin_capabilities_schema(&body);
+    assert_eq!(
+        body["listeners"],
+        json!({
+            "admin": {
+                "mode": "dedicated",
+                "public_admin_routes": false
+            },
+            "metrics": {
+                "mode": "admin",
+                "requires_admin_scope": true
+            }
+        })
+    );
+    assert!(!serde_json::to_string(&body["listeners"])
+        .expect("listeners serialize")
+        .contains("127.0.0.1"));
+}
+
+#[tokio::test]
+async fn governed_config_rejects_shared_admin_listener_topology() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    config.config_trust = Some(ConfigTrustConfig {
+        antirollback_state_path: tmp.path().join("config-antirollback.json"),
+        local_approval_state_path: tmp.path().join("config-local-approvals.json"),
+        break_glass_rate_limit: ConfigTrustRateLimit {
+            max_accepted: 1,
+            window_seconds: 3600,
+        },
+        accepted_roots: Vec::new(),
+    });
+
+    let error = match compile_notary_runtime(config) {
+        Ok(_) => panic!("shared governed topology is rejected"),
+        Err(error) => error,
+    };
+    let message = error.to_string();
+    assert!(
+        message.contains("server.admin_listener.mode = dedicated"),
+        "unexpected error: {message}"
+    );
 }
 
 #[test]

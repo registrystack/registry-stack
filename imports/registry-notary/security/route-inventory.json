@@ -19,7 +19,7 @@
       "source": "crates/registry-notary-server/src/api.rs"
     },
     {
-      "listener": "public",
+      "listener": "admin",
       "path": "/admin/v1/reload",
       "methods": [
         "POST"
@@ -27,7 +27,7 @@
       "source": "crates/registry-notary-server/src/api.rs"
     },
     {
-      "listener": "public",
+      "listener": "admin",
       "path": "/admin/v1/capabilities",
       "methods": [
         "GET"
@@ -35,7 +35,7 @@
       "source": "crates/registry-notary-server/src/api.rs"
     },
     {
-      "listener": "public",
+      "listener": "admin",
       "path": "/admin/v1/config/verify",
       "methods": [
         "POST"
@@ -43,7 +43,7 @@
       "source": "crates/registry-notary-server/src/api.rs"
     },
     {
-      "listener": "public",
+      "listener": "admin",
       "path": "/admin/v1/config/dry-run",
       "methods": [
         "POST"
@@ -51,7 +51,7 @@
       "source": "crates/registry-notary-server/src/api.rs"
     },
     {
-      "listener": "public",
+      "listener": "admin",
       "path": "/admin/v1/config/apply",
       "methods": [
         "POST"
@@ -59,12 +59,13 @@
       "source": "crates/registry-notary-server/src/api.rs"
     },
     {
-      "listener": "public",
+      "listener": "admin",
       "path": "/admin/v1/posture",
       "methods": [
         "GET"
       ],
-      "source": "crates/registry-notary-server/src/api.rs"
+      "source": "crates/registry-notary-server/src/api.rs",
+      "notes": "Read-only redacted operations posture route. In dedicated admin mode it is not mounted on the public listener; simple local shared mode still requires registry_notary:ops_read and local network controls."
     },
     {
       "listener": "public",
@@ -227,7 +228,7 @@
       "source": "crates/registry-notary-server/src/api.rs"
     },
     {
-      "listener": "public",
+      "listener": "admin",
       "path": "/admin/v1/credentials/{credential_id}/status",
       "methods": [
         "POST"
@@ -244,12 +245,13 @@
       "feature": "federation.enabled"
     },
     {
-      "listener": "metrics",
+      "listener": "admin",
       "path": "/metrics",
       "methods": [
         "GET"
       ],
-      "source": "crates/registry-notary-server/src/standalone.rs"
+      "source": "crates/registry-notary-server/src/standalone.rs",
+      "notes": "Admin metrics route mounted on the admin listener in dedicated mode and handler-enforced by admin scope. Simple local shared mode keeps the same admin-scope gate."
     },
     {
       "listener": "sidecar",

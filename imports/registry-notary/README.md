@@ -323,6 +323,10 @@ as `vX.Y.Z`, or immutable digests for rollback.
 Native runs default to `127.0.0.1:8081`. The Docker image sets
 `REGISTRY_NOTARY_BIND=0.0.0.0:8080` and exposes port `8080`; override it with
 `--bind` or `REGISTRY_NOTARY_BIND` when deploying behind a different listener.
+Set `server.admin_listener.mode: dedicated` and
+`server.admin_listener.bind` to serve `/admin/v1/*` and `/metrics` on a
+separate admin listener. Simple local deployments without `config_trust` may
+use `shared_with_public`; governed configuration requires dedicated mode.
 The image healthcheck runs `registry-notary healthcheck`, which probes
 `http://127.0.0.1:8080/healthz` by default and does not require a shell or curl
 inside the distroless runtime. Override `REGISTRY_NOTARY_HEALTHCHECK_URL` when

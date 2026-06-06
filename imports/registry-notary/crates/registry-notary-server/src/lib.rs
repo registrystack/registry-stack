@@ -36,6 +36,7 @@ pub use self_attestation_rate_limit::{
     SelfAttestationRateLimiter,
 };
 pub use standalone::{
-    compile_notary_runtime, notary_router_from_runtime, standalone_router, EvidenceIssuerRegistry,
-    NotaryRuntimeSnapshot, StandaloneServerError,
+    compile_notary_runtime, notary_admin_router_from_runtime, notary_public_router_from_runtime,
+    notary_router_from_runtime, notary_routers_from_runtime, standalone_router,
+    EvidenceIssuerRegistry, NotaryRouters, NotaryRuntimeSnapshot, StandaloneServerError,
 };

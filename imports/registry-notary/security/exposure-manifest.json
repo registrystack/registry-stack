@@ -43,7 +43,7 @@
     },
     {
       "service": "registry-notary",
-      "listener": "public",
+      "listener": "admin",
       "method": "POST",
       "path": "/admin/v1/reload",
       "feature": null,
@@ -66,7 +66,7 @@
     },
     {
       "service": "registry-notary",
-      "listener": "public",
+      "listener": "admin",
       "method": "GET",
       "path": "/admin/v1/capabilities",
       "feature": null,
@@ -90,7 +90,7 @@
     },
     {
       "service": "registry-notary",
-      "listener": "public",
+      "listener": "admin",
       "method": "POST",
       "path": "/admin/v1/config/verify",
       "feature": null,
@@ -113,7 +113,7 @@
     },
     {
       "service": "registry-notary",
-      "listener": "public",
+      "listener": "admin",
       "method": "POST",
       "path": "/admin/v1/config/dry-run",
       "feature": null,
@@ -137,7 +137,7 @@
     },
     {
       "service": "registry-notary",
-      "listener": "public",
+      "listener": "admin",
       "method": "POST",
       "path": "/admin/v1/config/apply",
       "feature": null,
@@ -161,7 +161,7 @@
     },
     {
       "service": "registry-notary",
-      "listener": "public",
+      "listener": "admin",
       "method": "GET",
       "path": "/admin/v1/posture",
       "feature": null,
@@ -175,7 +175,7 @@
       "openapi": false,
       "stability": "admin",
       "data_classification": "operational",
-      "notes": "Read-only redacted operations posture route. Registry Notary uses one listener, so production exposure requires reverse-proxy or network ACL controls in addition to registry_notary:ops_read.",
+      "notes": "Read-only redacted operations posture route. In dedicated admin mode it is not mounted on the public listener; simple local shared mode still requires registry_notary:ops_read and local network controls.",
       "source": "manual",
       "enforcement_tests": [
         "crates/registry-notary-server/tests/standalone_http.rs::admin_posture_requires_ops_read_not_admin_and_ops_cannot_reload"
@@ -614,7 +614,7 @@
     },
     {
       "service": "registry-notary",
-      "listener": "public",
+      "listener": "admin",
       "method": "POST",
       "path": "/admin/v1/credentials/{credential_id}/status",
       "feature": null,
@@ -661,7 +661,7 @@
     },
     {
       "service": "registry-notary",
-      "listener": "metrics",
+      "listener": "admin",
       "method": "GET",
       "path": "/metrics",
       "feature": null,
@@ -675,7 +675,7 @@
       "openapi": false,
       "stability": "admin",
       "data_classification": "operational",
-      "notes": "Admin metrics route mounted on the main listener but handler-enforced by admin scope.",
+      "notes": "Admin metrics route mounted on the admin listener in dedicated mode and handler-enforced by admin scope. Simple local shared mode keeps the same admin-scope gate.",
       "source": "manual",
       "enforcement_tests": [
         "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"

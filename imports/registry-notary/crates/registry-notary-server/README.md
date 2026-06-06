@@ -142,10 +142,12 @@ with exactly the read-only `registry_notary:ops_read` scope; the write-capable
 `registry_notary:admin` scope does not authorize posture unless the same
 credential also carries `registry_notary:ops_read`.
 
-Registry Notary serves admin and public routes on a single listener. Production
-deployments must place `/admin/v1/posture` behind a reverse-proxy ACL, service
-mesh policy, firewall, or equivalent operator-network control in addition to
-the application scope check.
+Registry Notary supports a dedicated admin listener with
+`server.admin_listener.mode: dedicated`. In that mode `/admin/v1/*` and
+`/metrics` are not mounted on the public listener. Simple local deployments may
+use `server.admin_listener.mode: shared_with_public`, but governed
+configuration with `config_trust` requires dedicated admin mode at startup.
+Every topology still enforces the application scope checks.
 
 ## Audit Configuration
 

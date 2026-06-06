@@ -383,6 +383,16 @@
                     "currently_available": true,
                     "supported": true
                   },
+                  "listeners": {
+                    "admin": {
+                      "mode": "shared_with_public",
+                      "public_admin_routes": true
+                    },
+                    "metrics": {
+                      "mode": "shared_with_public",
+                      "requires_admin_scope": true
+                    }
+                  },
                   "product": "registry-notary",
                   "reload": {
                     "config_reload": {

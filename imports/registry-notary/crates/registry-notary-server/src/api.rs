@@ -31,10 +31,10 @@ use registry_notary_core::{
     EvidenceConfig, EvidenceEntity, EvidenceEntityReference, EvidenceError, EvidencePrincipal,
     EvidenceRelationship, FederationConfig, Hashed, HolderRequest, Oid4vciConfig,
     Oid4vciCredentialConfigurationConfig, Oid4vciDisplayImageConfig, Oid4vciIssuerDisplayConfig,
-    PolicyIdentifier, RateLimitBucket, RenderEvaluationRequest, SelfAttestationConfig,
-    SelfAttestationDenialCode, SelfAttestationScopePolicy, SigningKeyStatus, SourceCapability,
-    StandaloneRegistryNotaryConfig, StoredSelfAttestationMetadata, SubjectRequest,
-    VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
+    PolicyIdentifier, RateLimitBucket, RegistryNotaryAdminListenerMode, RenderEvaluationRequest,
+    SelfAttestationConfig, SelfAttestationDenialCode, SelfAttestationScopePolicy, SigningKeyStatus,
+    SourceCapability, StandaloneRegistryNotaryConfig, StoredSelfAttestationMetadata,
+    SubjectRequest, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
 };
 use registry_platform_audit::AuditKeyHasher;
 use registry_platform_config::RegistryTrustRoot;
@@ -108,15 +108,16 @@ pub fn router<S>() -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
+    public_router().merge(admin_router())
+}
+
+pub fn public_router<S>() -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
     Router::new()
         .route("/healthz", get(healthz))
         .route("/ready", get(ready))
-        .route("/admin/v1/capabilities", get(admin_capabilities))
-        .route("/admin/v1/posture", get(admin_posture))
-        .route("/admin/v1/reload", post(admin_reload))
-        .route("/admin/v1/config/verify", post(admin_config_verify))
-        .route("/admin/v1/config/dry-run", post(admin_config_dry_run))
-        .route("/admin/v1/config/apply", post(admin_config_apply))
         .route("/openapi.json", get(openapi_json))
         .route("/.well-known/evidence-service", get(service_document))
         .route("/.well-known/evidence/jwks.json", get(issuer_jwks))
@@ -146,6 +147,19 @@ where
             "/v1/credentials/{credential_id}/status",
             get(get_credential_status),
         )
+}
+
+pub fn admin_router<S>() -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/admin/v1/capabilities", get(admin_capabilities))
+        .route("/admin/v1/posture", get(admin_posture))
+        .route("/admin/v1/reload", post(admin_reload))
+        .route("/admin/v1/config/verify", post(admin_config_verify))
+        .route("/admin/v1/config/dry-run", post(admin_config_dry_run))
+        .route("/admin/v1/config/apply", post(admin_config_apply))
         .route(
             "/admin/v1/credentials/{credential_id}/status",
             post(update_credential_status),
@@ -1958,7 +1972,10 @@ async fn admin_reload(principal: Option<Extension<EvidencePrincipal>>) -> Respon
     )
 }
 
-async fn admin_capabilities(principal: Option<Extension<EvidencePrincipal>>) -> Response {
+async fn admin_capabilities(
+    principal: Option<Extension<EvidencePrincipal>>,
+    Extension(state): Extension<Arc<RegistryNotaryApiState>>,
+) -> Response {
     let Some(Extension(principal)) = principal else {
         return evidence_error_response(EvidenceError::MissingCredential);
     };
@@ -1967,6 +1984,7 @@ async fn admin_capabilities(principal: Option<Extension<EvidencePrincipal>>) -> 
             required: OPS_READ_SCOPE.to_string(),
         });
     }
+    let listeners = admin_capabilities_listeners(state.runtime_config().as_deref());
     let mut response = Json(json!({
         "schema": "registry.admin.capabilities.v1",
         "product": "registry-notary",
@@ -1993,6 +2011,7 @@ async fn admin_capabilities(principal: Option<Extension<EvidencePrincipal>>) -> 
             "currently_available": true,
             "rate_limit_scope": "instance"
         },
+        "listeners": listeners,
         "root_transition": {
             "supported": true,
             "currently_available": true
@@ -2026,6 +2045,44 @@ async fn admin_capabilities(principal: Option<Extension<EvidencePrincipal>>) -> 
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
+}
+
+fn admin_capabilities_listeners(config: Option<&StandaloneRegistryNotaryConfig>) -> Value {
+    let mode = config
+        .map(|config| config.server.admin_listener.mode)
+        .unwrap_or(RegistryNotaryAdminListenerMode::SharedWithPublic);
+    match mode {
+        RegistryNotaryAdminListenerMode::Dedicated => json!({
+            "admin": {
+                "mode": "dedicated",
+                "public_admin_routes": false
+            },
+            "metrics": {
+                "mode": "admin",
+                "requires_admin_scope": true
+            }
+        }),
+        RegistryNotaryAdminListenerMode::SharedWithPublic => json!({
+            "admin": {
+                "mode": "shared_with_public",
+                "public_admin_routes": true
+            },
+            "metrics": {
+                "mode": "shared_with_public",
+                "requires_admin_scope": true
+            }
+        }),
+        RegistryNotaryAdminListenerMode::Disabled => json!({
+            "admin": {
+                "mode": "disabled",
+                "public_admin_routes": false
+            },
+            "metrics": {
+                "mode": "disabled",
+                "requires_admin_scope": true
+            }
+        }),
+    }
 }
 
 async fn admin_posture(

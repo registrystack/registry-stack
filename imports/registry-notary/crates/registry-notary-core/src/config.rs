@@ -137,6 +137,9 @@ impl StandaloneRegistryNotaryConfig {
         if !self.evidence.enabled {
             return Err(EvidenceConfigError::EvidenceDisabled);
         }
+        self.server
+            .admin_listener
+            .validate(self.server.bind, self.config_trust.is_some())?;
         if let Some(config_trust) = &self.config_trust {
             if config_trust.antirollback_state_path.as_os_str().is_empty() {
                 return Err(EvidenceConfigError::InvalidConfigTrustConfig {
@@ -3155,6 +3158,8 @@ fn detect_depends_on_cycle(
 pub struct RegistryNotaryHttpConfig {
     #[serde(default = "default_bind_addr")]
     pub bind: SocketAddr,
+    #[serde(default, skip_serializing_if = "admin_listener_config_is_default")]
+    pub admin_listener: RegistryNotaryAdminListenerConfig,
     #[serde(default)]
     pub cors: RegistryNotaryCorsConfig,
 }
@@ -3163,6 +3168,7 @@ impl Default for RegistryNotaryHttpConfig {
     fn default() -> Self {
         Self {
             bind: default_bind_addr(),
+            admin_listener: RegistryNotaryAdminListenerConfig::default(),
             cors: RegistryNotaryCorsConfig::default(),
         }
     }
@@ -3173,6 +3179,79 @@ fn default_bind_addr() -> SocketAddr {
     "127.0.0.1:8081"
         .parse()
         .expect("default bind address is valid")
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegistryNotaryAdminListenerMode {
+    #[default]
+    SharedWithPublic,
+    Dedicated,
+    Disabled,
+}
+
+impl RegistryNotaryAdminListenerMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SharedWithPublic => "shared_with_public",
+            Self::Dedicated => "dedicated",
+            Self::Disabled => "disabled",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegistryNotaryAdminListenerConfig {
+    #[serde(default, skip_serializing_if = "admin_listener_mode_is_default")]
+    pub mode: RegistryNotaryAdminListenerMode,
+    #[serde(default = "default_admin_bind_addr")]
+    pub bind: SocketAddr,
+}
+
+impl RegistryNotaryAdminListenerConfig {
+    fn validate(
+        &self,
+        public_bind: SocketAddr,
+        governed_config_enabled: bool,
+    ) -> Result<(), EvidenceConfigError> {
+        if governed_config_enabled && self.mode != RegistryNotaryAdminListenerMode::Dedicated {
+            return Err(EvidenceConfigError::InvalidServerConfig {
+                reason: "config_trust requires server.admin_listener.mode = dedicated".to_string(),
+            });
+        }
+        if self.mode == RegistryNotaryAdminListenerMode::Dedicated && self.bind == public_bind {
+            return Err(EvidenceConfigError::InvalidServerConfig {
+                reason: "server.admin_listener.bind must differ from server.bind in dedicated mode"
+                    .to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+impl Default for RegistryNotaryAdminListenerConfig {
+    fn default() -> Self {
+        Self {
+            mode: RegistryNotaryAdminListenerMode::SharedWithPublic,
+            bind: default_admin_bind_addr(),
+        }
+    }
+}
+
+fn default_admin_bind_addr() -> SocketAddr {
+    // SAFETY: the literal is a valid loopback socket address.
+    "127.0.0.1:8082"
+        .parse()
+        .expect("default admin bind address is valid")
+}
+
+fn admin_listener_config_is_default(config: &RegistryNotaryAdminListenerConfig) -> bool {
+    config == &RegistryNotaryAdminListenerConfig::default()
+}
+
+fn admin_listener_mode_is_default(mode: &RegistryNotaryAdminListenerMode) -> bool {
+    mode == &RegistryNotaryAdminListenerMode::default()
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -3562,6 +3641,8 @@ pub enum EvidenceConfigError {
     InvalidCelConfig { reason: String },
     #[error("invalid federation config: {reason}")]
     InvalidFederationConfig { reason: String },
+    #[error("invalid server config: {reason}")]
+    InvalidServerConfig { reason: String },
     #[error("invalid config_trust config: {reason}")]
     InvalidConfigTrustConfig { reason: String },
     #[error("source_connection '{connection}': invalid source_auth config: {reason}")]
@@ -4805,6 +4886,10 @@ auth:
         .expect("minimal config is valid YAML")
     }
 
+    fn use_dedicated_admin_listener(config: &mut StandaloneRegistryNotaryConfig) {
+        config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::Dedicated;
+    }
+
     fn minimal_claim(id: &str) -> ClaimDefinition {
         serde_norway::from_str(&format!(
             r#"
@@ -4825,6 +4910,7 @@ rule:
         let mut config = minimal_config();
         assert!(config.config_trust.is_none());
         config.validate().expect("simple local config validates");
+        use_dedicated_admin_listener(&mut config);
 
         config.config_trust = Some(ConfigTrustConfig {
             antirollback_state_path: PathBuf::from(""),
@@ -4876,6 +4962,7 @@ rule:
     #[test]
     fn config_trust_accepts_shared_trust_roots_and_validates_them() {
         let mut config = minimal_config();
+        use_dedicated_admin_listener(&mut config);
         config.config_trust = Some(ConfigTrustConfig {
             antirollback_state_path: PathBuf::from(
                 "/var/lib/registry-notary/config-antirollback.json",
@@ -5263,6 +5350,64 @@ credential_configurations:
             EvidenceConfigError::InvalidCredentialStatusConfig { reason } => reason,
             other => panic!("unexpected error variant: {other}"),
         }
+    }
+
+    #[test]
+    fn admin_listener_defaults_to_shared_for_simple_local_config() {
+        let config = minimal_config();
+
+        assert_eq!(
+            config.server.admin_listener.mode,
+            RegistryNotaryAdminListenerMode::SharedWithPublic
+        );
+        config
+            .validate()
+            .expect("simple local config may use shared listener topology");
+    }
+
+    #[test]
+    fn governed_config_requires_dedicated_admin_listener() {
+        let mut config = minimal_config();
+        config.config_trust = Some(ConfigTrustConfig {
+            antirollback_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-antirollback.json",
+            ),
+            local_approval_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-local-approvals.json",
+            ),
+            break_glass_rate_limit: default_break_glass_rate_limit(),
+            accepted_roots: Vec::new(),
+        });
+
+        let error = config
+            .validate()
+            .expect_err("governed config must not default to shared admin listener");
+        match error {
+            EvidenceConfigError::InvalidServerConfig { reason } => {
+                assert!(reason.contains("server.admin_listener.mode = dedicated"));
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+
+        config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::Dedicated;
+        config
+            .validate()
+            .expect("governed config validates with dedicated admin listener");
+    }
+
+    #[test]
+    fn dedicated_admin_listener_must_not_reuse_public_bind() {
+        let mut config = minimal_config();
+        config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::Dedicated;
+        config.server.admin_listener.bind = config.server.bind;
+
+        let error = config
+            .validate()
+            .expect_err("dedicated admin bind must differ from public bind");
+        assert!(matches!(
+            error,
+            EvidenceConfigError::InvalidServerConfig { .. }
+        ));
     }
 
     #[test]

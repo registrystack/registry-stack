@@ -1027,6 +1027,16 @@ fn add_response_examples(document: &mut Value) {
                 "currently_available": true,
                 "rate_limit_scope": "instance"
             },
+            "listeners": {
+                "admin": {
+                    "mode": "shared_with_public",
+                    "public_admin_routes": true
+                },
+                "metrics": {
+                    "mode": "shared_with_public",
+                    "requires_admin_scope": true
+                }
+            },
             "root_transition": {
                 "supported": true,
                 "currently_available": true

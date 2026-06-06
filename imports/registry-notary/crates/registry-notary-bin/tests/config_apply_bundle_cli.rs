@@ -177,7 +177,12 @@ fn tough_fixture(name: &str) -> PathBuf {
     registry.join("tough-0.22.0/tests/data").join(name)
 }
 
-fn root_transition_config_yaml(tmp: &TempDir, bind: SocketAddr, include_next_root: bool) -> String {
+fn root_transition_config_yaml(
+    tmp: &TempDir,
+    bind: SocketAddr,
+    admin_bind: SocketAddr,
+    include_next_root: bool,
+) -> String {
     let root_sha = sha256_uri(
         &std::fs::read(tough_fixture("simple-rsa").join("root.json"))
             .expect("trusted TUF root fixture reads"),
@@ -212,6 +217,9 @@ instance:
   environment: development
 server:
   bind: {bind}
+  admin_listener:
+    mode: dedicated
+    bind: {admin_bind}
 auth:
   mode: api_key
   bearer_tokens:
@@ -431,7 +439,11 @@ fn allocate_loopback_addr() -> SocketAddr {
     listener.local_addr().expect("ephemeral local addr")
 }
 
-async fn start_live_notary_server(config_path: &Path, bind: SocketAddr) -> LiveNotaryServer {
+async fn start_live_notary_server(
+    config_path: &Path,
+    public_bind: SocketAddr,
+    admin_bind: SocketAddr,
+) -> LiveNotaryServer {
     let mut child = Command::new(env!("CARGO_BIN_EXE_registry-notary"))
         .arg("--config")
         .arg(config_path)
@@ -443,8 +455,9 @@ async fn start_live_notary_server(config_path: &Path, bind: SocketAddr) -> LiveN
         .stderr(Stdio::null())
         .spawn()
         .expect("registry-notary server starts");
-    let admin_url = format!("http://{bind}");
-    let health_url = format!("{admin_url}/healthz");
+    let public_url = format!("http://{public_bind}");
+    let admin_url = format!("http://{admin_bind}");
+    let health_url = format!("{public_url}/healthz");
     let client = reqwest::Client::builder()
         .no_proxy()
         .build()
@@ -589,7 +602,8 @@ async fn config_apply_bundle_cli_rejects_http_admin_url_without_dev_opt_in() {
 async fn config_apply_bundle_cli_drives_live_admin_root_transition_with_local_approval() {
     let tmp = TempDir::new().expect("tempdir");
     let bind = allocate_loopback_addr();
-    let current_yaml = root_transition_config_yaml(&tmp, bind, false);
+    let admin_bind = allocate_loopback_addr();
+    let current_yaml = root_transition_config_yaml(&tmp, bind, admin_bind, false);
     let current_config = write_current_config(&tmp, &current_yaml);
     let antirollback_path = tmp.path().join("antirollback.json");
     let local_approval_path = tmp.path().join("local-approvals.json");
@@ -597,11 +611,11 @@ async fn config_apply_bundle_cli_drives_live_admin_root_transition_with_local_ap
     initialize_antirollback_state(&antirollback_path, &current_yaml);
     let current_config_hash = internal_config_hash(current_yaml.as_bytes());
 
-    let candidate_yaml = root_transition_config_yaml(&tmp, bind, true);
+    let candidate_yaml = root_transition_config_yaml(&tmp, bind, admin_bind, true);
     write_local_approval_state(&local_approval_path, &candidate_yaml, &current_config_hash);
     let signed =
         write_signed_root_transition_fixture(&tmp, &current_config_hash, &candidate_yaml).await;
-    let server = start_live_notary_server(&current_config, bind).await;
+    let server = start_live_notary_server(&current_config, bind, admin_bind).await;
 
     let output = live_apply_bundle_command(&server, &signed)
         .output()
@@ -687,7 +701,8 @@ async fn config_apply_bundle_cli_drives_live_admin_root_transition_with_local_ap
 async fn config_apply_bundle_cli_drives_live_admin_remote_root_transition_with_local_approval() {
     let tmp = TempDir::new().expect("tempdir");
     let bind = allocate_loopback_addr();
-    let current_yaml = root_transition_config_yaml(&tmp, bind, false);
+    let admin_bind = allocate_loopback_addr();
+    let current_yaml = root_transition_config_yaml(&tmp, bind, admin_bind, false);
     let current_config = write_current_config(&tmp, &current_yaml);
     let antirollback_path = tmp.path().join("antirollback.json");
     let local_approval_path = tmp.path().join("local-approvals.json");
@@ -695,12 +710,12 @@ async fn config_apply_bundle_cli_drives_live_admin_remote_root_transition_with_l
     initialize_antirollback_state(&antirollback_path, &current_yaml);
     let current_config_hash = internal_config_hash(current_yaml.as_bytes());
 
-    let candidate_yaml = root_transition_config_yaml(&tmp, bind, true);
+    let candidate_yaml = root_transition_config_yaml(&tmp, bind, admin_bind, true);
     write_local_approval_state(&local_approval_path, &candidate_yaml, &current_config_hash);
     let signed =
         write_signed_root_transition_fixture(&tmp, &current_config_hash, &candidate_yaml).await;
     let remote = serve_signed_tuf_fixture(&signed).await;
-    let server = start_live_notary_server(&current_config, bind).await;
+    let server = start_live_notary_server(&current_config, bind, admin_bind).await;
 
     let output = remote_live_apply_bundle_command(&server, &signed, &remote)
         .output()

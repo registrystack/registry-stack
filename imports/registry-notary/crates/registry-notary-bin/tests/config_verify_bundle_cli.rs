@@ -66,6 +66,9 @@ instance:
   environment: development
 server:
   bind: 127.0.0.1:0
+  admin_listener:
+    mode: dedicated
+    bind: 127.0.0.1:1
 auth:
   mode: api_key
   api_keys:

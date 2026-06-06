@@ -171,6 +171,11 @@ pub struct NotaryRuntimeSnapshot {
     federation_enabled: bool,
 }
 
+pub struct NotaryRouters {
+    pub public: Router,
+    pub admin: Router,
+}
+
 pub fn compile_notary_runtime(
     config: StandaloneRegistryNotaryConfig,
 ) -> Result<NotaryRuntimeSnapshot, StandaloneServerError> {
@@ -268,6 +273,10 @@ pub fn compile_notary_runtime(
 }
 
 pub fn notary_router_from_runtime(snapshot: NotaryRuntimeSnapshot) -> Router {
+    notary_shared_router_from_runtime(snapshot)
+}
+
+pub fn notary_shared_router_from_runtime(snapshot: NotaryRuntimeSnapshot) -> Router {
     let NotaryRuntimeSnapshot {
         metrics,
         auth_state,
@@ -285,6 +294,70 @@ pub fn notary_router_from_runtime(snapshot: NotaryRuntimeSnapshot) -> Router {
         get(admin_metrics_handler).with_state(Arc::clone(&metrics)),
     );
 
+    layer_notary_routes(
+        routes,
+        metrics,
+        auth_state,
+        api_state,
+        cors_policy,
+        wallet_cors_policy,
+    )
+}
+
+pub fn notary_routers_from_runtime(snapshot: NotaryRuntimeSnapshot) -> NotaryRouters {
+    let NotaryRuntimeSnapshot {
+        metrics,
+        auth_state,
+        api_state,
+        cors_policy,
+        wallet_cors_policy,
+        federation_enabled,
+    } = snapshot;
+    let mut public_routes = crate::api::public_router();
+    if federation_enabled {
+        public_routes = public_routes.merge(crate::api::federation_router());
+    }
+    let admin_routes = crate::api::admin_router().route(
+        "/metrics",
+        get(admin_metrics_handler).with_state(Arc::clone(&metrics)),
+    );
+
+    NotaryRouters {
+        public: layer_notary_routes(
+            public_routes,
+            Arc::clone(&metrics),
+            Arc::clone(&auth_state),
+            Arc::clone(&api_state),
+            cors_policy.clone(),
+            wallet_cors_policy.clone(),
+        ),
+        admin: layer_notary_routes(
+            admin_routes,
+            metrics,
+            auth_state,
+            api_state,
+            cors_policy,
+            wallet_cors_policy,
+        ),
+    }
+}
+
+pub fn notary_public_router_from_runtime(snapshot: NotaryRuntimeSnapshot) -> Router {
+    notary_routers_from_runtime(snapshot).public
+}
+
+pub fn notary_admin_router_from_runtime(snapshot: NotaryRuntimeSnapshot) -> Router {
+    notary_routers_from_runtime(snapshot).admin
+}
+
+fn layer_notary_routes(
+    routes: Router,
+    metrics: Arc<AppMetrics>,
+    auth_state: Arc<AuthAuditState>,
+    api_state: Arc<RegistryNotaryApiState>,
+    cors_policy: registry_platform_httpsec::CorsPolicy,
+    wallet_cors_policy: SelfAttestationWalletCorsPolicy,
+) -> Router {
     routes
         .layer(from_fn_with_state(Arc::clone(&metrics), metrics_middleware))
         .layer(axum::Extension(Arc::clone(&api_state)))

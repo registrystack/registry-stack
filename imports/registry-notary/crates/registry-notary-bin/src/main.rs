@@ -18,15 +18,16 @@ use base64::Engine;
 use clap::{Args as ClapArgs, Parser, Subcommand};
 use ed25519_dalek::SigningKey;
 use registry_notary_core::{
-    Oauth2ClientCredentialsSourceAuthConfig, SigningKeyProviderConfig, SourceAuthConfig,
-    StandaloneRegistryNotaryConfig,
+    Oauth2ClientCredentialsSourceAuthConfig, RegistryNotaryAdminListenerMode,
+    SigningKeyProviderConfig, SourceAuthConfig, StandaloneRegistryNotaryConfig,
 };
 use registry_notary_server::config_governed::{
     parse_candidate_config, resolve_tuf_config_candidate, ConfigGovernanceContext,
     LocalTufConfigTargetRequest, RemoteTufConfigTargetRequest, TufConfigTargetRequest,
 };
 use registry_notary_server::{
-    compile_notary_runtime, openapi_document, standalone_router, EvidenceIssuerRegistry,
+    compile_notary_runtime, notary_router_from_runtime, notary_routers_from_runtime,
+    openapi_document, EvidenceIssuerRegistry,
 };
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk};
 use registry_platform_httputil::{url as httputil_url, FetchUrlPolicy};
@@ -463,35 +464,104 @@ async fn run_server(
     let mut config = load_expanded_config(config_path)?;
     apply_bind_override(&mut config, bind_override);
     let bind = config.server.bind;
-    let app = standalone_router(config)?.layer(TraceLayer::new_for_http().make_span_with(
-        |request: &Request<Body>| {
-            let matched_path = request
-                .extensions()
-                .get::<MatchedPath>()
-                .map(MatchedPath::as_str)
-                .unwrap_or_else(|| request.uri().path());
-            tracing::info_span!(
-                "http_request",
-                method = %request.method(),
-                matched_path,
-            )
-        },
-    ));
-    let listener = tokio::net::TcpListener::bind(bind).await?;
-    let local_addr: SocketAddr = listener.local_addr()?;
-    tracing::info!(
-        %local_addr,
-        build_features = ?compiled_build_features(),
-        "registry notary listening"
-    );
+    let admin_mode = config.server.admin_listener.mode;
+    let admin_bind = config.server.admin_listener.bind;
+    let runtime = compile_notary_runtime(config)?;
+    match admin_mode {
+        RegistryNotaryAdminListenerMode::Dedicated => {
+            let routers = notary_routers_from_runtime(runtime);
+            let public_listener = tokio::net::TcpListener::bind(bind).await?;
+            let public_addr: SocketAddr = public_listener.local_addr()?;
+            let admin_listener = tokio::net::TcpListener::bind(admin_bind).await?;
+            let admin_addr: SocketAddr = admin_listener.local_addr()?;
+            tracing::info!(
+                %public_addr,
+                %admin_addr,
+                build_features = ?compiled_build_features(),
+                "registry notary listening with dedicated admin listener"
+            );
 
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown_signal())
-    .await?;
+            let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+            tokio::spawn(async move {
+                shutdown_signal().await;
+                let _ = shutdown_tx.send(true);
+            });
+            let public_shutdown = shutdown_when_signaled(shutdown_rx.clone());
+            let admin_shutdown = shutdown_when_signaled(shutdown_rx);
+            let public = axum::serve(
+                public_listener,
+                routers
+                    .public
+                    .layer(TraceLayer::new_for_http().make_span_with(http_trace_span))
+                    .into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(public_shutdown);
+            let admin = axum::serve(
+                admin_listener,
+                routers
+                    .admin
+                    .layer(TraceLayer::new_for_http().make_span_with(http_trace_span))
+                    .into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(admin_shutdown);
+            tokio::try_join!(public, admin)?;
+        }
+        RegistryNotaryAdminListenerMode::SharedWithPublic => {
+            let app = notary_router_from_runtime(runtime)
+                .layer(TraceLayer::new_for_http().make_span_with(http_trace_span));
+            let listener = tokio::net::TcpListener::bind(bind).await?;
+            let local_addr: SocketAddr = listener.local_addr()?;
+            tracing::info!(
+                %local_addr,
+                build_features = ?compiled_build_features(),
+                "registry notary listening"
+            );
+
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(shutdown_signal())
+            .await?;
+        }
+        RegistryNotaryAdminListenerMode::Disabled => {
+            let app = notary_routers_from_runtime(runtime)
+                .public
+                .layer(TraceLayer::new_for_http().make_span_with(http_trace_span));
+            let listener = tokio::net::TcpListener::bind(bind).await?;
+            let local_addr: SocketAddr = listener.local_addr()?;
+            tracing::info!(
+                %local_addr,
+                build_features = ?compiled_build_features(),
+                "registry notary listening without admin listener"
+            );
+
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(shutdown_signal())
+            .await?;
+        }
+    }
     Ok(())
+}
+
+fn http_trace_span(request: &Request<Body>) -> tracing::Span {
+    let matched_path = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(MatchedPath::as_str)
+        .unwrap_or_else(|| request.uri().path());
+    tracing::info_span!(
+        "http_request",
+        method = %request.method(),
+        matched_path,
+    )
+}
+
+async fn shutdown_when_signaled(mut shutdown_rx: tokio::sync::watch::Receiver<bool>) {
+    let _ = shutdown_rx.wait_for(|shutdown| *shutdown).await;
 }
 
 async fn config_verify_bundle(
