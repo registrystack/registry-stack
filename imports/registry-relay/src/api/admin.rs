@@ -57,6 +57,7 @@ const CONFIG_APPLY_UNAVAILABLE_CODE: &str = "admin.config_apply_unavailable";
 const CONFIG_INLINE_APPLY_REJECTED_CODE: &str = "registry.admin.config.inline_apply_rejected";
 const POSTURE_FILTER_FAILED_CODE: &str = "admin.posture_filter_failed";
 const POSTURE_TIER_INVALID_CODE: &str = "registry.admin.posture.invalid_tier";
+const RUNTIME_UNAVAILABLE_CODE: &str = "registry.admin.runtime_unavailable";
 const ADMIN_SCOPE: &str = "registry_relay:admin";
 const OPS_READ_SCOPE: &str = "registry_relay:ops_read";
 
@@ -104,10 +105,21 @@ where
         )
 }
 
-async fn capabilities(principal: Option<Extension<Principal>>) -> Response {
+async fn capabilities(
+    runtime: RuntimeSnapshot,
+    principal: Option<Extension<Principal>>,
+) -> Response {
     if let Err(error) = require_ops_scope(principal) {
         return error.into_response();
     }
+    let Some(config) = runtime.config() else {
+        return runtime_unavailable("runtime handle is not installed");
+    };
+    let (admin_mode, metrics_mode) = if config.server.admin_bind.is_some() {
+        ("dedicated", "admin")
+    } else {
+        ("disabled", "disabled")
+    };
     let mut response = Json(json!({
         "schema": "registry.admin.capabilities.v1",
         "product": "registry-relay",
@@ -133,6 +145,16 @@ async fn capabilities(principal: Option<Extension<Principal>>) -> Response {
             "supported": true,
             "currently_available": true,
             "rate_limit_scope": "instance"
+        },
+        "listeners": {
+            "admin": {
+                "mode": admin_mode,
+                "public_admin_routes": false
+            },
+            "metrics": {
+                "mode": metrics_mode,
+                "requires_admin_scope": false
+            }
         },
         "root_transition": {
             "supported": true,
@@ -2136,6 +2158,28 @@ fn reload_unavailable(detail: &'static str) -> Response {
     response
         .extensions_mut()
         .insert(ErrorCodeExt(RELOAD_UNAVAILABLE_CODE.to_string()));
+    response
+}
+
+fn runtime_unavailable(detail: &'static str) -> Response {
+    let status = StatusCode::INTERNAL_SERVER_ERROR;
+    let mut response = (
+        status,
+        Json(json!({
+            "type": format!("{}admin/runtime_unavailable", crate::error::PROBLEM_TYPE_BASE),
+            "title": "Admin runtime unavailable",
+            "status": status.as_u16(),
+            "detail": detail,
+            "code": RUNTIME_UNAVAILABLE_CODE,
+        })),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, PROBLEM_JSON);
+    response
+        .extensions_mut()
+        .insert(ErrorCodeExt(RUNTIME_UNAVAILABLE_CODE.to_string()));
     response
 }
 

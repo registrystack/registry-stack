@@ -1734,7 +1734,7 @@
       "enforcement_tests": [
         "tests/admin_reload.rs::posture_requires_ops_read_scope",
         "tests/admin_reload.rs::ops_read_key_cannot_reload",
-        "tests/admin_reload.rs::posture_is_not_mounted_on_public_app"
+        "tests/admin_reload.rs::admin_routes_are_not_mounted_on_public_app"
       ],
       "waiver": null
     },

@@ -355,6 +355,31 @@ fn write_config_with_instance_and_trust(
     instance_block: Option<&str>,
     include_config_trust: bool,
 ) -> std::path::PathBuf {
+    write_config_with_instance_trust_and_admin_bind(tmp, instance_block, include_config_trust, true)
+}
+
+fn write_config_without_admin_bind(tmp: &TempDir) -> std::path::PathBuf {
+    write_config_with_instance_trust_and_admin_bind(
+        tmp,
+        Some(
+            r#"instance:
+  id: relay-test-instance
+  environment: lab
+  owner: Test Ministry
+  jurisdiction: ZZ
+"#,
+        ),
+        true,
+        false,
+    )
+}
+
+fn write_config_with_instance_trust_and_admin_bind(
+    tmp: &TempDir,
+    instance_block: Option<&str>,
+    include_config_trust: bool,
+    include_admin_bind: bool,
+) -> std::path::PathBuf {
     let cache_dir = tmp.path().join("cache");
     let antirollback_path = tmp.path().join("config-antirollback.json");
     let local_approval_path = tmp.path().join("config-local-approvals.json");
@@ -409,12 +434,17 @@ config_trust:
     } else {
         String::new()
     };
+    let admin_bind_line = if include_admin_bind {
+        "  admin_bind: 127.0.0.1:0\n"
+    } else {
+        ""
+    };
     let yaml = format!(
         r#"
 {instance_block}
 server:
   bind: 127.0.0.1:0
-  admin_bind: 127.0.0.1:0
+{admin_bind_line}
   cache_dir: "{cache_dir}"
 {config_trust_block}
 
@@ -570,6 +600,7 @@ provenance:
       signing_algorithm: EdDSA
 "#,
         instance_block = instance_block,
+        admin_bind_line = admin_bind_line,
         cache_dir = cache_dir.to_string_lossy(),
         config_trust_block = config_trust_block,
         source_path = source_path.to_string_lossy(),
@@ -795,6 +826,12 @@ fn build_fixture() -> AdminFixture {
     build_fixture_from_config_path(tmp, config_path)
 }
 
+fn build_fixture_without_admin_bind() -> AdminFixture {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config_without_admin_bind(&tmp);
+    build_fixture_from_config_path(tmp, config_path)
+}
+
 #[test]
 fn simple_local_config_without_config_trust_still_loads() {
     let tmp = TempDir::new().expect("tempdir");
@@ -1003,6 +1040,21 @@ async fn capabilities_requires_ops_read_and_reports_relay_admin_surface() {
         json!(["tuf_local", "tuf_remote"])
     );
     assert_eq!(body["break_glass"]["rate_limit_scope"], "instance");
+    assert_eq!(
+        body["listeners"],
+        json!({
+            "admin": {
+                "mode": "dedicated",
+                "public_admin_routes": false
+            },
+            "metrics": {
+                "mode": "admin",
+                "requires_admin_scope": false
+            }
+        })
+    );
+    assert_eq!(body["listeners"]["admin"].get("bind"), None);
+    assert_eq!(body["listeners"]["metrics"].get("bind"), None);
     assert_eq!(body["root_transition"]["supported"], true);
     assert_eq!(
         body["hot_swap"]["components"],
@@ -1011,6 +1063,36 @@ async fn capabilities_requires_ops_read_and_reports_relay_admin_surface() {
     assert_eq!(body["reload"]["resource_reload"]["supported"], true);
     assert_eq!(body["reload"]["table_reload"]["supported"], true);
     assert_eq!(body["reload"]["config_reload"]["supported"], false);
+}
+
+#[tokio::test]
+async fn capabilities_reports_disabled_listener_topology_without_admin_bind() {
+    let fixture = build_fixture_without_admin_bind();
+
+    let resp = fixture
+        .server
+        .get("/admin/v1/capabilities")
+        .add_header("Authorization", format!("Bearer {OPS_KEY}"))
+        .await;
+    resp.assert_status(StatusCode::OK);
+
+    let body: Value = resp.json();
+    assert_matches_admin_capabilities_schema(&body);
+    assert_eq!(
+        body["listeners"],
+        json!({
+            "admin": {
+                "mode": "disabled",
+                "public_admin_routes": false
+            },
+            "metrics": {
+                "mode": "disabled",
+                "requires_admin_scope": false
+            }
+        })
+    );
+    assert_eq!(body["listeners"]["admin"].get("bind"), None);
+    assert_eq!(body["listeners"]["metrics"].get("bind"), None);
 }
 
 #[test]
@@ -3995,16 +4077,34 @@ async fn posture_warns_when_audit_checkpoint_unavailable() {
 }
 
 #[tokio::test]
-async fn posture_is_not_mounted_on_public_app() {
+async fn admin_routes_are_not_mounted_on_public_app() {
     let fixture = build_fixture();
 
-    let resp = fixture
-        .public_server
-        .get("/admin/v1/posture")
-        .add_header("Authorization", format!("Bearer {OPS_KEY}"))
-        .await;
+    for route in ["/admin/v1/posture", "/admin/v1/capabilities"] {
+        let resp = fixture
+            .public_server
+            .get(route)
+            .add_header("Authorization", format!("Bearer {OPS_KEY}"))
+            .await;
 
-    resp.assert_status(StatusCode::NOT_FOUND);
+        resp.assert_status(StatusCode::NOT_FOUND);
+    }
+
+    for route in [
+        "/admin/v1/config/verify",
+        "/admin/v1/config/dry-run",
+        "/admin/v1/config/apply",
+        "/admin/v1/reload",
+        "/admin/v1/datasets/social_registry/tables/beneficiaries_csv/reload",
+    ] {
+        let resp = fixture
+            .public_server
+            .post(route)
+            .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
+            .await;
+
+        resp.assert_status(StatusCode::NOT_FOUND);
+    }
 }
 
 #[tokio::test]
