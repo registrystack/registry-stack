@@ -1984,7 +1984,7 @@ async fn admin_capabilities(principal: Option<Extension<EvidencePrincipal>>) -> 
             "apply": {
                 "supported": true,
                 "currently_available": true,
-                "supported_sources": ["tuf_local"],
+                "supported_sources": ["tuf_local", "tuf_remote"],
                 "requires_signed_input": true
             }
         },

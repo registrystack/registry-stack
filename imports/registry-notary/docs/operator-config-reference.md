@@ -92,6 +92,10 @@ into the repository.
 
 ## Governed Config Apply
 
+This governed example is syntactically valid but illustrative. Generate the
+`tuf_root_sha256` and targets-role signer key IDs from your own trusted TUF
+repository before using governed apply in an environment.
+
 ```yaml
 config_trust:
   antirollback_state_path: /var/lib/registry-notary/config-antirollback.json
@@ -102,17 +106,17 @@ config_trust:
   accepted_roots:
     - root_id: ops-root
       production: false
-      tuf_root_sha256: sha256:REPLACE_WITH_FINAL_VERIFIED_TUF_ROOT_METADATA_HASH
+      tuf_root_sha256: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
       valid_from_unix_seconds: 1770000000
       valid_until_unix_seconds: 1772592000
       signers:
-        TUF_TARGETS_ROLE_KEY_ID_A:
-          kid: TUF_TARGETS_ROLE_KEY_ID_A
+        "1111111111111111111111111111111111111111111111111111111111111111":
+          kid: "1111111111111111111111111111111111111111111111111111111111111111"
           enabled: true
       roles:
         - name: config-admin
           threshold: 1
-          signer_kids: [TUF_TARGETS_ROLE_KEY_ID_A]
+          signer_kids: ["1111111111111111111111111111111111111111111111111111111111111111"]
           allowed_change_classes: [public_metadata, root_transition]
 ```
 

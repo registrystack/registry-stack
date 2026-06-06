@@ -5737,7 +5737,7 @@ async fn admin_capabilities_requires_ops_read_and_reports_notary_surface() {
     );
     assert_eq!(
         body["config"]["apply"]["supported_sources"],
-        json!(["tuf_local"])
+        json!(["tuf_local", "tuf_remote"])
     );
     assert_eq!(body["break_glass"]["rate_limit_scope"], json!("instance"));
     assert_eq!(body["root_transition"]["supported"], json!(true));
@@ -5752,6 +5752,32 @@ async fn admin_capabilities_requires_ops_read_and_reports_notary_surface() {
     assert_eq!(body["reload"]["resource_reload"]["supported"], json!(false));
     assert_eq!(body["reload"]["table_reload"]["supported"], json!(false));
     assert_eq!(body["reload"]["config_reload"]["supported"], json!(false));
+}
+
+#[test]
+fn governed_config_docs_do_not_ship_unresolved_config_trust_placeholders() {
+    let doc = fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/operator-config-reference.md"),
+    )
+    .expect("operator config reference reads");
+
+    assert!(
+        doc.contains("syntactically valid but illustrative"),
+        "governed config example must be explicitly labeled as illustrative"
+    );
+    assert!(
+        !doc.contains("REPLACE_WITH_FINAL"),
+        "governed config example must not contain replacement placeholders"
+    );
+    assert!(
+        !doc.contains("TUF_TARGETS_ROLE_KEY_ID"),
+        "governed config example must use concrete illustrative key IDs"
+    );
+    assert!(
+        doc.contains("\"1111111111111111111111111111111111111111111111111111111111111111\""),
+        "illustrative all-digit TUF key IDs must be quoted for YAML parsers"
+    );
 }
 
 #[tokio::test]

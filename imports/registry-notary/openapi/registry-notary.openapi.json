@@ -361,7 +361,8 @@
                       "requires_signed_input": true,
                       "supported": true,
                       "supported_sources": [
-                        "tuf_local"
+                        "tuf_local",
+                        "tuf_remote"
                       ]
                     },
                     "dry_run": {
