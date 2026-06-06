@@ -26,7 +26,6 @@
 //! router.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -47,28 +46,13 @@ use tokio::sync::watch;
 use ulid::Ulid;
 
 /// Load the canonical example config from the repo. The config
-/// loader runs cross-field validation; we set the required `hash_env`
+/// loader runs cross-field validation; we set the required fingerprint secret
 /// env vars to a known API key fingerprint so the loader does not
 /// fail with `config.missing_secret`.
 fn load_example_config() -> Config {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/example.yaml");
-    let fingerprint = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    // Matches the existing pattern in `tests/config_loader.rs`: env
-    // vars are set inline at test setup. Test binaries run each test in
-    // a fresh thread but share process env, so the chosen names must be
-    // unique to this fixture; the canonical example's keys are.
-    #[allow(unused_unsafe)]
-    unsafe {
-        std::env::set_var("STATS_OFFICE_API_KEY_HASH", fingerprint);
-        std::env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", fingerprint);
-        std::env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", fingerprint);
-        std::env::set_var("OPERATIONS_OPERATOR_API_KEY_HASH", fingerprint);
-        std::env::set_var(
-            "REGISTRY_RELAY_AUDIT_HASH_SECRET",
-            "relay-e2e-health-audit-secret-32-bytes",
-        );
-    }
-    registry_relay::config::load(&path).expect("example config loads")
+    registry_relay::config::test_support::load_example_config_for_tests(
+        "relay-e2e-health-audit-secret-32-bytes",
+    )
 }
 
 fn build_test_app(sink: Arc<AuditPipeline>) -> axum::Router {

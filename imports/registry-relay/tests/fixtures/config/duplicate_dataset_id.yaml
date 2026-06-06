@@ -10,7 +10,10 @@ auth:
   mode: api_key
   api_keys:
     - id: k1
-      hash_env: TEST_KEY_HASH_DUP
+      fingerprint:
+        provider: env
+        name: TEST_KEY_HASH_DUP
+        commitment: sha256:cbcaf577b8d08743c360b2b140d29d03d530ffa551409d7a033012d219b0955d
       scopes:
         - registry_relay:admin
 audit:

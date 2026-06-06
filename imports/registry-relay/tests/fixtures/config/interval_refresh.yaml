@@ -10,7 +10,10 @@ auth:
   mode: api_key
   api_keys:
     - id: k1
-      hash_env: TEST_KEY_HASH_INTERVAL
+      fingerprint:
+        provider: env
+        name: TEST_KEY_HASH_INTERVAL
+        commitment: sha256:bcfb9137b049bed247bf00f35c22de39a19f553289493e914eb0a0b353f1072c
       scopes:
         - registry_relay:admin
 audit:

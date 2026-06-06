@@ -26,6 +26,7 @@ use crate::error::AuthError;
 pub mod api_key;
 pub mod middleware;
 pub mod oidc;
+pub mod runtime;
 pub mod scopes;
 
 pub use scopes::ScopeSet;
@@ -73,8 +74,8 @@ pub struct Principal {
 ///
 /// V1 implementation: [`api_key::ApiKeyAuth`], reading
 /// `Authorization: Bearer <key>` or `X-Api-Key: <key>` and verifying
-/// it against SHA-256 fingerprints loaded from the env vars named by
-/// `auth.api_keys[].hash_env`. V2 will add JWT and dataspace
+/// it against SHA-256 fingerprints loaded from the configured
+/// `auth.api_keys[].fingerprint` references. V2 will add JWT and dataspace
 /// implementations; the trait surface does not change.
 ///
 /// ## Implementation contract

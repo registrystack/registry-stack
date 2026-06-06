@@ -14,6 +14,11 @@ use chrono::Utc;
 use datafusion::execution::context::SessionContext;
 use ed25519_dalek::SigningKey;
 use rand_core::OsRng;
+use registry_manifest_core::{source_manifest_digest, MetadataManifest};
+use registry_platform_authcommon::{
+    credential_fingerprint_commitment, CredentialCommitmentContext, CredentialProduct,
+    CredentialType,
+};
 use registry_platform_ops::{
     internal_config_hash, posture_safe_runtime_config_hash, AntiRollbackKey, AntiRollbackRecord,
     ConfigProvenance, FileAntiRollbackStore, FileLocalApprovalStore,
@@ -23,6 +28,7 @@ use registry_relay::api::admin::{
 };
 use registry_relay::audit::{AuditPipeline, InMemorySink};
 use registry_relay::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
+use registry_relay::auth::middleware::{AuthProviderRef, RuntimeAuthProvider};
 use registry_relay::auth::ScopeSet;
 use registry_relay::config::{self, Config, ProvenanceConfig};
 use registry_relay::entity::EntityRegistry;
@@ -155,6 +161,20 @@ fn tough_fixture(name: &str) -> std::path::PathBuf {
 
 fn make_fingerprint(plain: &str) -> String {
     format!("sha256:{}", hex_lower(&Sha256::digest(plain.as_bytes())))
+}
+
+fn fingerprint_ref_yaml(id: &str, env_name: &str, fingerprint: &str, indent: &str) -> String {
+    let commitment = credential_fingerprint_commitment(
+        CredentialCommitmentContext {
+            product: CredentialProduct::RegistryRelay,
+            credential_type: CredentialType::ApiKey,
+            credential_id: id,
+        },
+        fingerprint,
+    );
+    format!(
+        "{indent}fingerprint:\n{indent}  provider: env\n{indent}  name: {env_name}\n{indent}  commitment: {commitment}"
+    )
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
@@ -374,6 +394,61 @@ fn write_config_without_admin_bind(tmp: &TempDir) -> std::path::PathBuf {
     )
 }
 
+fn split_metadata_manifest_yaml(title: &str) -> String {
+    format!(
+        r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: relay-test
+  base_url: https://metadata.example.test/
+  title: {title}
+  publisher:
+    name: Test Ministry
+datasets:
+  - id: social_registry
+    title: Social Registry
+    entities:
+      - name: beneficiary
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: integer
+          - name: household_size
+            type: integer
+          - name: municipality_code
+            type: string
+          - name: program
+            type: string
+          - name: amount_eur
+            type: number
+          - name: joined_date
+            type: date
+          - name: last_updated
+            type: date
+"#
+    )
+}
+
+fn metadata_source_digest(metadata_yaml: &str) -> String {
+    let manifest: MetadataManifest =
+        serde_saphyr::from_str(metadata_yaml).expect("metadata manifest parses");
+    source_manifest_digest(&manifest).expect("metadata digest computes")
+}
+
+fn insert_metadata_digest(path: &Path, digest: &str) {
+    let yaml = std::fs::read_to_string(path).expect("config reads");
+    std::fs::write(
+        path,
+        yaml.replace(
+            "    path: metadata.yaml\n",
+            &format!("    path: metadata.yaml\n    digest: {digest}\n"),
+        ),
+    )
+    .expect("config writes");
+}
+
 fn write_config_with_instance_trust_and_admin_bind(
     tmp: &TempDir,
     instance_block: Option<&str>,
@@ -423,6 +498,8 @@ config_trust:
             - signing_key_rotation
             - emergency_break_glass
             - root_transition
+            - client_credential_rotation
+            - client_access_change
 "#,
             antirollback_path.to_string_lossy(),
             local_approval_path.to_string_lossy(),
@@ -449,7 +526,8 @@ server:
 {config_trust_block}
 
 metadata:
-  manifest_path: metadata.yaml
+  source:
+    path: metadata.yaml
 
 catalog:
   title: Test
@@ -678,6 +756,8 @@ fn build_fixture_from_config_path_with_provenance_state_and_admin_resolver(
         Arc::clone(&config),
         config_provenance.clone(),
         None,
+        None,
+        None,
         auth.clone(),
         Arc::clone(&sink),
         config.server.bind,
@@ -697,9 +777,10 @@ fn build_fixture_from_config_path_with_provenance_state_and_admin_resolver(
         None,
         Arc::clone(&metrics),
     )));
+    let runtime_auth: AuthProviderRef = Arc::new(RuntimeAuthProvider::new(Arc::clone(&handle)));
     let public_app = build_app_with_entity_query_metadata_provenance_and_metrics(
         Arc::clone(&config),
-        auth.clone(),
+        runtime_auth.clone(),
         Arc::clone(&sink),
         readiness_rx.clone(),
         Arc::clone(&entity_registry),
@@ -713,7 +794,7 @@ fn build_fixture_from_config_path_with_provenance_state_and_admin_resolver(
     .layer(axum::Extension(Arc::clone(&handle)));
     let mut app = build_admin_app(
         Arc::clone(&config),
-        auth,
+        runtime_auth,
         sink,
         readiness_rx,
         readiness_tx,
@@ -829,6 +910,16 @@ fn build_fixture() -> AdminFixture {
 fn build_fixture_without_admin_bind() -> AdminFixture {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = write_config_without_admin_bind(&tmp);
+    build_fixture_from_config_path(tmp, config_path)
+}
+
+fn build_fixture_without_metadata() -> AdminFixture {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(&tmp);
+    let config = std::fs::read_to_string(&config_path)
+        .expect("config reads")
+        .replace("\nmetadata:\n  source:\n    path: metadata.yaml\n", "\n");
+    std::fs::write(&config_path, config).expect("config writes");
     build_fixture_from_config_path(tmp, config_path)
 }
 
@@ -1058,7 +1149,12 @@ async fn capabilities_requires_ops_read_and_reports_relay_admin_surface() {
     assert_eq!(body["root_transition"]["supported"], true);
     assert_eq!(
         body["hot_swap"]["components"],
-        json!(["config_provenance", "compiled_metadata", "provenance_state"])
+        json!([
+            "config_provenance",
+            "compiled_metadata",
+            "auth_provider",
+            "provenance_state"
+        ])
     );
     assert_eq!(body["reload"]["resource_reload"]["supported"], true);
     assert_eq!(body["reload"]["table_reload"]["supported"], true);
@@ -1232,16 +1328,30 @@ fn break_glass_rate_limit() -> Value {
 }
 
 fn local_approval(reference: &str, config_hash: &str, previous_config_hash: &str) -> Value {
+    local_approval_for_change_class(
+        reference,
+        "root_transition",
+        config_hash,
+        previous_config_hash,
+    )
+}
+
+fn local_approval_for_change_class(
+    reference: &str,
+    change_class: &str,
+    config_hash: &str,
+    previous_config_hash: &str,
+) -> Value {
     let expires_at_unix_seconds = Utc::now().timestamp() as u64 + 3600;
     json!({
         "approved_by": "ops@example.test",
-        "reason": "approve local root transition",
+        "reason": format!("approve local {change_class}"),
         "approval_reference": reference,
-        "change_class": "root_transition",
+        "change_class": change_class,
         "config_hash": config_hash,
         "previous_config_hash": previous_config_hash,
         "expires_at_unix_seconds": expires_at_unix_seconds,
-        "rate_limit_identity": "registry-relay/relay-test-instance/lab/test-stream/root-transition",
+        "rate_limit_identity": format!("registry-relay/relay-test-instance/lab/test-stream/{change_class}"),
         "rate_limit": {
             "max_accepted": 1,
             "window_seconds": 3600
@@ -1285,8 +1395,8 @@ fn candidate_with_additional_accepted_root(fixture: &AdminFixture) -> String {
         tuf_root_sha256, TUF_TARGETS_SIGNER_KID, TUF_TARGETS_SIGNER_KID, TUF_TARGETS_SIGNER_KID
     );
     config_yaml.replace(
-        "\nmetadata:\n  manifest_path:",
-        &format!("\n{additional_root}metadata:\n  manifest_path:"),
+        "\nmetadata:\n  source:",
+        &format!("\n{additional_root}metadata:\n  source:"),
     )
 }
 
@@ -1413,6 +1523,101 @@ async fn write_signed_config_tuf_fixture_with_previous_hash_and_change_classes(
     }
 }
 
+async fn write_signed_config_tuf_fixture_with_metadata(
+    fixture: &AdminFixture,
+    config_yaml: &str,
+    metadata_yaml: &str,
+    source_manifest_digest: &str,
+    sequence: u64,
+) -> SignedConfigFixture {
+    let repo_dir = fixture
+        ._tmp
+        .path()
+        .join(format!("signed-config-metadata-{sequence}"));
+    let source_dir = repo_dir.join("source");
+    let metadata_dir = repo_dir.join("metadata");
+    let targets_dir = repo_dir.join("targets");
+    let datastore_dir = repo_dir.join("datastore");
+    std::fs::create_dir_all(&source_dir).expect("source dir");
+    std::fs::create_dir_all(&datastore_dir).expect("datastore dir");
+    let target_name = "registry-relay.yaml";
+    let metadata_target_name = "metadata.yaml";
+    let target_path = source_dir.join(target_name);
+    let metadata_path = source_dir.join(metadata_target_name);
+    std::fs::write(&target_path, config_yaml).expect("target config writes");
+    std::fs::write(&metadata_path, metadata_yaml).expect("metadata target writes");
+
+    let mut target = Target::from_path(&target_path)
+        .await
+        .expect("target metadata builds");
+    let custom = json!({
+        "product": "registry-relay",
+        "instance_id": "relay-test-instance",
+        "environment": "lab",
+        "stream_id": "test-stream",
+        "bundle_id": "test-bundle",
+        "sequence": sequence,
+        "previous_config_hash": fixture.current_config_hash,
+        "config_hash": sha256_uri(config_yaml.as_bytes()),
+        "change_classes": ["public_metadata"],
+        "signer_kids": [TUF_TARGETS_SIGNER_KID],
+        "apply_policy": "live",
+        "metadata_target_name": metadata_target_name,
+        "source_manifest_digest": source_manifest_digest,
+        "metadata_schema_version": "registry-manifest/v1"
+    });
+    target.custom = custom
+        .as_object()
+        .expect("custom target metadata is an object")
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    let metadata_target = Target::from_path(&metadata_path)
+        .await
+        .expect("metadata target metadata builds");
+
+    let root_path = tough_fixture("simple-rsa").join("root.json");
+    let key_path = tough_fixture("snakeoil.pem");
+    let signing_keys: &[Box<dyn tough::key_source::KeySource>] =
+        &[Box::new(LocalKeySource { path: key_path })];
+    let mut editor = RepositoryEditor::new(&root_path)
+        .await
+        .expect("repository editor builds");
+    editor
+        .targets_expires(Utc::now() + chrono::Duration::days(13))
+        .expect("targets expiration");
+    editor
+        .targets_version(NonZeroU64::new(sequence).expect("nonzero targets version"))
+        .expect("targets version");
+    editor.snapshot_expires(Utc::now() + chrono::Duration::days(21));
+    editor.snapshot_version(NonZeroU64::new(sequence).expect("nonzero snapshot version"));
+    editor.timestamp_expires(Utc::now() + chrono::Duration::days(3));
+    editor.timestamp_version(NonZeroU64::new(sequence).expect("nonzero timestamp version"));
+    editor
+        .add_target(target_name, target)
+        .expect("config target added");
+    editor
+        .add_target(metadata_target_name, metadata_target)
+        .expect("metadata target added");
+    let signed_repo = editor.sign(signing_keys).await.expect("repository signs");
+    signed_repo
+        .write(&metadata_dir)
+        .await
+        .expect("metadata writes");
+    signed_repo
+        .copy_targets(&source_dir, &targets_dir, PathExists::Fail)
+        .await
+        .expect("targets write");
+
+    SignedConfigFixture {
+        root_path: metadata_dir.join("1.root.json"),
+        metadata_dir,
+        targets_dir,
+        datastore_dir,
+        target_name: target_name.to_string(),
+    }
+}
+
 async fn post_admin_config(
     fixture: &AdminFixture,
     route: &str,
@@ -1501,7 +1706,10 @@ async fn config_dry_run_reports_restart_required_without_swapping() {
     )
     .await;
 
-    response.assert_status(StatusCode::OK);
+    if response.status_code() != StatusCode::OK {
+        let body: Value = response.json();
+        panic!("client access change apply should succeed, got {body:#}");
+    }
     let body: Value = response.json();
     assert_eq!(body["result"], "rejected_restart_required");
     assert_eq!(body["posture_result"], "rejected");
@@ -1730,54 +1938,77 @@ async fn config_apply_instance_identity_change_is_restart_required_without_swapp
 }
 
 #[tokio::test]
-async fn config_apply_auth_change_is_restart_required_without_swapping() {
-    std::env::set_var(
-        "REGISTRY_RELAY_TEST_ROTATED_API_KEY_HASH",
-        make_fingerprint("rotated-admin-token"),
+async fn config_apply_client_access_change_swaps_auth_provider() {
+    const ROTATED_ADMIN_KEY: &str = "rotated-admin-token";
+    const ROTATED_ADMIN_HASH_ENV: &str = "REGISTRY_RELAY_TEST_ROTATED_API_KEY_HASH";
+    let rotated_fingerprint = make_fingerprint(ROTATED_ADMIN_KEY);
+    std::env::set_var(ROTATED_ADMIN_HASH_ENV, &rotated_fingerprint);
+    let fixture = build_fixture_without_metadata();
+    let rotated_fingerprint_ref = fingerprint_ref_yaml(
+        "rotated_admin",
+        ROTATED_ADMIN_HASH_ENV,
+        &rotated_fingerprint,
+        "      ",
     );
-    let fixture = build_fixture();
     let candidate = std::fs::read_to_string(&fixture.config_path)
         .expect("config reads")
         .replace(
             "api_keys: []",
-            "api_keys:\n    - id: rotated_admin\n      hash_env: REGISTRY_RELAY_TEST_ROTATED_API_KEY_HASH\n      scopes:\n        - registry_relay:admin",
+            &format!(
+                "api_keys:\n    - id: rotated_admin\n{rotated_fingerprint_ref}\n      scopes:\n        - registry_relay:admin\n        - registry_relay:ops_read"
+            ),
         );
+    let candidate_hash = internal_config_hash(candidate.as_bytes());
+    write_local_approval(
+        &fixture,
+        local_approval_for_change_class(
+            "CLIENT-ACCESS-1",
+            "client_access_change",
+            &candidate_hash,
+            &fixture.current_config_hash,
+        ),
+    );
     let signed = write_signed_config_tuf_fixture_with_change_classes(
         &fixture,
         &candidate,
         5,
         "relay-test-instance",
         &["kid-a", "kid-b"],
-        &["public_metadata"],
+        &["client_access_change"],
     )
     .await;
+    let mut request = signed_tuf_apply_request(&signed);
+    request["local_approval_reference"] = json!("CLIENT-ACCESS-1");
 
-    let response = post_admin_config(
-        &fixture,
-        "/admin/v1/config/apply",
-        signed_tuf_apply_request(&signed),
-        ADMIN_KEY,
-    )
-    .await;
+    let response = post_admin_config(&fixture, "/admin/v1/config/apply", request, ADMIN_KEY).await;
 
-    response.assert_status(StatusCode::CONFLICT);
+    if response.status_code() != StatusCode::OK {
+        let body: Value = response.json();
+        panic!("client access change apply should succeed, got {body:#}");
+    }
     let body: Value = response.json();
-    assert_eq!(body["result"], "rejected_restart_required");
-    assert_eq!(body["applied"], false);
-    assert_eq!(body["restart_required"], true);
+    assert_eq!(body["result"], "applied");
+    assert_eq!(body["applied"], true);
+    assert_eq!(body["restart_required"], false);
 
-    let still_current = post_admin_config(
-        &fixture,
-        "/admin/v1/config/verify",
-        config_apply_request(
-            &fixture,
-            std::fs::read_to_string(&fixture.config_path).expect("config reads"),
-            6,
-        ),
-        ADMIN_KEY,
+    let old_admin = fixture
+        .server
+        .get("/admin/v1/posture")
+        .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
+        .await;
+    assert_problem(
+        old_admin,
+        StatusCode::UNAUTHORIZED,
+        "auth.invalid_credential",
     )
     .await;
-    still_current.assert_status(StatusCode::OK);
+
+    let rotated_admin = fixture
+        .server
+        .get("/admin/v1/posture")
+        .add_header("Authorization", format!("Bearer {ROTATED_ADMIN_KEY}"))
+        .await;
+    rotated_admin.assert_status(StatusCode::OK);
 }
 
 #[tokio::test]
@@ -2169,7 +2400,7 @@ async fn config_apply_signed_root_transition_with_local_approval_swaps_runtime_s
     );
     assert_eq!(
         config_audit["local_approval_rate_limit_identity"],
-        "registry-relay/relay-test-instance/lab/test-stream/root-transition"
+        "registry-relay/relay-test-instance/lab/test-stream/root_transition"
     );
     assert!(config_audit["local_approval_reason_hash"]
         .as_str()
@@ -2420,6 +2651,68 @@ async fn config_apply_signed_tuf_target_swaps_runtime_snapshot() {
     assert!(!audit_text.contains("registry-relay.yaml"));
     assert!(!audit_text.contains("signed-config-5"));
     assert!(!audit_text.contains("private-jwk-material"));
+}
+
+#[tokio::test]
+async fn config_apply_signed_metadata_package_swaps_compiled_metadata() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(&tmp);
+    let metadata_yaml = split_metadata_manifest_yaml("Signed Metadata Catalog");
+    let source_digest = metadata_source_digest(&metadata_yaml);
+    insert_metadata_digest(&config_path, &source_digest);
+    let fixture = build_fixture_from_config_path(tmp, config_path);
+    let candidate = std::fs::read_to_string(&fixture.config_path).expect("config reads");
+    let signed = write_signed_config_tuf_fixture_with_metadata(
+        &fixture,
+        &candidate,
+        &metadata_yaml,
+        &source_digest,
+        5,
+    )
+    .await;
+
+    let response = post_admin_config(
+        &fixture,
+        "/admin/v1/config/apply",
+        signed_tuf_apply_request(&signed),
+        ADMIN_KEY,
+    )
+    .await;
+
+    if response.status_code() != StatusCode::OK {
+        let body: Value = response.json();
+        panic!("signed metadata package apply should succeed, got {body:#}");
+    }
+    let body: Value = response.json();
+    assert_eq!(body["result"], "applied");
+
+    let snapshot = fixture.handle.load_full();
+    assert_eq!(
+        snapshot.metadata_source_digest.as_deref(),
+        Some(source_digest.as_str())
+    );
+    assert_eq!(
+        snapshot
+            .compiled_metadata
+            .as_ref()
+            .expect("compiled metadata swaps in")
+            .catalog()
+            .title,
+        "Signed Metadata Catalog"
+    );
+
+    let posture = fixture
+        .server
+        .get("/admin/v1/posture")
+        .add_header("Authorization", format!("Bearer {OPS_KEY}"))
+        .await;
+    posture.assert_status(StatusCode::OK);
+    let posture: Value = posture.json();
+    assert_matches_posture_schema(&posture);
+    assert_eq!(
+        posture["relay"]["metadata_manifest"]["source_digest"],
+        source_digest
+    );
 }
 
 #[tokio::test]
@@ -3664,16 +3957,9 @@ async fn config_apply_signed_tuf_target_rejects_missing_quorum_without_swapping(
     )
     .await;
 
-    let body = assert_problem(
-        response,
-        StatusCode::BAD_REQUEST,
-        "admin.config_bundle_invalid",
-    )
-    .await;
-    assert_eq!(
-        body["detail"],
-        "signed config target was not authorized by local trust roots"
-    );
+    response.assert_status(StatusCode::CONFLICT);
+    let body: Value = response.json();
+    assert_eq!(body["result"], "rejected_threshold");
 
     let posture = fixture
         .server
@@ -3723,16 +4009,9 @@ async fn config_apply_signed_tuf_target_rejects_forged_extra_signature_without_s
     )
     .await;
 
-    let body = assert_problem(
-        response,
-        StatusCode::BAD_REQUEST,
-        "admin.config_bundle_invalid",
-    )
-    .await;
-    assert_eq!(
-        body["detail"],
-        "signed config target was not authorized by local trust roots"
-    );
+    response.assert_status(StatusCode::CONFLICT);
+    let body: Value = response.json();
+    assert_eq!(body["result"], "rejected_threshold");
 
     let posture = fixture
         .server
@@ -3783,16 +4062,9 @@ async fn config_apply_signed_tuf_target_rejects_untrusted_tuf_root_without_swapp
     )
     .await;
 
-    let body = assert_problem(
-        response,
-        StatusCode::BAD_REQUEST,
-        "admin.config_bundle_invalid",
-    )
-    .await;
-    assert_eq!(
-        body["detail"],
-        "signed config target was not authorized by local trust roots"
-    );
+    response.assert_status(StatusCode::CONFLICT);
+    let body: Value = response.json();
+    assert_eq!(body["result"], "rejected_threshold");
 
     let posture = fixture
         .server
@@ -3839,16 +4111,9 @@ async fn config_apply_signed_tuf_target_rejects_expired_local_trust_root_without
     )
     .await;
 
-    let body = assert_problem(
-        response,
-        StatusCode::BAD_REQUEST,
-        "admin.config_bundle_invalid",
-    )
-    .await;
-    assert_eq!(
-        body["detail"],
-        "signed config target was not authorized by local trust roots"
-    );
+    response.assert_status(StatusCode::CONFLICT);
+    let body: Value = response.json();
+    assert_eq!(body["result"], "rejected_threshold");
 
     let posture = fixture
         .server

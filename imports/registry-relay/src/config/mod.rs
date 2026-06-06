@@ -23,6 +23,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use registry_platform_authcommon::CredentialFingerprintRef;
 use registry_platform_config::RegistryTrustRoot;
 use registry_platform_ops::BreakGlassRateLimit;
 use serde::{Deserialize, Serialize};
@@ -31,10 +32,15 @@ pub mod capabilities;
 pub mod governed;
 pub mod loader;
 pub mod provenance;
+#[cfg(any(test, debug_assertions))]
+#[doc(hidden)]
+pub mod test_support;
 pub mod validate;
 pub mod vocabularies;
 
-pub use loader::{load, load_metadata_manifest, load_with_metadata, LoadedConfig};
+pub use loader::{
+    load, load_config_metadata, load_metadata_manifest, load_with_metadata, LoadedConfig,
+};
 pub use provenance::{
     ClaimValidity, DelegatedIssuerConfig, FileWatchSignerConfig, GatewayIssuerConfig, IssuerConfig,
     KmsProvider, KmsSignerConfig, ProvenanceAlgorithm, ProvenanceConfig, RetiredKeyConfig,
@@ -124,7 +130,15 @@ fn default_break_glass_rate_limit() -> BreakGlassRateLimit {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MetadataConfig {
-    pub manifest_path: PathBuf,
+    pub source: MetadataSourceConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MetadataSourceConfig {
+    pub path: PathBuf,
+    #[serde(default)]
+    pub digest: Option<String>,
 }
 
 /// External standards adapters layered over configured entities.
@@ -362,14 +376,14 @@ pub enum AuthMode {
     Oidc,
 }
 
-/// One configured API key, identified by an id and a `hash_env` env
-/// var name. The raw hash never appears in config; it is read at
-/// startup from the named env var.
-#[derive(Debug, Clone, Deserialize)]
+/// One configured API key, identified by an id and a governed fingerprint
+/// reference. The raw key never appears in config; only a signed commitment
+/// to the fingerprint is stored here.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ApiKeyConfig {
     pub id: String,
-    pub hash_env: String,
+    pub fingerprint: CredentialFingerprintRef,
     #[serde(default)]
     pub scopes: Vec<String>,
 }

@@ -93,9 +93,9 @@ local builds, keep those checkouts next to this repository or set
 `REGISTRY_PLATFORM_DIR`, `REGISTRY_MANIFEST_DIR`, and `CEL_MAPPING_DIR` before
 running `scripts/build-image.sh`.
 
-Before promoting an image, inspect the effective config and verify that every referenced `hash_env` is supplied by the runtime environment. Do not bake API keys or API-key hashes into the image.
+Before promoting an image, inspect the effective config and verify that every env-backed `fingerprint.name` is supplied by the runtime environment and matches its signed commitment. Do not bake API keys or API-key hashes into the image.
 
-If the runtime config uses `metadata.manifest_path`, validate the manifest and
+If the runtime config uses `metadata.source.path`, validate the manifest and
 runtime bindings before promotion:
 
 ```sh
@@ -156,8 +156,8 @@ Recommended rotation procedure:
 
 1. Generate a new random API key outside the gateway.
 2. Store `sha256:<sha256(raw key)>` in the deployment secret store.
-3. Add a new `auth.api_keys[]` entry or update the existing entry's `hash_env` reference.
-4. Restart or roll the gateway, because the current keyring is loaded at process startup.
+3. Add a new `auth.api_keys[]` entry or update the existing entry's `fingerprint` reference and commitment.
+4. Apply the signed `client_credential_rotation` or `client_access_change` governed config bundle.
 5. Confirm the new key can call the intended lowest-privilege endpoint.
 6. Update the consumer to use the new raw key.
 7. Remove the old key entry or old secret and restart or roll again.
@@ -401,8 +401,8 @@ Recommended scrape posture:
 Config fails at startup:
 
 - Check YAML shape against [config/example.yaml](../config/example.yaml).
-- Confirm every `hash_env` variable is set.
-- Confirm each `hash_env` value is a `sha256:<64 lowercase hex chars>` fingerprint.
+- Confirm every env-backed `fingerprint.name` variable is set.
+- Confirm each referenced fingerprint value is a `sha256:<64 lowercase hex chars>` fingerprint and matches the signed commitment.
 - Confirm ids are lower-snake and unique.
 - Check vocabulary prefixes used by `concept_uri` and `conforms_to`.
 - For `metadata.manifest.*` errors, validate the portable metadata manifest.

@@ -106,12 +106,12 @@ fn decentralized_demo_configs_load() {
             "{name}: decentralized Relay demos should use stdout audit"
         );
         assert!(
-            config
-                .auth
-                .api_keys
-                .iter()
-                .all(|key| key.hash_env.ends_with("_HASH")),
-            "{name}: Relay credentials should be hash env references only"
+            config.auth.api_keys.iter().all(|key| key
+                .fingerprint
+                .name
+                .as_deref()
+                .is_some_and(|name| name.ends_with("_HASH"))),
+            "{name}: Relay credentials should be env-backed fingerprint references only"
         );
         let evidence_only = config
             .auth

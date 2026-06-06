@@ -14,6 +14,9 @@ use std::time::Duration;
 
 use crate::error::{ConfigError, Error, RuntimeBindingError};
 use registry_manifest_core::CompiledMetadata;
+use registry_platform_authcommon::{
+    CredentialCommitmentContext, CredentialFingerprintRefError, CredentialProduct, CredentialType,
+};
 use registry_platform_crypto::{validate_did, DidMethod};
 use registry_platform_httpsec::CorsPolicy;
 
@@ -1663,36 +1666,52 @@ fn validate_env_vars_and_hashes(config: &Config) -> Result<(), ConfigError> {
     if config.auth.mode != AuthMode::ApiKey {
         return Ok(());
     }
+    let mut fingerprints = HashSet::with_capacity(config.auth.api_keys.len());
     for key in &config.auth.api_keys {
-        if key.hash_env.trim().is_empty() {
-            tracing::error!(
-                code = "config.validation_error",
-                api_key_id = %key.id,
-                "hash_env must be a non-empty environment variable name"
-            );
-            return Err(ConfigError::ValidationError);
-        }
-        let value = match env::var(&key.hash_env) {
-            Ok(v) => v,
-            Err(_) => {
-                tracing::error!(
-                    code = "config.missing_secret",
-                    api_key_id = %key.id,
-                    hash_env = %key.hash_env,
-                    "hash_env environment variable is not set"
-                );
-                return Err(ConfigError::MissingSecret);
-            }
+        let context = CredentialCommitmentContext {
+            product: CredentialProduct::RegistryRelay,
+            credential_type: CredentialType::ApiKey,
+            credential_id: &key.id,
         };
-        if let Err(reason) = validate_api_key_fingerprint(&value) {
-            tracing::error!(
-                code = "config.validation_error",
-                api_key_id = %key.id,
-                hash_env = %key.hash_env,
-                reason = %reason,
-                "hash_env value failed API key fingerprint validation"
-            );
-            return Err(ConfigError::ValidationError);
+        match key.fingerprint.resolve(context) {
+            Ok(fingerprint) => {
+                if !fingerprints.insert(fingerprint) {
+                    tracing::error!(
+                        code = "config.validation_error",
+                        api_key_id = %key.id,
+                        "duplicate API key fingerprint resolved from configured credential references"
+                    );
+                    return Err(ConfigError::ValidationError);
+                }
+            }
+            Err(error) => {
+                match error {
+                    CredentialFingerprintRefError::MissingSecret => {
+                        tracing::error!(
+                            code = "config.missing_secret",
+                            api_key_id = %key.id,
+                            "configured API key fingerprint secret is not set"
+                        );
+                        return Err(ConfigError::MissingSecret);
+                    }
+                    CredentialFingerprintRefError::CommitmentMismatch => {
+                        tracing::error!(
+                            code = "config.validation_error",
+                            api_key_id = %key.id,
+                            "configured API key fingerprint does not match its signed commitment"
+                        );
+                    }
+                    other => {
+                        tracing::error!(
+                            code = "config.validation_error",
+                            api_key_id = %key.id,
+                            reason = ?other,
+                            "configured API key fingerprint reference is invalid"
+                        );
+                    }
+                }
+                return Err(ConfigError::ValidationError);
+            }
         }
     }
     Ok(())
@@ -1702,20 +1721,22 @@ fn validate_env_vars_and_hashes(config: &Config) -> Result<(), ConfigError> {
 /// 32-byte values generated out-of-band; configs store only
 /// `sha256:<64 lowercase hex chars>` so request authentication is a
 /// digest plus a map lookup.
+#[cfg(test)]
 fn validate_api_key_fingerprint(value: &str) -> Result<(), &'static str> {
-    let hex = value
-        .strip_prefix("sha256:")
-        .ok_or("API key fingerprint must start with sha256:")?;
-    if hex.len() != 64 {
-        return Err("API key fingerprint must contain 64 lowercase hex characters");
-    }
-    if !hex
-        .bytes()
-        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err("API key fingerprint must contain lowercase hex only");
-    }
-    Ok(())
+    registry_platform_authcommon::parse_fingerprint(value)
+        .map(|_| ())
+        .map_err(|error| match error {
+            registry_platform_authcommon::FingerprintFormatError::MissingPrefix => {
+                "API key fingerprint must start with sha256:"
+            }
+            registry_platform_authcommon::FingerprintFormatError::InvalidLength => {
+                "API key fingerprint must contain 64 lowercase hex characters"
+            }
+            registry_platform_authcommon::FingerprintFormatError::InvalidHex => {
+                "API key fingerprint must contain lowercase hex only"
+            }
+            _ => "API key fingerprint is invalid",
+        })
 }
 
 fn validate_resources(config: &Config) -> Result<(), ConfigError> {

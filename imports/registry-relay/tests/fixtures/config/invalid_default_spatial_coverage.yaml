@@ -13,7 +13,10 @@ auth:
   mode: api_key
   api_keys:
     - id: k1
-      hash_env: TEST_KEY_HASH_DEF_SPATIAL
+      fingerprint:
+        provider: env
+        name: TEST_KEY_HASH_DEF_SPATIAL
+        commitment: sha256:1b64f2dd703449dfc4eb93d5771c6b7a0807c04e4494546a760654f12153e0a1
       scopes:
         - ds_one:metadata
 audit:

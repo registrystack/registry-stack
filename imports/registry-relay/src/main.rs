@@ -6,11 +6,9 @@
 //! 2. Load and validate the YAML config from `--config <path>`, the
 //!    `REGISTRY_RELAY_CONFIG` env var, or `./config/example.yaml` (in that
 //!    order of precedence).
-//! 3. Build the `ApiKeyAuth` provider from `auth.api_keys[]`: read each
-//!    `hash_env` env var (validated for presence and fingerprint shape by the
-//!    config loader) and construct an `ApiKeyEntry` per configured id.
-//!    The keyring lives inside `ApiKeyAuth` and is immutable for the
-//!    lifetime of the process.
+//! 3. Build the auth provider from the configured credential references.
+//!    The active provider is stored in the runtime snapshot so governed
+//!    compatible credential changes can swap it without a process restart.
 //! 4. Build the configured audit sink: stdout, file, or syslog, with
 //!    platform audit envelopes.
 //! 5. Build ingest, readiness, entity registry, row-query, and aggregate
@@ -40,16 +38,14 @@ use axum::Extension;
 use datafusion::execution::context::SessionContext;
 use registry_platform_audit::AuditChainProfile;
 use registry_relay::audit::{AuditPipeline, FileSink, StdoutSink, SyslogSink};
-use registry_relay::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
-use registry_relay::auth::middleware::AuthProviderRef;
-use registry_relay::auth::oidc::{OidcAuth, ReqwestJwksFetcher};
-use registry_relay::auth::ScopeSet;
+use registry_relay::auth::middleware::{AuthProviderRef, RuntimeAuthProvider};
+use registry_relay::auth::runtime::build_auth;
 use registry_relay::config::governed::{
-    authorize_signed_config_candidate, parse_candidate_config_with_provenance,
+    authorize_signed_config_candidate, parse_resolved_config_candidate_with_provenance,
     resolve_tuf_config_candidate, LocalTufConfigTargetRequest, RemoteTufConfigTargetRequest,
     TufConfigTargetRequest,
 };
-use registry_relay::config::{self, ApiKeyConfig, AuditSinkConfig, Config, OidcConfig};
+use registry_relay::config::{self, AuditSinkConfig, Config};
 use registry_relay::entity::EntityRegistry;
 use registry_relay::error::{ConfigError, Error};
 use registry_relay::format::FormatRegistry;
@@ -284,9 +280,10 @@ async fn run_server(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
     // the other.
     let result: Result<(), Box<dyn std::error::Error + Send + Sync>> =
         if let Some(admin_listener) = admin_listener {
+            let auth: AuthProviderRef = Arc::new(RuntimeAuthProvider::new(Arc::clone(&handle)));
             let admin_app = registry_relay::server::build_admin_app_with_metadata_and_metrics(
                 Arc::clone(&runtime.config),
-                Arc::clone(&runtime.auth),
+                auth,
                 Arc::clone(&runtime.audit_sink),
                 runtime.readiness_rx.clone(),
                 runtime.readiness_tx.clone(),
@@ -352,13 +349,9 @@ async fn run_config_verify_bundle(
     };
     let resolved = resolve_tuf_config_candidate(&request, &current_config).await?;
     authorize_signed_config_candidate(&resolved, &current_config)?;
-    let (_candidate, provenance) = parse_candidate_config_with_provenance(
-        &resolved.config_yaml,
-        &resolved.bundle_id,
-        resolved.sequence,
-        resolved.source,
-    )
-    .map_err(|detail| io::Error::new(io::ErrorKind::InvalidData, detail))?;
+    let parsed = parse_resolved_config_candidate_with_provenance(&resolved)
+        .map_err(|detail| io::Error::new(io::ErrorKind::InvalidData, detail))?;
+    let provenance = parsed.provenance;
 
     let report = VerifyBundleReport {
         result: "verified",
@@ -370,6 +363,8 @@ async fn run_config_verify_bundle(
         previous_config_hash: resolved.previous_config_hash,
         config_hash: provenance.internal_config_hash,
         posture_config_hash: provenance.posture_config_hash,
+        metadata_source_digest: parsed.metadata_source_digest,
+        package_digest: parsed.package_digest,
         root_version: resolved.root_version,
         tuf_root_sha256: resolved.tuf_root_sha256,
         change_classes: resolved.change_classes.into_iter().collect(),
@@ -472,6 +467,8 @@ struct VerifyBundleReport {
     previous_config_hash: Option<String>,
     config_hash: String,
     posture_config_hash: String,
+    metadata_source_digest: Option<String>,
+    package_digest: Option<String>,
     root_version: Option<u64>,
     tuf_root_sha256: Option<String>,
     change_classes: Vec<String>,
@@ -486,6 +483,7 @@ async fn compile_relay_runtime(
     let loaded = config::load_with_metadata(&config_path)?;
     let config_provenance = loaded.provenance.clone();
     let compiled_metadata = loaded.metadata.map(Arc::new);
+    let metadata_source_digest = loaded.metadata_source_digest;
     let config = Arc::new(loaded.runtime);
 
     let auth = build_auth(&config).await?;
@@ -535,6 +533,8 @@ async fn compile_relay_runtime(
         config,
         config_provenance,
         compiled_metadata,
+        metadata_source_digest,
+        None,
         auth,
         audit_sink,
         bind,
@@ -560,10 +560,11 @@ fn build_relay_app_from_runtime(
     handle: Arc<RelayRuntimeHandle>,
 ) -> Result<axum::Router, Box<dyn std::error::Error + Send + Sync>> {
     let runtime = handle.load_full();
+    let auth: AuthProviderRef = Arc::new(RuntimeAuthProvider::new(Arc::clone(&handle)));
     let mut app =
         registry_relay::server::build_app_with_entity_query_metadata_provenance_and_metrics(
             Arc::clone(&runtime.config),
-            Arc::clone(&runtime.auth),
+            auth,
             Arc::clone(&runtime.audit_sink),
             runtime.readiness_rx.clone(),
             Arc::clone(&runtime.entity_registry),
@@ -969,142 +970,6 @@ async fn run_healthcheck(
         return Err(io::Error::other(format!("healthcheck returned status {status}")).into());
     }
     Ok(())
-}
-
-/// Build the configured authentication provider.
-///
-/// Returns an [`AuthProviderRef`] so the same call site serves both
-/// the V1 API-key provider and future OIDC provider without further
-/// branching at the wiring layer. Today only [`ApiKeyAuth`] is wired;
-/// OIDC will land as an additional arm on [`config::AuthMode`].
-///
-/// The config validator (`crate::config::validate`) already enforced
-/// that every `hash_env` is set and parses as a SHA-256 API key
-/// fingerprint, so the only failures we expect here are TOCTOU env var
-/// removals between validation and now. Those propagate as
-/// `ConfigError::MissingSecret` so the binary exits with the same
-/// stable code as the validator does.
-///
-/// The provider is immutable for the process lifetime. Key/JWKS
-/// rotation is a restart operation unless a future provider adds live
-/// reload.
-async fn build_auth(config: &Config) -> Result<AuthProviderRef, Error> {
-    match config.auth.mode {
-        config::AuthMode::ApiKey => {
-            let mut entries = Vec::with_capacity(config.auth.api_keys.len());
-            for key in &config.auth.api_keys {
-                let entry = build_api_key_entry(key)?;
-                entries.push(entry);
-            }
-            Ok(Arc::new(ApiKeyAuth::new(entries)))
-        }
-        config::AuthMode::Oidc => {
-            let oidc = config.auth.oidc.as_ref().ok_or_else(|| {
-                tracing::error!(
-                    code = "config.validation_error",
-                    "auth.mode = oidc but no oidc block resolved"
-                );
-                Error::from(ConfigError::ValidationError)
-            })?;
-            build_oidc_auth(oidc).await
-        }
-    }
-}
-
-/// Build the [`OidcAuth`] provider from its config block.
-///
-/// Resolves the JWKS URL from `discovery_url` if set; otherwise uses
-/// the explicit `jwks_url`. The discovery fetch happens once at startup
-/// and is not retried: a failure here aborts the binary so an operator
-/// sees the IdP wiring problem instead of a process that runs but
-/// silently rejects every token. The JWKS document itself is fetched
-/// lazily by the cache on first verify, so a transient JWKS outage at
-/// boot does not block startup.
-async fn build_oidc_auth(oidc: &OidcConfig) -> Result<AuthProviderRef, Error> {
-    if oidc.allow_dev_insecure_fetch_urls {
-        tracing::warn!(
-            code = "oidc.dev_insecure_fetch_urls_enabled",
-            "OIDC loopback HTTP issuer, discovery, and JWKS URLs are enabled for local development"
-        );
-    }
-
-    let fetcher = match (oidc.jwks_url.as_deref(), oidc.discovery_url.as_deref()) {
-        (Some(jwks_url), None) => {
-            let result = if oidc.allow_dev_insecure_fetch_urls {
-                ReqwestJwksFetcher::from_jwks_url_for_dev(jwks_url)
-            } else {
-                ReqwestJwksFetcher::from_jwks_url(jwks_url)
-            };
-            result.map_err(|err| {
-                tracing::error!(
-                    code = "config.validation_error",
-                    error = %err,
-                    "failed to build OIDC JWKS HTTP client"
-                );
-                Error::from(ConfigError::ValidationError)
-            })?
-        }
-        (None, Some(discovery_url)) => {
-            let result = if oidc.allow_dev_insecure_fetch_urls {
-                ReqwestJwksFetcher::from_discovery_url_for_dev(discovery_url, &oidc.issuer).await
-            } else {
-                ReqwestJwksFetcher::from_discovery_url(discovery_url, &oidc.issuer).await
-            };
-            result.map_err(|err| {
-                tracing::error!(
-                    code = "config.validation_error",
-                    error = %err,
-                    "failed to resolve OIDC discovery document"
-                );
-                Error::from(ConfigError::ValidationError)
-            })?
-        }
-        _ => {
-            tracing::error!(
-                code = "config.validation_error",
-                "auth.oidc must declare exactly one of jwks_url or discovery_url"
-            );
-            return Err(Error::from(ConfigError::ValidationError));
-        }
-    };
-    let jwks_url = fetcher.jwks_url().to_string();
-    let provider = OidcAuth::new(oidc, Arc::new(fetcher));
-    tracing::info!(
-        issuer = %oidc.issuer,
-        jwks_url = %jwks_url,
-        algorithms = ?oidc.algorithms,
-        "oidc auth provider wired"
-    );
-    Ok(Arc::new(provider))
-}
-
-/// Resolve one `ApiKeyConfig` into an `ApiKeyEntry`.
-///
-/// Pulls the fingerprint from the env var named by `hash_env`,
-/// collects scopes into a `ScopeSet`, and validates the fingerprint via
-/// `ApiKeyEntry::new` (which re-parses defensively even though the
-/// config validator already accepted it).
-fn build_api_key_entry(key: &ApiKeyConfig) -> Result<ApiKeyEntry, Error> {
-    let fingerprint = env::var(&key.hash_env).map_err(|_| {
-        tracing::error!(
-            code = "config.missing_secret",
-            api_key_id = %key.id,
-            hash_env = %key.hash_env,
-            "hash_env environment variable is not set at auth build time"
-        );
-        Error::from(ConfigError::MissingSecret)
-    })?;
-    let scopes: ScopeSet = key.scopes.iter().cloned().collect();
-    ApiKeyEntry::new(key.id.clone(), scopes, fingerprint).map_err(|reason| {
-        tracing::error!(
-            code = "config.validation_error",
-            api_key_id = %key.id,
-            hash_env = %key.hash_env,
-            reason = %reason,
-            "failed to construct ApiKeyEntry from configured hash_env"
-        );
-        Error::from(ConfigError::ValidationError)
-    })
 }
 
 /// Instantiate the configured audit sink.

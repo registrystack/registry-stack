@@ -5,7 +5,7 @@
 //! install the router and `IngestRegistry` extension from the admin
 //! listener when that wiring lands.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use axum::extract::{Path, Query};
@@ -30,12 +30,15 @@ use time::OffsetDateTime;
 use tokio::sync::watch;
 
 use crate::audit::{ConfigAuditExt, ErrorCodeExt};
+use crate::auth::middleware::AuthProviderRef;
+use crate::auth::runtime::build_auth;
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
 use crate::config::governed::{
     authorize_signed_config_candidate, is_signed_config_source,
-    parse_candidate_config_with_provenance, resolve_tuf_config_candidate, ConfigCandidateError,
-    ResolvedConfigCandidate, TufConfigTargetRequest,
+    parse_candidate_config_with_provenance, parse_resolved_config_candidate_with_provenance,
+    resolve_tuf_config_candidate, ConfigCandidateError, ResolvedConfigCandidate,
+    TufConfigTargetRequest,
 };
 use crate::config::{
     AuthMode, Config, DatasetId, IssuerConfig, ProvenanceConfig, ResourceId, SignerConfig,
@@ -166,6 +169,7 @@ async fn capabilities(
             "components": [
                 "config_provenance",
                 "compiled_metadata",
+                "auth_provider",
                 "provenance_state"
             ]
         },
@@ -331,8 +335,8 @@ async fn config_verify(
             ),
         );
     }
-    let candidate = match parse_candidate_config(&resolved.config_yaml) {
-        Ok(candidate) => candidate,
+    let parsed = match parse_resolved_config_candidate_with_provenance(&resolved) {
+        Ok(parsed) => parsed,
         Err(detail) => {
             return with_config_audit(
                 config_candidate_invalid(detail),
@@ -349,7 +353,7 @@ async fn config_verify(
     };
     let compatible = match classify_live_config_change(
         &current,
-        &candidate,
+        &parsed.config,
         live_change_authorization(&resolved),
         resolver_from_extension(resolver.as_ref()),
     ) {
@@ -623,16 +627,21 @@ async fn config_apply(
             .with_break_glass_request(&request),
         );
     }
-    if let Err(ConfigCandidateError::BundleInvalid(detail)) =
+    if let Err(ConfigCandidateError::BundleInvalid(_detail)) =
         authorize_signed_config_candidate(&resolved, &current.config)
     {
-        return with_config_audit(
-            config_bundle_invalid(detail),
+        return config_apply_report(
+            resolved.bundle_id.clone(),
+            resolved.sequence,
+            ApplyReportResult::RejectedThreshold,
+            false,
+            false,
+            StatusCode::CONFLICT,
             resolved_config_audit(
                 ConfigAdminAction::Apply,
                 &resolved,
                 "rejected",
-                "rejected_product_validation",
+                ApplyReportResult::RejectedThreshold.as_str(),
                 false,
                 false,
             ),
@@ -679,13 +688,8 @@ async fn config_apply(
             .with_break_glass_request(&request),
         );
     }
-    let (candidate, mut provenance) = match parse_candidate_config_with_provenance(
-        &resolved.config_yaml,
-        &resolved.bundle_id,
-        resolved.sequence,
-        resolved.source,
-    ) {
-        Ok(candidate) => candidate,
+    let parsed = match parse_resolved_config_candidate_with_provenance(&resolved) {
+        Ok(parsed) => parsed,
         Err(detail) => {
             return with_config_audit(
                 config_candidate_invalid(detail),
@@ -700,6 +704,10 @@ async fn config_apply(
             )
         }
     };
+    let candidate = parsed.config;
+    let candidate_metadata = parsed.metadata.map(Arc::new);
+    let candidate_metadata_source_digest = parsed.metadata_source_digest;
+    let mut provenance = parsed.provenance;
     let live_change = match classify_live_config_change(
         &current,
         &candidate,
@@ -724,6 +732,7 @@ async fn config_apply(
     let LiveConfigChange::Compatible {
         provenance_state,
         local_approval_change_class,
+        auth_change,
     } = live_change
     else {
         provenance.last_apply_result =
@@ -745,6 +754,31 @@ async fn config_apply(
                 true,
             ),
         );
+    };
+    let auth = if auth_change {
+        match build_auth(&candidate).await {
+            Ok(auth) => auth,
+            Err(_) => {
+                return config_apply_report(
+                    resolved.bundle_id.clone(),
+                    resolved.sequence,
+                    ApplyReportResult::RejectedReadiness,
+                    false,
+                    false,
+                    StatusCode::CONFLICT,
+                    resolved_config_audit(
+                        ConfigAdminAction::Apply,
+                        &resolved,
+                        "accepted",
+                        ApplyReportResult::RejectedReadiness.as_str(),
+                        false,
+                        false,
+                    ),
+                );
+            }
+        }
+    } else {
+        current.auth.clone()
     };
     if !candidate_signing_readiness(provenance_state.as_deref()).is_ready() {
         return config_apply_report(
@@ -857,8 +891,18 @@ async fn config_apply(
     }
     provenance.last_apply_result = Some(ApplyReportResult::Applied.as_posture_result());
     provenance.last_apply_at = Some(now_rfc3339());
-    let new_snapshot =
-        clone_snapshot_with_config(&current, candidate, provenance, provenance_state);
+    let new_snapshot = clone_snapshot_with_config(
+        &current,
+        SnapshotReplacement {
+            config: candidate,
+            config_provenance: provenance,
+            provenance_state,
+            auth,
+            compiled_metadata: candidate_metadata,
+            metadata_source_digest: candidate_metadata_source_digest,
+            metadata_package_digest: parsed.package_digest,
+        },
+    );
     handle.store(new_snapshot);
     config_apply_report(
         resolved.bundle_id.clone(),
@@ -1070,8 +1114,12 @@ async fn posture(
         &config,
         runtime.config_provenance(),
         snapshot.as_ref(),
-        runtime.compiled_metadata().as_deref(),
-        runtime.provenance_state().as_deref(),
+        PostureMetadata {
+            compiled: runtime.compiled_metadata().as_deref(),
+            source_digest: runtime.metadata_source_digest().as_deref(),
+            package_digest: runtime.metadata_package_digest().as_deref(),
+            provenance_state: runtime.provenance_state().as_deref(),
+        },
         tier,
     ) {
         Ok(posture) => posture,
@@ -1080,12 +1128,18 @@ async fn posture(
     Json(posture).into_response()
 }
 
+struct PostureMetadata<'a> {
+    compiled: Option<&'a CompiledMetadata>,
+    source_digest: Option<&'a str>,
+    package_digest: Option<&'a str>,
+    provenance_state: Option<&'a ProvenanceState>,
+}
+
 fn build_posture(
     config: &Config,
     provenance: Option<ConfigProvenance>,
     readiness: Option<&ReadinessSnapshot>,
-    metadata: Option<&CompiledMetadata>,
-    provenance_state: Option<&ProvenanceState>,
+    metadata: PostureMetadata<'_>,
     tier: PostureTier,
 ) -> Result<Value, PostureFilterError> {
     let warnings = posture_warnings(config, readiness);
@@ -1107,6 +1161,17 @@ fn build_posture(
         "public_base_url".to_string(),
         json!(config.catalog.base_url),
     );
+    let mut metadata_manifest = Map::new();
+    metadata_manifest.insert("configured".to_string(), json!(config.metadata.is_some()));
+    if metadata.compiled.is_some() {
+        metadata_manifest.insert("schema_version".to_string(), json!("registry-manifest/v1"));
+    }
+    if let Some(digest) = metadata.source_digest {
+        metadata_manifest.insert("source_digest".to_string(), json!(digest));
+    }
+    if let Some(digest) = metadata.package_digest {
+        metadata_manifest.insert("package_digest".to_string(), json!(digest));
+    }
     let posture = json!({
         "schema": "registry.ops.posture.v1",
         "observed_at": OffsetDateTime::now_utc()
@@ -1139,11 +1204,9 @@ fn build_posture(
             "dataset_count": config.datasets.len(),
             "entity_count": config.datasets.iter().map(|dataset| dataset.entities.len()).sum::<usize>(),
             "aggregate_count": config.datasets.iter().map(|dataset| dataset.aggregates.len() + dataset.tables.iter().map(|table| table.aggregates.len()).sum::<usize>()).sum::<usize>(),
-            "evidence_offering_count": metadata.map(|compiled| compiled.evidence_offerings().count()).unwrap_or(0),
-            "metadata_manifest": {
-                "configured": config.metadata.is_some(),
-            },
-            "provenance": provenance_summary(config, provenance_state),
+            "evidence_offering_count": metadata.compiled.map(|compiled| compiled.evidence_offerings().count()).unwrap_or(0),
+            "metadata_manifest": metadata_manifest,
+            "provenance": provenance_summary(config, metadata.provenance_state),
             "standards_adapters": {
                 "ogcapi_records": feature_status(cfg!(feature = "ogcapi-records")),
                 "ogcapi_features": feature_status(cfg!(feature = "ogcapi-features")),
@@ -1197,6 +1260,9 @@ async fn resolve_config_candidate(
                 signer_kids: BTreeSet::new(),
                 tuf_root_sha256: None,
                 config_yaml: config_yaml.clone(),
+                metadata_yaml: None,
+                metadata_source_digest: None,
+                package_digest: None,
                 source: ConfigSource::LocalFile,
             };
             validate_previous_config_hash(resolved.previous_config_hash.as_deref())?;
@@ -1230,6 +1296,7 @@ enum LiveConfigChange {
     Compatible {
         provenance_state: Option<Arc<ProvenanceState>>,
         local_approval_change_class: Option<&'static str>,
+        auth_change: bool,
     },
     RestartRequired,
 }
@@ -1239,6 +1306,8 @@ struct LiveChangeAuthorization {
     signing_key_rotation: bool,
     signing_key_cleanup: bool,
     root_transition: bool,
+    client_credential_rotation: bool,
+    client_access_change: bool,
 }
 
 fn resolver_from_extension(
@@ -1254,6 +1323,10 @@ fn live_change_authorization(candidate: &ResolvedConfigCandidate) -> LiveChangeA
         signing_key_rotation: candidate.change_classes.contains("signing_key_rotation"),
         signing_key_cleanup: candidate.change_classes.contains("signing_key_cleanup"),
         root_transition: candidate.change_classes.contains("root_transition"),
+        client_credential_rotation: candidate
+            .change_classes
+            .contains("client_credential_rotation"),
+        client_access_change: candidate.change_classes.contains("client_access_change"),
     }
 }
 
@@ -1267,6 +1340,7 @@ fn classify_live_config_change(
         return Ok(LiveConfigChange::Compatible {
             provenance_state: None,
             local_approval_change_class: None,
+            auth_change: false,
         });
     }
     if authorization.root_transition && is_root_transition_config_change(&current.config, candidate)
@@ -1274,6 +1348,23 @@ fn classify_live_config_change(
         return Ok(LiveConfigChange::Compatible {
             provenance_state: None,
             local_approval_change_class: Some("root_transition"),
+            auth_change: false,
+        });
+    }
+    if authorization.client_credential_rotation
+        && is_client_credential_rotation_change(&current.config, candidate)
+    {
+        return Ok(LiveConfigChange::Compatible {
+            provenance_state: None,
+            local_approval_change_class: Some("client_credential_rotation"),
+            auth_change: true,
+        });
+    }
+    if authorization.client_access_change && is_client_access_change(&current.config, candidate) {
+        return Ok(LiveConfigChange::Compatible {
+            provenance_state: None,
+            local_approval_change_class: Some("client_access_change"),
+            auth_change: true,
         });
     }
     if !is_provenance_signing_rotation_change(&current.config, candidate) {
@@ -1326,11 +1417,61 @@ fn classify_live_config_change(
             current_state.clock,
         ))),
         local_approval_change_class: None,
+        auth_change: false,
     })
 }
 
 fn candidate_signing_readiness(provenance_state: Option<&ProvenanceState>) -> KeyReadiness {
     signing_readiness_for_apply(provenance_state.map(|state| state.config().signer.as_ref()))
+}
+
+fn is_client_credential_rotation_change(current: &Config, candidate: &Config) -> bool {
+    equivalent_except_auth(current, candidate)
+        && api_key_auth_changed(current, candidate)
+        && same_api_key_ids_and_scopes(&current.auth.api_keys, &candidate.auth.api_keys)
+}
+
+fn is_client_access_change(current: &Config, candidate: &Config) -> bool {
+    equivalent_except_auth(current, candidate) && api_key_auth_changed(current, candidate)
+}
+
+fn api_key_auth_changed(current: &Config, candidate: &Config) -> bool {
+    current.auth.mode == AuthMode::ApiKey
+        && candidate.auth.mode == AuthMode::ApiKey
+        && format!("{:?}", current.auth.oidc) == format!("{:?}", candidate.auth.oidc)
+        && current.auth.api_keys != candidate.auth.api_keys
+}
+
+fn same_api_key_ids_and_scopes(
+    current: &[crate::config::ApiKeyConfig],
+    candidate: &[crate::config::ApiKeyConfig],
+) -> bool {
+    let Some(current_scopes) = api_key_scopes_by_id(current) else {
+        return false;
+    };
+    let Some(candidate_scopes) = api_key_scopes_by_id(candidate) else {
+        return false;
+    };
+    current_scopes == candidate_scopes
+}
+
+fn api_key_scopes_by_id(
+    keys: &[crate::config::ApiKeyConfig],
+) -> Option<BTreeMap<&str, BTreeSet<&str>>> {
+    let mut by_id = BTreeMap::new();
+    for key in keys {
+        let scopes = key
+            .scopes
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        if let Some(existing) = by_id.insert(key.id.as_str(), scopes.clone()) {
+            if existing != scopes {
+                return None;
+            }
+        }
+    }
+    Some(by_id)
 }
 
 fn signing_readiness_for_apply(signer: Option<&dyn Signer>) -> KeyReadiness {
@@ -1493,6 +1634,20 @@ fn equivalent_except_public_metadata(current: &Config, candidate: &Config) -> bo
         && current.catalog.default_spatial_coverage == candidate.catalog.default_spatial_coverage
 }
 
+fn equivalent_except_auth(current: &Config, candidate: &Config) -> bool {
+    current.instance.id == candidate.instance.id
+        && current.instance.environment == candidate.instance.environment
+        && format!("{:?}", current.server) == format!("{:?}", candidate.server)
+        && format!("{:?}", current.config_trust) == format!("{:?}", candidate.config_trust)
+        && format!("{:?}", current.metadata) == format!("{:?}", candidate.metadata)
+        && format!("{:?}", current.catalog) == format!("{:?}", candidate.catalog)
+        && current.vocabularies == candidate.vocabularies
+        && format!("{:?}", current.audit) == format!("{:?}", candidate.audit)
+        && format!("{:?}", current.datasets) == format!("{:?}", candidate.datasets)
+        && format!("{:?}", current.provenance) == format!("{:?}", candidate.provenance)
+        && format!("{:?}", current.standards) == format!("{:?}", candidate.standards)
+}
+
 fn equivalent_except_public_metadata_and_provenance(current: &Config, candidate: &Config) -> bool {
     current.instance.id == candidate.instance.id
         && current.instance.environment == candidate.instance.environment
@@ -1546,17 +1701,52 @@ fn compatible_provenance_issuer_signing_rotation(
     }
 }
 
-fn clone_snapshot_with_config(
-    current: &crate::runtime_config::RelayRuntimeSnapshot,
+struct SnapshotReplacement {
     config: Config,
     config_provenance: ConfigProvenance,
     provenance_state: Option<Arc<ProvenanceState>>,
+    auth: AuthProviderRef,
+    compiled_metadata: Option<Arc<CompiledMetadata>>,
+    metadata_source_digest: Option<String>,
+    metadata_package_digest: Option<String>,
+}
+
+fn clone_snapshot_with_config(
+    current: &crate::runtime_config::RelayRuntimeSnapshot,
+    replacement: SnapshotReplacement,
 ) -> crate::runtime_config::RelayRuntimeSnapshot {
+    let SnapshotReplacement {
+        config,
+        config_provenance,
+        provenance_state,
+        auth,
+        compiled_metadata,
+        metadata_source_digest,
+        metadata_package_digest,
+    } = replacement;
+    let preserve_current_metadata = config.metadata.is_some();
+    let compiled_metadata = compiled_metadata.or_else(|| {
+        preserve_current_metadata
+            .then(|| current.compiled_metadata.clone())
+            .flatten()
+    });
+    let metadata_source_digest = metadata_source_digest.or_else(|| {
+        preserve_current_metadata
+            .then(|| current.metadata_source_digest.clone())
+            .flatten()
+    });
+    let metadata_package_digest = metadata_package_digest.or_else(|| {
+        preserve_current_metadata
+            .then(|| current.metadata_package_digest.clone())
+            .flatten()
+    });
     crate::runtime_config::RelayRuntimeSnapshot::new(
         Arc::new(config),
         config_provenance,
-        current.compiled_metadata.clone(),
-        current.auth.clone(),
+        compiled_metadata,
+        metadata_source_digest,
+        metadata_package_digest,
+        auth,
         Arc::clone(&current.audit_sink),
         current.bind,
         current.admin_bind,

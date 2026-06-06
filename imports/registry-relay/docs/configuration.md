@@ -157,13 +157,22 @@ Vocabulary prefixes let entity fields and dataset metadata use compact semantic 
 
 ```yaml
 metadata:
-  manifest_path: ./metadata.yaml
+  source:
+    path: ./metadata.yaml
 ```
 
-`manifest_path` points at a portable metadata manifest. Relative paths are
-resolved from the runtime config file. At startup, Registry Relay compiles the
-manifest and validates that runtime datasets, entities, fields, filters, and
-relationships are present in the metadata model.
+`metadata.source.path` points at a portable metadata manifest. Relative paths
+are resolved from the runtime config file. At startup, Registry Relay compiles
+the manifest and validates that runtime datasets, entities, fields, filters, and
+relationships are present in the metadata model. Add
+`metadata.source.digest: sha256:<digest>` when the deployment should pin the
+exact reviewed manifest.
+
+| Mode | Required config | Digest rule | Delivery |
+| --- | --- | --- | --- |
+| Simple local | `metadata.source.path` | Optional | Local file read at startup |
+| Pinned local | `metadata.source.path`, `metadata.source.digest` | Must match the local manifest | Local file read at startup |
+| Governed | `config_trust`, `metadata.source.path`, `metadata.source.digest` | Required before startup and apply | Signed config target plus signed metadata target; optional signed package index when `package_digest` is claimed |
 
 Keep operational details in this runtime config: sources, tables, physical
 columns, scopes, filters, aggregates, standards adapters, ingest, and refresh.
@@ -182,7 +191,8 @@ decision.
 
 ```yaml
 metadata:
-  manifest_path: ./disability_registry.metadata.yaml
+  source:
+    path: ./disability_registry.metadata.yaml
 
 # In disability_registry.metadata.yaml:
 datasets:
@@ -261,13 +271,16 @@ auth:
   mode: api_key
   api_keys:
     - id: program_system
-      hash_env: PROGRAM_SYSTEM_API_KEY_HASH
+      fingerprint:
+        provider: env
+        name: PROGRAM_SYSTEM_API_KEY_HASH
+        commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
       scopes:
         - social_registry:metadata
         - social_registry:rows
 ```
 
-The YAML stores env var names, never raw API keys. Each env var value must be:
+The YAML stores committed fingerprint references, never raw API keys. Each env var value must be:
 
 ```text
 sha256:<64 lowercase hex chars>
@@ -280,7 +293,7 @@ RAW_KEY="$(openssl rand -base64 32)"
 printf 'sha256:%s\n' "$(printf '%s' "$RAW_KEY" | shasum -a 256 | awk '{print $1}')"
 ```
 
-Store the fingerprint in the platform secret store under the configured `hash_env` name. Give the raw key only to the authorized client.
+Store the fingerprint in the platform secret store under the configured `fingerprint.name`. Set `fingerprint.commitment` to the governed commitment over product, credential type, credential id, and fingerprint. Give the raw key only to the authorized client.
 
 ## OIDC (OAuth2)
 
@@ -785,7 +798,7 @@ See [provenance.md](provenance.md) for the full signer, DID, schema, context, an
 
 - Source files are read-only to the process.
 - `cache_dir` is writable and on a filesystem with enough space.
-- Every `hash_env` exists in the runtime environment.
+- Every env-backed `fingerprint.name` exists in the runtime environment.
 - No raw key, fingerprint, private JWK, or full environment dump is logged.
 - Admin listener, if enabled, is private.
 - CORS origins are explicit.

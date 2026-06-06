@@ -45,6 +45,40 @@ fn openssl_available() -> bool {
         .is_ok_and(|output| output.status.success())
 }
 
+fn copy_dir_recursive(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst).expect("destination directory");
+    for entry in std::fs::read_dir(src).expect("source directory readable") {
+        let entry = entry.expect("source directory entry");
+        let source = entry.path();
+        let target = dst.join(entry.file_name());
+        let file_type = entry.file_type().expect("entry file type");
+        if file_type.is_dir() {
+            copy_dir_recursive(&source, &target);
+        } else if file_type.is_file() {
+            std::fs::copy(&source, &target).unwrap_or_else(|err| {
+                panic!(
+                    "copy {} to {} failed: {err}",
+                    source.display(),
+                    target.display()
+                )
+            });
+        }
+    }
+}
+
+fn isolated_demo_keygen_root(repo: &Path) -> TempDir {
+    let tmp = TempDir::new().expect("tempdir");
+    let scripts = tmp.path().join("demo/scripts");
+    std::fs::create_dir_all(&scripts).expect("isolated demo scripts dir");
+    std::fs::copy(
+        repo.join("demo/scripts/generate_demo_keys.py"),
+        scripts.join("generate_demo_keys.py"),
+    )
+    .expect("copy demo key generator");
+    copy_dir_recursive(&repo.join("demo/config"), &tmp.path().join("demo/config"));
+    tmp
+}
+
 #[test]
 fn generated_demo_holder_proofs_verify_with_embedded_public_jwk() {
     if !openssl_available() {
@@ -177,13 +211,12 @@ fn demo_key_generator_writes_secret_files_0600() {
     }
 
     let root = repo_root();
-    let tmp = TempDir::new().expect("tempdir");
-    let env_file = tmp.path().join("demo.env");
-    let bruno_env = root.join("bruno/registry-relay-demo/.env");
-    let _ = std::fs::remove_file(&bruno_env);
+    let isolated = isolated_demo_keygen_root(&root);
+    let env_file = isolated.path().join("demo.env");
+    let bruno_env = isolated.path().join("bruno/registry-relay-demo/.env");
 
     let output = Command::new(python())
-        .current_dir(&root)
+        .current_dir(isolated.path())
         .arg("demo/scripts/generate_demo_keys.py")
         .arg("--env-file")
         .arg(&env_file)
@@ -201,8 +234,6 @@ fn demo_key_generator_writes_secret_files_0600() {
     let contents = std::fs::read_to_string(&env_file).expect("env file readable");
     assert!(contents.contains("REGISTRY_NOTARY_ISSUER_JWK="));
     assert!(!contents.contains("2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw"));
-
-    std::fs::remove_file(bruno_env).expect("remove generated bruno env");
 }
 
 #[test]
@@ -256,6 +287,76 @@ assert target.read_text() == "secret"
     assert!(
         output.status.success(),
         "write_secret_file verifier failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn key_generators_refresh_quoted_credential_refs() {
+    let root = repo_root();
+    let verifier = r#"
+import importlib.util
+import sys
+import types
+from pathlib import Path
+
+root = Path(sys.argv[1])
+
+def load(name, relative):
+    spec = importlib.util.spec_from_file_location(name, root / relative)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+cryptography = types.ModuleType("cryptography")
+hazmat = types.ModuleType("cryptography.hazmat")
+primitives = types.ModuleType("cryptography.hazmat.primitives")
+serialization = types.ModuleType("cryptography.hazmat.primitives.serialization")
+asymmetric = types.ModuleType("cryptography.hazmat.primitives.asymmetric")
+ed25519 = types.ModuleType("cryptography.hazmat.primitives.asymmetric.ed25519")
+ed25519.Ed25519PrivateKey = object
+primitives.serialization = serialization
+asymmetric.ed25519 = ed25519
+sys.modules["cryptography"] = cryptography
+sys.modules["cryptography.hazmat"] = hazmat
+sys.modules["cryptography.hazmat.primitives"] = primitives
+sys.modules["cryptography.hazmat.primitives.serialization"] = serialization
+sys.modules["cryptography.hazmat.primitives.asymmetric"] = asymmetric
+sys.modules["cryptography.hazmat.primitives.asymmetric.ed25519"] = ed25519
+
+for module in [
+    load("generate_demo_keys", "demo/scripts/generate_demo_keys.py"),
+    load("generate_perf_keys", "perf/scripts/generate_perf_keys.py"),
+]:
+    fingerprint = "sha256:" + "a" * 64
+    block, changed = module.refresh_credential_block(
+        [
+            "  - id: 'quoted-id'\n",
+            "    fingerprint_ref:\n",
+            '      name: "QUOTED_HASH"\n',
+            "      commitment: sha256:" + "0" * 64 + "\n",
+        ],
+        "'quoted-id'",
+        {"QUOTED_HASH": fingerprint},
+    )
+    assert changed, module.__name__
+    expected = module.credential_commitment("quoted-id", fingerprint)
+    assert block[-1] == f"      commitment: {expected}\n", block
+"#;
+
+    let output = Command::new(python())
+        .current_dir(&root)
+        .arg("-c")
+        .arg(verifier)
+        .arg(&root)
+        .output()
+        .expect("quoted credential verifier runs");
+
+    assert!(
+        output.status.success(),
+        "quoted credential verifier failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

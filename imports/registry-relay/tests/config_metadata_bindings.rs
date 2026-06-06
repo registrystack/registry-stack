@@ -22,7 +22,8 @@ server:
   bind: 127.0.0.1:0
 
 metadata:
-  manifest_path: {metadata_name}
+  source:
+    path: {metadata_name}
 
 catalog:
   title: Runtime Catalog
@@ -86,6 +87,52 @@ audit:
     )
     .expect("write runtime config");
     path
+}
+
+fn insert_metadata_digest(path: &std::path::Path, digest: &str) {
+    let yaml = std::fs::read_to_string(path).expect("runtime config reads");
+    std::fs::write(
+        path,
+        yaml.replace(
+            "    path: metadata.yaml\n",
+            &format!("    path: metadata.yaml\n    digest: {digest}\n"),
+        ),
+    )
+    .expect("runtime config rewrites");
+}
+
+fn insert_config_trust(path: &std::path::Path, tmp: &TempDir) {
+    let yaml = std::fs::read_to_string(path).expect("runtime config reads");
+    let trust = format!(
+        r#"
+config_trust:
+  antirollback_state_path: "{}"
+  local_approval_state_path: "{}"
+  accepted_roots:
+    - root_id: test-root
+      production: false
+      tuf_root_sha256: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      high_risk_change_classes: []
+      signers:
+        signer-a:
+          kid: signer-a
+          enabled: true
+      roles:
+        - name: metadata
+          threshold: 1
+          signer_kids:
+            - signer-a
+          allowed_change_classes:
+            - public_metadata
+"#,
+        tmp.path().join("antirollback.json").display(),
+        tmp.path().join("local-approvals.json").display()
+    );
+    std::fs::write(
+        path,
+        yaml.replace("\naudit:\n", &format!("{trust}\naudit:\n")),
+    )
+    .expect("runtime config rewrites");
 }
 
 fn write_metadata_manifest(tmp: &TempDir, include_region: bool) {
@@ -164,6 +211,40 @@ fn load_with_metadata_loads_manifest_relative_to_runtime_config() {
     assert_eq!(loaded.runtime.catalog.title, "Runtime Catalog");
     assert_eq!(metadata.catalog().title, "Split Metadata Catalog");
     assert_eq!(metadata.catalog().base_url, "https://metadata.example.test");
+    assert!(
+        loaded
+            .metadata_source_digest
+            .as_deref()
+            .is_some_and(|digest| digest.starts_with("sha256:")),
+        "loader records the active metadata source digest"
+    );
+}
+
+#[test]
+fn load_with_metadata_rejects_pinned_manifest_digest_mismatch() {
+    let tmp = TempDir::new().expect("tempdir");
+    write_metadata_manifest(&tmp, true);
+    let runtime_path = write_runtime_config(&tmp, "metadata.yaml");
+    insert_metadata_digest(
+        &runtime_path,
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    );
+
+    let err = config::load_with_metadata(&runtime_path)
+        .expect_err("wrong metadata digest should fail startup");
+    assert_eq!(err.code(), "metadata.manifest.digest_mismatch");
+}
+
+#[test]
+fn load_with_metadata_requires_digest_for_governed_config() {
+    let tmp = TempDir::new().expect("tempdir");
+    write_metadata_manifest(&tmp, true);
+    let runtime_path = write_runtime_config(&tmp, "metadata.yaml");
+    insert_config_trust(&runtime_path, &tmp);
+
+    let err = config::load_with_metadata(&runtime_path)
+        .expect_err("governed metadata must pin source digest");
+    assert_eq!(err.code(), "metadata.manifest.digest_required");
 }
 
 #[test]
@@ -232,7 +313,8 @@ server:
   bind: 127.0.0.1:0
 
 metadata:
-  manifest_path: metadata.yaml
+  source:
+    path: metadata.yaml
 
 catalog:
   title: Runtime Catalog

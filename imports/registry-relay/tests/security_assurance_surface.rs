@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Runtime exposure checks generated from the security assurance manifest.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::http::{Method, StatusCode};
@@ -28,20 +27,9 @@ struct Endpoint {
 }
 
 fn load_example_config() -> Config {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/example.yaml");
-    let fingerprint = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    #[allow(unused_unsafe)]
-    unsafe {
-        std::env::set_var("STATS_OFFICE_API_KEY_HASH", fingerprint);
-        std::env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", fingerprint);
-        std::env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", fingerprint);
-        std::env::set_var("OPERATIONS_OPERATOR_API_KEY_HASH", fingerprint);
-        std::env::set_var(
-            "REGISTRY_RELAY_AUDIT_HASH_SECRET",
-            "relay-security-assurance-secret-32-bytes",
-        );
-    }
-    registry_relay::config::load(&path).expect("example config loads")
+    registry_relay::config::test_support::load_example_config_for_tests(
+        "relay-security-assurance-secret-32-bytes",
+    )
 }
 
 fn sample_path(path: &str) -> String {

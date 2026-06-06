@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use chrono::Utc;
+use registry_manifest_core::{source_manifest_digest, MetadataManifest};
 use registry_platform_config::sha256_uri;
 use registry_platform_ops::internal_config_hash;
 use serde_json::{json, Value};
@@ -26,6 +27,19 @@ struct SignedConfigFixture {
     targets_dir: PathBuf,
     datastore_dir: PathBuf,
     target_name: String,
+}
+
+struct SignedConfigWithMetadataFixture {
+    signed: SignedConfigFixture,
+    source_manifest_digest: String,
+    package_digest: String,
+}
+
+struct MetadataPackageFixtureOptions {
+    include_package_index_target_name: bool,
+    signed_package_digest: String,
+    index_source_manifest_digest: String,
+    index_package_digest: String,
 }
 
 fn tough_fixture(name: &str) -> PathBuf {
@@ -149,6 +163,34 @@ config_trust:
     )
 }
 
+fn metadata_manifest_yaml() -> &'static str {
+    r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: relay-lab
+  base_url: https://metadata.example.test/
+  title: Metadata Catalog
+  publisher:
+    name: Test
+datasets: []
+"#
+}
+
+fn candidate_config_yaml_with_metadata(tmp: &TempDir, source_manifest_digest: &str) -> String {
+    candidate_config_yaml(tmp).replace(
+        "server:\n  bind: 127.0.0.1:0\n",
+        &format!(
+            "server:\n  bind: 127.0.0.1:0\nmetadata:\n  source:\n    path: metadata.yaml\n    digest: {source_manifest_digest}\n"
+        ),
+    )
+}
+
+fn metadata_source_digest(metadata_yaml: &str) -> String {
+    let manifest: MetadataManifest =
+        serde_saphyr::from_str(metadata_yaml).expect("metadata manifest parses");
+    source_manifest_digest(&manifest).expect("metadata digest computes")
+}
+
 async fn write_signed_config_tuf_fixture(tmp: &TempDir, config_yaml: &str) -> SignedConfigFixture {
     let repo_dir = tmp.path().join("signed-config");
     let source_dir = repo_dir.join("source");
@@ -218,6 +260,145 @@ async fn write_signed_config_tuf_fixture(tmp: &TempDir, config_yaml: &str) -> Si
         targets_dir,
         datastore_dir,
         target_name: target_name.to_string(),
+    }
+}
+
+async fn write_signed_config_tuf_fixture_with_metadata(
+    tmp: &TempDir,
+    config_yaml: &str,
+    metadata_yaml: &str,
+    source_manifest_digest: &str,
+) -> SignedConfigWithMetadataFixture {
+    let package_digest = sha256_uri(b"test metadata package");
+    write_signed_config_tuf_fixture_with_metadata_options(
+        tmp,
+        config_yaml,
+        metadata_yaml,
+        source_manifest_digest,
+        MetadataPackageFixtureOptions {
+            include_package_index_target_name: true,
+            signed_package_digest: package_digest.clone(),
+            index_source_manifest_digest: source_manifest_digest.to_string(),
+            index_package_digest: package_digest,
+        },
+    )
+    .await
+}
+
+async fn write_signed_config_tuf_fixture_with_metadata_options(
+    tmp: &TempDir,
+    config_yaml: &str,
+    metadata_yaml: &str,
+    source_manifest_digest: &str,
+    options: MetadataPackageFixtureOptions,
+) -> SignedConfigWithMetadataFixture {
+    let repo_dir = tmp.path().join("signed-config-with-metadata");
+    let source_dir = repo_dir.join("source");
+    let metadata_dir = repo_dir.join("metadata");
+    let targets_dir = repo_dir.join("targets");
+    let datastore_dir = repo_dir.join("datastore");
+    std::fs::create_dir_all(&source_dir).expect("source dir");
+    std::fs::create_dir_all(&datastore_dir).expect("datastore dir");
+    let target_name = "registry-relay.yaml";
+    let metadata_target_name = "metadata.yaml";
+    let package_index_target_name = "index.json";
+    let target_path = source_dir.join(target_name);
+    let metadata_path = source_dir.join(metadata_target_name);
+    let package_index_path = source_dir.join(package_index_target_name);
+    std::fs::write(&target_path, config_yaml).expect("target config writes");
+    std::fs::write(&metadata_path, metadata_yaml).expect("metadata target writes");
+    std::fs::write(
+        &package_index_path,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": "registry-manifest-index/v1",
+            "source_manifest_digest": options.index_source_manifest_digest,
+            "package_digest": options.index_package_digest,
+            "artifacts": []
+        }))
+        .expect("package index serializes"),
+    )
+    .expect("package index writes");
+
+    let mut target = Target::from_path(&target_path)
+        .await
+        .expect("target metadata builds");
+    let mut custom = json!({
+        "product": "registry-relay",
+        "instance_id": "relay-lab",
+        "environment": "lab",
+        "stream_id": "test-stream",
+        "bundle_id": "test-bundle-with-metadata",
+        "sequence": 1,
+        "previous_config_hash": internal_config_hash(config_yaml.as_bytes()),
+        "config_hash": sha256_uri(config_yaml.as_bytes()),
+        "change_classes": ["public_metadata"],
+        "signer_kids": [TUF_TARGETS_SIGNER_KID],
+        "apply_policy": "live",
+        "metadata_target_name": metadata_target_name,
+        "source_manifest_digest": source_manifest_digest,
+        "package_digest": options.signed_package_digest,
+        "metadata_schema_version": "registry-manifest/v1"
+    });
+    if options.include_package_index_target_name {
+        custom["package_index_target_name"] = json!(package_index_target_name);
+    }
+    target.custom = custom
+        .as_object()
+        .expect("custom target metadata is an object")
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    let metadata_target = Target::from_path(&metadata_path)
+        .await
+        .expect("metadata target metadata builds");
+    let package_index_target = Target::from_path(&package_index_path)
+        .await
+        .expect("package index target metadata builds");
+
+    let root_path = tough_fixture("simple-rsa").join("root.json");
+    let key_path = tough_fixture("snakeoil.pem");
+    let keys: Vec<Box<dyn KeySource>> = vec![Box::new(LocalKeySource { path: key_path })];
+    let version = NonZeroU64::new(1).expect("nonzero version");
+    let mut editor = RepositoryEditor::new(&root_path)
+        .await
+        .expect("repository editor builds");
+    editor
+        .targets_expires(Utc::now() + chrono::Duration::days(13))
+        .expect("targets expiration");
+    editor.targets_version(version).expect("targets version");
+    editor.snapshot_expires(Utc::now() + chrono::Duration::days(21));
+    editor.snapshot_version(version);
+    editor.timestamp_expires(Utc::now() + chrono::Duration::days(3));
+    editor.timestamp_version(version);
+    editor
+        .add_target(target_name, target)
+        .expect("config target added");
+    editor
+        .add_target(metadata_target_name, metadata_target)
+        .expect("metadata target added");
+    editor
+        .add_target(package_index_target_name, package_index_target)
+        .expect("package index target added");
+    let signed_repo = editor.sign(&keys).await.expect("repository signs");
+    signed_repo
+        .write(&metadata_dir)
+        .await
+        .expect("metadata writes");
+    signed_repo
+        .copy_targets(&source_dir, &targets_dir, PathExists::Fail)
+        .await
+        .expect("targets write");
+
+    SignedConfigWithMetadataFixture {
+        signed: SignedConfigFixture {
+            root_path: metadata_dir.join("1.root.json"),
+            metadata_dir,
+            targets_dir,
+            datastore_dir,
+            target_name: target_name.to_string(),
+        },
+        source_manifest_digest: source_manifest_digest.to_string(),
+        package_digest: options.signed_package_digest,
     }
 }
 
@@ -331,6 +512,150 @@ async fn config_verify_bundle_cli_reports_verified_signed_bundle() {
     assert_eq!(
         report["config_hash"],
         internal_config_hash(candidate_yaml.as_bytes())
+    );
+}
+
+#[tokio::test]
+async fn config_verify_bundle_cli_reports_verified_signed_metadata_package() {
+    let tmp = TempDir::new().expect("tempdir");
+    let current_config = write_current_config(&tmp, TUF_TARGETS_SIGNER_KID);
+    let metadata_yaml = metadata_manifest_yaml();
+    let source_digest = metadata_source_digest(metadata_yaml);
+    let candidate_yaml = candidate_config_yaml_with_metadata(&tmp, &source_digest);
+    let fixture = write_signed_config_tuf_fixture_with_metadata(
+        &tmp,
+        &candidate_yaml,
+        metadata_yaml,
+        &source_digest,
+    )
+    .await;
+
+    let output = verify_bundle_command(&current_config, &fixture.signed)
+        .output()
+        .expect("verify-bundle command runs");
+
+    assert!(
+        output.status.success(),
+        "verify-bundle failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value =
+        serde_json::from_slice(&output.stdout).expect("verify-bundle emits JSON report");
+    assert_eq!(report["result"], "verified");
+    assert_eq!(report["bundle_id"], "test-bundle-with-metadata");
+    assert_eq!(
+        report["metadata_source_digest"],
+        fixture.source_manifest_digest
+    );
+    assert_eq!(report["package_digest"], fixture.package_digest);
+    assert_ne!(
+        report["config_hash"],
+        internal_config_hash(candidate_yaml.as_bytes()),
+        "metadata package config_hash must bind more than raw runtime YAML"
+    );
+}
+
+fn assert_verify_bundle_failed_with(output: std::process::Output, detail: &str) {
+    assert!(
+        !output.status.success(),
+        "verify-bundle unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(detail),
+        "stderr did not contain {detail:?}\nstderr:\n{stderr}"
+    );
+}
+
+#[tokio::test]
+async fn config_verify_bundle_cli_rejects_package_digest_without_index_target() {
+    let tmp = TempDir::new().expect("tempdir");
+    let current_config = write_current_config(&tmp, TUF_TARGETS_SIGNER_KID);
+    let metadata_yaml = metadata_manifest_yaml();
+    let source_digest = metadata_source_digest(metadata_yaml);
+    let candidate_yaml = candidate_config_yaml_with_metadata(&tmp, &source_digest);
+    let package_digest = sha256_uri(b"test metadata package");
+    let fixture = write_signed_config_tuf_fixture_with_metadata_options(
+        &tmp,
+        &candidate_yaml,
+        metadata_yaml,
+        &source_digest,
+        MetadataPackageFixtureOptions {
+            include_package_index_target_name: false,
+            signed_package_digest: package_digest.clone(),
+            index_source_manifest_digest: source_digest.clone(),
+            index_package_digest: package_digest,
+        },
+    )
+    .await;
+
+    let output = verify_bundle_command(&current_config, &fixture.signed)
+        .output()
+        .expect("verify-bundle command runs");
+
+    assert_verify_bundle_failed_with(output, "package_digest requires package_index_target_name");
+}
+
+#[tokio::test]
+async fn config_verify_bundle_cli_rejects_package_index_digest_mismatch() {
+    let tmp = TempDir::new().expect("tempdir");
+    let current_config = write_current_config(&tmp, TUF_TARGETS_SIGNER_KID);
+    let metadata_yaml = metadata_manifest_yaml();
+    let source_digest = metadata_source_digest(metadata_yaml);
+    let candidate_yaml = candidate_config_yaml_with_metadata(&tmp, &source_digest);
+    let fixture = write_signed_config_tuf_fixture_with_metadata_options(
+        &tmp,
+        &candidate_yaml,
+        metadata_yaml,
+        &source_digest,
+        MetadataPackageFixtureOptions {
+            include_package_index_target_name: true,
+            signed_package_digest: sha256_uri(b"signed package"),
+            index_source_manifest_digest: source_digest.clone(),
+            index_package_digest: sha256_uri(b"different package"),
+        },
+    )
+    .await;
+
+    let output = verify_bundle_command(&current_config, &fixture.signed)
+        .output()
+        .expect("verify-bundle command runs");
+
+    assert_verify_bundle_failed_with(output, "package index digest did not match signed metadata");
+}
+
+#[tokio::test]
+async fn config_verify_bundle_cli_rejects_package_index_source_digest_mismatch() {
+    let tmp = TempDir::new().expect("tempdir");
+    let current_config = write_current_config(&tmp, TUF_TARGETS_SIGNER_KID);
+    let metadata_yaml = metadata_manifest_yaml();
+    let source_digest = metadata_source_digest(metadata_yaml);
+    let candidate_yaml = candidate_config_yaml_with_metadata(&tmp, &source_digest);
+    let package_digest = sha256_uri(b"test metadata package");
+    let fixture = write_signed_config_tuf_fixture_with_metadata_options(
+        &tmp,
+        &candidate_yaml,
+        metadata_yaml,
+        &source_digest,
+        MetadataPackageFixtureOptions {
+            include_package_index_target_name: true,
+            signed_package_digest: package_digest.clone(),
+            index_source_manifest_digest: sha256_uri(b"different source"),
+            index_package_digest: package_digest,
+        },
+    )
+    .await;
+
+    let output = verify_bundle_command(&current_config, &fixture.signed)
+        .output()
+        .expect("verify-bundle command runs");
+
+    assert_verify_bundle_failed_with(
+        output,
+        "package index source digest did not match signed metadata",
     );
 }
 

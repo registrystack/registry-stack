@@ -111,7 +111,10 @@ auth:
   mode: api_key
   api_keys:
     - id: program_system
-      hash_env: PROGRAM_SYSTEM_API_KEY_HASH
+      fingerprint:
+        provider: env
+        name: PROGRAM_SYSTEM_API_KEY_HASH
+        commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
       scopes:
         - social_registry:metadata
         - social_registry:aggregate

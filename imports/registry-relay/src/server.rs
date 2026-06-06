@@ -689,7 +689,6 @@ fn platform_cors_policy(cors: &CorsConfig) -> CorsPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -702,20 +701,9 @@ mod tests {
     use tower::ServiceExt;
 
     fn load_example_config() -> Config {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/example.yaml");
-        let fingerprint = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        #[allow(unused_unsafe)]
-        unsafe {
-            std::env::set_var("STATS_OFFICE_API_KEY_HASH", fingerprint);
-            std::env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", fingerprint);
-            std::env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", fingerprint);
-            std::env::set_var("OPERATIONS_OPERATOR_API_KEY_HASH", fingerprint);
-            std::env::set_var(
-                "REGISTRY_RELAY_AUDIT_HASH_SECRET",
-                "relay-audit-test-secret-32-bytes-minimum",
-            );
-        }
-        crate::config::load(&path).expect("example config loads")
+        crate::config::test_support::load_example_config_for_tests(
+            "relay-audit-test-secret-32-bytes-minimum",
+        )
     }
 
     fn captured_audit_record(line: &str) -> Value {

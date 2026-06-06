@@ -6,6 +6,7 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::path::PathBuf;
 
+use registry_manifest_core::{self as metadata_core, CompiledMetadata, MetadataManifest};
 use registry_platform_config::{
     LocalTufRepositoryInput, RemoteTufRepositoryInput, TufConfigVerifier, VerificationContext,
 };
@@ -56,7 +57,18 @@ pub struct ResolvedConfigCandidate {
     pub signer_kids: BTreeSet<String>,
     pub tuf_root_sha256: Option<String>,
     pub config_yaml: String,
+    pub metadata_yaml: Option<String>,
+    pub metadata_source_digest: Option<String>,
+    pub package_digest: Option<String>,
     pub source: ConfigSource,
+}
+
+pub struct ParsedConfigCandidate {
+    pub config: Config,
+    pub provenance: ConfigProvenance,
+    pub metadata: Option<CompiledMetadata>,
+    pub metadata_source_digest: Option<String>,
+    pub package_digest: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -95,7 +107,7 @@ pub async fn resolve_tuf_config_candidate(
         instance_id: current_config.instance.id.clone(),
         environment,
     };
-    let (verified, source) = match request {
+    let (verified, metadata_yaml, source) = match request {
         TufConfigTargetRequest::Local(request) => {
             let input = LocalTufRepositoryInput {
                 root_path: request.root_path.clone(),
@@ -111,7 +123,9 @@ pub async fn resolve_tuf_config_candidate(
                         "signed config target could not be verified",
                     )
                 })?;
-            (verified, ConfigSource::SignedBundleFile)
+            let metadata_yaml = resolve_local_metadata_target(request, &verified).await?;
+            validate_local_package_index_target(request, &verified).await?;
+            (verified, metadata_yaml, ConfigSource::SignedBundleFile)
         }
         TufConfigTargetRequest::Remote(request) => {
             let input = RemoteTufRepositoryInput {
@@ -129,7 +143,9 @@ pub async fn resolve_tuf_config_candidate(
                         "signed config target could not be verified",
                     )
                 })?;
-            (verified, ConfigSource::SignedBundleEndpoint)
+            let metadata_yaml = resolve_remote_metadata_target(request, &verified).await?;
+            validate_remote_package_index_target(request, &verified).await?;
+            (verified, metadata_yaml, ConfigSource::SignedBundleEndpoint)
         }
     };
     let config_yaml = String::from_utf8(verified.tuf.target_bytes).map_err(|_| {
@@ -145,6 +161,9 @@ pub async fn resolve_tuf_config_candidate(
         signer_kids: verified.tuf.signer_kids.into_iter().collect(),
         tuf_root_sha256: Some(verified.tuf.root_sha256),
         config_yaml,
+        metadata_yaml,
+        metadata_source_digest: verified.metadata.source_manifest_digest,
+        package_digest: verified.metadata.package_digest,
         source,
     })
 }
@@ -199,24 +218,309 @@ pub fn parse_candidate_config_with_provenance(
     sequence: u64,
     source: ConfigSource,
 ) -> Result<(Config, ConfigProvenance), &'static str> {
-    let config_value: Value =
-        serde_saphyr::from_str(config_yaml).map_err(|_| "candidate config could not be parsed")?;
-    let config: Config =
-        serde_saphyr::from_str(config_yaml).map_err(|_| "candidate config could not be parsed")?;
-    config::validate::run(&config).map_err(|_| "candidate config did not validate")?;
-    let mut provenance = ConfigProvenance {
+    let candidate = ResolvedConfigCandidate {
+        bundle_id: bundle_id.to_string(),
+        stream_id: "default".to_string(),
+        sequence,
+        previous_config_hash: None,
+        root_version: None,
+        change_classes: BTreeSet::new(),
+        signer_kids: BTreeSet::new(),
+        tuf_root_sha256: None,
+        config_yaml: config_yaml.to_string(),
+        metadata_yaml: None,
+        metadata_source_digest: None,
+        package_digest: None,
         source,
-        internal_config_hash: internal_config_hash(config_yaml.as_bytes()),
-        posture_config_hash: posture_safe_runtime_config_hash(&config_value),
+    };
+    let parsed = parse_resolved_config_candidate_with_provenance(&candidate)?;
+    Ok((parsed.config, parsed.provenance))
+}
+
+pub fn parse_resolved_config_candidate_with_provenance(
+    candidate: &ResolvedConfigCandidate,
+) -> Result<ParsedConfigCandidate, &'static str> {
+    let config_value: Value = serde_saphyr::from_str(&candidate.config_yaml)
+        .map_err(|_| "candidate config could not be parsed")?;
+    let config: Config = serde_saphyr::from_str(&candidate.config_yaml)
+        .map_err(|_| "candidate config could not be parsed")?;
+    config::validate::run(&config).map_err(|_| "candidate config did not validate")?;
+    let (metadata, metadata_source_digest) = parse_candidate_metadata(&config, candidate)?;
+    let package_digest = candidate.package_digest.clone();
+    let internal_hash = if metadata_source_digest.is_some() || package_digest.is_some() {
+        runtime_package_digest(
+            &candidate.config_yaml,
+            &config,
+            metadata_source_digest.as_deref(),
+            package_digest.as_deref(),
+            candidate.source,
+        )?
+    } else {
+        internal_config_hash(candidate.config_yaml.as_bytes())
+    };
+    let mut provenance = ConfigProvenance {
+        source: candidate.source,
+        internal_config_hash: internal_hash.clone(),
+        posture_config_hash: if metadata_source_digest.is_some() || package_digest.is_some() {
+            internal_hash
+        } else {
+            posture_safe_runtime_config_hash(&config_value)
+        },
         dynamic_reload_supported: true,
-        last_bundle_id: Some(bundle_id.to_string()),
-        last_bundle_sequence: Some(sequence),
+        last_bundle_id: Some(candidate.bundle_id.clone()),
+        last_bundle_sequence: Some(candidate.sequence),
         last_apply_result: None,
         last_apply_at: None,
         restart_required: false,
     };
-    if bundle_id.trim().is_empty() {
+    if candidate.bundle_id.trim().is_empty() {
         provenance.last_bundle_id = None;
     }
-    Ok((config, provenance))
+    Ok(ParsedConfigCandidate {
+        config,
+        provenance,
+        metadata,
+        metadata_source_digest,
+        package_digest,
+    })
+}
+
+async fn resolve_local_metadata_target(
+    request: &LocalTufConfigTargetRequest,
+    verified: &registry_platform_config::VerifiedConfigTarget,
+) -> Result<Option<String>, ConfigCandidateError> {
+    let Some(target_name) = verified.metadata.metadata_target_name.as_deref() else {
+        return Ok(None);
+    };
+    let input = LocalTufRepositoryInput {
+        root_path: request.root_path.clone(),
+        metadata_dir: request.metadata_dir.clone(),
+        targets_dir: request.targets_dir.clone(),
+        datastore_dir: request.datastore_dir.clone(),
+        target_name: target_name.to_string(),
+    };
+    let target = TufConfigVerifier::verify_local_target(&input)
+        .await
+        .map_err(|_| {
+            ConfigCandidateError::BundleInvalid("metadata target could not be verified")
+        })?;
+    let metadata_yaml = String::from_utf8(target.target_bytes).map_err(|_| {
+        ConfigCandidateError::CandidateInvalid("metadata target payload is not valid UTF-8")
+    })?;
+    validate_metadata_source_digest_claim(
+        &metadata_yaml,
+        verified.metadata.source_manifest_digest.as_deref(),
+    )?;
+    Ok(Some(metadata_yaml))
+}
+
+async fn resolve_remote_metadata_target(
+    request: &RemoteTufConfigTargetRequest,
+    verified: &registry_platform_config::VerifiedConfigTarget,
+) -> Result<Option<String>, ConfigCandidateError> {
+    let Some(target_name) = verified.metadata.metadata_target_name.as_deref() else {
+        return Ok(None);
+    };
+    let input = RemoteTufRepositoryInput {
+        root_path: request.root_path.clone(),
+        metadata_base_url: request.metadata_base_url.clone(),
+        targets_base_url: request.targets_base_url.clone(),
+        datastore_dir: request.datastore_dir.clone(),
+        target_name: target_name.to_string(),
+        allow_dev_insecure_fetch_urls: request.allow_dev_insecure_fetch_urls,
+    };
+    let target = TufConfigVerifier::verify_remote_target(&input)
+        .await
+        .map_err(|_| {
+            ConfigCandidateError::BundleInvalid("metadata target could not be verified")
+        })?;
+    let metadata_yaml = String::from_utf8(target.target_bytes).map_err(|_| {
+        ConfigCandidateError::CandidateInvalid("metadata target payload is not valid UTF-8")
+    })?;
+    validate_metadata_source_digest_claim(
+        &metadata_yaml,
+        verified.metadata.source_manifest_digest.as_deref(),
+    )?;
+    Ok(Some(metadata_yaml))
+}
+
+async fn validate_local_package_index_target(
+    request: &LocalTufConfigTargetRequest,
+    verified: &registry_platform_config::VerifiedConfigTarget,
+) -> Result<(), ConfigCandidateError> {
+    let Some(target_name) = verified.metadata.package_index_target_name.as_deref() else {
+        return validate_no_unbound_package_digest(verified);
+    };
+    let input = LocalTufRepositoryInput {
+        root_path: request.root_path.clone(),
+        metadata_dir: request.metadata_dir.clone(),
+        targets_dir: request.targets_dir.clone(),
+        datastore_dir: request.datastore_dir.clone(),
+        target_name: target_name.to_string(),
+    };
+    let target = TufConfigVerifier::verify_local_target(&input)
+        .await
+        .map_err(|_| {
+            ConfigCandidateError::BundleInvalid("package index target could not be verified")
+        })?;
+    validate_package_index_claims(&target.target_bytes, verified)
+}
+
+async fn validate_remote_package_index_target(
+    request: &RemoteTufConfigTargetRequest,
+    verified: &registry_platform_config::VerifiedConfigTarget,
+) -> Result<(), ConfigCandidateError> {
+    let Some(target_name) = verified.metadata.package_index_target_name.as_deref() else {
+        return validate_no_unbound_package_digest(verified);
+    };
+    let input = RemoteTufRepositoryInput {
+        root_path: request.root_path.clone(),
+        metadata_base_url: request.metadata_base_url.clone(),
+        targets_base_url: request.targets_base_url.clone(),
+        datastore_dir: request.datastore_dir.clone(),
+        target_name: target_name.to_string(),
+        allow_dev_insecure_fetch_urls: request.allow_dev_insecure_fetch_urls,
+    };
+    let target = TufConfigVerifier::verify_remote_target(&input)
+        .await
+        .map_err(|_| {
+            ConfigCandidateError::BundleInvalid("package index target could not be verified")
+        })?;
+    validate_package_index_claims(&target.target_bytes, verified)
+}
+
+fn validate_no_unbound_package_digest(
+    verified: &registry_platform_config::VerifiedConfigTarget,
+) -> Result<(), ConfigCandidateError> {
+    if verified.metadata.package_digest.is_some() {
+        return Err(ConfigCandidateError::BundleInvalid(
+            "package_digest requires package_index_target_name",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_package_index_claims(
+    target_bytes: &[u8],
+    verified: &registry_platform_config::VerifiedConfigTarget,
+) -> Result<(), ConfigCandidateError> {
+    let expected_package_digest =
+        verified
+            .metadata
+            .package_digest
+            .as_deref()
+            .ok_or(ConfigCandidateError::BundleInvalid(
+                "package index target requires package_digest",
+            ))?;
+    let index: Value = serde_json::from_slice(target_bytes).map_err(|_| {
+        ConfigCandidateError::CandidateInvalid("package index target payload could not be parsed")
+    })?;
+    if index.get("package_digest").and_then(Value::as_str) != Some(expected_package_digest) {
+        return Err(ConfigCandidateError::BundleInvalid(
+            "package index digest did not match signed metadata",
+        ));
+    }
+    if let Some(expected_source_digest) = verified.metadata.source_manifest_digest.as_deref() {
+        if index.get("source_manifest_digest").and_then(Value::as_str)
+            != Some(expected_source_digest)
+        {
+            return Err(ConfigCandidateError::BundleInvalid(
+                "package index source digest did not match signed metadata",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn parse_candidate_metadata(
+    config: &Config,
+    candidate: &ResolvedConfigCandidate,
+) -> Result<(Option<CompiledMetadata>, Option<String>), &'static str> {
+    match (&config.metadata, candidate.metadata_yaml.as_deref()) {
+        (Some(metadata_config), Some(metadata_yaml)) => {
+            let manifest: MetadataManifest = serde_saphyr::from_str(metadata_yaml)
+                .map_err(|_| "candidate metadata payload could not be parsed")?;
+            let digest = metadata_core::source_manifest_digest(&manifest)
+                .map_err(|_| "candidate metadata digest could not be computed")?;
+            if let Some(expected) = metadata_config.source.digest.as_deref() {
+                if expected != digest {
+                    return Err("candidate metadata digest did not match runtime config");
+                }
+            }
+            if let Some(expected) = candidate.metadata_source_digest.as_deref() {
+                if expected != digest {
+                    return Err("candidate metadata digest did not match signed target metadata");
+                }
+            }
+            let compiled = metadata_core::compile_manifest(&manifest)
+                .map_err(|_| "candidate metadata payload did not validate")?;
+            config::validate::validate_runtime_bindings(config, &compiled)
+                .map_err(|_| "candidate metadata did not match runtime bindings")?;
+            Ok((Some(compiled), Some(digest)))
+        }
+        (Some(_), None)
+            if is_signed_config_source(candidate.source)
+                && (candidate.metadata_source_digest.is_some()
+                    || candidate.package_digest.is_some()) =>
+        {
+            Err("candidate metadata payload is required")
+        }
+        (Some(_), None) => Ok((None, None)),
+        (None, Some(_)) => Err("candidate metadata payload was provided without metadata config"),
+        (None, None) => Ok((None, None)),
+    }
+}
+
+fn validate_metadata_source_digest_claim(
+    metadata_yaml: &str,
+    expected: Option<&str>,
+) -> Result<(), ConfigCandidateError> {
+    let Some(expected) = expected else {
+        return Err(ConfigCandidateError::BundleInvalid(
+            "metadata target requires source_manifest_digest",
+        ));
+    };
+    let manifest: MetadataManifest = serde_saphyr::from_str(metadata_yaml).map_err(|_| {
+        ConfigCandidateError::CandidateInvalid("metadata target payload could not be parsed")
+    })?;
+    let actual = metadata_core::source_manifest_digest(&manifest).map_err(|_| {
+        ConfigCandidateError::CandidateInvalid("metadata target digest could not be computed")
+    })?;
+    if expected != actual {
+        return Err(ConfigCandidateError::BundleInvalid(
+            "metadata target digest did not match signed metadata",
+        ));
+    }
+    Ok(())
+}
+
+fn runtime_package_digest(
+    config_yaml: &str,
+    config: &Config,
+    metadata_source_digest: Option<&str>,
+    package_digest: Option<&str>,
+    source: ConfigSource,
+) -> Result<String, &'static str> {
+    let environment = config
+        .instance
+        .environment
+        .as_deref()
+        .unwrap_or("development");
+    let mut preimage = serde_json::json!({
+        "schema_version": "registry-runtime-package/v1",
+        "product": "registry-relay",
+        "instance_id": config.instance.id,
+        "environment": environment,
+        "runtime_config_digest": internal_config_hash(config_yaml.as_bytes()),
+        "source": source.as_posture_str(),
+    });
+    if let Some(digest) = metadata_source_digest {
+        preimage["source_manifest_digest"] = Value::String(digest.to_string());
+    }
+    if let Some(digest) = package_digest {
+        preimage["package_digest"] = Value::String(digest.to_string());
+    }
+    let bytes = metadata_core::canonicalize_json(&preimage)
+        .map_err(|_| "runtime package digest could not be computed")?;
+    Ok(internal_config_hash(&bytes))
 }

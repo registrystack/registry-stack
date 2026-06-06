@@ -1100,7 +1100,7 @@ fn security_schemes(config: &Config) -> Value {
     let mut schemes = Map::new();
     let bearer_description = match config.auth.mode {
         AuthMode::ApiKey => {
-            "API key carried as `Authorization: Bearer <key>`. The gateway hashes the bearer with SHA-256 and matches the fingerprint against `config.auth.api_keys[*].hash_env`."
+            "API key carried as `Authorization: Bearer <key>`. The gateway hashes the bearer with SHA-256 and matches the fingerprint resolved from `config.auth.api_keys[*].fingerprint`."
         }
         AuthMode::Oidc => {
             "OIDC/OAuth2 bearer JWT validated against the configured issuer, audience, JWKS, token type, and scope claim."
@@ -4024,8 +4024,6 @@ fn openapi_unavailable(detail: &'static str) -> Response {
 mod tests {
     #[cfg(feature = "spdci-api-standards")]
     use std::collections::BTreeMap;
-    use std::env;
-    use std::path::PathBuf;
     use std::time::Duration;
 
     use super::*;
@@ -4036,19 +4034,9 @@ mod tests {
     use crate::metadata::catalog::{CatalogLinks, DatasetLinks, EntityLinks};
 
     fn load_example_config() -> Config {
-        let fingerprint = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        unsafe {
-            env::set_var("STATS_OFFICE_API_KEY_HASH", fingerprint);
-            env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", fingerprint);
-            env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", fingerprint);
-            env::set_var("OPERATIONS_OPERATOR_API_KEY_HASH", fingerprint);
-            env::set_var(
-                "REGISTRY_RELAY_AUDIT_HASH_SECRET",
-                "relay-openapi-audit-secret-32-bytes",
-            );
-        }
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/example.yaml");
-        crate::config::load(&path).expect("example config loads")
+        crate::config::test_support::load_example_config_for_tests(
+            "relay-openapi-audit-secret-32-bytes",
+        )
     }
 
     fn enable_provenance(config: &mut Config) {

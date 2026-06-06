@@ -62,13 +62,13 @@ OPENAPI_WORDS = {
 @dataclass
 class DemoKey:
     key_id: str
-    hash_env: str
+    fingerprint_env: str
     scopes: list[str]
 
     @property
     def raw_env(self) -> str:
-        if self.hash_env.endswith("_HASH"):
-            return f"{self.hash_env[:-5]}_RAW"
+        if self.fingerprint_env.endswith("_HASH"):
+            return f"{self.fingerprint_env[:-5]}_RAW"
         return f"{self.key_id.upper()}_RAW"
 
     @property
@@ -86,6 +86,7 @@ def parse_demo_keys(config_path: Path) -> list[DemoKey]:
     in_api_keys = False
     current: DemoKey | None = None
     in_scopes = False
+    in_fingerprint = False
 
     def finish_current() -> None:
         nonlocal current
@@ -111,22 +112,29 @@ def parse_demo_keys(config_path: Path) -> list[DemoKey]:
         if indent == 4 and stripped.startswith("- id: "):
             finish_current()
             key_id = stripped.removeprefix("- id: ").strip().strip("'\"")
-            current = DemoKey(key_id=key_id, hash_env="", scopes=[])
+            current = DemoKey(key_id=key_id, fingerprint_env="", scopes=[])
             in_scopes = False
+            in_fingerprint = False
             continue
         if current is None:
             continue
-        if indent == 6 and stripped.startswith("hash_env: "):
-            current.hash_env = stripped.removeprefix("hash_env: ").strip().strip("'\"")
+        if indent == 6 and stripped == "fingerprint:":
+            in_fingerprint = True
+            in_scopes = False
+            continue
+        if in_fingerprint and indent == 8 and stripped.startswith("name: "):
+            current.fingerprint_env = stripped.removeprefix("name: ").strip().strip("'\"")
             continue
         if indent == 6 and stripped == "scopes:":
             in_scopes = True
+            in_fingerprint = False
             continue
         if in_scopes and indent == 8 and stripped.startswith("- "):
             current.scopes.append(stripped.removeprefix("- ").strip().strip("'\""))
             continue
         if indent <= 6:
             in_scopes = False
+            in_fingerprint = False
 
     finish_current()
     return keys

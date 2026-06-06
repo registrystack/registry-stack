@@ -14,7 +14,10 @@ auth:
   mode: api_key
   api_keys:
     - id: k1
-      hash_env: TEST_KEY_HASH_AUTH_TYPE
+      fingerprint:
+        provider: env
+        name: TEST_KEY_HASH_AUTH_TYPE
+        commitment: sha256:e4acd1ec9275677dffc9d096189c5a7453ba7f0fbe66311abb3e935fcb814f91
       scopes:
         - ds_one:metadata
 audit:

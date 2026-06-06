@@ -106,6 +106,8 @@ pub struct RelayRuntimeSnapshot {
     pub config: Arc<Config>,
     pub config_provenance: ConfigProvenance,
     pub compiled_metadata: Option<Arc<CompiledMetadata>>,
+    pub metadata_source_digest: Option<String>,
+    pub metadata_package_digest: Option<String>,
     pub auth: AuthProviderRef,
     pub audit_sink: Arc<AuditPipeline>,
     pub bind: SocketAddr,
@@ -133,6 +135,8 @@ impl RelayRuntimeSnapshot {
         config: Arc<Config>,
         config_provenance: ConfigProvenance,
         compiled_metadata: Option<Arc<CompiledMetadata>>,
+        metadata_source_digest: Option<String>,
+        metadata_package_digest: Option<String>,
         auth: AuthProviderRef,
         audit_sink: Arc<AuditPipeline>,
         bind: SocketAddr,
@@ -157,6 +161,8 @@ impl RelayRuntimeSnapshot {
             config,
             config_provenance,
             compiled_metadata,
+            metadata_source_digest,
+            metadata_package_digest,
             auth,
             audit_sink,
             bind,
@@ -184,6 +190,8 @@ impl RelayRuntimeSnapshot {
             Arc::clone(&self.config),
             self.config_provenance.clone(),
             self.compiled_metadata.clone(),
+            self.metadata_source_digest.clone(),
+            self.metadata_package_digest.clone(),
             self.auth.clone(),
             Arc::clone(&self.audit_sink),
             self.bind,
@@ -257,6 +265,8 @@ pub struct RuntimeSnapshot {
     config: Option<Arc<Config>>,
     config_provenance: Option<ConfigProvenance>,
     compiled_metadata: Option<Arc<CompiledMetadata>>,
+    metadata_source_digest: Option<String>,
+    metadata_package_digest: Option<String>,
     ingest: Option<Arc<IngestRegistry>>,
     entity_registry: Option<Arc<EntityRegistry>>,
     query: Option<Arc<EntityQueryEngine>>,
@@ -305,6 +315,22 @@ impl RuntimeSnapshot {
             .as_ref()
             .and_then(|snapshot| snapshot.compiled_metadata.clone())
             .or_else(|| self.compiled_metadata.clone())
+    }
+
+    #[must_use]
+    pub fn metadata_source_digest(&self) -> Option<String> {
+        self.snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.metadata_source_digest.clone())
+            .or_else(|| self.metadata_source_digest.clone())
+    }
+
+    #[must_use]
+    pub fn metadata_package_digest(&self) -> Option<String> {
+        self.snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.metadata_package_digest.clone())
+            .or_else(|| self.metadata_package_digest.clone())
     }
 
     #[must_use]
@@ -436,6 +462,8 @@ where
             .await
             .unwrap_or(None)
             .map(|Extension(value)| value),
+            metadata_source_digest: None,
+            metadata_package_digest: None,
             ingest: Option::<Extension<Arc<IngestRegistry>>>::from_request_parts(parts, state)
                 .await
                 .unwrap_or(None)

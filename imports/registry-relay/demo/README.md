@@ -50,7 +50,7 @@ call. The registry has no relationships into personal datasets; cross-dataset
 composition happens client-side, with separate audited calls per dataset.
 
 Each runtime config in `demo/config/*.yaml` points at a sibling portable
-metadata manifest via `metadata.manifest_path`. The runtime YAML keeps source
+metadata manifest via `metadata.source.path`. The runtime YAML keeps source
 paths, table bindings, scopes, filters, aggregates, standards adapters, and
 ingest settings. The `*.metadata.yaml` file carries only the standard-facing
 catalog, dataset, entity, field, relationship, vocabulary, and profile
@@ -137,7 +137,7 @@ This writes two files in one go (both gitignored):
 
 - `demo/.env.local` with `export <PERSONA>_HASH`, `export <PERSONA>_RAW`,
   `REGISTRY_RELAY_AUDIT_HASH_SECRET`, and the local demo signing secrets
-  lines per persona. The `_HASH` values feed each config's `hash_env:` fields;
+  lines per persona. The `_HASH` values feed each config's committed `fingerprint` references;
   the `_RAW` values are what Bruno sends as `Bearer` tokens.
 - `bruno/registry-relay-demo/.env` with one `<PERSONA>_RAW=<value>` per persona,
   read by Bruno at collection load. The Bruno environment file at

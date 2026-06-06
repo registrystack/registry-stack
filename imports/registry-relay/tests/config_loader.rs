@@ -27,6 +27,10 @@ fn make_fingerprint(plaintext: &[u8]) -> String {
     format!("sha256:{}", hex_lower(&Sha256::digest(plaintext)))
 }
 
+fn seed_fingerprint_env(name: &str) {
+    env::set_var(name, make_fingerprint(name.as_bytes()));
+}
+
 fn hex_lower(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -104,16 +108,11 @@ fn assert_config_code(result: Result<config::Config, Error>, expected_code: &str
 #[test]
 fn example_config_loads_and_validates() {
     // All configured keys point at env vars; provide valid fingerprints.
-    let key_a = make_fingerprint(b"statistics-office-secret");
-    let key_b = make_fingerprint(b"program-system-secret");
-    let key_c = make_fingerprint(b"verification-service-secret");
-    let key_d = make_fingerprint(b"operations-operator-secret");
-
     // Safe to set: env name is unique to the example.
-    env::set_var("STATS_OFFICE_API_KEY_HASH", key_a);
-    env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", key_b);
-    env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", key_c);
-    env::set_var("OPERATIONS_OPERATOR_API_KEY_HASH", key_d);
+    seed_fingerprint_env("STATS_OFFICE_API_KEY_HASH");
+    seed_fingerprint_env("PROGRAM_SYSTEM_API_KEY_HASH");
+    seed_fingerprint_env("VERIFICATION_SERVICE_API_KEY_HASH");
+    seed_fingerprint_env("OPERATIONS_OPERATOR_API_KEY_HASH");
     let config = config::load(&example_path()).expect("example config must load");
 
     assert_eq!(config.instance.id, "registry-relay-local");
@@ -140,8 +139,8 @@ fn example_config_loads_and_validates() {
     assert_eq!(config.auth.api_keys.len(), 4);
     assert_eq!(config.auth.api_keys[0].id, "statistics_office");
     assert_eq!(
-        config.auth.api_keys[0].hash_env,
-        "STATS_OFFICE_API_KEY_HASH"
+        config.auth.api_keys[0].fingerprint.name.as_deref(),
+        Some("STATS_OFFICE_API_KEY_HASH")
     );
     let ops = config
         .auth
@@ -149,7 +148,10 @@ fn example_config_loads_and_validates() {
         .iter()
         .find(|key| key.id == "operations_operator")
         .expect("operations operator key is configured");
-    assert_eq!(ops.hash_env, "OPERATIONS_OPERATOR_API_KEY_HASH");
+    assert_eq!(
+        ops.fingerprint.name.as_deref(),
+        Some("OPERATIONS_OPERATOR_API_KEY_HASH")
+    );
     assert_eq!(ops.scopes, ["registry_relay:ops_read"]);
 
     assert_eq!(config.datasets.len(), 1);
@@ -331,7 +333,7 @@ evidence:
 
 #[test]
 fn invalid_scope_rejected() {
-    env::set_var("TEST_KEY_HASH_SCOPE", make_fingerprint(b"scope-test"));
+    seed_fingerprint_env("TEST_KEY_HASH_SCOPE");
     let result = config::load(&fixture_path("invalid_scope.yaml"));
     let msg = assert_config_code(result, "config.validation_error");
     // No assertion on the offending scope value beyond the code; the
@@ -350,61 +352,49 @@ fn missing_env_var_rejected() {
 
 #[test]
 fn duplicate_dataset_id_rejected() {
-    env::set_var("TEST_KEY_HASH_DUP", make_fingerprint(b"dup-test"));
+    seed_fingerprint_env("TEST_KEY_HASH_DUP");
     let result = config::load(&fixture_path("duplicate_dataset_id.yaml"));
     assert_config_code(result, "config.duplicate_id");
 }
 
 #[test]
 fn unknown_vocabulary_prefix_rejected() {
-    env::set_var("TEST_KEY_HASH_VOCAB", make_fingerprint(b"vocab-test"));
+    seed_fingerprint_env("TEST_KEY_HASH_VOCAB");
     let result = config::load(&fixture_path("unknown_vocab_prefix.yaml"));
     assert_config_code(result, "config.validation_error");
 }
 
 #[test]
 fn invalid_authority_type_rejected() {
-    env::set_var(
-        "TEST_KEY_HASH_AUTH_TYPE",
-        make_fingerprint(b"auth-type-test"),
-    );
+    seed_fingerprint_env("TEST_KEY_HASH_AUTH_TYPE");
     let result = config::load(&fixture_path("invalid_authority_type.yaml"));
     assert_config_code(result, "config.validation_error");
 }
 
 #[test]
 fn invalid_publisher_iri_rejected() {
-    env::set_var(
-        "TEST_KEY_HASH_PUBLISHER_IRI",
-        make_fingerprint(b"publisher-iri-test"),
-    );
+    seed_fingerprint_env("TEST_KEY_HASH_PUBLISHER_IRI");
     let result = config::load(&fixture_path("invalid_publisher_iri.yaml"));
     assert_config_code(result, "config.validation_error");
 }
 
 #[test]
 fn invalid_default_spatial_coverage_rejected() {
-    env::set_var(
-        "TEST_KEY_HASH_DEF_SPATIAL",
-        make_fingerprint(b"def-spatial-test"),
-    );
+    seed_fingerprint_env("TEST_KEY_HASH_DEF_SPATIAL");
     let result = config::load(&fixture_path("invalid_default_spatial_coverage.yaml"));
     assert_config_code(result, "config.validation_error");
 }
 
 #[test]
 fn invalid_dataset_spatial_coverage_rejected() {
-    env::set_var(
-        "TEST_KEY_HASH_DS_SPATIAL",
-        make_fingerprint(b"ds-spatial-test"),
-    );
+    seed_fingerprint_env("TEST_KEY_HASH_DS_SPATIAL");
     let result = config::load(&fixture_path("invalid_dataset_spatial_coverage.yaml"));
     assert_config_code(result, "config.validation_error");
 }
 
 #[test]
 fn allowed_filter_unknown_field_rejected() {
-    env::set_var("TEST_KEY_HASH_FILTER", make_fingerprint(b"filter-test"));
+    seed_fingerprint_env("TEST_KEY_HASH_FILTER");
     let result = config::load(&fixture_path("allowed_filter_unknown_field.yaml"));
     assert_config_code(result, "config.validation_error");
 }
@@ -508,7 +498,7 @@ fn vocab_expand_roundtrip() {
 
 #[test]
 fn humantime_parses_interval() {
-    env::set_var("TEST_KEY_HASH_INTERVAL", make_fingerprint(b"interval-test"));
+    seed_fingerprint_env("TEST_KEY_HASH_INTERVAL");
     let config = config::load(&fixture_path("interval_refresh.yaml"))
         .expect("interval_refresh fixture must load");
     let refresh = config.datasets[0]
@@ -1429,7 +1419,10 @@ auth:
   mode: oidc
   api_keys:
     - id: leftover
-      hash_env: SHOULD_NOT_BE_READ
+      fingerprint:
+        provider: env
+        name: SHOULD_NOT_BE_READ
+        commitment: sha256:c1731a9bbf5fdb74547daffeffe5975a756127a50adc1aac043363fcd402856c
       scopes: []
   oidc:
     issuer: https://idp.example.test

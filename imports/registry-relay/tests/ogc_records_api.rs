@@ -197,7 +197,7 @@ fn write_split_config(tmp: &TempDir) -> std::path::PathBuf {
         &path,
         raw.replacen(
             "catalog:\n",
-            "metadata:\n  manifest_path: metadata.yaml\n\ncatalog:\n",
+            "metadata:\n  source:\n    path: metadata.yaml\n\ncatalog:\n",
             1,
         ),
     )

@@ -24,7 +24,8 @@ A runtime config may point at a metadata manifest:
 
 ```yaml
 metadata:
-  manifest_path: ./benefits_casework.metadata.yaml
+  source:
+    path: ./benefits_casework.metadata.yaml
 ```
 
 Relative paths are resolved from the runtime config file, not the shell's current

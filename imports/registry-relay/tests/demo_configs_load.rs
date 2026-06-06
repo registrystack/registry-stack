@@ -3,11 +3,9 @@
 //! combined `all_demos.yaml`, and the full standards demo config. This keeps
 //! the public demo pack covered by a focused config-loading check.
 //!
-//! The core configs declare the same six persona `hash_env:` names
-//! (`CATALOG_VIEWER_HASH` etc.), so this binary keeps a single test function
-//! that loads them in sequence. Cargo runs each `tests/*.rs` binary in its
-//! own process, so the global env writes here cannot race with other tests
-//! that use disjoint env names.
+//! The core configs declare the same six persona fingerprint secret names
+//! (`CATALOG_VIEWER_HASH` etc.) plus a shared audit hash secret env var, so
+//! this binary seeds them before loading each demo pack.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -53,6 +51,10 @@ fn seed_demo_secret_env() {
     for name in PERSONA_HASH_ENVS {
         env::set_var(name, make_fingerprint(name.as_bytes()));
     }
+    env::set_var(
+        "REGISTRY_RELAY_AUDIT_HASH_SECRET",
+        "relay-demo-audit-secret-32-bytes-minimum",
+    );
 }
 
 #[test]

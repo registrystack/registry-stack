@@ -33,7 +33,7 @@ const JWK_ENV_UNSET: &str = "PROV_TEST_JWK_MISSING";
 
 fn ensure_persona_env() {
     SET_PERSONA_ENV.call_once(|| {
-        env::set_var(TEST_HASH_ENV, make_fingerprint(b"operator"));
+        env::set_var(TEST_HASH_ENV, make_fingerprint(TEST_HASH_ENV.as_bytes()));
         // A populated value here lets the `enabled: true` path pass.
         env::set_var(JWK_ENV_SET_AND_VALID, "non-empty");
         env::remove_var(JWK_ENV_UNSET);
@@ -78,7 +78,10 @@ auth:
   mode: api_key
   api_keys:
     - id: operator
-      hash_env: PROVENANCE_TEST_OPERATOR_HASH
+      fingerprint:
+        provider: env
+        name: PROVENANCE_TEST_OPERATOR_HASH
+        commitment: sha256:264a06f96fe260125bf53a1b604312881dcfdd4c13a87e6d469d1c6f2bfe529d
       scopes: ["registry_relay:admin"]
 
 audit:

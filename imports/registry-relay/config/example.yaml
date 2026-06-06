@@ -29,26 +29,38 @@ auth:
   mode: api_key
   api_keys:
     - id: statistics_office
-      hash_env: STATS_OFFICE_API_KEY_HASH
+      fingerprint:
+        provider: env
+        name: STATS_OFFICE_API_KEY_HASH
+        commitment: sha256:b21620332a196ee79d97b77cb490cb8033906f07c5e4ff0c0e3d7776999bd1d6
       scopes:
         - social_registry:metadata
         - social_registry:aggregate
 
     - id: program_system
-      hash_env: PROGRAM_SYSTEM_API_KEY_HASH
+      fingerprint:
+        provider: env
+        name: PROGRAM_SYSTEM_API_KEY_HASH
+        commitment: sha256:069a5a49b48c64e1644c2c7ac9a746aa9785b2c18cee1eaee395f04d51736ff3
       scopes:
         - social_registry:metadata
         - social_registry:aggregate
         - social_registry:rows
 
     - id: identity_verification_service
-      hash_env: VERIFICATION_SERVICE_API_KEY_HASH
+      fingerprint:
+        provider: env
+        name: VERIFICATION_SERVICE_API_KEY_HASH
+        commitment: sha256:ba18c6e651be2168f263df1b70cf7821ebc1b4d876de71fa5b679a56cad9dc16
       scopes:
         - social_registry:metadata
         - social_registry:evidence_verification
 
     - id: operations_operator
-      hash_env: OPERATIONS_OPERATOR_API_KEY_HASH
+      fingerprint:
+        provider: env
+        name: OPERATIONS_OPERATOR_API_KEY_HASH
+        commitment: sha256:aab859ae1ef792b76913f8bb1aea0ab3d9c7f59f0c49eb4dc559e13358a9cef5
       scopes:
         - registry_relay:ops_read
 

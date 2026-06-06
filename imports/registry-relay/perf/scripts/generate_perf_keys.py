@@ -36,6 +36,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import secrets
 import sys
 from pathlib import Path
@@ -44,7 +45,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
-# Key definitions: (id, hash_env_var, scopes list or None)
+# Key definitions: (id, fingerprint_env_var, scopes list or None)
 # Scopes are informational for the comment; the env file carries the hash only.
 KEY_DEFS = [
     ("perf_rows",               "PERF_ROWS_KEY_HASH",               ["clinic_capacity:rows"]),
@@ -55,12 +56,36 @@ KEY_DEFS = [
 ]
 
 INVALID_TOKEN_VALUE = "not-a-real-token-xxxx"
+PERF_ROOT = Path(__file__).resolve().parents[1]
+
+AUTH_LIST_RE = re.compile(r"^(\s*)api_keys:\s*$")
+ENTRY_ID_RE = re.compile(r"^(\s*)-\s+id:\s*(.+?)\s*$")
+FINGERPRINT_NAME_RE = re.compile(r"^(\s*)name:\s*(.+?)\s*$")
+FINGERPRINT_COMMITMENT_RE = re.compile(r"^(\s*)commitment:\s*(.+?)\s*$")
+
+
+def yaml_scalar_text(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        return value[1:-1]
+    return value
 
 
 def sha256_fingerprint(raw: str) -> str:
     """Return sha256:<64 lowercase hex chars> of the UTF-8-encoded raw token."""
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
     return f"sha256:{digest}"
+
+
+def credential_commitment(credential_id: str, credential_fingerprint: str) -> str:
+    payload = {
+        "product": "registry-relay",
+        "credential_type": "api_key",
+        "credential_id": credential_id,
+        "fingerprint": credential_fingerprint,
+    }
+    encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
 def generate_token() -> str:
@@ -153,6 +178,95 @@ def build_env_lines(
     return lines
 
 
+def refresh_config_commitments(tokens: dict[str, str]) -> int:
+    fingerprints = {
+        hash_env: sha256_fingerprint(tokens[key_id])
+        for key_id, hash_env, _scopes in KEY_DEFS
+    }
+    updated = 0
+    for path in sorted((PERF_ROOT / "config").glob("*.yaml")):
+        if refresh_config_file(path, fingerprints):
+            updated += 1
+    return updated
+
+
+def refresh_config_file(path: Path, fingerprints: dict[str, str]) -> bool:
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    rewritten: list[str] = []
+    index = 0
+    changed = False
+    in_api_keys = False
+    list_indent = 0
+    while index < len(lines):
+        line = lines[index]
+        if match := AUTH_LIST_RE.match(line):
+            in_api_keys = True
+            list_indent = len(match.group(1))
+            rewritten.append(line)
+            index += 1
+            continue
+        if in_api_keys:
+            if line.strip() and leading_spaces(line) <= list_indent:
+                in_api_keys = False
+                rewritten.append(line)
+                index += 1
+                continue
+            if entry_match := ENTRY_ID_RE.match(line):
+                entry_indent = len(entry_match.group(1))
+                block_end = index + 1
+                while block_end < len(lines):
+                    candidate = lines[block_end]
+                    if candidate.strip() and leading_spaces(candidate) <= list_indent:
+                        break
+                    if ENTRY_ID_RE.match(candidate) and leading_spaces(candidate) == entry_indent:
+                        break
+                    block_end += 1
+                block, block_changed = refresh_credential_block(
+                    lines[index:block_end],
+                    yaml_scalar_text(entry_match.group(2)),
+                    fingerprints,
+                )
+                rewritten.extend(block)
+                changed = changed or block_changed
+                index = block_end
+                continue
+        rewritten.append(line)
+        index += 1
+    if changed:
+        path.write_text("".join(rewritten), encoding="utf-8")
+    return changed
+
+
+def refresh_credential_block(
+    block: list[str],
+    credential_id: str,
+    fingerprints: dict[str, str],
+) -> tuple[list[str], bool]:
+    credential_id = yaml_scalar_text(credential_id)
+    env_name = None
+    commitment_index = None
+    for index, line in enumerate(block):
+        if name_match := FINGERPRINT_NAME_RE.match(line):
+            env_name = yaml_scalar_text(name_match.group(2))
+        if FINGERPRINT_COMMITMENT_RE.match(line):
+            commitment_index = index
+    if env_name is None or commitment_index is None or env_name not in fingerprints:
+        return block, False
+    commitment = credential_commitment(credential_id, fingerprints[env_name])
+    commitment_match = FINGERPRINT_COMMITMENT_RE.match(block[commitment_index])
+    assert commitment_match is not None
+    new_line = f"{commitment_match.group(1)}commitment: {commitment}\n"
+    if block[commitment_index] == new_line:
+        return block, False
+    rewritten = list(block)
+    rewritten[commitment_index] = new_line
+    return rewritten, True
+
+
+def leading_spaces(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate synthetic API keys for Registry Relay perf testing."
@@ -192,9 +306,12 @@ def main() -> None:
     env_path.write_text(env_content, encoding="utf-8")
     # Restrict to owner read/write only.
     os.chmod(env_path, 0o600)
+    updated_configs = refresh_config_commitments(tokens)
 
     # Report only the path and variable names, never values.
     print(f"Wrote: {env_path}")
+    if updated_configs:
+        print(f"Updated fingerprint commitments in {updated_configs} perf config files")
     print("Variables written:")
     var_names = [
         "REGISTRY_RELAY_TOKEN",

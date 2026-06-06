@@ -207,7 +207,7 @@ or:
 X-Api-Key: <api-key>
 ```
 
-When both are present, `Authorization` wins. The gateway hashes the presented raw key with SHA-256 and compares it to fingerprints loaded from the environment variables named by `auth.api_keys[].hash_env`.
+When both are present, `Authorization` wins. The gateway hashes the presented raw key with SHA-256 and compares it to fingerprints resolved from `auth.api_keys[].fingerprint`.
 
 ### OIDC bearer JWT
 

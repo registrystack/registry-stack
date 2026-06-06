@@ -14,7 +14,7 @@ use registry_manifest_core::{
     self as metadata_core, CompiledMetadata, MetadataError as CoreMetadataError, MetadataManifest,
 };
 use registry_platform_ops::{
-    internal_config_hash, posture_safe_runtime_config_hash, ConfigProvenance,
+    internal_config_hash, is_sha256_config_hash, posture_safe_runtime_config_hash, ConfigProvenance,
 };
 use serde_json::Value;
 
@@ -27,6 +27,7 @@ use super::Config;
 pub struct LoadedConfig {
     pub runtime: Config,
     pub metadata: Option<CompiledMetadata>,
+    pub metadata_source_digest: Option<String>,
     pub provenance: ConfigProvenance,
 }
 
@@ -98,20 +99,54 @@ fn load_config_document(path: &Path) -> Result<LoadedConfigDocument, Error> {
 /// Load runtime config and, when configured, the split metadata manifest.
 pub fn load_with_metadata(path: &Path) -> Result<LoadedConfig, Error> {
     let document = load_config_document(path)?;
-    let metadata = match document.runtime.metadata.as_ref() {
-        Some(metadata) => {
-            let manifest_path = resolve_relative_to_config(path, &metadata.manifest_path);
-            let compiled = load_metadata_manifest(&manifest_path)?;
-            validate::validate_runtime_bindings(&document.runtime, &compiled)?;
-            Some(compiled)
-        }
-        None => None,
-    };
+    let (metadata, metadata_source_digest) = load_config_metadata(path, &document.runtime)?;
     Ok(LoadedConfig {
         runtime: document.runtime,
         metadata,
+        metadata_source_digest,
         provenance: document.provenance,
     })
+}
+
+pub fn load_config_metadata(
+    config_path: &Path,
+    config: &Config,
+) -> Result<(Option<CompiledMetadata>, Option<String>), Error> {
+    let (metadata, metadata_source_digest) = match config.metadata.as_ref() {
+        Some(metadata) => {
+            let manifest_path = resolve_relative_to_config(config_path, &metadata.source.path);
+            let (compiled, digest) = load_metadata_manifest_with_digest(&manifest_path)?;
+            if config.config_trust.is_some() && metadata.source.digest.is_none() {
+                tracing::error!(
+                    code = "metadata.manifest.digest_required",
+                    "governed configuration requires metadata.source.digest"
+                );
+                return Err(MetadataError::ManifestDigestRequired.into());
+            }
+            if let Some(expected) = metadata.source.digest.as_deref() {
+                if !is_sha256_config_hash(expected) {
+                    tracing::error!(
+                        code = "metadata.manifest.digest_invalid",
+                        "metadata manifest configured digest is not a canonical sha256 digest"
+                    );
+                    return Err(MetadataError::ManifestDigestInvalid.into());
+                }
+                if expected != digest {
+                    tracing::error!(
+                        code = "metadata.manifest.digest_mismatch",
+                        expected = %expected,
+                        actual = %digest,
+                        "metadata manifest configured digest does not match loaded manifest"
+                    );
+                    return Err(MetadataError::ManifestDigestMismatch.into());
+                }
+            }
+            validate::validate_runtime_bindings(config, &compiled)?;
+            (Some(compiled), Some(digest))
+        }
+        None => (None, None),
+    };
+    Ok((metadata, metadata_source_digest))
 }
 
 struct LoadedConfigDocument {
@@ -120,6 +155,12 @@ struct LoadedConfigDocument {
 }
 
 pub fn load_metadata_manifest(path: &Path) -> Result<CompiledMetadata, Error> {
+    load_metadata_manifest_with_digest(path).map(|(compiled, _)| compiled)
+}
+
+pub fn load_metadata_manifest_with_digest(
+    path: &Path,
+) -> Result<(CompiledMetadata, String), Error> {
     let raw = match fs::read_to_string(path) {
         Ok(s) => s,
         Err(err) => {
@@ -144,7 +185,16 @@ pub fn load_metadata_manifest(path: &Path) -> Result<CompiledMetadata, Error> {
             return Err(MetadataError::ManifestParseFailed.into());
         }
     };
-    metadata_core::compile_manifest(&manifest).map_err(|err| {
+    let digest = metadata_core::source_manifest_digest(&manifest).map_err(|err| {
+        tracing::error!(
+            code = "metadata.manifest.digest_invalid",
+            path = %path.display(),
+            error = %err,
+            "failed to compute metadata manifest digest"
+        );
+        Error::from(MetadataError::ManifestDigestInvalid)
+    })?;
+    let compiled = metadata_core::compile_manifest(&manifest).map_err(|err| {
         let code = match &err {
             CoreMetadataError::VersionUnsupported => "metadata.manifest.version_unsupported",
             CoreMetadataError::Validation { .. } => "metadata.manifest.validation_failed",
@@ -163,7 +213,8 @@ pub fn load_metadata_manifest(path: &Path) -> Result<CompiledMetadata, Error> {
                 Error::from(MetadataError::ManifestValidationFailed)
             }
         }
-    })
+    })?;
+    Ok((compiled, digest))
 }
 
 fn resolve_relative_to_config(config_path: &Path, target: &Path) -> PathBuf {
@@ -210,7 +261,16 @@ mod tests {
                 "cache_dir": "/var/lib/relay"
             },
             "audit": { "hash_secret_env": "AUDIT_SECRET_A" },
-            "auth": { "api_keys": [{ "key_id": "ops", "hash_env": "KEY_HASH_A" }] },
+            "auth": {
+                "api_keys": [{
+                    "key_id": "ops",
+                    "fingerprint": {
+                        "provider": "env",
+                        "name": "KEY_HASH_A",
+                        "commitment": "sha256:dd137781fa21a07dab0c30e53cde951cd974d201b8fa2183a5bef5f6ad3219d5"
+                    }
+                }]
+            },
             "datasets": [{
                 "id": "benefits",
                 "tables": [{
@@ -230,7 +290,9 @@ mod tests {
         changed["server"]["bind"] = json!("10.0.0.5:8080");
         changed["server"]["cache_dir"] = json!("/srv/relay");
         changed["audit"]["hash_secret_env"] = json!("AUDIT_SECRET_B");
-        changed["auth"]["api_keys"][0]["hash_env"] = json!("KEY_HASH_B");
+        changed["auth"]["api_keys"][0]["fingerprint"]["name"] = json!("KEY_HASH_B");
+        changed["auth"]["api_keys"][0]["fingerprint"]["commitment"] =
+            json!("sha256:3b25f6aee025d6b906b835f3d18d0a6a683c9ab8cb91c43517e2fe2c74f7be65");
         changed["datasets"][0]["tables"][0]["source"]["path"] = json!("/private/b.csv");
         changed["provenance"]["issuer"]["did"] = json!("did:web:issuer-b.example");
         changed["provenance"]["issuer"]["verification_method_id"] =

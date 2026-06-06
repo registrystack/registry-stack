@@ -2631,7 +2631,7 @@
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Carries either an API key or an OIDC JWT, depending on the gateway's `auth.mode`. API-key deployments hash the bearer with SHA-256 and compare against `config.auth.api_keys[*].hash_env`. OIDC deployments verify the JWT against the configured `auth.oidc` block and its JWKS."
+        "description": "Carries either an API key or an OIDC JWT, depending on the gateway's `auth.mode`. API-key deployments hash the bearer with SHA-256 and compare against `config.auth.api_keys[*].fingerprint`. OIDC deployments verify the JWT against the configured `auth.oidc` block and its JWKS."
       },
       "apiKeyAuth": {
         "type": "apiKey",

@@ -19,14 +19,19 @@
 //!   extracted principal.
 
 use std::net::{IpAddr, Ipv4Addr};
+use std::pin::Pin;
 use std::sync::Arc;
 
 use axum::extract::{ConnectInfo, Request, State};
+use axum::http::HeaderMap;
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
 use axum::Router;
 
+use crate::auth::Principal;
+use crate::error::AuthError;
 use crate::error::Error;
+use crate::runtime_config::RelayRuntimeHandle;
 
 use super::AuthProvider;
 
@@ -37,6 +42,34 @@ use super::AuthProvider;
 /// SHA-256 hashing (API-key path) or JWT signature verification plus
 /// occasional JWKS fetches (OIDC path).
 pub type AuthProviderRef = Arc<dyn AuthProvider>;
+
+/// Auth provider facade that delegates each request to the active runtime
+/// snapshot.
+///
+/// The protected router captures this facade once at startup. Governed apply
+/// can then swap `RelayRuntimeSnapshot.auth` and subsequent requests observe
+/// the new provider without rebuilding axum routes.
+pub struct RuntimeAuthProvider {
+    handle: Arc<RelayRuntimeHandle>,
+}
+
+impl RuntimeAuthProvider {
+    #[must_use]
+    pub fn new(handle: Arc<RelayRuntimeHandle>) -> Self {
+        Self { handle }
+    }
+}
+
+impl AuthProvider for RuntimeAuthProvider {
+    fn authenticate<'a>(
+        &'a self,
+        headers: &'a HeaderMap,
+        remote_addr: IpAddr,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<Principal, AuthError>> + Send + 'a>> {
+        let provider = self.handle.load_full().auth.clone();
+        Box::pin(async move { provider.authenticate(headers, remote_addr).await })
+    }
+}
 
 /// Attach an authentication layer to `router`.
 ///

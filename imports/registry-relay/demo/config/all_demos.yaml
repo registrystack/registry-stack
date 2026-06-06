@@ -13,7 +13,8 @@
 server:
   bind: 0.0.0.0:4242
 metadata:
-  manifest_path: all_demos.metadata.yaml
+  source:
+    path: all_demos.metadata.yaml
 
 catalog:
   title: Government Demo Registry Relay (All Demos)
@@ -23,7 +24,10 @@ auth:
   mode: api_key
   api_keys:
     - id: catalog_viewer
-      hash_env: CATALOG_VIEWER_HASH
+      fingerprint:
+        provider: env
+        name: CATALOG_VIEWER_HASH
+        commitment: sha256:8e1a97e93d31a6c8e57a2e47fede65dc52655e4c40c4ddb3836395a6c12ef17f
       scopes:
         - benefits_casework:metadata
         - clinic_capacity:metadata
@@ -31,7 +35,10 @@ auth:
         - education_registry:metadata
         - subject_registry:metadata
     - id: planning_analyst
-      hash_env: PLANNING_ANALYST_HASH
+      fingerprint:
+        provider: env
+        name: PLANNING_ANALYST_HASH
+        commitment: sha256:2ff911bb5cf147eafc2024bb123df859f731d087e02e7da96a2b4c49687b5320
       scopes:
         - benefits_casework:metadata
         - benefits_casework:aggregate
@@ -47,7 +54,10 @@ auth:
     # non-personal operational datasets (clinic, public works) where cross-demo
     # follow-ups need them. Explicitly NOT subject_registry:rows.
     - id: casework_system
-      hash_env: CASEWORK_SYSTEM_HASH
+      fingerprint:
+        provider: env
+        name: CASEWORK_SYSTEM_HASH
+        commitment: sha256:31eaa0644ee0593bf88482417b113d4e4f01b07848d5b2a628d97a01be899779
       scopes:
         - benefits_casework:metadata
         - benefits_casework:rows
@@ -63,7 +73,10 @@ auth:
         - education_registry:aggregate
         - subject_registry:metadata
     - id: verification_service
-      hash_env: VERIFICATION_SERVICE_HASH
+      fingerprint:
+        provider: env
+        name: VERIFICATION_SERVICE_HASH
+        commitment: sha256:a0bd21e279907c6fada5bb839a461a3e3014617dbb49c2e9a03e87e7f1f3344b
       scopes:
         - benefits_casework:evidence_verification
         - clinic_capacity:evidence_verification
@@ -73,13 +86,19 @@ auth:
     # linkage_service: the only persona with subject_registry:rows.
     # No row scopes on benefits or education; resolves aliases via the registry only.
     - id: linkage_service
-      hash_env: LINKAGE_SERVICE_HASH
+      fingerprint:
+        provider: env
+        name: LINKAGE_SERVICE_HASH
+        commitment: sha256:4e8a0c5713797fb8c03b4e710e3367185fdc383f9e33d9d1ab27dd19df29e4e2
       scopes:
         - subject_registry:metadata
         - subject_registry:rows
         - subject_registry:aggregate
     - id: operations_admin
-      hash_env: OPERATIONS_ADMIN_HASH
+      fingerprint:
+        provider: env
+        name: OPERATIONS_ADMIN_HASH
+        commitment: sha256:379ad2d16e275e6fc7de478764353606569f30507c6e73647dc28045d79b2f17
       scopes:
         - registry_relay:admin
         - registry_relay:ops_read

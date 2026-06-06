@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Tests for the `/docs` Scalar viewer and its vendored bundle.
 
-use std::env;
 use std::sync::Arc;
 
 use axum::http::StatusCode;
@@ -16,19 +15,11 @@ fn server() -> TestServer {
 }
 
 fn full_app_server() -> TestServer {
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/example.yaml");
-    let fingerprint = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    unsafe {
-        env::set_var("STATS_OFFICE_API_KEY_HASH", fingerprint);
-        env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", fingerprint);
-        env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", fingerprint);
-        env::set_var("OPERATIONS_OPERATOR_API_KEY_HASH", fingerprint);
-        env::set_var(
-            "REGISTRY_RELAY_AUDIT_HASH_SECRET",
+    let config = Arc::new(
+        registry_relay::config::test_support::load_example_config_for_tests(
             "relay-api-docs-audit-secret-32-bytes",
-        );
-    }
-    let config = Arc::new(registry_relay::config::load(&path).expect("example config loads"));
+        ),
+    );
     let auth = Arc::new(ApiKeyAuth::new(Vec::new()));
     let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
     TestServer::new(build_app(config, auth, sink).unwrap())

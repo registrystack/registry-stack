@@ -307,6 +307,12 @@ pub enum MetadataError {
     ManifestVersionUnsupported,
     #[error("metadata manifest validation failed")]
     ManifestValidationFailed,
+    #[error("metadata manifest digest invalid")]
+    ManifestDigestInvalid,
+    #[error("metadata manifest digest required")]
+    ManifestDigestRequired,
+    #[error("metadata manifest digest mismatch")]
+    ManifestDigestMismatch,
 }
 
 /// `runtime.binding.*` startup codes for runtime config references into the
@@ -1054,6 +1060,9 @@ impl MetadataError {
             MetadataError::ManifestParseFailed => "metadata.manifest.parse_failed",
             MetadataError::ManifestVersionUnsupported => "metadata.manifest.version_unsupported",
             MetadataError::ManifestValidationFailed => "metadata.manifest.validation_failed",
+            MetadataError::ManifestDigestInvalid => "metadata.manifest.digest_invalid",
+            MetadataError::ManifestDigestRequired => "metadata.manifest.digest_required",
+            MetadataError::ManifestDigestMismatch => "metadata.manifest.digest_mismatch",
         }
     }
 
@@ -1068,6 +1077,9 @@ impl MetadataError {
             MetadataError::ManifestParseFailed => "Metadata manifest parse failed",
             MetadataError::ManifestVersionUnsupported => "Metadata manifest version unsupported",
             MetadataError::ManifestValidationFailed => "Metadata manifest validation failed",
+            MetadataError::ManifestDigestInvalid => "Metadata manifest digest invalid",
+            MetadataError::ManifestDigestRequired => "Metadata manifest digest required",
+            MetadataError::ManifestDigestMismatch => "Metadata manifest digest mismatch",
         }
     }
 
@@ -1080,6 +1092,13 @@ impl MetadataError {
             }
             MetadataError::ManifestValidationFailed => {
                 "metadata manifest failed semantic validation"
+            }
+            MetadataError::ManifestDigestInvalid => "metadata manifest digest is not valid",
+            MetadataError::ManifestDigestRequired => {
+                "governed configuration requires metadata manifest digest"
+            }
+            MetadataError::ManifestDigestMismatch => {
+                "metadata manifest digest did not match configured digest"
             }
         }
     }

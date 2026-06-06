@@ -7,7 +7,8 @@ server:
   bind: 127.0.0.1:4256
 
 metadata:
-  manifest_path: evidence_registries.metadata.yaml
+  source:
+    path: evidence_registries.metadata.yaml
 
 catalog:
   title: Evidence Source Registries Demo
@@ -21,14 +22,20 @@ auth:
   mode: api_key
   api_keys:
     - id: verification_service
-      hash_env: VERIFICATION_SERVICE_HASH
+      fingerprint:
+        provider: env
+        name: VERIFICATION_SERVICE_HASH
+        commitment: sha256:a0bd21e279907c6fada5bb839a461a3e3014617dbb49c2e9a03e87e7f1f3344b
       scopes:
         - civil_registry:metadata
         - civil_registry:evidence_verification
         - farmer_registry:metadata
         - farmer_registry:evidence_verification
     - id: casework_system
-      hash_env: CASEWORK_SYSTEM_HASH
+      fingerprint:
+        provider: env
+        name: CASEWORK_SYSTEM_HASH
+        commitment: sha256:31eaa0644ee0593bf88482417b113d4e4f01b07848d5b2a628d97a01be899779
       scopes:
         - civil_registry:metadata
         - civil_registry:rows
