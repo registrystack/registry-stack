@@ -52,7 +52,7 @@ async fn federated_evaluate(
     let Some(Extension(state)) = state else {
         return federation_problem_response(FederationProblem::server_disabled());
     };
-    let Some(runtime) = state.federation_runtime.as_ref().cloned() else {
+    let Some(runtime) = state.federation_runtime() else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let outcome =

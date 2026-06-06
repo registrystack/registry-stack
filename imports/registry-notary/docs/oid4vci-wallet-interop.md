@@ -188,6 +188,12 @@ SD-JWT VC credential key, with its own issuer, audience, and a distinct header
 eSignet single-issuer path is unchanged, so an eSignet token and a Notary token
 each pass only their own verifier.
 
+During governed key rotation, keep the outgoing access-token key as
+`publish_only` and list it in `auth.access_token_signing.verification_key_ids`
+until existing Notary access tokens and pre-authorized codes have expired. The
+active `signing_key_id` signs new codes and access tokens; `verification_key_ids`
+only accepts older public keys for verification.
+
 ## Metadata And Offers
 
 Issuer metadata is derived from `oid4vci` and the configured credential

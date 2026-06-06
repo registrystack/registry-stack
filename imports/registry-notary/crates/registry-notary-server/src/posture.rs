@@ -8,9 +8,10 @@ use registry_notary_core::{
     SelfAttestationRateLimitMode, SigningKeyStatus, StandaloneRegistryNotaryConfig,
     CREDENTIAL_STATUS_STORAGE_REDIS, REPLAY_STORAGE_IN_MEMORY, REPLAY_STORAGE_REDIS,
 };
-use registry_platform_ops::{filter_posture_for_tier, PostureFilterError, PostureTier};
+use registry_platform_ops::{
+    filter_posture_for_tier, posture_safe_runtime_config_hash, PostureFilterError, PostureTier,
+};
 use serde_json::{json, Map, Value};
-use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
 use crate::{
@@ -100,11 +101,14 @@ impl PostureContext {
 
 pub(crate) async fn posture_document(
     state: &RegistryNotaryApiState,
+    tier: PostureTier,
 ) -> Result<Value, PostureFilterError> {
     let replay_ready = state.replay.check_ready().await;
     let replay_ready_bool = matches!(replay_ready, Ok(ReplayReadiness::Ready));
     let credential_status_ready = state.credential_status.check_ready().await.is_ok();
-    let signer_ready = state.signer_readiness.is_ready();
+    let signer_readiness = state.signer_readiness();
+    let signer_ready = signer_readiness.is_ready();
+    let config_apply = state.config_apply_posture();
     let readiness = if replay_ready_bool && credential_status_ready && signer_ready {
         "ready"
     } else if matches!(replay_ready, Ok(ReplayReadiness::Degraded))
@@ -121,6 +125,11 @@ pub(crate) async fn posture_document(
         .as_ref()
         .map(|context| (**context).clone())
         .unwrap_or_else(default_posture_context);
+    let signing_keys = state
+        .runtime_config()
+        .as_deref()
+        .map(signing_key_posture)
+        .unwrap_or_else(|| context.signing_keys.clone());
     let mut warnings = Vec::<String>::new();
     let mut findings = Vec::new();
     if production_like(context.instance.environment.as_str())
@@ -179,23 +188,37 @@ pub(crate) async fn posture_document(
             "readiness": readiness,
         },
         "configuration": {
-            "source": "local_file",
+            "source": config_apply.source.as_posture_str(),
             "dynamic_reload_supported": false,
-            "last_config_hash": context.config_hash,
-            "last_bundle_id": Value::Null,
-            "last_bundle_sequence": Value::Null,
-            "last_apply_result": Value::Null,
-            "last_apply_at": Value::Null,
-            "restart_required": false,
+            "last_config_hash": config_apply
+                .last_config_hash
+                .as_deref()
+                .unwrap_or(context.config_hash.as_str()),
+            "last_bundle_id": config_apply
+                .last_bundle_id
+                .as_ref()
+                .map_or(Value::Null, |value| json!(value)),
+            "last_bundle_sequence": config_apply
+                .last_bundle_sequence
+                .map_or(Value::Null, |value| json!(value)),
+            "last_apply_result": config_apply
+                .last_apply_result
+                .map_or(Value::Null, |value| json!(value.as_str())),
+            "last_apply_at": config_apply
+                .last_apply_at
+                .as_ref()
+                .map_or(Value::Null, |value| json!(value)),
+            "restart_required": config_apply.restart_required,
         },
         "standards_artifacts": standards_artifacts(state),
         "notary": {
             "claim_count": state.evidence.claims.len(),
             "source_connection_counts": context.source_connections.by_kind,
             "signing_keys": {
-                "active": context.signing_keys.active,
-                "publish_only": context.signing_keys.publish_only,
-                "disabled": context.signing_keys.disabled,
+                "active": signing_keys.active,
+                "publish_only": signing_keys.publish_only,
+                "disabled": signing_keys.disabled,
+                "readiness": signing_key_readiness_by_kid(state),
             },
             "credential_profile_count": state.evidence.credential_profiles.len(),
             "replay": {
@@ -234,7 +257,7 @@ pub(crate) async fn posture_document(
             },
         },
     });
-    filter_posture_for_tier(posture, PostureTier::Default)
+    filter_posture_for_tier(posture, tier)
 }
 
 fn default_posture_context() -> PostureContext {
@@ -276,36 +299,8 @@ fn default_posture_context() -> PostureContext {
 }
 
 fn config_hash(config: &StandaloneRegistryNotaryConfig) -> String {
-    let value = serde_json::to_value(config).unwrap_or(Value::Null);
-    let bytes = canonical_json_bytes(value);
-    let hex = Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    format!("sha256:{hex}")
-}
-
-fn canonical_json_bytes(mut value: Value) -> Vec<u8> {
-    sort_json(&mut value);
-    serde_json::to_vec(&value).unwrap_or_default()
-}
-
-fn sort_json(value: &mut Value) {
-    match value {
-        Value::Object(map) => {
-            let sorted = std::mem::take(map).into_iter().collect::<BTreeMap<_, _>>();
-            for (key, mut child) in sorted {
-                sort_json(&mut child);
-                map.insert(key, child);
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                sort_json(item);
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-    }
+    let value = serde_json::to_value(config).expect("notary config serializes to JSON");
+    posture_safe_runtime_config_hash(&value)
 }
 
 fn classify_replay_storage(storage: &str) -> String {
@@ -377,15 +372,29 @@ fn source_connection_counts_by_kind(
     counts
 }
 
+fn signing_key_readiness_by_kid(state: &RegistryNotaryApiState) -> BTreeMap<String, String> {
+    state
+        .signer_readiness()
+        .by_kid()
+        .into_iter()
+        .map(|entry| (entry.kid, entry.readiness.as_str().to_string()))
+        .collect()
+}
+
 fn signing_key_posture(config: &StandaloneRegistryNotaryConfig) -> SigningKeyPosture {
+    let now = u64::try_from(OffsetDateTime::now_utc().unix_timestamp()).unwrap_or(0);
     let mut active = Vec::new();
     let mut publish_only = Vec::new();
     let mut disabled = Vec::new();
     for (key_id, key) in &config.evidence.signing_keys {
         match key.status {
             SigningKeyStatus::Active => active.push(key_id.clone()),
-            SigningKeyStatus::PublishOnly => publish_only.push(key_id.clone()),
+            SigningKeyStatus::PublishOnly if key.may_publish_at(now) => {
+                publish_only.push(key_id.clone());
+            }
+            SigningKeyStatus::PublishOnly => {}
             SigningKeyStatus::Disabled => disabled.push(key_id.clone()),
+            _ => disabled.push(key_id.clone()),
         }
     }
     SigningKeyPosture {
@@ -527,7 +536,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn canonical_json_bytes_sorts_nested_objects() {
+    fn config_hash_is_stable_for_json_object_order() {
         let left = json!({
             "b": 1,
             "a": {
@@ -555,7 +564,10 @@ mod tests {
             "b": 1
         });
 
-        assert_eq!(canonical_json_bytes(left), canonical_json_bytes(right));
+        assert_eq!(
+            posture_safe_runtime_config_hash(&left),
+            posture_safe_runtime_config_hash(&right)
+        );
     }
 
     #[test]

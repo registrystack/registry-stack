@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
@@ -15,13 +15,19 @@ use axum::extract::MatchedPath;
 use axum::http::Request;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use clap::{Parser, Subcommand};
+use clap::{Args as ClapArgs, Parser, Subcommand};
 use ed25519_dalek::SigningKey;
 use registry_notary_core::{
     Oauth2ClientCredentialsSourceAuthConfig, SigningKeyProviderConfig, SourceAuthConfig,
     StandaloneRegistryNotaryConfig,
 };
-use registry_notary_server::{openapi_document, standalone_router, EvidenceIssuerRegistry};
+use registry_notary_server::config_governed::{
+    parse_candidate_config, resolve_tuf_config_candidate, ConfigGovernanceContext,
+    LocalTufConfigTargetRequest, RemoteTufConfigTargetRequest, TufConfigTargetRequest,
+};
+use registry_notary_server::{
+    compile_notary_runtime, openapi_document, standalone_router, EvidenceIssuerRegistry,
+};
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk};
 use registry_platform_httputil::{url as httputil_url, FetchUrlPolicy};
 use serde_json::{json, Value};
@@ -78,6 +84,11 @@ enum Command {
     },
     /// Print resolved config and required env vars.
     ExplainConfig,
+    /// Verify governed runtime configuration bundles without applying them.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// Generate starter files.
     Init {
         #[command(subcommand)]
@@ -129,6 +140,82 @@ enum Command {
     BuildInfo,
     /// Print a lightweight JSON schema for top-level config discovery.
     Schema,
+}
+
+#[derive(Debug, Subcommand)]
+enum ConfigCommand {
+    /// Verify a local or remote TUF-profile signed configuration target.
+    VerifyBundle(ConfigVerifyBundleArgs),
+    /// Apply a local or remote TUF-profile signed configuration target through the admin API.
+    ApplyBundle(ConfigApplyBundleArgs),
+}
+
+#[derive(Debug, Clone, ClapArgs)]
+struct ConfigVerifyBundleArgs {
+    /// Local TUF root metadata path.
+    #[arg(long)]
+    root_path: PathBuf,
+    /// Local TUF metadata directory.
+    #[arg(long)]
+    metadata_dir: Option<PathBuf>,
+    /// Local TUF targets directory.
+    #[arg(long)]
+    targets_dir: Option<PathBuf>,
+    /// Remote TUF metadata base URL.
+    #[arg(long)]
+    metadata_base_url: Option<String>,
+    /// Remote TUF targets base URL.
+    #[arg(long)]
+    targets_base_url: Option<String>,
+    /// Persistent TUF datastore directory.
+    #[arg(long)]
+    datastore_dir: PathBuf,
+    /// Target filename to verify.
+    #[arg(long)]
+    target_name: String,
+    /// Allow HTTP loopback remote TUF repositories for tests and local development.
+    #[arg(long)]
+    allow_dev_insecure_fetch_urls: bool,
+}
+
+#[derive(Debug, Clone, ClapArgs)]
+struct ConfigApplyBundleArgs {
+    /// Admin API base URL.
+    #[arg(long)]
+    admin_url: String,
+    /// Environment variable containing the admin bearer token.
+    #[arg(long)]
+    admin_token_env: String,
+    /// Local TUF root metadata path.
+    #[arg(long)]
+    root_path: PathBuf,
+    /// Local TUF metadata directory.
+    #[arg(long)]
+    metadata_dir: Option<PathBuf>,
+    /// Local TUF targets directory.
+    #[arg(long)]
+    targets_dir: Option<PathBuf>,
+    /// Remote TUF metadata base URL.
+    #[arg(long)]
+    metadata_base_url: Option<String>,
+    /// Remote TUF targets base URL.
+    #[arg(long)]
+    targets_base_url: Option<String>,
+    /// Persistent TUF datastore directory.
+    #[arg(long)]
+    datastore_dir: PathBuf,
+    /// Target filename to apply.
+    #[arg(long)]
+    target_name: String,
+    /// Allow HTTP loopback remote TUF repositories for tests and local development.
+    #[arg(long)]
+    allow_dev_insecure_fetch_urls: bool,
+    /// Allow plaintext HTTP for the admin apply URL in local development.
+    #[arg(long)]
+    allow_insecure_admin_url: bool,
+    /// Apply-only reference for a matching local root-transition approval record.
+    #[arg(long)]
+    local_approval_reference: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -286,6 +373,19 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
             explain_config(config_path, &env_report, args.bind)?;
             Ok(ExitCode::SUCCESS)
         }
+        Some(Command::Config {
+            command: ConfigCommand::VerifyBundle(verify_args),
+        }) => {
+            let config_path = required_config_path(args.config.as_deref())?;
+            config_verify_bundle(config_path, verify_args).await?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(Command::Config {
+            command: ConfigCommand::ApplyBundle(apply_args),
+        }) => {
+            config_apply_bundle(apply_args).await?;
+            Ok(ExitCode::SUCCESS)
+        }
         Some(Command::Init { template }) => {
             match template {
                 InitCommand::Dci {
@@ -392,6 +492,270 @@ async fn run_server(
     .with_graceful_shutdown(shutdown_signal())
     .await?;
     Ok(())
+}
+
+async fn config_verify_bundle(
+    config_path: &Path,
+    args: ConfigVerifyBundleArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let request = tuf_config_target_request_from_cli(&args)?;
+    let current_config = load_expanded_config(config_path)?;
+    let resolved = resolve_tuf_config_candidate(
+        &request,
+        &ConfigGovernanceContext::from_config(&current_config),
+    )
+    .await?;
+    let candidate_config = parse_candidate_config(&resolved.config_yaml)
+        .map_err(|detail| io::Error::new(io::ErrorKind::InvalidData, detail))?;
+    let _compiled = compile_notary_runtime(candidate_config)?;
+
+    let report = json!({
+        "result": "verified",
+        "source": resolved.source_label(),
+        "target_name": args.target_name,
+        "bundle_id": resolved.bundle_id,
+        "stream_id": resolved.stream_id,
+        "sequence": resolved.sequence,
+        "previous_config_hash": resolved.previous_config_hash,
+        "config_hash": resolved.internal_config_hash(),
+        "root_version": resolved.root_version,
+        "tuf_root_sha256": resolved.tuf_root_sha256,
+        "change_classes": resolved.change_classes.into_iter().collect::<Vec<_>>(),
+        "signer_kids": resolved.signer_kids.into_iter().collect::<Vec<_>>(),
+    });
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+async fn config_apply_bundle(
+    args: ConfigApplyBundleArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let token = admin_bearer_token_from_env(&args.admin_token_env)?;
+    let url = admin_config_apply_url(&args.admin_url, args.allow_insecure_admin_url)?;
+    let body = config_apply_bundle_request_body(&args)?;
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .no_proxy()
+        .build()?
+        .post(url)
+        .bearer_auth(token)
+        .json(&body)
+        .send()
+        .await?;
+    let status = response.status();
+    let response_bytes = response.bytes().await?;
+    let response_json: Value = serde_json::from_slice(&response_bytes).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("admin config apply response was not JSON: {err}"),
+        )
+    })?;
+    println!("{}", serde_json::to_string_pretty(&response_json)?);
+    if status.is_success() {
+        Ok(())
+    } else {
+        Err(format!("admin config apply returned HTTP {status}").into())
+    }
+}
+
+fn admin_bearer_token_from_env(env_name: &str) -> Result<String, io::Error> {
+    if !valid_env_key(env_name) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid --admin-token-env value: {env_name}"),
+        ));
+    }
+    let token = std::env::var(env_name).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("admin bearer token env var {env_name} is not set"),
+        )
+    })?;
+    let token = token.trim();
+    if token.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("admin bearer token env var {env_name} is empty"),
+        ));
+    }
+    Ok(token.to_string())
+}
+
+fn admin_config_apply_url(
+    admin_url: &str,
+    allow_insecure_admin_url: bool,
+) -> Result<reqwest::Url, io::Error> {
+    let admin_url = admin_url.trim();
+    if admin_url.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--admin-url must not be empty",
+        ));
+    }
+    let url = format!("{}/admin/v1/config/apply", admin_url.trim_end_matches('/'));
+    let url = reqwest::Url::parse(&url).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("--admin-url did not form a valid admin apply URL: {err}"),
+        )
+    })?;
+    if url.scheme() == "http" {
+        if !allow_insecure_admin_url {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "--admin-url must use https unless --allow-insecure-admin-url is set for local development",
+            ));
+        }
+        if !is_loopback_admin_url(&url) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "--allow-insecure-admin-url only permits http admin URLs on localhost or loopback addresses",
+            ));
+        }
+    }
+    Ok(url)
+}
+
+fn is_loopback_admin_url(url: &reqwest::Url) -> bool {
+    url.host_str().is_some_and(|host| {
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .parse::<IpAddr>()
+                .map(|addr| addr.is_loopback())
+                .unwrap_or(false)
+    })
+}
+
+fn config_apply_bundle_request_body(args: &ConfigApplyBundleArgs) -> Result<Value, io::Error> {
+    let mut body = json!({
+        "tuf": tuf_config_target_json_from_apply_cli(args)?,
+    });
+    if let Some(reference) = &args.local_approval_reference {
+        body["local_approval_reference"] = Value::String(reference.clone());
+    }
+    Ok(body)
+}
+
+fn tuf_config_target_json_from_apply_cli(args: &ConfigApplyBundleArgs) -> Result<Value, io::Error> {
+    let has_local_source = args.metadata_dir.is_some() || args.targets_dir.is_some();
+    let has_remote_source = args.metadata_base_url.is_some()
+        || args.targets_base_url.is_some()
+        || args.allow_dev_insecure_fetch_urls;
+
+    if has_local_source && has_remote_source {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "TUF request must choose exactly one local or remote source shape",
+        ));
+    }
+
+    if has_remote_source {
+        let metadata_base_url = args.metadata_base_url.clone().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "--metadata-base-url is required for remote TUF apply",
+            )
+        })?;
+        let targets_base_url = args.targets_base_url.clone().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "--targets-base-url is required for remote TUF apply",
+            )
+        })?;
+        return Ok(json!({
+            "root_path": path_for_json(&args.root_path),
+            "metadata_base_url": metadata_base_url,
+            "targets_base_url": targets_base_url,
+            "datastore_dir": path_for_json(&args.datastore_dir),
+            "target_name": &args.target_name,
+            "allow_dev_insecure_fetch_urls": args.allow_dev_insecure_fetch_urls,
+        }));
+    }
+
+    let metadata_dir = args.metadata_dir.clone().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--metadata-dir is required for local TUF apply",
+        )
+    })?;
+    let targets_dir = args.targets_dir.clone().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--targets-dir is required for local TUF apply",
+        )
+    })?;
+    Ok(json!({
+        "root_path": path_for_json(&args.root_path),
+        "metadata_dir": path_for_json(&metadata_dir),
+        "targets_dir": path_for_json(&targets_dir),
+        "datastore_dir": path_for_json(&args.datastore_dir),
+        "target_name": &args.target_name,
+    }))
+}
+
+fn path_for_json(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+fn tuf_config_target_request_from_cli(
+    args: &ConfigVerifyBundleArgs,
+) -> Result<TufConfigTargetRequest, io::Error> {
+    let has_local_source = args.metadata_dir.is_some() || args.targets_dir.is_some();
+    let has_remote_source = args.metadata_base_url.is_some()
+        || args.targets_base_url.is_some()
+        || args.allow_dev_insecure_fetch_urls;
+
+    if has_local_source && has_remote_source {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "TUF request must choose exactly one local or remote source shape",
+        ));
+    }
+
+    if has_remote_source {
+        let metadata_base_url = args.metadata_base_url.clone().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "--metadata-base-url is required for remote TUF verification",
+            )
+        })?;
+        let targets_base_url = args.targets_base_url.clone().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "--targets-base-url is required for remote TUF verification",
+            )
+        })?;
+        return Ok(TufConfigTargetRequest::Remote(
+            RemoteTufConfigTargetRequest {
+                root_path: args.root_path.clone(),
+                metadata_base_url,
+                targets_base_url,
+                datastore_dir: args.datastore_dir.clone(),
+                target_name: args.target_name.clone(),
+                allow_dev_insecure_fetch_urls: args.allow_dev_insecure_fetch_urls,
+            },
+        ));
+    }
+
+    let metadata_dir = args.metadata_dir.clone().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--metadata-dir is required for local TUF verification",
+        )
+    })?;
+    let targets_dir = args.targets_dir.clone().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--targets-dir is required for local TUF verification",
+        )
+    })?;
+    Ok(TufConfigTargetRequest::Local(LocalTufConfigTargetRequest {
+        root_path: args.root_path.clone(),
+        metadata_dir,
+        targets_dir,
+        datastore_dir: args.datastore_dir.clone(),
+        target_name: args.target_name.clone(),
+    }))
 }
 
 fn required_config_path(path: Option<&Path>) -> Result<&Path, Box<dyn std::error::Error>> {
@@ -1515,7 +1879,7 @@ fn redact_value(value: &mut Value) {
         Value::Object(map) => {
             for (key, value) in map {
                 let lower = key.to_ascii_lowercase();
-                if ["secret", "token", "jwk", "pin"]
+                if ["secret", "token", "jwk", "pin", "password"]
                     .iter()
                     .any(|term| lower.contains(term))
                     || (lower.contains("key") && lower != "signing_keys" && lower != "api_keys")
@@ -2179,6 +2543,361 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
     }
 
     #[test]
+    fn config_verify_bundle_cli_accepts_local_tuf_flags() {
+        let args = Args::try_parse_from([
+            "registry-notary",
+            "--config",
+            "/etc/registry-notary/current.yaml",
+            "config",
+            "verify-bundle",
+            "--root-path",
+            "/etc/registry-notary/tuf/metadata/1.root.json",
+            "--metadata-dir",
+            "/etc/registry-notary/tuf/metadata",
+            "--targets-dir",
+            "/etc/registry-notary/tuf/targets",
+            "--datastore-dir",
+            "/var/lib/registry-notary/tuf",
+            "--target-name",
+            "registry-notary.yaml",
+        ])
+        .expect("args parse");
+
+        assert_eq!(
+            args.config,
+            Some(PathBuf::from("/etc/registry-notary/current.yaml"))
+        );
+        let Some(Command::Config {
+            command: ConfigCommand::VerifyBundle(command),
+        }) = args.command
+        else {
+            panic!("expected config verify-bundle command");
+        };
+        assert_eq!(
+            command.root_path,
+            PathBuf::from("/etc/registry-notary/tuf/metadata/1.root.json")
+        );
+        assert_eq!(
+            command.metadata_dir,
+            Some(PathBuf::from("/etc/registry-notary/tuf/metadata"))
+        );
+        assert_eq!(
+            command.targets_dir,
+            Some(PathBuf::from("/etc/registry-notary/tuf/targets"))
+        );
+        assert_eq!(
+            command.datastore_dir,
+            PathBuf::from("/var/lib/registry-notary/tuf")
+        );
+        assert_eq!(command.target_name, "registry-notary.yaml");
+        assert_eq!(command.metadata_base_url, None);
+        assert_eq!(command.targets_base_url, None);
+        assert!(!command.allow_dev_insecure_fetch_urls);
+    }
+
+    #[test]
+    fn config_verify_bundle_cli_accepts_remote_tuf_flags() {
+        let args = Args::try_parse_from([
+            "registry-notary",
+            "--config",
+            "/etc/registry-notary/current.yaml",
+            "config",
+            "verify-bundle",
+            "--root-path",
+            "/etc/registry-notary/tuf/metadata/1.root.json",
+            "--metadata-base-url",
+            "https://config.example.gov/metadata",
+            "--targets-base-url",
+            "https://config.example.gov/targets",
+            "--datastore-dir",
+            "/var/lib/registry-notary/tuf",
+            "--target-name",
+            "registry-notary.yaml",
+            "--allow-dev-insecure-fetch-urls",
+        ])
+        .expect("args parse");
+
+        let Some(Command::Config {
+            command: ConfigCommand::VerifyBundle(command),
+        }) = args.command
+        else {
+            panic!("expected config verify-bundle command");
+        };
+        assert_eq!(
+            command.root_path,
+            PathBuf::from("/etc/registry-notary/tuf/metadata/1.root.json")
+        );
+        assert_eq!(command.metadata_dir, None);
+        assert_eq!(command.targets_dir, None);
+        assert_eq!(
+            command.metadata_base_url.as_deref(),
+            Some("https://config.example.gov/metadata")
+        );
+        assert_eq!(
+            command.targets_base_url.as_deref(),
+            Some("https://config.example.gov/targets")
+        );
+        assert_eq!(
+            command.datastore_dir,
+            PathBuf::from("/var/lib/registry-notary/tuf")
+        );
+        assert_eq!(command.target_name, "registry-notary.yaml");
+        assert!(command.allow_dev_insecure_fetch_urls);
+    }
+
+    #[test]
+    fn config_verify_bundle_cli_requires_target_name() {
+        let err = Args::try_parse_from([
+            "registry-notary",
+            "--config",
+            "/etc/registry-notary/current.yaml",
+            "config",
+            "verify-bundle",
+            "--root-path",
+            "/etc/registry-notary/tuf/metadata/1.root.json",
+            "--metadata-dir",
+            "/etc/registry-notary/tuf/metadata",
+            "--targets-dir",
+            "/etc/registry-notary/tuf/targets",
+            "--datastore-dir",
+            "/var/lib/registry-notary/tuf",
+        ])
+        .expect_err("missing target-name is rejected");
+
+        assert!(err.to_string().contains("--target-name"));
+    }
+
+    #[test]
+    fn config_apply_bundle_cli_accepts_local_tuf_flags_without_config() {
+        let args = Args::try_parse_from([
+            "registry-notary",
+            "config",
+            "apply-bundle",
+            "--admin-url",
+            "https://notary-admin.example.gov",
+            "--admin-token-env",
+            "REGISTRY_NOTARY_ADMIN_TOKEN",
+            "--root-path",
+            "/etc/registry-notary/tuf/metadata/1.root.json",
+            "--metadata-dir",
+            "/etc/registry-notary/tuf/metadata",
+            "--targets-dir",
+            "/etc/registry-notary/tuf/targets",
+            "--datastore-dir",
+            "/var/lib/registry-notary/tuf",
+            "--target-name",
+            "registry-notary.yaml",
+            "--local-approval-reference",
+            "ROOT-2026-Q2",
+        ])
+        .expect("args parse");
+
+        assert_eq!(args.config, None);
+        let Some(Command::Config {
+            command: ConfigCommand::ApplyBundle(command),
+        }) = args.command
+        else {
+            panic!("expected config apply-bundle command");
+        };
+        assert_eq!(command.admin_url, "https://notary-admin.example.gov");
+        assert_eq!(command.admin_token_env, "REGISTRY_NOTARY_ADMIN_TOKEN");
+        assert_eq!(
+            command.root_path,
+            PathBuf::from("/etc/registry-notary/tuf/metadata/1.root.json")
+        );
+        assert_eq!(
+            command.metadata_dir,
+            Some(PathBuf::from("/etc/registry-notary/tuf/metadata"))
+        );
+        assert_eq!(
+            command.targets_dir,
+            Some(PathBuf::from("/etc/registry-notary/tuf/targets"))
+        );
+        assert_eq!(
+            command.datastore_dir,
+            PathBuf::from("/var/lib/registry-notary/tuf")
+        );
+        assert_eq!(command.target_name, "registry-notary.yaml");
+        assert_eq!(
+            command.local_approval_reference.as_deref(),
+            Some("ROOT-2026-Q2")
+        );
+        assert_eq!(command.metadata_base_url, None);
+        assert_eq!(command.targets_base_url, None);
+        assert!(!command.allow_dev_insecure_fetch_urls);
+    }
+
+    #[test]
+    fn config_apply_bundle_cli_accepts_remote_tuf_flags() {
+        let args = Args::try_parse_from([
+            "registry-notary",
+            "config",
+            "apply-bundle",
+            "--admin-url",
+            "https://notary-admin.example.gov",
+            "--admin-token-env",
+            "REGISTRY_NOTARY_ADMIN_TOKEN",
+            "--root-path",
+            "/etc/registry-notary/tuf/metadata/1.root.json",
+            "--metadata-base-url",
+            "https://config.example.gov/metadata",
+            "--targets-base-url",
+            "https://config.example.gov/targets",
+            "--datastore-dir",
+            "/var/lib/registry-notary/tuf",
+            "--target-name",
+            "registry-notary.yaml",
+            "--allow-dev-insecure-fetch-urls",
+        ])
+        .expect("args parse");
+
+        let Some(Command::Config {
+            command: ConfigCommand::ApplyBundle(command),
+        }) = args.command
+        else {
+            panic!("expected config apply-bundle command");
+        };
+        assert_eq!(command.metadata_dir, None);
+        assert_eq!(command.targets_dir, None);
+        assert_eq!(
+            command.metadata_base_url.as_deref(),
+            Some("https://config.example.gov/metadata")
+        );
+        assert_eq!(
+            command.targets_base_url.as_deref(),
+            Some("https://config.example.gov/targets")
+        );
+        assert!(command.allow_dev_insecure_fetch_urls);
+        assert!(!command.allow_insecure_admin_url);
+    }
+
+    #[test]
+    fn config_apply_bundle_cli_parses_insecure_admin_url_dev_opt_in() {
+        let args = Args::try_parse_from([
+            "registry-notary",
+            "config",
+            "apply-bundle",
+            "--admin-url",
+            "http://127.0.0.1:8080",
+            "--allow-insecure-admin-url",
+            "--admin-token-env",
+            "REGISTRY_NOTARY_ADMIN_TOKEN",
+            "--root-path",
+            "/etc/registry-notary/tuf/metadata/1.root.json",
+            "--metadata-dir",
+            "/etc/registry-notary/tuf/metadata",
+            "--targets-dir",
+            "/etc/registry-notary/tuf/targets",
+            "--datastore-dir",
+            "/var/lib/registry-notary/tuf",
+            "--target-name",
+            "registry-notary.yaml",
+        ])
+        .expect("args parse");
+
+        let Some(Command::Config {
+            command: ConfigCommand::ApplyBundle(command),
+        }) = args.command
+        else {
+            panic!("expected config apply-bundle command");
+        };
+        assert_eq!(command.admin_url, "http://127.0.0.1:8080");
+        assert!(command.allow_insecure_admin_url);
+    }
+
+    #[test]
+    fn admin_apply_url_rejects_remote_plaintext_even_with_dev_opt_in() {
+        let error = admin_config_apply_url("http://notary-admin.example.gov", true)
+            .expect_err("remote plaintext admin URL must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("localhost or loopback addresses"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn admin_apply_url_accepts_loopback_plaintext_only_with_dev_opt_in() {
+        let error = admin_config_apply_url("http://127.0.0.1:8080", false)
+            .expect_err("loopback plaintext still requires explicit opt-in");
+        assert!(error.to_string().contains("--allow-insecure-admin-url"));
+
+        let url = admin_config_apply_url("http://localhost:8080", true)
+            .expect("localhost plaintext is allowed with explicit opt-in");
+        assert_eq!(url.as_str(), "http://localhost:8080/admin/v1/config/apply");
+    }
+
+    #[test]
+    fn config_apply_bundle_request_body_builds_local_tuf_json() {
+        let args = ConfigApplyBundleArgs {
+            admin_url: "https://notary-admin.example.gov".to_string(),
+            admin_token_env: "REGISTRY_NOTARY_ADMIN_TOKEN".to_string(),
+            root_path: PathBuf::from("/etc/registry-notary/tuf/metadata/1.root.json"),
+            metadata_dir: Some(PathBuf::from("/etc/registry-notary/tuf/metadata")),
+            targets_dir: Some(PathBuf::from("/etc/registry-notary/tuf/targets")),
+            metadata_base_url: None,
+            targets_base_url: None,
+            datastore_dir: PathBuf::from("/var/lib/registry-notary/tuf"),
+            target_name: "registry-notary.yaml".to_string(),
+            allow_dev_insecure_fetch_urls: false,
+            allow_insecure_admin_url: false,
+            local_approval_reference: Some("ROOT-2026-Q2".to_string()),
+        };
+
+        let body = config_apply_bundle_request_body(&args).expect("body builds");
+
+        assert_eq!(
+            body,
+            json!({
+                "tuf": {
+                    "root_path": "/etc/registry-notary/tuf/metadata/1.root.json",
+                    "metadata_dir": "/etc/registry-notary/tuf/metadata",
+                    "targets_dir": "/etc/registry-notary/tuf/targets",
+                    "datastore_dir": "/var/lib/registry-notary/tuf",
+                    "target_name": "registry-notary.yaml"
+                },
+                "local_approval_reference": "ROOT-2026-Q2"
+            })
+        );
+    }
+
+    #[test]
+    fn config_apply_bundle_request_body_builds_remote_tuf_json() {
+        let args = ConfigApplyBundleArgs {
+            admin_url: "https://notary-admin.example.gov".to_string(),
+            admin_token_env: "REGISTRY_NOTARY_ADMIN_TOKEN".to_string(),
+            root_path: PathBuf::from("/etc/registry-notary/tuf/metadata/1.root.json"),
+            metadata_dir: None,
+            targets_dir: None,
+            metadata_base_url: Some("https://config.example.gov/metadata".to_string()),
+            targets_base_url: Some("https://config.example.gov/targets".to_string()),
+            datastore_dir: PathBuf::from("/var/lib/registry-notary/tuf"),
+            target_name: "registry-notary.yaml".to_string(),
+            allow_dev_insecure_fetch_urls: true,
+            allow_insecure_admin_url: false,
+            local_approval_reference: None,
+        };
+
+        let body = config_apply_bundle_request_body(&args).expect("body builds");
+
+        assert_eq!(
+            body,
+            json!({
+                "tuf": {
+                    "root_path": "/etc/registry-notary/tuf/metadata/1.root.json",
+                    "metadata_base_url": "https://config.example.gov/metadata",
+                    "targets_base_url": "https://config.example.gov/targets",
+                    "datastore_dir": "/var/lib/registry-notary/tuf",
+                    "target_name": "registry-notary.yaml",
+                    "allow_dev_insecure_fetch_urls": true
+                }
+            })
+        );
+    }
+
+    #[test]
     fn build_info_reports_compiled_pkcs11_capability() {
         let info = build_info();
         assert_eq!(info["package"], "registry-notary-bin");
@@ -2250,6 +2969,43 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
         );
     }
 
+    #[tokio::test]
+    async fn run_server_compiles_runtime_before_binding_listener() {
+        let held_listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("test listener binds");
+        let held_addr = held_listener
+            .local_addr()
+            .expect("test listener exposes local addr");
+        let config_path = std::env::temp_dir().join(format!(
+            "registry-notary-invalid-startup-{}.yaml",
+            Ulid::new()
+        ));
+        let config = doctor_live_test_config("http://127.0.0.1:1");
+        fs::write(
+            &config_path,
+            serde_norway::to_string(&config).expect("startup config serializes"),
+        )
+        .expect("invalid startup config writes");
+
+        let error = run_server(&config_path, Some(held_addr))
+            .await
+            .expect_err("invalid runtime config fails before serving");
+        let message = error.to_string();
+
+        assert!(
+            message.contains("TEST_DOCTOR_OAUTH_CLIENT_ID")
+                || message.contains("audit.hash_secret_env"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            !message.contains("Address already in use"),
+            "server bound before compile failure: {message}"
+        );
+
+        let _ = fs::remove_file(config_path);
+        drop(held_listener);
+    }
+
     #[test]
     fn bind_cli_override_wins_over_env() {
         let _guard = ENV_LOCK.lock().expect("env lock is not poisoned");
@@ -2286,6 +3042,7 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
     fn redaction_covers_pin_key_and_credential_names() {
         let mut value = json!({
             "pin": "1234",
+            "password_env": "PKCS12_PASSWORD_ENV_NAME",
             "key": "plain-key",
             "credential": "raw-credential",
             "credential_env": "SOURCE_CREDENTIAL",
@@ -2309,6 +3066,7 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
         redact_value(&mut value);
 
         assert_eq!(value["pin"], json!("[redacted]"));
+        assert_eq!(value["password_env"], json!("[redacted]"));
         assert_eq!(value["key"], json!("[redacted]"));
         assert_eq!(value["credential"], json!("[redacted]"));
         assert_eq!(value["credential_env"], json!("[redacted]"));
@@ -2360,6 +3118,7 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
                 alg: "EdDSA".to_string(),
                 kid: "did:web:issuer.example#hsm".to_string(),
                 status: registry_notary_core::SigningKeyStatus::Active,
+                publish_until_unix_seconds: None,
                 private_jwk_env: String::new(),
                 public_jwk_env: "TEST_DOCTOR_PKCS11_PUBLIC_JWK".to_string(),
                 module_path: "/definitely/missing/pkcs11.so".to_string(),

@@ -8,6 +8,7 @@
 pub mod api;
 #[cfg(feature = "registry-notary-cel")]
 pub mod cel_worker;
+pub mod config_governed;
 pub(crate) mod credential_status;
 pub(crate) mod federation;
 pub(crate) mod metrics;
@@ -34,4 +35,7 @@ pub use self_attestation_rate_limit::{
     SelfAttestationRateLimitBucket, SelfAttestationRateLimitError, SelfAttestationRateLimitKeys,
     SelfAttestationRateLimiter,
 };
-pub use standalone::{standalone_router, EvidenceIssuerRegistry, StandaloneServerError};
+pub use standalone::{
+    compile_notary_runtime, notary_router_from_runtime, standalone_router, EvidenceIssuerRegistry,
+    NotaryRuntimeSnapshot, StandaloneServerError,
+};

@@ -21,6 +21,9 @@ that route.
 | `GET /healthz` | `health` | not exposed | not exposed |
 | `GET /ready` | `ready` | not exposed | not exposed |
 | `POST /admin/v1/reload` | `admin_reload` | not exposed | not exposed |
+| `POST /admin/v1/config/verify` | not exposed | not exposed | not exposed |
+| `POST /admin/v1/config/dry-run` | not exposed | not exposed | not exposed |
+| `POST /admin/v1/config/apply` | not exposed | not exposed | not exposed |
 | `GET /openapi.json` | `openapi_json` | not exposed | not exposed |
 | `GET /.well-known/evidence-service` | `service_document` | `service_document` | `serviceDocument` |
 | `GET /.well-known/evidence/jwks.json` | `issuer_jwks`, `refresh_jwks`, `raw_issuer_jwks` | `issuer_jwks`, `refresh_jwks`, `raw_issuer_jwks` | `issuerJwks`, `refreshJwks`, `rawIssuerJwks` |

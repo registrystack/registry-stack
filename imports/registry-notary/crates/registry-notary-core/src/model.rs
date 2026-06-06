@@ -1301,6 +1301,58 @@ pub struct EvidenceAuditEvent {
     pub matching_error_code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batch_items: Option<Vec<EvidenceBatchItemAuditEvent>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<ConfigAuditEvent>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ConfigAuditEvent {
+    pub action: String,
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_id: Option<String>,
+    #[serde(
+        default,
+        rename = "bundle_sequence",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sequence: Option<u64>,
+    pub signer_kids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_config_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_hash: Option<String>,
+    pub product_validation_result: String,
+    pub apply_result: String,
+    pub posture_result: String,
+    pub applied: bool,
+    pub restart_required: bool,
+    pub change_classes: Vec<String>,
+    pub break_glass: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub break_glass_approval_reference: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub break_glass_approved_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub break_glass_reason_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub break_glass_emergency_change_class: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub break_glass_expires_at_unix_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub break_glass_rate_limit_identity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_approval_reference: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_approval_approved_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_approval_reason_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_approval_change_class: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_approval_expires_at_unix_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_approval_rate_limit_identity: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1634,6 +1686,7 @@ mod tests {
                 matching_outcome: Some("matched".to_string()),
                 matching_error_code: None,
             }]),
+            config: None,
         };
 
         let value = serde_json::to_value(&event).expect("audit event serializes");

@@ -40,3 +40,9 @@ ulid.workspace = true
 
 [dev-dependencies]
 axum-test = { version = "20" }
+chrono = { version = "0.4" }
+registry-platform-config.workspace = true
+registry-platform-ops.workspace = true
+tempfile = { version = "3" }
+tough = { version = "0.22.0" }
+wiremock = { version = "0.6" }

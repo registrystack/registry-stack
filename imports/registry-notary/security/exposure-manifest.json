@@ -67,6 +67,77 @@
     {
       "service": "registry-notary",
       "listener": "public",
+      "method": "POST",
+      "path": "/admin/v1/config/verify",
+      "feature": null,
+      "audience": "operator",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "registry_notary:admin"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "admin",
+      "data_classification": "operational",
+      "notes": "Protected Registry Notary route. Standalone mode validates the candidate and reports restart_required until a swappable runtime config handle exists.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::admin_config_apply_routes_are_admin_only"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "POST",
+      "path": "/admin/v1/config/dry-run",
+      "feature": null,
+      "audience": "operator",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "registry_notary:admin"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "admin",
+      "data_classification": "operational",
+      "notes": "Protected Registry Notary route. Standalone mode validates the candidate and reports rejected_restart_required without mutating runtime state.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::admin_config_apply_routes_are_admin_only",
+        "crates/registry-notary-server/tests/standalone_http.rs::admin_config_dry_run_reports_restart_required_without_mutating_posture"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "POST",
+      "path": "/admin/v1/config/apply",
+      "feature": null,
+      "audience": "operator",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "registry_notary:admin"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "admin",
+      "data_classification": "operational",
+      "notes": "Protected Registry Notary route. Standalone mode rejects apply as restart_required until a swappable runtime config handle exists.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::admin_config_apply_routes_are_admin_only",
+        "crates/registry-notary-server/tests/standalone_http.rs::admin_config_apply_rejects_restart_required_without_mutating_posture"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
       "method": "GET",
       "path": "/admin/v1/posture",
       "feature": null,

@@ -338,6 +338,276 @@
         "x-registry-notary-catch-all": true
       }
     },
+    "/admin/v1/config/apply": {
+      "post": {
+        "summary": "Attempt to apply a candidate runtime config",
+        "description": "Standalone mode validates an inline candidate config or verifies a local or remote signed TUF config target. Governed signed credential issuer key rotations can swap the issuer runtime after anti-rollback acceptance. Break-glass apply additionally requires approval details, a locally configured rate-limit policy, and a signed emergency change class. Other changes remain restart-required.",
+        "operationId": "adminConfigApply",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Compatible signed config was applied without restart",
+            "content": {
+              "application/json": {
+                "example": {
+                  "applied": true,
+                  "bundle_id": "demo-bundle",
+                  "posture_result": "accepted",
+                  "restart_required": false,
+                  "result": "applied",
+                  "sequence": 2
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Candidate config is invalid",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "config.candidate_invalid",
+                  "detail": "candidate config could not be parsed",
+                  "status": 400,
+                  "title": "Candidate config invalid",
+                  "type": "https://docs.registry-notary.dev/problems/config/candidate_invalid"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller lacks registry_notary:admin scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.scope_denied",
+                  "detail": "missing required scope",
+                  "status": 403,
+                  "title": "Scope denied",
+                  "type": "https://docs.registry-notary.dev/problems/auth/scope_denied"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Candidate config requires restart and was not applied",
+            "content": {
+              "application/json": {
+                "example": {
+                  "applied": false,
+                  "bundle_id": "demo-bundle",
+                  "posture_result": "rejected",
+                  "restart_required": true,
+                  "result": "rejected_restart_required",
+                  "sequence": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/v1/config/dry-run": {
+      "post": {
+        "summary": "Dry-run a candidate runtime config",
+        "description": "Standalone mode validates an inline candidate config or verifies a local or remote signed TUF config target. Inline candidates and non-swappable changes report rejected_restart_required without mutating runtime state.",
+        "operationId": "adminConfigDryRun",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Candidate config was evaluated without applying",
+            "content": {
+              "application/json": {
+                "example": {
+                  "applied": false,
+                  "bundle_id": "demo-bundle",
+                  "posture_result": "rejected",
+                  "restart_required": true,
+                  "result": "rejected_restart_required",
+                  "sequence": 1
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Candidate config is invalid",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "config.candidate_invalid",
+                  "detail": "candidate config could not be parsed",
+                  "status": 400,
+                  "title": "Candidate config invalid",
+                  "type": "https://docs.registry-notary.dev/problems/config/candidate_invalid"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller lacks registry_notary:admin scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.scope_denied",
+                  "detail": "missing required scope",
+                  "status": 403,
+                  "title": "Scope denied",
+                  "type": "https://docs.registry-notary.dev/problems/auth/scope_denied"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/v1/config/verify": {
+      "post": {
+        "summary": "Validate a candidate runtime config",
+        "description": "Standalone mode parses and validates an inline candidate config or verifies a local or remote signed TUF config target. Inline candidates remain restart-required. Governed signed credential issuer key rotations may be hot-applied when anti-rollback state accepts the bundle.",
+        "operationId": "adminConfigVerify",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Candidate config parsed and validated",
+            "content": {
+              "application/json": {
+                "example": {
+                  "applied": false,
+                  "bundle_id": "demo-bundle",
+                  "posture_result": "not_applied",
+                  "restart_required": true,
+                  "result": "verified",
+                  "sequence": 1
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Candidate config is invalid",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "config.candidate_invalid",
+                  "detail": "candidate config could not be parsed",
+                  "status": 400,
+                  "title": "Candidate config invalid",
+                  "type": "https://docs.registry-notary.dev/problems/config/candidate_invalid"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller lacks registry_notary:admin scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.scope_denied",
+                  "detail": "missing required scope",
+                  "status": 403,
+                  "title": "Scope denied",
+                  "type": "https://docs.registry-notary.dev/problems/auth/scope_denied"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/v1/credentials/{credential_id}/status": {
       "post": {
         "summary": "Update credential lifecycle status",
@@ -469,11 +739,12 @@
     },
     "/admin/v1/reload": {
       "post": {
-        "summary": "Request a standalone config reload",
+        "summary": "No-op standalone reload marker",
+        "description": "Standalone mode does not reload runtime configuration. The endpoint returns a no-op response until a runtime config handle supports reload.",
         "operationId": "adminReload",
         "responses": {
           "200": {
-            "description": "Standalone router accepted the reload request",
+            "description": "No-op response; runtime configuration was not reloaded",
             "content": {
               "application/json": {
                 "example": {
@@ -2549,6 +2820,66 @@
         },
         "additionalProperties": false
       },
+      "BreakGlassApproval": {
+        "type": "object",
+        "required": [
+          "approved_by",
+          "reason",
+          "approval_reference",
+          "emergency_change_class",
+          "expires_at_unix_seconds",
+          "rate_limit_identity"
+        ],
+        "properties": {
+          "approval_reference": {
+            "type": "string",
+            "minLength": 1
+          },
+          "approved_by": {
+            "type": "string",
+            "minLength": 1
+          },
+          "emergency_change_class": {
+            "type": "string",
+            "description": "Must appear in the signed target change_classes and be authorized by local trust roots.",
+            "minLength": 1
+          },
+          "expires_at_unix_seconds": {
+            "type": "integer",
+            "format": "uint64"
+          },
+          "rate_limit_identity": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reason": {
+            "type": "string",
+            "description": "Local approval reason. Audit records store only a hash of this value.",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "BreakGlassRateLimit": {
+        "type": "object",
+        "required": [
+          "max_accepted",
+          "window_seconds"
+        ],
+        "properties": {
+          "max_accepted": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 1
+          },
+          "window_seconds": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
+      },
       "ClaimProvenance": {
         "type": "object",
         "required": [
@@ -2650,6 +2981,53 @@
           "value": {
             "type": "object",
             "description": "Claim value. The runtime may return any JSON value."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ConfigApplyRequest": {
+        "type": "object",
+        "properties": {
+          "break_glass": {
+            "type": "boolean",
+            "description": "Apply-only emergency mode. Verify and dry-run reject break-glass requests.",
+            "default": false
+          },
+          "break_glass_approval": {
+            "$ref": "#/components/schemas/BreakGlassApproval"
+          },
+          "bundle_id": {
+            "type": "string",
+            "description": "Operator-visible candidate identifier. Signed TUF targets may derive it from target metadata."
+          },
+          "config_yaml": {
+            "type": "string",
+            "description": "Inline YAML candidate for verify and dry-run diagnostics."
+          },
+          "local_approval_reference": {
+            "type": "string",
+            "description": "Apply-only reference for a matching local approval record used by root_transition bundles."
+          },
+          "previous_config_hash": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "root_version": {
+            "type": "integer",
+            "format": "uint64"
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "Monotonic bundle sequence. Signed TUF targets may derive it from target metadata."
+          },
+          "stream_id": {
+            "type": "string",
+            "description": "Governance stream identifier used by anti-rollback state.",
+            "default": "default"
+          },
+          "tuf": {
+            "$ref": "#/components/schemas/TufConfigTargetRequest"
           }
         },
         "additionalProperties": false
@@ -3141,6 +3519,34 @@
         },
         "additionalProperties": false
       },
+      "LocalTufConfigTargetRequest": {
+        "type": "object",
+        "required": [
+          "root_path",
+          "metadata_dir",
+          "targets_dir",
+          "datastore_dir",
+          "target_name"
+        ],
+        "properties": {
+          "datastore_dir": {
+            "type": "string"
+          },
+          "metadata_dir": {
+            "type": "string"
+          },
+          "root_path": {
+            "type": "string"
+          },
+          "target_name": {
+            "type": "string"
+          },
+          "targets_dir": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "MatchingMetadata": {
         "type": "object",
         "required": [
@@ -3235,6 +3641,42 @@
           }
         },
         "additionalProperties": true
+      },
+      "RemoteTufConfigTargetRequest": {
+        "type": "object",
+        "required": [
+          "root_path",
+          "metadata_base_url",
+          "targets_base_url",
+          "datastore_dir",
+          "target_name"
+        ],
+        "properties": {
+          "allow_dev_insecure_fetch_urls": {
+            "type": "boolean",
+            "default": false
+          },
+          "datastore_dir": {
+            "type": "string"
+          },
+          "metadata_base_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "HTTPS TUF metadata base URL. HTTP loopback is accepted only when allow_dev_insecure_fetch_urls is true."
+          },
+          "root_path": {
+            "type": "string"
+          },
+          "target_name": {
+            "type": "string"
+          },
+          "targets_base_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "HTTPS TUF targets base URL. HTTP loopback is accepted only when allow_dev_insecure_fetch_urls is true."
+          }
+        },
+        "additionalProperties": false
       },
       "RenderEvaluationRequest": {
         "type": "object",
@@ -3425,6 +3867,16 @@
             "example": "Bearer"
           }
         }
+      },
+      "TufConfigTargetRequest": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/LocalTufConfigTargetRequest"
+          },
+          {
+            "$ref": "#/components/schemas/RemoteTufConfigTargetRequest"
+          }
+        ]
       }
     },
     "securitySchemes": {

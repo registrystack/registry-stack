@@ -101,5 +101,6 @@ pub(super) fn federation_audit_event(
         matching_outcome: None,
         matching_error_code: None,
         batch_items: None,
+        config: None,
     }
 }

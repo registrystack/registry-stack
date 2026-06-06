@@ -28,6 +28,30 @@
     },
     {
       "listener": "public",
+      "path": "/admin/v1/config/verify",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/admin/v1/config/dry-run",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/admin/v1/config/apply",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
       "path": "/admin/v1/posture",
       "methods": [
         "GET"

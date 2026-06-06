@@ -32,6 +32,7 @@ jsonwebtoken = { version = "10", default-features = false, features = ["rust_cry
 registry-platform-audit = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-audit" }
 registry-platform-authcommon = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-authcommon" }
 registry-platform-cache = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-cache", features = ["redis"] }
+registry-platform-config = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-config" }
 registry-platform-crypto = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-crypto" }
 registry-platform-httpsec = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-httpsec" }
 registry-platform-httputil = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-httputil" }

@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Standalone Registry Notary routes.
 
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Arc, RwLock},
+    time::Duration,
+};
 
 use axum::body::{to_bytes, Body, Bytes};
 use axum::extract::rejection::JsonRejection;
@@ -22,17 +26,19 @@ use registry_notary_core::tokens::{
 use registry_notary_core::RegistryNotaryCelConfig;
 use registry_notary_core::{
     AccessMode, BatchEvaluateItemRequest, BatchEvaluateRequest, BoundedClaimId,
-    BoundedCorrelationId, ClaimRef, ClaimResultView, ClaimSet, ConfigMetadata,
+    BoundedCorrelationId, ClaimRef, ClaimResultView, ClaimSet, ConfigAuditEvent, ConfigMetadata,
     CredentialIssueRequest, CredentialProfileConfig, EvaluateRequest, EvidenceBatchItemAuditEvent,
     EvidenceConfig, EvidenceEntity, EvidenceEntityReference, EvidenceError, EvidencePrincipal,
     EvidenceRelationship, FederationConfig, Hashed, HolderRequest, Oid4vciConfig,
     Oid4vciCredentialConfigurationConfig, Oid4vciDisplayImageConfig, Oid4vciIssuerDisplayConfig,
     PolicyIdentifier, RateLimitBucket, RenderEvaluationRequest, SelfAttestationConfig,
-    SelfAttestationDenialCode, SelfAttestationScopePolicy, SourceCapability,
-    StoredSelfAttestationMetadata, SubjectRequest, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON,
-    FORMAT_SD_JWT_VC,
+    SelfAttestationDenialCode, SelfAttestationScopePolicy, SigningKeyStatus, SourceCapability,
+    StandaloneRegistryNotaryConfig, StoredSelfAttestationMetadata, SubjectRequest,
+    VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
 };
 use registry_platform_audit::AuditKeyHasher;
+use registry_platform_config::RegistryTrustRoot;
+use registry_platform_crypto::KeyReadiness;
 use registry_platform_crypto::PublicJwk;
 use registry_platform_crypto::SigningProvider;
 use registry_platform_oid4vci::{
@@ -43,10 +49,15 @@ use registry_platform_oid4vci::{
     TokenRequest as Oid4vciTokenRequest, TokenResponse as Oid4vciTokenResponse, TxCode,
     ValidatedProof, WireError, PRE_AUTHORIZED_CODE_GRANT_TYPE, PROOF_TYPE_JWT, SD_JWT_VC_FORMAT,
 };
-use registry_platform_ops::PostureFilterError;
+use registry_platform_ops::{
+    internal_config_hash, posture_safe_runtime_config_hash, AntiRollbackKey, AntiRollbackProposal,
+    AntiRollbackStoreError, ApplyReportResult, BreakGlassApproval, BreakGlassRateLimit,
+    ConfigSource, FileAntiRollbackStore, FileLocalApprovalStore, LocalApprovalStoreError,
+    LocalOperatorApproval, PostureApplyResult, PostureFilterError,
+};
 use registry_platform_replay::{ReplayKey, ReplayScope, RequiredReplayError};
 use registry_platform_sdjwt::{validate_holder_proof, HolderProofBindings, HolderProofPolicy};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
@@ -54,6 +65,10 @@ use time::OffsetDateTime;
 
 #[cfg(feature = "registry-notary-cel")]
 use crate::cel_worker::CelWorker;
+use crate::config_governed::{
+    is_signed_config_source, parse_candidate_config, resolve_tuf_config_candidate,
+    ConfigCandidateError, ConfigGovernanceContext, ResolvedConfigCandidate, TufConfigTargetRequest,
+};
 use crate::{
     credential_profile_for,
     credential_status::{is_mutable_status, CredentialStatusStore},
@@ -66,7 +81,7 @@ use crate::{
     runtime::claim_ids,
     standalone::{
         constant_time_eq, generate_numeric_tx_code, generate_opaque_token, pkce_s256_challenge,
-        pre_auth_audit_event, PreAuthAuditFields, PreAuthRuntime, SignerReadiness,
+        pre_auth_audit_event, AuthAuditState, PreAuthAuditFields, PreAuthRuntime, SignerReadiness,
     },
     BatchEvaluateOptions, EvidenceStore, RegistryNotaryRuntime, SelfAttestationRateLimitBucket,
     SelfAttestationRateLimitError, SelfAttestationRateLimitKeys, SelfAttestationRateLimiter,
@@ -80,6 +95,8 @@ pub(crate) const OPS_READ_SCOPE: &str = "registry_notary:ops_read";
 const OID4VCI_CREDENTIAL_PATH: &str = "/oid4vci/credential";
 // SD-JWT VC Type Metadata well-known prefix inserted between host and vct path.
 const WELL_KNOWN_VCT_PREFIX: &str = "/.well-known/vct";
+const CONFIG_CANDIDATE_INVALID_CODE: &str = "config.candidate_invalid";
+const CONFIG_BUNDLE_INVALID_CODE: &str = "admin.config_bundle_invalid";
 const POSTURE_FILTER_FAILED_CODE: &str = "posture.filter_failed";
 
 pub use crate::federation::federation_router;
@@ -93,6 +110,9 @@ where
         .route("/ready", get(ready))
         .route("/admin/v1/posture", get(admin_posture))
         .route("/admin/v1/reload", post(admin_reload))
+        .route("/admin/v1/config/verify", post(admin_config_verify))
+        .route("/admin/v1/config/dry-run", post(admin_config_dry_run))
+        .route("/admin/v1/config/apply", post(admin_config_apply))
         .route("/openapi.json", get(openapi_json))
         .route("/.well-known/evidence-service", get(service_document))
         .route("/.well-known/evidence/jwks.json", get(issuer_jwks))
@@ -126,6 +146,1639 @@ where
             "/admin/v1/credentials/{credential_id}/status",
             post(update_credential_status),
         )
+}
+
+#[derive(Debug, Deserialize)]
+struct ConfigApplyRequest {
+    #[serde(default)]
+    bundle_id: Option<String>,
+    #[serde(default)]
+    sequence: Option<u64>,
+    #[serde(default)]
+    config_yaml: Option<String>,
+    #[serde(default = "default_stream_id")]
+    stream_id: String,
+    #[serde(default)]
+    previous_config_hash: Option<String>,
+    #[serde(default)]
+    root_version: Option<u64>,
+    #[serde(default)]
+    break_glass: bool,
+    #[serde(default)]
+    break_glass_approval: Option<BreakGlassApproval>,
+    #[serde(default)]
+    break_glass_rate_limit: Option<BreakGlassRateLimit>,
+    #[serde(default)]
+    local_approval_reference: Option<String>,
+    #[serde(default)]
+    tuf: Option<TufConfigTargetRequest>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ConfigApplyPosture {
+    pub(crate) source: ConfigSource,
+    pub(crate) last_config_hash: Option<String>,
+    pub(crate) last_bundle_id: Option<String>,
+    pub(crate) last_bundle_sequence: Option<u64>,
+    pub(crate) last_apply_result: Option<PostureApplyResult>,
+    pub(crate) last_apply_at: Option<String>,
+    pub(crate) restart_required: bool,
+}
+
+impl Default for ConfigApplyPosture {
+    fn default() -> Self {
+        Self {
+            source: ConfigSource::LocalFile,
+            last_config_hash: None,
+            last_bundle_id: None,
+            last_bundle_sequence: None,
+            last_apply_result: None,
+            last_apply_at: None,
+            restart_required: false,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct ConfigApplyResponse {
+    bundle_id: String,
+    sequence: u64,
+    result: &'static str,
+    posture_result: &'static str,
+    applied: bool,
+    restart_required: bool,
+}
+
+#[derive(Clone, Copy)]
+enum ConfigAdminAction {
+    Verify,
+    DryRun,
+    Apply,
+}
+
+impl ConfigAdminAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Verify => "verify",
+            Self::DryRun => "dry_run",
+            Self::Apply => "apply",
+        }
+    }
+}
+
+async fn admin_config_verify(
+    principal: Option<Extension<EvidencePrincipal>>,
+    Extension(state): Extension<Arc<RegistryNotaryApiState>>,
+    Json(request): Json<ConfigApplyRequest>,
+) -> Response {
+    if let Some(response) = require_admin_scope_error(principal) {
+        return response;
+    }
+    let candidate = match resolve_config_candidate(&request, &state).await {
+        Ok(candidate) => candidate,
+        Err(ConfigCandidateError::CandidateInvalid(detail)) => {
+            return with_config_audit(
+                config_candidate_invalid(detail),
+                unresolved_config_audit(
+                    ConfigAdminAction::Verify,
+                    &request,
+                    "rejected",
+                    "rejected_compile",
+                    false,
+                    false,
+                ),
+            )
+        }
+        Err(ConfigCandidateError::BundleInvalid(detail)) => {
+            return with_config_audit(
+                config_bundle_invalid(detail),
+                unresolved_config_audit(
+                    ConfigAdminAction::Verify,
+                    &request,
+                    "rejected",
+                    "rejected_signature",
+                    false,
+                    false,
+                ),
+            )
+        }
+    };
+    let candidate_config = match parse_candidate_config(&candidate.config_yaml) {
+        Ok(config) => config,
+        Err(detail) => {
+            return with_config_audit(
+                config_candidate_invalid(detail),
+                resolved_config_audit(
+                    ConfigAdminAction::Verify,
+                    &candidate,
+                    "rejected",
+                    "rejected_compile",
+                    false,
+                    false,
+                ),
+            )
+        }
+    };
+    if request.break_glass
+        || request.break_glass_approval.is_some()
+        || request.break_glass_rate_limit.is_some()
+    {
+        return config_apply_report(
+            candidate.bundle_id.clone(),
+            candidate.sequence,
+            ApplyReportResult::RejectedBreakGlass,
+            false,
+            false,
+            StatusCode::OK,
+            resolved_config_audit(
+                ConfigAdminAction::Verify,
+                &candidate,
+                "rejected",
+                ApplyReportResult::RejectedBreakGlass.as_str(),
+                false,
+                false,
+            ),
+        );
+    }
+    let classification = if is_signed_config_source(candidate.source) {
+        classify_credential_issuer_rotation(
+            &state,
+            &candidate_config,
+            signing_change_authorization(&candidate),
+        )
+    } else {
+        Err(CredentialIssuerRotationError::RestartRequired)
+    };
+    let (result, product_validation_result, restart_required) = match classification {
+        Ok(_) => (ApplyReportResult::Verified, "accepted", false),
+        Err(CredentialIssuerRotationError::RestartRequired) => {
+            (ApplyReportResult::Verified, "accepted", true)
+        }
+        Err(CredentialIssuerRotationError::Readiness) => {
+            (ApplyReportResult::RejectedReadiness, "rejected", false)
+        }
+    };
+    consume_apply_metadata(&request);
+    config_apply_report(
+        candidate.bundle_id.clone(),
+        candidate.sequence,
+        result,
+        false,
+        restart_required,
+        StatusCode::OK,
+        resolved_config_audit(
+            ConfigAdminAction::Verify,
+            &candidate,
+            product_validation_result,
+            result.as_str(),
+            false,
+            restart_required,
+        ),
+    )
+}
+
+async fn admin_config_dry_run(
+    principal: Option<Extension<EvidencePrincipal>>,
+    Extension(state): Extension<Arc<RegistryNotaryApiState>>,
+    Json(request): Json<ConfigApplyRequest>,
+) -> Response {
+    if let Some(response) = require_admin_scope_error(principal) {
+        return response;
+    }
+    let candidate = match resolve_config_candidate(&request, &state).await {
+        Ok(candidate) => candidate,
+        Err(ConfigCandidateError::CandidateInvalid(detail)) => {
+            return with_config_audit(
+                config_candidate_invalid(detail),
+                unresolved_config_audit(
+                    ConfigAdminAction::DryRun,
+                    &request,
+                    "rejected",
+                    "rejected_compile",
+                    false,
+                    false,
+                ),
+            )
+        }
+        Err(ConfigCandidateError::BundleInvalid(detail)) => {
+            return with_config_audit(
+                config_bundle_invalid(detail),
+                unresolved_config_audit(
+                    ConfigAdminAction::DryRun,
+                    &request,
+                    "rejected",
+                    "rejected_signature",
+                    false,
+                    false,
+                ),
+            )
+        }
+    };
+    let candidate_config = match parse_candidate_config(&candidate.config_yaml) {
+        Ok(config) => config,
+        Err(detail) => {
+            return with_config_audit(
+                config_candidate_invalid(detail),
+                resolved_config_audit(
+                    ConfigAdminAction::DryRun,
+                    &candidate,
+                    "rejected",
+                    "rejected_compile",
+                    false,
+                    false,
+                ),
+            )
+        }
+    };
+    if request.break_glass
+        || request.break_glass_approval.is_some()
+        || request.break_glass_rate_limit.is_some()
+    {
+        return config_apply_report(
+            candidate.bundle_id.clone(),
+            candidate.sequence,
+            ApplyReportResult::RejectedBreakGlass,
+            false,
+            false,
+            StatusCode::OK,
+            resolved_config_audit(
+                ConfigAdminAction::DryRun,
+                &candidate,
+                "rejected",
+                ApplyReportResult::RejectedBreakGlass.as_str(),
+                false,
+                false,
+            ),
+        );
+    }
+    let classification = if is_signed_config_source(candidate.source) {
+        classify_credential_issuer_rotation(
+            &state,
+            &candidate_config,
+            signing_change_authorization(&candidate),
+        )
+    } else {
+        Err(CredentialIssuerRotationError::RestartRequired)
+    };
+    consume_apply_metadata(&request);
+    let (result, product_validation_result, restart_required) = match classification {
+        Ok(_) => (ApplyReportResult::Verified, "accepted", false),
+        Err(CredentialIssuerRotationError::RestartRequired) => {
+            (ApplyReportResult::RejectedRestartRequired, "accepted", true)
+        }
+        Err(CredentialIssuerRotationError::Readiness) => {
+            (ApplyReportResult::RejectedReadiness, "rejected", false)
+        }
+    };
+    config_apply_report(
+        candidate.bundle_id.clone(),
+        candidate.sequence,
+        result,
+        false,
+        restart_required,
+        StatusCode::OK,
+        resolved_config_audit(
+            ConfigAdminAction::DryRun,
+            &candidate,
+            product_validation_result,
+            result.as_str(),
+            false,
+            restart_required,
+        ),
+    )
+}
+
+async fn admin_config_apply(
+    principal: Option<Extension<EvidencePrincipal>>,
+    Extension(state): Extension<Arc<RegistryNotaryApiState>>,
+    Json(request): Json<ConfigApplyRequest>,
+) -> Response {
+    if let Some(response) = require_admin_scope_error(principal) {
+        return response;
+    }
+    let candidate = match resolve_config_candidate(&request, &state).await {
+        Ok(candidate) => candidate,
+        Err(ConfigCandidateError::CandidateInvalid(detail)) => {
+            return with_config_audit(
+                config_candidate_invalid(detail),
+                unresolved_config_audit(
+                    ConfigAdminAction::Apply,
+                    &request,
+                    "rejected",
+                    "rejected_compile",
+                    false,
+                    false,
+                ),
+            )
+        }
+        Err(ConfigCandidateError::BundleInvalid(detail)) => {
+            return with_config_audit(
+                config_bundle_invalid(detail),
+                unresolved_config_audit(
+                    ConfigAdminAction::Apply,
+                    &request,
+                    "rejected",
+                    "rejected_signature",
+                    false,
+                    false,
+                ),
+            )
+        }
+    };
+    let candidate_config = match parse_candidate_config(&candidate.config_yaml) {
+        Ok(config) => config,
+        Err(detail) => {
+            return with_config_audit(
+                config_candidate_invalid(detail),
+                resolved_config_audit(
+                    ConfigAdminAction::Apply,
+                    &candidate,
+                    "rejected",
+                    "rejected_compile",
+                    false,
+                    false,
+                ),
+            )
+        }
+    };
+    let config_governance = state.config_governance();
+    let break_glass = match break_glass_proposal(&request) {
+        Ok(break_glass) => break_glass,
+        Err(()) => {
+            return config_apply_report(
+                candidate.bundle_id.clone(),
+                candidate.sequence,
+                ApplyReportResult::RejectedBreakGlass,
+                false,
+                false,
+                StatusCode::CONFLICT,
+                resolved_config_audit(
+                    ConfigAdminAction::Apply,
+                    &candidate,
+                    "rejected",
+                    ApplyReportResult::RejectedBreakGlass.as_str(),
+                    false,
+                    false,
+                )
+                .with_break_glass_request(&request),
+            );
+        }
+    };
+    if let Err(()) = require_break_glass_emergency_change_class(&request, &candidate) {
+        return config_apply_report(
+            candidate.bundle_id.clone(),
+            candidate.sequence,
+            ApplyReportResult::RejectedBreakGlass,
+            false,
+            false,
+            StatusCode::CONFLICT,
+            resolved_config_audit(
+                ConfigAdminAction::Apply,
+                &candidate,
+                "rejected",
+                ApplyReportResult::RejectedBreakGlass.as_str(),
+                false,
+                false,
+            )
+            .with_break_glass_request(&request),
+        );
+    }
+    if !is_signed_config_source(candidate.source) {
+        consume_apply_metadata(&request);
+        if request.break_glass {
+            return config_apply_report(
+                candidate.bundle_id.clone(),
+                candidate.sequence,
+                ApplyReportResult::RejectedBreakGlass,
+                false,
+                false,
+                StatusCode::CONFLICT,
+                resolved_config_audit(
+                    ConfigAdminAction::Apply,
+                    &candidate,
+                    "rejected",
+                    ApplyReportResult::RejectedBreakGlass.as_str(),
+                    false,
+                    false,
+                )
+                .with_break_glass_request(&request),
+            );
+        }
+        return config_apply_report(
+            candidate.bundle_id.clone(),
+            candidate.sequence,
+            ApplyReportResult::RejectedRestartRequired,
+            false,
+            true,
+            StatusCode::CONFLICT,
+            resolved_config_audit(
+                ConfigAdminAction::Apply,
+                &candidate,
+                "accepted",
+                ApplyReportResult::RejectedRestartRequired.as_str(),
+                false,
+                true,
+            ),
+        );
+    }
+    let governed_apply = if root_transition_authorized(&candidate) {
+        match classify_root_transition(&state, &candidate_config) {
+            Ok(()) => match load_root_transition_local_approval(&request, &state, &candidate) {
+                Ok(local_approval) => GovernedConfigApply::RootTransition { local_approval },
+                Err(_) => {
+                    consume_apply_metadata(&request);
+                    return config_apply_report(
+                        candidate.bundle_id.clone(),
+                        candidate.sequence,
+                        ApplyReportResult::RejectedLocalApproval,
+                        false,
+                        false,
+                        StatusCode::CONFLICT,
+                        resolved_config_audit(
+                            ConfigAdminAction::Apply,
+                            &candidate,
+                            "accepted",
+                            ApplyReportResult::RejectedLocalApproval.as_str(),
+                            false,
+                            false,
+                        )
+                        .with_local_approval_request(&request),
+                    );
+                }
+            },
+            Err(RootTransitionError::RestartRequired) => {
+                consume_apply_metadata(&request);
+                return config_apply_report(
+                    candidate.bundle_id.clone(),
+                    candidate.sequence,
+                    ApplyReportResult::RejectedRestartRequired,
+                    false,
+                    true,
+                    StatusCode::CONFLICT,
+                    resolved_config_audit(
+                        ConfigAdminAction::Apply,
+                        &candidate,
+                        "accepted",
+                        ApplyReportResult::RejectedRestartRequired.as_str(),
+                        false,
+                        true,
+                    )
+                    .with_local_approval_request(&request),
+                );
+            }
+        }
+    } else {
+        let signing_change_authorization = signing_change_authorization(&candidate);
+        if !signing_change_authorization.any() {
+            consume_apply_metadata(&request);
+            return config_apply_report(
+                candidate.bundle_id.clone(),
+                candidate.sequence,
+                ApplyReportResult::RejectedRestartRequired,
+                false,
+                true,
+                StatusCode::CONFLICT,
+                resolved_config_audit(
+                    ConfigAdminAction::Apply,
+                    &candidate,
+                    "accepted",
+                    ApplyReportResult::RejectedRestartRequired.as_str(),
+                    false,
+                    true,
+                ),
+            );
+        }
+        let issuer_rotation = match classify_credential_issuer_rotation(
+            &state,
+            &candidate_config,
+            signing_change_authorization,
+        ) {
+            Ok(rotation) => rotation,
+            Err(CredentialIssuerRotationError::RestartRequired) => {
+                consume_apply_metadata(&request);
+                return config_apply_report(
+                    candidate.bundle_id.clone(),
+                    candidate.sequence,
+                    ApplyReportResult::RejectedRestartRequired,
+                    false,
+                    true,
+                    StatusCode::CONFLICT,
+                    resolved_config_audit(
+                        ConfigAdminAction::Apply,
+                        &candidate,
+                        "accepted",
+                        ApplyReportResult::RejectedRestartRequired.as_str(),
+                        false,
+                        true,
+                    ),
+                );
+            }
+            Err(CredentialIssuerRotationError::Readiness) => {
+                consume_apply_metadata(&request);
+                return config_apply_report(
+                    candidate.bundle_id.clone(),
+                    candidate.sequence,
+                    ApplyReportResult::RejectedReadiness,
+                    false,
+                    false,
+                    StatusCode::CONFLICT,
+                    resolved_config_audit(
+                        ConfigAdminAction::Apply,
+                        &candidate,
+                        "rejected",
+                        ApplyReportResult::RejectedReadiness.as_str(),
+                        false,
+                        false,
+                    ),
+                );
+            }
+        };
+        if !credential_issuer_rotation_ready(&issuer_rotation) {
+            consume_apply_metadata(&request);
+            return config_apply_report(
+                candidate.bundle_id.clone(),
+                candidate.sequence,
+                ApplyReportResult::RejectedReadiness,
+                false,
+                false,
+                StatusCode::CONFLICT,
+                resolved_config_audit(
+                    ConfigAdminAction::Apply,
+                    &candidate,
+                    "rejected",
+                    ApplyReportResult::RejectedReadiness.as_str(),
+                    false,
+                    false,
+                ),
+            );
+        }
+        let notary_auth_anchor = match state.notary_auth_anchor_for_config(&candidate_config) {
+            Ok(anchor) => anchor,
+            Err(_) => {
+                return config_apply_report(
+                    candidate.bundle_id.clone(),
+                    candidate.sequence,
+                    ApplyReportResult::RejectedReadiness,
+                    false,
+                    false,
+                    StatusCode::CONFLICT,
+                    resolved_config_audit(
+                        ConfigAdminAction::Apply,
+                        &candidate,
+                        "rejected",
+                        ApplyReportResult::RejectedReadiness.as_str(),
+                        false,
+                        false,
+                    ),
+                );
+            }
+        };
+        GovernedConfigApply::SigningRotation {
+            issuer_rotation,
+            notary_auth_anchor,
+        }
+    };
+    let candidate_config = Arc::new(candidate_config);
+    let Some(config_trust) = &config_governance.config_trust else {
+        return with_config_audit(
+            config_apply_unavailable("config_trust.antirollback_state_path is not configured"),
+            resolved_config_audit(
+                ConfigAdminAction::Apply,
+                &candidate,
+                "accepted",
+                ApplyReportResult::InternalError.as_str(),
+                false,
+                false,
+            ),
+        );
+    };
+    let break_glass_rate_limit = BreakGlassRateLimit {
+        max_accepted: config_trust.break_glass_rate_limit.max_accepted,
+        window_seconds: config_trust.break_glass_rate_limit.window_seconds,
+    };
+    let antirollback_store = FileAntiRollbackStore::new(&config_trust.antirollback_state_path)
+        .with_break_glass_rate_limit(break_glass_rate_limit);
+    let local_approval = governed_apply.local_approval().cloned();
+    if let Err(error) = antirollback_store.accept(
+        &antirollback_key(&config_governance, &candidate.stream_id),
+        AntiRollbackProposal {
+            sequence: candidate.sequence,
+            previous_config_hash: candidate.previous_config_hash.clone(),
+            config_hash: internal_config_hash(candidate.config_yaml.as_bytes()),
+            root_version: candidate.root_version,
+            break_glass,
+            break_glass_rate_limit: None,
+            local_approval: local_approval.clone(),
+            local_approval_rate_limit: local_approval.as_ref().map(|approval| approval.rate_limit),
+        },
+    ) {
+        let (result, status) = antirollback_apply_failure(&error);
+        return config_apply_report(
+            candidate.bundle_id.clone(),
+            candidate.sequence,
+            result,
+            false,
+            false,
+            status,
+            resolved_config_audit(
+                ConfigAdminAction::Apply,
+                &candidate,
+                "accepted",
+                result.as_str(),
+                false,
+                false,
+            )
+            .with_break_glass_request(&request)
+            .with_local_approval(local_approval.as_ref()),
+        );
+    }
+    consume_apply_metadata(&request);
+    match governed_apply {
+        GovernedConfigApply::SigningRotation {
+            issuer_rotation,
+            notary_auth_anchor,
+        } => {
+            state.swap_notary_auth_anchor(notary_auth_anchor);
+            state.swap_issuer_runtime(
+                candidate_config.clone(),
+                issuer_rotation.issuers,
+                issuer_rotation.signer_readiness,
+            );
+            state.swap_preauth_runtime(issuer_rotation.preauth);
+            state.swap_federation_runtime(issuer_rotation.federation);
+        }
+        GovernedConfigApply::RootTransition { .. } => {
+            state.swap_runtime_config(candidate_config.clone());
+        }
+    }
+    state.swap_config_governance(ConfigGovernanceContext::from_config(&candidate_config));
+    state.record_config_apply(ConfigApplyPosture {
+        source: candidate.source,
+        last_config_hash: Some(posture_hash(&candidate_config)),
+        last_bundle_id: Some(candidate.bundle_id.clone()),
+        last_bundle_sequence: Some(candidate.sequence),
+        last_apply_result: Some(ApplyReportResult::Applied.as_posture_result()),
+        last_apply_at: Some(format_time(OffsetDateTime::now_utc())),
+        restart_required: false,
+    });
+    config_apply_report(
+        candidate.bundle_id.clone(),
+        candidate.sequence,
+        ApplyReportResult::Applied,
+        true,
+        false,
+        StatusCode::OK,
+        resolved_config_audit(
+            ConfigAdminAction::Apply,
+            &candidate,
+            "accepted",
+            ApplyReportResult::Applied.as_str(),
+            true,
+            false,
+        )
+        .with_break_glass_request(&request)
+        .with_local_approval(local_approval.as_ref()),
+    )
+}
+
+#[derive(Clone, Copy)]
+struct SigningChangeAuthorization {
+    rotation: bool,
+    cleanup: bool,
+}
+
+impl SigningChangeAuthorization {
+    fn any(self) -> bool {
+        self.rotation || self.cleanup
+    }
+}
+
+fn signing_change_authorization(candidate: &ResolvedConfigCandidate) -> SigningChangeAuthorization {
+    let signed = is_signed_config_source(candidate.source);
+    SigningChangeAuthorization {
+        rotation: signed && candidate.change_classes.contains("signing_key_rotation"),
+        cleanup: signed && candidate.change_classes.contains("signing_key_cleanup"),
+    }
+}
+
+fn break_glass_proposal(request: &ConfigApplyRequest) -> Result<Option<BreakGlassApproval>, ()> {
+    if !request.break_glass {
+        return if request.break_glass_approval.is_some() || request.break_glass_rate_limit.is_some()
+        {
+            Err(())
+        } else {
+            Ok(None)
+        };
+    }
+    if request.break_glass_rate_limit.is_some() {
+        return Err(());
+    }
+    match request.break_glass_approval.clone() {
+        Some(approval) => Ok(Some(approval)),
+        _ => Err(()),
+    }
+}
+
+fn require_break_glass_emergency_change_class(
+    request: &ConfigApplyRequest,
+    candidate: &ResolvedConfigCandidate,
+) -> Result<(), ()> {
+    let Some(approval) = &request.break_glass_approval else {
+        return Ok(());
+    };
+    if candidate
+        .change_classes
+        .contains(&approval.emergency_change_class)
+    {
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
+fn credential_issuer_rotation_ready(rotation: &CredentialIssuerRotation) -> bool {
+    rotation.signer_readiness.is_ready()
+}
+
+fn is_break_glass_error(error: &AntiRollbackStoreError) -> bool {
+    matches!(
+        error,
+        AntiRollbackStoreError::BreakGlassUnsupported
+            | AntiRollbackStoreError::BreakGlassApprovalExpired
+            | AntiRollbackStoreError::BreakGlassRateLimitMissing
+            | AntiRollbackStoreError::BreakGlassRateLimited
+            | AntiRollbackStoreError::InvalidBreakGlassApproval(_)
+            | AntiRollbackStoreError::InvalidBreakGlassRateLimit(_)
+    )
+}
+
+fn is_local_approval_error(error: &AntiRollbackStoreError) -> bool {
+    matches!(
+        error,
+        AntiRollbackStoreError::LocalApprovalExpired
+            | AntiRollbackStoreError::LocalApprovalRateLimitMissing
+            | AntiRollbackStoreError::LocalApprovalRateLimited
+            | AntiRollbackStoreError::InvalidLocalApproval(_)
+    )
+}
+
+fn is_antirollback_state_error(error: &AntiRollbackStoreError) -> bool {
+    matches!(
+        error,
+        AntiRollbackStoreError::MissingState
+            | AntiRollbackStoreError::KeyMismatch
+            | AntiRollbackStoreError::InvalidState(_)
+            | AntiRollbackStoreError::Io(_)
+            | AntiRollbackStoreError::Json(_)
+    )
+}
+
+fn antirollback_apply_failure(error: &AntiRollbackStoreError) -> (ApplyReportResult, StatusCode) {
+    if is_break_glass_error(error) {
+        (ApplyReportResult::RejectedBreakGlass, StatusCode::CONFLICT)
+    } else if is_local_approval_error(error) {
+        (
+            ApplyReportResult::RejectedLocalApproval,
+            StatusCode::CONFLICT,
+        )
+    } else if is_antirollback_state_error(error) {
+        (
+            ApplyReportResult::InternalError,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        )
+    } else {
+        (ApplyReportResult::RejectedRollback, StatusCode::CONFLICT)
+    }
+}
+
+fn require_admin_scope_error(principal: Option<Extension<EvidencePrincipal>>) -> Option<Response> {
+    let Some(Extension(principal)) = principal else {
+        return Some(evidence_error_response(EvidenceError::MissingCredential));
+    };
+    if !principal.has_scope(ADMIN_SCOPE) {
+        return Some(evidence_error_response(EvidenceError::ScopeDenied {
+            required: ADMIN_SCOPE.to_string(),
+        }));
+    }
+    None
+}
+
+struct CredentialIssuerRotation {
+    issuers: Arc<dyn EvidenceIssuerResolver>,
+    signer_readiness: SignerReadiness,
+    preauth: Option<Arc<PreAuthRuntime>>,
+    federation: Option<Arc<crate::federation::FederationRuntimeState>>,
+}
+
+enum CredentialIssuerRotationError {
+    RestartRequired,
+    Readiness,
+}
+
+enum GovernedConfigApply {
+    SigningRotation {
+        issuer_rotation: CredentialIssuerRotation,
+        notary_auth_anchor: Option<crate::standalone::NotaryTokenAnchor>,
+    },
+    RootTransition {
+        local_approval: LocalOperatorApproval,
+    },
+}
+
+impl GovernedConfigApply {
+    fn local_approval(&self) -> Option<&LocalOperatorApproval> {
+        match self {
+            Self::SigningRotation { .. } => None,
+            Self::RootTransition { local_approval } => Some(local_approval),
+        }
+    }
+}
+
+enum RootTransitionError {
+    RestartRequired,
+}
+
+fn root_transition_authorized(candidate: &ResolvedConfigCandidate) -> bool {
+    is_signed_config_source(candidate.source)
+        && candidate.change_classes.contains("root_transition")
+}
+
+fn classify_root_transition(
+    state: &RegistryNotaryApiState,
+    candidate: &StandaloneRegistryNotaryConfig,
+) -> Result<(), RootTransitionError> {
+    let Some(current) = state.runtime_config() else {
+        return Err(RootTransitionError::RestartRequired);
+    };
+    let Some(current_trust) = &current.config_trust else {
+        return Err(RootTransitionError::RestartRequired);
+    };
+    let Some(candidate_trust) = &candidate.config_trust else {
+        return Err(RootTransitionError::RestartRequired);
+    };
+    if current_trust.antirollback_state_path != candidate_trust.antirollback_state_path
+        || current_trust.local_approval_state_path != candidate_trust.local_approval_state_path
+        || current_trust.break_glass_rate_limit != candidate_trust.break_glass_rate_limit
+        || candidate_trust.accepted_roots.is_empty()
+        || current_trust.accepted_roots == candidate_trust.accepted_roots
+        || !root_ids_are_unique(&current_trust.accepted_roots)
+        || !root_ids_are_unique(&candidate_trust.accepted_roots)
+    {
+        return Err(RootTransitionError::RestartRequired);
+    }
+    for current_root in &current_trust.accepted_roots {
+        if let Some(candidate_root) = candidate_trust
+            .accepted_roots
+            .iter()
+            .find(|root| root.root_id == current_root.root_id)
+        {
+            if candidate_root != current_root {
+                return Err(RootTransitionError::RestartRequired);
+            }
+        }
+    }
+    if !equivalent_except_config_trust_accepted_roots(&current, candidate)
+        .map_err(|_| RootTransitionError::RestartRequired)?
+    {
+        return Err(RootTransitionError::RestartRequired);
+    }
+    Ok(())
+}
+
+fn root_ids_are_unique(roots: &[RegistryTrustRoot]) -> bool {
+    let mut seen = BTreeSet::new();
+    roots.iter().all(|root| seen.insert(root.root_id.as_str()))
+}
+
+fn equivalent_except_config_trust_accepted_roots(
+    current: &StandaloneRegistryNotaryConfig,
+    candidate: &StandaloneRegistryNotaryConfig,
+) -> Result<bool, &'static str> {
+    let mut current =
+        serde_json::to_value(current).map_err(|_| "current config could not be normalized")?;
+    let mut candidate =
+        serde_json::to_value(candidate).map_err(|_| "candidate config could not be normalized")?;
+    normalize_config_trust_accepted_roots(&mut current);
+    normalize_config_trust_accepted_roots(&mut candidate);
+    Ok(current == candidate)
+}
+
+fn normalize_config_trust_accepted_roots(value: &mut Value) {
+    if let Some(config_trust) = value.get_mut("config_trust").and_then(Value::as_object_mut) {
+        config_trust.insert("accepted_roots".to_string(), Value::Array(Vec::new()));
+    }
+}
+
+fn load_root_transition_local_approval(
+    request: &ConfigApplyRequest,
+    state: &RegistryNotaryApiState,
+    candidate: &ResolvedConfigCandidate,
+) -> Result<LocalOperatorApproval, LocalApprovalStoreError> {
+    let approval_reference = request
+        .local_approval_reference
+        .as_deref()
+        .ok_or(LocalApprovalStoreError::ApprovalNotFound)?;
+    let governance = state.config_governance();
+    let config_trust = governance
+        .config_trust
+        .as_ref()
+        .ok_or(LocalApprovalStoreError::MissingState)?;
+    FileLocalApprovalStore::new(&config_trust.local_approval_state_path).load_for_apply(
+        approval_reference,
+        "root_transition",
+        &internal_config_hash(candidate.config_yaml.as_bytes()),
+        candidate.previous_config_hash.as_deref(),
+    )
+}
+
+fn classify_credential_issuer_rotation(
+    state: &RegistryNotaryApiState,
+    candidate: &StandaloneRegistryNotaryConfig,
+    authorization: SigningChangeAuthorization,
+) -> Result<CredentialIssuerRotation, CredentialIssuerRotationError> {
+    let Some(current) = state.runtime_config() else {
+        return Err(CredentialIssuerRotationError::Readiness);
+    };
+    if !equivalent_except_notary_signing_rotation(&current, candidate)
+        .map_err(|_| CredentialIssuerRotationError::Readiness)?
+    {
+        return Err(CredentialIssuerRotationError::RestartRequired);
+    }
+    let reference_changed = notary_signing_key_reference_changed(&current, candidate);
+    let cleanup_key_ids = cleanup_signing_key_change_ids(&current, candidate)?;
+    if reference_changed && !authorization.rotation {
+        return Err(CredentialIssuerRotationError::RestartRequired);
+    }
+    if !cleanup_key_ids.is_empty() && !authorization.cleanup {
+        return Err(CredentialIssuerRotationError::RestartRequired);
+    }
+    if !reference_changed && cleanup_key_ids.is_empty() {
+        return Err(CredentialIssuerRotationError::RestartRequired);
+    }
+    if !changed_signing_keys_are_allowed(&current, candidate, &cleanup_key_ids) {
+        return Err(CredentialIssuerRotationError::RestartRequired);
+    }
+    old_referenced_keys_are_safe_for_rotation(&current, candidate)?;
+    let (issuers, signer_readiness) =
+        crate::standalone::credential_issuer_runtime_from_config(&candidate.evidence)
+            .map_err(|_| CredentialIssuerRotationError::Readiness)?;
+    let previous_preauth = preauth_runtime(state);
+    let preauth = crate::standalone::preauth_runtime_from_config_preserving_stores(
+        candidate,
+        previous_preauth.as_deref(),
+    )
+    .map_err(|_| CredentialIssuerRotationError::Readiness)?;
+    let federation = crate::standalone::federation_runtime_from_config(
+        candidate,
+        state
+            .auth_state
+            .as_ref()
+            .map(|auth_state| auth_state.audit_pipeline()),
+        state.replay.store(),
+        Arc::clone(&state.metrics),
+    )
+    .map_err(|_| CredentialIssuerRotationError::Readiness)?;
+    Ok(CredentialIssuerRotation {
+        issuers,
+        signer_readiness,
+        preauth,
+        federation,
+    })
+}
+
+fn equivalent_except_notary_signing_rotation(
+    current: &StandaloneRegistryNotaryConfig,
+    candidate: &StandaloneRegistryNotaryConfig,
+) -> Result<bool, &'static str> {
+    let mut current =
+        serde_json::to_value(current).map_err(|_| "current config could not be normalized")?;
+    let mut candidate =
+        serde_json::to_value(candidate).map_err(|_| "candidate config could not be normalized")?;
+    normalize_notary_signing_rotation_fields(&mut current);
+    normalize_notary_signing_rotation_fields(&mut candidate);
+    Ok(current == candidate)
+}
+
+fn normalize_notary_signing_rotation_fields(value: &mut Value) {
+    let Some(evidence) = value.get_mut("evidence").and_then(Value::as_object_mut) else {
+        return;
+    };
+    evidence.remove("signing_keys");
+    if let Some(profiles) = evidence
+        .get_mut("credential_profiles")
+        .and_then(Value::as_object_mut)
+    {
+        for profile in profiles.values_mut() {
+            if let Some(profile) = profile.as_object_mut() {
+                profile.remove("signing_key");
+            }
+        }
+    }
+    if let Some(auth) = value
+        .get_mut("auth")
+        .and_then(Value::as_object_mut)
+        .and_then(|auth| auth.get_mut("access_token_signing"))
+        .and_then(Value::as_object_mut)
+    {
+        auth.remove("signing_key_id");
+        auth.remove("verification_key_ids");
+    }
+    if let Some(esignet) = value
+        .get_mut("oid4vci")
+        .and_then(Value::as_object_mut)
+        .and_then(|oid4vci| oid4vci.get_mut("pre_authorized_code"))
+        .and_then(Value::as_object_mut)
+        .and_then(|preauth| preauth.get_mut("esignet"))
+        .and_then(Value::as_object_mut)
+    {
+        esignet.remove("client_signing_key_id");
+    }
+    if let Some(signing) = value
+        .get_mut("federation")
+        .and_then(Value::as_object_mut)
+        .and_then(|federation| federation.get_mut("signing"))
+        .and_then(Value::as_object_mut)
+    {
+        signing.remove("signing_key");
+    }
+}
+
+fn notary_signing_key_reference_changed(
+    current: &StandaloneRegistryNotaryConfig,
+    candidate: &StandaloneRegistryNotaryConfig,
+) -> bool {
+    current
+        .evidence
+        .credential_profiles
+        .iter()
+        .any(|(profile_id, current_profile)| {
+            candidate
+                .evidence
+                .credential_profiles
+                .get(profile_id)
+                .is_some_and(|candidate_profile| {
+                    candidate_profile.signing_key != current_profile.signing_key
+                })
+        })
+        || current.auth.access_token_signing.signing_key_id
+            != candidate.auth.access_token_signing.signing_key_id
+        || current.auth.access_token_signing.verification_key_ids
+            != candidate.auth.access_token_signing.verification_key_ids
+        || current
+            .oid4vci
+            .pre_authorized_code
+            .esignet
+            .client_signing_key_id
+            != candidate
+                .oid4vci
+                .pre_authorized_code
+                .esignet
+                .client_signing_key_id
+        || current.federation.signing.signing_key != candidate.federation.signing.signing_key
+}
+
+fn changed_signing_keys_are_allowed(
+    current: &StandaloneRegistryNotaryConfig,
+    candidate: &StandaloneRegistryNotaryConfig,
+    cleanup_key_ids: &BTreeSet<String>,
+) -> bool {
+    let mut allowed = BTreeSet::new();
+    for (profile_id, current_profile) in &current.evidence.credential_profiles {
+        let Some(candidate_profile) = candidate.evidence.credential_profiles.get(profile_id) else {
+            return false;
+        };
+        if candidate_profile.signing_key != current_profile.signing_key {
+            allowed.insert(current_profile.signing_key.as_str());
+            allowed.insert(candidate_profile.signing_key.as_str());
+        }
+    }
+    if current.auth.access_token_signing.signing_key_id
+        != candidate.auth.access_token_signing.signing_key_id
+    {
+        allowed.insert(current.auth.access_token_signing.signing_key_id.as_str());
+        allowed.insert(candidate.auth.access_token_signing.signing_key_id.as_str());
+    }
+    for key_id in &current.auth.access_token_signing.verification_key_ids {
+        allowed.insert(key_id.as_str());
+    }
+    for key_id in &candidate.auth.access_token_signing.verification_key_ids {
+        allowed.insert(key_id.as_str());
+    }
+    if current
+        .oid4vci
+        .pre_authorized_code
+        .esignet
+        .client_signing_key_id
+        != candidate
+            .oid4vci
+            .pre_authorized_code
+            .esignet
+            .client_signing_key_id
+    {
+        allowed.insert(
+            current
+                .oid4vci
+                .pre_authorized_code
+                .esignet
+                .client_signing_key_id
+                .as_str(),
+        );
+        allowed.insert(
+            candidate
+                .oid4vci
+                .pre_authorized_code
+                .esignet
+                .client_signing_key_id
+                .as_str(),
+        );
+    }
+    if current.federation.signing.signing_key != candidate.federation.signing.signing_key {
+        allowed.insert(current.federation.signing.signing_key.as_str());
+        allowed.insert(candidate.federation.signing.signing_key.as_str());
+    }
+    for key_id in cleanup_key_ids {
+        allowed.insert(key_id.as_str());
+    }
+    let mut keys = BTreeSet::new();
+    keys.extend(current.evidence.signing_keys.keys().map(String::as_str));
+    keys.extend(candidate.evidence.signing_keys.keys().map(String::as_str));
+    keys.into_iter().all(|key| {
+        current.evidence.signing_keys.get(key) == candidate.evidence.signing_keys.get(key)
+            || allowed.contains(key)
+    })
+}
+
+fn cleanup_signing_key_change_ids(
+    current: &StandaloneRegistryNotaryConfig,
+    candidate: &StandaloneRegistryNotaryConfig,
+) -> Result<BTreeSet<String>, CredentialIssuerRotationError> {
+    let now = u64::try_from(time::OffsetDateTime::now_utc().unix_timestamp()).unwrap_or(0);
+    let active_refs = active_notary_signing_key_refs(current, candidate);
+    let current_verification_refs = current
+        .auth
+        .access_token_signing
+        .verification_key_ids
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let candidate_verification_refs = candidate
+        .auth
+        .access_token_signing
+        .verification_key_ids
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut cleanup = BTreeSet::new();
+    for (key_id, current_key) in &current.evidence.signing_keys {
+        let candidate_key = candidate.evidence.signing_keys.get(key_id);
+        if candidate_key.is_some() {
+            continue;
+        }
+        if active_refs.contains(key_id) || candidate_verification_refs.contains(key_id) {
+            return Err(CredentialIssuerRotationError::RestartRequired);
+        }
+        if !matches!(current_key.status, SigningKeyStatus::PublishOnly) {
+            return Err(CredentialIssuerRotationError::RestartRequired);
+        }
+        if current_key.may_publish_at(now) {
+            return Err(CredentialIssuerRotationError::Readiness);
+        }
+        if current_verification_refs.contains(key_id)
+            && candidate_verification_refs.contains(key_id)
+        {
+            return Err(CredentialIssuerRotationError::RestartRequired);
+        }
+        cleanup.insert(key_id.clone());
+    }
+    Ok(cleanup)
+}
+
+fn active_notary_signing_key_refs(
+    current: &StandaloneRegistryNotaryConfig,
+    candidate: &StandaloneRegistryNotaryConfig,
+) -> BTreeSet<String> {
+    let mut refs = BTreeSet::new();
+    refs.extend(
+        current
+            .evidence
+            .credential_profiles
+            .values()
+            .map(|profile| profile.signing_key.clone()),
+    );
+    refs.extend(
+        candidate
+            .evidence
+            .credential_profiles
+            .values()
+            .map(|profile| profile.signing_key.clone()),
+    );
+    refs.insert(current.auth.access_token_signing.signing_key_id.clone());
+    refs.insert(candidate.auth.access_token_signing.signing_key_id.clone());
+    refs.insert(
+        current
+            .oid4vci
+            .pre_authorized_code
+            .esignet
+            .client_signing_key_id
+            .clone(),
+    );
+    refs.insert(
+        candidate
+            .oid4vci
+            .pre_authorized_code
+            .esignet
+            .client_signing_key_id
+            .clone(),
+    );
+    refs.insert(current.federation.signing.signing_key.clone());
+    refs.insert(candidate.federation.signing.signing_key.clone());
+    refs
+}
+
+fn old_referenced_keys_are_safe_for_rotation(
+    current: &StandaloneRegistryNotaryConfig,
+    candidate: &StandaloneRegistryNotaryConfig,
+) -> Result<(), CredentialIssuerRotationError> {
+    let mut old_key_ids = BTreeSet::new();
+    for (profile_id, current_profile) in &current.evidence.credential_profiles {
+        let Some(candidate_profile) = candidate.evidence.credential_profiles.get(profile_id) else {
+            return Err(CredentialIssuerRotationError::RestartRequired);
+        };
+        if candidate_profile.signing_key != current_profile.signing_key {
+            old_key_ids.insert(current_profile.signing_key.as_str());
+        }
+    }
+    if current.auth.access_token_signing.signing_key_id
+        != candidate.auth.access_token_signing.signing_key_id
+    {
+        old_key_ids.insert(current.auth.access_token_signing.signing_key_id.as_str());
+    }
+    if current
+        .oid4vci
+        .pre_authorized_code
+        .esignet
+        .client_signing_key_id
+        != candidate
+            .oid4vci
+            .pre_authorized_code
+            .esignet
+            .client_signing_key_id
+    {
+        old_key_ids.insert(
+            current
+                .oid4vci
+                .pre_authorized_code
+                .esignet
+                .client_signing_key_id
+                .as_str(),
+        );
+    }
+    if current.federation.signing.signing_key != candidate.federation.signing.signing_key {
+        old_key_ids.insert(current.federation.signing.signing_key.as_str());
+    }
+    for key_id in old_key_ids {
+        old_key_is_safe_for_rotation(&current.evidence, &candidate.evidence, key_id)?;
+    }
+    Ok(())
+}
+
+fn old_key_is_safe_for_rotation(
+    current: &EvidenceConfig,
+    candidate: &EvidenceConfig,
+    key_id: &str,
+) -> Result<(), CredentialIssuerRotationError> {
+    let now = u64::try_from(time::OffsetDateTime::now_utc().unix_timestamp()).unwrap_or(0);
+    let Some(candidate_old_key) = candidate.signing_keys.get(key_id) else {
+        return Err(CredentialIssuerRotationError::Readiness);
+    };
+    if !candidate_old_key.may_publish_at(now) {
+        return Err(CredentialIssuerRotationError::Readiness);
+    }
+    let current_public = crate::standalone::signing_key_public_jwk_from_config(current, key_id)
+        .map_err(|_| CredentialIssuerRotationError::Readiness)?
+        .ok_or(CredentialIssuerRotationError::Readiness)?;
+    let candidate_public = crate::standalone::signing_key_public_jwk_from_config(candidate, key_id)
+        .map_err(|_| CredentialIssuerRotationError::Readiness)?
+        .ok_or(CredentialIssuerRotationError::Readiness)?;
+    if candidate_public != current_public {
+        return Err(CredentialIssuerRotationError::Readiness);
+    }
+    Ok(())
+}
+
+async fn resolve_config_candidate(
+    request: &ConfigApplyRequest,
+    state: &RegistryNotaryApiState,
+) -> Result<ResolvedConfigCandidate, ConfigCandidateError> {
+    match (&request.config_yaml, &request.tuf) {
+        (Some(_), Some(_)) => Err(ConfigCandidateError::CandidateInvalid(
+            "exactly one candidate config source must be provided",
+        )),
+        (Some(config_yaml), None) => {
+            let bundle_id =
+                request
+                    .bundle_id
+                    .clone()
+                    .ok_or(ConfigCandidateError::CandidateInvalid(
+                        "bundle_id is required for inline config",
+                    ))?;
+            let sequence = request
+                .sequence
+                .ok_or(ConfigCandidateError::CandidateInvalid(
+                    "sequence is required for inline config",
+                ))?;
+            Ok(ResolvedConfigCandidate {
+                bundle_id,
+                stream_id: request.stream_id.clone(),
+                sequence,
+                previous_config_hash: request.previous_config_hash.clone(),
+                root_version: request.root_version,
+                change_classes: BTreeSet::new(),
+                signer_kids: BTreeSet::new(),
+                tuf_root_sha256: None,
+                config_yaml: config_yaml.clone(),
+                source: ConfigSource::LocalFile,
+            })
+        }
+        (None, Some(tuf)) => resolve_tuf_config_candidate(tuf, &state.config_governance()).await,
+        (None, None) => Err(ConfigCandidateError::CandidateInvalid(
+            "candidate config source was not provided",
+        )),
+    }
+}
+
+fn consume_apply_metadata(request: &ConfigApplyRequest) {
+    let _ = (
+        request.stream_id.as_str(),
+        request.previous_config_hash.as_deref(),
+        request.root_version,
+        request.break_glass,
+        request.break_glass_approval.as_ref(),
+        request.break_glass_rate_limit,
+        request.local_approval_reference.as_deref(),
+        request.bundle_id.as_deref(),
+        request.sequence,
+    );
+}
+
+fn default_stream_id() -> String {
+    "default".to_string()
+}
+
+fn antirollback_key(context: &ConfigGovernanceContext, stream_id: &str) -> AntiRollbackKey {
+    AntiRollbackKey {
+        product: "registry-notary".to_string(),
+        instance_id: context.instance_id.clone(),
+        environment: context.environment.clone(),
+        stream_id: stream_id.to_string(),
+    }
+}
+
+fn posture_hash(config: &StandaloneRegistryNotaryConfig) -> String {
+    let value = serde_json::to_value(config).expect("notary config serializes to JSON");
+    posture_safe_runtime_config_hash(&value)
+}
+
+fn config_apply_report(
+    bundle_id: String,
+    sequence: u64,
+    result: ApplyReportResult,
+    applied: bool,
+    restart_required: bool,
+    status: StatusCode,
+    audit: ConfigAuditEvent,
+) -> Response {
+    let mut response = (
+        status,
+        Json(ConfigApplyResponse {
+            bundle_id,
+            sequence,
+            result: result.as_str(),
+            posture_result: result.as_posture_result().as_str(),
+            applied,
+            restart_required,
+        }),
+    )
+        .into_response();
+    response.extensions_mut().insert(EvidenceAuditContext {
+        config: Some(audit),
+        ..EvidenceAuditContext::default()
+    });
+    response
+}
+
+fn with_config_audit(mut response: Response, audit: ConfigAuditEvent) -> Response {
+    response.extensions_mut().insert(EvidenceAuditContext {
+        config: Some(audit),
+        ..EvidenceAuditContext::default()
+    });
+    response
+}
+
+fn unresolved_config_audit(
+    action: ConfigAdminAction,
+    request: &ConfigApplyRequest,
+    product_validation_result: &'static str,
+    apply_result: &'static str,
+    applied: bool,
+    restart_required: bool,
+) -> ConfigAuditEvent {
+    ConfigAuditEvent {
+        action: action.as_str().to_string(),
+        source: request_config_source(request).as_posture_str().to_string(),
+        bundle_id: request.bundle_id.clone(),
+        sequence: request.sequence,
+        signer_kids: Vec::new(),
+        previous_config_hash: request.previous_config_hash.clone(),
+        config_hash: request
+            .config_yaml
+            .as_deref()
+            .map(|yaml| internal_config_hash(yaml.as_bytes())),
+        product_validation_result: product_validation_result.to_string(),
+        apply_result: apply_result.to_string(),
+        posture_result: apply_result_to_posture_audit(apply_result).to_string(),
+        applied,
+        restart_required,
+        change_classes: Vec::new(),
+        break_glass: false,
+        break_glass_approval_reference: None,
+        break_glass_approved_by: None,
+        break_glass_reason_hash: None,
+        break_glass_emergency_change_class: None,
+        break_glass_expires_at_unix_seconds: None,
+        break_glass_rate_limit_identity: None,
+        local_approval_reference: request.local_approval_reference.clone(),
+        local_approval_approved_by: None,
+        local_approval_reason_hash: None,
+        local_approval_change_class: None,
+        local_approval_expires_at_unix_seconds: None,
+        local_approval_rate_limit_identity: None,
+    }
+}
+
+fn resolved_config_audit(
+    action: ConfigAdminAction,
+    resolved: &ResolvedConfigCandidate,
+    product_validation_result: &'static str,
+    apply_result: &'static str,
+    applied: bool,
+    restart_required: bool,
+) -> ConfigAuditEvent {
+    ConfigAuditEvent {
+        action: action.as_str().to_string(),
+        source: resolved.source.as_posture_str().to_string(),
+        bundle_id: Some(resolved.bundle_id.clone()),
+        sequence: Some(resolved.sequence),
+        signer_kids: resolved.signer_kids.iter().cloned().collect(),
+        previous_config_hash: resolved.previous_config_hash.clone(),
+        config_hash: Some(internal_config_hash(resolved.config_yaml.as_bytes())),
+        product_validation_result: product_validation_result.to_string(),
+        apply_result: apply_result.to_string(),
+        posture_result: apply_result_to_posture_audit(apply_result).to_string(),
+        applied,
+        restart_required,
+        change_classes: resolved.change_classes.iter().cloned().collect(),
+        break_glass: false,
+        break_glass_approval_reference: None,
+        break_glass_approved_by: None,
+        break_glass_reason_hash: None,
+        break_glass_emergency_change_class: None,
+        break_glass_expires_at_unix_seconds: None,
+        break_glass_rate_limit_identity: None,
+        local_approval_reference: None,
+        local_approval_approved_by: None,
+        local_approval_reason_hash: None,
+        local_approval_change_class: None,
+        local_approval_expires_at_unix_seconds: None,
+        local_approval_rate_limit_identity: None,
+    }
+}
+
+trait ConfigAuditBreakGlassExt {
+    fn with_break_glass_request(self, request: &ConfigApplyRequest) -> Self;
+}
+
+impl ConfigAuditBreakGlassExt for ConfigAuditEvent {
+    fn with_break_glass_request(mut self, request: &ConfigApplyRequest) -> Self {
+        self.break_glass = request.break_glass;
+        if let Some(approval) = &request.break_glass_approval {
+            self.break_glass_approval_reference = Some(approval.approval_reference.clone());
+            self.break_glass_approved_by = Some(approval.approved_by.clone());
+            self.break_glass_reason_hash = Some(internal_config_hash(approval.reason.as_bytes()));
+            self.break_glass_emergency_change_class = Some(approval.emergency_change_class.clone());
+            self.break_glass_expires_at_unix_seconds = Some(approval.expires_at_unix_seconds);
+            self.break_glass_rate_limit_identity = Some(approval.rate_limit_identity.clone());
+        }
+        self
+    }
+}
+
+trait ConfigAuditLocalApprovalExt {
+    fn with_local_approval_request(self, request: &ConfigApplyRequest) -> Self;
+    fn with_local_approval(self, approval: Option<&LocalOperatorApproval>) -> Self;
+}
+
+impl ConfigAuditLocalApprovalExt for ConfigAuditEvent {
+    fn with_local_approval_request(mut self, request: &ConfigApplyRequest) -> Self {
+        self.local_approval_reference = request.local_approval_reference.clone();
+        self
+    }
+
+    fn with_local_approval(mut self, approval: Option<&LocalOperatorApproval>) -> Self {
+        if let Some(approval) = approval {
+            self.local_approval_reference = Some(approval.approval_reference.clone());
+            self.local_approval_approved_by = Some(approval.approved_by.clone());
+            self.local_approval_reason_hash =
+                Some(internal_config_hash(approval.reason.as_bytes()));
+            self.local_approval_change_class = Some(approval.change_class.clone());
+            self.local_approval_expires_at_unix_seconds = Some(approval.expires_at_unix_seconds);
+            self.local_approval_rate_limit_identity = Some(approval.rate_limit_identity.clone());
+        }
+        self
+    }
+}
+
+fn request_config_source(request: &ConfigApplyRequest) -> ConfigSource {
+    if let Some(tuf) = &request.tuf {
+        match tuf {
+            TufConfigTargetRequest::Local(_) => ConfigSource::SignedBundleFile,
+            TufConfigTargetRequest::Remote(_) => ConfigSource::SignedBundleEndpoint,
+        }
+    } else if request.config_yaml.is_some() {
+        ConfigSource::LocalFile
+    } else {
+        ConfigSource::Unknown
+    }
+}
+
+fn apply_result_to_posture_audit(apply_result: &str) -> &'static str {
+    match apply_result {
+        "verified" => ApplyReportResult::Verified.as_posture_result().as_str(),
+        "applied" => ApplyReportResult::Applied.as_posture_result().as_str(),
+        "rejected_restart_required" | "restart_required" => {
+            ApplyReportResult::RejectedRestartRequired
+                .as_posture_result()
+                .as_str()
+        }
+        "rejected_break_glass" => ApplyReportResult::RejectedBreakGlass
+            .as_posture_result()
+            .as_str(),
+        "rejected_local_approval" => ApplyReportResult::RejectedLocalApproval
+            .as_posture_result()
+            .as_str(),
+        "rejected_rollback"
+        | "rejected_signature"
+        | "rejected_threshold"
+        | "rejected_freshness"
+        | "rejected_readiness"
+        | "rejected_apply_policy"
+        | "rejected_product_validation"
+        | "rejected_compile"
+        | "internal_error" => "rejected",
+        _ => "rejected",
+    }
+}
+
+fn config_candidate_invalid(detail: &'static str) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "type": format!("{}/config/candidate_invalid", crate::PROBLEM_TYPE_BASE_URL),
+            "title": "Candidate config invalid",
+            "status": 400,
+            "code": CONFIG_CANDIDATE_INVALID_CODE,
+            "detail": detail,
+        })),
+    )
+        .into_response()
+}
+
+fn config_bundle_invalid(detail: &'static str) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "type": format!("{}/config/bundle_invalid", crate::PROBLEM_TYPE_BASE_URL),
+            "title": "Signed config bundle invalid",
+            "status": 400,
+            "code": CONFIG_BUNDLE_INVALID_CODE,
+            "detail": detail,
+        })),
+    )
+        .into_response()
+}
+
+fn config_apply_unavailable(detail: &'static str) -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({
+            "type": format!("{}/config/apply_unavailable", crate::PROBLEM_TYPE_BASE_URL),
+            "title": "Config apply unavailable",
+            "status": 503,
+            "code": "config.apply_unavailable",
+            "detail": detail,
+        })),
+    )
+        .into_response()
 }
 
 pub async fn oid4vci_proof_precheck_middleware(
@@ -195,16 +1848,17 @@ async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Respons
             let replay_readiness = state.replay.check_ready().await;
             let credential_status_ready = state.credential_status.check_ready().await.is_ok();
             let replay_ready = matches!(replay_readiness, Ok(ReplayReadiness::Ready));
-            let signer_ready = state.signer_readiness.is_ready();
+            let signer_readiness = state.signer_readiness();
+            let signer_ready = signer_readiness.is_ready();
             let degraded = matches!(replay_readiness, Ok(ReplayReadiness::Degraded))
                 && credential_status_ready
                 && signer_ready;
             (
                 replay_ready && credential_status_ready && signer_ready && !degraded,
                 degraded,
-                state.signer_readiness.total(),
-                state.signer_readiness.ready_count(),
-                state.signer_readiness.failed_count(),
+                signer_readiness.total(),
+                signer_readiness.ready_count(),
+                signer_readiness.failed_count(),
             )
         }
         _ => (false, false, 0, 0, 0),
@@ -242,14 +1896,14 @@ async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Respons
         StatusCode::SERVICE_UNAVAILABLE
     };
     let status_text = match (ready, is_degraded) {
-        (true, _) => "ready",
-        (false, true) => "degraded",
-        (false, false) => "not_ready",
+        (true, _) => KeyReadiness::Ready,
+        (false, true) => KeyReadiness::Degraded,
+        (false, false) => KeyReadiness::NotReady,
     };
     (
         status,
         Json(json!({
-            "status": status_text,
+            "status": status_text.as_str(),
             "checks": {
                 "total": total,
                 "ok": ok,
@@ -284,6 +1938,7 @@ async fn admin_reload(principal: Option<Extension<EvidencePrincipal>>) -> Respon
 }
 
 async fn admin_posture(
+    Query(query): Query<PostureQuery>,
     state: Option<Extension<Arc<RegistryNotaryApiState>>>,
     principal: Option<Extension<EvidencePrincipal>>,
 ) -> Response {
@@ -305,10 +1960,20 @@ async fn admin_posture(
         )
             .into_response();
     };
-    match posture_document(&state).await {
+    let tier = match query.tier.as_deref() {
+        Some("restricted") => registry_platform_ops::PostureTier::Restricted,
+        Some("default") | None => registry_platform_ops::PostureTier::Default,
+        Some(_) => registry_platform_ops::PostureTier::Default,
+    };
+    match posture_document(&state, tier).await {
         Ok(posture) => Json(posture).into_response(),
         Err(error) => posture_filter_failed(error),
     }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PostureQuery {
+    tier: Option<String>,
 }
 
 async fn get_credential_status(
@@ -488,7 +2153,7 @@ pub struct RegistryNotaryApiState {
     pub(crate) self_attestation: Arc<SelfAttestationConfig>,
     pub(crate) oid4vci: Arc<Oid4vciConfig>,
     pub(crate) federation: Arc<FederationConfig>,
-    pub(crate) federation_runtime: Option<Arc<crate::federation::FederationRuntimeState>>,
+    federation_runtime: Arc<RwLock<Option<Arc<crate::federation::FederationRuntimeState>>>>,
     self_attestation_rate_limiter: Arc<SelfAttestationRateLimiter>,
     pub(crate) self_attestation_rate_keys: Arc<SelfAttestationRateLimitKeys>,
     pub(crate) replay: ReplayStores,
@@ -496,16 +2161,24 @@ pub struct RegistryNotaryApiState {
     pub(crate) metrics: Arc<AppMetrics>,
     pub(crate) source: Arc<dyn SourceReader>,
     pub(crate) store: Arc<EvidenceStore>,
-    issuers: Arc<dyn EvidenceIssuerResolver>,
-    pub(crate) signer_readiness: SignerReadiness,
+    issuer_runtime: Arc<RwLock<Arc<IssuerRuntimeBundle>>>,
+    auth_state: Option<Arc<AuthAuditState>>,
     pub(crate) posture: Option<Arc<PostureContext>>,
+    config_governance: Arc<RwLock<ConfigGovernanceContext>>,
+    runtime_config: Arc<RwLock<Option<Arc<StandaloneRegistryNotaryConfig>>>>,
+    config_apply_posture: Arc<RwLock<ConfigApplyPosture>>,
     /// Pre-authorized-code flow runtime. `None` unless the flow is enabled and
     /// the dedicated access-token signing key plus eSignet RP settings loaded.
-    pub(crate) preauth: Option<Arc<PreAuthRuntime>>,
+    pub(crate) preauth: Arc<RwLock<Option<Arc<PreAuthRuntime>>>>,
     #[cfg(feature = "registry-notary-cel")]
     pub(crate) cel_worker: Option<Arc<CelWorker>>,
     #[cfg(feature = "registry-notary-cel")]
     pub(crate) cel_config: Arc<RegistryNotaryCelConfig>,
+}
+
+struct IssuerRuntimeBundle {
+    issuers: Arc<dyn EvidenceIssuerResolver>,
+    signer_readiness: SignerReadiness,
 }
 
 impl RegistryNotaryApiState {
@@ -686,12 +2359,16 @@ impl RegistryNotaryApiState {
             self_attestation.rate_limits.clone(),
         ));
         let self_attestation_rate_keys = Arc::new(SelfAttestationRateLimitKeys::new(audit_hasher));
+        let issuer_runtime = Arc::new(IssuerRuntimeBundle {
+            issuers,
+            signer_readiness,
+        });
         Self {
             evidence,
             self_attestation,
             oid4vci,
             federation,
-            federation_runtime,
+            federation_runtime: Arc::new(RwLock::new(federation_runtime)),
             self_attestation_rate_limiter,
             self_attestation_rate_keys,
             replay,
@@ -699,10 +2376,13 @@ impl RegistryNotaryApiState {
             metrics,
             source,
             store,
-            issuers,
-            signer_readiness,
+            issuer_runtime: Arc::new(RwLock::new(issuer_runtime)),
+            auth_state: None,
             posture: None,
-            preauth: None,
+            config_governance: Arc::new(RwLock::new(ConfigGovernanceContext::default())),
+            runtime_config: Arc::new(RwLock::new(None)),
+            config_apply_posture: Arc::new(RwLock::new(ConfigApplyPosture::default())),
+            preauth: Arc::new(RwLock::new(None)),
             #[cfg(feature = "registry-notary-cel")]
             cel_worker: None,
             #[cfg(feature = "registry-notary-cel")]
@@ -711,19 +2391,172 @@ impl RegistryNotaryApiState {
     }
 
     #[must_use]
-    pub(crate) fn with_preauth_runtime(mut self, preauth: Option<Arc<PreAuthRuntime>>) -> Self {
-        self.preauth = preauth;
+    pub(crate) fn with_auth_state(mut self, auth_state: Arc<AuthAuditState>) -> Self {
+        self.auth_state = Some(auth_state);
         self
     }
 
-    pub(crate) fn with_signer_readiness(mut self, signer_readiness: SignerReadiness) -> Self {
-        self.signer_readiness = signer_readiness;
+    #[must_use]
+    pub(crate) fn with_preauth_runtime(self, preauth: Option<Arc<PreAuthRuntime>>) -> Self {
+        *self
+            .preauth
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = preauth;
+        self
+    }
+
+    pub(crate) fn with_signer_readiness(self, signer_readiness: SignerReadiness) -> Self {
+        let current = self.issuer_runtime();
+        *self
+            .issuer_runtime
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Arc::new(IssuerRuntimeBundle {
+            issuers: current.issuers.clone(),
+            signer_readiness,
+        });
         self
     }
 
     pub(crate) fn with_posture_context(mut self, posture: PostureContext) -> Self {
         self.posture = Some(Arc::new(posture));
         self
+    }
+
+    pub(crate) fn with_config_governance(self, context: ConfigGovernanceContext) -> Self {
+        *self
+            .config_governance
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = context;
+        self
+    }
+
+    pub(crate) fn with_runtime_config(self, config: Arc<StandaloneRegistryNotaryConfig>) -> Self {
+        *self
+            .runtime_config
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(config);
+        self
+    }
+
+    pub(crate) fn runtime_config(&self) -> Option<Arc<StandaloneRegistryNotaryConfig>> {
+        self.runtime_config
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn swap_runtime_config(&self, config: Arc<StandaloneRegistryNotaryConfig>) {
+        *self
+            .runtime_config
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(config);
+    }
+
+    fn config_governance(&self) -> ConfigGovernanceContext {
+        self.config_governance
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn swap_config_governance(&self, context: ConfigGovernanceContext) {
+        *self
+            .config_governance
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = context;
+    }
+
+    pub(crate) fn federation_runtime(
+        &self,
+    ) -> Option<Arc<crate::federation::FederationRuntimeState>> {
+        self.federation_runtime
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    pub(crate) fn config_apply_posture(&self) -> ConfigApplyPosture {
+        self.config_apply_posture
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn record_config_apply(&self, posture: ConfigApplyPosture) {
+        *self
+            .config_apply_posture
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = posture;
+    }
+
+    fn issuer_runtime(&self) -> Arc<IssuerRuntimeBundle> {
+        self.issuer_runtime
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn issuer_resolver(&self) -> Arc<dyn EvidenceIssuerResolver> {
+        self.issuer_runtime().issuers.clone()
+    }
+
+    pub(crate) fn signer_readiness(&self) -> SignerReadiness {
+        self.issuer_runtime().signer_readiness.clone()
+    }
+
+    fn swap_issuer_runtime(
+        &self,
+        runtime_config: Arc<StandaloneRegistryNotaryConfig>,
+        issuers: Arc<dyn EvidenceIssuerResolver>,
+        signer_readiness: SignerReadiness,
+    ) {
+        *self
+            .runtime_config
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(runtime_config);
+        *self
+            .issuer_runtime
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Arc::new(IssuerRuntimeBundle {
+            issuers,
+            signer_readiness,
+        });
+    }
+
+    fn swap_preauth_runtime(&self, preauth: Option<Arc<PreAuthRuntime>>) {
+        *self
+            .preauth
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = preauth;
+    }
+
+    fn swap_federation_runtime(
+        &self,
+        federation: Option<Arc<crate::federation::FederationRuntimeState>>,
+    ) {
+        *self
+            .federation_runtime
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = federation;
+    }
+
+    fn notary_auth_anchor_for_config(
+        &self,
+        config: &StandaloneRegistryNotaryConfig,
+    ) -> Result<
+        Option<crate::standalone::NotaryTokenAnchor>,
+        crate::standalone::StandaloneServerError,
+    > {
+        if let Some(auth_state) = &self.auth_state {
+            return auth_state.notary_anchor_for_config(config);
+        }
+        Ok(None)
+    }
+
+    fn swap_notary_auth_anchor(&self, anchor: Option<crate::standalone::NotaryTokenAnchor>) {
+        if let (Some(auth_state), Some(anchor)) = (&self.auth_state, anchor) {
+            auth_state.swap_notary_anchor(anchor);
+        }
     }
 
     #[cfg(feature = "registry-notary-cel")]
@@ -765,7 +2598,7 @@ impl RegistryNotaryApiState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct EvidenceAuditContext {
     pub verification_id: Option<String>,
     pub verification_decision: Option<String>,
@@ -790,6 +2623,7 @@ pub struct EvidenceAuditContext {
     pub matching_outcome: Option<String>,
     pub matching_error_code: Option<String>,
     pub batch_items: Option<Vec<EvidenceBatchItemAuditEvent>>,
+    pub config: Option<ConfigAuditEvent>,
 }
 
 #[derive(Debug, Clone)]
@@ -1090,7 +2924,10 @@ async fn oid4vci_credential(
         Some(profile) => profile,
         None => return oid4vci_error_response(Oid4vciWireError::UnsupportedCredentialType),
     };
-    let issuer = match state.issuers.issuer(&configuration.credential_profile) {
+    let issuer = match state
+        .issuer_resolver()
+        .issuer(&configuration.credential_profile)
+    {
         Ok(issuer) => issuer,
         Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
     };
@@ -1654,16 +3491,22 @@ async fn oid4vci_token(
         return token_error_response(TokenWireError::SlowDown);
     }
     let now = OffsetDateTime::now_utc().unix_timestamp();
-    let verified = match verify_notary_token(
-        code,
-        preauth.access_token_public_jwk(),
-        PRE_AUTHORIZED_CODE_JWT_TYP,
-        preauth.notary_issuer(),
-        &[],
-        now,
-    ) {
-        Ok(verified) => verified,
-        Err(_) => {
+    let verified = match preauth
+        .access_token_public_jwks()
+        .iter()
+        .find_map(|public_jwk| {
+            verify_notary_token(
+                code,
+                public_jwk,
+                PRE_AUTHORIZED_CODE_JWT_TYP,
+                preauth.notary_issuer(),
+                &[],
+                now,
+            )
+            .ok()
+        }) {
+        Some(verified) => verified,
+        None => {
             return token_error_after_invalid_attempt(
                 &state,
                 &preauth,
@@ -1812,7 +3655,11 @@ fn preauth_runtime(state: &RegistryNotaryApiState) -> Option<Arc<PreAuthRuntime>
     if !state.oid4vci.enabled {
         return None;
     }
-    state.preauth.clone()
+    state
+        .preauth
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
 }
 
 /// Validate a requested `credential_configuration_id` against the configured
@@ -1852,9 +3699,8 @@ async fn consume_pre_authorized_code_jti(
     // Bound the single-use marker's storage to roughly the code lifetime.
     let expires_at = OffsetDateTime::from_unix_timestamp(now).map_err(|_| ())?
         + time::Duration::seconds(
-            state
-                .preauth
-                .as_ref()
+            preauth_runtime(state)
+                .as_deref()
                 .map(|preauth| preauth.pre_authorized_code_ttl_seconds())
                 .unwrap_or(300) as i64,
         );
@@ -2284,7 +4130,7 @@ async fn issuer_jwks(
         Ok(evidence) => evidence,
         Err(error) => return evidence_error_response(error),
     };
-    match state.issuers.public_jwks(evidence) {
+    match state.issuer_resolver().public_jwks(evidence) {
         Ok(keys) => Json(json!({ "keys": keys })).into_response(),
         Err(error) => evidence_error_response(error),
     }
@@ -3004,7 +4850,7 @@ async fn issue_credential(
             return response;
         }
     }
-    let issuer = match state.issuers.issuer(profile_id) {
+    let issuer = match state.issuer_resolver().issuer(profile_id) {
         Ok(issuer) => issuer,
         Err(error) => return evidence_error_response(error),
     };
@@ -4447,6 +6293,7 @@ fn attach_evidence_audit_with_purposes(
         matching_outcome: None,
         matching_error_code: None,
         batch_items: None,
+        ..EvidenceAuditContext::default()
     });
 }
 
@@ -4753,6 +6600,7 @@ fn attach_self_attestation_credential_audit(
         matching_outcome: matching.map(|_| "matched".to_string()),
         matching_error_code: None,
         batch_items: None,
+        ..EvidenceAuditContext::default()
     });
     Ok(())
 }
@@ -4789,6 +6637,7 @@ fn attach_self_attestation_success_audit(
         matching_outcome: None,
         matching_error_code: None,
         batch_items: None,
+        ..EvidenceAuditContext::default()
     });
 }
 
@@ -4823,6 +6672,7 @@ fn attach_self_attestation_audit(
         matching_outcome: None,
         matching_error_code: None,
         batch_items: None,
+        ..EvidenceAuditContext::default()
     });
 }
 
@@ -4858,6 +6708,7 @@ fn attach_oid4vci_self_attestation_denial_audit(
         matching_outcome: None,
         matching_error_code: None,
         batch_items: None,
+        ..EvidenceAuditContext::default()
     });
 }
 
@@ -4891,6 +6742,7 @@ fn attach_self_attestation_rate_limit_audit(
         matching_outcome: None,
         matching_error_code: None,
         batch_items: None,
+        ..EvidenceAuditContext::default()
     });
 }
 
@@ -5389,6 +7241,73 @@ mod tests {
     const ISSUER_PRIV_D_B64: &str = "f4QIxnAyRWzhuBOmNRgvBTE56mWePdsPL0mvCtl8Gys";
     const ISSUER_PUB_X_B64: &str = "pv4e_hXHBLN27rcs6VDFV1ED0TiU8M3xy9vsuWFEsec";
     const SUBJECT_BINDING_CLAIM: &str = "https://id.example.gov/claims/national_id";
+
+    #[test]
+    fn config_request_rejects_ambiguous_local_and_remote_tuf_source() {
+        let request = serde_json::from_value::<ConfigApplyRequest>(json!({
+            "tuf": {
+                "root_path": "/etc/registry-notary/trust/root.json",
+                "metadata_dir": "/etc/registry-notary/trust/metadata",
+                "targets_dir": "/etc/registry-notary/trust/targets",
+                "metadata_base_url": "https://config.example.gov/metadata/",
+                "targets_base_url": "https://config.example.gov/targets/",
+                "datastore_dir": "/var/lib/registry-notary/config-tuf",
+                "target_name": "registry-notary.yaml"
+            }
+        }));
+
+        assert!(
+            request.is_err(),
+            "TUF request must choose exactly one local or remote source shape"
+        );
+    }
+
+    #[test]
+    fn antirollback_state_failures_map_to_internal_error_not_rollback() {
+        for error in [
+            AntiRollbackStoreError::MissingState,
+            AntiRollbackStoreError::KeyMismatch,
+            AntiRollbackStoreError::InvalidState("corrupt hash".to_string()),
+            AntiRollbackStoreError::Io("permission denied".to_string()),
+            AntiRollbackStoreError::Json("invalid JSON".to_string()),
+        ] {
+            let (result, status) = antirollback_apply_failure(&error);
+            assert_eq!(result, ApplyReportResult::InternalError);
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    #[test]
+    fn genuine_rollback_failures_still_map_to_rejected_rollback() {
+        for error in [
+            AntiRollbackStoreError::NonMonotonicSequence,
+            AntiRollbackStoreError::RootVersionRollback,
+            AntiRollbackStoreError::PreviousConfigHashMismatch,
+        ] {
+            let (result, status) = antirollback_apply_failure(&error);
+            assert_eq!(result, ApplyReportResult::RejectedRollback);
+            assert_eq!(status, StatusCode::CONFLICT);
+        }
+    }
+
+    #[test]
+    fn credential_issuer_rotation_gate_rejects_unready_signer() {
+        let ready = Arc::new(AtomicBool::new(true));
+        let not_ready = Arc::new(AtomicBool::new(false));
+        let rotation = CredentialIssuerRotation {
+            issuers: Arc::new(NoopIssuerResolver),
+            signer_readiness: SignerReadiness::from_provider_flags(vec![
+                Arc::clone(&ready),
+                Arc::clone(&not_ready),
+            ]),
+            preauth: None,
+            federation: None,
+        };
+
+        assert!(!credential_issuer_rotation_ready(&rotation));
+        not_ready.store(true, Ordering::SeqCst);
+        assert!(credential_issuer_rotation_ready(&rotation));
+    }
 
     fn holder_did_jwk() -> String {
         let holder = PrivateJwk::parse(

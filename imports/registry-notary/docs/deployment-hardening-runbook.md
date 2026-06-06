@@ -252,7 +252,9 @@ deployments. Use PKCS#11 where the deployment requires HSM-backed signing.
 Operational rules:
 
 - `status: active` keys may sign and publish.
-- `status: publish_only` keys publish public material but cannot sign.
+- `status: publish_only` keys publish public material but cannot sign. If
+  `publish_until_unix_seconds` is set, JWKS and restricted posture omit the key
+  after that time.
 - `status: disabled` keys do neither.
 - Keep `kid` stable for a key version and unique among published keys.
 - Do not configure a private JWK for `publish_only`.
@@ -373,7 +375,8 @@ attacker with a copy of the key.
 4. For keys that were `active` before the incident, set them to `publish_only`
    (not `disabled`) only if verifiers still hold credentials that reference
    their key id and need the public key to verify signatures on already-issued
-   material. Once all such credentials have expired and verifier caches have
+   material. Set `publish_until_unix_seconds` to the end of that verification
+   window, or once all such credentials have expired and verifier caches have
    refreshed, set them to `disabled`.
 5. Decide whether status-enabled credentials signed by the compromised key
    need suspension or revocation. If so, use the status mutation endpoint

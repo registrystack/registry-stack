@@ -4,8 +4,13 @@
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
+use registry_platform_config::RegistryTrustRoot;
 use registry_platform_crypto::validate_did_web_https_issuer_binding;
+pub use registry_platform_crypto::{
+    KeyProviderKind as SigningKeyProviderConfig, KeyStatus as SigningKeyStatus,
+};
 use registry_platform_oid4vci::{
     CREDENTIAL_SIGNING_ALG_EDDSA, CRYPTOGRAPHIC_BINDING_METHOD_DID_JWK,
     SD_JWT_VC_FORMAT as OID4VCI_SD_JWT_VC_FORMAT,
@@ -36,6 +41,8 @@ pub struct StandaloneRegistryNotaryConfig {
     pub auth: EvidenceAuthConfig,
     #[serde(default)]
     pub audit: EvidenceAuditConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_trust: Option<ConfigTrustConfig>,
     #[serde(default, skip_serializing_if = "replay_config_is_default")]
     pub replay: ReplayConfig,
     #[serde(default, skip_serializing_if = "credential_status_config_is_default")]
@@ -63,6 +70,42 @@ pub struct NotaryInstanceConfig {
     pub jurisdiction: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub public_base_url: Option<String>,
+}
+
+/// Optional governed-configuration local trust state.
+///
+/// Simple local deployments omit this block. Signed/governed apply requires it
+/// so anti-rollback state lives in an explicit durable location.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigTrustConfig {
+    pub antirollback_state_path: PathBuf,
+    pub local_approval_state_path: PathBuf,
+    #[serde(
+        default = "default_break_glass_rate_limit",
+        skip_serializing_if = "config_trust_rate_limit_is_default"
+    )]
+    pub break_glass_rate_limit: ConfigTrustRateLimit,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accepted_roots: Vec<RegistryTrustRoot>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigTrustRateLimit {
+    pub max_accepted: u32,
+    pub window_seconds: u64,
+}
+
+fn default_break_glass_rate_limit() -> ConfigTrustRateLimit {
+    ConfigTrustRateLimit {
+        max_accepted: 1,
+        window_seconds: 3600,
+    }
+}
+
+fn config_trust_rate_limit_is_default(rate_limit: &ConfigTrustRateLimit) -> bool {
+    rate_limit == &default_break_glass_rate_limit()
 }
 
 impl Default for NotaryInstanceConfig {
@@ -93,6 +136,43 @@ impl StandaloneRegistryNotaryConfig {
     pub fn validate(&self) -> Result<(), EvidenceConfigError> {
         if !self.evidence.enabled {
             return Err(EvidenceConfigError::EvidenceDisabled);
+        }
+        if let Some(config_trust) = &self.config_trust {
+            if config_trust.antirollback_state_path.as_os_str().is_empty() {
+                return Err(EvidenceConfigError::InvalidConfigTrustConfig {
+                    reason: "config_trust.antirollback_state_path must not be empty".to_string(),
+                });
+            }
+            if config_trust
+                .local_approval_state_path
+                .as_os_str()
+                .is_empty()
+            {
+                return Err(EvidenceConfigError::InvalidConfigTrustConfig {
+                    reason: "config_trust.local_approval_state_path must not be empty".to_string(),
+                });
+            }
+            if config_trust.break_glass_rate_limit.max_accepted == 0 {
+                return Err(EvidenceConfigError::InvalidConfigTrustConfig {
+                    reason:
+                        "config_trust.break_glass_rate_limit.max_accepted must be greater than zero"
+                            .to_string(),
+                });
+            }
+            if config_trust.break_glass_rate_limit.window_seconds == 0 {
+                return Err(EvidenceConfigError::InvalidConfigTrustConfig {
+                    reason: "config_trust.break_glass_rate_limit.window_seconds must be greater than zero"
+                        .to_string(),
+                });
+            }
+            for root in &config_trust.accepted_roots {
+                root.validate()
+                    .map_err(|error| EvidenceConfigError::InvalidConfigTrustConfig {
+                        reason: format!(
+                            "config_trust.accepted_roots contains an invalid trust root: {error}"
+                        ),
+                    })?;
+            }
         }
         self.replay.validate()?;
         match self.auth.mode.as_str() {
@@ -519,6 +599,49 @@ impl StandaloneRegistryNotaryConfig {
                     "signing_key_id '{}' must be distinct from credential profile '{profile_id}' signing key",
                     signing.signing_key_id
                 ));
+            }
+        }
+        let mut verification_keys = std::collections::BTreeSet::new();
+        for key_id in &signing.verification_key_ids {
+            if key_id.trim().is_empty() {
+                return invalid_access_token_signing(
+                    "verification_key_ids must not contain blank entries",
+                );
+            }
+            if key_id == &signing.signing_key_id {
+                return invalid_access_token_signing(format!(
+                    "verification_key_ids must not repeat active signing_key_id '{}'",
+                    signing.signing_key_id
+                ));
+            }
+            if !verification_keys.insert(key_id.as_str()) {
+                return invalid_access_token_signing(format!(
+                    "verification_key_ids contains duplicate key '{key_id}'"
+                ));
+            }
+            let key = self.evidence.signing_keys.get(key_id).ok_or_else(|| {
+                EvidenceConfigError::InvalidAccessTokenSigningConfig {
+                    reason: format!(
+                        "verification_key_ids entry '{key_id}' must reference an evidence.signing_keys entry"
+                    ),
+                }
+            })?;
+            if !key.status.may_publish() || key.status.may_sign() {
+                return invalid_access_token_signing(format!(
+                    "verification_key_ids entry '{key_id}' must be a publish_only signing key"
+                ));
+            }
+            if key.alg != CREDENTIAL_SIGNING_ALG_EDDSA {
+                return invalid_access_token_signing(format!(
+                    "verification_key_ids entry '{key_id}' must use {CREDENTIAL_SIGNING_ALG_EDDSA}"
+                ));
+            }
+            for (profile_id, profile) in &self.evidence.credential_profiles {
+                if profile.signing_key == *key_id {
+                    return invalid_access_token_signing(format!(
+                        "verification_key_ids entry '{key_id}' must be distinct from credential profile '{profile_id}' signing key"
+                    ));
+                }
             }
         }
         Ok(())
@@ -3123,6 +3246,11 @@ pub struct AccessTokenSigningConfig {
     /// dedicated key, never a credential-signing key.
     #[serde(default)]
     pub signing_key_id: String,
+    /// Additional publish-only `evidence.signing_keys` entries accepted for
+    /// verifying previously minted Notary access tokens and pre-authorized
+    /// codes during a governed key rotation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verification_key_ids: Vec<String>,
     /// Access-token lifetime in seconds.
     #[serde(default = "default_access_token_ttl_seconds")]
     pub access_token_ttl_seconds: u64,
@@ -3137,6 +3265,7 @@ impl Default for AccessTokenSigningConfig {
             allowed_algorithms: default_access_token_signing_algorithms(),
             token_typ: default_access_token_typ(),
             signing_key_id: String::new(),
+            verification_key_ids: Vec::new(),
             access_token_ttl_seconds: default_access_token_ttl_seconds(),
         }
     }
@@ -3433,6 +3562,8 @@ pub enum EvidenceConfigError {
     InvalidCelConfig { reason: String },
     #[error("invalid federation config: {reason}")]
     InvalidFederationConfig { reason: String },
+    #[error("invalid config_trust config: {reason}")]
+    InvalidConfigTrustConfig { reason: String },
     #[error("source_connection '{connection}': invalid source_auth config: {reason}")]
     InvalidSourceAuthConfig { connection: String, reason: String },
     #[error("claim id must not be empty")]
@@ -4365,40 +4496,14 @@ pub struct CredentialProfileConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub enum SigningKeyProviderConfig {
-    LocalJwkEnv,
-    Pkcs11,
-    LocalPkcs12File,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub enum SigningKeyStatus {
-    Active,
-    PublishOnly,
-    Disabled,
-}
-
-impl SigningKeyStatus {
-    #[must_use]
-    pub const fn may_sign(self) -> bool {
-        matches!(self, Self::Active)
-    }
-
-    #[must_use]
-    pub const fn may_publish(self) -> bool {
-        matches!(self, Self::Active | Self::PublishOnly)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SigningKeyConfig {
     pub provider: SigningKeyProviderConfig,
     pub alg: String,
     pub kid: String,
     pub status: SigningKeyStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publish_until_unix_seconds: Option<u64>,
     #[serde(default)]
     pub private_jwk_env: String,
     #[serde(default)]
@@ -4433,6 +4538,14 @@ impl SigningKeyConfig {
             );
         }
         validate_signing_key_non_empty(key_id, "kid", &self.kid)?;
+        if self.publish_until_unix_seconds.is_some()
+            && !matches!(self.status, SigningKeyStatus::PublishOnly)
+        {
+            return invalid_signing_key(
+                key_id,
+                "publish_until_unix_seconds is valid only for publish_only signing keys",
+            );
+        }
         match self.provider {
             SigningKeyProviderConfig::LocalJwkEnv => {
                 if self.status.may_sign() {
@@ -4487,14 +4600,44 @@ impl SigningKeyConfig {
                 validate_signing_key_absent(key_id, "path", &self.path)?;
                 validate_signing_key_absent(key_id, "password_env", &self.password_env)?;
             }
+            SigningKeyProviderConfig::FileWatch => {
+                if matches!(self.status, SigningKeyStatus::PublishOnly) {
+                    return invalid_signing_key(
+                        key_id,
+                        "file_watch provider supports only active or disabled signing keys",
+                    );
+                }
+                if self.status.may_sign() {
+                    validate_signing_key_non_empty(key_id, "path", &self.path)?;
+                }
+                validate_signing_key_absent(key_id, "private_jwk_env", &self.private_jwk_env)?;
+                validate_signing_key_absent(key_id, "public_jwk_env", &self.public_jwk_env)?;
+                validate_signing_key_absent(key_id, "module_path", &self.module_path)?;
+                validate_signing_key_absent(key_id, "token_label", &self.token_label)?;
+                validate_signing_key_absent(key_id, "pin_env", &self.pin_env)?;
+                validate_signing_key_absent(key_id, "key_label", &self.key_label)?;
+                validate_signing_key_absent(key_id, "key_id_hex", &self.key_id_hex)?;
+                validate_signing_key_absent(key_id, "password_env", &self.password_env)?;
+            }
             SigningKeyProviderConfig::LocalPkcs12File => {
                 invalid_signing_key(
                     key_id,
                     "local_pkcs12_file provider is intentionally not implemented yet",
                 )?;
             }
+            _ => {
+                invalid_signing_key(key_id, "signing key provider is unsupported by this Notary")?;
+            }
         }
         Ok(())
+    }
+
+    pub fn may_publish_at(&self, now_unix_seconds: u64) -> bool {
+        if !self.status.may_publish() {
+            return false;
+        }
+        self.publish_until_unix_seconds
+            .is_none_or(|publish_until| now_unix_seconds <= publish_until)
     }
 }
 
@@ -4635,6 +4778,9 @@ pub struct OotsConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
+
+    use registry_platform_config::{TrustRootRole, TrustRootSigner};
 
     /// Builds a minimal valid config from which individual tests can deviate.
     fn minimal_config() -> StandaloneRegistryNotaryConfig {
@@ -4672,6 +4818,109 @@ rule:
 "#
         ))
         .expect("minimal claim is valid YAML")
+    }
+
+    #[test]
+    fn config_trust_is_optional_but_requires_explicit_antirollback_path() {
+        let mut config = minimal_config();
+        assert!(config.config_trust.is_none());
+        config.validate().expect("simple local config validates");
+
+        config.config_trust = Some(ConfigTrustConfig {
+            antirollback_state_path: PathBuf::from(""),
+            local_approval_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-local-approvals.json",
+            ),
+            break_glass_rate_limit: default_break_glass_rate_limit(),
+            accepted_roots: Vec::new(),
+        });
+        let error = config
+            .validate()
+            .expect_err("empty governed-state path must fail validation");
+        assert!(matches!(
+            error,
+            EvidenceConfigError::InvalidConfigTrustConfig { .. }
+        ));
+
+        config.config_trust = Some(ConfigTrustConfig {
+            antirollback_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-antirollback.json",
+            ),
+            local_approval_state_path: PathBuf::from(""),
+            break_glass_rate_limit: default_break_glass_rate_limit(),
+            accepted_roots: Vec::new(),
+        });
+        let error = config
+            .validate()
+            .expect_err("empty local-approval path must fail validation");
+        assert!(matches!(
+            error,
+            EvidenceConfigError::InvalidConfigTrustConfig { .. }
+        ));
+
+        config.config_trust = Some(ConfigTrustConfig {
+            antirollback_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-antirollback.json",
+            ),
+            local_approval_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-local-approvals.json",
+            ),
+            break_glass_rate_limit: default_break_glass_rate_limit(),
+            accepted_roots: Vec::new(),
+        });
+        config
+            .validate()
+            .expect("explicit governed-state paths validate");
+    }
+
+    #[test]
+    fn config_trust_accepts_shared_trust_roots_and_validates_them() {
+        let mut config = minimal_config();
+        config.config_trust = Some(ConfigTrustConfig {
+            antirollback_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-antirollback.json",
+            ),
+            local_approval_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-local-approvals.json",
+            ),
+            break_glass_rate_limit: default_break_glass_rate_limit(),
+            accepted_roots: vec![RegistryTrustRoot {
+                root_id: "ops-root".to_string(),
+                production: false,
+                tuf_root_sha256:
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        .to_string(),
+                valid_from_unix_seconds: None,
+                valid_until_unix_seconds: None,
+                high_risk_change_classes: BTreeSet::new(),
+                signers: BTreeMap::from([(
+                    "kid-a".to_string(),
+                    TrustRootSigner {
+                        kid: "kid-a".to_string(),
+                        enabled: true,
+                    },
+                )]),
+                roles: vec![TrustRootRole {
+                    name: "config-admin".to_string(),
+                    threshold: 1,
+                    signer_kids: vec!["kid-a".to_string()],
+                    allowed_change_classes: BTreeSet::from(["public_metadata".to_string()]),
+                }],
+            }],
+        });
+        config
+            .validate()
+            .expect("shared trust root config validates");
+
+        let trust = config.config_trust.as_mut().expect("trust config exists");
+        trust.accepted_roots[0].roles[0].threshold = 2;
+        let error = config
+            .validate()
+            .expect_err("invalid shared trust root must fail validation");
+        assert!(matches!(
+            error,
+            EvidenceConfigError::InvalidConfigTrustConfig { .. }
+        ));
     }
 
     #[test]
@@ -5168,6 +5417,7 @@ syslog_socket_path: /dev/log
                 alg: FEDERATION_SIGNING_ALG_EDDSA.to_string(),
                 kid: "agency-a-fed-1".to_string(),
                 status: SigningKeyStatus::Active,
+                publish_until_unix_seconds: None,
                 private_jwk_env: "FEDERATION_SIGNING_KEY".to_string(),
                 public_jwk_env: String::new(),
                 module_path: String::new(),
@@ -5577,6 +5827,56 @@ issuer-2025:
     }
 
     #[test]
+    fn publish_only_signing_key_accepts_bounded_publication_window() {
+        let mut config = minimal_config();
+        config.evidence.signing_keys = serde_norway::from_str(
+            r#"
+issuer-2025:
+  provider: local_jwk_env
+  public_jwk_env: OLD_ISSUER_PUBLIC_KEY
+  alg: EdDSA
+  kid: did:web:issuer.example#issuer-2025
+  status: publish_only
+  publish_until_unix_seconds: 1893456000
+"#,
+        )
+        .expect("signing key YAML is valid");
+
+        let key = config
+            .evidence
+            .signing_keys
+            .get("issuer-2025")
+            .expect("publish-only key exists");
+        assert_eq!(key.publish_until_unix_seconds, Some(1_893_456_000));
+        assert!(key.may_publish_at(1_893_456_000));
+        assert!(!key.may_publish_at(1_893_456_001));
+        config
+            .validate()
+            .expect("publish-only key may carry a publication deadline");
+    }
+
+    #[test]
+    fn active_signing_key_rejects_publication_window() {
+        let mut config = minimal_config();
+        let active = config
+            .evidence
+            .signing_keys
+            .values_mut()
+            .find(|key| key.status == SigningKeyStatus::Active)
+            .expect("minimal config has an active key");
+        active.publish_until_unix_seconds = Some(1_893_456_000);
+
+        let err = config
+            .validate()
+            .expect_err("active signing keys cannot carry a publication deadline");
+        assert!(
+            err.to_string()
+                .contains("publish_until_unix_seconds is valid only for publish_only signing keys"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn pkcs11_signing_key_shape_validates_without_loading_module() {
         let mut config = minimal_config();
         config.evidence.signing_keys = serde_norway::from_str(
@@ -5612,6 +5912,83 @@ allowed_claims:
             .insert("test-profile".to_string(), profile);
 
         config.validate().expect("PKCS#11 key shape validates");
+    }
+
+    #[test]
+    fn file_watch_signing_key_shape_validates_without_secret_material_in_config() {
+        let mut config = minimal_config();
+        config.evidence.signing_keys = serde_norway::from_str(
+            r#"
+issuer-file:
+  provider: file_watch
+  path: /run/secrets/issuer.jwk
+  alg: EdDSA
+  kid: did:web:issuer.example#issuer-file
+  status: active
+"#,
+        )
+        .expect("signing key YAML is valid");
+        let profile: CredentialProfileConfig = serde_norway::from_str(
+            r#"
+format: application/dc+sd-jwt
+issuer: did:web:issuer.example
+signing_key: issuer-file
+vct: https://vct.example/test
+allowed_claims:
+  - some-claim
+"#,
+        )
+        .expect("profile YAML is valid");
+        config
+            .evidence
+            .credential_profiles
+            .insert("test-profile".to_string(), profile);
+
+        config.validate().expect("file-watch key shape validates");
+    }
+
+    #[test]
+    fn file_watch_signing_key_rejects_secret_fields_and_missing_path() {
+        let mut config = minimal_config();
+        config.evidence.signing_keys = serde_norway::from_str(
+            r#"
+issuer-file:
+  provider: file_watch
+  private_jwk_env: REGISTRY_NOTARY_ISSUER_JWK
+  alg: EdDSA
+  kid: did:web:issuer.example#issuer-file
+  status: active
+"#,
+        )
+        .expect("signing key YAML is valid");
+        let err = config
+            .validate()
+            .expect_err("file-watch key must use a local path");
+        assert!(
+            err.to_string().contains("path must not be empty"),
+            "unexpected error: {err}"
+        );
+
+        config.evidence.signing_keys = serde_norway::from_str(
+            r#"
+issuer-file:
+  provider: file_watch
+  path: /run/secrets/issuer.jwk
+  private_jwk_env: REGISTRY_NOTARY_ISSUER_JWK
+  alg: EdDSA
+  kid: did:web:issuer.example#issuer-file
+  status: active
+"#,
+        )
+        .expect("signing key YAML is valid");
+        let err = config
+            .validate()
+            .expect_err("file-watch key must not carry env-backed private material");
+        assert!(
+            err.to_string()
+                .contains("private_jwk_env is not valid for this signing key provider"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -7803,6 +8180,15 @@ status: active
         .expect("access-token signing key is valid YAML")
     }
 
+    fn publish_only_access_token_verification_key(kid: &str) -> SigningKeyConfig {
+        let mut key = second_signing_key();
+        key.kid = kid.to_string();
+        key.status = SigningKeyStatus::PublishOnly;
+        key.private_jwk_env = String::new();
+        key.public_jwk_env = "ACCESS_TOKEN_PUBLIC_KEY".to_string();
+        key
+    }
+
     /// A pre-auth-enabled oid4vci config with a dedicated access-token signing
     /// key, distinct from the credential-signing key.
     fn valid_pre_auth_config() -> StandaloneRegistryNotaryConfig {
@@ -7953,6 +8339,67 @@ access_token_ttl_seconds: 300
         assert!(reason.contains("EdDSA"));
     }
 
+    #[test]
+    fn access_token_verification_key_ids_accept_publish_only_old_keys() {
+        let mut config = valid_pre_auth_config();
+        config.evidence.signing_keys.insert(
+            "access-token-key-old".to_string(),
+            publish_only_access_token_verification_key(
+                "did:web:issuer.example#access-token-key-old",
+            ),
+        );
+        config.auth.access_token_signing.verification_key_ids =
+            vec!["access-token-key-old".to_string()];
+
+        config
+            .validate()
+            .expect("publish-only verification keys are valid during rotation");
+    }
+
+    #[test]
+    fn access_token_verification_key_ids_must_not_repeat_active_key() {
+        let mut config = valid_pre_auth_config();
+        config.auth.access_token_signing.verification_key_ids =
+            vec!["access-token-key".to_string()];
+
+        let reason = expect_access_token_signing_error(&config);
+        assert!(reason.contains("must not repeat active signing_key_id"));
+    }
+
+    #[test]
+    fn access_token_verification_key_ids_must_be_unique() {
+        let mut config = valid_pre_auth_config();
+        config.evidence.signing_keys.insert(
+            "access-token-key-old".to_string(),
+            publish_only_access_token_verification_key(
+                "did:web:issuer.example#access-token-key-old",
+            ),
+        );
+        config.auth.access_token_signing.verification_key_ids = vec![
+            "access-token-key-old".to_string(),
+            "access-token-key-old".to_string(),
+        ];
+
+        let reason = expect_access_token_signing_error(&config);
+        assert!(reason.contains("duplicate key"));
+    }
+
+    #[test]
+    fn access_token_verification_key_ids_must_be_publish_only() {
+        let mut config = valid_pre_auth_config();
+        let mut active_old_key = second_signing_key();
+        active_old_key.kid = "did:web:issuer.example#access-token-key-old".to_string();
+        config
+            .evidence
+            .signing_keys
+            .insert("access-token-key-old".to_string(), active_old_key);
+        config.auth.access_token_signing.verification_key_ids =
+            vec!["access-token-key-old".to_string()];
+
+        let reason = expect_access_token_signing_error(&config);
+        assert!(reason.contains("publish_only"));
+    }
+
     /// An RS256 signing key entry. Config validation only checks the alg string
     /// and the per-provider fields, so a dummy private_jwk_env name suffices; the
     /// JWK itself is not decoded at validation time.
@@ -7962,6 +8409,7 @@ access_token_ttl_seconds: 300
             alg: CLIENT_ASSERTION_SIGNING_ALG_RS256.to_string(),
             kid: kid.to_string(),
             status: SigningKeyStatus::Active,
+            publish_until_unix_seconds: None,
             private_jwk_env: private_jwk_env.to_string(),
             public_jwk_env: String::new(),
             module_path: String::new(),
