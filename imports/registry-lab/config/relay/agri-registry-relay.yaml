@@ -4,6 +4,13 @@ server:
   bind: 0.0.0.0:8080
   cache_dir: /var/lib/registry-relay/cache
 
+config_trust:
+  antirollback_state_path: /var/lib/registry-relay/cache/agri-registry-relay-config-antirollback.json
+  local_approval_state_path: /var/lib/registry-relay/cache/agri-registry-relay-config-local-approvals.json
+  break_glass_rate_limit:
+    max_accepted: 1
+    window_seconds: 3600
+
 metadata:
   manifest_path: agri-registry-relay.metadata.yaml
 
@@ -21,27 +28,42 @@ auth:
   mode: api_key
   api_keys:
     - id: metadata_client
-      hash_env: AGRI_METADATA_CLIENT_HASH
+      fingerprint:
+        provider: env
+        name: AGRI_METADATA_CLIENT_HASH
+        commitment: sha256:0d10d58ffbd05a729ff4f0e9f0d6b2d08b0ef6f341157b8bcc6d6c5ea48cd2b4
       scopes:
         - agri_registry:metadata
     - id: agri_evidence_source
-      hash_env: AGRI_EVIDENCE_SOURCE_HASH
+      fingerprint:
+        provider: env
+        name: AGRI_EVIDENCE_SOURCE_HASH
+        commitment: sha256:9d13aedbd2a2b37223debc42f589975a9334edcb557b93f5e70bb218476ec9a0
       scopes:
         - agri_registry:metadata
         - agri_registry:rows
         - agri_registry:evidence_verification
     - id: evidence_only
-      hash_env: AGRI_EVIDENCE_ONLY_HASH
+      fingerprint:
+        provider: env
+        name: AGRI_EVIDENCE_ONLY_HASH
+        commitment: sha256:9bf20fad8057d7a7cfd2a7cf36b4946411bf0749123b71fcf0755dfeeb969aa2
       scopes:
         - agri_registry:metadata
         - agri_registry:evidence_verification
     - id: row_reader
-      hash_env: AGRI_ROW_READER_HASH
+      fingerprint:
+        provider: env
+        name: AGRI_ROW_READER_HASH
+        commitment: sha256:bef67432ff2b493e8f2e613ea49f8068ef105ebe19420b1aefbf2b1df66501f2
       scopes:
         - agri_registry:metadata
         - agri_registry:rows
     - id: aggregate_reader
-      hash_env: AGRI_AGGREGATE_READER_HASH
+      fingerprint:
+        provider: env
+        name: AGRI_AGGREGATE_READER_HASH
+        commitment: sha256:a1da617b678eeab8b825322be88f40c3d45507c23ff62c6923680978d5a4aabd
       scopes:
         - agri_registry:metadata
         - agri_registry:aggregate

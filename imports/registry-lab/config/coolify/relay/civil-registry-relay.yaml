@@ -4,6 +4,13 @@ server:
   bind: 0.0.0.0:8080
   cache_dir: /var/lib/registry-relay/cache
 
+config_trust:
+  antirollback_state_path: /var/lib/registry-relay/cache/civil-registry-relay-config-antirollback.json
+  local_approval_state_path: /var/lib/registry-relay/cache/civil-registry-relay-config-local-approvals.json
+  break_glass_rate_limit:
+    max_accepted: 1
+    window_seconds: 3600
+
 metadata:
   manifest_path: civil-registry-relay.metadata.yaml
 
@@ -21,27 +28,42 @@ auth:
   mode: api_key
   api_keys:
     - id: metadata_client
-      hash_env: CIVIL_METADATA_CLIENT_HASH
+      fingerprint:
+        provider: env
+        name: CIVIL_METADATA_CLIENT_HASH
+        commitment: sha256:fb77b8dd8715d6d2ef6298a7fbb986bbc8d98bd5c75518b42801941573ff75f1
       scopes:
         - civil_registry:metadata
     - id: evidence_source
-      hash_env: CIVIL_EVIDENCE_SOURCE_HASH
+      fingerprint:
+        provider: env
+        name: CIVIL_EVIDENCE_SOURCE_HASH
+        commitment: sha256:c736f6aff2f88e3fcf3023548ee19376fca06dec13f33fc5695aa61c8c0f3216
       scopes:
         - civil_registry:metadata
         - civil_registry:rows
         - civil_registry:evidence_verification
     - id: evidence_only
-      hash_env: CIVIL_EVIDENCE_ONLY_HASH
+      fingerprint:
+        provider: env
+        name: CIVIL_EVIDENCE_ONLY_HASH
+        commitment: sha256:a33b52157bf8000da1af36a112d668c7b3ca99b9f8f28dc151b7d2ab6898371d
       scopes:
         - civil_registry:metadata
         - civil_registry:evidence_verification
     - id: row_reader
-      hash_env: CIVIL_ROW_READER_HASH
+      fingerprint:
+        provider: env
+        name: CIVIL_ROW_READER_HASH
+        commitment: sha256:ba9b5fe986b7358858db9cb21ee79b50db2b360ad2348db99458b9ef6630a139
       scopes:
         - civil_registry:metadata
         - civil_registry:rows
     - id: shared_evidence_source
-      hash_env: SHARED_CIVIL_EVIDENCE_SOURCE_HASH
+      fingerprint:
+        provider: env
+        name: SHARED_CIVIL_EVIDENCE_SOURCE_HASH
+        commitment: sha256:fa5e62049f9495c6ea2b366536496bb1eedf3eb2cc2908391f7f26fbe7189213
       scopes:
         - civil_registry:metadata
         - civil_registry:rows

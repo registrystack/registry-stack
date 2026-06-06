@@ -464,6 +464,22 @@ def fingerprint(raw: str) -> str:
     return "sha256:" + hashlib.sha256(raw.encode("ascii")).hexdigest()
 
 
+def credential_commitment(
+    product: str,
+    credential_type: str,
+    credential_id: str,
+    credential_fingerprint: str,
+) -> str:
+    payload = {
+        "product": product,
+        "credential_type": credential_type,
+        "credential_id": credential_id,
+        "fingerprint": credential_fingerprint,
+    }
+    encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
 def b64_json(segment: str) -> Any:
     padded = segment + ("=" * (-len(segment) % 4))
     return json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
@@ -597,10 +613,16 @@ def stop_process(proc: subprocess.Popen[str]) -> None:
         proc.wait(timeout=10)
 
 
-def write_postgres_story_config(out: Path, port: int) -> Path:
+def write_postgres_story_config(out: Path, port: int, reader_fingerprint: str) -> Path:
     path = out / "postgres-live-relay.yaml"
     cache = out / "postgres-relay-cache"
     db_url_env = "POSTGRES_STORY_DATABASE_URL"
+    reader_commitment = credential_commitment(
+        "registry-relay",
+        "api_key",
+        "live_story_reader",
+        reader_fingerprint,
+    )
     path.write_text(
         f"""server:
   bind: 127.0.0.1:{port}
@@ -618,7 +640,10 @@ auth:
   mode: api_key
   api_keys:
     - id: live_story_reader
-      hash_env: POSTGRES_STORY_READER_HASH
+      fingerprint:
+        provider: env
+        name: POSTGRES_STORY_READER_HASH
+        commitment: {reader_commitment}
       scopes:
         - postgres_registry:metadata
         - postgres_registry:rows
@@ -1518,12 +1543,13 @@ INSERT INTO demo_story.beneficiaries VALUES
 """
     )
     token = secrets.token_urlsafe(24)
+    token_fingerprint = fingerprint(token)
     port = int(os.environ.get("REGISTRY_LAB_POSTGRES_STORY_PORT", "4315"))
-    config = write_postgres_story_config(out, port)
+    config = write_postgres_story_config(out, port, token_fingerprint)
     relay_env = {
         "POSTGRES_STORY_DATABASE_URL": f"postgres://postgres:postgres@127.0.0.1:{os.environ.get('REGISTRY_LAB_POSTGRES_PORT', '54329')}/registry_lab?sslmode=require",
         "DATA_GATE_POSTGRES_ROOT_CERT_PATH": str(ROOT / "config/postgres/ssl/server.crt"),
-        "POSTGRES_STORY_READER_HASH": fingerprint(token),
+        "POSTGRES_STORY_READER_HASH": token_fingerprint,
         "REGISTRY_RELAY_AUDIT_HASH_SECRET": env("REGISTRY_RELAY_AUDIT_HASH_SECRET", values),
     }
     proc = start_relay(config, out / "postgres-live-relay.log", port, relay_env)

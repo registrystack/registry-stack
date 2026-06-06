@@ -186,6 +186,7 @@ services:
       - "4321:8080"
     volumes:
       - ./config/notary/civil-notary.yaml:/etc/registry-notary/civil-notary.yaml:ro
+      - notary-config-state:/var/lib/registry-notary/config-state
     depends_on:
       - civil-registry-relay
       - static-metadata-publisher
@@ -197,6 +198,7 @@ services:
       - "4322:8080"
     volumes:
       - ./config/notary/social-protection-notary.yaml:/etc/registry-notary/social-protection-notary.yaml:ro
+      - notary-config-state:/var/lib/registry-notary/config-state
     depends_on:
       - social-protection-registry-relay
       - static-metadata-publisher
@@ -208,6 +210,7 @@ services:
       - "4323:8080"
     volumes:
       - ./config/notary/shared-eligibility-notary.yaml:/etc/registry-notary/shared-eligibility-notary.yaml:ro
+      - notary-config-state:/var/lib/registry-notary/config-state
 
   openfn-mock-registry:
     image: registry-notary-openfn-sidecar:demo
@@ -293,6 +296,7 @@ services:
       - "4324:8080"
     volumes:
       - ./config/notary/openfn-civil-notary.yaml:/etc/registry-notary/openfn-civil-notary.yaml:ro
+      - notary-config-state:/var/lib/registry-notary/config-state
     networks:
       - default
       - openfn-internal
@@ -355,6 +359,7 @@ services:
       - "4326:8080"
     volumes:
       - ./config/notary/dhis2-health-notary.yaml:/etc/registry-notary/dhis2-health-notary.yaml:ro
+      - notary-config-state:/var/lib/registry-notary/config-state
     networks:
       - default
       - openfn-internal
@@ -386,6 +391,7 @@ services:
       - "${OPENCRVS_DCI_NOTARY_PORT:-4352}:8080"
     volumes:
       - ./config/notary/opencrvs-dci-notary.yaml:/etc/registry-notary/opencrvs-dci-notary.yaml:ro
+      - notary-config-state:/var/lib/registry-notary/config-state
 
   static-metadata-publisher:
     image: python:3.12.3-slim-bookworm
@@ -416,6 +422,7 @@ services:
       - "4342:8080"
     volumes:
       - ./config/notary/nagdi-agriculture-notary.yaml:/etc/registry-notary/nagdi-agriculture-notary.yaml:ro
+      - notary-config-state:/var/lib/registry-notary/config-state
     depends_on:
       - agri-registry-relay
       - agri-static-metadata-publisher
@@ -488,6 +495,7 @@ volumes:
   social-protection-registry-cache:
   health-registry-cache:
   agri-registry-cache:
+  notary-config-state:
 
 networks:
   openfn-internal:

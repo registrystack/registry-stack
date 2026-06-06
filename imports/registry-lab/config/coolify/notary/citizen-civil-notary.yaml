@@ -2,6 +2,9 @@
 
 server:
   bind: 0.0.0.0:8080
+  admin_listener:
+    mode: dedicated
+    bind: 0.0.0.0:8081
 
 auth:
   mode: oidc
@@ -45,6 +48,13 @@ replay:
     key_prefix: registry-lab:citizen-civil-notary
     connect_timeout_ms: 1000
     operation_timeout_ms: 500
+
+config_trust:
+  antirollback_state_path: /var/lib/registry-notary/config-state/citizen-civil-notary-config-antirollback.json
+  local_approval_state_path: /var/lib/registry-notary/config-state/citizen-civil-notary-config-local-approvals.json
+  break_glass_rate_limit:
+    max_accepted: 1
+    window_seconds: 3600
 
 evidence:
   enabled: true

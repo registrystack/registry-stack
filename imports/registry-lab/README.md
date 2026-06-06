@@ -23,6 +23,7 @@ Use this README for setup, service ports, and command reference. Use
 - [DHIS2 OpenFn Notary tutorial](docs/dhis2-openfn-notary-tutorial.md)
 - [Citizen self-attestation eSignet use case](docs/citizen-self-attestation-esignet-use-case.md)
 - [Wallet interop testing](docs/wallet-interop-testing.md)
+- [Lab 2 governed operations demo spec](docs/lab2-governed-operations-demo-spec.md)
 
 ## Topology
 
@@ -619,6 +620,36 @@ container service.
 This lab does not call OOTS Evidence Broker or Data Service Directory services.
 Those remain future cross-border integration points rather than hidden demo
 behavior.
+
+## Governed configuration baseline
+
+The committed Relay and Notary YAML files remain simple static configs, but they
+now include local `config_trust` state paths and a one-per-hour break-glass rate
+limit. They do not include `accepted_roots`; signed governed apply stays disabled
+until an opt-in Lab 2 flow renders demo configs with generated TUF roots under
+`output/lab2/`.
+
+Relay stores that local trust state in its existing per-service cache volumes.
+Notary stores it in the `notary-config-state` volume mounted at
+`/var/lib/registry-notary/config-state`.
+
+Use `just lab2-demo` for a narrated operator-facing walkthrough. It resets only
+Lab 2 containers and volumes, renders governed config, starts the overlay, shows
+before/after posture and credential issuance, applies a signed Relay metadata
+owner change that is visible through posture, rotates the Notary signing key,
+proves threshold guardrails, and writes the transcript to
+`output/lab2/evidence/demo/story.md`. Set `LAB2_DEMO_PAUSE=1` to pause between
+steps.
+
+Use `just lab2-smoke` for the exhaustive gate. Use `just lab2-demo-reset` to
+remove only Lab 2 containers and volumes, and `just lab2-demo-open-evidence` to
+open the latest story file.
+
+The Bruno API workspace also includes a local-only `40 - Lab 2 Governed Config`
+folder for stepping through the governed apply story request by request. Open
+`requests/registry-lab/` in Bruno, select the `Local Lab 2` environment, paste
+the Lab 2 tokens from `.env`, and run the folder after `just lab2-generate` and
+`just lab2-up`.
 
 ## Source repositories
 

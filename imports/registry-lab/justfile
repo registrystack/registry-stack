@@ -77,6 +77,39 @@ logs *services:
 smoke:
     scripts/smoke.sh
 
+# Generate governed runtime configuration artifacts for the opt-in Lab 2 demo.
+lab2-generate:
+    @test -f .env || (echo "Run just generate before just lab2-generate." >&2; exit 1)
+    scripts/lab2-generate-governed-config.sh
+
+# Start the opt-in Lab 2 governed configuration topology.
+lab2-up:
+    @test -d output/lab2/runtime-config && test -n "$$(find output/lab2/runtime-config -maxdepth 1 -type f -print -quit)" || (echo "Run just lab2-generate first." >&2; exit 1)
+    REGISTRY_RELAY_SOURCE_DIR=./vendor/registry-relay REGISTRY_NOTARY_SOURCE_DIR=./vendor/registry-notary REGISTRY_PLATFORM_SOURCE_DIR=./vendor/registry-platform REGISTRY_RELAY_PLATFORM_SOURCE_DIR=./vendor/registry-platform REGISTRY_NOTARY_PLATFORM_SOURCE_DIR=./vendor/registry-platform docker compose -f compose.yaml -f compose.lab2.yaml build lab2-civil-registry-relay
+    REGISTRY_RELAY_SOURCE_DIR=./vendor/registry-relay REGISTRY_NOTARY_SOURCE_DIR=./vendor/registry-notary REGISTRY_PLATFORM_SOURCE_DIR=./vendor/registry-platform REGISTRY_RELAY_PLATFORM_SOURCE_DIR=./vendor/registry-platform REGISTRY_NOTARY_PLATFORM_SOURCE_DIR=./vendor/registry-platform docker compose -f compose.yaml -f compose.lab2.yaml build lab2-civil-notary
+    REGISTRY_RELAY_SOURCE_DIR=./vendor/registry-relay REGISTRY_NOTARY_SOURCE_DIR=./vendor/registry-notary REGISTRY_PLATFORM_SOURCE_DIR=./vendor/registry-platform REGISTRY_RELAY_PLATFORM_SOURCE_DIR=./vendor/registry-platform REGISTRY_NOTARY_PLATFORM_SOURCE_DIR=./vendor/registry-platform docker compose -f compose.yaml -f compose.lab2.yaml up -d --no-build lab2-civil-registry-relay lab2-civil-notary
+
+# Run the governed configuration smoke for Lab 2.
+lab2-smoke:
+    scripts/lab2-smoke-governed-config.sh
+
+# Run a narrated Lab 2 governed configuration demo.
+lab2-demo:
+    scripts/lab2-demo-story.sh
+
+# Reset only the Lab 2 governed configuration demo containers and volumes.
+lab2-demo-reset:
+    just lab2-down
+
+# Open the latest narrated Lab 2 demo evidence story on macOS, or print its path elsewhere.
+lab2-demo-open-evidence:
+    @if command -v open >/dev/null 2>&1; then open output/lab2/evidence/demo/story.md; else printf '%s\n' output/lab2/evidence/demo/story.md; fi
+
+# Stop the opt-in Lab 2 topology and remove only Lab 2 volumes.
+lab2-down:
+    -docker compose -f compose.yaml -f compose.lab2.yaml rm -sf lab2-civil-registry-relay lab2-civil-notary lab2-config-state-init lab2-redis
+    -docker volume rm registry-lab_lab2-civil-registry-cache registry-lab_lab2-notary-config-state
+
 # Run the default signed Notary-to-Notary delegated-evaluation smoke.
 federation:
     scripts/smoke-federation.sh

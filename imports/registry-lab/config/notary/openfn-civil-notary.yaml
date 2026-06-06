@@ -2,23 +2,39 @@
 
 server:
   bind: 0.0.0.0:8080
+  admin_listener:
+    mode: dedicated
+    bind: 0.0.0.0:8081
 
 auth:
   mode: api_key
   api_keys:
     - id: openfn_civil_evidence_client
-      hash_env: CIVIL_EVIDENCE_CLIENT_TOKEN_HASH
+      fingerprint:
+        provider: env
+        name: CIVIL_EVIDENCE_CLIENT_TOKEN_HASH
+        commitment: sha256:8ffe31ead1dbb3fcfadd970e17feaa10c1cbd716333dacef0e1a7ab0f070fc7d
       scopes:
         - civil_registry:evidence_verification
   bearer_tokens:
     - id: openfn_civil_evidence_client
-      hash_env: CIVIL_EVIDENCE_CLIENT_BEARER_HASH
+      fingerprint:
+        provider: env
+        name: CIVIL_EVIDENCE_CLIENT_BEARER_HASH
+        commitment: sha256:ab72d4c611b742ef426c338d9c80682da288df36531e6492c206fc3bf275ebba
       scopes:
         - civil_registry:evidence_verification
 
 audit:
   sink: stdout
   hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+
+config_trust:
+  antirollback_state_path: /var/lib/registry-notary/config-state/openfn-civil-notary-config-antirollback.json
+  local_approval_state_path: /var/lib/registry-notary/config-state/openfn-civil-notary-config-local-approvals.json
+  break_glass_rate_limit:
+    max_accepted: 1
+    window_seconds: 3600
 
 evidence:
   enabled: true

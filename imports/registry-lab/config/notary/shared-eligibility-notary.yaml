@@ -2,19 +2,28 @@
 
 server:
   bind: 0.0.0.0:8080
+  admin_listener:
+    mode: dedicated
+    bind: 0.0.0.0:8081
 
 auth:
   mode: api_key
   api_keys:
     - id: shared_evidence_client
-      hash_env: SHARED_EVIDENCE_CLIENT_TOKEN_HASH
+      fingerprint:
+        provider: env
+        name: SHARED_EVIDENCE_CLIENT_TOKEN_HASH
+        commitment: sha256:4520f0612aadef9a63284404a813d0418c21c77b080aa76f88054404602711dd
       scopes:
         - civil_registry:evidence_verification
         - social_protection_registry:evidence_verification
         - health_registry:evidence_verification
   bearer_tokens:
     - id: shared_evidence_client
-      hash_env: SHARED_EVIDENCE_CLIENT_BEARER_HASH
+      fingerprint:
+        provider: env
+        name: SHARED_EVIDENCE_CLIENT_BEARER_HASH
+        commitment: sha256:3467edd2a8f5672681ded5dd6473708ce577ff4d604acb78330036f4b91fd5e4
       scopes:
         - civil_registry:evidence_verification
         - social_protection_registry:evidence_verification
@@ -23,6 +32,13 @@ auth:
 audit:
   sink: stdout
   hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+
+config_trust:
+  antirollback_state_path: /var/lib/registry-notary/config-state/shared-eligibility-notary-config-antirollback.json
+  local_approval_state_path: /var/lib/registry-notary/config-state/shared-eligibility-notary-config-local-approvals.json
+  break_glass_rate_limit:
+    max_accepted: 1
+    window_seconds: 3600
 
 cel:
   worker_count: 16

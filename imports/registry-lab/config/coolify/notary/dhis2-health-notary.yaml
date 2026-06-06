@@ -2,23 +2,39 @@
 
 server:
   bind: 0.0.0.0:8080
+  admin_listener:
+    mode: dedicated
+    bind: 0.0.0.0:8081
 
 auth:
   mode: api_key
   api_keys:
     - id: dhis2_evidence_client
-      hash_env: DHIS2_EVIDENCE_CLIENT_TOKEN_HASH
+      fingerprint:
+        provider: env
+        name: DHIS2_EVIDENCE_CLIENT_TOKEN_HASH
+        commitment: sha256:beefb4808b2a525f5eb4a6d8307ec91bd7ba46cca15fbab2d54ab48994ce64a3
       scopes:
         - dhis2_health:evidence_verification
   bearer_tokens:
     - id: dhis2_evidence_client
-      hash_env: DHIS2_EVIDENCE_CLIENT_BEARER_HASH
+      fingerprint:
+        provider: env
+        name: DHIS2_EVIDENCE_CLIENT_BEARER_HASH
+        commitment: sha256:b2ce4e0cae329ce1e4d1a4cc2cee69fa968c787a5b82cf0db8876d09371e73bf
       scopes:
         - dhis2_health:evidence_verification
 
 audit:
   sink: stdout
   hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+
+config_trust:
+  antirollback_state_path: /var/lib/registry-notary/config-state/dhis2-health-notary-config-antirollback.json
+  local_approval_state_path: /var/lib/registry-notary/config-state/dhis2-health-notary-config-local-approvals.json
+  break_glass_rate_limit:
+    max_accepted: 1
+    window_seconds: 3600
 
 evidence:
   enabled: true

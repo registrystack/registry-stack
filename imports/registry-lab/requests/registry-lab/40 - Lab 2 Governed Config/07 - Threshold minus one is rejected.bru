@@ -1,0 +1,41 @@
+meta {
+  name: 07 - Threshold minus one is rejected
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{lab2_civil_relay_admin_url}}/admin/v1/config/apply
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{CIVIL_RELAY_OPS_RAW}}
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "tuf": {
+      "root_path": "/lab2/tuf-repo/relay-threshold-minus-one/metadata/1.root.json",
+      "metadata_dir": "/lab2/tuf-repo/relay-threshold-minus-one/metadata",
+      "targets_dir": "/lab2/tuf-repo/relay-threshold-minus-one/targets",
+      "datastore_dir": "/var/lib/registry-relay/cache/tuf-relay-threshold-minus-one",
+      "target_name": "civil-registry-relay.yaml"
+    }
+  }
+}
+
+script:post-response {
+  const body = res.getBody();
+
+  test("status is 409", function () {
+    expect(res.getStatus()).to.equal(409);
+  });
+
+  test("signed but under-quorum target is rejected", function () {
+    expect(body).to.have.property("result", "rejected_threshold");
+    expect(body).to.have.property("applied", false);
+  });
+}

@@ -294,6 +294,7 @@ services:
     command: ["--config", "/etc/registry-notary/citizen-civil-notary.yaml"]
     volumes:
       - cfg-notary:/etc/registry-notary:ro
+      - notary-config-state:/var/lib/registry-notary/config-state
     depends_on:
       config-loader:
         condition: service_completed_successfully
@@ -346,6 +347,7 @@ services:
       OPENFN_SIDECAR_TOKEN_RAW: ${OPENFN_SIDECAR_TOKEN_RAW:-}
     volumes:
       - cfg-notary:/etc/registry-notary:ro
+      - notary-config-state:/var/lib/registry-notary/config-state
     depends_on:
       config-loader:
         condition: service_completed_successfully
@@ -386,6 +388,7 @@ services:
       OPENCRVS_DCI_SHA_SECRET: ${OPENCRVS_DCI_SHA_SECRET:-}
     volumes:
       - opencrvs-notary-config:/etc/registry-notary-rendered:ro
+      - notary-config-state:/var/lib/registry-notary/config-state
     depends_on:
       opencrvs-dci-notary-config:
         condition: service_completed_successfully
@@ -409,3 +412,4 @@ volumes:
   cfg-lab-homepage:
   static-content:
   opencrvs-notary-config:
+  notary-config-state:

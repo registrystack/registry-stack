@@ -4,6 +4,13 @@ server:
   bind: 0.0.0.0:8080
   cache_dir: /var/lib/registry-relay/cache
 
+config_trust:
+  antirollback_state_path: /var/lib/registry-relay/cache/social-protection-registry-relay-config-antirollback.json
+  local_approval_state_path: /var/lib/registry-relay/cache/social-protection-registry-relay-config-local-approvals.json
+  break_glass_rate_limit:
+    max_accepted: 1
+    window_seconds: 3600
+
 metadata:
   manifest_path: social-protection-registry-relay.metadata.yaml
 
@@ -20,32 +27,50 @@ auth:
   mode: api_key
   api_keys:
     - id: metadata_client
-      hash_env: SOCIAL_METADATA_CLIENT_HASH
+      fingerprint:
+        provider: env
+        name: SOCIAL_METADATA_CLIENT_HASH
+        commitment: sha256:c5246d00e666cdfa8170466bbe9bfda51033dd21dff180482c2f3fcc952664f7
       scopes:
         - social_protection_registry:metadata
     - id: evidence_source
-      hash_env: SOCIAL_EVIDENCE_SOURCE_HASH
+      fingerprint:
+        provider: env
+        name: SOCIAL_EVIDENCE_SOURCE_HASH
+        commitment: sha256:93920def341888e5a07764f68a9b1ac7bcd701fc40a2dbf6e2082ba8071d5859
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:rows
         - social_protection_registry:evidence_verification
     - id: evidence_only
-      hash_env: SOCIAL_EVIDENCE_ONLY_HASH
+      fingerprint:
+        provider: env
+        name: SOCIAL_EVIDENCE_ONLY_HASH
+        commitment: sha256:f131e738abebba9c414230cc6eabf5afcb96201a13858a51e36412c353ef4efd
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:evidence_verification
     - id: row_reader
-      hash_env: SOCIAL_ROW_READER_HASH
+      fingerprint:
+        provider: env
+        name: SOCIAL_ROW_READER_HASH
+        commitment: sha256:26d9c9f3607ba34b8d8fa3edd00a439122fe12b5911c811cbd039121ee6d6f28
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:rows
     - id: aggregate_reader
-      hash_env: SOCIAL_AGGREGATE_READER_HASH
+      fingerprint:
+        provider: env
+        name: SOCIAL_AGGREGATE_READER_HASH
+        commitment: sha256:c68698ce212137e170c1fb0cbfdb35beea1944c776b13582f626bc1c22d8097c
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:aggregate
     - id: shared_evidence_source
-      hash_env: SHARED_SOCIAL_EVIDENCE_SOURCE_HASH
+      fingerprint:
+        provider: env
+        name: SHARED_SOCIAL_EVIDENCE_SOURCE_HASH
+        commitment: sha256:98c3f82642a31c07077eedf346ace40505c7770746b1d79b57b239c8939854cd
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:rows

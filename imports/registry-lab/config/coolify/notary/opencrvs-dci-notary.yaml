@@ -2,18 +2,31 @@
 
 server:
   bind: 0.0.0.0:8080
+  admin_listener:
+    mode: dedicated
+    bind: 0.0.0.0:8081
 
 auth:
   mode: api_key
   api_keys:
     - id: opencrvs_dci_lab_client
-      hash_env: OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH
+      fingerprint:
+        provider: env
+        name: OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH
+        commitment: sha256:d07f799ae77c7d07f929964d70c7aa2bbd85093703d0fb68c56fae45d4c61c16
       scopes:
         - civil_registry:evidence_verification
 
 audit:
   sink: stdout
   hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+
+config_trust:
+  antirollback_state_path: /var/lib/registry-notary/config-state/opencrvs-dci-notary-config-antirollback.json
+  local_approval_state_path: /var/lib/registry-notary/config-state/opencrvs-dci-notary-config-local-approvals.json
+  break_glass_rate_limit:
+    max_accepted: 1
+    window_seconds: 3600
 
 evidence:
   enabled: true

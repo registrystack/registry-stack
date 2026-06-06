@@ -2,27 +2,46 @@
 
 server:
   bind: 0.0.0.0:8080
+  admin_listener:
+    mode: dedicated
+    bind: 0.0.0.0:8081
 
 auth:
   mode: api_key
   api_keys:
     - id: civil_notary_ops
-      hash_env: CIVIL_NOTARY_OPS_TOKEN_HASH
+      fingerprint:
+        provider: env
+        name: CIVIL_NOTARY_OPS_TOKEN_HASH
+        commitment: sha256:0a3e7d79bc7956e92918eee5a2f61163e490fd4529fd45dc995c74167e20e983
       scopes:
         - registry_notary:ops_read
     - id: civil_evidence_client
-      hash_env: CIVIL_EVIDENCE_CLIENT_TOKEN_HASH
+      fingerprint:
+        provider: env
+        name: CIVIL_EVIDENCE_CLIENT_TOKEN_HASH
+        commitment: sha256:f5763c7e6dc587f02c3d179bce0a7a1996dbc6a31520f2184c3731f6f85668d6
       scopes:
         - civil_registry:evidence_verification
   bearer_tokens:
     - id: civil_evidence_client
-      hash_env: CIVIL_EVIDENCE_CLIENT_BEARER_HASH
+      fingerprint:
+        provider: env
+        name: CIVIL_EVIDENCE_CLIENT_BEARER_HASH
+        commitment: sha256:ea61b4c4599773a5423f01a58ba5b717bfb0339cc7da5c98fc8bf647800f0ece
       scopes:
         - civil_registry:evidence_verification
 
 audit:
   sink: stdout
   hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+
+config_trust:
+  antirollback_state_path: /var/lib/registry-notary/config-state/civil-notary-config-antirollback.json
+  local_approval_state_path: /var/lib/registry-notary/config-state/civil-notary-config-local-approvals.json
+  break_glass_rate_limit:
+    max_accepted: 1
+    window_seconds: 3600
 
 federation:
   enabled: true

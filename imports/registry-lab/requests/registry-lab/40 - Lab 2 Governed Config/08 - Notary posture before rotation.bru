@@ -1,0 +1,29 @@
+meta {
+  name: 08 - Notary posture before rotation
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{lab2_civil_notary_admin_url}}/admin/v1/posture?tier=restricted
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{CIVIL_NOTARY_OPS_BEARER}}
+}
+
+script:post-response {
+  const body = res.getBody();
+  const text = JSON.stringify(body);
+
+  test("status is 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("initial signing key is reported ready", function () {
+    expect(text).to.include("civil-evidence-demo-key-1");
+    expect(text).to.include("ready");
+  });
+}
