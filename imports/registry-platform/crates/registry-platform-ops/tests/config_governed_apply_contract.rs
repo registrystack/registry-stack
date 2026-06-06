@@ -209,6 +209,16 @@ fn admin_capabilities_schema_distinguishes_supported_operations() {
             "currently_available": true,
             "rate_limit_scope": "instance"
         },
+        "listeners": {
+            "admin": {
+                "mode": "dedicated",
+                "public_admin_routes": false
+            },
+            "metrics": {
+                "mode": "admin",
+                "requires_admin_scope": false
+            }
+        },
         "root_transition": {
             "supported": true,
             "currently_available": true
@@ -230,6 +240,65 @@ fn admin_capabilities_schema_distinguishes_supported_operations() {
     let mut invalid = document;
     invalid["supported_posture_tiers"] = json!(["restricted"]);
     assert_invalid(ADMIN_CAPABILITIES_SCHEMA_V1, &invalid);
+}
+
+#[test]
+fn admin_capabilities_schema_rejects_topology_leaks_and_unknown_modes() {
+    let document = json!({
+        "schema": "registry.admin.capabilities.v1",
+        "product": "registry-notary",
+        "admin_api_version": "v1",
+        "supported_posture_tiers": ["default", "restricted"],
+        "config": {
+            "verify": {"supported": true, "currently_available": true},
+            "dry_run": {"supported": true, "currently_available": true},
+            "apply": {
+                "supported": true,
+                "currently_available": true,
+                "requires_signed_input": true,
+                "supported_sources": ["tuf_local", "tuf_remote"]
+            }
+        },
+        "break_glass": {
+            "supported": true,
+            "currently_available": true,
+            "rate_limit_scope": "instance"
+        },
+        "listeners": {
+            "admin": {
+                "mode": "shared_with_public",
+                "public_admin_routes": true
+            },
+            "metrics": {
+                "mode": "shared_with_public",
+                "requires_admin_scope": true
+            }
+        },
+        "root_transition": {
+            "supported": true,
+            "currently_available": true
+        },
+        "hot_swap": {
+            "supported": true,
+            "currently_available": true,
+            "components": ["signing_keys"]
+        },
+        "reload": {
+            "resource_reload": {"supported": false, "currently_available": false},
+            "table_reload": {"supported": false, "currently_available": false},
+            "config_reload": {"supported": false, "currently_available": false}
+        }
+    });
+
+    assert_valid(ADMIN_CAPABILITIES_SCHEMA_V1, &document);
+
+    let mut invalid_mode = document.clone();
+    invalid_mode["listeners"]["admin"]["mode"] = json!("public");
+    assert_invalid(ADMIN_CAPABILITIES_SCHEMA_V1, &invalid_mode);
+
+    let mut leaked_address = document;
+    leaked_address["listeners"]["admin"]["bind"] = json!("127.0.0.1:8081");
+    assert_invalid(ADMIN_CAPABILITIES_SCHEMA_V1, &leaked_address);
 }
 
 #[test]

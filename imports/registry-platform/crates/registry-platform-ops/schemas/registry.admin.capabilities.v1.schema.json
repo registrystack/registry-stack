@@ -10,6 +10,7 @@
     "admin_api_version",
     "supported_posture_tiers",
     "config",
+    "listeners",
     "break_glass",
     "root_transition",
     "hot_swap",
@@ -57,6 +58,9 @@
     },
     "break_glass": {
       "$ref": "#/$defs/break_glass_capability"
+    },
+    "listeners": {
+      "$ref": "#/$defs/listener_topology"
     },
     "root_transition": {
       "$ref": "#/$defs/operation_capability"
@@ -138,6 +142,47 @@
         "rate_limit_scope": {
           "type": "string",
           "enum": ["instance", "fleet", "none"]
+        }
+      }
+    },
+    "listener_topology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admin", "metrics"],
+      "properties": {
+        "admin": {
+          "$ref": "#/$defs/admin_listener_topology"
+        },
+        "metrics": {
+          "$ref": "#/$defs/metrics_listener_topology"
+        }
+      }
+    },
+    "admin_listener_topology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "public_admin_routes"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["dedicated", "shared_with_public", "disabled"]
+        },
+        "public_admin_routes": {
+          "type": "boolean"
+        }
+      }
+    },
+    "metrics_listener_topology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "requires_admin_scope"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["admin", "dedicated", "shared_with_public", "disabled"]
+        },
+        "requires_admin_scope": {
+          "type": "boolean"
         }
       }
     },
