@@ -354,6 +354,18 @@ pub struct ConfigTargetMetadata {
     #[serde(default)]
     pub signer_kids: BTreeSet<String>,
     pub apply_policy: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_target_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_index_target_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_manifest_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_schema_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_schema_version: Option<String>,
 }
 
 impl ConfigTargetMetadata {
@@ -402,6 +414,17 @@ impl ConfigTargetMetadata {
                 actual,
             });
         }
+        if let Some(target_name) = self.metadata_target_name.as_deref() {
+            validate_target_name(target_name)?;
+        }
+        if let Some(target_name) = self.package_index_target_name.as_deref() {
+            validate_target_name(target_name)?;
+        }
+        validate_optional_sha256_uri(
+            "source_manifest_digest",
+            self.source_manifest_digest.as_deref(),
+        )?;
+        validate_optional_sha256_uri("package_digest", self.package_digest.as_deref())?;
         Ok(())
     }
 }
@@ -788,6 +811,36 @@ fn validate_sha256_uri(field: &'static str, value: &str) -> Result<(), ConfigVer
     };
     if digest.len() != 64 || !digest.chars().all(|ch| ch.is_ascii_hexdigit()) {
         return Err(ConfigVerificationError::InvalidSha256Uri { field });
+    }
+    Ok(())
+}
+
+fn validate_optional_sha256_uri(
+    field: &'static str,
+    value: Option<&str>,
+) -> Result<(), ConfigVerificationError> {
+    if let Some(value) = value {
+        validate_sha256_uri(field, value)?;
+    }
+    Ok(())
+}
+
+fn validate_target_name(value: &str) -> Result<(), ConfigVerificationError> {
+    TargetName::new(value)
+        .map_err(|error| ConfigVerificationError::InvalidTargetName(error.to_string()))?;
+    let path = Path::new(value);
+    if path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir | std::path::Component::RootDir
+            )
+        })
+    {
+        return Err(ConfigVerificationError::InvalidTargetName(
+            "metadata target name must be relative and must not contain parent traversal"
+                .to_string(),
+        ));
     }
     Ok(())
 }

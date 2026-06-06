@@ -117,6 +117,71 @@ fn parses_target_metadata_and_rejects_hash_or_context_mismatch() {
 }
 
 #[test]
+fn target_metadata_accepts_and_validates_metadata_package_claims() {
+    let target = b"instance:\n  id: relay-a\n";
+    let context = VerificationContext {
+        product: "registry-relay".to_string(),
+        instance_id: "relay-a".to_string(),
+        environment: "production".to_string(),
+    };
+    let custom = json!({
+        "product": "registry-relay",
+        "instance_id": "relay-a",
+        "environment": "production",
+        "stream_id": "default",
+        "bundle_id": "bundle-43",
+        "sequence": 43,
+        "config_hash": sha256_uri(target),
+        "change_classes": ["public_metadata"],
+        "signer_kids": ["kid-a"],
+        "apply_policy": "live",
+        "metadata_target_name": "metadata.yaml",
+        "package_index_target_name": "index.json",
+        "source_manifest_digest": sha256_uri(b"source manifest"),
+        "package_digest": sha256_uri(b"package"),
+        "runtime_schema_version": "registry-relay-config/v1",
+        "metadata_schema_version": "registry-manifest/v1"
+    });
+
+    let parsed = ConfigTargetMetadata::from_custom_metadata(&custom, target, &context)
+        .expect("metadata package claims parse");
+
+    assert_eq!(
+        parsed.metadata_target_name.as_deref(),
+        Some("metadata.yaml")
+    );
+    assert_eq!(
+        parsed.package_index_target_name.as_deref(),
+        Some("index.json")
+    );
+    assert_eq!(
+        parsed.source_manifest_digest.as_deref(),
+        Some(sha256_uri(b"source manifest").as_str())
+    );
+    assert_eq!(
+        parsed.package_digest.as_deref(),
+        Some(sha256_uri(b"package").as_str())
+    );
+
+    let mut bad_digest = custom.clone();
+    bad_digest["source_manifest_digest"] = json!("not-a-sha256-uri");
+    assert_eq!(
+        ConfigTargetMetadata::from_custom_metadata(&bad_digest, target, &context)
+            .expect_err("bad source manifest digest is rejected"),
+        ConfigVerificationError::InvalidSha256Uri {
+            field: "source_manifest_digest"
+        }
+    );
+
+    let mut bad_target = custom;
+    bad_target["metadata_target_name"] = json!("../metadata.yaml");
+    assert!(matches!(
+        ConfigTargetMetadata::from_custom_metadata(&bad_target, target, &context),
+        Err(ConfigVerificationError::InvalidTargetName(_))
+    ));
+}
+
+#[test]
 fn trust_root_deserializes_from_local_config_shape() {
     let root: RegistryTrustRoot = serde_json::from_value(json!({
         "root_id": "ops-root",

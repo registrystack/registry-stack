@@ -582,6 +582,16 @@
             "configured": {
               "type": "boolean"
             },
+            "schema_version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source_digest": {
+              "$ref": "#/$defs/hash"
+            },
+            "package_digest": {
+              "$ref": "#/$defs/hash"
+            },
             "sha256": {
               "$ref": "#/$defs/hash"
             }

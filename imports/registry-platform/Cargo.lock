@@ -2051,8 +2051,11 @@ name = "registry-platform-authcommon"
 version = "0.1.2"
 dependencies = [
  "proptest",
+ "serde",
+ "serde_json",
  "sha2 0.11.0",
  "subtle",
+ "tempfile",
  "thiserror",
  "zeroize",
 ]
