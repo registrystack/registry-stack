@@ -49,6 +49,7 @@ fn sample_record() -> AuditRecord {
         duration_ms: 12,
         error_code: None,
         provenance: None,
+        config: None,
     }
 }
 
@@ -89,6 +90,7 @@ fn benchmark_record_construction(c: &mut Criterion) {
                 duration_ms: 12,
                 error_code: None,
                 provenance: None,
+                config: None,
             })
         });
     });

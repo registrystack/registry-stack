@@ -35,6 +35,7 @@ fn load_example_config() -> Config {
         std::env::set_var("STATS_OFFICE_API_KEY_HASH", fingerprint);
         std::env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", fingerprint);
         std::env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", fingerprint);
+        std::env::set_var("OPERATIONS_OPERATOR_API_KEY_HASH", fingerprint);
         std::env::set_var(
             "REGISTRY_RELAY_AUDIT_HASH_SECRET",
             "relay-security-assurance-secret-32-bytes",

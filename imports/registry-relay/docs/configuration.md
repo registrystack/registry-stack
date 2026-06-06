@@ -11,18 +11,34 @@ The canonical sample is [config/example.yaml](../config/example.yaml). Keep exam
 ## Root Shape
 
 ```yaml
+instance: {}
 server: {}
 metadata: {}   # optional split portable metadata manifest
 catalog: {}
 vocabularies: {}
 auth: {}
 audit: {}
+config_trust: {} # optional governed config apply state
 datasets: []
 provenance: {} # optional
 standards: {}  # optional, feature-gated adapters
 ```
 
 Unknown fields are rejected for most blocks. Config validation runs after YAML parsing and checks ids, scopes, table/entity references, filter references, aggregate references, env var presence, and vocabulary prefixes.
+
+## Instance
+
+```yaml
+instance:
+  id: registry-relay-local
+  environment: development
+  owner: Ministry of Digital Government
+  jurisdiction: example-country
+```
+
+`instance` gives posture and operations tooling a stable public identity for the
+running relay. `id` defaults to `registry-relay-local`; `environment`, `owner`,
+and `jurisdiction` are optional public labels.
 
 ## Server
 
@@ -52,6 +68,68 @@ server:
 HTTP/2 connections use the same finite connection cap and keepalive timeout, but the beta socket-level slow-header regression test covers HTTP/1. If production terminates HTTP/2 at a reverse proxy, configure bounded proxy header/body read timeouts and per-client connection limits before forwarding to Registry Relay.
 
 The default CORS policy is deny by omission. Add explicit trusted origins only.
+
+## Governed Config Apply
+
+```yaml
+config_trust:
+  antirollback_state_path: /var/lib/registry-relay/config-antirollback.json
+  local_approval_state_path: /var/lib/registry-relay/config-local-approvals.json
+  break_glass_rate_limit:
+    max_accepted: 1
+    window_seconds: 3600
+  accepted_roots:
+    - root_id: ops-root
+      production: true
+      tuf_root_sha256: sha256:REPLACE_WITH_FINAL_VERIFIED_TUF_ROOT_METADATA_HASH
+      valid_from_unix_seconds: 1770000000
+      valid_until_unix_seconds: 1772592000
+      high_risk_change_classes:
+        - auth_scopes
+        - signing_key_cleanup
+        - signing_key_rotation
+      signers:
+        TUF_TARGETS_ROLE_KEY_ID_A:
+          kid: TUF_TARGETS_ROLE_KEY_ID_A
+          enabled: true
+        TUF_TARGETS_ROLE_KEY_ID_B:
+          kid: TUF_TARGETS_ROLE_KEY_ID_B
+          enabled: true
+      roles:
+        - name: config-admin
+          threshold: 2
+          signer_kids:
+            - TUF_TARGETS_ROLE_KEY_ID_A
+            - TUF_TARGETS_ROLE_KEY_ID_B
+          allowed_change_classes:
+            - public_metadata
+```
+
+`config_trust` is optional. Simple local deployments omit it and keep using the
+local YAML loaded at startup. Governed config apply requires
+`antirollback_state_path` and `local_approval_state_path`, which must point to
+durable local state such as a mounted volume. `break_glass_rate_limit` is the
+trusted local rolling-window policy used for break-glass apply requests; when
+omitted it defaults to one accepted request per rate-limit identity per hour.
+Registry Relay fails closed for
+apply when required local state is absent, unreadable, stale, or inconsistent;
+verify and dry-run remain available.
+
+Signed apply also requires at least one local `accepted_roots` entry that
+authorizes every change class in the signed target metadata. Registry Relay uses
+the local root only after TUF target verification succeeds. Verified TUF
+targets-role signature key IDs, not target-declared custom metadata, must
+satisfy one role threshold per change class. Inline admin YAML can be used for
+verify/dry-run checks, but apply requires a signed local TUF target and never
+treats raw inline YAML as signed governance input.
+
+For TUF root rotation, add the new final `tuf_root_sha256` as another local
+`accepted_roots` entry before applying bundles that verify through the rotated
+root. `valid_from_unix_seconds` and `valid_until_unix_seconds` are optional
+local bounds for overlap windows. Omit them for an indefinite local root; set
+them when old and new roots should both authorize bundles only during a planned
+transition window. Expired or not-yet-valid roots fail authorization even when
+the TUF metadata and signer quorum are otherwise valid.
 
 ## Catalog And Vocabularies
 
@@ -695,7 +773,7 @@ Supported indicator functions include the configured V1 set used by tests and ex
 
 ## Provenance
 
-The `provenance` block is optional. When absent or `enabled: false`, the gateway behaves as a plain JSON service. When enabled, callers can opt in to signed VC-JWT responses with `Accept: application/vc+jwt`.
+The `provenance` block is optional. When absent or `enabled: false`, the gateway behaves as a plain JSON service. When enabled, callers can opt in to signed VC-JWT responses with `Accept: application/vc+jwt`. V1 supports local Ed25519 signing from either a `software` env-var JWK or a `file_watch` JWK file.
 
 See [provenance.md](provenance.md) for the full signer, DID, schema, context, and rotation contract.
 

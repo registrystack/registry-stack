@@ -73,7 +73,7 @@ use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::Level;
 use ulid::Ulid;
 
-use crate::api::{self, CursorSigner};
+use crate::api;
 use crate::audit::{self, AuditPipeline, AuditSettings, OperationalAuditEvent};
 use crate::auth::middleware::{auth_layer, AuthProviderRef};
 use crate::config::{Config, CorsConfig};
@@ -82,6 +82,7 @@ use crate::error::{ConfigError, Error, InternalError};
 use crate::ingest::{IngestRegistry, ReadinessSnapshot};
 use crate::observability::RequestMetrics;
 use crate::query::{AggregateQueryEngine, EntityQueryEngine};
+use crate::runtime_config::CursorSigner;
 
 /// Defensive cap on request body size (1 MiB). V1 endpoints are GET only;
 /// the limit exists so a misbehaving client cannot exhaust memory by
@@ -708,6 +709,7 @@ mod tests {
             std::env::set_var("STATS_OFFICE_API_KEY_HASH", fingerprint);
             std::env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", fingerprint);
             std::env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", fingerprint);
+            std::env::set_var("OPERATIONS_OPERATOR_API_KEY_HASH", fingerprint);
             std::env::set_var(
                 "REGISTRY_RELAY_AUDIT_HASH_SECRET",
                 "relay-audit-test-secret-32-bytes-minimum",

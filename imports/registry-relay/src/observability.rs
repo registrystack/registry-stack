@@ -10,17 +10,16 @@ use std::fmt::Write as _;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Instant;
 
+use crate::audit::{EndpointKind, ErrorCodeExt};
+use crate::ingest::ReadinessSnapshot;
+use crate::runtime_config::RuntimeSnapshot;
 use axum::body::Body;
 use axum::extract::MatchedPath;
 use axum::http::{header, HeaderValue, Request, StatusCode};
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::{Extension, Router};
-use tokio::sync::watch;
-
-use crate::audit::{EndpointKind, ErrorCodeExt};
-use crate::ingest::ReadinessSnapshot;
+use axum::Router;
 
 const TEXT_PLAIN_004: HeaderValue =
     HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8");
@@ -318,11 +317,11 @@ where
     Router::new().route("/metrics", get(metrics))
 }
 
-async fn metrics(
-    Extension(metrics): Extension<Arc<RequestMetrics>>,
-    readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
-) -> Response {
-    let readiness = readiness.as_ref().map(|Extension(rx)| rx.borrow().clone());
+async fn metrics(runtime: RuntimeSnapshot) -> Response {
+    let Some(metrics) = runtime.metrics() else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    let readiness = runtime.readiness_rx().map(|rx| rx.borrow().clone());
     let body = metrics.render(readiness.as_ref());
     let mut response = Body::from(body).into_response();
     response

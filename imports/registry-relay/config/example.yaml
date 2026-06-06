@@ -2,6 +2,12 @@
 # Canonical V1 example. Keep this file aligned with docs/configuration.md,
 # docs/api.md, and docs/ops.md.
 
+instance:
+  id: registry-relay-local
+  environment: development
+  owner: Ministry of Digital Government
+  jurisdiction: example-country
+
 server:
   bind: 0.0.0.0:8080
 
@@ -41,6 +47,10 @@ auth:
         - social_registry:metadata
         - social_registry:evidence_verification
 
+    - id: operations_operator
+      hash_env: OPERATIONS_OPERATOR_API_KEY_HASH
+      scopes:
+        - registry_relay:ops_read
 
 
 datasets:
@@ -276,8 +286,8 @@ audit:
 # provenance stays invisible: no Accept negotiation, no signing, no
 # extra audit events. Plain JSON responses stay unchanged.
 #
-# Opting in requires a local software signer and an issuer DID. Two
-# issuer modes:
+# Opting in requires a local signer (`software` env var or `file_watch`
+# JWK file) and an issuer DID. Two issuer modes:
 #
 # * `gateway`: registry-relay self-issues under its own DID and hosts
 #   `/.well-known/did.json`.
@@ -305,4 +315,9 @@ audit:
 #       kind: software
 #       jwk_env: REGISTRY_RELAY_PROVENANCE_JWK   # private JWK (JSON), never logged
 #       signing_algorithm: EdDSA
+#     # Or, for simple local file-mounted secret refresh:
+#     # signer:
+#     #   kind: file_watch
+#     #   path: /run/secrets/registry-relay/provenance-active.jwk
+#     #   signing_algorithm: EdDSA
 #     retired_keys: []                     # public JWKs of rotated-out keys

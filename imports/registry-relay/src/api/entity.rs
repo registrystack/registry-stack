@@ -8,32 +8,27 @@
 //! return an explicit RFC 9457-style `501` response.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
 
 use axum::extract::{Path, Query};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
 use axum::{Extension, Router};
-use hmac::{KeyInit, Mac, SimpleHmac};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use subtle::ConstantTimeEq;
 use tokio::sync::watch;
-use zeroize::Zeroizing;
 
 use crate::audit::{AuditContextExt, ErrorCodeExt};
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
-use crate::config::{Config, DatasetId, ResourceId};
+use crate::config::{DatasetId, ResourceId};
 use crate::entity::{EntityModel, EntityRegistry};
 use crate::error::{AuthError, EntityError, Error, InternalError, SchemaError};
 use crate::ingest::ReadinessSnapshot;
 use crate::metadata;
-use crate::query::{
-    EntityCollectionQuery, EntityFilter, EntityFilterOp, EntityQueryEngine, RelationshipPageQuery,
-};
+use crate::query::{EntityCollectionQuery, EntityFilter, EntityFilterOp, RelationshipPageQuery};
+use crate::runtime_config::{CursorSigner, RuntimeSnapshot, CURSOR_MAC_LEN};
 
 const PROBLEM_JSON: HeaderValue = HeaderValue::from_static("application/problem+json");
 const QUERY_UNAVAILABLE_CODE: &str = "entity.query_unavailable";
@@ -45,76 +40,6 @@ const DATA_PURPOSE_HEADER: &str = "data-purpose";
 /// `server.rs` to bound the cost a single client can impose on filter
 /// parsing and DataFusion logical-plan construction.
 const MAX_FILTERS_PER_REQUEST: usize = 20;
-
-/// Truncated HMAC tag length, in bytes. 16 bytes (128 bits) preserves
-/// the standard collision-resistance bound for HMAC while keeping the
-/// hex-encoded cursor short.
-const CURSOR_MAC_LEN: usize = 16;
-
-/// Server-side signer for opaque pagination cursors.
-///
-/// The key is generated at startup from the OS CSPRNG via
-/// [`getrandom::fill`] and lives only in process memory; restarting the
-/// gateway invalidates outstanding cursors, which is acceptable for
-/// opaque pagination tokens (clients must always be prepared for
-/// `pagination.cursor_invalidated`). Held in [`Zeroizing`] so the key
-/// is wiped on drop.
-pub struct CursorSigner {
-    key: Zeroizing<[u8; 32]>,
-}
-
-impl CursorSigner {
-    /// Generate a fresh signer with a random 32-byte key.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the OS CSPRNG is unavailable. On supported targets
-    /// (Linux, macOS, BSD, Windows) `getrandom` only fails in
-    /// catastrophic conditions (e.g. early-boot before the kernel pool
-    /// is seeded); failing fast at startup is preferred over running
-    /// the gateway without cursor integrity.
-    #[must_use]
-    pub fn new_random() -> Self {
-        let mut key = Zeroizing::new([0u8; 32]);
-        getrandom::fill(key.as_mut_slice()).expect("OS CSPRNG must be available at startup");
-        Self { key }
-    }
-
-    fn tag(&self, message: &[u8]) -> [u8; CURSOR_MAC_LEN] {
-        let mut mac = <SimpleHmac<Sha256> as KeyInit>::new_from_slice(self.key.as_ref())
-            .expect("HMAC-SHA256 accepts any key length");
-        mac.update(message);
-        let full = mac.finalize().into_bytes();
-        let mut tag = [0u8; CURSOR_MAC_LEN];
-        tag.copy_from_slice(&full[..CURSOR_MAC_LEN]);
-        tag
-    }
-
-    #[cfg(any(feature = "ogcapi-features", feature = "ogcapi-records"))]
-    pub(crate) fn sign_payload(&self, message: &[u8]) -> [u8; CURSOR_MAC_LEN] {
-        self.tag(message)
-    }
-
-    /// Constant-time verify that `tag` is the MAC of `message`.
-    fn verify(&self, message: &[u8], tag: &[u8]) -> bool {
-        if tag.len() != CURSOR_MAC_LEN {
-            return false;
-        }
-        let expected = self.tag(message);
-        expected.ct_eq(tag).into()
-    }
-
-    #[cfg(any(feature = "ogcapi-features", feature = "ogcapi-records"))]
-    pub(crate) fn verify_payload(&self, message: &[u8], tag: &[u8]) -> bool {
-        self.verify(message, tag)
-    }
-}
-
-impl std::fmt::Debug for CursorSigner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CursorSigner").finish_non_exhaustive()
-    }
-}
 
 /// Sub-router for the entity-shaped dataset routes documented in `docs/api.md`.
 ///
@@ -167,12 +92,10 @@ struct EntityRelationshipPath {
 async fn entity_schema(
     Path(path): Path<EntityPath>,
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
-    readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
 ) -> Response {
-    let Some(Extension(registry)) = registry else {
+    let Some(registry) = runtime.entity_registry() else {
         return query_unavailable(
             "entity schema route matched, but entity registry is not installed",
         );
@@ -187,15 +110,13 @@ async fn entity_schema(
     if let Err(error) = require_principal_scope(principal, &entity.access.metadata_scope) {
         return error.into_response();
     }
-    let ingest_version = ingest_version_for_entity(
-        readiness.as_ref().map(|Extension(readiness)| readiness),
-        &path.dataset_id,
-        entity,
-    );
+    let readiness = runtime.readiness_rx();
+    let ingest_version = ingest_version_for_entity(readiness.as_ref(), &path.dataset_id, entity);
 
+    let config = runtime.config();
     let document = config
         .as_ref()
-        .and_then(|Extension(config)| {
+        .and_then(|config| {
             metadata::entity_schema_document(config, &registry, &path.dataset_id, &path.entity)
         })
         .unwrap_or_else(|| schema_document(&path.dataset_id, entity));
@@ -237,19 +158,16 @@ async fn entity_collection(
     Path(path): Path<EntityPath>,
     Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
-    query: Option<Extension<Arc<EntityQueryEngine>>>,
-    _readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
-    signer: Option<Extension<Arc<CursorSigner>>>,
 ) -> Response {
-    let Some(Extension(registry)) = registry.as_ref() else {
+    let Some(registry) = runtime.entity_registry() else {
         return query_unavailable(
             "entity collection route matched, but entity registry state is not installed",
         );
     };
-    let audit_context = audit_context_for_entity(registry, &path);
-    let required_filters = match entity_from_registry(registry, &path.dataset_id, &path.entity) {
+    let audit_context = audit_context_for_entity(&registry, &path);
+    let required_filters = match entity_from_registry(&registry, &path.dataset_id, &path.entity) {
         Ok(entity) => {
             if let Err(error) = require_read_access(principal.clone(), entity, &headers) {
                 return error.into_response();
@@ -260,7 +178,7 @@ async fn entity_collection(
                     Err(error) => return error.into_response(),
                 };
                 if let Err(error) = require_expansion_access(
-                    registry,
+                    &registry,
                     &path.dataset_id,
                     entity,
                     &expansions,
@@ -275,13 +193,13 @@ async fn entity_collection(
         Err(error) => return error.into_response(),
     };
 
-    let Some(Extension(query)) = query else {
+    let Some(query) = runtime.query() else {
         return query_unavailable(
             "entity collection route matched, but entity query state is not installed",
         );
     };
 
-    let Some(Extension(signer)) = signer else {
+    let Some(signer) = runtime.cursor_signer() else {
         return query_unavailable(
             "entity collection route matched, but cursor signer is not installed",
         );
@@ -399,21 +317,16 @@ async fn entity_record(
     Path(path): Path<EntityRecordPath>,
     Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
-    query: Option<Extension<Arc<EntityQueryEngine>>>,
-    _readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
-    config: Option<Extension<Arc<Config>>>,
-    provenance: Option<Extension<Arc<crate::provenance::ProvenanceState>>>,
-    publicschema: Option<Extension<Arc<crate::provenance::publicschema::PublicSchemaVcRegistry>>>,
 ) -> Response {
-    let Some(Extension(registry)) = registry.as_ref() else {
+    let Some(registry) = runtime.entity_registry() else {
         return query_unavailable(
             "entity record route matched, but entity registry state is not installed",
         );
     };
-    let audit_context = audit_context_for_entity_record(registry, &path.dataset_id, &path.entity);
-    match entity_from_registry(registry, &path.dataset_id, &path.entity) {
+    let audit_context = audit_context_for_entity_record(&registry, &path.dataset_id, &path.entity);
+    match entity_from_registry(&registry, &path.dataset_id, &path.entity) {
         Ok(entity) => {
             if let Err(error) = require_read_access(principal.clone(), entity, &headers) {
                 return error.into_response();
@@ -424,7 +337,7 @@ async fn entity_record(
                     Err(error) => return error.into_response(),
                 };
                 if let Err(error) = require_expansion_access(
-                    registry,
+                    &registry,
                     &path.dataset_id,
                     entity,
                     &expansions,
@@ -438,7 +351,7 @@ async fn entity_record(
         Err(error) => return error.into_response(),
     }
 
-    let Some(Extension(query)) = query else {
+    let Some(query) = runtime.query() else {
         return query_unavailable(
             "entity record route matched, but entity query state is not installed",
         );
@@ -480,13 +393,13 @@ async fn entity_record(
             } else {
                 Json(record.value.clone()).into_response()
             };
-            let provenance_state = provenance.as_ref().map(|Extension(state)| state);
-            let config_ref = config.as_ref().map(|Extension(cfg)| cfg);
-            let publicschema_ref = publicschema.as_ref().map(|Extension(registry)| registry);
+            let provenance_state = runtime.provenance_state();
+            let config_ref = runtime.config();
+            let publicschema_ref = runtime.publicschema_registry();
             let mut response = crate::api::provenance_issuance::maybe_issue_entity_record(
-                provenance_state,
-                config_ref,
-                publicschema_ref,
+                provenance_state.as_ref(),
+                config_ref.as_ref(),
+                publicschema_ref.as_ref(),
                 &headers,
                 plain_response,
                 &path.dataset_id,
@@ -512,31 +425,28 @@ async fn entity_relationship(
     Path(path): Path<EntityRelationshipPath>,
     Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
-    query: Option<Extension<Arc<EntityQueryEngine>>>,
-    _readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
-    signer: Option<Extension<Arc<CursorSigner>>>,
 ) -> Response {
-    let Some(Extension(registry)) = registry.as_ref() else {
+    let Some(registry) = runtime.entity_registry() else {
         return query_unavailable(
             "entity relationship route matched, but entity registry state is not installed",
         );
     };
     let audit_context = audit_context_for_relationship(
-        registry,
+        &registry,
         &path.dataset_id,
         &path.entity,
         &path.relationship,
     );
     let mut page_context = None;
-    match entity_from_registry(registry, &path.dataset_id, &path.entity) {
+    match entity_from_registry(&registry, &path.dataset_id, &path.entity) {
         Ok(entity) => {
             if let Err(error) = require_read_access(principal.clone(), entity, &headers) {
                 return error.into_response();
             }
             if let Err(error) = require_relationship_target_access(
-                registry,
+                &registry,
                 &path.dataset_id,
                 entity,
                 &path.relationship,
@@ -547,7 +457,7 @@ async fn entity_relationship(
             }
             if let Some(relationship) = entity.relationships.get(&path.relationship) {
                 let target =
-                    match entity_from_registry(registry, &path.dataset_id, &relationship.target) {
+                    match entity_from_registry(&registry, &path.dataset_id, &relationship.target) {
                         Ok(target) => target,
                         Err(error) => return error.into_response(),
                     };
@@ -574,13 +484,13 @@ async fn entity_relationship(
         Err(error) => return error.into_response(),
     }
 
-    let Some(Extension(query)) = query else {
+    let Some(query) = runtime.query() else {
         return query_unavailable(
             "entity relationship route matched, but entity query state is not installed",
         );
     };
 
-    let Some(Extension(signer)) = signer else {
+    let Some(signer) = runtime.cursor_signer() else {
         return query_unavailable(
             "entity relationship route matched, but cursor signer is not installed",
         );
@@ -1218,7 +1128,7 @@ fn validate_cursor(cursor: &PageCursor, context: &CursorContext) -> Result<(), P
 
 fn encode_cursor(signer: &CursorSigner, cursor: &PageCursor) -> Result<String, Error> {
     let payload = serde_json::to_vec(cursor).map_err(|_| Error::from(InternalError::Unhandled))?;
-    let tag = signer.tag(&payload);
+    let tag = signer.sign_payload(&payload);
     let mut buf = Vec::with_capacity(CURSOR_MAC_LEN + payload.len());
     buf.extend_from_slice(&tag);
     buf.extend_from_slice(&payload);
@@ -1231,7 +1141,7 @@ fn decode_cursor(signer: &CursorSigner, cursor: &str) -> Result<PageCursor, Erro
         return Err(crate::error::FilterError::InvalidValue.into());
     }
     let (tag, payload) = bytes.split_at(CURSOR_MAC_LEN);
-    if !signer.verify(payload, tag) {
+    if !signer.verify_payload(payload, tag) {
         return Err(crate::error::FilterError::InvalidValue.into());
     }
     serde_json::from_slice(payload).map_err(|_| crate::error::FilterError::InvalidValue.into())

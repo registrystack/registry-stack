@@ -17,7 +17,6 @@ use serde_json::{json, Map, Value};
 use time::format_description::well_known::Rfc3339;
 use time::{Date, OffsetDateTime};
 
-use crate::api::CursorSigner;
 use crate::audit::{AuditContextExt, ErrorCodeExt};
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
@@ -26,7 +25,8 @@ use crate::entity::{EntityModel, EntityRegistry, EntitySpatialModel};
 use crate::error::{
     AuthError, Error, FilterError, InternalError, OgcError, QueryError, SpatialError,
 };
-use crate::query::{EntityCollectionQuery, EntityFilter, EntityFilterOp, EntityQueryEngine};
+use crate::query::{EntityCollectionQuery, EntityFilter, EntityFilterOp};
+use crate::runtime_config::{CursorSigner, RuntimeSnapshot, CURSOR_MAC_LEN};
 
 const GEOJSON: HeaderValue = HeaderValue::from_static("application/geo+json");
 const JSON: &str = "application/json";
@@ -34,7 +34,6 @@ const GEOJSON_MIME: &str = "application/geo+json";
 const OGC_BASE: &str = "/ogc/v1";
 const DATA_PURPOSE_HEADER: &str = "data-purpose";
 const MAX_FILTERS_PER_REQUEST: usize = 20;
-const CURSOR_MAC_LEN: usize = 16;
 const OPENAPI_ENABLED: bool = true;
 
 const CONFORMANCE_CORE: &str = "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core";
@@ -86,11 +85,8 @@ struct FeaturePath {
     feature_id: String,
 }
 
-async fn landing(
-    config: Option<Extension<Arc<crate::config::Config>>>,
-    principal: Option<Extension<Principal>>,
-) -> Response {
-    let Some(Extension(config)) = config else {
+async fn landing(runtime: RuntimeSnapshot, principal: Option<Extension<Principal>>) -> Response {
+    let Some(config) = runtime.config() else {
         return query_unavailable("OGC landing route matched, but config is not installed");
     };
     if let Err(error) = require_any_metadata_scope(&config, principal) {
@@ -104,10 +100,10 @@ async fn landing(
 }
 
 async fn conformance(
-    config: Option<Extension<Arc<crate::config::Config>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let Some(Extension(config)) = config else {
+    let Some(config) = runtime.config() else {
         return query_unavailable("OGC conformance route matched, but config is not installed");
     };
     if let Err(error) = require_any_metadata_scope(&config, principal) {
@@ -117,11 +113,10 @@ async fn conformance(
 }
 
 async fn collections(
-    config: Option<Extension<Arc<crate::config::Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let Some((config, registry)) = ogc_state(config, registry) else {
+    let Some((config, registry)) = ogc_state(&runtime) else {
         return query_unavailable("OGC collections route matched, but state is not installed");
     };
     let Some(Extension(principal)) = principal else {
@@ -144,11 +139,10 @@ async fn collections(
 
 async fn dataset_collections(
     Path(path): Path<DatasetPath>,
-    config: Option<Extension<Arc<crate::config::Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let Some((config, registry)) = ogc_state(config, registry) else {
+    let Some((config, registry)) = ogc_state(&runtime) else {
         return query_unavailable(
             "OGC dataset collections route matched, but state is not installed",
         );
@@ -175,11 +169,10 @@ async fn dataset_collections(
 
 async fn collection_detail(
     Path(path): Path<CollectionPath>,
-    config: Option<Extension<Arc<crate::config::Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let Some((config, registry)) = ogc_state(config, registry) else {
+    let Some((config, registry)) = ogc_state(&runtime) else {
         return query_unavailable("OGC collection route matched, but state is not installed");
     };
     let Ok((entity, spatial)) = require_spatial_entity(
@@ -201,19 +194,16 @@ async fn collection_items(
     Path(path): Path<CollectionPath>,
     Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
-    config: Option<Extension<Arc<crate::config::Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
-    query: Option<Extension<Arc<EntityQueryEngine>>>,
-    signer: Option<Extension<Arc<CursorSigner>>>,
 ) -> Response {
-    let Some((_, registry)) = ogc_state(config, registry) else {
+    let Some((_, registry)) = ogc_state(&runtime) else {
         return query_unavailable("OGC items route matched, but state is not installed");
     };
-    let Some(Extension(query)) = query else {
+    let Some(query) = runtime.query() else {
         return query_unavailable("OGC items route matched, but query engine is not installed");
     };
-    let Some(Extension(signer)) = signer else {
+    let Some(signer) = runtime.cursor_signer() else {
         return query_unavailable("OGC items route matched, but cursor signer is not installed");
     };
     let principal_ref = principal.as_ref().map(|Extension(principal)| principal);
@@ -339,15 +329,13 @@ async fn feature_item(
     Path(path): Path<FeaturePath>,
     Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
-    config: Option<Extension<Arc<crate::config::Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
-    query: Option<Extension<Arc<EntityQueryEngine>>>,
 ) -> Response {
-    let Some((_, registry)) = ogc_state(config, registry) else {
+    let Some((_, registry)) = ogc_state(&runtime) else {
         return query_unavailable("OGC feature route matched, but state is not installed");
     };
-    let Some(Extension(query)) = query else {
+    let Some(query) = runtime.query() else {
         return query_unavailable("OGC feature route matched, but query engine is not installed");
     };
     let Ok((entity, spatial)) = require_spatial_entity(
@@ -435,10 +423,9 @@ async fn feature_item(
 }
 
 fn ogc_state(
-    config: Option<Extension<Arc<crate::config::Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
+    runtime: &RuntimeSnapshot,
 ) -> Option<(Arc<crate::config::Config>, Arc<EntityRegistry>)> {
-    Some((config?.0, registry?.0))
+    Some((runtime.config()?, runtime.entity_registry()?))
 }
 
 fn require_any_metadata_scope(

@@ -44,6 +44,7 @@ fn sample_record(request_id: usize) -> AuditRecord {
         duration_ms: 3,
         error_code: None,
         provenance: None,
+        config: None,
     }
 }
 

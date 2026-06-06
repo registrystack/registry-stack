@@ -47,6 +47,7 @@ fn sample_record(path: &str) -> AuditRecord {
         duration_ms: 7,
         error_code: None,
         provenance: None,
+        config: None,
     }
 }
 

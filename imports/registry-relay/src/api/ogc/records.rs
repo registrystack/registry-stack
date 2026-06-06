@@ -14,7 +14,6 @@ use registry_manifest_core::{CompiledDataset, CompiledMetadata};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::api::CursorSigner;
 use crate::auth::Principal;
 use crate::config::Config;
 use crate::entity::EntityRegistry;
@@ -23,13 +22,13 @@ use crate::error::{
 };
 use crate::metadata::catalog::normalized_base_url;
 use crate::metadata::scoped_compiled_from_runtime;
+use crate::runtime_config::{CursorSigner, RuntimeSnapshot, CURSOR_MAC_LEN};
 
 const RECORDS_BASE: &str = "/ogc/v1/records";
 const DATASETS_COLLECTION_ID: &str = "datasets";
 const GEOJSON: HeaderValue = HeaderValue::from_static("application/geo+json");
 const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 1000;
-const CURSOR_MAC_LEN: usize = 16;
 pub(crate) const CONFORMANCE_RECORD_CORE: &str =
     "http://www.opengis.net/spec/ogcapi-records-1/1.0/conf/record-core";
 pub(crate) const CONFORMANCE_RECORD_COLLECTION: &str =
@@ -75,11 +74,8 @@ struct RecordPath {
     record_id: String,
 }
 
-async fn landing(
-    config: Option<Extension<Arc<Config>>>,
-    principal: Option<Extension<Principal>>,
-) -> Response {
-    let Some(Extension(config)) = config else {
+async fn landing(runtime: RuntimeSnapshot, principal: Option<Extension<Principal>>) -> Response {
+    let Some(config) = runtime.config() else {
         return Error::from(crate::error::InternalError::Unhandled).into_response();
     };
     if let Err(error) = require_metadata_access(&config, principal) {
@@ -101,10 +97,10 @@ async fn landing(
 }
 
 async fn conformance(
-    config: Option<Extension<Arc<Config>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let Some(Extension(config)) = config else {
+    let Some(config) = runtime.config() else {
         return Error::from(crate::error::InternalError::Unhandled).into_response();
     };
     if let Err(error) = require_metadata_access(&config, principal) {
@@ -118,11 +114,10 @@ async fn conformance(
 }
 
 async fn collections(
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let Some((config, _registry)) = records_state(config, registry) else {
+    let Some((config, _registry)) = records_state(&runtime) else {
         return Error::from(crate::error::InternalError::Unhandled).into_response();
     };
     if let Err(error) = require_metadata_access(&config, principal) {
@@ -139,10 +134,10 @@ async fn collections(
 
 async fn collection_detail(
     Path(path): Path<CollectionPath>,
-    config: Option<Extension<Arc<Config>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let Some(Extension(config)) = config else {
+    let Some(config) = runtime.config() else {
         return Error::from(crate::error::InternalError::Unhandled).into_response();
     };
     if path.collection_id != DATASETS_COLLECTION_ID {
@@ -161,27 +156,23 @@ async fn collection_detail(
 async fn collection_items(
     Path(path): Path<CollectionPath>,
     Query(params): Query<HashMap<String, String>>,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    compiled_metadata: Option<Extension<Arc<CompiledMetadata>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
-    signer: Option<Extension<Arc<CursorSigner>>>,
 ) -> Response {
     if path.collection_id != DATASETS_COLLECTION_ID {
         return Error::from(OgcError::CollectionNotFound).into_response();
     }
-    let Some((config, registry)) = records_state(config, registry) else {
+    let Some((config, registry)) = records_state(&runtime) else {
         return Error::from(crate::error::InternalError::Unhandled).into_response();
     };
-    let Some(Extension(signer)) = signer else {
+    let Some(signer) = runtime.cursor_signer() else {
         return Error::from(crate::error::InternalError::Unhandled).into_response();
     };
     let principal_ref = principal.as_ref().map(|Extension(principal)| principal);
-    let compiled =
-        match scoped_records_metadata(&config, &registry, compiled_metadata, principal.clone()) {
-            Ok(compiled) => compiled,
-            Err(error) => return error.into_response(),
-        };
+    let compiled = match scoped_records_metadata(&runtime, &config, &registry, principal.clone()) {
+        Ok(compiled) => compiled,
+        Err(error) => return error.into_response(),
+    };
     let parsed = match parse_records_query(params) {
         Ok(parsed) => parsed,
         Err(error) => return error.into_response(),
@@ -272,18 +263,16 @@ async fn collection_items(
 
 async fn record_item(
     Path(path): Path<RecordPath>,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    compiled_metadata: Option<Extension<Arc<CompiledMetadata>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
     if path.collection_id != DATASETS_COLLECTION_ID {
         return Error::from(OgcError::CollectionNotFound).into_response();
     }
-    let Some((config, registry)) = records_state(config, registry) else {
+    let Some((config, registry)) = records_state(&runtime) else {
         return Error::from(crate::error::InternalError::Unhandled).into_response();
     };
-    let compiled = match scoped_records_metadata(&config, &registry, compiled_metadata, principal) {
+    let compiled = match scoped_records_metadata(&runtime, &config, &registry, principal) {
         Ok(compiled) => compiled,
         Err(error) => return error.into_response(),
     };
@@ -300,11 +289,8 @@ async fn record_item(
     response
 }
 
-fn records_state(
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-) -> Option<(Arc<Config>, Arc<EntityRegistry>)> {
-    Some((config?.0, registry?.0))
+fn records_state(runtime: &RuntimeSnapshot) -> Option<(Arc<Config>, Arc<EntityRegistry>)> {
+    Some((runtime.config()?, runtime.entity_registry()?))
 }
 
 fn visible_metadata_entity_ids(
@@ -343,13 +329,13 @@ fn require_metadata_access(
 }
 
 fn scoped_records_metadata(
+    runtime: &RuntimeSnapshot,
     config: &Config,
     registry: &EntityRegistry,
-    compiled_metadata: Option<Extension<Arc<CompiledMetadata>>>,
     principal: Option<Extension<Principal>>,
 ) -> Result<CompiledMetadata, Error> {
     let visible_entity_ids = visible_metadata_entity_ids(config, principal)?;
-    if let Some(Extension(compiled)) = compiled_metadata {
+    if let Some(compiled) = runtime.compiled_metadata() {
         return Ok(compiled.filter(|dataset, entity| {
             visible_entity_ids.contains(&(dataset.dataset_id.clone(), entity.name.clone()))
         }));

@@ -12,6 +12,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand_core::OsRng;
+use registry_platform_crypto::KeyReadiness;
 use registry_relay::config::{ProvenanceAlgorithm, SoftwareSignerConfig};
 use registry_relay::provenance::signers::software::SoftwareSigner;
 use registry_relay::provenance::{Signer, SignerError, SigningAlgorithm};
@@ -62,6 +63,7 @@ fn software_signer_exposes_configured_algorithm_and_vm_id() {
         signer.verification_method_id(),
         "did:web:example#software-1"
     );
+    assert_eq!(signer.readiness(), KeyReadiness::Ready);
 }
 
 #[test]
@@ -133,6 +135,7 @@ fn software_signer_public_jwk_carries_exported_public_key() {
 
 struct ExternalTestSigner {
     verification_method_id: String,
+    readiness: KeyReadiness,
 }
 
 impl Signer for ExternalTestSigner {
@@ -156,12 +159,17 @@ impl Signer for ExternalTestSigner {
             "kid": self.verification_method_id,
         })
     }
+
+    fn readiness(&self) -> KeyReadiness {
+        self.readiness
+    }
 }
 
 #[test]
 fn signer_trait_accepts_future_external_adapters() {
     let signer: Box<dyn Signer> = Box::new(ExternalTestSigner {
         verification_method_id: "did:web:example#future-adapter".to_string(),
+        readiness: KeyReadiness::Degraded,
     });
     assert_eq!(signer.algorithm(), SigningAlgorithm::EdDSA);
     assert_eq!(
@@ -172,4 +180,5 @@ fn signer_trait_accepts_future_external_adapters() {
         signer.sign(json!({}), json!({})).expect("external sign"),
         "e30.e30.c2lnbmF0dXJl"
     );
+    assert_eq!(signer.readiness(), KeyReadiness::Degraded);
 }

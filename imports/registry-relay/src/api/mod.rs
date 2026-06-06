@@ -32,6 +32,7 @@ pub mod schemas;
 #[cfg(feature = "spdci-api-standards")]
 pub mod spdci;
 
+pub use crate::runtime_config::CursorSigner;
 pub use admin::router as admin_router;
 pub use aggregates::router as aggregates_router;
 pub use contexts::router as contexts_router;
@@ -39,7 +40,6 @@ pub use datasets::router as datasets_router;
 pub use did::router as did_router;
 pub use docs::router as docs_router;
 pub use entity::router as entity_router;
-pub use entity::CursorSigner;
 pub use health::router as health_router;
 pub use metadata::router as metadata_router;
 #[cfg(feature = "ogcapi-edr")]

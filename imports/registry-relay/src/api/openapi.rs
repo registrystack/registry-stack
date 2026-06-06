@@ -1,19 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Best-effort OpenAPI route.
 
-use std::collections::BTreeSet;
-use std::sync::Arc;
-
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
 use axum::{Extension, Router};
 use serde_json::{json, Map, Value};
+use std::collections::BTreeSet;
 
 use crate::audit::ErrorCodeExt;
 use crate::auth::Principal;
 use crate::config::{AuthMode, Config, DatasetConfig, EntityConfig, FilterOp};
-use crate::entity::EntityRegistry;
 use crate::error::{AuthError, Error};
 // Reads the local `CatalogDocument`, not `registry-manifest-core`'s
 // `CompiledMetadata`, because the OpenAPI synthesizer below depends on
@@ -24,6 +21,7 @@ use crate::metadata::catalog::{
     catalog_document_for_entity_ids, entity_class_uri, field_property_uri, CatalogDocument,
     DatasetMetadata, EntityMetadata, FieldMetadata, RelationshipMetadata,
 };
+use crate::runtime_config::RuntimeSnapshot;
 
 const PROBLEM_JSON: HeaderValue = HeaderValue::from_static("application/problem+json");
 const OPENAPI_UNAVAILABLE_CODE: &str = "openapi.generation_unavailable";
@@ -52,12 +50,11 @@ where
     Router::new().route("/openapi.json", get(openapi))
 }
 
-async fn openapi(
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    principal: Option<Extension<Principal>>,
-) -> Response {
-    let Some((config, registry)) = openapi_state(config, registry) else {
+async fn openapi(runtime: RuntimeSnapshot, principal: Option<Extension<Principal>>) -> Response {
+    let Some(config) = runtime.config() else {
+        return openapi_unavailable("OpenAPI route matched, but metadata state is not installed");
+    };
+    let Some(registry) = runtime.entity_registry() else {
         return openapi_unavailable("OpenAPI route matched, but metadata state is not installed");
     };
     let visible_entity_ids = match visible_metadata_entity_ids(&config, principal) {
@@ -67,13 +64,6 @@ async fn openapi(
     let catalog = catalog_document_for_entity_ids(&config, &registry, &visible_entity_ids);
 
     Json(openapi_document(&catalog, &config)).into_response()
-}
-
-fn openapi_state(
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-) -> Option<(Arc<Config>, Arc<EntityRegistry>)> {
-    Some((config?.0, registry?.0))
 }
 
 fn visible_metadata_entity_ids(
@@ -4051,6 +4041,7 @@ mod tests {
             env::set_var("STATS_OFFICE_API_KEY_HASH", fingerprint);
             env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", fingerprint);
             env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", fingerprint);
+            env::set_var("OPERATIONS_OPERATOR_API_KEY_HASH", fingerprint);
             env::set_var(
                 "REGISTRY_RELAY_AUDIT_HASH_SECRET",
                 "relay-openapi-audit-secret-32-bytes",

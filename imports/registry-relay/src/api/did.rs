@@ -14,18 +14,18 @@
 //! (spec §7, §13.4). `max_validity` is the longest claim-validity
 //! window across all claim types; `clock_skew_grace` is 5 minutes.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::{Extension, Router};
+use axum::Router;
 use time::OffsetDateTime;
 
 use crate::error::{Error, ProvenanceError};
 use crate::provenance::did_web::{build_did_document, VerificationMethodEntry};
 use crate::provenance::{IssuerMode, ProvenanceState};
+use crate::runtime_config::RuntimeSnapshot;
 
 const APPLICATION_DID_JSON: HeaderValue = HeaderValue::from_static("application/did+json");
 const CACHE_CONTROL_5M: HeaderValue = HeaderValue::from_static("public, max-age=300");
@@ -42,8 +42,8 @@ where
     Router::new().route("/.well-known/did.json", get(serve_did_document))
 }
 
-async fn serve_did_document(state: Option<Extension<Arc<ProvenanceState>>>) -> Response {
-    let Some(Extension(state)) = state else {
+async fn serve_did_document(runtime: RuntimeSnapshot) -> Response {
+    let Some(state) = runtime.provenance_state() else {
         return Error::from(ProvenanceError::DidDocumentUnavailable).into_response();
     };
     let now = (state.clock)();

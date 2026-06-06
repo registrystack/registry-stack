@@ -2,7 +2,6 @@
 //! Standard-facing metadata routes backed by `registry-manifest-core`.
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
 use axum::extract::{Path, Query};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -16,9 +15,9 @@ use sha2::{Digest, Sha256};
 
 use crate::auth::Principal;
 use crate::config::Config;
-use crate::entity::EntityRegistry;
 use crate::error::{AuthError, Error, SchemaError};
 use crate::metadata::scoped_compiled_from_runtime;
+use crate::runtime_config::RuntimeSnapshot;
 
 const JSON_LD: HeaderValue = HeaderValue::from_static("application/ld+json");
 const LINKSET_JSON: HeaderValue = HeaderValue::from_static(
@@ -137,12 +136,10 @@ impl EvidenceOfferingFilters {
 
 async fn metadata_landing(
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let compiled = match scoped_metadata(config, registry, compiled_metadata, principal) {
+    let compiled = match scoped_metadata(runtime, principal) {
         Ok(compiled) => compiled,
         Err(response) => return *response,
     };
@@ -240,12 +237,10 @@ async fn api_catalog_head() -> Response {
 
 async fn catalog(
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let compiled = match scoped_metadata(config, registry, compiled_metadata, principal) {
+    let compiled = match scoped_metadata(runtime, principal) {
         Ok(compiled) => compiled,
         Err(response) => return *response,
     };
@@ -255,12 +250,10 @@ async fn catalog(
 async fn evidence_offerings(
     Query(filters): Query<EvidenceOfferingFilters>,
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let compiled = match scoped_metadata(config, registry, compiled_metadata, principal) {
+    let compiled = match scoped_metadata(runtime, principal) {
         Ok(compiled) => compiled,
         Err(response) => return *response,
     };
@@ -277,12 +270,10 @@ async fn evidence_offerings(
 async fn evidence_offering(
     Path(path): Path<EvidenceOfferingPath>,
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let compiled = match scoped_metadata(config, registry, compiled_metadata, principal) {
+    let compiled = match scoped_metadata(runtime, principal) {
         Ok(compiled) => compiled,
         Err(response) if response.status() == StatusCode::FORBIDDEN => return offering_not_found(),
         Err(response) => return *response,
@@ -296,12 +287,10 @@ async fn evidence_offering(
 
 async fn dcat(
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let compiled = match scoped_metadata(config, registry, compiled_metadata, principal) {
+    let compiled = match scoped_metadata(runtime, principal) {
         Ok(compiled) => compiled,
         Err(response) => return *response,
     };
@@ -311,12 +300,10 @@ async fn dcat(
 async fn dcat_profile(
     Path(profile): Path<String>,
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let compiled = match scoped_metadata(config, registry, compiled_metadata, principal) {
+    let compiled = match scoped_metadata(runtime, principal) {
         Ok(compiled) => compiled,
         Err(response) => return *response,
     };
@@ -328,12 +315,10 @@ async fn dcat_profile(
 
 async fn shacl(
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let compiled = match scoped_metadata(config, registry, compiled_metadata, principal) {
+    let compiled = match scoped_metadata(runtime, principal) {
         Ok(compiled) => compiled,
         Err(response) => return *response,
     };
@@ -342,12 +327,10 @@ async fn shacl(
 
 async fn policies(
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let compiled = match scoped_metadata(config, registry, compiled_metadata, principal) {
+    let compiled = match scoped_metadata(runtime, principal) {
         Ok(compiled) => compiled,
         Err(response) => return *response,
     };
@@ -357,12 +340,10 @@ async fn policies(
 async fn entity_schema(
     Path(path): Path<EntityPath>,
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let compiled = match scoped_metadata(config, registry, compiled_metadata, principal) {
+    let compiled = match scoped_metadata(runtime, principal) {
         Ok(compiled) => compiled,
         Err(response) => return *response,
     };
@@ -379,12 +360,10 @@ async fn entity_schema(
 async fn entity_shacl(
     Path(path): Path<EntityPath>,
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let compiled = match scoped_metadata(config, registry, compiled_metadata, principal) {
+    let compiled = match scoped_metadata(runtime, principal) {
         Ok(compiled) => compiled,
         Err(response) => return *response,
     };
@@ -398,12 +377,10 @@ async fn entity_shacl(
 
 async fn profiles(
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let compiled = match scoped_metadata(config, registry, compiled_metadata, principal) {
+    let compiled = match scoped_metadata(runtime, principal) {
         Ok(compiled) => compiled,
         Err(response) => return *response,
     };
@@ -419,12 +396,10 @@ async fn profiles(
 async fn profile(
     Path(profile): Path<String>,
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let compiled = match scoped_metadata(config, registry, compiled_metadata, principal) {
+    let compiled = match scoped_metadata(runtime, principal) {
         Ok(compiled) => compiled,
         Err(response) => return *response,
     };
@@ -441,12 +416,10 @@ async fn profile(
 
 async fn datasets(
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let compiled = match scoped_metadata(config, registry, compiled_metadata, principal) {
+    let compiled = match scoped_metadata(runtime, principal) {
         Ok(compiled) => compiled,
         Err(response) => return *response,
     };
@@ -461,12 +434,10 @@ async fn datasets(
 async fn dataset(
     Path(path): Path<DatasetPath>,
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let compiled = match scoped_metadata(config, registry, compiled_metadata, principal) {
+    let compiled = match scoped_metadata(runtime, principal) {
         Ok(compiled) => compiled,
         Err(response) => return *response,
     };
@@ -479,12 +450,10 @@ async fn dataset(
 async fn dataset_policy(
     Path(path): Path<DatasetPath>,
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let compiled = match scoped_metadata(config, registry, compiled_metadata, principal) {
+    let compiled = match scoped_metadata(runtime, principal) {
         Ok(compiled) => compiled,
         Err(response) => return *response,
     };
@@ -498,12 +467,10 @@ async fn dataset_policy(
 async fn dataset_entities(
     Path(path): Path<DatasetPath>,
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let compiled = match scoped_metadata(config, registry, compiled_metadata, principal) {
+    let compiled = match scoped_metadata(runtime, principal) {
         Ok(compiled) => compiled,
         Err(response) => return *response,
     };
@@ -522,12 +489,10 @@ async fn dataset_entities(
 async fn dataset_entity(
     Path(path): Path<EntityPath>,
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let compiled = match scoped_metadata(config, registry, compiled_metadata, principal) {
+    let compiled = match scoped_metadata(runtime, principal) {
         Ok(compiled) => compiled,
         Err(response) => return *response,
     };
@@ -542,12 +507,10 @@ async fn dataset_entity(
 
 async fn ogc_records(
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let compiled = match scoped_metadata(config, registry, compiled_metadata, principal) {
+    let compiled = match scoped_metadata(runtime, principal) {
         Ok(compiled) => compiled,
         Err(response) => return *response,
     };
@@ -557,12 +520,10 @@ async fn ogc_records(
 async fn ogc_record_item(
     Path(record_id): Path<String>,
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let compiled = match scoped_metadata(config, registry, compiled_metadata, principal) {
+    let compiled = match scoped_metadata(runtime, principal) {
         Ok(compiled) => compiled,
         Err(response) => return *response,
     };
@@ -573,24 +534,22 @@ async fn ogc_record_item(
 }
 
 fn scoped_metadata(
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Result<metadata_core::CompiledMetadata, Box<Response>> {
-    let Some(Extension(config)) = config else {
+    let Some(config) = runtime.config() else {
         return Err(Box::new(metadata_unavailable(
             "metadata route matched, but config state is not installed",
         )));
     };
-    let Some(Extension(registry)) = registry else {
+    let Some(registry) = runtime.entity_registry() else {
         return Err(Box::new(metadata_unavailable(
             "metadata route matched, but entity registry state is not installed",
         )));
     };
     let visible_entity_ids = visible_metadata_entity_ids(&config, principal)
         .map_err(|error| Box::new(error.into_response()))?;
-    if let Some(Extension(compiled)) = compiled_metadata {
+    if let Some(compiled) = runtime.compiled_metadata() {
         return Ok(compiled.filter(|dataset, entity| {
             visible_entity_ids.contains(&(dataset.dataset_id.clone(), entity.name.clone()))
         }));

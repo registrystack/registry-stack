@@ -107,13 +107,25 @@ fn example_config_loads_and_validates() {
     let key_a = make_fingerprint(b"statistics-office-secret");
     let key_b = make_fingerprint(b"program-system-secret");
     let key_c = make_fingerprint(b"verification-service-secret");
+    let key_d = make_fingerprint(b"operations-operator-secret");
 
     // Safe to set: env name is unique to the example.
     env::set_var("STATS_OFFICE_API_KEY_HASH", key_a);
     env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", key_b);
     env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", key_c);
+    env::set_var("OPERATIONS_OPERATOR_API_KEY_HASH", key_d);
     let config = config::load(&example_path()).expect("example config must load");
 
+    assert_eq!(config.instance.id, "registry-relay-local");
+    assert_eq!(config.instance.environment.as_deref(), Some("development"));
+    assert_eq!(
+        config.instance.owner.as_deref(),
+        Some("Ministry of Digital Government")
+    );
+    assert_eq!(
+        config.instance.jurisdiction.as_deref(),
+        Some("example-country")
+    );
     assert_eq!(config.server.bind.to_string(), "0.0.0.0:8080");
 
     assert_eq!(config.catalog.title, "Internal Government Registry Relay");
@@ -125,12 +137,20 @@ fn example_config_loads_and_validates() {
     );
 
     assert!(matches!(config.auth.mode, AuthMode::ApiKey));
-    assert_eq!(config.auth.api_keys.len(), 3);
+    assert_eq!(config.auth.api_keys.len(), 4);
     assert_eq!(config.auth.api_keys[0].id, "statistics_office");
     assert_eq!(
         config.auth.api_keys[0].hash_env,
         "STATS_OFFICE_API_KEY_HASH"
     );
+    let ops = config
+        .auth
+        .api_keys
+        .iter()
+        .find(|key| key.id == "operations_operator")
+        .expect("operations operator key is configured");
+    assert_eq!(ops.hash_env, "OPERATIONS_OPERATOR_API_KEY_HASH");
+    assert_eq!(ops.scopes, ["registry_relay:ops_read"]);
 
     assert_eq!(config.datasets.len(), 1);
     let dataset = &config.datasets[0];
@@ -1103,10 +1123,9 @@ fn loader_does_not_leak_path_in_error_message() {
         Err(e) => e.detail(),
         Ok(_) => panic!("expected load of missing file to fail"),
     };
-    assert!(
-        !msg.contains(bogus.to_string_lossy().as_ref()),
-        "msg: {msg}"
-    );
+    let bogus_path = bogus.to_string_lossy();
+    let bogus_path: &str = bogus_path.as_ref();
+    assert!(!msg.contains(bogus_path), "msg: {msg}");
 }
 
 #[test]

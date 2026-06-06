@@ -36,6 +36,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::Extension;
 use datafusion::execution::context::SessionContext;
 use registry_platform_audit::AuditChainProfile;
 use registry_relay::audit::{AuditPipeline, FileSink, StdoutSink, SyslogSink};
@@ -43,6 +44,11 @@ use registry_relay::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
 use registry_relay::auth::middleware::AuthProviderRef;
 use registry_relay::auth::oidc::{OidcAuth, ReqwestJwksFetcher};
 use registry_relay::auth::ScopeSet;
+use registry_relay::config::governed::{
+    authorize_signed_config_candidate, parse_candidate_config_with_provenance,
+    resolve_tuf_config_candidate, LocalTufConfigTargetRequest, RemoteTufConfigTargetRequest,
+    TufConfigTargetRequest,
+};
 use registry_relay::config::{self, ApiKeyConfig, AuditSinkConfig, Config, OidcConfig};
 use registry_relay::entity::EntityRegistry;
 use registry_relay::error::{ConfigError, Error};
@@ -54,9 +60,11 @@ use registry_relay::provenance::{
     ResolvedProvenanceConfig,
 };
 use registry_relay::query::{AggregateQueryEngine, EntityQueryEngine};
+use registry_relay::runtime_config::{RelayRuntimeHandle, RelayRuntimeSnapshot};
 use registry_relay::serve::{serve_listener, ServeLimits};
 #[cfg(feature = "spdci-api-standards")]
 use registry_relay::spdci::build_spdci_response_mapper;
+use serde::Serialize;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tracing::{error, info, warn};
@@ -68,6 +76,13 @@ const CONFIG_FLAG: &str = "--config";
 
 /// Top-level command for shell-free container liveness probing.
 const HEALTHCHECK_COMMAND: &str = "healthcheck";
+
+/// Top-level namespace for operator configuration commands.
+const CONFIG_COMMAND: &str = "config";
+
+/// Verifies a signed governed-config target without applying it.
+const VERIFY_BUNDLE_COMMAND: &str = "verify-bundle";
+const APPLY_BUNDLE_COMMAND: &str = "apply-bundle";
 
 /// Healthcheck target override flag.
 const HEALTHCHECK_URL_FLAG: &str = "--url";
@@ -84,10 +99,57 @@ const DEFAULT_HEALTHCHECK_TIMEOUT_MS: u64 = 5_000;
 /// Last-resort default config path.
 const DEFAULT_CONFIG_PATH: &str = "./config/example.yaml";
 
+const ROOT_PATH_FLAG: &str = "--root-path";
+const METADATA_DIR_FLAG: &str = "--metadata-dir";
+const TARGETS_DIR_FLAG: &str = "--targets-dir";
+const METADATA_BASE_URL_FLAG: &str = "--metadata-base-url";
+const TARGETS_BASE_URL_FLAG: &str = "--targets-base-url";
+const DATASTORE_DIR_FLAG: &str = "--datastore-dir";
+const TARGET_NAME_FLAG: &str = "--target-name";
+const ALLOW_DEV_INSECURE_FETCH_URLS_FLAG: &str = "--allow-dev-insecure-fetch-urls";
+const ADMIN_URL_FLAG: &str = "--admin-url";
+const ADMIN_TOKEN_ENV_FLAG: &str = "--admin-token-env";
+const LOCAL_APPROVAL_REFERENCE_FLAG: &str = "--local-approval-reference";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CliCommand {
     Serve { config_path: PathBuf },
     Healthcheck { url: String, timeout: Duration },
+    ConfigVerifyBundle(ConfigVerifyBundleCommand),
+    ConfigApplyBundle(ConfigApplyBundleCommand),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConfigVerifyBundleCommand {
+    config_path: PathBuf,
+    root_path: PathBuf,
+    datastore_dir: PathBuf,
+    target_name: String,
+    source: ConfigVerifyBundleSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ConfigVerifyBundleSource {
+    Local {
+        metadata_dir: PathBuf,
+        targets_dir: PathBuf,
+    },
+    Remote {
+        metadata_base_url: String,
+        targets_base_url: String,
+        allow_dev_insecure_fetch_urls: bool,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConfigApplyBundleCommand {
+    admin_url: String,
+    admin_token_env: String,
+    root_path: PathBuf,
+    datastore_dir: PathBuf,
+    target_name: String,
+    source: ConfigVerifyBundleSource,
+    local_approval_reference: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,13 +208,283 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             println!("registry-relay healthcheck ok");
             Ok(())
         }
+        CliCommand::ConfigVerifyBundle(command) => run_config_verify_bundle(command).await,
+        CliCommand::ConfigApplyBundle(command) => run_config_apply_bundle(command).await,
     }
 }
 
 async fn run_server(config_path: PathBuf) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let handle = Arc::new(RelayRuntimeHandle::new(
+        compile_relay_runtime(config_path).await?,
+    ));
+    let runtime = handle.load_full();
+    let app = build_relay_app_from_runtime(Arc::clone(&handle))?;
+
+    runtime
+        .ingest
+        .run_initial_ingest(runtime.readiness_tx.clone())
+        .await;
+    let (mut refresh_tasks, refresh_shutdown) = Arc::clone(&runtime.ingest)
+        .spawn_refresh_tasks_with_config(
+            &runtime.config,
+            runtime.readiness_tx.clone(),
+            Arc::clone(&runtime.audit_sink),
+        );
+
+    let provenance_state_for_log = runtime.provenance_state.as_ref().map(|state| {
+        let cfg = state.config();
+        (state.is_enabled(), cfg.mode, cfg.issuer_did.clone())
+    });
+
+    let listener = TcpListener::bind(runtime.bind).await.map_err(|err| {
+        error!(error = %err, bind = %runtime.bind, "failed to bind listener");
+        err
+    })?;
+
+    match provenance_state_for_log.as_ref() {
+        Some((enabled, mode, issuer_did)) => {
+            info!(
+                bind = %runtime.bind,
+                admin_bind = ?runtime.admin_bind,
+                datasets = runtime.dataset_count(),
+                api_keys = runtime.auth_size_hint(),
+                audit_sink = runtime.audit_kind,
+                provenance_enabled = *enabled,
+                provenance_mode = ?mode,
+                provenance_issuer_did = %issuer_did,
+                "registry-relay listening"
+            );
+        }
+        None => {
+            info!(
+                bind = %runtime.bind,
+                admin_bind = ?runtime.admin_bind,
+                datasets = runtime.dataset_count(),
+                api_keys = runtime.auth_size_hint(),
+                audit_sink = runtime.audit_kind,
+                provenance_enabled = false,
+                "registry-relay listening"
+            );
+        }
+    }
+
+    let admin_listener = match runtime.admin_bind {
+        Some(addr) => Some(TcpListener::bind(addr).await.map_err(|err| {
+            error!(error = %err, bind = %addr, "failed to bind admin listener");
+            err
+        })?),
+        None => None,
+    };
+
+    let serve_limits = ServeLimits::from_config(&runtime.config.server);
+    let main_serve = serve_listener(listener, app, serve_limits, shutdown_signal());
+
+    // Run both servers concurrently. `tokio::select!` is the natural
+    // fit because either listener exiting (clean or not) tears down
+    // the other.
+    let result: Result<(), Box<dyn std::error::Error + Send + Sync>> =
+        if let Some(admin_listener) = admin_listener {
+            let admin_app = registry_relay::server::build_admin_app_with_metadata_and_metrics(
+                Arc::clone(&runtime.config),
+                Arc::clone(&runtime.auth),
+                Arc::clone(&runtime.audit_sink),
+                runtime.readiness_rx.clone(),
+                runtime.readiness_tx.clone(),
+                Arc::clone(&runtime.ingest),
+                runtime.compiled_metadata.clone(),
+                Arc::clone(&runtime.metrics),
+            )?
+            .layer(Extension(Arc::clone(&handle)));
+            let admin_serve =
+                serve_listener(admin_listener, admin_app, serve_limits, shutdown_signal());
+            tokio::select! {
+                r = main_serve => r.map_err(Into::into),
+                r = admin_serve => r.map_err(Into::into),
+            }
+        } else {
+            main_serve.await.map_err(Into::into)
+        };
+
+    // Best-effort audit flush on the way out, regardless of which
+    // listener tripped the shutdown.
+    if let Err(err) = runtime.audit_sink.flush().await {
+        warn!(error = %err, "audit flush on shutdown failed");
+    }
+
+    refresh_shutdown.cancel();
+    while let Some(joined) = refresh_tasks.join_next().await {
+        if let Err(err) = joined {
+            warn!(error = %err, "refresh task failed during shutdown");
+        }
+    }
+
+    result
+}
+
+async fn run_config_verify_bundle(
+    command: ConfigVerifyBundleCommand,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let loaded = config::load_with_metadata(&command.config_path)?;
+    let current_config = loaded.runtime;
+    let request = match command.source {
+        ConfigVerifyBundleSource::Local {
+            metadata_dir,
+            targets_dir,
+        } => TufConfigTargetRequest::Local(LocalTufConfigTargetRequest {
+            root_path: command.root_path,
+            metadata_dir,
+            targets_dir,
+            datastore_dir: command.datastore_dir,
+            target_name: command.target_name.clone(),
+        }),
+        ConfigVerifyBundleSource::Remote {
+            metadata_base_url,
+            targets_base_url,
+            allow_dev_insecure_fetch_urls,
+        } => TufConfigTargetRequest::Remote(RemoteTufConfigTargetRequest {
+            root_path: command.root_path,
+            metadata_base_url,
+            targets_base_url,
+            datastore_dir: command.datastore_dir,
+            target_name: command.target_name.clone(),
+            allow_dev_insecure_fetch_urls,
+        }),
+    };
+    let resolved = resolve_tuf_config_candidate(&request, &current_config).await?;
+    authorize_signed_config_candidate(&resolved, &current_config)?;
+    let (_candidate, provenance) = parse_candidate_config_with_provenance(
+        &resolved.config_yaml,
+        &resolved.bundle_id,
+        resolved.sequence,
+        resolved.source,
+    )
+    .map_err(|detail| io::Error::new(io::ErrorKind::InvalidData, detail))?;
+
+    let report = VerifyBundleReport {
+        result: "verified",
+        source: resolved.source.as_posture_str(),
+        target_name: command.target_name,
+        bundle_id: resolved.bundle_id,
+        stream_id: resolved.stream_id,
+        sequence: resolved.sequence,
+        previous_config_hash: resolved.previous_config_hash,
+        config_hash: provenance.internal_config_hash,
+        posture_config_hash: provenance.posture_config_hash,
+        root_version: resolved.root_version,
+        tuf_root_sha256: resolved.tuf_root_sha256,
+        change_classes: resolved.change_classes.into_iter().collect(),
+        signer_kids: resolved.signer_kids.into_iter().collect(),
+    };
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+async fn run_config_apply_bundle(
+    command: ConfigApplyBundleCommand,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let token = env::var(&command.admin_token_env).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{} is not set", command.admin_token_env),
+        )
+    })?;
+    if token.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} must not be empty", command.admin_token_env),
+        )
+        .into());
+    }
+    let body = config_apply_bundle_request_body(&command);
+    let url = admin_endpoint_url(&command.admin_url, "/admin/v1/config/apply")?;
+    let response = reqwest::Client::new()
+        .post(url)
+        .bearer_auth(token)
+        .json(&body)
+        .send()
+        .await?;
+    let status = response.status();
+    let text = response.text().await?;
+    let parsed: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|_| {
+        serde_json::json!({
+            "status": status.as_u16(),
+            "body": text,
+        })
+    });
+    println!("{}", serde_json::to_string_pretty(&parsed)?);
+    if !status.is_success() {
+        return Err(
+            io::Error::other(format!("admin config apply failed with HTTP {status}")).into(),
+        );
+    }
+    Ok(())
+}
+
+fn config_apply_bundle_request_body(command: &ConfigApplyBundleCommand) -> serde_json::Value {
+    let tuf = match &command.source {
+        ConfigVerifyBundleSource::Local {
+            metadata_dir,
+            targets_dir,
+        } => serde_json::json!({
+            "root_path": command.root_path,
+            "metadata_dir": metadata_dir,
+            "targets_dir": targets_dir,
+            "datastore_dir": command.datastore_dir,
+            "target_name": command.target_name,
+        }),
+        ConfigVerifyBundleSource::Remote {
+            metadata_base_url,
+            targets_base_url,
+            allow_dev_insecure_fetch_urls,
+        } => serde_json::json!({
+            "root_path": command.root_path,
+            "metadata_base_url": metadata_base_url,
+            "targets_base_url": targets_base_url,
+            "datastore_dir": command.datastore_dir,
+            "target_name": command.target_name,
+            "allow_dev_insecure_fetch_urls": allow_dev_insecure_fetch_urls,
+        }),
+    };
+    let mut body = serde_json::json!({ "tuf": tuf });
+    if let Some(reference) = &command.local_approval_reference {
+        body["local_approval_reference"] = serde_json::Value::String(reference.clone());
+    }
+    body
+}
+
+fn admin_endpoint_url(admin_url: &str, path: &str) -> Result<String, CliError> {
+    let base = reqwest::Url::parse(admin_url)
+        .map_err(|err| CliError(format!("{ADMIN_URL_FLAG} is not a valid URL: {err}")))?;
+    if base.scheme() != "http" && base.scheme() != "https" {
+        return Err(CliError(format!("{ADMIN_URL_FLAG} must use http or https")));
+    }
+    Ok(format!("{}{}", admin_url.trim_end_matches('/'), path))
+}
+
+#[derive(Debug, Serialize)]
+struct VerifyBundleReport {
+    result: &'static str,
+    source: &'static str,
+    target_name: String,
+    bundle_id: String,
+    stream_id: String,
+    sequence: u64,
+    previous_config_hash: Option<String>,
+    config_hash: String,
+    posture_config_hash: String,
+    root_version: Option<u64>,
+    tuf_root_sha256: Option<String>,
+    change_classes: Vec<String>,
+    signer_kids: Vec<String>,
+}
+
+async fn compile_relay_runtime(
+    config_path: PathBuf,
+) -> Result<RelayRuntimeSnapshot, Box<dyn std::error::Error + Send + Sync>> {
     info!(path = %config_path.display(), "loading registry-relay config");
 
     let loaded = config::load_with_metadata(&config_path)?;
+    let config_provenance = loaded.provenance.clone();
     let compiled_metadata = loaded.metadata.map(Arc::new);
     let config = Arc::new(loaded.runtime);
 
@@ -182,21 +514,8 @@ async fn run_server(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
     ));
     let initial_snapshot = ingest.snapshot();
     let (readiness_tx, readiness_rx) = watch::channel::<ReadinessSnapshot>(initial_snapshot);
+    let cursor_signer = Arc::new(registry_relay::runtime_config::CursorSigner::new_random());
 
-    ingest.run_initial_ingest(readiness_tx.clone()).await;
-    let (mut refresh_tasks, refresh_shutdown) = Arc::clone(&ingest)
-        .spawn_refresh_tasks_with_config(&config, readiness_tx.clone(), Arc::clone(&audit_sink));
-
-    let dataset_count = config.datasets.len();
-    // Operational startup log: a per-mode size hint. For `api_key` this
-    // is the configured key count; for `oidc` it is 0 (the real signal
-    // is the issuer URL, logged separately when the provider is wired).
-    // Read off the config rather than the provider so the wiring layer
-    // doesn't need a `len()` method on the trait.
-    let auth_size_hint = match config.auth.mode {
-        config::AuthMode::ApiKey => config.auth.api_keys.len(),
-        config::AuthMode::Oidc => 0,
-    };
     // Build provenance state from the parsed config.
     // `build_resolved_provenance_config` returns:
     //   * `Ok(None)` when the operator omitted the `provenance:` block
@@ -210,114 +529,58 @@ async fn run_server(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
     let publicschema_registry = build_publicschema_registry(&config)?.map(Arc::new);
     #[cfg(feature = "spdci-api-standards")]
     let spdci_response_mapper = build_spdci_response_mapper(&config)?.map(Arc::new);
-    let provenance_state_for_log = provenance_state.as_ref().map(|state| {
-        let cfg = state.config();
-        (state.is_enabled(), cfg.mode, cfg.issuer_did.clone())
-    });
     let metrics = RequestMetrics::shared();
+
+    Ok(RelayRuntimeSnapshot::new(
+        config,
+        config_provenance,
+        compiled_metadata,
+        auth,
+        audit_sink,
+        bind,
+        admin_bind,
+        audit_kind,
+        df_ctx,
+        ingest,
+        entity_registry,
+        query,
+        aggregate_query,
+        readiness_tx,
+        readiness_rx,
+        cursor_signer,
+        provenance_state,
+        publicschema_registry,
+        #[cfg(feature = "spdci-api-standards")]
+        spdci_response_mapper,
+        metrics,
+    ))
+}
+
+fn build_relay_app_from_runtime(
+    handle: Arc<RelayRuntimeHandle>,
+) -> Result<axum::Router, Box<dyn std::error::Error + Send + Sync>> {
+    let runtime = handle.load_full();
     let mut app =
         registry_relay::server::build_app_with_entity_query_metadata_provenance_and_metrics(
-            Arc::clone(&config),
-            Arc::clone(&auth),
-            Arc::clone(&audit_sink),
-            readiness_rx.clone(),
-            entity_registry,
-            query,
-            aggregate_query,
-            compiled_metadata.clone(),
-            provenance_state.clone(),
-            Arc::clone(&metrics),
+            Arc::clone(&runtime.config),
+            Arc::clone(&runtime.auth),
+            Arc::clone(&runtime.audit_sink),
+            runtime.readiness_rx.clone(),
+            Arc::clone(&runtime.entity_registry),
+            Arc::clone(&runtime.query),
+            Arc::clone(&runtime.aggregate_query),
+            runtime.compiled_metadata.clone(),
+            runtime.provenance_state.clone(),
+            Arc::clone(&runtime.metrics),
         )?;
-    if let Some(publicschema_registry) = publicschema_registry {
-        app = app.layer(axum::Extension(publicschema_registry));
+    if let Some(publicschema_registry) = &runtime.publicschema_registry {
+        app = app.layer(Extension(Arc::clone(publicschema_registry)));
     }
     #[cfg(feature = "spdci-api-standards")]
-    if let Some(spdci_response_mapper) = spdci_response_mapper {
-        app = app.layer(axum::Extension(spdci_response_mapper));
+    if let Some(spdci_response_mapper) = &runtime.spdci_response_mapper {
+        app = app.layer(Extension(Arc::clone(spdci_response_mapper)));
     }
-
-    let listener = TcpListener::bind(bind).await.map_err(|err| {
-        error!(error = %err, bind = %bind, "failed to bind listener");
-        err
-    })?;
-
-    match provenance_state_for_log.as_ref() {
-        Some((enabled, mode, issuer_did)) => {
-            info!(
-                bind = %bind,
-                admin_bind = ?admin_bind,
-                datasets = dataset_count,
-                api_keys = auth_size_hint,
-                audit_sink = audit_kind,
-                provenance_enabled = *enabled,
-                provenance_mode = ?mode,
-                provenance_issuer_did = %issuer_did,
-                "registry-relay listening"
-            );
-        }
-        None => {
-            info!(
-                bind = %bind,
-                admin_bind = ?admin_bind,
-                datasets = dataset_count,
-                api_keys = auth_size_hint,
-                audit_sink = audit_kind,
-                provenance_enabled = false,
-                "registry-relay listening"
-            );
-        }
-    }
-
-    let admin_listener = match admin_bind {
-        Some(addr) => Some(TcpListener::bind(addr).await.map_err(|err| {
-            error!(error = %err, bind = %addr, "failed to bind admin listener");
-            err
-        })?),
-        None => None,
-    };
-
-    let serve_limits = ServeLimits::from_config(&config.server);
-    let main_serve = serve_listener(listener, app, serve_limits, shutdown_signal());
-
-    // Run both servers concurrently. `tokio::select!` is the natural
-    // fit because either listener exiting (clean or not) tears down
-    // the other.
-    let result: Result<(), Box<dyn std::error::Error + Send + Sync>> =
-        if let Some(admin_listener) = admin_listener {
-            let admin_app = registry_relay::server::build_admin_app_with_metadata_and_metrics(
-                Arc::clone(&config),
-                Arc::clone(&auth),
-                Arc::clone(&audit_sink),
-                readiness_rx.clone(),
-                readiness_tx.clone(),
-                Arc::clone(&ingest),
-                compiled_metadata.clone(),
-                Arc::clone(&metrics),
-            )?;
-            let admin_serve =
-                serve_listener(admin_listener, admin_app, serve_limits, shutdown_signal());
-            tokio::select! {
-                r = main_serve => r.map_err(Into::into),
-                r = admin_serve => r.map_err(Into::into),
-            }
-        } else {
-            main_serve.await.map_err(Into::into)
-        };
-
-    // Best-effort audit flush on the way out, regardless of which
-    // listener tripped the shutdown.
-    if let Err(err) = audit_sink.flush().await {
-        warn!(error = %err, "audit flush on shutdown failed");
-    }
-
-    refresh_shutdown.cancel();
-    while let Some(joined) = refresh_tasks.join_next().await {
-        if let Err(err) = joined {
-            warn!(error = %err, "refresh task failed during shutdown");
-        }
-    }
-
-    result
+    Ok(app.layer(Extension(handle)))
 }
 
 fn parse_cli_command_from(args: Vec<String>) -> Result<CliCommand, CliError> {
@@ -326,11 +589,266 @@ fn parse_cli_command_from(args: Vec<String>) -> Result<CliCommand, CliError> {
     let rest: Vec<String> = args.collect();
     if rest.first().is_some_and(|arg| arg == HEALTHCHECK_COMMAND) {
         parse_healthcheck_command(&rest[1..])
+    } else if rest.first().is_some_and(|arg| arg == CONFIG_COMMAND) {
+        parse_config_command(&rest[1..])
     } else {
         Ok(CliCommand::Serve {
             config_path: resolve_config_path_from(rest),
         })
     }
+}
+
+fn parse_config_command(args: &[String]) -> Result<CliCommand, CliError> {
+    let Some(command) = args.first() else {
+        return Err(CliError(format!("{CONFIG_COMMAND} requires a subcommand")));
+    };
+    match command.as_str() {
+        VERIFY_BUNDLE_COMMAND => parse_config_verify_bundle_command(&args[1..]),
+        APPLY_BUNDLE_COMMAND => parse_config_apply_bundle_command(&args[1..]),
+        _ => Err(CliError(format!(
+            "unknown {CONFIG_COMMAND} subcommand: {command}"
+        ))),
+    }
+}
+
+fn parse_config_apply_bundle_command(args: &[String]) -> Result<CliCommand, CliError> {
+    let mut admin_url: Option<String> = None;
+    let mut admin_token_env: Option<String> = None;
+    let mut root_path: Option<PathBuf> = None;
+    let mut metadata_dir: Option<PathBuf> = None;
+    let mut targets_dir: Option<PathBuf> = None;
+    let mut metadata_base_url: Option<String> = None;
+    let mut targets_base_url: Option<String> = None;
+    let mut datastore_dir: Option<PathBuf> = None;
+    let mut target_name: Option<String> = None;
+    let mut allow_dev_insecure_fetch_urls = false;
+    let mut local_approval_reference: Option<String> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if let Some(value) = flag_value(arg, ADMIN_URL_FLAG) {
+            admin_url = Some(required_string_value(ADMIN_URL_FLAG, value)?);
+        } else if arg == ADMIN_URL_FLAG {
+            index += 1;
+            admin_url = Some(required_string_arg(args, index, ADMIN_URL_FLAG)?);
+        } else if let Some(value) = flag_value(arg, ADMIN_TOKEN_ENV_FLAG) {
+            admin_token_env = Some(required_string_value(ADMIN_TOKEN_ENV_FLAG, value)?);
+        } else if arg == ADMIN_TOKEN_ENV_FLAG {
+            index += 1;
+            admin_token_env = Some(required_string_arg(args, index, ADMIN_TOKEN_ENV_FLAG)?);
+        } else if let Some(value) = flag_value(arg, ROOT_PATH_FLAG) {
+            root_path = Some(required_path_value(ROOT_PATH_FLAG, value)?);
+        } else if arg == ROOT_PATH_FLAG {
+            index += 1;
+            root_path = Some(required_path_arg(args, index, ROOT_PATH_FLAG)?);
+        } else if let Some(value) = flag_value(arg, METADATA_DIR_FLAG) {
+            metadata_dir = Some(required_path_value(METADATA_DIR_FLAG, value)?);
+        } else if arg == METADATA_DIR_FLAG {
+            index += 1;
+            metadata_dir = Some(required_path_arg(args, index, METADATA_DIR_FLAG)?);
+        } else if let Some(value) = flag_value(arg, TARGETS_DIR_FLAG) {
+            targets_dir = Some(required_path_value(TARGETS_DIR_FLAG, value)?);
+        } else if arg == TARGETS_DIR_FLAG {
+            index += 1;
+            targets_dir = Some(required_path_arg(args, index, TARGETS_DIR_FLAG)?);
+        } else if let Some(value) = flag_value(arg, METADATA_BASE_URL_FLAG) {
+            metadata_base_url = Some(required_string_value(METADATA_BASE_URL_FLAG, value)?);
+        } else if arg == METADATA_BASE_URL_FLAG {
+            index += 1;
+            metadata_base_url = Some(required_string_arg(args, index, METADATA_BASE_URL_FLAG)?);
+        } else if let Some(value) = flag_value(arg, TARGETS_BASE_URL_FLAG) {
+            targets_base_url = Some(required_string_value(TARGETS_BASE_URL_FLAG, value)?);
+        } else if arg == TARGETS_BASE_URL_FLAG {
+            index += 1;
+            targets_base_url = Some(required_string_arg(args, index, TARGETS_BASE_URL_FLAG)?);
+        } else if let Some(value) = flag_value(arg, DATASTORE_DIR_FLAG) {
+            datastore_dir = Some(required_path_value(DATASTORE_DIR_FLAG, value)?);
+        } else if arg == DATASTORE_DIR_FLAG {
+            index += 1;
+            datastore_dir = Some(required_path_arg(args, index, DATASTORE_DIR_FLAG)?);
+        } else if let Some(value) = flag_value(arg, TARGET_NAME_FLAG) {
+            target_name = Some(required_string_value(TARGET_NAME_FLAG, value)?);
+        } else if arg == TARGET_NAME_FLAG {
+            index += 1;
+            target_name = Some(required_string_arg(args, index, TARGET_NAME_FLAG)?);
+        } else if arg == ALLOW_DEV_INSECURE_FETCH_URLS_FLAG {
+            allow_dev_insecure_fetch_urls = true;
+        } else if let Some(value) = flag_value(arg, LOCAL_APPROVAL_REFERENCE_FLAG) {
+            local_approval_reference =
+                Some(required_string_value(LOCAL_APPROVAL_REFERENCE_FLAG, value)?);
+        } else if arg == LOCAL_APPROVAL_REFERENCE_FLAG {
+            index += 1;
+            local_approval_reference = Some(required_string_arg(
+                args,
+                index,
+                LOCAL_APPROVAL_REFERENCE_FLAG,
+            )?);
+        } else {
+            return Err(CliError(format!(
+                "unknown {CONFIG_COMMAND} {APPLY_BUNDLE_COMMAND} argument: {arg}"
+            )));
+        }
+        index += 1;
+    }
+
+    Ok(CliCommand::ConfigApplyBundle(ConfigApplyBundleCommand {
+        admin_url: require_flag(admin_url, ADMIN_URL_FLAG)?,
+        admin_token_env: require_flag(admin_token_env, ADMIN_TOKEN_ENV_FLAG)?,
+        root_path: require_flag(root_path, ROOT_PATH_FLAG)?,
+        datastore_dir: require_flag(datastore_dir, DATASTORE_DIR_FLAG)?,
+        target_name: require_flag(target_name, TARGET_NAME_FLAG)?,
+        source: config_bundle_source_from_parts(
+            metadata_dir,
+            targets_dir,
+            metadata_base_url,
+            targets_base_url,
+            allow_dev_insecure_fetch_urls,
+        )?,
+        local_approval_reference,
+    }))
+}
+
+fn config_bundle_source_from_parts(
+    metadata_dir: Option<PathBuf>,
+    targets_dir: Option<PathBuf>,
+    metadata_base_url: Option<String>,
+    targets_base_url: Option<String>,
+    allow_dev_insecure_fetch_urls: bool,
+) -> Result<ConfigVerifyBundleSource, CliError> {
+    let uses_local_source = metadata_dir.is_some() || targets_dir.is_some();
+    let uses_remote_source =
+        metadata_base_url.is_some() || targets_base_url.is_some() || allow_dev_insecure_fetch_urls;
+    if uses_local_source && uses_remote_source {
+        return Err(CliError(
+            "local and remote TUF repository flags cannot be mixed".to_string(),
+        ));
+    }
+    if uses_remote_source {
+        Ok(ConfigVerifyBundleSource::Remote {
+            metadata_base_url: require_flag(metadata_base_url, METADATA_BASE_URL_FLAG)?,
+            targets_base_url: require_flag(targets_base_url, TARGETS_BASE_URL_FLAG)?,
+            allow_dev_insecure_fetch_urls,
+        })
+    } else {
+        Ok(ConfigVerifyBundleSource::Local {
+            metadata_dir: require_flag(metadata_dir, METADATA_DIR_FLAG)?,
+            targets_dir: require_flag(targets_dir, TARGETS_DIR_FLAG)?,
+        })
+    }
+}
+
+fn parse_config_verify_bundle_command(args: &[String]) -> Result<CliCommand, CliError> {
+    let mut config_path: Option<PathBuf> = None;
+    let mut root_path: Option<PathBuf> = None;
+    let mut metadata_dir: Option<PathBuf> = None;
+    let mut targets_dir: Option<PathBuf> = None;
+    let mut metadata_base_url: Option<String> = None;
+    let mut targets_base_url: Option<String> = None;
+    let mut datastore_dir: Option<PathBuf> = None;
+    let mut target_name: Option<String> = None;
+    let mut allow_dev_insecure_fetch_urls = false;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if let Some(value) = flag_value(arg, CONFIG_FLAG) {
+            config_path = Some(required_path_value(CONFIG_FLAG, value)?);
+        } else if arg == CONFIG_FLAG {
+            index += 1;
+            config_path = Some(required_path_arg(args, index, CONFIG_FLAG)?);
+        } else if let Some(value) = flag_value(arg, ROOT_PATH_FLAG) {
+            root_path = Some(required_path_value(ROOT_PATH_FLAG, value)?);
+        } else if arg == ROOT_PATH_FLAG {
+            index += 1;
+            root_path = Some(required_path_arg(args, index, ROOT_PATH_FLAG)?);
+        } else if let Some(value) = flag_value(arg, METADATA_DIR_FLAG) {
+            metadata_dir = Some(required_path_value(METADATA_DIR_FLAG, value)?);
+        } else if arg == METADATA_DIR_FLAG {
+            index += 1;
+            metadata_dir = Some(required_path_arg(args, index, METADATA_DIR_FLAG)?);
+        } else if let Some(value) = flag_value(arg, TARGETS_DIR_FLAG) {
+            targets_dir = Some(required_path_value(TARGETS_DIR_FLAG, value)?);
+        } else if arg == TARGETS_DIR_FLAG {
+            index += 1;
+            targets_dir = Some(required_path_arg(args, index, TARGETS_DIR_FLAG)?);
+        } else if let Some(value) = flag_value(arg, METADATA_BASE_URL_FLAG) {
+            metadata_base_url = Some(required_string_value(METADATA_BASE_URL_FLAG, value)?);
+        } else if arg == METADATA_BASE_URL_FLAG {
+            index += 1;
+            metadata_base_url = Some(required_string_arg(args, index, METADATA_BASE_URL_FLAG)?);
+        } else if let Some(value) = flag_value(arg, TARGETS_BASE_URL_FLAG) {
+            targets_base_url = Some(required_string_value(TARGETS_BASE_URL_FLAG, value)?);
+        } else if arg == TARGETS_BASE_URL_FLAG {
+            index += 1;
+            targets_base_url = Some(required_string_arg(args, index, TARGETS_BASE_URL_FLAG)?);
+        } else if let Some(value) = flag_value(arg, DATASTORE_DIR_FLAG) {
+            datastore_dir = Some(required_path_value(DATASTORE_DIR_FLAG, value)?);
+        } else if arg == DATASTORE_DIR_FLAG {
+            index += 1;
+            datastore_dir = Some(required_path_arg(args, index, DATASTORE_DIR_FLAG)?);
+        } else if let Some(value) = flag_value(arg, TARGET_NAME_FLAG) {
+            target_name = Some(required_string_value(TARGET_NAME_FLAG, value)?);
+        } else if arg == TARGET_NAME_FLAG {
+            index += 1;
+            target_name = Some(required_string_arg(args, index, TARGET_NAME_FLAG)?);
+        } else if arg == ALLOW_DEV_INSECURE_FETCH_URLS_FLAG {
+            allow_dev_insecure_fetch_urls = true;
+        } else {
+            return Err(CliError(format!(
+                "unknown {CONFIG_COMMAND} {VERIFY_BUNDLE_COMMAND} argument: {arg}"
+            )));
+        }
+        index += 1;
+    }
+
+    Ok(CliCommand::ConfigVerifyBundle(ConfigVerifyBundleCommand {
+        config_path: config_path.unwrap_or_else(default_config_path_from_env),
+        root_path: require_flag(root_path, ROOT_PATH_FLAG)?,
+        datastore_dir: require_flag(datastore_dir, DATASTORE_DIR_FLAG)?,
+        target_name: require_flag(target_name, TARGET_NAME_FLAG)?,
+        source: config_bundle_source_from_parts(
+            metadata_dir,
+            targets_dir,
+            metadata_base_url,
+            targets_base_url,
+            allow_dev_insecure_fetch_urls,
+        )?,
+    }))
+}
+
+fn flag_value<'a>(arg: &'a str, flag: &str) -> Option<&'a str> {
+    arg.strip_prefix(&format!("{flag}="))
+}
+
+fn required_path_arg(args: &[String], index: usize, flag: &str) -> Result<PathBuf, CliError> {
+    let Some(value) = args.get(index) else {
+        return Err(CliError(format!("{flag} requires a non-empty path")));
+    };
+    required_path_value(flag, value)
+}
+
+fn required_path_value(flag: &str, value: &str) -> Result<PathBuf, CliError> {
+    if value.is_empty() {
+        return Err(CliError(format!("{flag} requires a non-empty path")));
+    }
+    Ok(PathBuf::from(value))
+}
+
+fn required_string_arg(args: &[String], index: usize, flag: &str) -> Result<String, CliError> {
+    let Some(value) = args.get(index) else {
+        return Err(CliError(format!("{flag} requires a non-empty value")));
+    };
+    required_string_value(flag, value)
+}
+
+fn required_string_value(flag: &str, value: &str) -> Result<String, CliError> {
+    if value.is_empty() {
+        return Err(CliError(format!("{flag} requires a non-empty value")));
+    }
+    Ok(value.to_string())
+}
+
+fn require_flag<T>(value: Option<T>, flag: &str) -> Result<T, CliError> {
+    value.ok_or_else(|| CliError(format!("{flag} is required")))
 }
 
 fn parse_healthcheck_command(args: &[String]) -> Result<CliCommand, CliError> {
@@ -412,6 +930,15 @@ fn resolve_config_path_from(args: Vec<String>) -> PathBuf {
             return PathBuf::from(rest);
         }
     }
+    if let Ok(p) = env::var("REGISTRY_RELAY_CONFIG") {
+        if !p.is_empty() {
+            return PathBuf::from(p);
+        }
+    }
+    PathBuf::from(DEFAULT_CONFIG_PATH)
+}
+
+fn default_config_path_from_env() -> PathBuf {
     if let Ok(p) = env::var("REGISTRY_RELAY_CONFIG") {
         if !p.is_empty() {
             return PathBuf::from(p);
@@ -672,20 +1199,26 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_audit_sink, parse_cli_command_from, run_healthcheck, CliCommand,
-        OperationalLogFormat, DEFAULT_HEALTHCHECK_TIMEOUT_MS, DEFAULT_HEALTHCHECK_URL,
+        build_audit_sink, compile_relay_runtime, config_apply_bundle_request_body,
+        parse_cli_command_from, run_config_apply_bundle, run_healthcheck, CliCommand,
+        ConfigApplyBundleCommand, ConfigVerifyBundleSource, OperationalLogFormat,
+        DEFAULT_HEALTHCHECK_TIMEOUT_MS, DEFAULT_HEALTHCHECK_URL,
     };
-    use axum::routing::get;
-    use axum::Router;
+    use axum::extract::State;
+    use axum::http::{HeaderMap, StatusCode};
+    use axum::routing::{get, post};
+    use axum::{Json, Router};
     use registry_platform_audit::{
         verify_jsonl_lines, verify_jsonl_lines_with_hasher, AuditChainHasher,
     };
     use registry_relay::audit::{AuditRecord, EndpointKind};
     use registry_relay::config::Config;
-    use serde_json::json;
+    use serde_json::{json, Value};
+    use std::sync::Arc;
     use std::time::Duration;
     use tempfile::tempdir;
     use tokio::net::TcpListener;
+    use tokio::sync::Mutex;
 
     fn sample_audit_record() -> AuditRecord {
         AuditRecord {
@@ -722,6 +1255,7 @@ mod tests {
             duration_ms: 7,
             error_code: None,
             provenance: None,
+            config: None,
         }
     }
 
@@ -750,6 +1284,27 @@ audit:
         .expect("test config parses")
     }
 
+    fn runtime_config_yaml(hash_secret_env: &str) -> String {
+        format!(
+            r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {{}}
+auth:
+  mode: api_key
+  api_keys: []
+datasets: []
+audit:
+  sink: stdout
+  hash_secret_env: {hash_secret_env}
+"#
+        )
+    }
+
     fn command_args(args: &[&str]) -> Vec<String> {
         args.iter().map(|arg| (*arg).to_string()).collect()
     }
@@ -765,6 +1320,53 @@ audit:
                 .expect("test health server serves");
         });
         format!("http://{addr}/healthz")
+    }
+
+    async fn spawn_admin_apply_server(
+        expected_token: &'static str,
+        status: StatusCode,
+    ) -> (String, Arc<Mutex<Option<Value>>>) {
+        let received = Arc::new(Mutex::new(None));
+        let app = Router::new()
+            .route(
+                "/admin/v1/config/apply",
+                post(
+                    move |State(received): State<Arc<Mutex<Option<Value>>>>,
+                          headers: HeaderMap,
+                          Json(body): Json<Value>| async move {
+                        let expected_auth = format!("Bearer {expected_token}");
+                        assert_eq!(
+                            headers
+                                .get("authorization")
+                                .and_then(|value| value.to_str().ok()),
+                            Some(expected_auth.as_str())
+                        );
+                        *received.lock().await = Some(body);
+                        (
+                            status,
+                            Json(json!({
+                                "bundle_id": "bundle-1",
+                                "sequence": 1,
+                                "result": "verified",
+                                "posture_result": "verified",
+                                "applied": true,
+                                "restart_required": false,
+                            })),
+                        )
+                    },
+                ),
+            )
+            .with_state(Arc::clone(&received));
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener binds");
+        let addr = listener.local_addr().expect("listener has local addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("test admin server serves");
+        });
+        (format!("http://{addr}"), received)
     }
 
     #[test]
@@ -836,6 +1438,341 @@ audit:
         );
     }
 
+    #[test]
+    fn config_verify_bundle_cli_accepts_local_tuf_flags() {
+        let command = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "config",
+            "verify-bundle",
+            "--config",
+            "/etc/registry-relay/current.yaml",
+            "--root-path",
+            "/etc/registry-relay/tuf/root.json",
+            "--metadata-dir=/etc/registry-relay/tuf/metadata",
+            "--targets-dir",
+            "/etc/registry-relay/tuf/targets",
+            "--datastore-dir=/var/lib/registry-relay/tuf",
+            "--target-name",
+            "registry-relay.yaml",
+        ]))
+        .expect("config verify-bundle command parses");
+
+        let CliCommand::ConfigVerifyBundle(command) = command else {
+            panic!("expected config verify-bundle command");
+        };
+        assert_eq!(
+            command.config_path,
+            std::path::PathBuf::from("/etc/registry-relay/current.yaml")
+        );
+        assert_eq!(
+            command.root_path,
+            std::path::PathBuf::from("/etc/registry-relay/tuf/root.json")
+        );
+        assert_eq!(
+            command.datastore_dir,
+            std::path::PathBuf::from("/var/lib/registry-relay/tuf")
+        );
+        assert_eq!(command.target_name, "registry-relay.yaml");
+        assert_eq!(
+            command.source,
+            ConfigVerifyBundleSource::Local {
+                metadata_dir: std::path::PathBuf::from("/etc/registry-relay/tuf/metadata"),
+                targets_dir: std::path::PathBuf::from("/etc/registry-relay/tuf/targets"),
+            }
+        );
+    }
+
+    #[test]
+    fn config_verify_bundle_cli_accepts_remote_tuf_flags() {
+        let command = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "config",
+            "verify-bundle",
+            "--config",
+            "/etc/registry-relay/current.yaml",
+            "--root-path",
+            "/etc/registry-relay/tuf/root.json",
+            "--metadata-base-url=https://config.example.test/metadata",
+            "--targets-base-url",
+            "https://config.example.test/targets",
+            "--datastore-dir=/var/lib/registry-relay/tuf",
+            "--target-name",
+            "registry-relay.yaml",
+            "--allow-dev-insecure-fetch-urls",
+        ]))
+        .expect("config verify-bundle command parses");
+
+        let CliCommand::ConfigVerifyBundle(command) = command else {
+            panic!("expected config verify-bundle command");
+        };
+        assert_eq!(
+            command.config_path,
+            std::path::PathBuf::from("/etc/registry-relay/current.yaml")
+        );
+        assert_eq!(
+            command.root_path,
+            std::path::PathBuf::from("/etc/registry-relay/tuf/root.json")
+        );
+        assert_eq!(
+            command.datastore_dir,
+            std::path::PathBuf::from("/var/lib/registry-relay/tuf")
+        );
+        assert_eq!(command.target_name, "registry-relay.yaml");
+        assert_eq!(
+            command.source,
+            ConfigVerifyBundleSource::Remote {
+                metadata_base_url: "https://config.example.test/metadata".to_string(),
+                targets_base_url: "https://config.example.test/targets".to_string(),
+                allow_dev_insecure_fetch_urls: true,
+            }
+        );
+    }
+
+    #[test]
+    fn config_verify_bundle_cli_rejects_mixed_local_and_remote_tuf_flags() {
+        let err = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "config",
+            "verify-bundle",
+            "--config",
+            "/etc/registry-relay/current.yaml",
+            "--root-path",
+            "/etc/registry-relay/tuf/root.json",
+            "--metadata-dir=/etc/registry-relay/tuf/metadata",
+            "--targets-dir=/etc/registry-relay/tuf/targets",
+            "--metadata-base-url=https://config.example.test/metadata",
+            "--targets-base-url=https://config.example.test/targets",
+            "--datastore-dir=/var/lib/registry-relay/tuf",
+            "--target-name",
+            "registry-relay.yaml",
+        ]))
+        .expect_err("mixed source flags fail");
+
+        assert_eq!(
+            err.to_string(),
+            "local and remote TUF repository flags cannot be mixed"
+        );
+    }
+
+    #[test]
+    fn config_apply_bundle_cli_accepts_remote_tuf_flags() {
+        let command = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "config",
+            "apply-bundle",
+            "--admin-url",
+            "http://127.0.0.1:9090",
+            "--admin-token-env",
+            "REGISTRY_RELAY_ADMIN_TOKEN",
+            "--root-path",
+            "/etc/registry-relay/tuf/root.json",
+            "--metadata-base-url=https://config.example.test/metadata",
+            "--targets-base-url",
+            "https://config.example.test/targets",
+            "--datastore-dir=/var/lib/registry-relay/tuf",
+            "--target-name",
+            "registry-relay.yaml",
+            "--allow-dev-insecure-fetch-urls",
+            "--local-approval-reference",
+            "ROOT-2026-Q2",
+        ]))
+        .expect("config apply-bundle command parses");
+
+        let CliCommand::ConfigApplyBundle(command) = command else {
+            panic!("expected config apply-bundle command");
+        };
+        assert_eq!(command.admin_url, "http://127.0.0.1:9090");
+        assert_eq!(command.admin_token_env, "REGISTRY_RELAY_ADMIN_TOKEN");
+        assert_eq!(
+            command.root_path,
+            std::path::PathBuf::from("/etc/registry-relay/tuf/root.json")
+        );
+        assert_eq!(
+            command.datastore_dir,
+            std::path::PathBuf::from("/var/lib/registry-relay/tuf")
+        );
+        assert_eq!(command.target_name, "registry-relay.yaml");
+        assert_eq!(
+            command.local_approval_reference.as_deref(),
+            Some("ROOT-2026-Q2")
+        );
+        assert_eq!(
+            command.source,
+            ConfigVerifyBundleSource::Remote {
+                metadata_base_url: "https://config.example.test/metadata".to_string(),
+                targets_base_url: "https://config.example.test/targets".to_string(),
+                allow_dev_insecure_fetch_urls: true,
+            }
+        );
+    }
+
+    #[test]
+    fn config_apply_bundle_cli_rejects_mixed_local_and_remote_tuf_flags() {
+        let err = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "config",
+            "apply-bundle",
+            "--admin-url",
+            "http://127.0.0.1:9090",
+            "--admin-token-env",
+            "REGISTRY_RELAY_ADMIN_TOKEN",
+            "--root-path",
+            "/etc/registry-relay/tuf/root.json",
+            "--metadata-dir=/etc/registry-relay/tuf/metadata",
+            "--targets-dir=/etc/registry-relay/tuf/targets",
+            "--metadata-base-url=https://config.example.test/metadata",
+            "--targets-base-url=https://config.example.test/targets",
+            "--datastore-dir=/var/lib/registry-relay/tuf",
+            "--target-name",
+            "registry-relay.yaml",
+        ]))
+        .expect_err("mixed source flags fail");
+
+        assert_eq!(
+            err.to_string(),
+            "local and remote TUF repository flags cannot be mixed"
+        );
+    }
+
+    #[test]
+    fn config_apply_bundle_request_body_uses_admin_apply_schema() {
+        let command = ConfigApplyBundleCommand {
+            admin_url: "http://127.0.0.1:9090".to_string(),
+            admin_token_env: "REGISTRY_RELAY_ADMIN_TOKEN".to_string(),
+            root_path: "/etc/registry-relay/tuf/root.json".into(),
+            datastore_dir: "/var/lib/registry-relay/tuf".into(),
+            target_name: "registry-relay.yaml".to_string(),
+            source: ConfigVerifyBundleSource::Remote {
+                metadata_base_url: "https://config.example.test/metadata".to_string(),
+                targets_base_url: "https://config.example.test/targets".to_string(),
+                allow_dev_insecure_fetch_urls: false,
+            },
+            local_approval_reference: Some("ROOT-2026-Q2".to_string()),
+        };
+
+        assert_eq!(
+            config_apply_bundle_request_body(&command),
+            json!({
+                "tuf": {
+                    "root_path": "/etc/registry-relay/tuf/root.json",
+                    "metadata_base_url": "https://config.example.test/metadata",
+                    "targets_base_url": "https://config.example.test/targets",
+                    "datastore_dir": "/var/lib/registry-relay/tuf",
+                    "target_name": "registry-relay.yaml",
+                    "allow_dev_insecure_fetch_urls": false,
+                },
+                "local_approval_reference": "ROOT-2026-Q2",
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn config_apply_bundle_posts_admin_apply_request_with_bearer_token() {
+        let token_env = "REGISTRY_RELAY_TEST_APPLY_BUNDLE_TOKEN";
+        let token = "relay-admin-token";
+        std::env::set_var(token_env, token);
+        let (admin_url, received) = spawn_admin_apply_server(token, StatusCode::OK).await;
+        let command = ConfigApplyBundleCommand {
+            admin_url,
+            admin_token_env: token_env.to_string(),
+            root_path: "/srv/relay/tuf/1.root.json".into(),
+            datastore_dir: "/srv/relay/tuf/datastore".into(),
+            target_name: "registry-relay.yaml".to_string(),
+            source: ConfigVerifyBundleSource::Local {
+                metadata_dir: "/srv/relay/tuf/metadata".into(),
+                targets_dir: "/srv/relay/tuf/targets".into(),
+            },
+            local_approval_reference: None,
+        };
+
+        run_config_apply_bundle(command)
+            .await
+            .expect("apply-bundle posts to admin apply endpoint");
+
+        assert_eq!(
+            received.lock().await.take(),
+            Some(json!({
+                "tuf": {
+                    "root_path": "/srv/relay/tuf/1.root.json",
+                    "metadata_dir": "/srv/relay/tuf/metadata",
+                    "targets_dir": "/srv/relay/tuf/targets",
+                    "datastore_dir": "/srv/relay/tuf/datastore",
+                    "target_name": "registry-relay.yaml",
+                }
+            }))
+        );
+    }
+
+    #[tokio::test]
+    async fn config_apply_bundle_posts_remote_admin_apply_request_with_bearer_token() {
+        let token_env = "REGISTRY_RELAY_TEST_REMOTE_APPLY_BUNDLE_TOKEN";
+        let token = "relay-admin-token";
+        std::env::set_var(token_env, token);
+        let (admin_url, received) = spawn_admin_apply_server(token, StatusCode::OK).await;
+        let command = ConfigApplyBundleCommand {
+            admin_url,
+            admin_token_env: token_env.to_string(),
+            root_path: "/srv/relay/tuf/1.root.json".into(),
+            datastore_dir: "/srv/relay/tuf/datastore".into(),
+            target_name: "registry-relay.yaml".to_string(),
+            source: ConfigVerifyBundleSource::Remote {
+                metadata_base_url: "https://config.example.test/metadata".to_string(),
+                targets_base_url: "https://config.example.test/targets".to_string(),
+                allow_dev_insecure_fetch_urls: true,
+            },
+            local_approval_reference: Some("ROOT-2026-Q2".to_string()),
+        };
+
+        run_config_apply_bundle(command)
+            .await
+            .expect("remote apply-bundle posts to admin apply endpoint");
+
+        assert_eq!(
+            received.lock().await.take(),
+            Some(json!({
+                "tuf": {
+                    "root_path": "/srv/relay/tuf/1.root.json",
+                    "metadata_base_url": "https://config.example.test/metadata",
+                    "targets_base_url": "https://config.example.test/targets",
+                    "datastore_dir": "/srv/relay/tuf/datastore",
+                    "target_name": "registry-relay.yaml",
+                    "allow_dev_insecure_fetch_urls": true,
+                },
+                "local_approval_reference": "ROOT-2026-Q2",
+            }))
+        );
+    }
+
+    #[test]
+    fn config_verify_bundle_cli_requires_target_name() {
+        let err = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "config",
+            "verify-bundle",
+            "--config",
+            "/etc/registry-relay/current.yaml",
+            "--root-path",
+            "/etc/registry-relay/tuf/root.json",
+            "--metadata-dir",
+            "/etc/registry-relay/tuf/metadata",
+            "--targets-dir",
+            "/etc/registry-relay/tuf/targets",
+            "--datastore-dir",
+            "/var/lib/registry-relay/tuf",
+        ]))
+        .expect_err("target name is required");
+
+        assert_eq!(err.to_string(), "--target-name is required");
+    }
+
+    #[test]
+    fn config_cli_rejects_unknown_subcommand() {
+        let err = parse_cli_command_from(command_args(&["registry-relay", "config", "reload"]))
+            .expect_err("unknown config subcommand fails");
+
+        assert_eq!(err.to_string(), "unknown config subcommand: reload");
+    }
+
     #[tokio::test]
     async fn healthcheck_succeeds_for_success_status() {
         let url = spawn_health_server(
@@ -900,6 +1837,46 @@ audit:
         assert!(
             err.to_string().contains("request failed"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn compile_relay_runtime_is_named_fail_closed_boundary() {
+        let dir = tempdir().expect("tempdir");
+        let config_path = dir.path().join("relay.yaml");
+        let env_name = "REGISTRY_RELAY_TEST_COMPILE_MISSING_AUDIT_HASH";
+        std::env::remove_var(env_name);
+        std::fs::write(&config_path, runtime_config_yaml(env_name)).expect("config writes");
+
+        let err = match compile_relay_runtime(config_path).await {
+            Ok(_) => panic!("missing audit secret should fail compile"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains("missing")
+                || err.to_string().contains("Missing")
+                || err.to_string().contains("validation"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn compile_relay_runtime_does_not_start_ingest_or_refresh_tasks() {
+        let source = include_str!("main.rs");
+        let compile_body = source
+            .split("async fn compile_relay_runtime")
+            .nth(1)
+            .and_then(|tail| tail.split("fn build_relay_app_from_runtime").next())
+            .expect("compile_relay_runtime body is present");
+
+        assert!(
+            !compile_body.contains("run_initial_ingest"),
+            "compile boundary must not perform initial ingest side effects"
+        );
+        assert!(
+            !compile_body.contains("spawn_refresh_tasks"),
+            "compile boundary must not start background refresh tasks"
         );
     }
 

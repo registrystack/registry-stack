@@ -6,13 +6,19 @@
 //! presence check that fires only when `enabled: true`.
 
 use std::env;
+use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Once;
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
+use ed25519_dalek::SigningKey;
+use rand_core::OsRng;
 use registry_relay::config;
+use serde_json::json;
 use sha2::{Digest, Sha256};
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, TempDir};
 
 // All tests in this binary need the persona hash env vars present; the
 // base YAML below declares a single api_key for completeness. We seed
@@ -112,6 +118,40 @@ fn gateway_provenance(
       signing_algorithm: EdDSA
 "#
     )
+}
+
+fn file_watch_provenance(enabled: bool, key_path: &str, signing_algorithm: &str) -> String {
+    format!(
+        r#"  enabled: {enabled}
+  context_base_url: https://data.example.test/contexts
+  schema_base_url: https://data.example.test/schemas
+  claim_validity:
+    aggregate_result: 10m
+    entity_record: 10m
+  issuer:
+    mode: gateway
+    did: did:web:data.example.test
+    verification_method_id: "did:web:data.example.test#file-watch"
+    signer:
+      kind: file_watch
+      path: "{key_path}"
+      signing_algorithm: {signing_algorithm}
+"#
+    )
+}
+
+fn write_ed25519_jwk(path: &std::path::Path) {
+    let sk = SigningKey::generate(&mut OsRng);
+    let vk = sk.verifying_key();
+    let jwk = json!({
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "d": URL_SAFE_NO_PAD.encode(sk.to_bytes()),
+        "x": URL_SAFE_NO_PAD.encode(vk.to_bytes()),
+        "alg": "EdDSA",
+        "kid": "did:web:data.example.test#file-watch",
+    });
+    fs::write(path, serde_json::to_string(&jwk).unwrap()).expect("write jwk");
 }
 
 #[test]
@@ -442,6 +482,125 @@ fn software_signer_with_es256_is_rejected_at_load_time() {
     let err =
         config::load(&path).expect_err("software + ES256 must be rejected at config-load time");
     assert_eq!(err.code(), "provenance.config.algorithm_unsupported");
+}
+
+#[test]
+fn file_watch_signer_enabled_with_existing_key_file_loads() {
+    ensure_persona_env();
+    let tmp = TempDir::new().expect("tempdir");
+    let key_path = tmp.path().join("active.jwk");
+    fs::write(&key_path, "not parsed during config validation").expect("write key marker");
+    let yaml = base_yaml(&file_watch_provenance(
+        true,
+        &key_path.to_string_lossy(),
+        "EdDSA",
+    ));
+    let path = write_yaml(&yaml);
+
+    let cfg = config::load(&path).expect("file_watch config with existing key file loads");
+
+    assert!(cfg.provenance.unwrap().enabled);
+}
+
+#[test]
+fn file_watch_signer_enabled_with_missing_key_file_rejects() {
+    ensure_persona_env();
+    let tmp = TempDir::new().expect("tempdir");
+    let key_path = tmp.path().join("missing.jwk");
+    let yaml = base_yaml(&file_watch_provenance(
+        true,
+        &key_path.to_string_lossy(),
+        "EdDSA",
+    ));
+    let path = write_yaml(&yaml);
+
+    let err = config::load(&path).expect_err("enabled file_watch requires an existing key file");
+
+    assert_eq!(err.code(), "provenance.config.jwk_env_missing");
+}
+
+#[test]
+fn file_watch_signer_disabled_with_missing_key_file_loads() {
+    ensure_persona_env();
+    let tmp = TempDir::new().expect("tempdir");
+    let key_path = tmp.path().join("missing.jwk");
+    let yaml = base_yaml(&file_watch_provenance(
+        false,
+        &key_path.to_string_lossy(),
+        "EdDSA",
+    ));
+    let path = write_yaml(&yaml);
+
+    let cfg = config::load(&path).expect("disabled file_watch may omit local material");
+
+    assert!(!cfg.provenance.unwrap().enabled);
+}
+
+#[test]
+fn file_watch_signer_rejects_es256_until_supported() {
+    ensure_persona_env();
+    let tmp = TempDir::new().expect("tempdir");
+    let key_path = tmp.path().join("active.jwk");
+    fs::write(&key_path, "not parsed during config validation").expect("write key marker");
+    let yaml = base_yaml(&file_watch_provenance(
+        true,
+        &key_path.to_string_lossy(),
+        "ES256",
+    ));
+    let path = write_yaml(&yaml);
+
+    let err =
+        config::load(&path).expect_err("file_watch + ES256 must be rejected at config-load time");
+
+    assert_eq!(err.code(), "provenance.config.algorithm_unsupported");
+}
+
+#[test]
+fn file_watch_signer_malformed_key_file_fails_runtime_builder() {
+    use registry_relay::provenance::build_resolved_provenance_config;
+
+    ensure_persona_env();
+    let tmp = TempDir::new().expect("tempdir");
+    let key_path = tmp.path().join("active.jwk");
+    fs::write(&key_path, "{not valid jwk").expect("write malformed key");
+    let yaml = base_yaml(&file_watch_provenance(
+        true,
+        &key_path.to_string_lossy(),
+        "EdDSA",
+    ));
+    let path = write_yaml(&yaml);
+    let cfg = config::load(&path).expect("config validation checks shape, not JWK material");
+
+    let err = build_resolved_provenance_config(cfg.provenance.as_ref())
+        .expect_err("runtime builder fails closed on malformed file_watch JWK");
+
+    assert!(format!("{err:?}").contains("SignerLoad"));
+}
+
+#[test]
+fn file_watch_signer_valid_key_file_builds_runtime_state() {
+    use registry_relay::provenance::build_resolved_provenance_config;
+
+    ensure_persona_env();
+    let tmp = TempDir::new().expect("tempdir");
+    let key_path = tmp.path().join("active.jwk");
+    write_ed25519_jwk(&key_path);
+    let yaml = base_yaml(&file_watch_provenance(
+        true,
+        &key_path.to_string_lossy(),
+        "EdDSA",
+    ));
+    let path = write_yaml(&yaml);
+    let cfg = config::load(&path).expect("file_watch config loads");
+
+    let resolved = build_resolved_provenance_config(cfg.provenance.as_ref())
+        .expect("runtime builder accepts valid file_watch JWK")
+        .expect("enabled provenance resolves");
+
+    assert_eq!(
+        resolved.verification_method_id,
+        "did:web:data.example.test#file-watch"
+    );
 }
 
 #[test]

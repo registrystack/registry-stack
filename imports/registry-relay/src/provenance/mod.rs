@@ -462,6 +462,13 @@ fn build_signer(
                 signers::software::SoftwareSigner::from_config(software, verification_method_id)?;
             Ok(Arc::new(signer))
         }
+        SignerConfig::FileWatch(file_watch) => {
+            let signer = signers::file_watch::FileWatchSigner::from_config(
+                file_watch,
+                verification_method_id,
+            )?;
+            Ok(Arc::new(signer))
+        }
         SignerConfig::Kms(_) => Err(SignerError::KeyLoad {
             reason: "kms signer unsupported in V1",
         }),

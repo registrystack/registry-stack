@@ -47,6 +47,7 @@ auth:
       hash_env: OPERATIONS_ADMIN_HASH
       scopes:
         - admin
+        - registry_relay:ops_read
         - clinic_capacity:metadata
 
 audit:

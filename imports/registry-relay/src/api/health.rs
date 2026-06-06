@@ -17,12 +17,10 @@ use axum::http::{header, StatusCode};
 use axum::response::Json;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::Extension;
 use axum::Router;
 use serde_json::{json, Value};
-use tokio::sync::watch;
 
-use crate::ingest::ReadinessSnapshot;
+use crate::runtime_config::RuntimeSnapshot;
 
 /// Sub-router carrying both `/healthz` and `/ready`. Returned to
 /// `server::build_app` so it can mount this set on the main router
@@ -42,11 +40,11 @@ async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))
 }
 
-/// Readiness probe. With a readiness receiver installed,
+/// Readiness probe. With a runtime readiness receiver installed,
 /// returns 200 only when every configured resource has ingested. When
-/// no receiver is installed, it returns a trivial ready response.
-async fn ready(readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>) -> Response {
-    let Some(Extension(readiness)) = readiness else {
+/// no runtime is installed, it returns a trivial ready response.
+async fn ready(runtime: RuntimeSnapshot) -> Response {
+    let Some(readiness) = runtime.readiness_rx() else {
         return Json(json!({ "status": "ok" })).into_response();
     };
 

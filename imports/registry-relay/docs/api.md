@@ -95,14 +95,93 @@ When `provenance.enabled: true`, public verifier-support routes are mounted for 
 Admin routes on `server.admin_bind`:
 
 ```text
+GET /healthz
+GET /ready
 GET /metrics
+GET /admin/v1/posture
+POST /admin/v1/config/verify
+POST /admin/v1/config/dry-run
+POST /admin/v1/config/apply
 POST /admin/v1/datasets/{dataset_id}/tables/{table_id}/reload
 POST /admin/v1/reload
 ```
 
 `GET /metrics` returns Prometheus-style `text/plain` metrics for operators. It is intentionally admin-listener only and is not mounted on `server.bind`.
 
+`GET /admin/v1/posture` returns a redacted operations posture document for callers with `registry_relay:ops_read`. Pass `?tier=restricted` only to trusted operations users who need the restricted posture projection.
+
 `POST /admin/v1/reload` reloads every configured resource and returns a compact `status` plus `counts` summary. Use the table-specific route when you need to reload only one source.
+
+The governed config routes require the independent `admin` scope:
+
+- `POST /admin/v1/config/verify` validates a candidate config and reports whether Relay could live-apply it or would need a restart.
+- `POST /admin/v1/config/dry-run` performs the same validation path used by apply and returns `rejected_restart_required` for candidates that cannot be swapped live.
+- `POST /admin/v1/config/apply` applies only a signed TUF config target and only when the live-change classifier accepts the change. Inline `config_yaml` candidates are accepted for verify and dry-run, but apply rejects them with `admin.config_apply_unavailable`.
+
+The config request body accepts exactly one candidate source:
+
+```json
+{
+  "bundle_id": "ops-bundle-2026-06-05",
+  "stream_id": "default",
+  "sequence": 42,
+  "previous_config_hash": "sha256:...",
+  "root_version": 3,
+  "config_yaml": "instance:\n  id: relay-prod\n..."
+}
+```
+
+or:
+
+```json
+{
+  "tuf": {
+    "root_path": "/etc/registry-relay/trust/root.json",
+    "metadata_dir": "/etc/registry-relay/trust/metadata",
+    "targets_dir": "/etc/registry-relay/trust/targets",
+    "datastore_dir": "/var/lib/registry-relay/config-tuf",
+    "target_name": "registry-relay.yaml"
+  }
+}
+```
+
+or a remote TUF repository:
+
+```json
+{
+  "tuf": {
+    "root_path": "/etc/registry-relay/trust/root.json",
+    "metadata_base_url": "https://config.example.gov/registry-relay/metadata/",
+    "targets_base_url": "https://config.example.gov/registry-relay/targets/",
+    "datastore_dir": "/var/lib/registry-relay/config-tuf",
+    "target_name": "registry-relay.yaml"
+  }
+}
+```
+
+Remote TUF sources are recorded as `signed_bundle_endpoint`; local TUF directory
+sources are recorded as `signed_bundle_file`; inline diagnostics are recorded as
+`local_file`. HTTP loopback remote repositories require
+`allow_dev_insecure_fetch_urls: true` and are intended only for tests and local
+development.
+
+Break-glass is apply-only. `verify` and `dry-run` reject any break-glass fields. `apply` accepts break-glass only for signed TUF targets and only when the approval is present, the signed bundle includes the requested emergency change class, and local anti-rollback rate limits allow it. The rolling-window rate-limit policy comes from local `config_trust.break_glass_rate_limit`; clients must not include it in the request:
+
+```json
+{
+  "break_glass": true,
+  "break_glass_approval": {
+    "approved_by": "ops@example.gov",
+    "reason": "recover from bad live config",
+    "approval_reference": "INC-4242",
+    "emergency_change_class": "emergency_break_glass",
+    "expires_at_unix_seconds": 1780000000,
+    "rate_limit_identity": "registry-relay/relay-prod/production/default"
+  }
+}
+```
+
+The audit record stores the approval reference, approver, emergency change class, expiry, and rate-limit identity. It hashes the free-text `reason` and does not store the raw reason.
 
 ## Authentication
 

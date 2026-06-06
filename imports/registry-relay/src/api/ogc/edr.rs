@@ -3,7 +3,6 @@
 
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Arc;
 
 use axum::extract::{Path, Query};
 use axum::http::{header, HeaderMap, HeaderValue};
@@ -24,9 +23,10 @@ use crate::entity::EntityRegistry;
 use crate::error::{AuthError, Error, FilterError, OgcError, SpatialError};
 use crate::ingest::ReadinessSnapshot;
 use crate::query::{
-    AggregateFilter, AggregateFilterOp, AggregateQueryEngine, AggregateQueryRequest,
-    EntityCollectionQuery, EntityQueryEngine,
+    AggregateFilter, AggregateFilterOp, AggregateQueryRequest, EntityCollectionQuery,
+    EntityQueryEngine,
 };
+use crate::runtime_config::RuntimeSnapshot;
 
 const EDR_BASE: &str = "/ogc/edr/v1";
 const GEOJSON: HeaderValue = HeaderValue::from_static("application/geo+json");
@@ -77,11 +77,8 @@ struct AreaQuery {
     extra: HashMap<String, String>,
 }
 
-async fn landing(
-    config: Option<Extension<Arc<Config>>>,
-    principal: Option<Extension<Principal>>,
-) -> Response {
-    let Some(Extension(config)) = config else {
+async fn landing(runtime: RuntimeSnapshot, principal: Option<Extension<Principal>>) -> Response {
+    let Some(config) = runtime.config() else {
         return Error::from(crate::error::InternalError::Unhandled).into_response();
     };
     if let Err(error) = require_any_metadata_scope(&config, principal) {
@@ -100,10 +97,10 @@ async fn landing(
 }
 
 async fn conformance(
-    config: Option<Extension<Arc<Config>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let Some(Extension(config)) = config else {
+    let Some(config) = runtime.config() else {
         return Error::from(crate::error::InternalError::Unhandled).into_response();
     };
     if let Err(error) = require_any_metadata_scope(&config, principal) {
@@ -122,10 +119,10 @@ async fn conformance(
 }
 
 async fn collections(
-    config: Option<Extension<Arc<Config>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let Some(Extension(config)) = config else {
+    let Some(config) = runtime.config() else {
         return Error::from(crate::error::InternalError::Unhandled).into_response();
     };
     let Some(Extension(principal)) = principal else {
@@ -150,10 +147,10 @@ async fn collections(
 
 async fn collection_detail(
     Path(path): Path<CollectionPath>,
-    config: Option<Extension<Arc<Config>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let Some(Extension(config)) = config else {
+    let Some(config) = runtime.config() else {
         return Error::from(crate::error::InternalError::Unhandled).into_response();
     };
     let Some(Extension(principal)) = principal else {
@@ -173,12 +170,8 @@ async fn area_get(
     Path(path): Path<CollectionPath>,
     Query(params): Query<AreaQuery>,
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
-    aggregate_query: Option<Extension<Arc<AggregateQueryEngine>>>,
-    entity_query: Option<Extension<Arc<EntityQueryEngine>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
 ) -> Response {
     let Some(coords) = params.coords.as_deref() else {
         return Error::from(SpatialError::GeometryInvalid).into_response();
@@ -187,19 +180,7 @@ async fn area_get(
         Ok(geometry) => geometry,
         Err(error) => return error.into_response(),
     };
-    area_common(
-        path,
-        params,
-        geometry,
-        headers,
-        config,
-        principal,
-        aggregate_query,
-        entity_query,
-        registry,
-        readiness,
-    )
-    .await
+    area_common(path, params, geometry, headers, runtime, principal).await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -207,12 +188,8 @@ async fn area_post(
     Path(path): Path<CollectionPath>,
     Query(mut params): Query<AreaQuery>,
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
-    aggregate_query: Option<Extension<Arc<AggregateQueryEngine>>>,
-    entity_query: Option<Extension<Arc<EntityQueryEngine>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
     Json(body): Json<Value>,
 ) -> Response {
     apply_body_query_fields(&mut params, &body);
@@ -220,19 +197,7 @@ async fn area_post(
         Ok(geometry) => geometry,
         Err(error) => return error.into_response(),
     };
-    area_common(
-        path,
-        params,
-        geometry,
-        headers,
-        config,
-        principal,
-        aggregate_query,
-        entity_query,
-        registry,
-        readiness,
-    )
-    .await
+    area_common(path, params, geometry, headers, runtime, principal).await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -241,12 +206,8 @@ async fn area_common(
     params: AreaQuery,
     input_geometry: Geometry,
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
-    aggregate_query: Option<Extension<Arc<AggregateQueryEngine>>>,
-    entity_query: Option<Extension<Arc<EntityQueryEngine>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
 ) -> Response {
     if params
         .f
@@ -256,19 +217,19 @@ async fn area_common(
         return Error::from(FilterError::UnsupportedOp).into_response();
     }
     let geometry_vertex_count = count_vertices(&input_geometry) as u64;
-    let Some(Extension(config)) = config else {
+    let Some(config) = runtime.config() else {
         return Error::from(crate::error::InternalError::Unhandled).into_response();
     };
     let Some(Extension(principal)) = principal else {
         return Error::from(AuthError::MissingCredential).into_response();
     };
-    let Some(Extension(aggregate_query)) = aggregate_query else {
+    let Some(aggregate_query) = runtime.aggregate_query() else {
         return Error::from(crate::error::InternalError::Unhandled).into_response();
     };
-    let Some(Extension(entity_query)) = entity_query else {
+    let Some(entity_query) = runtime.query() else {
         return Error::from(crate::error::InternalError::Unhandled).into_response();
     };
-    let Some(Extension(registry)) = registry else {
+    let Some(registry) = runtime.entity_registry() else {
         return Error::from(crate::error::InternalError::Unhandled).into_response();
     };
     let Some(collection) = find_edr_collection(&config, &path.collection_id) else {
@@ -350,7 +311,7 @@ async fn area_common(
         Err(error) => return error.into_response(),
     };
     let as_of = resolve_as_of(
-        readiness.as_ref().map(|Extension(r)| r),
+        runtime.readiness_rx().as_ref(),
         &result,
         Some((&registry, &collection.dataset_id, geometry_entity)),
     );

@@ -24,9 +24,10 @@ use crate::audit::AuditContextExt;
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
 use crate::config::{Config, SpdciDisabilityRegistryConfig, SpdciRegistryConfig};
-use crate::entity::{EntityModel, EntityRegistry};
+use crate::entity::EntityModel;
 use crate::error::{AuthError, Error, FilterError, InternalError, SchemaError, SpdciError};
 use crate::query::{EntityCollectionQuery, EntityFilter, EntityFilterOp, EntityQueryEngine};
+use crate::runtime_config::RuntimeSnapshot;
 use crate::spdci::SpdciResponseMapper;
 
 /// Header fields the SP DCI standard marks `required` on inbound
@@ -40,10 +41,7 @@ const REQUIRED_HEADER_FIELDS: &[&str] = &[
 ];
 
 struct RouteDeps {
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    query: Option<Extension<Arc<EntityQueryEngine>>>,
-    response_mapper: Option<Extension<Arc<SpdciResponseMapper>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 }
 
@@ -55,20 +53,7 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         Ok(Self {
-            config: Option::<Extension<Arc<Config>>>::from_request_parts(parts, state)
-                .await
-                .unwrap_or(None),
-            registry: Option::<Extension<Arc<EntityRegistry>>>::from_request_parts(parts, state)
-                .await
-                .unwrap_or(None),
-            query: Option::<Extension<Arc<EntityQueryEngine>>>::from_request_parts(parts, state)
-                .await
-                .unwrap_or(None),
-            response_mapper: Option::<Extension<Arc<SpdciResponseMapper>>>::from_request_parts(
-                parts, state,
-            )
-            .await
-            .unwrap_or(None),
+            runtime: RuntimeSnapshot::from_request_parts(parts, state).await?,
             principal: Option::<Extension<Principal>>::from_request_parts(parts, state)
                 .await
                 .unwrap_or(None),
@@ -114,14 +99,8 @@ async fn disabled_status(
     deps: RouteDeps,
     Json(body): Json<Value>,
 ) -> Response {
-    let RouteDeps {
-        config,
-        registry,
-        query,
-        principal,
-        ..
-    } = deps;
-    let route = match RouteState::resolve(config, registry, query, &registry_name) {
+    let RouteDeps { runtime, principal } = deps;
+    let route = match RouteState::resolve(&runtime, &registry_name) {
         Ok(route) => route,
         Err(error) => return error.into_response(),
     };
@@ -174,19 +153,15 @@ async fn sync_search_response(
     deps: RouteDeps,
     body: Value,
 ) -> Response {
-    let RouteDeps {
-        config,
-        registry,
-        query,
-        response_mapper,
-        principal,
-    } = deps;
-    let route = match SearchRouteState::resolve(config, registry, query, registry_name.as_deref()) {
+    let RouteDeps { runtime, principal } = deps;
+    let route = match SearchRouteState::resolve(&runtime, registry_name.as_deref()) {
         Ok(route) => route,
         Err(error) => return error.into_response(),
     };
+    let response_mapper = runtime.spdci_response_mapper();
     let result =
-        run_sync_search_response(&route, headers, response_mapper.as_ref(), principal, body).await;
+        run_sync_search_response(&route, headers, response_mapper.as_deref(), principal, body)
+            .await;
     let (response, total_count) = match result {
         Ok((response, total_count)) => (response, total_count),
         Err(error) => (error.into_response(), 0),
@@ -197,7 +172,7 @@ async fn sync_search_response(
 async fn run_sync_search_response(
     route: &SearchRouteState,
     headers: HeaderMap,
-    response_mapper: Option<&Extension<Arc<SpdciResponseMapper>>>,
+    response_mapper: Option<&SpdciResponseMapper>,
     principal: Option<Extension<Principal>>,
     body: Value,
 ) -> Result<(Response, u64), Error> {
@@ -257,28 +232,23 @@ async fn search_response(
     deps: RouteDeps,
     body: Value,
 ) -> Response {
-    let RouteDeps {
-        config,
-        registry,
-        query,
-        response_mapper,
-        principal,
-    } = deps;
+    let RouteDeps { runtime, principal } = deps;
     // Look up the named-registry config so its `response_fields` /
     // mapping path drive projection through the same code path as
     // `sync_search`. `RouteState::resolve` below requires the same
     // entry, so the lookup is guaranteed to succeed when route
     // resolution does.
-    let named_search_config = config.as_ref().and_then(|Extension(cfg)| {
+    let named_search_config = runtime.config().and_then(|cfg| {
         cfg.standards
             .spdci
             .as_ref()
             .and_then(|spdci| spdci.registries.get(&registry_name).cloned())
     });
-    let route = match RouteState::resolve(config, registry, query, &registry_name) {
+    let route = match RouteState::resolve(&runtime, &registry_name) {
         Ok(route) => route,
         Err(error) => return error.into_response(),
     };
+    let response_mapper = runtime.spdci_response_mapper();
     let search_registry_config = named_search_config
         .expect("named_search_config must be Some when RouteState::resolve succeeded");
     let result = run_search_response(
@@ -286,7 +256,7 @@ async fn search_response(
         &registry_name,
         &search_registry_config,
         headers,
-        response_mapper.as_ref(),
+        response_mapper.as_deref(),
         principal,
         body,
     )
@@ -303,7 +273,7 @@ async fn run_search_response(
     registry_name: &str,
     search_registry_config: &SpdciRegistryConfig,
     headers: HeaderMap,
-    response_mapper: Option<&Extension<Arc<SpdciResponseMapper>>>,
+    response_mapper: Option<&SpdciResponseMapper>,
     principal: Option<Extension<Principal>>,
     body: Value,
 ) -> Result<(Response, u64), Error> {
@@ -346,21 +316,18 @@ struct SearchRouteState {
 }
 
 impl RouteState {
-    fn resolve(
-        config: Option<Extension<Arc<Config>>>,
-        registry: Option<Extension<Arc<EntityRegistry>>>,
-        query: Option<Extension<Arc<EntityQueryEngine>>>,
-        registry_name: &str,
-    ) -> Result<Self, Error> {
-        let Extension(config) = config.ok_or(SchemaError::UnknownResource)?;
+    fn resolve(runtime: &RuntimeSnapshot, registry_name: &str) -> Result<Self, Error> {
+        let config = runtime.config().ok_or(SchemaError::UnknownResource)?;
         let disability = resolve_disability_config(&config, registry_name)?;
-        let Extension(registry) = registry.ok_or(SchemaError::UnknownResource)?;
+        let registry = runtime
+            .entity_registry()
+            .ok_or(SchemaError::UnknownResource)?;
         let entity = registry
             .dataset(disability.dataset.as_str())
             .and_then(|dataset| dataset.entity(&disability.entity))
             .cloned()
             .ok_or(SchemaError::UnknownResource)?;
-        let Extension(query) = query.ok_or(SchemaError::UnknownResource)?;
+        let query = runtime.query().ok_or(SchemaError::UnknownResource)?;
         Ok(Self {
             config: disability,
             entity,
@@ -392,21 +359,18 @@ fn resolve_disability_config(
 }
 
 impl SearchRouteState {
-    fn resolve(
-        config: Option<Extension<Arc<Config>>>,
-        registry: Option<Extension<Arc<EntityRegistry>>>,
-        query: Option<Extension<Arc<EntityQueryEngine>>>,
-        registry_name: Option<&str>,
-    ) -> Result<Self, Error> {
-        let Extension(config) = config.ok_or(SchemaError::UnknownResource)?;
+    fn resolve(runtime: &RuntimeSnapshot, registry_name: Option<&str>) -> Result<Self, Error> {
+        let config = runtime.config().ok_or(SchemaError::UnknownResource)?;
         let (resolved_name, search) = resolve_search_config(&config, registry_name)?;
-        let Extension(registry) = registry.ok_or(SchemaError::UnknownResource)?;
+        let registry = runtime
+            .entity_registry()
+            .ok_or(SchemaError::UnknownResource)?;
         let entity = registry
             .dataset(search.dataset.as_str())
             .and_then(|dataset| dataset.entity(&search.entity))
             .cloned()
             .ok_or(SchemaError::UnknownResource)?;
-        let Extension(query) = query.ok_or(SchemaError::UnknownResource)?;
+        let query = runtime.query().ok_or(SchemaError::UnknownResource)?;
         Ok(Self {
             registry_name: resolved_name,
             config: search,
@@ -804,11 +768,12 @@ fn string_field(value: &Value, field: &str) -> Option<String> {
 fn project_search_records(
     registry_name: &str,
     registry_config: &SpdciRegistryConfig,
-    response_mapper: Option<&Extension<Arc<SpdciResponseMapper>>>,
+    response_mapper: Option<&SpdciResponseMapper>,
     rows: Vec<Value>,
 ) -> Result<Value, Error> {
+    let default_mapper;
     let mapper = match response_mapper {
-        Some(Extension(mapper)) => Arc::clone(mapper),
+        Some(mapper) => mapper,
         None if registry_has_mapping(registry_config) => {
             tracing::error!(
                 code = "spdci.mapper.unavailable",
@@ -819,7 +784,10 @@ fn project_search_records(
             );
             return Err(SpdciError::MapperUnavailable.into());
         }
-        None => Arc::new(SpdciResponseMapper::default()),
+        None => {
+            default_mapper = SpdciResponseMapper::default();
+            &default_mapper
+        }
     };
     let mapped = rows
         .into_iter()

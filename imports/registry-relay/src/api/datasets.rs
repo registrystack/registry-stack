@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Dataset listing route declarations.
 
-use std::collections::BTreeSet;
-use std::sync::Arc;
-
 use axum::extract::Path;
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
@@ -11,11 +8,13 @@ use axum::routing::get;
 use axum::{Extension, Router};
 use serde::Serialize;
 use serde_json::json;
+use std::collections::BTreeSet;
 
 use crate::audit::ErrorCodeExt;
 use crate::auth::Principal;
 use crate::config::{AccessRights, Config, DatasetConfig, Sensitivity, UpdateFrequency};
 use crate::error::{AuthError, Error, SchemaError};
+use crate::runtime_config::RuntimeSnapshot;
 
 const PROBLEM_JSON: HeaderValue = HeaderValue::from_static("application/problem+json");
 const DATASETS_UNAVAILABLE_CODE: &str = "datasets.config_unavailable";
@@ -94,11 +93,8 @@ struct SpdciRegistryStandard {
     disability_support: Option<String>,
 }
 
-async fn datasets(
-    config: Option<Extension<Arc<Config>>>,
-    principal: Option<Extension<Principal>>,
-) -> Response {
-    let Some(Extension(config)) = config else {
+async fn datasets(runtime: RuntimeSnapshot, principal: Option<Extension<Principal>>) -> Response {
+    let Some(config) = runtime.config() else {
         return datasets_unavailable("datasets route matched, but config state is not installed");
     };
     let Some(Extension(principal)) = principal else {
@@ -123,10 +119,10 @@ async fn datasets(
 
 async fn dataset(
     Path(dataset_id): Path<String>,
-    config: Option<Extension<Arc<Config>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let Some(Extension(config)) = config else {
+    let Some(config) = runtime.config() else {
         return datasets_unavailable("dataset route matched, but config state is not installed");
     };
     let Some(Extension(principal)) = principal else {

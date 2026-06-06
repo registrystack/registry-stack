@@ -10,4 +10,5 @@
 //! provenance state builder. V1 intentionally ships no KMS provider
 //! implementation.
 
+pub mod file_watch;
 pub mod software;

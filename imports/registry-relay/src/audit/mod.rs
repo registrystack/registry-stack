@@ -23,9 +23,9 @@ use std::time::Instant;
 
 use axum::body::Body;
 use axum::extract::{ConnectInfo, Extension};
-use axum::http::{HeaderMap, Request};
+use axum::http::{HeaderMap, Request, StatusCode};
 use axum::middleware::Next;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use time::format_description::FormatItem;
@@ -34,6 +34,8 @@ use time::OffsetDateTime;
 use tokio::sync::OnceCell;
 use tracing::error;
 use ulid::Ulid;
+
+use crate::runtime_config::RuntimeSnapshot;
 
 pub mod file;
 pub mod middleware;
@@ -109,6 +111,53 @@ pub struct AuditContextExt {
     pub geometry_vertex_count: Option<u64>,
     pub row_count: Option<u64>,
     pub suppressed_groups: Option<u64>,
+}
+
+/// Redacted config-governance metadata attached by admin config handlers.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigAuditExt {
+    pub action: &'static str,
+    pub source: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bundle_id: Option<String>,
+    #[serde(rename = "bundle_sequence", skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<u64>,
+    pub signer_kids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_config_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_hash: Option<String>,
+    pub product_validation_result: &'static str,
+    pub apply_result: &'static str,
+    pub posture_result: &'static str,
+    pub applied: bool,
+    pub restart_required: bool,
+    pub change_classes: Vec<String>,
+    pub break_glass: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub break_glass_approval_reference: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub break_glass_approved_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub break_glass_reason_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub break_glass_emergency_change_class: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub break_glass_expires_at_unix_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub break_glass_rate_limit_identity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_approval_reference: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_approval_approved_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_approval_reason_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_approval_change_class: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_approval_expires_at_unix_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_approval_rate_limit_identity: Option<String>,
 }
 
 /// Response-extension marker emitted by handlers that signed a VC for
@@ -255,6 +304,9 @@ pub struct AuditRecord {
     /// JSON responses and deployments without provenance enabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provenance: Option<ProvenanceIssuanceRecord>,
+    /// Present on governed config verify, dry-run, and apply attempts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<ConfigAuditExt>,
 }
 
 /// Provenance issuance metadata embedded in an `AuditRecord` when the
@@ -382,6 +434,7 @@ impl OperationalAuditEvent {
             duration_ms: 0,
             error_code: Some(self.error_code.to_string()),
             provenance: None,
+            config: None,
         }
     }
 }
@@ -589,11 +642,15 @@ impl registry_platform_audit::AuditSink for InMemorySink {
 /// State is `Arc<AuditPipeline>` so the same layer factory works with
 /// any sink choice (stdout, file, tee, chain).
 pub async fn audit_layer(
-    Extension(sink): Extension<Arc<AuditPipeline>>,
+    runtime: RuntimeSnapshot,
     settings: Option<Extension<AuditSettings>>,
     request: Request<Body>,
     next: Next,
 ) -> Response {
+    let Some(sink) = runtime.audit_sink() else {
+        error!("audit pipeline unavailable in request runtime");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
     let settings = settings.map(|Extension(s)| s).unwrap_or_default();
     let start = Instant::now();
     let method = request.method().as_str().to_string();
@@ -671,6 +728,7 @@ pub async fn audit_layer(
         .extensions()
         .get::<ProvenanceIssuanceExt>()
         .map(ProvenanceIssuanceRecord::from);
+    let config_audit = response.extensions().get::<ConfigAuditExt>().cloned();
 
     // Auth middleware (inner) attaches `Principal` to the response on
     // success after the handler returns. Prefer that as the canonical
@@ -740,6 +798,7 @@ pub async fn audit_layer(
         duration_ms,
         error_code,
         provenance,
+        config: config_audit,
     };
 
     // Fire and await the write; the sink is responsible for making

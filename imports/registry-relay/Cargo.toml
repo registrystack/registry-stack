@@ -88,6 +88,7 @@ registry-platform-crypto = { version = "0.1.2", path = "../registry-platform/cra
 registry-platform-httpsec = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-httpsec" }
 registry-platform-httputil = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-httputil" }
 registry-platform-oidc = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-oidc" }
+registry-platform-config = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-config" }
 registry-platform-sdjwt = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-sdjwt" }
 getrandom = { version = "0.4" }
 hmac = { version = "0.13" }
@@ -130,6 +131,7 @@ wkt = { version = "0.12", optional = true, features = ["geo-types"] }
 [dev-dependencies]
 axum-test = { version = "20" }
 assert-json-diff = { version = "2" }
+chrono = { version = "0.4" }
 registry-platform-testing = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-testing", features = ["test-utils"] }
 proptest = { version = "1" }
 tempfile = { version = "3" }
@@ -149,6 +151,8 @@ ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
 rand_core = { version = "0.6", features = ["std"] }
 # Parses `resources/MANIFEST.toml` in the resource pinning test.
 toml = { version = "1.1" }
+tough = { version = "0.22.0" }
+wiremock = { version = "0.6" }
 # Criterion drives the microbenchmarks under `benches/`. The benches are
 # manually invoked via `cargo bench`; CI only smoke-checks `cargo bench --no-run`.
 criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }

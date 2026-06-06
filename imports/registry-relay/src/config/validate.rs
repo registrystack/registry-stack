@@ -39,6 +39,7 @@ const ADMIN_SCOPE: &str = "admin";
 pub fn run(config: &Config) -> Result<(), Error> {
     super::vocabularies::validate_registry(&config.vocabularies).map_err(Error::from)?;
     validate_server(config).map_err(Error::from)?;
+    validate_config_trust(config).map_err(Error::from)?;
     validate_auth_mode(config).map_err(Error::from)?;
     validate_ids_and_uniqueness(config).map_err(Error::from)?;
     validate_scopes(config).map_err(Error::from)?;
@@ -51,6 +52,55 @@ pub fn run(config: &Config) -> Result<(), Error> {
     }
     validate_publicschema_feature(config).map_err(Error::from)?;
     validate_spdci_feature(config).map_err(Error::from)?;
+    Ok(())
+}
+
+fn validate_config_trust(config: &Config) -> Result<(), ConfigError> {
+    let Some(config_trust) = &config.config_trust else {
+        return Ok(());
+    };
+    if config_trust.antirollback_state_path.as_os_str().is_empty() {
+        tracing::error!(
+            code = "config.validation_error",
+            "config_trust.antirollback_state_path must not be empty"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    if config_trust
+        .local_approval_state_path
+        .as_os_str()
+        .is_empty()
+    {
+        tracing::error!(
+            code = "config.validation_error",
+            "config_trust.local_approval_state_path must not be empty"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    if config_trust.break_glass_rate_limit.max_accepted == 0 {
+        tracing::error!(
+            code = "config.validation_error",
+            "config_trust.break_glass_rate_limit.max_accepted must be greater than zero"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    if config_trust.break_glass_rate_limit.window_seconds == 0 {
+        tracing::error!(
+            code = "config.validation_error",
+            "config_trust.break_glass_rate_limit.window_seconds must be greater than zero"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    for root in &config_trust.accepted_roots {
+        if let Err(error) = root.validate() {
+            tracing::error!(
+                code = "config.validation_error",
+                error = %error,
+                "config_trust.accepted_roots contains an invalid trust root"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
     Ok(())
 }
 
@@ -872,7 +922,7 @@ fn validate_provenance(cfg: &super::provenance::ProvenanceConfig) -> Result<(), 
         return Err(ConfigError::ProvenanceSchemaBaseUrlInvalid);
     }
 
-    let (issuer_did, vm_id, signer, _retired) = match &cfg.issuer {
+    let (issuer_did, vm_id, signer, retired) = match &cfg.issuer {
         IssuerConfig::Gateway(g) => (
             g.did.as_str(),
             g.verification_method_id.as_str(),
@@ -917,6 +967,23 @@ fn validate_provenance(cfg: &super::provenance::ProvenanceConfig) -> Result<(), 
         );
         return Err(ConfigError::ProvenanceVerificationMethodMismatch);
     }
+    for retired_key in retired {
+        let retired_vm_id = retired_key.verification_method_id.as_str();
+        if validate_did(retired_vm_id, &[DidMethod::Web]).is_err() {
+            tracing::error!(
+                code = "provenance.config.verification_method_invalid",
+                "retired verification_method_id must be a valid did:web fragment",
+            );
+            return Err(ConfigError::ProvenanceVerificationMethodMismatch);
+        }
+        if !retired_vm_id.starts_with(&prefix) {
+            tracing::error!(
+                code = "provenance.config.verification_method_mismatch",
+                "retired verification_method_id must be a fragment of the issuer DID",
+            );
+            return Err(ConfigError::ProvenanceVerificationMethodMismatch);
+        }
+    }
 
     // Signer-level validation.
     match signer {
@@ -960,6 +1027,29 @@ fn validate_provenance(cfg: &super::provenance::ProvenanceConfig) -> Result<(), 
                     );
                     return Err(ConfigError::ProvenanceJwkEnvMissing);
                 }
+            }
+        }
+        SignerConfig::FileWatch(s) => {
+            if s.signing_algorithm != super::provenance::ProvenanceAlgorithm::EdDSA {
+                tracing::error!(
+                    code = "provenance.config.algorithm_unsupported",
+                    "file_watch signer supports only EdDSA in V1",
+                );
+                return Err(ConfigError::ProvenanceAlgorithmUnsupported);
+            }
+            if s.path.as_os_str().is_empty() {
+                tracing::error!(
+                    code = "provenance.config.file_watch_path_missing",
+                    "file_watch signer path must not be empty",
+                );
+                return Err(ConfigError::ProvenanceSignerKindInvalid);
+            }
+            if cfg.enabled && !s.path.is_file() {
+                tracing::error!(
+                    code = "provenance.config.file_watch_key_missing",
+                    "file_watch signer key file is missing or not a regular file",
+                );
+                return Err(ConfigError::ProvenanceJwkEnvMissing);
             }
         }
         SignerConfig::Kms(k) => {
@@ -3160,6 +3250,7 @@ fn is_reserved_relationship_segment(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ProvenanceConfig;
 
     #[test]
     fn id_regex_accepts_canonical() {
@@ -3242,5 +3333,60 @@ mod tests {
         assert!(!is_trusted_proxy_spec("not-an-ip"));
         assert!(!is_trusted_proxy_spec("10.0.0.0/99"));
         assert!(!is_trusted_proxy_spec("2001:db8::/129"));
+    }
+
+    fn provenance_with_retired_verification_method(retired_vm_id: &str) -> ProvenanceConfig {
+        serde_saphyr::from_str(&format!(
+            r#"
+enabled: false
+accepted_media_types:
+  - application/vc+jwt
+schema_base_url: https://data.example.test/schemas
+context_base_url: https://data.example.test/contexts
+claim_validity:
+  aggregate_result: 10m
+  entity_record: 10m
+issuer:
+  mode: gateway
+  did: did:web:data.example.test
+  verification_method_id: did:web:data.example.test#relay-public-key
+  signer:
+    kind: software
+    jwk_env: REGISTRY_RELAY_TEST_PRIVATE_JWK
+    signing_algorithm: EdDSA
+  retired_keys:
+    - verification_method_id: {retired_vm_id}
+      jwk_env: REGISTRY_RELAY_RETIRED_PUBLIC_JWK
+      retired_after: 2026-06-05T00:00:00Z
+"#
+        ))
+        .expect("provenance fixture parses")
+    }
+
+    #[test]
+    fn retired_verification_method_must_be_valid_did_web_fragment() {
+        let cfg = provenance_with_retired_verification_method("https://data.example.test#old");
+
+        assert!(matches!(
+            validate_provenance(&cfg),
+            Err(ConfigError::ProvenanceVerificationMethodMismatch)
+        ));
+    }
+
+    #[test]
+    fn retired_verification_method_must_belong_to_issuer_did() {
+        let cfg = provenance_with_retired_verification_method("did:web:other.example.test#old-key");
+
+        assert!(matches!(
+            validate_provenance(&cfg),
+            Err(ConfigError::ProvenanceVerificationMethodMismatch)
+        ));
+    }
+
+    #[test]
+    fn retired_verification_method_accepts_issuer_did_fragment() {
+        let cfg = provenance_with_retired_verification_method("did:web:data.example.test#old-key");
+
+        validate_provenance(&cfg).expect("issuer-bound retired key is valid");
     }
 }

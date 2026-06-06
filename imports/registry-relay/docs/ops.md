@@ -35,7 +35,7 @@ flowchart TB
   subgraph Proc["registry-relay process or container"]
     direction TB
     Data["Data-plane listener<br/>server.bind"]
-    Admin["Admin listener<br/>server.admin_bind, /metrics, reload"]
+    Admin["Admin listener<br/>server.admin_bind, /metrics, posture, config, reload"]
   end
 
   Ingress --> Data
@@ -46,9 +46,10 @@ flowchart TB
 ```
 
 *Recommended production topology. TLS, WAF, and external auth sit at the
-ingress. The admin listener carries metrics and reload and is reachable only
-from the private admin and monitoring networks. Source files are read-only; the
-cache is writable; the public data-plane listener does not mount `/metrics`.*
+ingress. The admin listener carries metrics, posture, governed config, and
+reload operations and is reachable only from the private admin and monitoring
+networks. Source files are read-only; the cache is writable; the public
+data-plane listener does not mount `/metrics`.*
 
 ## Build And Release
 
@@ -131,16 +132,17 @@ registry-relay --config /etc/registry-relay/config.yaml
 Important configuration blocks:
 
 - `server.bind`: public data-plane listener.
-- `server.admin_bind`: optional admin listener. Intended for reload and future admin operations on a restricted network.
+- `server.admin_bind`: optional admin listener. Intended for metrics, posture, governed config operations, and reload on a restricted network.
 - `server.cache_dir`: writable cache for normalized Parquet files and ingest state.
 - `server.cors.allowed_origins`: default deny when empty.
 - `server.trust_proxy`: only enable when the gateway is behind trusted proxies and those proxy CIDRs are configured.
 - `auth.api_keys`: key ids, hash env var names, and scopes.
+- `config_trust`: optional local trust roots, anti-rollback state, and local approval state for governed signed config apply.
 - `datasets[].source.path`: local file path inside the container or host.
 - `datasets[].refresh`: `mtime`, `interval`, or `manual`.
 - `audit`: audit sink and JSONL options.
 
-Config reload is restart-only in V1. Dataset reload does not reload `config.yaml`.
+Local-file startup config changes remain a rolling restart operation. Governed signed config apply is available on the private admin listener when the runtime handle and `config_trust` are installed. It can live-apply compatible public metadata changes, compatible provenance signing-key rotations, and locally approved root transitions that only change `config_trust.accepted_roots`; route-affecting, listener, auth, audit, dataset, standards, and most provenance shape changes still report `restart_required` and must be rolled through deployment. Dataset reload does not reload startup `config.yaml`.
 
 ## API-Key Provisioning And Rotation
 
@@ -194,14 +196,14 @@ Rotation procedure (gateway mode):
 1. Mint a new Ed25519 keypair for `EdDSA`. Store the new private JWK in the deployment secret store.
 2. Add the new public JWK to the DID Document under a new `verificationMethod` id (e.g. `did:web:data.example.gov#issuance-2026q3`).
 3. Move the currently active verification method to `provenance.issuer.retired_keys[]`, recording the `retired_after` RFC 3339 timestamp and the public JWK in its own env var.
-4. Update `verification_method_id` to the new id and point `signer.jwk_env` at the new env var.
-5. Roll the gateway. The keyring loads at process start, so rotation is a rolling-restart operation.
+4. Update `verification_method_id` to the new id and point the signer at the new material (`signer.jwk_env` for `software`, or the configured JWK file for `file_watch`).
+5. Roll the gateway for local-file startup config changes. With governed signed config apply, Relay can live-apply an active provenance key-id flip when provenance was already enabled, issuer identity and route-affecting settings are unchanged, new local signer material is ready, and the old key is published in `retired_keys`. With `file_watch`, replacing file contents without a config change is only a same-public-key refresh; a different public key under the same `verification_method_id` is rejected so older VCs remain verifiable through the retired-key flow.
 6. Confirm the new VCs verify with the new public JWK and that previously issued VCs (still inside their validity window) verify against the retired entry.
-7. Once the longest applicable `claim_validity` window has elapsed since `retired_after`, drop the retired entry from config and remove the public JWK from the DID Document on the next deploy.
+7. Once the longest applicable `claim_validity` window plus five minutes has elapsed since `retired_after`, drop the retired entry from config. Governed signed apply uses change class `signing_key_cleanup`; local-file startup config removes it on the next deploy.
 
 Delegated mode follows the same steps, except the DID Document edits land on the ministry's side. Coordinate the cutover so the ministry publishes the new `verificationMethod` before the gateway starts signing with the corresponding private key.
 
-Remote signing (`signer.kind: kms`) is reserved for a future backend and is rejected by V1 config validation. The supported production path is local software Ed25519 signing with the private JWK loaded from the configured secret environment variable.
+Remote signing (`signer.kind: kms`) is reserved for a future backend and is rejected by V1 config validation. The supported production paths are local Ed25519 signing with a private JWK loaded from the configured secret environment variable (`software`) or from a configured local JWK file (`file_watch`).
 
 Never log the JWK, the env var value, or any full environment dump. The provenance audit block intentionally records only `iss`, `kid`, `jti`, `claim_type`, `subject`, and the `iat`/`nbf`/`exp` triple, not the signed body or any signing material.
 
@@ -263,6 +265,97 @@ curl -X POST -H "Authorization: Bearer $ADMIN_API_KEY" \
 ```
 
 The reload-all response includes `status` and aggregate `counts` for total, succeeded, and failed resources. A non-zero failure count returns HTTP 500 with `status: "failed"`; inspect the audit and operational logs for the resource-level failure context.
+
+## Admin Posture And Config Apply
+
+Operations posture is a read-only admin-listener route with its own scope:
+
+```sh
+curl -H "Authorization: Bearer $OPS_READ_API_KEY" \
+  http://127.0.0.1:8081/admin/v1/posture
+```
+
+Use `?tier=restricted` only for trusted operations users who need the restricted projection. The default projection is redacted for broader operational sharing.
+
+Governed config routes require a token with the independent `admin` scope:
+
+```text
+POST /admin/v1/config/verify
+POST /admin/v1/config/dry-run
+POST /admin/v1/config/apply
+```
+
+`verify` and `dry-run` accept either inline `config_yaml` plus bundle metadata or a local signed TUF target reference. They validate the candidate and return:
+
+```json
+{
+  "bundle_id": "test-bundle",
+  "sequence": 5,
+  "result": "verified",
+  "posture_result": "not_applied",
+  "applied": false,
+  "restart_required": false
+}
+```
+
+`apply` requires a signed TUF target and rejects inline config with `admin.config_apply_unavailable`. The local signed target request shape is:
+
+```json
+{
+  "tuf": {
+    "root_path": "/etc/registry-relay/trust/root.json",
+    "metadata_dir": "/etc/registry-relay/trust/metadata",
+    "targets_dir": "/etc/registry-relay/trust/targets",
+    "datastore_dir": "/var/lib/registry-relay/config-tuf",
+    "target_name": "registry-relay.yaml"
+  }
+}
+```
+
+The remote signed target request shape uses the same trusted root and durable
+datastore, but fetches TUF metadata and targets from guarded base URLs:
+
+```json
+{
+  "tuf": {
+    "root_path": "/etc/registry-relay/trust/root.json",
+    "metadata_base_url": "https://config.example.gov/registry-relay/metadata/",
+    "targets_base_url": "https://config.example.gov/registry-relay/targets/",
+    "datastore_dir": "/var/lib/registry-relay/config-tuf",
+    "target_name": "registry-relay.yaml"
+  }
+}
+```
+
+Remote sources are recorded as `signed_bundle_endpoint`; local repository
+sources are recorded as `signed_bundle_file`. The default remote URL policy
+requires safe HTTPS endpoints. HTTP loopback is accepted only with
+`allow_dev_insecure_fetch_urls: true` for tests and local development.
+
+Break-glass requests are apply-only and must include all current fields:
+
+```json
+{
+  "tuf": {
+    "root_path": "/etc/registry-relay/trust/root.json",
+    "metadata_dir": "/etc/registry-relay/trust/metadata",
+    "targets_dir": "/etc/registry-relay/trust/targets",
+    "datastore_dir": "/var/lib/registry-relay/config-tuf",
+    "target_name": "registry-relay.yaml"
+  },
+  "break_glass": true,
+  "break_glass_approval": {
+    "approved_by": "ops@example.gov",
+    "reason": "recover from bad live config",
+    "approval_reference": "INC-4242",
+    "emergency_change_class": "emergency_break_glass",
+    "expires_at_unix_seconds": 1780000000,
+    "rate_limit_identity": "registry-relay/relay-prod/production/default"
+  }
+}
+```
+
+Break-glass can waive only the previous-config-hash rollback check. It does not waive monotonic sequence, TUF signature and local trust-root authorization, expiry, emergency change-class authorization, or local rolling-window rate limits. The rolling-window policy comes from local `config_trust.break_glass_rate_limit`; requests that include `break_glass_rate_limit` are rejected. The audit record stores the approval reference, approver, emergency change class, expiry, and rate-limit identity; it stores a hash of `reason`, not the raw free text.
 
 ## Readiness And Probes
 
@@ -351,7 +444,7 @@ Caller expected a signed VC but received plain JSON:
 
 - Confirm the request `Accept` header lists one of `provenance.accepted_media_types` (default `application/vc+jwt` or `application/jwt`).
 - Confirm `provenance.enabled: true` in the loaded config and that the process was restarted after the config change.
-- Confirm the env var named by `provenance.issuer.signer.jwk_env` is set and holds a valid JWK; a missing or malformed JWK fails the signer at startup, not at request time.
+- Confirm the configured signer material is available and valid: `signer.jwk_env` for `software`, or `signer.path` for `file_watch`. Missing or malformed material fails the signer at startup, not at request time.
 - For `mode: delegated`, confirm the ministry's DID Document publishes the gateway's `verification_method_id`.
 
 Admin reload fails:

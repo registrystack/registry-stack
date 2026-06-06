@@ -55,8 +55,9 @@ provenance:
       signing_algorithm: EdDSA
 ```
 
-The private JWK comes from an environment variable (never from the
-YAML). The env value is a JSON-encoded private JWK, e.g.:
+The private JWK material comes from a local secret provider, never inline
+YAML. `kind: software` reads the JSON-encoded private JWK from the named
+environment variable:
 
 ```json
 {"kty":"OKP","crv":"Ed25519","d":"<base64url>","x":"<base64url>","alg":"EdDSA"}
@@ -64,6 +65,21 @@ YAML). The env value is a JSON-encoded private JWK, e.g.:
 
 Use 1Password, AWS Secrets Manager, or your platform's secret store to
 inject it. Do not echo, log, or commit this value.
+
+For simple local deployments that prefer file-mounted secrets, use
+`kind: file_watch`:
+
+```yaml
+    signer:
+      kind: file_watch
+      path: /run/secrets/registry-relay/provenance-active.jwk
+      signing_algorithm: EdDSA
+```
+
+The file must contain the same JSON private JWK shape. Relay re-reads the
+file on signer use; a valid replacement for the same public key identity
+becomes active without process restart, while a malformed or different-key
+replacement degrades key readiness and keeps the last good signer available.
 
 For local smoke tests, generate a throwaway Ed25519 JWK into ignored
 build output and inject it into the environment:
@@ -338,12 +354,11 @@ omit the `provenance` block entirely.
 
 ## Key Rotation
 
-The signing key is referenced indirectly: the config names an env var,
-the env var holds the JWK. To rotate:
+The signing key is referenced indirectly: the config names either an env
+var (`software`) or a local JWK file (`file_watch`). To rotate:
 
 1. Mint a new Ed25519 keypair. V1 production signing supports local
-   software EdDSA only; P-256 (`ES256`) is reserved for a future signer
-   backend.
+   EdDSA only; P-256 (`ES256`) is reserved for a future signer backend.
 2. Add the new public JWK to the DID Document under a new
    `verificationMethod` id (gateway mode: edit the source the DID
    Document handler reads; delegated mode: coordinate with the
@@ -353,12 +368,21 @@ the env var holds the JWK. To rotate:
    has expired (cutoff = `retired_after` + the longest
    `claim_validity` window).
 4. Update `verification_method_id` to the new id.
-5. Update the env var holding the private JWK.
-6. Restart or roll the gateway. The keyring is loaded once at process
-   start, so rotation is a restart-driven operation in V1.
+5. Update the private JWK material. For `software`, update the env var.
+   For `file_watch`, stage the new JWK file that the new config points to.
+   A running file-watch signer accepts only same-public-key refreshes;
+   same-id different-key replacements are rejected to preserve old VC
+   verification.
+6. Roll the gateway when using local-file startup config. With governed signed
+   config apply, Relay can live-apply this change when provenance was already
+   enabled, the issuer identity and route-affecting settings are unchanged, the
+   new local signer material is ready, and the old key is published in
+   `retired_keys`.
 7. Once the retirement cutoff has passed, drop the entry from
-   `retired_keys` and remove the public JWK from the DID Document on
-   the next rolling deploy.
+   `retired_keys`. With governed signed config apply, use change class
+   `signing_key_cleanup`; Relay rejects cleanup before
+   `retired_after + max(claim_validity) + 5m`. With local-file startup config,
+   remove the entry on the next rolling deploy.
 
 Never check a private JWK into git, into config, or into a container
 image. Never log it, never include it in error messages, and never
@@ -450,10 +474,11 @@ claims, sorted `_sd` digests, and `jti == credential_id` issuance
 parity.
 
 `signer.kind: kms` is reserved for future remote signing backends and
-is rejected by config validation today. The internal signer trait is
-kept narrow so an AWS KMS, GCP KMS, HSM, or out-of-process signer can
-be added later without changing the VC-JWT envelope, DID Web behavior,
-or issuer-mode model.
+is rejected by config validation today. V1 supports `software` and
+`file_watch` local Ed25519 signing. The internal signer trait is kept
+narrow so an AWS KMS, GCP KMS, HSM, or out-of-process signer can be
+added later without changing the VC-JWT envelope, DID Web behavior, or
+issuer-mode model.
 
 The production acceptance bar for any future remote signer backend is:
 

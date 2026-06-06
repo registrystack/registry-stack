@@ -10,6 +10,7 @@
 use thiserror::Error;
 
 use crate::config::ProvenanceAlgorithm;
+use registry_platform_crypto::KeyReadiness;
 
 /// JWS signing algorithm. Mirrors [`ProvenanceAlgorithm`] but lives
 /// inside the signer module so signer-side code does not depend on the
@@ -91,4 +92,9 @@ pub trait Signer: Send + Sync {
     /// Public JWK for the active signing key. Used by the gateway
     /// `/.well-known/did.json` builder.
     fn public_jwk(&self) -> serde_json::Value;
+
+    /// Current health of the local signer backend.
+    fn readiness(&self) -> KeyReadiness {
+        KeyReadiness::Ready
+    }
 }

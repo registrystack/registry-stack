@@ -246,7 +246,7 @@ pub enum ConfigError {
     /// Gateway DID does not match the deployment host.
     #[error("provenance issuer did mismatch")]
     ProvenanceIssuerDidMismatch,
-    /// Signer kind is not one of `software` or `kms`.
+    /// Signer kind is not one of `software` or `file_watch`.
     #[error("provenance signer kind invalid")]
     ProvenanceSignerKindInvalid,
     /// Software signer's `jwk_env` is unset or empty.
@@ -1004,9 +1004,11 @@ impl ConfigError {
             ConfigError::ProvenanceIssuerDidMismatch => {
                 "configured issuer DID does not match the deployment host"
             }
-            ConfigError::ProvenanceSignerKindInvalid => "signer kind must be software",
+            ConfigError::ProvenanceSignerKindInvalid => {
+                "signer kind must be software or file_watch"
+            }
             ConfigError::ProvenanceJwkEnvMissing => {
-                "the signing JWK environment variable is unset or empty"
+                "the configured signing key material is unavailable"
             }
             ConfigError::ProvenanceAlgorithmUnsupported => {
                 "signing_algorithm must be EdDSA or ES256"

@@ -2,7 +2,6 @@
 //! Dataset-scoped aggregate HTTP route declarations.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 
 use axum::extract::{Path, Query};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -16,13 +15,11 @@ use tokio::sync::watch;
 use crate::audit::{AuditContextExt, ErrorCodeExt};
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
-use crate::config::{Config, DatasetConfig};
+use crate::config::DatasetConfig;
 use crate::error::{AuthError, Error, FilterError, SchemaError};
 use crate::ingest::ReadinessSnapshot;
-use crate::query::{
-    AggregateFilter, AggregateFilterOp, AggregateQueryEngine, AggregateQueryRequest,
-    AggregateResult,
-};
+use crate::query::{AggregateFilter, AggregateFilterOp, AggregateQueryRequest, AggregateResult};
+use crate::runtime_config::RuntimeSnapshot;
 
 const PROBLEM_JSON: HeaderValue = HeaderValue::from_static("application/problem+json");
 const QUERY_UNAVAILABLE_CODE: &str = "aggregate.query_unavailable";
@@ -105,14 +102,13 @@ struct TemporalFilter {
 
 async fn list_aggregates(
     Path(path): Path<AggregatePath>,
-    query: Option<Extension<Arc<AggregateQueryEngine>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
-    config: Option<Extension<Arc<Config>>>,
 ) -> Response {
-    if let Err(error) = require_metadata_scope(config.as_ref(), principal, &path.dataset_id, None) {
+    if let Err(error) = require_metadata_scope(principal, &path.dataset_id, None) {
         return error.into_response();
     }
-    let Some(Extension(query)) = query else {
+    let Some(query) = runtime.aggregate_query() else {
         return query_unavailable(
             "aggregate list route matched, but aggregate query state is not installed",
         );
@@ -131,23 +127,18 @@ async fn list_aggregates(
 
 async fn aggregate_metadata(
     Path(path): Path<AggregateRunPath>,
-    query: Option<Extension<Arc<AggregateQueryEngine>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
-    config: Option<Extension<Arc<Config>>>,
 ) -> Response {
-    let Some(Extension(query)) = query else {
+    let Some(query) = runtime.aggregate_query() else {
         return query_unavailable(
             "aggregate metadata route matched, but aggregate query state is not installed",
         );
     };
     let aggregate = match query.aggregate_config(&path.dataset_id, &path.aggregate_id) {
         Ok((dataset, aggregate)) => {
-            if let Err(error) = require_metadata_scope(
-                config.as_ref(),
-                principal,
-                &path.dataset_id,
-                Some(aggregate),
-            ) {
+            if let Err(error) = require_metadata_scope(principal, &path.dataset_id, Some(aggregate))
+            {
                 return error.into_response();
             }
             aggregate_metadata_json(dataset, aggregate)
@@ -159,14 +150,13 @@ async fn aggregate_metadata(
 
 async fn list_indicators(
     Path(path): Path<AggregatePath>,
-    query: Option<Extension<Arc<AggregateQueryEngine>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
-    config: Option<Extension<Arc<Config>>>,
 ) -> Response {
-    if let Err(error) = require_metadata_scope(config.as_ref(), principal, &path.dataset_id, None) {
+    if let Err(error) = require_metadata_scope(principal, &path.dataset_id, None) {
         return error.into_response();
     }
-    let Some(Extension(query)) = query else {
+    let Some(query) = runtime.aggregate_query() else {
         return query_unavailable(
             "indicator list route matched, but aggregate query state is not installed",
         );
@@ -185,14 +175,13 @@ async fn list_indicators(
 
 async fn get_indicator(
     Path(path): Path<AggregateDiscoveryPath>,
-    query: Option<Extension<Arc<AggregateQueryEngine>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
-    config: Option<Extension<Arc<Config>>>,
 ) -> Response {
-    if let Err(error) = require_metadata_scope(config.as_ref(), principal, &path.dataset_id, None) {
+    if let Err(error) = require_metadata_scope(principal, &path.dataset_id, None) {
         return error.into_response();
     }
-    let Some(Extension(query)) = query else {
+    let Some(query) = runtime.aggregate_query() else {
         return query_unavailable(
             "indicator detail route matched, but aggregate query state is not installed",
         );
@@ -210,14 +199,13 @@ async fn get_indicator(
 
 async fn list_dimensions(
     Path(path): Path<AggregatePath>,
-    query: Option<Extension<Arc<AggregateQueryEngine>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
-    config: Option<Extension<Arc<Config>>>,
 ) -> Response {
-    if let Err(error) = require_metadata_scope(config.as_ref(), principal, &path.dataset_id, None) {
+    if let Err(error) = require_metadata_scope(principal, &path.dataset_id, None) {
         return error.into_response();
     }
-    let Some(Extension(query)) = query else {
+    let Some(query) = runtime.aggregate_query() else {
         return query_unavailable(
             "dimension list route matched, but aggregate query state is not installed",
         );
@@ -236,14 +224,13 @@ async fn list_dimensions(
 
 async fn get_dimension(
     Path(path): Path<AggregateDiscoveryPath>,
-    query: Option<Extension<Arc<AggregateQueryEngine>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
-    config: Option<Extension<Arc<Config>>>,
 ) -> Response {
-    if let Err(error) = require_metadata_scope(config.as_ref(), principal, &path.dataset_id, None) {
+    if let Err(error) = require_metadata_scope(principal, &path.dataset_id, None) {
         return error.into_response();
     }
-    let Some(Extension(query)) = query else {
+    let Some(query) = runtime.aggregate_query() else {
         return query_unavailable(
             "dimension detail route matched, but aggregate query state is not installed",
         );
@@ -264,20 +251,14 @@ async fn execute_aggregate(
     Path(path): Path<AggregateRunPath>,
     Query(format): Query<FormatQuery>,
     headers: HeaderMap,
-    query: Option<Extension<Arc<AggregateQueryEngine>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
-    config: Option<Extension<Arc<Config>>>,
-    provenance: Option<Extension<Arc<crate::provenance::ProvenanceState>>>,
-    readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
 ) -> Response {
     run_aggregate(
         path,
         headers,
-        query,
+        runtime,
         principal,
-        config,
-        provenance,
-        readiness,
         AggregateQueryBody {
             format: format.f,
             ..AggregateQueryBody::default()
@@ -290,31 +271,21 @@ async fn execute_aggregate(
 async fn query_aggregate(
     Path(path): Path<AggregateRunPath>,
     headers: HeaderMap,
-    query: Option<Extension<Arc<AggregateQueryEngine>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
-    config: Option<Extension<Arc<Config>>>,
-    provenance: Option<Extension<Arc<crate::provenance::ProvenanceState>>>,
-    readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
     Json(body): Json<AggregateQueryBody>,
 ) -> Response {
-    run_aggregate(
-        path, headers, query, principal, config, provenance, readiness, body,
-    )
-    .await
+    run_aggregate(path, headers, runtime, principal, body).await
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run_aggregate(
     path: AggregateRunPath,
     headers: HeaderMap,
-    query: Option<Extension<Arc<AggregateQueryEngine>>>,
+    runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
-    config: Option<Extension<Arc<Config>>>,
-    provenance: Option<Extension<Arc<crate::provenance::ProvenanceState>>>,
-    readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
     body: AggregateQueryBody,
 ) -> Response {
-    let Some(Extension(query)) = query else {
+    let Some(query) = runtime.aggregate_query() else {
         return query_unavailable(
             "aggregate route matched, but aggregate query state is not installed",
         );
@@ -326,12 +297,7 @@ async fn run_aggregate(
     if let Err(error) = require_purpose_header(dataset, aggregate, &headers) {
         return error.into_response();
     }
-    if let Err(error) = require_aggregate_scope(
-        config.as_ref(),
-        principal,
-        &path.dataset_id,
-        Some(aggregate),
-    ) {
+    if let Err(error) = require_aggregate_scope(principal, &path.dataset_id, Some(aggregate)) {
         return error.into_response();
     }
     let format = body.format.clone().unwrap_or_else(|| "json".to_string());
@@ -347,7 +313,8 @@ async fn run_aggregate(
         .await
     {
         Ok(result) => {
-            let as_of = resolve_as_of_rfc3339(readiness.as_ref().map(|Extension(r)| r), &result);
+            let readiness = runtime.readiness_rx();
+            let as_of = resolve_as_of_rfc3339(readiness.as_ref(), &result);
             let envelope = aggregate_result_json(&result, as_of.as_deref());
             let plain_response = if format == "csv" {
                 csv_response(&result, &envelope)
@@ -355,8 +322,8 @@ async fn run_aggregate(
                 Json(envelope.clone()).into_response()
             };
             let mut response = crate::api::provenance_issuance::maybe_issue_aggregate_result(
-                provenance.as_ref().map(|Extension(state)| state),
-                config.as_ref().map(|Extension(cfg)| cfg),
+                runtime.provenance_state().as_ref(),
+                runtime.config().as_ref(),
                 &headers,
                 plain_response,
                 crate::api::provenance_issuance::AggregateIssuanceArgs {
@@ -915,7 +882,6 @@ fn csv_value(value: &Value) -> String {
 }
 
 fn require_metadata_scope(
-    config: Option<&Extension<Arc<Config>>>,
     principal: Option<Extension<Principal>>,
     dataset_id: &str,
     aggregate: Option<&crate::config::AggregateConfig>,
@@ -926,12 +892,10 @@ fn require_metadata_scope(
         .map(str::to_string)
         .unwrap_or_else(|| format!("{dataset_id}:metadata"));
     require_principal_scope(principal, &required)?;
-    let _ = config;
     Ok(())
 }
 
 fn require_aggregate_scope(
-    config: Option<&Extension<Arc<Config>>>,
     principal: Option<Extension<Principal>>,
     dataset_id: &str,
     aggregate: Option<&crate::config::AggregateConfig>,
@@ -942,7 +906,6 @@ fn require_aggregate_scope(
         .map(str::to_string)
         .unwrap_or_else(|| format!("{dataset_id}:aggregate"));
     require_principal_scope(principal, &required)?;
-    let _ = config;
     Ok(())
 }
 

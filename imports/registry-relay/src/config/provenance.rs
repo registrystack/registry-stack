@@ -7,6 +7,7 @@
 //! Validation lives in [`crate::config::validate`]. This module owns
 //! the data model only.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -81,15 +82,16 @@ pub struct DelegatedIssuerConfig {
     pub retired_keys: Vec<RetiredKeyConfig>,
 }
 
-/// Signer backend. V1 supports only `software`, which reads a private
-/// JWK from an env var. Other variants are reserved so future remote
-/// signers can plug into the provenance signer boundary without
-/// changing the issuer model.
+/// Signer backend. V1 supports local `software` env-var material and
+/// `file_watch` material reloaded from a local JWK file. Other variants
+/// are reserved so future remote signers can plug into the provenance
+/// signer boundary without changing the issuer model.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[non_exhaustive]
 pub enum SignerConfig {
     Software(SoftwareSignerConfig),
+    FileWatch(FileWatchSignerConfig),
     /// Reserved for a future remote signer backend. Config validation
     /// rejects this variant in V1 so operators do not accidentally
     /// deploy an unsupported KMS path.
@@ -102,6 +104,15 @@ pub struct SoftwareSignerConfig {
     /// Environment variable name carrying the private JWK (JSON).
     pub jwk_env: String,
     /// JWS signing algorithm. EdDSA or ES256.
+    pub signing_algorithm: ProvenanceAlgorithm,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileWatchSignerConfig {
+    /// Local file path carrying the private JWK (JSON).
+    pub path: PathBuf,
+    /// JWS signing algorithm. V1 supports EdDSA.
     pub signing_algorithm: ProvenanceAlgorithm,
 }
 
