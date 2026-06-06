@@ -9,7 +9,9 @@ Source:
 
 ### `validate`
 
-Parses and validates a manifest. Prints `"metadata manifest valid: <path>"` on success. Exits non-zero and prints all errors on failure.
+Parses and validates a manifest. Prints `"metadata manifest valid: <path>"` and the
+canonical `source_manifest_digest` on success. Exits non-zero and prints all errors
+on failure.
 
 ```text
 validate <metadata.yaml>
@@ -158,7 +160,7 @@ For `EvidenceOfferingAccessManifest` with `kind: registry-notary`:
 ### Runtime-only keys
 
 The following keys must not appear in a portable manifest.
-Their presence causes `validate-profiles` to fail.
+Their presence causes `validate`, `publish`, and `validate-profiles` to fail.
 They belong in Registry Relay or Registry Notary runtime configuration, not in a metadata manifest.
 
 `source`, `source_id`, `table`, `scope`, `url`, `url_env`, `file_path`, `query`,
@@ -197,16 +199,46 @@ All paths are relative to the `--out` directory.
 | `profiles/<profile-id>.json` | JSON | Compiled profile structure |
 | `index.json` | JSON | Bundle manifest index (schema version `registry-manifest-index/v1`) |
 
-The `index.json` structure contains the schema version, top-level artifact URLs, and arrays
-for per-profile, per-schema, per-policy, and per-offering documents.
+The `index.json` structure contains the schema version, digest metadata, top-level
+artifact URLs, and arrays for per-profile, per-schema, per-policy, and per-offering
+documents.
 Source:
 [`crates/registry-manifest-cli/src/main.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-cli/src/main.rs)
+
+Digest fields use `sha256:<hex>` values:
+
+- `source_manifest_digest`: canonical digest of the typed `metadata.yaml` manifest after
+  parsing. YAML comments, formatting, and mapping order do not affect this digest, but
+  semantic manifest changes do.
+- `package_digest`: canonical digest of the published package inventory. It covers the
+  `source_manifest_digest` plus the sorted `artifacts` entries.
+- `artifacts[].sha256`: content digest for each published metadata artifact listed in
+  `artifacts`.
+
+The `artifacts` inventory uses paths relative to `--out`, records each artifact's media type,
+and excludes `index.json` because it contains the package digest. Discovery documents under
+`.well-known/` are also excluded because they may be written under a separate `--site-root`
+while still pointing at the same `/metadata/index.json` entry point.
 
 Minimal example shape:
 
 ```json
 {
   "schema_version": "registry-manifest-index/v1",
+  "source_manifest_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "package_digest": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+  "artifacts": [
+    {
+      "path": "metadata.yaml",
+      "media_type": "application/yaml",
+      "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "path": "catalog.json",
+      "media_type": "application/json",
+      "sha256": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  ],
   "manifest": "/metadata/metadata.yaml",
   "catalog": "/metadata/catalog.json",
   "evidence_offerings": "/metadata/evidence-offerings.json",

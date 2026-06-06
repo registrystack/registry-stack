@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use oxiri::Iri;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 #[allow(dead_code)]
@@ -43,6 +44,126 @@ const BUILTIN_VOCABULARIES: &[(&str, &str)] = &[
     ("skos", "http://www.w3.org/2004/02/skos/core#"),
     ("xsd", "http://www.w3.org/2001/XMLSchema#"),
 ];
+
+pub const RUNTIME_ONLY_KEYS: &[&str] = &[
+    "admin_bind",
+    "admin_listener",
+    "audit",
+    "auth",
+    "bind",
+    "bindings",
+    "capabilities",
+    "column",
+    "config_trust",
+    "file_path",
+    "jwks_uri",
+    "listener",
+    "listeners",
+    "peer_allowlist",
+    "peers",
+    "private_jwk",
+    "private_jwk_env",
+    "query",
+    "replay",
+    "required_filters",
+    "rows_scope",
+    "scope",
+    "secret_provider",
+    "secret_providers",
+    "signing_keys",
+    "source",
+    "source_id",
+    "table",
+    "token_url",
+    "url",
+    "url_env",
+    "visibility",
+];
+
+#[must_use]
+pub fn is_runtime_only_key(key: &str) -> bool {
+    RUNTIME_ONLY_KEYS.contains(&key)
+}
+
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum ManifestDigestError {
+    #[error("metadata manifest canonical JSON does not support non-finite numbers")]
+    InvalidNumber,
+    #[error("metadata manifest serialization failed: {0}")]
+    Json(#[from] serde_json::Error),
+}
+
+pub fn canonicalize_json(value: &Value) -> Result<Vec<u8>, ManifestDigestError> {
+    let mut out = Vec::new();
+    write_canonical(value, &mut out)?;
+    Ok(out)
+}
+
+pub fn source_manifest_digest(manifest: &MetadataManifest) -> Result<String, ManifestDigestError> {
+    let value = serde_json::to_value(manifest)?;
+    let canonical = canonicalize_json(&value)?;
+    Ok(sha256_uri(&canonical))
+}
+
+#[must_use]
+pub fn sha256_uri(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut output = String::with_capacity("sha256:".len() + 64);
+    output.push_str("sha256:");
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(output, "{byte:02x}");
+    }
+    output
+}
+
+fn write_canonical(value: &Value, out: &mut Vec<u8>) -> Result<(), ManifestDigestError> {
+    match value {
+        Value::Null => out.extend_from_slice(b"null"),
+        Value::Bool(value) => out.extend_from_slice(if *value { b"true" } else { b"false" }),
+        Value::Number(number) => {
+            if let Some(value) = number.as_f64() {
+                if !value.is_finite() {
+                    return Err(ManifestDigestError::InvalidNumber);
+                }
+            }
+            out.extend_from_slice(number.to_string().as_bytes());
+        }
+        Value::String(value) => out.extend_from_slice(serde_json::to_string(value)?.as_bytes()),
+        Value::Array(values) => {
+            out.push(b'[');
+            for (index, item) in values.iter().enumerate() {
+                if index > 0 {
+                    out.push(b',');
+                }
+                write_canonical(item, out)?;
+            }
+            out.push(b']');
+        }
+        Value::Object(map) => write_canonical_object(map, out)?,
+    }
+    Ok(())
+}
+
+fn write_canonical_object(
+    map: &Map<String, Value>,
+    out: &mut Vec<u8>,
+) -> Result<(), ManifestDigestError> {
+    out.push(b'{');
+    let mut entries = map.iter().collect::<Vec<_>>();
+    entries.sort_unstable_by(|(left, _), (right, _)| left.as_bytes().cmp(right.as_bytes()));
+    for (index, (key, value)) in entries.into_iter().enumerate() {
+        if index > 0 {
+            out.push(b',');
+        }
+        out.extend_from_slice(serde_json::to_string(key)?.as_bytes());
+        out.push(b':');
+        write_canonical(value, out)?;
+    }
+    out.push(b'}');
+    Ok(())
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -6229,4 +6350,102 @@ fn jsonld_context_with_service_catalogue_terms() -> Value {
         }
     }
     context
+}
+
+#[cfg(test)]
+mod digest_tests {
+    use super::*;
+
+    fn manifest(raw: &str) -> MetadataManifest {
+        serde_yaml_ng::from_str(raw).expect("manifest parses")
+    }
+
+    #[test]
+    fn source_manifest_digest_is_stable_for_yaml_formatting_and_key_order() {
+        let first = manifest(
+            r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: demo
+  base_url: https://metadata.example.test
+  title: Demo
+  publisher:
+    name: Publisher
+vocabularies:
+  ex: https://example.test/
+datasets: []
+"#,
+        );
+        let second = manifest(
+            r#"
+# Comments and mapping order do not affect the typed canonical digest.
+vocabularies: {ex: "https://example.test/"}
+datasets: []
+catalog:
+  publisher: {name: "Publisher"}
+  title: "Demo"
+  base_url: "https://metadata.example.test"
+  id: demo
+schema_version: registry-manifest/v1
+"#,
+        );
+
+        assert_eq!(
+            source_manifest_digest(&first).expect("first digest"),
+            source_manifest_digest(&second).expect("second digest")
+        );
+    }
+
+    #[test]
+    fn source_manifest_digest_moves_for_typed_changes_and_array_order() {
+        let first = manifest(
+            r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: demo
+  base_url: https://metadata.example.test
+  title: Demo
+  publisher:
+    name: Publisher
+  conforms_to: [https://example.test/a, https://example.test/b]
+datasets: []
+"#,
+        );
+        let changed_field = manifest(
+            r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: demo
+  base_url: https://metadata.example.test
+  title: Changed
+  publisher:
+    name: Publisher
+  conforms_to: [https://example.test/a, https://example.test/b]
+datasets: []
+"#,
+        );
+        let changed_order = manifest(
+            r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: demo
+  base_url: https://metadata.example.test
+  title: Demo
+  publisher:
+    name: Publisher
+  conforms_to: [https://example.test/b, https://example.test/a]
+datasets: []
+"#,
+        );
+
+        let digest = source_manifest_digest(&first).expect("first digest");
+        assert_ne!(
+            digest,
+            source_manifest_digest(&changed_field).expect("field digest")
+        );
+        assert_ne!(
+            digest,
+            source_manifest_digest(&changed_order).expect("order digest")
+        );
+    }
 }

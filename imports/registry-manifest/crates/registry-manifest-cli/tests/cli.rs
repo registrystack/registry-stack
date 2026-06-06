@@ -166,6 +166,42 @@ datasets: []
 }
 
 #[test]
+fn validate_prints_source_digest_and_rejects_runtime_only_keys() {
+    let dir = temp_dir("validate-digest");
+    let valid = dir.join("valid.yaml");
+    write_minimal_manifest(&valid, "datasets: []\n");
+
+    let output = Command::new(bin())
+        .args(["validate", valid.to_str().unwrap()])
+        .output()
+        .expect("run cli");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    assert!(stdout.contains("source_manifest_digest: sha256:"));
+
+    let invalid = dir.join("runtime-only.yaml");
+    write_minimal_manifest(
+        &invalid,
+        r#"
+datasets:
+  - id: ds
+    title: Dataset
+    entities:
+      - name: person
+        title: Person
+        source: people_table
+"#,
+    );
+    let output = Command::new(bin())
+        .args(["validate", invalid.to_str().unwrap()])
+        .output()
+        .expect("run cli");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("runtime_key_present: source"));
+}
+
+#[test]
 fn publish_writes_every_indexed_artifact_without_undeclared_profiles() {
     let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
     let out = temp_dir("publish-example-person-schema");
@@ -202,6 +238,65 @@ fn publish_writes_every_indexed_artifact_without_undeclared_profiles() {
     assert_index_urls_exist(&out, &index);
     assert_well_known_discovery_matches_index(&out, &index);
     assert_api_catalog_points_at_index_and_catalogs(&out, &index);
+}
+
+#[test]
+fn publish_writes_stable_package_digest_and_artifact_digests() {
+    let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
+    let first = temp_dir("publish-digest-first");
+    let second = temp_dir("publish-digest-second");
+
+    for out in [&first, &second] {
+        let site_root = out.join("site");
+        let output = Command::new(bin())
+            .args([
+                "publish",
+                manifest.to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+                "--site-root",
+                site_root.to_str().unwrap(),
+            ])
+            .output()
+            .expect("run cli");
+        assert!(
+            output.status.success(),
+            "publish failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let first_index: serde_json::Value =
+        serde_json::from_slice(&fs::read(first.join("index.json")).expect("index reads"))
+            .expect("index parses");
+    let second_index: serde_json::Value =
+        serde_json::from_slice(&fs::read(second.join("index.json")).expect("index reads"))
+            .expect("index parses");
+
+    let source_digest = first_index["source_manifest_digest"]
+        .as_str()
+        .expect("source digest");
+    assert!(source_digest.starts_with("sha256:"));
+    assert_eq!(source_digest.len(), "sha256:".len() + 64);
+    assert_eq!(
+        first_index["source_manifest_digest"],
+        second_index["source_manifest_digest"]
+    );
+    assert_eq!(
+        first_index["package_digest"],
+        second_index["package_digest"]
+    );
+
+    let artifacts = first_index["artifacts"].as_array().expect("artifacts");
+    assert!(artifacts.iter().any(|artifact| {
+        artifact["path"] == "metadata.yaml"
+            && artifact["sha256"]
+                .as_str()
+                .is_some_and(|digest| digest.starts_with("sha256:"))
+    }));
+    assert!(!artifacts.iter().any(|artifact| artifact["path"]
+        .as_str()
+        .is_some_and(|path| path.starts_with(".well-known/"))));
 }
 
 #[test]

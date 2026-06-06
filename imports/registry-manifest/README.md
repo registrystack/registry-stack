@@ -77,6 +77,8 @@ entry point. When the output directory is mounted as `/metadata`, the publisher
 also writes `/.well-known/api-catalog` at the public root for standards-aligned
 API and metadata discovery. The older `/.well-known/registry-manifest.json`
 document is retained for compatibility with early Registry Manifest clients.
+The index records the canonical `source_manifest_digest`, package-level digest,
+and per-artifact SHA-256 digests operators can use to compare published bundles.
 
 Workspace build:
 

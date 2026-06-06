@@ -42,6 +42,7 @@ On success, the CLI prints:
 
 ```text
 metadata manifest valid: profiles/example-civil-registration/fixtures/metadata.yaml
+source_manifest_digest: sha256:...
 ```
 
 On failure, all validation errors are printed together.
@@ -57,6 +58,7 @@ Validation checks include:
 - Public service, authority, channel, form, and data-service references resolve.
 - ODRL policy terms use recognized action and operator values.
 - Evidence offering references are internally consistent.
+- Runtime-only keys such as table names, source paths, scopes, and backend bindings are absent.
 
 ### 2. Render a single artifact
 
@@ -182,7 +184,8 @@ cargo run -p registry-manifest-cli -- render \
 ### 3. Publish a static bundle
 
 `publish` runs every renderer, writes all artifacts to a directory, and creates an
-`index.json` that lists every artifact with its relative path.
+`index.json` that lists every artifact with its relative path, media type, and SHA-256
+digest.
 
 ```sh
 cargo run -p registry-manifest-cli -- publish \
@@ -196,7 +199,15 @@ files, OGC Records output, evidence-offering files, and per-dataset policy docum
 See [Registry Manifest reference](./reference.md) for the full artifact list.
 
 The `index.json` at the root of the output directory carries schema version
-`registry-manifest-index/v1` and links to every artifact.
+`registry-manifest-index/v1`, links to every artifact, and includes:
+
+- `source_manifest_digest`: the canonical digest of the typed source manifest.
+- `package_digest`: a digest over the source manifest digest and the published artifact inventory.
+- `artifacts`: per-artifact `path`, `media_type`, and `sha256` entries.
+
+`artifacts` excludes `index.json` itself and `.well-known/*` discovery documents. The index
+is excluded because it contains the package digest, and `.well-known/*` may be written under
+`--site-root` while still discovering the same metadata bundle.
 
 ## Verification
 
@@ -244,3 +255,9 @@ The ID must match a `DatasetManifest` entry in your manifest.
 
 A validation failure inside `publish` aborts the run.
 Run `validate` first to confirm the manifest is clean before running `publish`.
+
+### Validation rejects a key like `source`, `table`, or `scope`
+
+Portable manifests cannot include runtime binding keys. Move data-source locations, database
+tables, caller scopes, credentials, peer allowlists, signing keys, and replay-store settings to
+Registry Relay or Registry Notary runtime configuration.

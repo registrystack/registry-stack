@@ -8,10 +8,11 @@ use std::mem::MaybeUninit;
 use std::path::{Component, Path, PathBuf};
 
 use registry_manifest_core::{
-    compile_manifest, render_base_dcat, render_breg_dcat_ap, render_catalog, render_cpsv_ap,
-    render_dataset_policy_document, render_dcat_profile, render_entity_schema_draft_2020_12,
-    render_evidence_offering, render_evidence_offerings, render_form_schema_draft_2020_12,
-    render_ogc_records_items, render_policy_collection, render_shacl, MetadataError,
+    canonicalize_json, compile_manifest, is_runtime_only_key, render_base_dcat,
+    render_breg_dcat_ap, render_catalog, render_cpsv_ap, render_dataset_policy_document,
+    render_dcat_profile, render_entity_schema_draft_2020_12, render_evidence_offering,
+    render_evidence_offerings, render_form_schema_draft_2020_12, render_ogc_records_items,
+    render_policy_collection, render_shacl, sha256_uri, source_manifest_digest, MetadataError,
     MetadataManifest,
 };
 use serde::{de::DeserializeOwned, Deserialize};
@@ -38,7 +39,9 @@ fn run() -> Result<(), String> {
             let path = args.get(1).ok_or_else(usage)?;
             let manifest = load_manifest(path)?;
             registry_manifest_core::validate_manifest(&manifest).map_err(format_metadata_error)?;
+            let digest = source_manifest_digest(&manifest).map_err(|error| error.to_string())?;
             println!("metadata manifest valid: {path}");
+            println!("source_manifest_digest: {digest}");
             Ok(())
         }
         Some("render") => render_command(&args[1..]),
@@ -119,6 +122,7 @@ fn publish_command(args: &[String]) -> Result<(), String> {
     let out = option_value(args, "--out").unwrap_or_else(|| "public/metadata".to_string());
     let manifest = load_manifest(manifest_path)?;
     let compiled = compile_manifest(&manifest).map_err(format_metadata_error)?;
+    let source_digest = source_manifest_digest(&manifest).map_err(|error| error.to_string())?;
     let out = PathBuf::from(out);
     let out_root = prepare_publish_root(&out, "metadata.publish.out_not_directory")?;
     let site_root = option_value(args, "--site-root")
@@ -285,8 +289,13 @@ fn publish_command(args: &[String]) -> Result<(), String> {
             })
         })
         .collect::<Vec<_>>();
+    let artifact_digests = collect_artifact_digests(&out_root)?;
+    let package_digest = publication_package_digest(&source_digest, &artifact_digests)?;
     let index = serde_json::json!({
         "schema_version": "registry-manifest-index/v1",
+        "source_manifest_digest": source_digest,
+        "package_digest": package_digest,
+        "artifacts": artifact_digests,
         "manifest": "/metadata/metadata.yaml",
         "catalog": "/metadata/catalog.json",
         "evidence_offerings": "/metadata/evidence-offerings.json",
@@ -436,6 +445,90 @@ fn value_array<'a>(value: &'a serde_json::Value, key: &str) -> &'a [serde_json::
         .and_then(serde_json::Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or(&[])
+}
+
+fn collect_artifact_digests(root: &PublishRoot) -> Result<Vec<serde_json::Value>, String> {
+    let mut files = Vec::new();
+    collect_artifact_paths(&root.root, Path::new(""), &mut files)?;
+    files.sort();
+    let mut artifacts = Vec::with_capacity(files.len());
+    for relative in files {
+        if relative == Path::new("index.json") || relative.starts_with(".well-known") {
+            continue;
+        }
+        let full_path = root.root.join(&relative);
+        let bytes = fs::read(&full_path).map_err(|error| error.to_string())?;
+        let path = relative_path_string(&relative)?;
+        artifacts.push(serde_json::json!({
+            "path": path,
+            "media_type": media_type_for_artifact(&relative),
+            "sha256": sha256_uri(&bytes),
+        }));
+    }
+    Ok(artifacts)
+}
+
+fn collect_artifact_paths(
+    root: &Path,
+    relative: &Path,
+    files: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    let dir = root.join(relative);
+    for entry in fs::read_dir(&dir).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let name = entry.file_name();
+        let child_relative = relative.join(name);
+        let metadata = entry.metadata().map_err(|error| error.to_string())?;
+        if metadata.is_dir() {
+            collect_artifact_paths(root, &child_relative, files)?;
+        } else if metadata.is_file() {
+            files.push(child_relative);
+        }
+    }
+    Ok(())
+}
+
+fn relative_path_string(path: &Path) -> Result<String, String> {
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => parts.push(part.to_string_lossy().to_string()),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(format!(
+                    "metadata.publish.path_escape: invalid generated path {}",
+                    path.display()
+                ));
+            }
+        }
+    }
+    Ok(parts.join("/"))
+}
+
+fn media_type_for_artifact(path: &Path) -> &'static str {
+    let path_string = path.to_string_lossy();
+    if path_string.ends_with(".jsonld") || path == Path::new("cpsv-ap") {
+        "application/ld+json"
+    } else if path_string.ends_with(".ttl") {
+        "text/turtle"
+    } else if path_string.ends_with(".yaml") || path_string.ends_with(".yml") {
+        "application/yaml"
+    } else {
+        "application/json"
+    }
+}
+
+fn publication_package_digest(
+    source_manifest_digest: &str,
+    artifacts: &[serde_json::Value],
+) -> Result<String, String> {
+    let package = serde_json::json!({
+        "schema_version": "registry-manifest-package/v1",
+        "source_manifest_digest": source_manifest_digest,
+        "artifacts": artifacts,
+    });
+    let canonical = canonicalize_json(&package).map_err(|error| error.to_string())?;
+    Ok(sha256_uri(&canonical))
 }
 
 fn write_legacy_registry_manifest_discovery(
@@ -710,6 +803,17 @@ fn validate_profile_fixture(
 fn load_manifest(path: impl AsRef<Path>) -> Result<MetadataManifest, String> {
     let path = path.as_ref();
     let raw = load_yaml_source(path, YamlInput::Manifest)?;
+    let raw_value = serde_yaml_ng::from_str::<Value>(&raw)
+        .map_err(|error| YamlInput::Manifest.parse_error(path, error))?;
+    let mut runtime_key_errors = Vec::new();
+    collect_runtime_only_keys(
+        &raw_value,
+        &path.display().to_string(),
+        &mut runtime_key_errors,
+    );
+    if !runtime_key_errors.is_empty() {
+        return Err(runtime_key_errors.join("\n"));
+    }
     deserialize_yaml(&raw, path, YamlInput::Manifest)
 }
 
@@ -995,27 +1099,11 @@ fn manifest_codelists(manifest: &MetadataManifest) -> BTreeMap<String, BTreeSet<
 }
 
 fn collect_runtime_only_keys(value: &Value, path: &str, errors: &mut Vec<String>) {
-    const RUNTIME_ONLY_KEYS: &[&str] = &[
-        "bindings",
-        "capabilities",
-        "column",
-        "file_path",
-        "query",
-        "required_filters",
-        "rows_scope",
-        "scope",
-        "source",
-        "source_id",
-        "table",
-        "url",
-        "url_env",
-        "visibility",
-    ];
     match value {
         Value::Mapping(mapping) => {
             for (key, child) in mapping {
                 if let Value::String(key) = key {
-                    if RUNTIME_ONLY_KEYS.contains(&key.as_str()) {
+                    if is_runtime_only_key(key) {
                         errors.push(format!(
                             "{path}: metadata.profile.runtime_key_present: {key}"
                         ));

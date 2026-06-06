@@ -50,6 +50,9 @@ documentation, a local form profile, or Open Digital Rights Language (ODRL) poli
 declaring access terms.
 Write one `metadata.yaml`, run `registry-manifest-cli publish`, and get a static directory
 of all those artifacts ready to host anywhere.
+The published `index.json` includes a canonical digest of the source manifest, a package
+digest, and per-artifact digests so operators can compare or pin bundles without running
+Registry Relay.
 
 If you need runtime metadata served over HTTP with per-caller scoping and authorization,
 that is Registry Relay's job.
@@ -142,6 +145,8 @@ before any rendering occurs:
 8. Validates Registry Notary federation metadata when `registry-notary` access is declared:
    HTTPS URLs, `did:web` issuer binding, protocol version, unique evaluation profile ids, unique
    rulesets, and `access.ruleset` references.
+9. Rejects runtime-only keys such as source paths, table names, scopes, backend bindings,
+   visibility rules, and capability declarations.
 
 All errors are collected and returned together so a single run surfaces every problem in
 the file.

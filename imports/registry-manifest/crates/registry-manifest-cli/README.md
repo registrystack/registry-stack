@@ -37,6 +37,8 @@ and `.well-known/registry-manifest.json`, inside the directory passed to
 metadata entry point, `/.well-known/api-catalog` is the standards-facing
 discovery document, and `/.well-known/registry-manifest.json` remains for
 compatibility with older Registry Manifest clients.
+`/metadata/index.json` includes the canonical `source_manifest_digest`, a
+package-level digest, and SHA-256 digests for each indexed metadata artifact.
 
 If the metadata bundle is a sibling of the site root rather than the site root
 itself (for example, when `--out` points at `/srv/site/metadata-public/`), pass
