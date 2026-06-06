@@ -75,8 +75,8 @@ The script emits JSON describing CSV columns, XLSX sheets, or Parquet schema whe
    - Declare `metadata_scope`, `aggregate_scope`, and `read_scope` on each entity. Add `evidence_verification_scope` only when the entity backs an evidence offering.
    - Common default strings are `<dataset>:metadata`, `<dataset>:aggregate`, `<dataset>:rows`, and `<dataset>:evidence_verification`.
    - Do not assume aggregate or evidence-verification access implies row access.
-   - Use an `admin` scope only for `/admin/reload`.
-   - `auth.api_keys[].hash_env` names an environment variable containing an Argon2id PHC hash. Never put raw keys or hashes directly in comments, examples, logs, or final answers.
+   - Use the `registry_relay:admin` scope only for `/admin/reload`.
+   - `auth.api_keys[].fingerprint` is a governed credential reference. `provider: env` reads a `sha256:<64 lowercase hex chars>` fingerprint from the environment variable named by `name`; `provider: file` reads it from `path`. `commitment` is the governed `sha256:` commitment over the product, credential type, credential id, and fingerprint. Never put raw keys or fingerprint values directly in comments, examples, logs, or final answers.
 
 9. Keep query access narrow.
    - Add `allowed_filters` only for fields consumers genuinely need.
@@ -107,7 +107,7 @@ When the user wants a first draft and has not answered every modeling question:
 - Add metadata and aggregate keys before row keys. Add evidence-verification-only keys only when there is a clear existence-check use case.
 - Start with `allowed_filters` on primary key and stable geography/status/date fields. Do not add filters for every column.
 - Start with no row-level aggregates unless the aggregate is useful and disclosure-safe.
-- Use placeholder `hash_env` names such as `<CONSUMER>_API_KEY_HASH`, not secret values.
+- Use placeholder `fingerprint.name` values such as `<CONSUMER>_API_KEY_HASH`, not secret values.
 
 ## Validation Loop
 

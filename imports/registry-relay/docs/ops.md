@@ -360,6 +360,78 @@ Break-glass requests are apply-only and must include all current fields:
 
 Break-glass can waive only the previous-config-hash rollback check. It does not waive monotonic sequence, TUF signature and local trust-root authorization, expiry, emergency change-class authorization, or local rolling-window rate limits. The rolling-window policy comes from local `config_trust.break_glass_rate_limit`; requests that include `break_glass_rate_limit` are rejected. The audit record stores the approval reference, approver, emergency change class, expiry, and rate-limit identity; it stores a hash of `reason`, not the raw free text.
 
+## Governed Config CLI
+
+The `registry-relay config` command group operates governed signed config bundles from the command line. The two subcommands mirror the HTTP routes in [Admin Posture And Config Apply](#admin-posture-and-config-apply): `verify-bundle` validates a signed target in-process and `apply-bundle` posts an apply request to a running admin listener.
+
+```text
+registry-relay config verify-bundle <flags>
+registry-relay config apply-bundle <flags>
+```
+
+Both subcommands accept either a local TUF repository (`--metadata-dir` plus `--targets-dir`) or a remote TUF repository (`--metadata-base-url` plus `--targets-base-url`). Local and remote flags cannot be mixed in one invocation. Flags accept both `--flag value` and `--flag=value` forms.
+
+### config verify-bundle
+
+`verify-bundle` loads the current config, resolves and TUF-verifies the signed config target, authorizes it against the local `config_trust` roots, compiles the candidate, and prints a JSON report to stdout. It does not check anti-rollback, apply the candidate, or contact a running gateway.
+
+Flags:
+
+- `--config`: path to the current config used as the verification baseline. Optional. Falls back to `REGISTRY_RELAY_CONFIG`, then `./config/example.yaml`.
+- `--root-path`: path to the trusted TUF root JSON. Required.
+- `--datastore-dir`: durable TUF client datastore directory. Required.
+- `--target-name`: TUF target name of the config payload. Required.
+- `--metadata-dir`: local TUF metadata directory. Required for a local source.
+- `--targets-dir`: local TUF targets directory. Required for a local source.
+- `--metadata-base-url`: remote TUF metadata base URL. Required for a remote source.
+- `--targets-base-url`: remote TUF targets base URL. Required for a remote source.
+- `--allow-dev-insecure-fetch-urls`: allow HTTP loopback fetch URLs for tests and local development. Optional; defaults to off. Remote sources otherwise require safe HTTPS endpoints.
+
+The report includes the resolved `bundle_id`, `stream_id`, `sequence`, `previous_config_hash`, `config_hash`, `posture_config_hash`, TUF `root_version` and `tuf_root_sha256`, source posture (`signed_bundle_file` or `signed_bundle_endpoint`), `change_classes`, and `signer_kids`.
+
+Example with a local TUF repository:
+
+```sh
+registry-relay config verify-bundle \
+  --config /etc/registry-relay/config.yaml \
+  --root-path /etc/registry-relay/trust/root.json \
+  --metadata-dir /etc/registry-relay/trust/metadata \
+  --targets-dir /etc/registry-relay/trust/targets \
+  --datastore-dir /var/lib/registry-relay/config-tuf \
+  --target-name registry-relay.yaml
+```
+
+### config apply-bundle
+
+`apply-bundle` builds an apply request from the signed target reference and posts it to `/admin/v1/config/apply` on the admin listener with a bearer token, then prints the parsed JSON response. The gateway performs TUF verification, trust-root authorization, anti-rollback (monotonic sequence and previous-config-hash), and any required local operator approval. A non-success HTTP status exits non-zero.
+
+Flags:
+
+- `--admin-url`: base URL of the admin listener, for example `http://127.0.0.1:8081`. Required. Must use `http` or `https`.
+- `--admin-token-env`: name of the environment variable holding the `registry_relay:admin` bearer token. Required. The variable must be set and non-empty.
+- `--root-path`: path to the trusted TUF root JSON. Required.
+- `--datastore-dir`: durable TUF client datastore directory. Required.
+- `--target-name`: TUF target name of the config payload. Required.
+- `--metadata-dir`, `--targets-dir`: local TUF source pair (see verify-bundle).
+- `--metadata-base-url`, `--targets-base-url`, `--allow-dev-insecure-fetch-urls`: remote TUF source flags (see verify-bundle).
+- `--local-approval-reference`: local operator approval reference. Optional. Supply it when the change class requires a recorded local approval; the gateway resolves it server-side.
+
+The CLI reads the bearer token only from the named environment variable; it is never passed as a flag. The apply-bundle subcommand does not send break-glass fields. Break-glass remains an HTTP-only apply path as described above.
+
+Example posting a remote bundle to a running admin listener:
+
+```sh
+export RELAY_ADMIN_TOKEN=...  # registry_relay:admin bearer token
+registry-relay config apply-bundle \
+  --admin-url http://127.0.0.1:8081 \
+  --admin-token-env RELAY_ADMIN_TOKEN \
+  --root-path /etc/registry-relay/trust/root.json \
+  --metadata-base-url https://config.example.gov/registry-relay/metadata/ \
+  --targets-base-url https://config.example.gov/registry-relay/targets/ \
+  --datastore-dir /var/lib/registry-relay/config-tuf \
+  --target-name registry-relay.yaml
+```
+
 ## Readiness And Probes
 
 Use:

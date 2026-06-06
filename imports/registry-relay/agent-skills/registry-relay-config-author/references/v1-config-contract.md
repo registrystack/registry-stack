@@ -56,22 +56,34 @@ auth:
   mode: api_key
   api_keys:
     - id: statistics_office
-      hash_env: STATS_OFFICE_API_KEY_HASH
+      fingerprint:
+        provider: env
+        name: STATS_OFFICE_API_KEY_HASH
+        commitment: sha256:<64 lowercase hex commitment>
       scopes:
         - social_registry:metadata
         - social_registry:aggregate
     - id: program_system
-      hash_env: PROGRAM_SYSTEM_API_KEY_HASH
+      fingerprint:
+        provider: env
+        name: PROGRAM_SYSTEM_API_KEY_HASH
+        commitment: sha256:<64 lowercase hex commitment>
       scopes:
         - social_registry:metadata
         - social_registry:aggregate
         - social_registry:rows
     - id: verification_service
-      hash_env: VERIFICATION_SERVICE_API_KEY_HASH
+      fingerprint:
+        provider: env
+        name: VERIFICATION_SERVICE_API_KEY_HASH
+        commitment: sha256:<64 lowercase hex commitment>
       scopes:
         - social_registry:evidence_verification
     - id: operations_admin
-      hash_env: OPERATIONS_ADMIN_API_KEY_HASH
+      fingerprint:
+        provider: env
+        name: OPERATIONS_ADMIN_API_KEY_HASH
+        commitment: sha256:<64 lowercase hex commitment>
       scopes:
         - registry_relay:admin
 
@@ -367,14 +379,19 @@ auth:
 Each API key has:
 
 - `id`: lower-snake identifier.
-- `hash_env`: environment variable name containing an Argon2id PHC hash.
+- `fingerprint`: a governed credential reference. `provider: env` reads a
+  `sha256:<64 lowercase hex chars>` fingerprint from the environment variable
+  named by `name`; `provider: file` reads it from `path`. `commitment` is the
+  governed `sha256:` commitment over the product, credential type, credential
+  id, and fingerprint.
 - `scopes`: list of granted scopes.
 
-Never place raw keys or hash values in YAML.
+Never place raw keys or fingerprint values in YAML.
 
 Scope forms:
 
-- `admin`
+- `registry_relay:admin`
+- `registry_relay:ops_read`
 - `<dataset>:metadata`
 - `<dataset>:aggregate`
 - `<dataset>:rows`
@@ -388,7 +405,8 @@ Scope meanings:
 - `aggregate`: configured aggregate endpoints only.
 - `rows`: collection, single-record, nested relationship, and expansion row reads.
 - `evidence_verification`: evidence-offering verification events only.
-- `admin`: reload and future admin operations.
+- `registry_relay:ops_read`: read-only admin-listener posture and capabilities routes.
+- `registry_relay:admin`: governed config and reload admin operations.
 
 Scopes are independent. Aggregate access does not imply row access. Evidence-verification access does not imply metadata, aggregate, row, or admin access.
 
