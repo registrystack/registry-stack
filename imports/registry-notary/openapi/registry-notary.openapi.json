@@ -338,10 +338,119 @@
         "x-registry-notary-catch-all": true
       }
     },
+    "/admin/v1/capabilities": {
+      "get": {
+        "summary": "Discover authenticated admin capabilities",
+        "description": "Returns redacted product capability metadata for governed configuration, posture, and reload operations.",
+        "operationId": "adminCapabilities",
+        "responses": {
+          "200": {
+            "description": "Admin capabilities for this product runtime",
+            "content": {
+              "application/json": {
+                "example": {
+                  "admin_api_version": "v1",
+                  "break_glass": {
+                    "currently_available": true,
+                    "rate_limit_scope": "instance",
+                    "supported": true
+                  },
+                  "config": {
+                    "apply": {
+                      "currently_available": true,
+                      "requires_signed_input": true,
+                      "supported": true,
+                      "supported_sources": [
+                        "tuf_local"
+                      ]
+                    },
+                    "dry_run": {
+                      "currently_available": true,
+                      "supported": true
+                    },
+                    "verify": {
+                      "currently_available": true,
+                      "supported": true
+                    }
+                  },
+                  "hot_swap": {
+                    "components": [
+                      "credential_issuer_signing",
+                      "preauth_signing",
+                      "federation_signing"
+                    ],
+                    "currently_available": true,
+                    "supported": true
+                  },
+                  "product": "registry-notary",
+                  "reload": {
+                    "config_reload": {
+                      "currently_available": false,
+                      "supported": false
+                    },
+                    "resource_reload": {
+                      "currently_available": false,
+                      "supported": false
+                    },
+                    "table_reload": {
+                      "currently_available": false,
+                      "supported": false
+                    }
+                  },
+                  "root_transition": {
+                    "currently_available": true,
+                    "supported": true
+                  },
+                  "schema": "registry.admin.capabilities.v1",
+                  "supported_posture_tiers": [
+                    "default",
+                    "restricted"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller lacks registry_notary:ops_read scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.scope_denied",
+                  "detail": "missing required scope",
+                  "status": 403,
+                  "title": "Scope denied",
+                  "type": "https://docs.registry-notary.dev/problems/auth/scope_denied"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/v1/config/apply": {
       "post": {
         "summary": "Attempt to apply a candidate runtime config",
-        "description": "Standalone mode validates an inline candidate config or verifies a local or remote signed TUF config target. Governed signed credential issuer key rotations can swap the issuer runtime after anti-rollback acceptance. Break-glass apply additionally requires approval details, a locally configured rate-limit policy, and a signed emergency change class. Other changes remain restart-required.",
+        "description": "Standalone mode applies only signed local TUF config targets. Governed signed credential issuer key rotations can swap the issuer runtime after anti-rollback acceptance. Break-glass apply additionally requires approval details, a locally configured rate-limit policy, and a signed emergency change class. Inline config candidates are rejected with registry.admin.config.inline_apply_rejected. Other signed changes remain restart-required.",
         "operationId": "adminConfigApply",
         "requestBody": {
           "content": {
@@ -526,7 +635,7 @@
     "/admin/v1/config/verify": {
       "post": {
         "summary": "Validate a candidate runtime config",
-        "description": "Standalone mode parses and validates an inline candidate config or verifies a local or remote signed TUF config target. Inline candidates remain restart-required. Governed signed credential issuer key rotations may be hot-applied when anti-rollback state accepts the bundle.",
+        "description": "Standalone mode parses and validates an inline candidate config or verifies a local or remote signed TUF config target. Governed signed credential issuer key rotations may be hot-applied when anti-rollback state accepts the bundle.",
         "operationId": "adminConfigVerify",
         "requestBody": {
           "content": {
@@ -739,22 +848,10 @@
     },
     "/admin/v1/reload": {
       "post": {
-        "summary": "No-op standalone reload marker",
-        "description": "Standalone mode does not reload runtime configuration. The endpoint returns a no-op response until a runtime config handle supports reload.",
+        "summary": "Report unsupported runtime reload",
+        "description": "Standalone mode does not support runtime configuration reload. Operators should call /admin/v1/capabilities before invoking product-specific reload operations.",
         "operationId": "adminReload",
         "responses": {
-          "200": {
-            "description": "No-op response; runtime configuration was not reloaded",
-            "content": {
-              "application/json": {
-                "example": {
-                  "detail": "standalone router has no reloadable external config handle",
-                  "reloaded": false,
-                  "status": "noop"
-                }
-              }
-            }
-          },
           "401": {
             "description": "Missing or invalid credential",
             "content": {
@@ -785,6 +882,25 @@
                   "status": 403,
                   "title": "Scope denied",
                   "type": "https://docs.registry-notary.dev/problems/auth/scope_denied"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Runtime configuration reload is not supported",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "registry.admin.capability.not_supported",
+                  "detail": "registry-notary standalone runtime does not support reload",
+                  "message": "registry-notary standalone runtime does not support reload",
+                  "schema": "registry.admin.error.v1",
+                  "status": 501,
+                  "title": "Admin capability not supported",
+                  "type": "https://docs.registry-notary.dev/problems/registry/admin/capability/not_supported"
                 }
               }
             }

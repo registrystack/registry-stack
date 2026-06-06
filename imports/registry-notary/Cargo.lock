@@ -2899,6 +2899,7 @@ name = "registry-notary-server"
 version = "0.3.0"
 dependencies = [
  "async-trait",
+ "aws-lc-rs",
  "axum",
  "axum-test",
  "base64",

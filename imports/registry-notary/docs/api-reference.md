@@ -20,6 +20,7 @@ that route.
 | --- | --- | --- | --- |
 | `GET /healthz` | `health` | not exposed | not exposed |
 | `GET /ready` | `ready` | not exposed | not exposed |
+| `GET /admin/v1/capabilities` | `admin_capabilities` | not exposed | not exposed |
 | `POST /admin/v1/reload` | `admin_reload` | not exposed | not exposed |
 | `POST /admin/v1/config/verify` | not exposed | not exposed | not exposed |
 | `POST /admin/v1/config/dry-run` | not exposed | not exposed | not exposed |

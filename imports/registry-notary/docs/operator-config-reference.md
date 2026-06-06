@@ -149,9 +149,16 @@ rotations for credential issuer, pre-authorized access-token, eSignet
 client-assertion, and federation response signing paths after TUF verification,
 trust-root authorization, and local anti-rollback acceptance. It can also
 hot-apply `signing_key_cleanup` for expired publish-only keys that are no longer
-active signing references. Other changes continue to reject with
-`rejected_restart_required`, so rejected signed targets do not advance
-anti-rollback state or change active posture provenance.
+active signing references. Inline config candidates are accepted only by verify
+and dry-run; apply rejects them with
+`registry.admin.config.inline_apply_rejected`. Other signed changes continue to
+reject with `rejected_restart_required`, so rejected signed targets do not
+advance anti-rollback state or change active posture provenance.
+Use `GET /admin/v1/capabilities` with `registry_notary:ops_read` before
+automation invokes governed config or reload operations. Standalone Notary does
+not support resource, table, or runtime config reload; the mounted
+`POST /admin/v1/reload` route returns `501
+registry.admin.capability.not_supported`.
 Break-glass apply is
 available only for signed targets whose target metadata includes the local
 approval's `emergency_change_class`; the approval fields come from the admin

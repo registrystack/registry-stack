@@ -50,10 +50,10 @@ use registry_platform_oid4vci::{
     ValidatedProof, WireError, PRE_AUTHORIZED_CODE_GRANT_TYPE, PROOF_TYPE_JWT, SD_JWT_VC_FORMAT,
 };
 use registry_platform_ops::{
-    internal_config_hash, posture_safe_runtime_config_hash, AntiRollbackKey, AntiRollbackProposal,
-    AntiRollbackStoreError, ApplyReportResult, BreakGlassApproval, BreakGlassRateLimit,
-    ConfigSource, FileAntiRollbackStore, FileLocalApprovalStore, LocalApprovalStoreError,
-    LocalOperatorApproval, PostureApplyResult, PostureFilterError,
+    internal_config_hash, is_sha256_config_hash, posture_safe_runtime_config_hash, AntiRollbackKey,
+    AntiRollbackProposal, AntiRollbackStoreError, ApplyReportResult, BreakGlassApproval,
+    BreakGlassRateLimit, ConfigSource, FileAntiRollbackStore, FileLocalApprovalStore,
+    LocalApprovalStoreError, LocalOperatorApproval, PostureApplyResult, PostureFilterError,
 };
 use registry_platform_replay::{ReplayKey, ReplayScope, RequiredReplayError};
 use registry_platform_sdjwt::{validate_holder_proof, HolderProofBindings, HolderProofPolicy};
@@ -98,6 +98,9 @@ const WELL_KNOWN_VCT_PREFIX: &str = "/.well-known/vct";
 const CONFIG_CANDIDATE_INVALID_CODE: &str = "config.candidate_invalid";
 const CONFIG_BUNDLE_INVALID_CODE: &str = "admin.config_bundle_invalid";
 const POSTURE_FILTER_FAILED_CODE: &str = "posture.filter_failed";
+const ADMIN_CAPABILITY_NOT_SUPPORTED_CODE: &str = "registry.admin.capability.not_supported";
+const CONFIG_INLINE_APPLY_REJECTED_CODE: &str = "registry.admin.config.inline_apply_rejected";
+const POSTURE_TIER_INVALID_CODE: &str = "registry.admin.posture.invalid_tier";
 
 pub use crate::federation::federation_router;
 
@@ -108,6 +111,7 @@ where
     Router::new()
         .route("/healthz", get(healthz))
         .route("/ready", get(ready))
+        .route("/admin/v1/capabilities", get(admin_capabilities))
         .route("/admin/v1/posture", get(admin_posture))
         .route("/admin/v1/reload", post(admin_reload))
         .route("/admin/v1/config/verify", post(admin_config_verify))
@@ -564,20 +568,21 @@ async fn admin_config_apply(
                 .with_break_glass_request(&request),
             );
         }
-        return config_apply_report(
-            candidate.bundle_id.clone(),
-            candidate.sequence,
-            ApplyReportResult::RejectedRestartRequired,
-            false,
-            true,
-            StatusCode::CONFLICT,
+        return with_config_audit(
+            admin_problem_response(
+                StatusCode::BAD_REQUEST,
+                CONFIG_INLINE_APPLY_REJECTED_CODE,
+                "Inline config apply rejected",
+                "signed config target is required for apply",
+                None,
+            ),
             resolved_config_audit(
                 ConfigAdminAction::Apply,
                 &candidate,
-                "accepted",
+                "rejected",
                 ApplyReportResult::RejectedRestartRequired.as_str(),
                 false,
-                true,
+                false,
             ),
         );
     }
@@ -1487,7 +1492,7 @@ async fn resolve_config_candidate(
                 .ok_or(ConfigCandidateError::CandidateInvalid(
                     "sequence is required for inline config",
                 ))?;
-            Ok(ResolvedConfigCandidate {
+            let resolved = ResolvedConfigCandidate {
                 bundle_id,
                 stream_id: request.stream_id.clone(),
                 sequence,
@@ -1498,13 +1503,28 @@ async fn resolve_config_candidate(
                 tuf_root_sha256: None,
                 config_yaml: config_yaml.clone(),
                 source: ConfigSource::LocalFile,
-            })
+            };
+            validate_previous_config_hash(resolved.previous_config_hash.as_deref())?;
+            Ok(resolved)
         }
-        (None, Some(tuf)) => resolve_tuf_config_candidate(tuf, &state.config_governance()).await,
+        (None, Some(tuf)) => {
+            let resolved = resolve_tuf_config_candidate(tuf, &state.config_governance()).await?;
+            validate_previous_config_hash(resolved.previous_config_hash.as_deref())?;
+            Ok(resolved)
+        }
         (None, None) => Err(ConfigCandidateError::CandidateInvalid(
             "candidate config source was not provided",
         )),
     }
+}
+
+fn validate_previous_config_hash(value: Option<&str>) -> Result<(), ConfigCandidateError> {
+    if value.is_some_and(|hash| !is_sha256_config_hash(hash)) {
+        return Err(ConfigCandidateError::CandidateInvalid(
+            "previous_config_hash must be sha256:<64 lowercase hex>",
+        ));
+    }
+    Ok(())
 }
 
 fn consume_apply_metadata(request: &ConfigApplyRequest) {
@@ -1929,12 +1949,83 @@ async fn admin_reload(principal: Option<Extension<EvidencePrincipal>>) -> Respon
             required: ADMIN_SCOPE.to_string(),
         });
     }
-    Json(json!({
-        "reloaded": false,
-        "status": "noop",
-        "detail": "standalone router has no reloadable external config handle",
+    admin_problem_response(
+        StatusCode::NOT_IMPLEMENTED,
+        ADMIN_CAPABILITY_NOT_SUPPORTED_CODE,
+        "Admin capability not supported",
+        "registry-notary standalone runtime does not support reload",
+        Some("reload.config_reload"),
+    )
+}
+
+async fn admin_capabilities(principal: Option<Extension<EvidencePrincipal>>) -> Response {
+    let Some(Extension(principal)) = principal else {
+        return evidence_error_response(EvidenceError::MissingCredential);
+    };
+    if !principal.has_scope(OPS_READ_SCOPE) {
+        return evidence_error_response(EvidenceError::ScopeDenied {
+            required: OPS_READ_SCOPE.to_string(),
+        });
+    }
+    let mut response = Json(json!({
+        "schema": "registry.admin.capabilities.v1",
+        "product": "registry-notary",
+        "admin_api_version": "v1",
+        "supported_posture_tiers": ["default", "restricted"],
+        "config": {
+            "verify": {
+                "supported": true,
+                "currently_available": true
+            },
+            "dry_run": {
+                "supported": true,
+                "currently_available": true
+            },
+            "apply": {
+                "supported": true,
+                "currently_available": true,
+                "supported_sources": ["tuf_local"],
+                "requires_signed_input": true
+            }
+        },
+        "break_glass": {
+            "supported": true,
+            "currently_available": true,
+            "rate_limit_scope": "instance"
+        },
+        "root_transition": {
+            "supported": true,
+            "currently_available": true
+        },
+        "hot_swap": {
+            "supported": true,
+            "currently_available": true,
+            "components": [
+                "credential_issuer_signing",
+                "preauth_signing",
+                "federation_signing"
+            ]
+        },
+        "reload": {
+            "resource_reload": {
+                "supported": false,
+                "currently_available": false
+            },
+            "table_reload": {
+                "supported": false,
+                "currently_available": false
+            },
+            "config_reload": {
+                "supported": false,
+                "currently_available": false
+            }
+        }
     }))
-    .into_response()
+    .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 async fn admin_posture(
@@ -1963,12 +2054,47 @@ async fn admin_posture(
     let tier = match query.tier.as_deref() {
         Some("restricted") => registry_platform_ops::PostureTier::Restricted,
         Some("default") | None => registry_platform_ops::PostureTier::Default,
-        Some(_) => registry_platform_ops::PostureTier::Default,
+        Some(_) => {
+            return admin_problem_response(
+                StatusCode::BAD_REQUEST,
+                POSTURE_TIER_INVALID_CODE,
+                "Admin posture tier invalid",
+                "posture tier must be default or restricted",
+                None,
+            )
+        }
     };
     match posture_document(&state, tier).await {
         Ok(posture) => Json(posture).into_response(),
         Err(error) => posture_filter_failed(error),
     }
+}
+
+fn admin_problem_response(
+    status: StatusCode,
+    code: &'static str,
+    title: &'static str,
+    detail: &'static str,
+    capability: Option<&'static str>,
+) -> Response {
+    let mut body = json!({
+        "schema": "registry.admin.error.v1",
+        "type": format!("{}/{}", crate::PROBLEM_TYPE_BASE_URL, code.replace('.', "/")),
+        "title": title,
+        "status": status.as_u16(),
+        "code": code,
+        "message": detail,
+        "detail": detail,
+    });
+    if let Some(capability) = capability {
+        body["capability"] = json!(capability);
+    }
+    let mut response = (status, Json(body)).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/problem+json"),
+    );
+    response
 }
 
 #[derive(Debug, Default, Deserialize)]

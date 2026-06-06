@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Standalone Registry Notary tests that do not link Registry Relay.
 
+use aws_lc_rs::rand::SystemRandom;
 use axum::body::Bytes;
 use axum::extract::Query;
 #[cfg(feature = "registry-notary-cel")]
@@ -58,10 +59,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tempfile::TempDir;
 use time::OffsetDateTime;
-use tough::editor::signed::PathExists;
+use tough::editor::signed::{PathExists, SignedRole};
 use tough::editor::RepositoryEditor;
 use tough::key_source::LocalKeySource;
-use tough::schema::Target;
+use tough::schema::{KeyHolder, Root, Signed, Snapshot, Target, Timestamp};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -70,6 +71,8 @@ const TEST_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd
 const TEST_HOLDER_JWK: &str = r#"{"crv":"Ed25519","d":"f4QIxnAyRWzhuBOmNRgvBTE56mWePdsPL0mvCtl8Gys","x":"pv4e_hXHBLN27rcs6VDFV1ED0TiU8M3xy9vsuWFEsec","kty":"OKP","alg":"EdDSA"}"#;
 const TUF_TARGETS_SIGNER_KID: &str =
     "8ec3a843a0f9328c863cac4046ab1cacbbc67888476ac7acf73d9bcd9a223ada";
+const FORGED_TUF_SIGNER_KID: &str =
+    "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0";
 
 #[derive(Debug, Deserialize)]
 struct ExposureManifest {
@@ -351,6 +354,114 @@ fn hex_lower(bytes: &[u8]) -> String {
         out.push(HEX[(byte & 0x0f) as usize] as char);
     }
     out
+}
+
+fn find_metadata_file(dir: &std::path::Path, suffix: &str) -> std::path::PathBuf {
+    std::fs::read_dir(dir)
+        .expect("metadata dir reads")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(suffix))
+        })
+        .unwrap_or_else(|| panic!("metadata file ending in {suffix} exists"))
+}
+
+fn forge_extra_targets_signature(metadata_dir: &std::path::Path) -> String {
+    let targets_path = find_metadata_file(metadata_dir, "targets.json");
+    let mut value: Value =
+        serde_json::from_slice(&std::fs::read(&targets_path).expect("targets reads"))
+            .expect("targets parses");
+    let signatures = value["signatures"]
+        .as_array_mut()
+        .expect("signatures is an array");
+    let real_keyid = signatures
+        .iter()
+        .filter_map(|signature| signature["keyid"].as_str())
+        .find(|kid| *kid != FORGED_TUF_SIGNER_KID)
+        .expect("real keyid exists")
+        .to_string();
+    signatures.push(json!({
+        "keyid": FORGED_TUF_SIGNER_KID,
+        "sig": "abababababababababababababababababababababababababababababababab"
+    }));
+    std::fs::write(
+        &targets_path,
+        serde_json::to_vec_pretty(&value).expect("targets serializes"),
+    )
+    .expect("targets rewrites");
+    real_keyid
+}
+
+fn set_meta(signed_value: &mut Value, suffix: &str, length: u64, hash_hex: &str) {
+    let meta = signed_value["signed"]["meta"]
+        .as_object_mut()
+        .expect("meta object");
+    let key = meta
+        .keys()
+        .find(|key| key.ends_with(suffix))
+        .cloned()
+        .unwrap_or_else(|| panic!("snapshot/timestamp meta entry for {suffix} exists"));
+    let entry = meta
+        .get_mut(&key)
+        .and_then(Value::as_object_mut)
+        .expect("meta entry object");
+    entry.insert("length".to_string(), json!(length));
+    entry.insert("hashes".to_string(), json!({ "sha256": hash_hex }));
+}
+
+async fn reseal_snapshot_and_timestamp(metadata_dir: &std::path::Path) {
+    let root: Signed<Root> = serde_json::from_slice(
+        &std::fs::read(tough_fixture("simple-rsa").join("root.json")).unwrap(),
+    )
+    .expect("root parses");
+    let key_holder = KeyHolder::Root(root.signed.clone());
+    let keys: Vec<Box<dyn tough::key_source::KeySource>> = vec![Box::new(LocalKeySource {
+        path: tough_fixture("snakeoil.pem"),
+    })];
+    let rng = SystemRandom::new();
+
+    let targets_bytes = std::fs::read(find_metadata_file(metadata_dir, "targets.json")).unwrap();
+    let mut snapshot_value: Value = serde_json::from_slice(
+        &std::fs::read(find_metadata_file(metadata_dir, "snapshot.json")).unwrap(),
+    )
+    .expect("snapshot parses");
+    set_meta(
+        &mut snapshot_value,
+        "targets.json",
+        targets_bytes.len() as u64,
+        &hex_lower(&Sha256::digest(&targets_bytes)),
+    );
+    let snapshot: Snapshot =
+        serde_json::from_value(snapshot_value["signed"].clone()).expect("snapshot deserializes");
+    SignedRole::new(snapshot, &key_holder, &keys, &rng)
+        .await
+        .expect("snapshot re-signs")
+        .write(metadata_dir, true)
+        .await
+        .expect("snapshot writes");
+
+    let snapshot_bytes = std::fs::read(find_metadata_file(metadata_dir, "snapshot.json")).unwrap();
+    let mut timestamp_value: Value = serde_json::from_slice(
+        &std::fs::read(find_metadata_file(metadata_dir, "timestamp.json")).unwrap(),
+    )
+    .expect("timestamp parses");
+    set_meta(
+        &mut timestamp_value,
+        "snapshot.json",
+        snapshot_bytes.len() as u64,
+        &hex_lower(&Sha256::digest(&snapshot_bytes)),
+    );
+    let timestamp: Timestamp =
+        serde_json::from_value(timestamp_value["signed"].clone()).expect("timestamp deserializes");
+    SignedRole::new(timestamp, &key_holder, &keys, &rng)
+        .await
+        .expect("timestamp re-signs")
+        .write(metadata_dir, true)
+        .await
+        .expect("timestamp writes");
 }
 
 fn add_config_trust(
@@ -725,6 +836,22 @@ fn assert_matches_posture_schema(body: &Value) {
     assert!(
         errors.is_empty(),
         "posture response did not match registry.ops.posture.v1: {errors:?}\n{body:#}"
+    );
+}
+
+fn assert_matches_admin_capabilities_schema(body: &Value) {
+    let schema: Value = serde_json::from_str(registry_platform_ops::ADMIN_CAPABILITIES_SCHEMA_V1)
+        .expect("admin capabilities schema parses");
+    let compiled =
+        jsonschema::JSONSchema::compile(&schema).expect("admin capabilities schema compiles");
+    let errors = compiled
+        .validate(body)
+        .err()
+        .map(|errors| errors.map(|error| error.to_string()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    assert!(
+        errors.is_empty(),
+        "capabilities response did not match registry.admin.capabilities.v1: {errors:?}\n{body:#}"
     );
 }
 
@@ -2626,7 +2753,7 @@ async fn federation_audit_write_failure_replaces_signed_success() {
 }
 
 #[tokio::test]
-async fn admin_reload_401_unauth_403_wrong_scope_200_admin() {
+async fn admin_reload_401_unauth_403_wrong_scope_501_admin() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -2667,10 +2794,14 @@ async fn admin_reload_401_unauth_403_wrong_scope_200_admin() {
         .post("/admin/v1/reload")
         .add_header("x-api-key", "admin-token")
         .await;
-    admin.assert_status_ok();
+    admin.assert_status(StatusCode::NOT_IMPLEMENTED);
     let admin_body: Value = admin.json();
-    assert_eq!(admin_body["reloaded"], json!(false));
-    assert_eq!(admin_body["status"], json!("noop"));
+    assert_eq!(admin_body["schema"], json!("registry.admin.error.v1"));
+    assert_eq!(
+        admin_body["code"],
+        json!("registry.admin.capability.not_supported")
+    );
+    assert_eq!(admin_body["capability"], json!("reload.config_reload"));
 }
 
 #[tokio::test]
@@ -2721,6 +2852,43 @@ async fn admin_config_apply_routes_are_admin_only() {
             "admin config route should be mounted: {route}"
         );
     }
+}
+
+#[tokio::test]
+async fn admin_config_rejects_malformed_previous_config_hash_before_evaluation() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    add_admin_api_key(&mut config);
+    let mut body = config_apply_request(&config, 2);
+    body["previous_config_hash"] = json!("sha256:not-a-digest");
+
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let response = server
+        .post("/admin/v1/config/dry-run")
+        .add_header("x-api-key", "admin-token")
+        .json(&body)
+        .await;
+
+    response.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = response.json();
+    assert_eq!(body["code"], "config.candidate_invalid");
+    assert_eq!(
+        body["detail"],
+        "previous_config_hash must be sha256:<64 lowercase hex>"
+    );
 }
 
 #[tokio::test]
@@ -2806,7 +2974,7 @@ async fn admin_config_dry_run_reports_restart_required_without_mutating_posture(
 }
 
 #[tokio::test]
-async fn admin_config_apply_rejects_restart_required_without_mutating_posture() {
+async fn admin_config_apply_rejects_inline_candidate_without_mutating_posture() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -2835,12 +3003,10 @@ async fn admin_config_apply_rejects_restart_required_without_mutating_posture() 
         .json(&body)
         .await;
 
-    response.assert_status(StatusCode::CONFLICT);
+    response.assert_status(StatusCode::BAD_REQUEST);
     let body: Value = response.json();
-    assert_eq!(body["result"], "rejected_restart_required");
-    assert_eq!(body["posture_result"], "rejected");
-    assert_eq!(body["applied"], false);
-    assert_eq!(body["restart_required"], true);
+    assert_eq!(body["schema"], "registry.admin.error.v1");
+    assert_eq!(body["code"], "registry.admin.config.inline_apply_rejected");
 
     let posture = server
         .get("/admin/v1/posture")
@@ -5031,7 +5197,7 @@ async fn admin_config_apply_signed_credential_issuer_rotation_requires_antirollb
 }
 
 #[tokio::test]
-async fn admin_config_apply_inline_credential_issuer_rotation_is_restart_required() {
+async fn admin_config_apply_inline_credential_issuer_rotation_is_rejected_before_apply() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -5096,12 +5262,11 @@ async fn admin_config_apply_inline_credential_issuer_rotation_is_restart_require
         }))
         .await;
 
-    response.assert_status(StatusCode::CONFLICT);
+    response.assert_status(StatusCode::BAD_REQUEST);
     let body: Value = response.json();
-    assert_eq!(body["result"], "rejected_restart_required");
-    assert_eq!(body["posture_result"], "rejected");
-    assert_eq!(body["applied"], false);
-    assert_eq!(body["restart_required"], true);
+    assert_eq!(body["schema"], "registry.admin.error.v1");
+    assert_eq!(body["code"], "registry.admin.config.inline_apply_rejected");
+    assert_eq!(body["detail"], "signed config target is required for apply");
 
     let record = config_audit_record(&audit_path, "/admin/v1/config/apply");
     assert_eq!(record["config"]["action"], "apply");
@@ -5153,6 +5318,79 @@ async fn admin_config_signed_tuf_target_rejects_missing_local_quorum() {
         &["kid-a"],
     )
     .await;
+
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let response = server
+        .post("/admin/v1/config/verify")
+        .add_header("x-api-key", "admin-token")
+        .json(&signed_tuf_apply_request(&signed))
+        .await;
+
+    response.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = response.json();
+    assert_eq!(body["code"], "admin.config_bundle_invalid");
+    assert_eq!(
+        body["detail"],
+        "signed config target was not authorized by local trust roots"
+    );
+}
+
+#[tokio::test]
+async fn admin_config_signed_tuf_target_rejects_forged_extra_signature_quorum() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let antirollback_path = tmp.path().join("config-antirollback.json");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    add_admin_api_key(&mut config);
+    add_config_trust(&mut config, antirollback_path);
+    let root = &mut config
+        .config_trust
+        .as_mut()
+        .expect("config trust exists")
+        .accepted_roots[0];
+    root.signers.remove("kid-b");
+    root.signers.insert(
+        FORGED_TUF_SIGNER_KID.to_string(),
+        TrustRootSigner {
+            kid: FORGED_TUF_SIGNER_KID.to_string(),
+            enabled: true,
+        },
+    );
+    root.roles[0].threshold = 2;
+    root.roles[0].signer_kids = vec![
+        TUF_TARGETS_SIGNER_KID.to_string(),
+        FORGED_TUF_SIGNER_KID.to_string(),
+    ];
+
+    let current_config_yaml = serde_norway::to_string(&config).expect("current config serializes");
+    let current_config_hash = internal_config_hash(current_config_yaml.as_bytes());
+    let mut candidate = config.clone();
+    candidate.instance.owner = Some("Forged Signer Ministry".to_string());
+    let candidate_yaml = serde_norway::to_string(&candidate).expect("candidate serializes");
+    let signed = write_signed_notary_config_tuf_fixture(
+        &tmp,
+        &current_config_hash,
+        &candidate_yaml,
+        11,
+        "registry-notary-standalone",
+        &[TUF_TARGETS_SIGNER_KID, FORGED_TUF_SIGNER_KID],
+    )
+    .await;
+    let real_keyid = forge_extra_targets_signature(&signed.metadata_dir);
+    assert_eq!(real_keyid, TUF_TARGETS_SIGNER_KID);
+    reseal_snapshot_and_timestamp(&signed.metadata_dir).await;
 
     let app = standalone_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
@@ -5341,9 +5579,17 @@ fn admin_reload_openapi_says_runtime_config_reload_is_not_supported() {
     let operation = &document["paths"]["/admin/v1/reload"]["post"];
     let rendered = serde_json::to_string(operation).expect("operation serializes");
 
-    assert!(rendered.contains("No-op"));
-    assert!(rendered.contains("does not reload runtime configuration"));
+    assert!(rendered.contains("unsupported"));
+    assert!(rendered.contains("does not support runtime configuration reload"));
+    assert!(operation["responses"].get("501").is_some());
+    assert!(operation["responses"].get("200").is_none());
     assert!(!rendered.contains("Request a standalone config reload"));
+
+    let capabilities = &document["paths"]["/admin/v1/capabilities"]["get"];
+    assert_eq!(
+        capabilities["responses"]["403"]["description"],
+        "Caller lacks registry_notary:ops_read scope"
+    );
 
     let verify = &document["paths"]["/admin/v1/config/verify"]["post"];
     let dry_run = &document["paths"]["/admin/v1/config/dry-run"]["post"];
@@ -5417,6 +5663,129 @@ async fn admin_posture_requires_ops_read_not_admin_and_ops_cannot_reload() {
     assert_eq!(body["build"]["version"], json!(env!("CARGO_PKG_VERSION")));
     assert!(body["build"].get("git_sha").is_none());
     assert!(body["build"].get("features").is_none());
+}
+
+#[tokio::test]
+async fn admin_capabilities_requires_ops_read_and_reports_notary_surface() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    add_admin_api_key(&mut config);
+    add_ops_read_api_key(&mut config);
+
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    server
+        .get("/admin/v1/capabilities")
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    server
+        .get("/admin/v1/capabilities")
+        .add_header("x-api-key", "admin-token")
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    let response = server
+        .get("/admin/v1/capabilities")
+        .add_header("x-api-key", "ops-token")
+        .await;
+    response.assert_status_ok();
+    assert_eq!(
+        response
+            .header("cache-control")
+            .to_str()
+            .expect("cache-control is ASCII"),
+        "no-store"
+    );
+    let body: Value = response.json();
+    assert_matches_admin_capabilities_schema(&body);
+    assert_eq!(body["schema"], json!("registry.admin.capabilities.v1"));
+    assert_eq!(body["product"], json!("registry-notary"));
+    assert_eq!(
+        body["supported_posture_tiers"],
+        json!(["default", "restricted"])
+    );
+    assert_eq!(body.get("scopes"), None);
+    assert_eq!(
+        body["config"]["verify"],
+        json!({
+            "supported": true,
+            "currently_available": true
+        })
+    );
+    assert_eq!(
+        body["config"]["dry_run"],
+        json!({
+            "supported": true,
+            "currently_available": true
+        })
+    );
+    assert_eq!(
+        body["config"]["apply"]["requires_signed_input"],
+        json!(true)
+    );
+    assert_eq!(
+        body["config"]["apply"]["supported_sources"],
+        json!(["tuf_local"])
+    );
+    assert_eq!(body["break_glass"]["rate_limit_scope"], json!("instance"));
+    assert_eq!(body["root_transition"]["supported"], json!(true));
+    assert_eq!(
+        body["hot_swap"]["components"],
+        json!([
+            "credential_issuer_signing",
+            "preauth_signing",
+            "federation_signing"
+        ])
+    );
+    assert_eq!(body["reload"]["resource_reload"]["supported"], json!(false));
+    assert_eq!(body["reload"]["table_reload"]["supported"], json!(false));
+    assert_eq!(body["reload"]["config_reload"]["supported"], json!(false));
+}
+
+#[tokio::test]
+async fn admin_posture_rejects_unknown_tier_with_shared_error_code() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    add_ops_read_api_key(&mut config);
+
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let response = server
+        .get("/admin/v1/posture?tier=complete")
+        .add_header("x-api-key", "ops-token")
+        .await;
+    response.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = response.json();
+    assert_eq!(body["schema"], json!("registry.admin.error.v1"));
+    assert_eq!(body["code"], json!("registry.admin.posture.invalid_tier"));
+    assert_eq!(
+        body["detail"],
+        json!("posture tier must be default or restricted")
+    );
 }
 
 #[tokio::test]

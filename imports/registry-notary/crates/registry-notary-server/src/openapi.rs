@@ -60,20 +60,32 @@ fn build_openapi_document() -> OpenApi {
             },
             "/admin/v1/reload": {
                 "post": {
-                    "summary": "No-op standalone reload marker",
-                    "description": "Standalone mode does not reload runtime configuration. The endpoint returns a no-op response until a runtime config handle supports reload.",
+                    "summary": "Report unsupported runtime reload",
+                    "description": "Standalone mode does not support runtime configuration reload. Operators should call /admin/v1/capabilities before invoking product-specific reload operations.",
                     "operationId": "adminReload",
                     "responses": {
-                        "200": { "description": "No-op response; runtime configuration was not reloaded" },
+                        "501": { "description": "Runtime configuration reload is not supported" },
                         "401": { "description": "Missing or invalid credential" },
                         "403": { "description": "Caller lacks registry_notary:admin scope" }
+                    }
+                }
+            },
+            "/admin/v1/capabilities": {
+                "get": {
+                    "summary": "Discover authenticated admin capabilities",
+                    "description": "Returns redacted product capability metadata for governed configuration, posture, and reload operations.",
+                    "operationId": "adminCapabilities",
+                    "responses": {
+                        "200": { "description": "Admin capabilities for this product runtime" },
+                        "401": { "description": "Missing or invalid credential" },
+                        "403": { "description": "Caller lacks registry_notary:ops_read scope" }
                     }
                 }
             },
             "/admin/v1/config/verify": {
                 "post": {
                     "summary": "Validate a candidate runtime config",
-                    "description": "Standalone mode parses and validates an inline candidate config or verifies a local or remote signed TUF config target. Inline candidates remain restart-required. Governed signed credential issuer key rotations may be hot-applied when anti-rollback state accepts the bundle.",
+                    "description": "Standalone mode parses and validates an inline candidate config or verifies a local or remote signed TUF config target. Governed signed credential issuer key rotations may be hot-applied when anti-rollback state accepts the bundle.",
                     "operationId": "adminConfigVerify",
                     "requestBody": config_apply_request_body_schema(),
                     "responses": {
@@ -101,7 +113,7 @@ fn build_openapi_document() -> OpenApi {
             "/admin/v1/config/apply": {
                 "post": {
                     "summary": "Attempt to apply a candidate runtime config",
-                    "description": "Standalone mode validates an inline candidate config or verifies a local or remote signed TUF config target. Governed signed credential issuer key rotations can swap the issuer runtime after anti-rollback acceptance. Break-glass apply additionally requires approval details, a locally configured rate-limit policy, and a signed emergency change class. Other changes remain restart-required.",
+                    "description": "Standalone mode applies only signed local TUF config targets. Governed signed credential issuer key rotations can swap the issuer runtime after anti-rollback acceptance. Break-glass apply additionally requires approval details, a locally configured rate-limit policy, and a signed emergency change class. Inline config candidates are rejected with registry.admin.config.inline_apply_rejected. Other signed changes remain restart-required.",
                     "operationId": "adminConfigApply",
                     "requestBody": config_apply_request_body_schema(),
                     "responses": {
@@ -970,17 +982,100 @@ fn add_response_examples(document: &mut Value) {
             }
         }),
     );
-    set_json_response(
+    set_problem_response(
         document,
         "/admin/v1/reload",
         "post",
+        "501",
+        "Runtime configuration reload is not supported",
+        admin_error_example(
+            501,
+            "registry.admin.capability.not_supported",
+            "Admin capability not supported",
+            "registry-notary standalone runtime does not support reload",
+        ),
+    );
+    set_json_response(
+        document,
+        "/admin/v1/capabilities",
+        "get",
         "200",
-        "Standalone router accepted the reload request",
+        "Admin capabilities for this product runtime",
         json!({
-            "reloaded": false,
-            "status": "noop",
-            "detail": "standalone router has no reloadable external config handle"
+            "schema": "registry.admin.capabilities.v1",
+            "product": "registry-notary",
+            "admin_api_version": "v1",
+            "supported_posture_tiers": ["default", "restricted"],
+            "config": {
+                "verify": {
+                    "supported": true,
+                    "currently_available": true
+                },
+                "dry_run": {
+                    "supported": true,
+                    "currently_available": true
+                },
+                "apply": {
+                    "supported": true,
+                    "currently_available": true,
+                    "supported_sources": ["tuf_local"],
+                    "requires_signed_input": true
+                }
+            },
+            "break_glass": {
+                "supported": true,
+                "currently_available": true,
+                "rate_limit_scope": "instance"
+            },
+            "root_transition": {
+                "supported": true,
+                "currently_available": true
+            },
+            "hot_swap": {
+                "supported": true,
+                "currently_available": true,
+                "components": [
+                    "credential_issuer_signing",
+                    "preauth_signing",
+                    "federation_signing"
+                ]
+            },
+            "reload": {
+                "resource_reload": {
+                    "supported": false,
+                    "currently_available": false
+                },
+                "table_reload": {
+                    "supported": false,
+                    "currently_available": false
+                },
+                "config_reload": {
+                    "supported": false,
+                    "currently_available": false
+                }
+            }
         }),
+    );
+    set_problem_response(
+        document,
+        "/admin/v1/capabilities",
+        "get",
+        "401",
+        "Missing or invalid credential",
+        missing_credential_example(),
+    );
+    set_problem_response(
+        document,
+        "/admin/v1/capabilities",
+        "get",
+        "403",
+        "Caller lacks registry_notary:ops_read scope",
+        problem_example(
+            403,
+            "auth.scope_denied",
+            "Scope denied",
+            "missing required scope",
+        ),
     );
     set_problem_response(
         document,
@@ -2623,6 +2718,18 @@ fn problem_example(status: u16, code: &str, title: &str, detail: &str) -> Value 
     })
 }
 
+fn admin_error_example(status: u16, code: &str, title: &str, detail: &str) -> Value {
+    json!({
+        "schema": "registry.admin.error.v1",
+        "type": format!("{}/{}", crate::PROBLEM_TYPE_BASE_URL, code.replace('.', "/")),
+        "title": title,
+        "status": status,
+        "detail": detail,
+        "message": detail,
+        "code": code
+    })
+}
+
 fn missing_credential_example() -> Value {
     problem_example(
         401,
@@ -3099,6 +3206,7 @@ mod tests {
             "/healthz",
             "/ready",
             "/admin/v1/reload",
+            "/admin/v1/capabilities",
             "/admin/v1/config/verify",
             "/admin/v1/config/dry-run",
             "/admin/v1/config/apply",
@@ -3250,7 +3358,7 @@ mod tests {
             ("/healthz", "get", "200"),
             ("/ready", "get", "200"),
             ("/ready", "get", "503"),
-            ("/admin/v1/reload", "post", "200"),
+            ("/admin/v1/capabilities", "get", "200"),
             ("/admin/v1/config/verify", "post", "200"),
             ("/admin/v1/config/dry-run", "post", "200"),
             ("/admin/v1/config/apply", "post", "200"),
@@ -3570,6 +3678,9 @@ mod tests {
         assert!(doc["components"]["schemas"]["ProblemDetails"].is_object());
 
         for (path, method, status) in [
+            ("/admin/v1/reload", "post", "501"),
+            ("/admin/v1/capabilities", "get", "401"),
+            ("/admin/v1/capabilities", "get", "403"),
             ("/v1/evaluations", "post", "400"),
             ("/v1/evaluations", "post", "401"),
             ("/v1/evaluations", "post", "403"),
