@@ -11,7 +11,10 @@ auth:
   mode: api_key
   api_keys:
     - id: local_tester
-      hash_env: REGISTRY_NOTARY_API_KEY_HASH
+      fingerprint:
+        provider: env
+        name: REGISTRY_NOTARY_API_KEY_HASH
+        commitment: sha256:ce551aedcccd9709da728accc6f777e53ebfd18b30a32445d49d5d89ec3df733
       scopes:
         - civil_registry:evidence_verification
 

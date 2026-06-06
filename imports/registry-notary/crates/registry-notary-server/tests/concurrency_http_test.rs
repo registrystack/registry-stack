@@ -14,6 +14,10 @@ use axum::{Json, Router};
 use axum_test::TestServer;
 use registry_notary_core::StandaloneRegistryNotaryConfig;
 use registry_notary_server::standalone_router;
+use registry_platform_authcommon::{
+    credential_fingerprint_commitment, CredentialCommitmentContext, CredentialProduct,
+    CredentialType,
+};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use tempfile::TempDir;
@@ -26,9 +30,25 @@ fn person_target(id: &str) -> Value {
 }
 
 const TEST_AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
+const TEST_EVIDENCE_API_KEY_HASH: &str =
+    "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51";
 
 fn set_audit_secret() {
     std::env::set_var("REGISTRY_NOTARY_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
+}
+
+fn test_api_key_fingerprint_ref_yaml(id: &str, env_name: &str, fingerprint: &str) -> String {
+    let commitment = credential_fingerprint_commitment(
+        CredentialCommitmentContext {
+            product: CredentialProduct::RegistryNotary,
+            credential_type: CredentialType::ApiKey,
+            credential_id: id,
+        },
+        fingerprint,
+    );
+    format!(
+        "fingerprint:\n        provider: env\n        name: {env_name}\n        commitment: {commitment}"
+    )
 }
 
 #[derive(Clone, Default)]
@@ -217,6 +237,11 @@ fn config_with_max_in_flight(
     max_in_flight: usize,
 ) -> StandaloneRegistryNotaryConfig {
     set_audit_secret();
+    let api_key_fingerprint = test_api_key_fingerprint_ref_yaml(
+        "caseworker",
+        "TEST_EVIDENCE_API_KEY_HASH",
+        TEST_EVIDENCE_API_KEY_HASH,
+    );
     let raw = format!(
         r#"
 server:
@@ -225,7 +250,7 @@ auth:
   mode: api_key
   api_keys:
     - id: caseworker
-      hash_env: TEST_EVIDENCE_API_KEY_HASH
+      {api_key_fingerprint}
       scopes: [farmer_registry:evidence_verification]
 audit:
   sink: file
@@ -303,6 +328,11 @@ fn config_with_oauth_source_options(
     token_url: &str,
 ) -> StandaloneRegistryNotaryConfig {
     set_audit_secret();
+    let api_key_fingerprint = test_api_key_fingerprint_ref_yaml(
+        "caseworker",
+        "TEST_EVIDENCE_API_KEY_HASH",
+        TEST_EVIDENCE_API_KEY_HASH,
+    );
     let raw = format!(
         r#"
 server:
@@ -311,7 +341,7 @@ auth:
   mode: api_key
   api_keys:
     - id: caseworker
-      hash_env: TEST_EVIDENCE_API_KEY_HASH
+      {api_key_fingerprint}
       scopes: [farmer_registry:evidence_verification]
 audit:
   sink: file

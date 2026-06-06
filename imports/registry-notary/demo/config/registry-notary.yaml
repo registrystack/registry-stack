@@ -10,13 +10,19 @@ auth:
   mode: api_key
   api_keys:
     - id: verification_service
-      hash_env: REGISTRY_NOTARY_API_KEY_HASH
+      fingerprint:
+        provider: env
+        name: REGISTRY_NOTARY_API_KEY_HASH
+        commitment: sha256:29b82cfd026f8458578c9df2b34766e42b7211af160d4c5c2c9608531103b224
       scopes:
         - civil_registry:evidence_verification
         - farmer_registry:evidence_verification
   bearer_tokens:
     - id: verification_service
-      hash_env: REGISTRY_NOTARY_BEARER_TOKEN_HASH
+      fingerprint:
+        provider: env
+        name: REGISTRY_NOTARY_BEARER_TOKEN_HASH
+        commitment: sha256:6ddb832f23cd984fda8a49c8ee328c43245706a7850c6670b7c5df46cecdfc2f
       scopes:
         - civil_registry:evidence_verification
         - farmer_registry:evidence_verification

@@ -1176,7 +1176,9 @@ fn local_env_diagnostics(
         .iter()
         .chain(config.auth.bearer_tokens.iter())
     {
-        diagnostics.push(check_hash_env(&credential.hash_env, env_report));
+        if let Some(env) = credential.fingerprint.name.as_deref() {
+            diagnostics.push(check_fingerprint_env(env, env_report));
+        }
     }
     if let Some(secret_env) = &config.audit.hash_secret_env {
         diagnostics.push(check_present_env(
@@ -1275,16 +1277,16 @@ fn local_env_diagnostics(
     diagnostics
 }
 
-fn check_hash_env(env: &str, env_report: &EnvFileReport) -> Diagnostic {
+fn check_fingerprint_env(env: &str, env_report: &EnvFileReport) -> Diagnostic {
     match std::env::var(env) {
         Ok(value) if valid_sha256_hash(&value) => {
             Diagnostic::ok(format!("{env} is present and valid"))
         }
         Ok(_) => Diagnostic::fail(
-            format!("{env} is present but not a sha256:<64 hex> hash"),
+            format!("{env} is present but not a sha256:<64 hex> fingerprint"),
             format!("set {env} using `registry-notary hash-api-key --hash-only`"),
         ),
-        Err(_) => missing_env_diag(env, env_report, "hash env var"),
+        Err(_) => missing_env_diag(env, env_report, "fingerprint env var"),
     }
 }
 
@@ -1898,7 +1900,9 @@ fn required_env_vars(config: &StandaloneRegistryNotaryConfig) -> BTreeSet<String
         .iter()
         .chain(config.auth.bearer_tokens.iter())
     {
-        vars.insert(credential.hash_env.clone());
+        if let Some(env) = credential.fingerprint.name.clone() {
+            vars.insert(env);
+        }
     }
     if let Some(env) = &config.audit.hash_secret_env {
         vars.insert(env.clone());
@@ -2127,7 +2131,10 @@ auth:
   mode: api_key
   api_keys:
     - id: local-demo
-      hash_env: REGISTRY_NOTARY_API_KEY_HASH
+      fingerprint:
+        provider: env
+        name: REGISTRY_NOTARY_API_KEY_HASH
+        commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
       scopes: [dci:evidence_verification]
 audit:
   sink: file
@@ -3526,7 +3533,10 @@ auth:
   mode: api_key
   api_keys:
     - id: local
-      hash_env: TEST_DOCTOR_API_HASH
+      fingerprint:
+        provider: env
+        name: TEST_DOCTOR_API_HASH
+        commitment: sha256:31f2999a69fa6301763a9f61eea44388a13318ce8b80a16a115a9efdb62b883b
       scopes: [dci:evidence_verification]
 audit:
   sink: stdout

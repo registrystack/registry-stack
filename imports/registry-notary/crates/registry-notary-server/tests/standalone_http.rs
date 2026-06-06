@@ -33,6 +33,10 @@ use registry_notary_server::{
 use registry_platform_audit::{
     verify_jsonl_lines, verify_jsonl_lines_with_hasher, AuditChainHasher, AuditEnvelope,
 };
+use registry_platform_authcommon::{
+    credential_fingerprint_commitment, CredentialCommitmentContext, CredentialFingerprintProvider,
+    CredentialFingerprintRef, CredentialProduct, CredentialType,
+};
 use registry_platform_config::{RegistryTrustRoot, TrustRootRole, TrustRootSigner};
 #[cfg(feature = "registry-notary-cel")]
 use registry_platform_crypto::verify;
@@ -207,26 +211,38 @@ retention_seconds: 3600
     .expect("credential status config parses");
 }
 
+fn env_fingerprint_ref(id: &str, env_name: &str, fingerprint: &str) -> CredentialFingerprintRef {
+    CredentialFingerprintRef {
+        provider: CredentialFingerprintProvider::Env,
+        name: Some(env_name.to_string()),
+        path: None,
+        commitment: credential_fingerprint_commitment(
+            CredentialCommitmentContext {
+                product: CredentialProduct::RegistryNotary,
+                credential_type: CredentialType::ApiKey,
+                credential_id: id,
+            },
+            fingerprint,
+        ),
+    }
+}
+
 fn add_admin_api_key(config: &mut StandaloneRegistryNotaryConfig) {
-    std::env::set_var(
-        "TEST_EVIDENCE_ADMIN_KEY_HASH",
-        "sha256:10a4c7c9fc5206d6f36dc6944a81bb6f4a3cb0e25014ae3b12e6c3e52712292a",
-    );
+    let fingerprint = "sha256:10a4c7c9fc5206d6f36dc6944a81bb6f4a3cb0e25014ae3b12e6c3e52712292a";
+    std::env::set_var("TEST_EVIDENCE_ADMIN_KEY_HASH", fingerprint);
     config.auth.api_keys.push(EvidenceCredentialConfig {
         id: "admin".to_string(),
-        hash_env: "TEST_EVIDENCE_ADMIN_KEY_HASH".to_string(),
+        fingerprint: env_fingerprint_ref("admin", "TEST_EVIDENCE_ADMIN_KEY_HASH", fingerprint),
         scopes: vec!["registry_notary:admin".to_string()],
     });
 }
 
 fn add_ops_read_api_key(config: &mut StandaloneRegistryNotaryConfig) {
-    std::env::set_var(
-        "TEST_EVIDENCE_OPS_KEY_HASH",
-        "sha256:d9310c002af91822beb0b3487d8b04f85bf6bf1f8a5496bff7d35fc7c5a29def",
-    );
+    let fingerprint = "sha256:d9310c002af91822beb0b3487d8b04f85bf6bf1f8a5496bff7d35fc7c5a29def";
+    std::env::set_var("TEST_EVIDENCE_OPS_KEY_HASH", fingerprint);
     config.auth.api_keys.push(EvidenceCredentialConfig {
         id: "ops".to_string(),
-        hash_env: "TEST_EVIDENCE_OPS_KEY_HASH".to_string(),
+        fingerprint: env_fingerprint_ref("ops", "TEST_EVIDENCE_OPS_KEY_HASH", fingerprint),
         scopes: vec!["registry_notary:ops_read".to_string()],
     });
 }
@@ -523,6 +539,8 @@ fn add_config_trust_with_local_approval_path(
                     "signing_key_rotation".to_string(),
                     "emergency_break_glass".to_string(),
                     "root_transition".to_string(),
+                    "client_credential_rotation".to_string(),
+                    "client_access_change".to_string(),
                 ]),
             }],
         }],
@@ -530,16 +548,31 @@ fn add_config_trust_with_local_approval_path(
 }
 
 fn local_operator_approval(config_yaml: &str, previous_config_hash: &str) -> LocalOperatorApproval {
+    local_operator_approval_for_change_class(
+        config_yaml,
+        previous_config_hash,
+        "root_transition",
+        "ROOT-2026-Q2",
+    )
+}
+
+fn local_operator_approval_for_change_class(
+    config_yaml: &str,
+    previous_config_hash: &str,
+    change_class: &str,
+    approval_reference: &str,
+) -> LocalOperatorApproval {
     LocalOperatorApproval {
         approved_by: "ops@example.test".to_string(),
-        reason: "approve Notary root transition".to_string(),
-        approval_reference: "ROOT-2026-Q2".to_string(),
-        change_class: "root_transition".to_string(),
+        reason: format!("approve Notary {change_class}"),
+        approval_reference: approval_reference.to_string(),
+        change_class: change_class.to_string(),
         config_hash: internal_config_hash(config_yaml.as_bytes()),
         previous_config_hash: Some(previous_config_hash.to_string()),
         expires_at_unix_seconds: Utc::now().timestamp() as u64 + 3600,
-        rate_limit_identity:
-            "registry-notary/registry-notary-standalone/development/notary-test-stream".to_string(),
+        rate_limit_identity: format!(
+            "registry-notary/registry-notary-standalone/development/notary-test-stream/{change_class}"
+        ),
         rate_limit: BreakGlassRateLimit {
             max_accepted: 1,
             window_seconds: 3600,
@@ -1012,7 +1045,10 @@ auth:
   mode: api_key
   api_keys:
     - id: caseworker
-      hash_env: TEST_EVIDENCE_API_KEY_HASH
+      fingerprint:
+        provider: env
+        name: TEST_EVIDENCE_API_KEY_HASH
+        commitment: sha256:6c1874c8df397cc85277166d01625853a21afb53a4cff37e66fc108a0fc8cffb
       scopes: [farmer_registry:evidence_verification]
 audit:
   sink: file
@@ -1625,7 +1661,10 @@ auth:
   mode: api_key
   api_keys:
     - id: caseworker
-      hash_env: TEST_EVIDENCE_API_KEY_HASH
+      fingerprint:
+        provider: env
+        name: TEST_EVIDENCE_API_KEY_HASH
+        commitment: sha256:6c1874c8df397cc85277166d01625853a21afb53a4cff37e66fc108a0fc8cffb
       scopes: [farmer_registry:evidence_verification]
 audit:
   sink: file
@@ -2775,7 +2814,11 @@ async fn admin_reload_401_unauth_403_wrong_scope_501_admin() {
     );
     config.auth.api_keys.push(EvidenceCredentialConfig {
         id: "wrong-scope".to_string(),
-        hash_env: "TEST_EVIDENCE_WRONG_SCOPE_KEY_HASH".to_string(),
+        fingerprint: env_fingerprint_ref(
+            "wrong-scope",
+            "TEST_EVIDENCE_WRONG_SCOPE_KEY_HASH",
+            "sha256:ac3dced2bcf7d2cb4166747790d67437b5cc5314ed33e01d06b274a7fe0c3b3c",
+        ),
         scopes: vec!["farmer_registry:evidence_verification".to_string()],
     });
     add_admin_api_key(&mut config);
@@ -3281,6 +3324,101 @@ async fn admin_config_apply_signed_tuf_target_rejects_restart_required_without_m
     assert_eq!(posture["configuration"]["last_bundle_id"], Value::Null);
     assert_eq!(posture["configuration"]["last_apply_result"], Value::Null);
     assert!(posture["instance"].get("owner").is_none());
+}
+
+#[tokio::test]
+async fn admin_config_apply_signed_client_access_change_swaps_auth_without_restart() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    const ROTATED_ADMIN_KEY: &str = "rotated-admin-token";
+    const ROTATED_ADMIN_HASH_ENV: &str = "TEST_EVIDENCE_ROTATED_ADMIN_KEY_HASH";
+    let rotated_fingerprint = sha256_uri(ROTATED_ADMIN_KEY.as_bytes());
+    std::env::set_var(ROTATED_ADMIN_HASH_ENV, &rotated_fingerprint);
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let antirollback_path = tmp.path().join("config-antirollback.json");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    add_admin_api_key(&mut config);
+    add_config_trust(&mut config, antirollback_path.clone());
+    let current_config_yaml = serde_norway::to_string(&config).expect("current config serializes");
+    initialize_notary_antirollback_state(&antirollback_path, &current_config_yaml, 1);
+    let current_config_hash = internal_config_hash(current_config_yaml.as_bytes());
+
+    let mut candidate = config.clone();
+    candidate.auth.api_keys.clear();
+    candidate.auth.api_keys.push(EvidenceCredentialConfig {
+        id: "rotated_admin".to_string(),
+        fingerprint: env_fingerprint_ref(
+            "rotated_admin",
+            ROTATED_ADMIN_HASH_ENV,
+            &rotated_fingerprint,
+        ),
+        scopes: vec![
+            "registry_notary:admin".to_string(),
+            "registry_notary:ops_read".to_string(),
+        ],
+    });
+    let candidate_yaml = serde_norway::to_string(&candidate).expect("candidate serializes");
+    let local_approval_path = config
+        .config_trust
+        .as_ref()
+        .expect("config trust exists")
+        .local_approval_state_path
+        .clone();
+    write_local_approval_state(
+        &local_approval_path,
+        local_operator_approval_for_change_class(
+            &candidate_yaml,
+            &current_config_hash,
+            "client_access_change",
+            "CLIENT-ACCESS-1",
+        ),
+    );
+    let signed = write_signed_notary_config_tuf_fixture_with_change_classes(
+        &tmp,
+        &current_config_hash,
+        &candidate_yaml,
+        2,
+        "registry-notary-standalone",
+        &["kid-a", "kid-b"],
+        &["client_access_change"],
+    )
+    .await;
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let mut request = signed_tuf_apply_request(&signed);
+    request["local_approval_reference"] = json!("CLIENT-ACCESS-1");
+
+    let response = server
+        .post("/admin/v1/config/apply")
+        .add_header("x-api-key", "admin-token")
+        .json(&request)
+        .await;
+
+    response.assert_status(StatusCode::OK);
+    let body: Value = response.json();
+    assert_eq!(body["result"], "applied");
+    assert_eq!(body["restart_required"], false);
+
+    let old_admin = server
+        .get("/admin/v1/posture")
+        .add_header("x-api-key", "admin-token")
+        .await;
+    old_admin.assert_status(StatusCode::UNAUTHORIZED);
+
+    let rotated_admin = server
+        .get("/admin/v1/posture")
+        .add_header("x-api-key", ROTATED_ADMIN_KEY)
+        .await;
+    rotated_admin.assert_status(StatusCode::OK);
 }
 
 #[tokio::test]
@@ -5764,7 +5902,8 @@ async fn admin_capabilities_requires_ops_read_and_reports_notary_surface() {
         json!([
             "credential_issuer_signing",
             "preauth_signing",
-            "federation_signing"
+            "federation_signing",
+            "auth_provider"
         ])
     );
     assert_eq!(body["reload"]["resource_reload"]["supported"], json!(false));
@@ -6450,7 +6589,11 @@ async fn metrics_requires_admin_scope_and_keeps_health_public() {
     );
     config.auth.api_keys.push(EvidenceCredentialConfig {
         id: "admin".to_string(),
-        hash_env: "TEST_EVIDENCE_ADMIN_KEY_HASH".to_string(),
+        fingerprint: env_fingerprint_ref(
+            "admin",
+            "TEST_EVIDENCE_ADMIN_KEY_HASH",
+            "sha256:10a4c7c9fc5206d6f36dc6944a81bb6f4a3cb0e25014ae3b12e6c3e52712292a",
+        ),
         scopes: vec!["registry_notary:admin".to_string()],
     });
 
@@ -7525,7 +7668,11 @@ async fn credential_status_admin_edges_return_expected_http_statuses() {
     enable_credential_status(&mut enabled_config);
     enabled_config.auth.api_keys.push(EvidenceCredentialConfig {
         id: "admin".to_string(),
-        hash_env: "TEST_EVIDENCE_ADMIN_KEY_HASH".to_string(),
+        fingerprint: env_fingerprint_ref(
+            "admin",
+            "TEST_EVIDENCE_ADMIN_KEY_HASH",
+            "sha256:10a4c7c9fc5206d6f36dc6944a81bb6f4a3cb0e25014ae3b12e6c3e52712292a",
+        ),
         scopes: vec!["registry_notary:admin".to_string()],
     });
     let enabled_server = TestServer::builder()
@@ -7563,7 +7710,11 @@ async fn credential_status_admin_edges_return_expected_http_statuses() {
         .api_keys
         .push(EvidenceCredentialConfig {
             id: "admin".to_string(),
-            hash_env: "TEST_EVIDENCE_ADMIN_KEY_HASH".to_string(),
+            fingerprint: env_fingerprint_ref(
+                "admin",
+                "TEST_EVIDENCE_ADMIN_KEY_HASH",
+                "sha256:10a4c7c9fc5206d6f36dc6944a81bb6f4a3cb0e25014ae3b12e6c3e52712292a",
+            ),
             scopes: vec!["registry_notary:admin".to_string()],
         });
     let disabled_server = TestServer::builder()

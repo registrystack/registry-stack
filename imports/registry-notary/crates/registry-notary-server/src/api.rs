@@ -81,7 +81,8 @@ use crate::{
     runtime::claim_ids,
     standalone::{
         constant_time_eq, generate_numeric_tx_code, generate_opaque_token, pkce_s256_challenge,
-        pre_auth_audit_event, AuthAuditState, PreAuthAuditFields, PreAuthRuntime, SignerReadiness,
+        pre_auth_audit_event, AuthAuditState, PreAuthAuditFields, PreAuthRuntime,
+        PreparedAuthenticator, SignerReadiness,
     },
     BatchEvaluateOptions, EvidenceStore, RegistryNotaryRuntime, SelfAttestationRateLimitBucket,
     SelfAttestationRateLimitError, SelfAttestationRateLimitKeys, SelfAttestationRateLimiter,
@@ -646,6 +647,57 @@ async fn admin_config_apply(
                 );
             }
         }
+    } else if let Some(change_class) =
+        client_auth_change_class(&state, &candidate_config, &candidate)
+    {
+        let authenticator = match AuthAuditState::prepare_authenticator(&candidate_config) {
+            Ok(authenticator) => authenticator,
+            Err(_) => {
+                consume_apply_metadata(&request);
+                return config_apply_report(
+                    candidate.bundle_id.clone(),
+                    candidate.sequence,
+                    ApplyReportResult::RejectedReadiness,
+                    false,
+                    false,
+                    StatusCode::CONFLICT,
+                    resolved_config_audit(
+                        ConfigAdminAction::Apply,
+                        &candidate,
+                        "rejected",
+                        ApplyReportResult::RejectedReadiness.as_str(),
+                        false,
+                        false,
+                    ),
+                );
+            }
+        };
+        match load_local_approval(&request, &state, &candidate, change_class) {
+            Ok(local_approval) => GovernedConfigApply::ClientAuthChange {
+                authenticator,
+                local_approval,
+            },
+            Err(_) => {
+                consume_apply_metadata(&request);
+                return config_apply_report(
+                    candidate.bundle_id.clone(),
+                    candidate.sequence,
+                    ApplyReportResult::RejectedLocalApproval,
+                    false,
+                    false,
+                    StatusCode::CONFLICT,
+                    resolved_config_audit(
+                        ConfigAdminAction::Apply,
+                        &candidate,
+                        "rejected",
+                        ApplyReportResult::RejectedLocalApproval.as_str(),
+                        false,
+                        false,
+                    )
+                    .with_local_approval_request(&request),
+                );
+            }
+        }
     } else {
         let signing_change_authorization = signing_change_authorization(&candidate);
         if !signing_change_authorization.any() {
@@ -829,6 +881,12 @@ async fn admin_config_apply(
         GovernedConfigApply::RootTransition { .. } => {
             state.swap_runtime_config(candidate_config.clone());
         }
+        GovernedConfigApply::ClientAuthChange { authenticator, .. } => {
+            if let Some(auth_state) = state.auth_state.as_ref() {
+                auth_state.swap_prepared_authenticator(authenticator);
+            }
+            state.swap_runtime_config(candidate_config.clone());
+        }
     }
     state.swap_config_governance(ConfigGovernanceContext::from_config(&candidate_config));
     state.record_config_apply(ConfigApplyPosture {
@@ -1002,13 +1060,18 @@ enum GovernedConfigApply {
     RootTransition {
         local_approval: LocalOperatorApproval,
     },
+    ClientAuthChange {
+        authenticator: PreparedAuthenticator,
+        local_approval: LocalOperatorApproval,
+    },
 }
 
 impl GovernedConfigApply {
     fn local_approval(&self) -> Option<&LocalOperatorApproval> {
         match self {
             Self::SigningRotation { .. } => None,
-            Self::RootTransition { local_approval } => Some(local_approval),
+            Self::RootTransition { local_approval }
+            | Self::ClientAuthChange { local_approval, .. } => Some(local_approval),
         }
     }
 }
@@ -1069,6 +1132,106 @@ fn root_ids_are_unique(roots: &[RegistryTrustRoot]) -> bool {
     roots.iter().all(|root| seen.insert(root.root_id.as_str()))
 }
 
+fn client_auth_change_class(
+    state: &RegistryNotaryApiState,
+    candidate: &StandaloneRegistryNotaryConfig,
+    resolved: &ResolvedConfigCandidate,
+) -> Option<&'static str> {
+    let current = state.runtime_config()?;
+    if resolved
+        .change_classes
+        .contains("client_credential_rotation")
+        && is_client_credential_rotation_change(&current, candidate).ok()?
+    {
+        return Some("client_credential_rotation");
+    }
+    if resolved.change_classes.contains("client_access_change")
+        && is_client_access_change(&current, candidate).ok()?
+    {
+        return Some("client_access_change");
+    }
+    None
+}
+
+fn is_client_credential_rotation_change(
+    current: &StandaloneRegistryNotaryConfig,
+    candidate: &StandaloneRegistryNotaryConfig,
+) -> Result<bool, &'static str> {
+    Ok(equivalent_except_auth(current, candidate)?
+        && static_auth_changed(current, candidate)
+        && same_credential_ids_and_scopes(&current.auth.api_keys, &candidate.auth.api_keys)
+        && same_credential_ids_and_scopes(
+            &current.auth.bearer_tokens,
+            &candidate.auth.bearer_tokens,
+        ))
+}
+
+fn is_client_access_change(
+    current: &StandaloneRegistryNotaryConfig,
+    candidate: &StandaloneRegistryNotaryConfig,
+) -> Result<bool, &'static str> {
+    Ok(equivalent_except_auth(current, candidate)? && static_auth_changed(current, candidate))
+}
+
+fn static_auth_changed(
+    current: &StandaloneRegistryNotaryConfig,
+    candidate: &StandaloneRegistryNotaryConfig,
+) -> bool {
+    current.auth.mode == "api_key"
+        && candidate.auth.mode == "api_key"
+        && serde_json::to_value(&current.auth.oidc).ok()
+            == serde_json::to_value(&candidate.auth.oidc).ok()
+        && (current.auth.api_keys != candidate.auth.api_keys
+            || current.auth.bearer_tokens != candidate.auth.bearer_tokens)
+}
+
+fn same_credential_ids_and_scopes(
+    current: &[registry_notary_core::EvidenceCredentialConfig],
+    candidate: &[registry_notary_core::EvidenceCredentialConfig],
+) -> bool {
+    credential_scopes_by_id(current)
+        .zip(credential_scopes_by_id(candidate))
+        .is_some_and(|(current, candidate)| current == candidate)
+}
+
+fn credential_scopes_by_id(
+    credentials: &[registry_notary_core::EvidenceCredentialConfig],
+) -> Option<BTreeMap<&str, BTreeSet<&str>>> {
+    let mut by_id = BTreeMap::new();
+    for credential in credentials {
+        let scopes = credential
+            .scopes
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        if let Some(existing) = by_id.insert(credential.id.as_str(), scopes.clone()) {
+            if existing != scopes {
+                return None;
+            }
+        }
+    }
+    Some(by_id)
+}
+
+fn equivalent_except_auth(
+    current: &StandaloneRegistryNotaryConfig,
+    candidate: &StandaloneRegistryNotaryConfig,
+) -> Result<bool, &'static str> {
+    let mut current =
+        serde_json::to_value(current).map_err(|_| "current config could not be normalized")?;
+    let mut candidate =
+        serde_json::to_value(candidate).map_err(|_| "candidate config could not be normalized")?;
+    normalize_auth(&mut current);
+    normalize_auth(&mut candidate);
+    Ok(current == candidate)
+}
+
+fn normalize_auth(value: &mut Value) {
+    if let Some(object) = value.as_object_mut() {
+        object.insert("auth".to_string(), json!({}));
+    }
+}
+
 fn equivalent_except_config_trust_accepted_roots(
     current: &StandaloneRegistryNotaryConfig,
     candidate: &StandaloneRegistryNotaryConfig,
@@ -1093,6 +1256,15 @@ fn load_root_transition_local_approval(
     state: &RegistryNotaryApiState,
     candidate: &ResolvedConfigCandidate,
 ) -> Result<LocalOperatorApproval, LocalApprovalStoreError> {
+    load_local_approval(request, state, candidate, "root_transition")
+}
+
+fn load_local_approval(
+    request: &ConfigApplyRequest,
+    state: &RegistryNotaryApiState,
+    candidate: &ResolvedConfigCandidate,
+    change_class: &str,
+) -> Result<LocalOperatorApproval, LocalApprovalStoreError> {
     let approval_reference = request
         .local_approval_reference
         .as_deref()
@@ -1104,7 +1276,7 @@ fn load_root_transition_local_approval(
         .ok_or(LocalApprovalStoreError::MissingState)?;
     FileLocalApprovalStore::new(&config_trust.local_approval_state_path).load_for_apply(
         approval_reference,
-        "root_transition",
+        change_class,
         &internal_config_hash(candidate.config_yaml.as_bytes()),
         candidate.previous_config_hash.as_deref(),
     )
@@ -2022,7 +2194,8 @@ async fn admin_capabilities(
             "components": [
                 "credential_issuer_signing",
                 "preauth_signing",
-                "federation_signing"
+                "federation_signing",
+                "auth_provider"
             ]
         },
         "reload": {

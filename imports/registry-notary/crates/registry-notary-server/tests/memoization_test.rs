@@ -30,6 +30,10 @@ use registry_notary_server::{
     standalone_router, BatchEvaluateOptions, EvidenceStore, MemoState, RegistryNotaryRuntime,
     SourceReader,
 };
+use registry_platform_authcommon::{
+    credential_fingerprint_commitment, CredentialCommitmentContext, CredentialProduct,
+    CredentialType,
+};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -39,6 +43,8 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 const TEST_AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
+const TEST_MEMO_API_KEY_HASH: &str =
+    "sha256:7ef768fc3d2b9a667fa45576a9dcc26cc47a9925fea1410910eabbd8cf2e687c";
 
 fn person_target(id: &str) -> Value {
     json!({
@@ -49,6 +55,20 @@ fn person_target(id: &str) -> Value {
 
 fn set_audit_secret() {
     std::env::set_var("REGISTRY_NOTARY_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
+}
+
+fn test_api_key_fingerprint_ref_yaml(id: &str, env_name: &str, fingerprint: &str) -> String {
+    let commitment = credential_fingerprint_commitment(
+        CredentialCommitmentContext {
+            product: CredentialProduct::RegistryNotary,
+            credential_type: CredentialType::ApiKey,
+            credential_id: id,
+        },
+        fingerprint,
+    );
+    format!(
+        "fingerprint:\n        provider: env\n        name: {env_name}\n        commitment: {commitment}"
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +155,11 @@ fn rda_config(
     max_subjects: usize,
 ) -> StandaloneRegistryNotaryConfig {
     set_audit_secret();
+    let api_key_fingerprint = test_api_key_fingerprint_ref_yaml(
+        "caseworker",
+        "TEST_MEMO_API_KEY_HASH",
+        TEST_MEMO_API_KEY_HASH,
+    );
     let raw = format!(
         r#"
 server:
@@ -143,7 +168,7 @@ auth:
   mode: api_key
   api_keys:
     - id: caseworker
-      hash_env: TEST_MEMO_API_KEY_HASH
+      {api_key_fingerprint}
       scopes: [farmer_registry:evidence_verification]
 audit:
   sink: file
@@ -212,6 +237,11 @@ fn two_claims_shared_binding_config(
     audit_path: &str,
 ) -> StandaloneRegistryNotaryConfig {
     set_audit_secret();
+    let api_key_fingerprint = test_api_key_fingerprint_ref_yaml(
+        "caseworker",
+        "TEST_MEMO_API_KEY_HASH",
+        TEST_MEMO_API_KEY_HASH,
+    );
     let raw = format!(
         r#"
 server:
@@ -220,7 +250,7 @@ auth:
   mode: api_key
   api_keys:
     - id: caseworker
-      hash_env: TEST_MEMO_API_KEY_HASH
+      {api_key_fingerprint}
       scopes: [farmer_registry:evidence_verification]
 audit:
   sink: file
@@ -322,6 +352,11 @@ fn three_claims_shared_binding_config(
     audit_path: &str,
 ) -> StandaloneRegistryNotaryConfig {
     set_audit_secret();
+    let api_key_fingerprint = test_api_key_fingerprint_ref_yaml(
+        "caseworker",
+        "TEST_MEMO_API_KEY_HASH",
+        TEST_MEMO_API_KEY_HASH,
+    );
     let raw = format!(
         r#"
 server:
@@ -330,7 +365,7 @@ auth:
   mode: api_key
   api_keys:
     - id: caseworker
-      hash_env: TEST_MEMO_API_KEY_HASH
+      {api_key_fingerprint}
       scopes: [farmer_registry:evidence_verification]
 audit:
   sink: file
@@ -470,6 +505,11 @@ fn two_claims_different_fields_config(
     audit_path: &str,
 ) -> StandaloneRegistryNotaryConfig {
     set_audit_secret();
+    let api_key_fingerprint = test_api_key_fingerprint_ref_yaml(
+        "caseworker",
+        "TEST_MEMO_API_KEY_HASH",
+        TEST_MEMO_API_KEY_HASH,
+    );
     let raw = format!(
         r#"
 server:
@@ -478,7 +518,7 @@ auth:
   mode: api_key
   api_keys:
     - id: caseworker
-      hash_env: TEST_MEMO_API_KEY_HASH
+      {api_key_fingerprint}
       scopes: [farmer_registry:evidence_verification]
 audit:
   sink: file
@@ -570,6 +610,11 @@ fn two_dci_claims_different_query_type_config(
     audit_path: &str,
 ) -> StandaloneRegistryNotaryConfig {
     set_audit_secret();
+    let api_key_fingerprint = test_api_key_fingerprint_ref_yaml(
+        "caseworker",
+        "TEST_MEMO_API_KEY_HASH",
+        TEST_MEMO_API_KEY_HASH,
+    );
     let raw = format!(
         r#"
 server:
@@ -578,7 +623,7 @@ auth:
   mode: api_key
   api_keys:
     - id: caseworker
-      hash_env: TEST_MEMO_API_KEY_HASH
+      {api_key_fingerprint}
       scopes: [farmer_registry:evidence_verification]
 audit:
   sink: file
@@ -686,10 +731,7 @@ evidence:
 // ---------------------------------------------------------------------------
 
 fn set_test_env() {
-    std::env::set_var(
-        "TEST_MEMO_API_KEY_HASH",
-        "sha256:7ef768fc3d2b9a667fa45576a9dcc26cc47a9925fea1410910eabbd8cf2e687c",
-    );
+    std::env::set_var("TEST_MEMO_API_KEY_HASH", TEST_MEMO_API_KEY_HASH);
     std::env::set_var("TEST_MEMO_SOURCE_TOKEN", "memo-source-token");
 }
 

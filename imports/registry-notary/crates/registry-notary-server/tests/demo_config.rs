@@ -121,6 +121,8 @@ fn openspp_disability_demo_config_loads_validates_and_builds_router() {
 
 #[test]
 fn opencrvs_dci_demo_config_loads_validates_and_builds_router() {
+    let _guard = common::issuer_jwk_guard();
+
     unsafe {
         std::env::set_var(
             "REGISTRY_NOTARY_API_KEY_HASH",

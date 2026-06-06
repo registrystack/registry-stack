@@ -39,7 +39,8 @@ use registry_platform_audit::{
     JsonlFileSink, JsonlStdoutSink, SyslogSink,
 };
 use registry_platform_authcommon::{
-    parse_bearer_token, parse_fingerprint, verify_api_key, FingerprintFormatError,
+    parse_bearer_token, verify_api_key, CredentialCommitmentContext, CredentialFingerprintRefError,
+    CredentialProduct, CredentialType, FingerprintFormatError,
 };
 use registry_platform_crypto::{
     sign, verify, KeyReadiness, LocalJwkSigner, PrivateJwk, PublicJwk, SigningProvider,
@@ -3182,7 +3183,7 @@ mod pkcs11 {
 
 /// Bench-internal: exposed only so `benches/auth_bench.rs` can construct
 /// fixtures. Production code goes through `resolve_credentials`, which reads
-/// the fingerprint from `EvidenceCredentialConfig::hash_env`. Not part of the
+/// the fingerprint from `EvidenceCredentialConfig::fingerprint`. Not part of the
 /// public API; do not depend on this shape from outside the workspace.
 #[doc(hidden)]
 #[derive(Clone)]
@@ -3204,12 +3205,14 @@ impl std::fmt::Debug for ResolvedCredential {
 
 #[derive(Debug)]
 pub(crate) struct AuthAuditState {
-    authenticator: Authenticator,
+    authenticator: RwLock<Arc<Authenticator>>,
     audit: AuditPipeline,
     metrics: Arc<AppMetrics>,
     self_attestation_invalid_token_limiter: Option<Arc<SelfAttestationRateLimiter>>,
     self_attestation_rate_keys: Option<Arc<SelfAttestationRateLimitKeys>>,
 }
+
+pub(crate) struct PreparedAuthenticator(Authenticator);
 
 #[derive(Debug, Clone, Default)]
 struct RequestCredentials {
@@ -3226,7 +3229,7 @@ impl RequestCredentials {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Authenticator {
     Static {
         api_keys: Vec<ResolvedCredential>,
@@ -3290,7 +3293,7 @@ impl AuthAuditState {
             ))
         });
         Ok(Self {
-            authenticator: Authenticator::from_config(config)?,
+            authenticator: RwLock::new(Arc::new(Authenticator::from_config(config)?)),
             audit,
             metrics,
             self_attestation_invalid_token_limiter,
@@ -3302,19 +3305,28 @@ impl AuthAuditState {
         &self,
         credentials: RequestCredentials,
     ) -> Result<EvidencePrincipal, EvidenceError> {
-        self.authenticator.authenticate(credentials).await
+        let authenticator = self
+            .authenticator
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        authenticator.authenticate(credentials).await
     }
 
     pub(crate) fn notary_anchor_for_config(
         &self,
         config: &StandaloneRegistryNotaryConfig,
     ) -> Result<Option<NotaryTokenAnchor>, StandaloneServerError> {
+        let authenticator = self
+            .authenticator
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Authenticator::Oidc {
             principal_claim,
             subject_binding_claim,
             notary_anchor: Some(_),
             ..
-        } = &self.authenticator
+        } = &**authenticator
         else {
             return Ok(None);
         };
@@ -3326,16 +3338,37 @@ impl AuthAuditState {
     }
 
     pub(crate) fn swap_notary_anchor(&self, updated: NotaryTokenAnchor) {
+        let authenticator = self
+            .authenticator
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Authenticator::Oidc {
             notary_anchor: Some(anchor),
             ..
-        } = &self.authenticator
+        } = &**authenticator
         else {
             return;
         };
         *anchor
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = updated;
+    }
+
+    fn swap_authenticator(&self, updated: Authenticator) {
+        *self
+            .authenticator
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Arc::new(updated);
+    }
+
+    pub(crate) fn prepare_authenticator(
+        config: &StandaloneRegistryNotaryConfig,
+    ) -> Result<PreparedAuthenticator, StandaloneServerError> {
+        Authenticator::from_config(config).map(PreparedAuthenticator)
+    }
+
+    pub(crate) fn swap_prepared_authenticator(&self, updated: PreparedAuthenticator) {
+        self.swap_authenticator(updated.0);
     }
 
     pub(crate) fn audit_pipeline(&self) -> AuditPipeline {
@@ -3347,8 +3380,11 @@ impl Authenticator {
     fn from_config(config: &StandaloneRegistryNotaryConfig) -> Result<Self, StandaloneServerError> {
         match config.auth.mode.as_str() {
             "api_key" => Ok(Self::Static {
-                api_keys: resolve_credentials(&config.auth.api_keys)?,
-                bearer_tokens: resolve_credentials(&config.auth.bearer_tokens)?,
+                api_keys: resolve_credentials(&config.auth.api_keys, CredentialType::ApiKey)?,
+                bearer_tokens: resolve_credentials(
+                    &config.auth.bearer_tokens,
+                    CredentialType::BearerToken,
+                )?,
             }),
             "oidc" => {
                 let oidc = config.auth.oidc.as_ref().ok_or_else(|| {
@@ -4005,19 +4041,56 @@ fn correlation_id_from_headers(headers: &HeaderMap) -> BoundedCorrelationId {
 
 fn resolve_credentials(
     credentials: &[EvidenceCredentialConfig],
+    credential_type: CredentialType,
 ) -> Result<Vec<ResolvedCredential>, StandaloneServerError> {
     credentials
         .iter()
         .map(|credential| {
-            let fingerprint = env::var(&credential.hash_env)
-                .ok()
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    StandaloneServerError::MissingCredentialEnv(credential.hash_env.clone())
+            let secret_ref = credential
+                .fingerprint
+                .name
+                .clone()
+                .or_else(|| {
+                    credential
+                        .fingerprint
+                        .path
+                        .as_ref()
+                        .map(|path| path.display().to_string())
+                })
+                .unwrap_or_else(|| credential.id.clone());
+            let fingerprint = credential
+                .fingerprint
+                .resolve(CredentialCommitmentContext {
+                    product: CredentialProduct::RegistryNotary,
+                    credential_type,
+                    credential_id: &credential.id,
+                })
+                .map_err(|error| match error {
+                    CredentialFingerprintRefError::MissingSecret => {
+                        StandaloneServerError::MissingCredentialEnv(secret_ref.clone())
+                    }
+                    CredentialFingerprintRefError::InvalidFingerprint(format_error)
+                    | CredentialFingerprintRefError::InvalidCommitment(format_error) => {
+                        StandaloneServerError::InvalidCredentialHash(
+                            secret_ref.clone(),
+                            format_error,
+                        )
+                    }
+                    CredentialFingerprintRefError::EmptySecret => {
+                        StandaloneServerError::MissingCredentialEnv(secret_ref.clone())
+                    }
+                    CredentialFingerprintRefError::CommitmentMismatch
+                    | CredentialFingerprintRefError::InvalidShape => {
+                        StandaloneServerError::InvalidCredentialHash(
+                            secret_ref.clone(),
+                            FingerprintFormatError::InvalidHex,
+                        )
+                    }
+                    _ => StandaloneServerError::InvalidCredentialHash(
+                        secret_ref.clone(),
+                        FingerprintFormatError::InvalidHex,
+                    ),
                 })?;
-            parse_fingerprint(&fingerprint).map_err(|error| {
-                StandaloneServerError::InvalidCredentialHash(credential.hash_env.clone(), error)
-            })?;
             Ok(ResolvedCredential {
                 id: credential.id.clone(),
                 fingerprint,
@@ -6569,14 +6642,14 @@ credential_profiles:
 
     fn auth_state(audit: AuditPipeline) -> Arc<AuthAuditState> {
         Arc::new(AuthAuditState {
-            authenticator: Authenticator::Static {
+            authenticator: RwLock::new(Arc::new(Authenticator::Static {
                 api_keys: vec![ResolvedCredential {
                     id: "caseworker".to_string(),
                     fingerprint: registry_platform_authcommon::fingerprint_api_key("api-token"),
                     scopes: Vec::new(),
                 }],
                 bearer_tokens: Vec::new(),
-            },
+            })),
             audit,
             metrics: Arc::new(AppMetrics::default()),
             self_attestation_invalid_token_limiter: None,
@@ -7736,10 +7809,10 @@ sources:
         };
         let audit = AuditPipeline::for_sink_dev_only(Arc::new(JsonlStdoutSink::new()));
         let state = Arc::new(AuthAuditState {
-            authenticator: Authenticator::Static {
+            authenticator: RwLock::new(Arc::new(Authenticator::Static {
                 api_keys: Vec::new(),
                 bearer_tokens: Vec::new(),
-            },
+            })),
             audit: audit.clone(),
             metrics: Arc::new(AppMetrics::default()),
             self_attestation_invalid_token_limiter: Some(Arc::new(
@@ -7772,14 +7845,14 @@ sources:
     #[tokio::test]
     async fn auth_state_accepts_case_insensitive_bearer_scheme() {
         let state = AuthAuditState {
-            authenticator: Authenticator::Static {
+            authenticator: RwLock::new(Arc::new(Authenticator::Static {
                 api_keys: Vec::new(),
                 bearer_tokens: vec![ResolvedCredential {
                     id: "caseworker".to_string(),
                     fingerprint: registry_platform_authcommon::fingerprint_api_key("api-token"),
                     scopes: vec!["farmer_registry:evidence_verification".to_string()],
                 }],
-            },
+            })),
             audit: AuditPipeline::for_sink_dev_only(Arc::new(JsonlStdoutSink::new())),
             metrics: Arc::new(AppMetrics::default()),
             self_attestation_invalid_token_limiter: None,

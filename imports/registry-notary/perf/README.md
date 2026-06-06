@@ -334,8 +334,10 @@ Tests cover:
 | `REGISTRY_NOTARY_ISSUER_JWK`           | (generated Ed25519 JWK)  | Required by notary even when issuance is not exercised |
 
 Client scenarios use raw bearer and API-key values. Server config reads only
-`sha256:<64 hex>` fingerprints from `*_HASH` environment variables via
-`hash_env`; raw tokens must not be stored in config.
+`sha256:<64 hex>` fingerprints from committed `fingerprint` references; raw
+tokens must not be stored in config. Regenerate perf credentials with
+`perf/scripts/generate_perf_keys.py` so the config commitments match the new
+fingerprints.
 
 ---
 

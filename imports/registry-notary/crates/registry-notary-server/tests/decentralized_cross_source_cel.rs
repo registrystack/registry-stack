@@ -13,12 +13,18 @@ use axum::{Json, Router};
 use axum_test::TestServer;
 use registry_notary_core::StandaloneRegistryNotaryConfig;
 use registry_notary_server::standalone_router;
+use registry_platform_authcommon::{
+    credential_fingerprint_commitment, CredentialCommitmentContext, CredentialProduct,
+    CredentialType,
+};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 const DEMO_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
 const TEST_AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
+const TEST_SHARED_EVIDENCE_CLIENT_TOKEN_HASH: &str =
+    "sha256:3adbe152ab16e34838a5ce68872b2f315e5efbcb91a1f795af0632fd9e0d5ada";
 
 fn cel_worker_bin() -> PathBuf {
     let env_path = PathBuf::from(env!("CARGO_BIN_EXE_registry-notary-cel-worker"));
@@ -42,6 +48,20 @@ fn cel_worker_bin() -> PathBuf {
 fn set_audit_secret() {
     std::env::set_var("REGISTRY_NOTARY_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
     std::env::set_var("REGISTRY_NOTARY_CEL_WORKER_COMMAND", cel_worker_bin());
+}
+
+fn test_api_key_fingerprint_ref_yaml(id: &str, env_name: &str, fingerprint: &str) -> String {
+    let commitment = credential_fingerprint_commitment(
+        CredentialCommitmentContext {
+            product: CredentialProduct::RegistryNotary,
+            credential_type: CredentialType::ApiKey,
+            credential_id: id,
+        },
+        fingerprint,
+    );
+    format!(
+        "fingerprint:\n        provider: env\n        name: {env_name}\n        commitment: {commitment}"
+    )
 }
 
 async fn civil_source(
@@ -111,6 +131,11 @@ fn source_response(
 
 fn shared_config(civil_base_url: &str, social_base_url: &str) -> StandaloneRegistryNotaryConfig {
     set_audit_secret();
+    let api_key_fingerprint = test_api_key_fingerprint_ref_yaml(
+        "shared_caseworker",
+        "TEST_SHARED_EVIDENCE_CLIENT_TOKEN_HASH",
+        TEST_SHARED_EVIDENCE_CLIENT_TOKEN_HASH,
+    );
     let raw = format!(
         r#"
 server:
@@ -119,7 +144,7 @@ auth:
   mode: api_key
   api_keys:
     - id: shared_caseworker
-      hash_env: TEST_SHARED_EVIDENCE_CLIENT_TOKEN_HASH
+      {api_key_fingerprint}
       scopes:
         - civil_registry:evidence_verification
         - social_protection_registry:evidence_verification
@@ -232,7 +257,7 @@ async fn cross_source_cel_claim_reads_dependencies_with_distinct_tokens() {
     unsafe {
         std::env::set_var(
             "TEST_SHARED_EVIDENCE_CLIENT_TOKEN_HASH",
-            "sha256:3adbe152ab16e34838a5ce68872b2f315e5efbcb91a1f795af0632fd9e0d5ada",
+            TEST_SHARED_EVIDENCE_CLIENT_TOKEN_HASH,
         );
         std::env::set_var(
             "TEST_SHARED_CIVIL_EVIDENCE_SOURCE_RAW",

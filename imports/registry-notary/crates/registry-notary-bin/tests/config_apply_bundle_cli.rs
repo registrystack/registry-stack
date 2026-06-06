@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Binary-level coverage for governed configuration bundle apply.
 
+use std::io::Read;
 use std::net::{SocketAddr, TcpListener};
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
@@ -224,7 +225,10 @@ auth:
   mode: api_key
   bearer_tokens:
     - id: admin-bearer
-      hash_env: TEST_ADMIN_BEARER_HASH
+      fingerprint:
+        provider: env
+        name: TEST_ADMIN_BEARER_HASH
+        commitment: sha256:ac59f6b6db38a7728847b7187ff8b5c483849410ed0bf53ced93ac5fc3400b56
       scopes: [registry_notary:admin, registry_notary:ops_read]
 audit:
   sink: file
@@ -452,7 +456,7 @@ async fn start_live_notary_server(
         .env("TEST_AUDIT_SECRET", TEST_AUDIT_SECRET)
         .env_remove("REGISTRY_NOTARY_CONFIG")
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("registry-notary server starts");
     let public_url = format!("http://{public_bind}");
@@ -465,7 +469,11 @@ async fn start_live_notary_server(
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         if let Some(status) = child.try_wait().expect("server child status checks") {
-            panic!("registry-notary server exited before readiness: {status}");
+            let mut stderr = String::new();
+            if let Some(mut pipe) = child.stderr.take() {
+                let _ = pipe.read_to_string(&mut stderr);
+            }
+            panic!("registry-notary server exited before readiness: {status}\nstderr:\n{stderr}");
         }
         if client
             .get(&health_url)

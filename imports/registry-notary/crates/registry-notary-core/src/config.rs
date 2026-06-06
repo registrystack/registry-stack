@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+use registry_platform_authcommon::CredentialFingerprintRef;
 use registry_platform_config::RegistryTrustRoot;
 use registry_platform_crypto::validate_did_web_https_issuer_binding;
 pub use registry_platform_crypto::{
@@ -3362,11 +3363,11 @@ const fn default_access_token_ttl_seconds() -> u64 {
     300
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceCredentialConfig {
     pub id: String,
-    pub hash_env: String,
+    pub fingerprint: CredentialFingerprintRef,
     #[serde(default)]
     pub scopes: Vec<String>,
 }
@@ -4880,7 +4881,10 @@ auth:
   mode: api_key
   api_keys:
     - id: test-key
-      hash_env: TEST_TOKEN_HASH
+      fingerprint:
+        provider: env
+        name: TEST_TOKEN_HASH
+        commitment: sha256:56c3f8e9f68c7acd05bcf1e5d619cb1c4e9f91efafb471a3c60675c983fe7ed6
 "#,
         )
         .expect("minimal config is valid YAML")
@@ -5046,7 +5050,10 @@ auth:
   mode: api_key
   api_keys:
     - id: test-key
-      hash_env: TEST_TOKEN_HASH
+      fingerprint:
+        provider: env
+        name: TEST_TOKEN_HASH
+        commitment: sha256:56c3f8e9f68c7acd05bcf1e5d619cb1c4e9f91efafb471a3c60675c983fe7ed6
 cel:
   mode: worker
   worker_count: 4
@@ -5112,7 +5119,10 @@ auth:
   mode: api_key
   api_keys:
     - id: test-key
-      hash_env: TEST_TOKEN_HASH
+      fingerprint:
+        provider: env
+        name: TEST_TOKEN_HASH
+        commitment: sha256:56c3f8e9f68c7acd05bcf1e5d619cb1c4e9f91efafb471a3c60675c983fe7ed6
 "#,
         )
         .expect("config shape parses");
@@ -6673,7 +6683,14 @@ auth:
         let mut config = valid_self_attestation_config();
         config.auth.api_keys.push(EvidenceCredentialConfig {
             id: "legacy-api-key".to_string(),
-            hash_env: "LEGACY_API_KEY_HASH".to_string(),
+            fingerprint: CredentialFingerprintRef {
+                provider: registry_platform_authcommon::CredentialFingerprintProvider::Env,
+                name: Some("LEGACY_API_KEY_HASH".to_string()),
+                path: None,
+                commitment:
+                    "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                        .to_string(),
+            },
             scopes: vec!["self_attestation".to_string()],
         });
 
@@ -7298,7 +7315,10 @@ auth:
   mode: api_key
   api_keys:
     - id: caseworker
-      hash_env: TEST_HASH
+      fingerprint:
+        provider: env
+        name: TEST_HASH
+        commitment: sha256:99292e759add3e4112a464b31437bebf77accdf88e2ca09d6a538f909ea6d694
       scopes: [civil_registry:evidence_verification]
 evidence:
   enabled: true
@@ -7884,7 +7904,14 @@ allowed_claims: ["", "   "]
         config.auth.mode = "api_key".to_string();
         config.auth.api_keys.push(EvidenceCredentialConfig {
             id: "api".to_string(),
-            hash_env: "API_HASH".to_string(),
+            fingerprint: CredentialFingerprintRef {
+                provider: registry_platform_authcommon::CredentialFingerprintProvider::Env,
+                name: Some("API_HASH".to_string()),
+                path: None,
+                commitment:
+                    "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                        .to_string(),
+            },
             scopes: Vec::new(),
         });
 

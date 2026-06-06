@@ -57,7 +57,7 @@ Config files should contain names, not secret values.
 
 | Need | Config field | Environment value |
 | --- | --- | --- |
-| API key or bearer-token auth | `auth.api_keys[].hash_env`, `auth.bearer_tokens[].hash_env` | `sha256:<hex>` hash |
+| API key or bearer-token auth | `auth.api_keys[].fingerprint`, `auth.bearer_tokens[].fingerprint` | `sha256:<hex>` fingerprint |
 | Static upstream source token | `evidence.source_connections.<id>.token_env` | Raw upstream bearer token |
 | OAuth2 client credential source auth | `source_auth.client_id_env`, `source_auth.client_secret_env` | OAuth client id and secret |
 | Local JWK signing key | `evidence.signing_keys.<id>.private_jwk_env` | Private Ed25519 JWK JSON |
@@ -183,7 +183,10 @@ auth:
   mode: api_key
   api_keys:
     - id: verifier-service
-      hash_env: REGISTRY_NOTARY_API_KEY_HASH
+      fingerprint:
+        provider: env
+        name: REGISTRY_NOTARY_API_KEY_HASH
+        commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
       scopes:
         - civil_registry:evidence_verification
         - registry_notary:credential_issue
@@ -271,9 +274,9 @@ evidence:
 ## Authentication
 
 `auth.mode: api_key` is for backend integrations. Configure at least one API key
-or bearer token. Each entry has an `id`, a `hash_env`, and scopes. Use the
-smallest scope set each caller needs. Admin functions, including metrics and
-credential status mutation, require `registry_notary:admin`.
+or bearer token. Each entry has an `id`, a committed `fingerprint`, and scopes.
+Use the smallest scope set each caller needs. Admin functions, including metrics
+and credential status mutation, require `registry_notary:admin`.
 
 `auth.mode: oidc` is for citizen and wallet flows. When OIDC is selected,
 `auth.api_keys` and `auth.bearer_tokens` must be empty. Configure:
