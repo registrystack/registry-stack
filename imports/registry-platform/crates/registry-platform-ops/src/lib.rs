@@ -4,9 +4,18 @@
 //! collection. This crate owns the shared public contract and the emit-only
 //! sensitivity-tier filter used before posture leaves a runtime.
 
+use std::fmt::{self, Display, Write as _};
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use fs2::FileExt;
+use registry_platform_crypto::canonicalize_json;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 pub const POSTURE_SCHEMA_V1: &str = include_str!("../schemas/registry.ops.posture.v1.schema.json");
 
@@ -27,6 +36,978 @@ pub const DEFAULT_REDACTED_POSTURE_FIXTURE_V1: &str =
 
 pub const RESTRICTED_POSTURE_FIXTURE_V1: &str =
     include_str!("../fixtures/posture/restricted-posture.valid.json");
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ConfigSource {
+    LocalFile,
+    SignedBundleFile,
+    SignedBundleEndpoint,
+    Unknown,
+}
+
+impl ConfigSource {
+    pub fn as_posture_str(self) -> &'static str {
+        match self {
+            Self::LocalFile => "local_file",
+            Self::SignedBundleFile => "signed_bundle_file",
+            Self::SignedBundleEndpoint => "signed_bundle_endpoint",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConfigProvenance {
+    pub source: ConfigSource,
+    pub internal_config_hash: String,
+    pub posture_config_hash: String,
+    pub dynamic_reload_supported: bool,
+    pub last_bundle_id: Option<String>,
+    pub last_bundle_sequence: Option<u64>,
+    pub last_apply_result: Option<PostureApplyResult>,
+    pub last_apply_at: Option<String>,
+    pub restart_required: bool,
+}
+
+impl ConfigProvenance {
+    pub fn local_file(
+        internal_config_hash: impl Into<String>,
+        posture_config_hash: impl Into<String>,
+        dynamic_reload_supported: bool,
+    ) -> Self {
+        Self {
+            source: ConfigSource::LocalFile,
+            internal_config_hash: internal_config_hash.into(),
+            posture_config_hash: posture_config_hash.into(),
+            dynamic_reload_supported,
+            last_bundle_id: None,
+            last_bundle_sequence: None,
+            last_apply_result: None,
+            last_apply_at: None,
+            restart_required: false,
+        }
+    }
+
+    pub fn posture_source(&self) -> &'static str {
+        self.source.as_posture_str()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ApplyReportResult {
+    Verified,
+    Applied,
+    RejectedSignature,
+    RejectedThreshold,
+    RejectedFreshness,
+    RejectedRollback,
+    RejectedRestartRequired,
+    RejectedReadiness,
+    RejectedBreakGlass,
+    RejectedLocalApproval,
+    InternalError,
+}
+
+impl ApplyReportResult {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Verified => "verified",
+            Self::Applied => "applied",
+            Self::RejectedSignature => "rejected_signature",
+            Self::RejectedThreshold => "rejected_threshold",
+            Self::RejectedFreshness => "rejected_freshness",
+            Self::RejectedRollback => "rejected_rollback",
+            Self::RejectedRestartRequired => "rejected_restart_required",
+            Self::RejectedReadiness => "rejected_readiness",
+            Self::RejectedBreakGlass => "rejected_break_glass",
+            Self::RejectedLocalApproval => "rejected_local_approval",
+            Self::InternalError => "internal_error",
+        }
+    }
+
+    pub fn as_posture_result(self) -> PostureApplyResult {
+        match self {
+            Self::Verified => PostureApplyResult::NotApplied,
+            Self::Applied => PostureApplyResult::Accepted,
+            Self::RejectedSignature
+            | Self::RejectedThreshold
+            | Self::RejectedFreshness
+            | Self::RejectedRollback
+            | Self::RejectedRestartRequired
+            | Self::RejectedReadiness
+            | Self::RejectedBreakGlass
+            | Self::RejectedLocalApproval => PostureApplyResult::Rejected,
+            Self::InternalError => PostureApplyResult::Failed,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum PostureApplyResult {
+    Accepted,
+    Rejected,
+    Failed,
+    NotApplied,
+}
+
+impl PostureApplyResult {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Rejected => "rejected",
+            Self::Failed => "failed",
+            Self::NotApplied => "not_applied",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct AntiRollbackKey {
+    pub product: String,
+    pub instance_id: String,
+    pub environment: String,
+    pub stream_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct AntiRollbackRecord {
+    pub key: AntiRollbackKey,
+    pub last_sequence: u64,
+    pub last_config_hash: String,
+    pub root_version: Option<u64>,
+    #[serde(default)]
+    pub break_glass: BreakGlassState,
+    #[serde(default)]
+    pub local_approvals: LocalApprovalState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AntiRollbackProposal {
+    pub sequence: u64,
+    pub previous_config_hash: Option<String>,
+    pub config_hash: String,
+    pub root_version: Option<u64>,
+    pub break_glass: Option<BreakGlassApproval>,
+    pub break_glass_rate_limit: Option<BreakGlassRateLimit>,
+    pub local_approval: Option<LocalOperatorApproval>,
+    pub local_approval_rate_limit: Option<BreakGlassRateLimit>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct BreakGlassState {
+    #[serde(default)]
+    pub accepted: Vec<BreakGlassAcceptance>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct BreakGlassAcceptance {
+    pub accepted_at_unix_seconds: u64,
+    pub approval_reference: String,
+    pub rate_limit_identity: String,
+    pub sequence: u64,
+    pub config_hash: String,
+    pub expires_at_unix_seconds: u64,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct LocalApprovalState {
+    #[serde(default)]
+    pub accepted: Vec<LocalApprovalAcceptance>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct LocalApprovalAcceptance {
+    pub accepted_at_unix_seconds: u64,
+    pub approval_reference: String,
+    pub change_class: String,
+    pub rate_limit_identity: String,
+    pub sequence: u64,
+    pub config_hash: String,
+    pub expires_at_unix_seconds: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct LocalOperatorApproval {
+    pub approved_by: String,
+    pub reason: String,
+    pub approval_reference: String,
+    pub change_class: String,
+    pub config_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_config_hash: Option<String>,
+    pub expires_at_unix_seconds: u64,
+    pub rate_limit_identity: String,
+    pub rate_limit: BreakGlassRateLimit,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct BreakGlassApproval {
+    pub approved_by: String,
+    pub reason: String,
+    pub approval_reference: String,
+    pub emergency_change_class: String,
+    pub expires_at_unix_seconds: u64,
+    pub rate_limit_identity: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct BreakGlassRateLimit {
+    pub max_accepted: u32,
+    pub window_seconds: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AntiRollbackStoreError {
+    MissingState,
+    KeyMismatch,
+    NonMonotonicSequence,
+    RootVersionRollback,
+    PreviousConfigHashMismatch,
+    BreakGlassUnsupported,
+    BreakGlassApprovalExpired,
+    BreakGlassRateLimitMissing,
+    BreakGlassRateLimited,
+    LocalApprovalExpired,
+    LocalApprovalRateLimitMissing,
+    LocalApprovalRateLimited,
+    InvalidLocalApproval(&'static str),
+    InvalidBreakGlassApproval(&'static str),
+    InvalidBreakGlassRateLimit(&'static str),
+    InvalidState(String),
+    Io(String),
+    Json(String),
+}
+
+impl Display for AntiRollbackStoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingState => write!(f, "anti-rollback state is missing"),
+            Self::KeyMismatch => write!(f, "anti-rollback state key does not match runtime"),
+            Self::NonMonotonicSequence => write!(f, "bundle sequence is not monotonic"),
+            Self::RootVersionRollback => write!(f, "TUF root version is not monotonic"),
+            Self::PreviousConfigHashMismatch => write!(f, "previous config hash does not match"),
+            Self::BreakGlassUnsupported => write!(f, "break-glass approval is not supported"),
+            Self::BreakGlassApprovalExpired => write!(f, "break-glass approval is expired"),
+            Self::BreakGlassRateLimitMissing => {
+                write!(f, "break-glass rate limit policy is missing")
+            }
+            Self::BreakGlassRateLimited => write!(f, "break-glass rate limit exceeded"),
+            Self::LocalApprovalExpired => write!(f, "local approval is expired"),
+            Self::LocalApprovalRateLimitMissing => {
+                write!(f, "local approval rate limit policy is missing")
+            }
+            Self::LocalApprovalRateLimited => write!(f, "local approval rate limit exceeded"),
+            Self::InvalidLocalApproval(field) => {
+                write!(f, "local approval field is invalid: {field}")
+            }
+            Self::InvalidBreakGlassApproval(field) => {
+                write!(f, "break-glass approval field is invalid: {field}")
+            }
+            Self::InvalidBreakGlassRateLimit(field) => {
+                write!(f, "break-glass rate limit field is invalid: {field}")
+            }
+            Self::InvalidState(message) => write!(f, "invalid anti-rollback state: {message}"),
+            Self::Io(message) => write!(f, "anti-rollback state I/O error: {message}"),
+            Self::Json(message) => write!(f, "anti-rollback state JSON error: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for AntiRollbackStoreError {}
+
+#[derive(Clone, Debug)]
+pub struct FileAntiRollbackStore {
+    path: PathBuf,
+    break_glass_rate_limit: Option<BreakGlassRateLimit>,
+}
+
+impl FileAntiRollbackStore {
+    pub fn new(path: impl AsRef<Path>) -> Self {
+        Self {
+            path: path.as_ref().to_path_buf(),
+            break_glass_rate_limit: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_break_glass_rate_limit(mut self, rate_limit: BreakGlassRateLimit) -> Self {
+        self.break_glass_rate_limit = Some(rate_limit);
+        self
+    }
+
+    pub fn load(
+        &self,
+        key: &AntiRollbackKey,
+    ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
+        let bytes = match fs::read(&self.path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(AntiRollbackStoreError::MissingState);
+            }
+            Err(error) => return Err(AntiRollbackStoreError::Io(error.to_string())),
+        };
+        let record: AntiRollbackRecord = serde_json::from_slice(&bytes)
+            .map_err(|error| AntiRollbackStoreError::Json(error.to_string()))?;
+        record.validate()?;
+        if &record.key != key {
+            return Err(AntiRollbackStoreError::KeyMismatch);
+        }
+        Ok(record)
+    }
+
+    pub fn initialize(&self, record: AntiRollbackRecord) -> Result<(), AntiRollbackStoreError> {
+        let _lock = self.acquire_lock()?;
+        record.validate()?;
+        self.write_record(&record)
+    }
+
+    pub fn accept(
+        &self,
+        key: &AntiRollbackKey,
+        proposal: AntiRollbackProposal,
+    ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
+        self.accept_at(key, proposal, current_unix_seconds()?)
+    }
+
+    pub fn accept_at(
+        &self,
+        key: &AntiRollbackKey,
+        proposal: AntiRollbackProposal,
+        now_unix_seconds: u64,
+    ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
+        let _lock = self.acquire_lock()?;
+        let current = self.load(key)?;
+        if proposal.sequence <= current.last_sequence {
+            return Err(AntiRollbackStoreError::NonMonotonicSequence);
+        }
+        if let (Some(current_root_version), Some(proposed_root_version)) =
+            (current.root_version, proposal.root_version)
+        {
+            if proposed_root_version < current_root_version {
+                return Err(AntiRollbackStoreError::RootVersionRollback);
+            }
+        }
+        let mut break_glass = current.break_glass.clone();
+        let mut local_approvals = current.local_approvals.clone();
+        let approved_break_glass = if let Some(approval) = &proposal.break_glass {
+            let rate_limit = match (self.break_glass_rate_limit, proposal.break_glass_rate_limit) {
+                (Some(local), Some(proposed)) if local != proposed => {
+                    return Err(AntiRollbackStoreError::InvalidBreakGlassRateLimit(
+                        "policy_mismatch",
+                    ));
+                }
+                (Some(local), _) => local,
+                (None, Some(proposed)) => proposed,
+                (None, None) => return Err(AntiRollbackStoreError::BreakGlassRateLimitMissing),
+            };
+            validate_break_glass_approval(approval, now_unix_seconds)?;
+            validate_break_glass_rate_limit(rate_limit)?;
+            enforce_break_glass_rate_limit(
+                &mut break_glass,
+                approval,
+                rate_limit,
+                proposal.sequence,
+                &proposal.config_hash,
+                now_unix_seconds,
+            )?;
+            true
+        } else {
+            false
+        };
+        if !approved_break_glass
+            && proposal.previous_config_hash.as_deref() != Some(current.last_config_hash.as_str())
+        {
+            return Err(AntiRollbackStoreError::PreviousConfigHashMismatch);
+        }
+        if let Some(approval) = &proposal.local_approval {
+            let rate_limit = proposal
+                .local_approval_rate_limit
+                .ok_or(AntiRollbackStoreError::LocalApprovalRateLimitMissing)?;
+            validate_local_approval(
+                approval,
+                &proposal.config_hash,
+                proposal.previous_config_hash.as_deref(),
+                now_unix_seconds,
+            )?;
+            validate_break_glass_rate_limit(rate_limit)?;
+            if approval.rate_limit != rate_limit {
+                return Err(AntiRollbackStoreError::InvalidLocalApproval("rate_limit"));
+            }
+            enforce_local_approval_rate_limit(
+                &mut local_approvals,
+                approval,
+                rate_limit,
+                proposal.sequence,
+                now_unix_seconds,
+            )?;
+        }
+        let accepted = AntiRollbackRecord {
+            key: key.clone(),
+            last_sequence: proposal.sequence,
+            last_config_hash: proposal.config_hash,
+            root_version: proposal.root_version.or(current.root_version),
+            break_glass,
+            local_approvals,
+        };
+        accepted.validate()?;
+        self.write_record(&accepted)?;
+        Ok(accepted)
+    }
+
+    fn write_record(&self, record: &AntiRollbackRecord) -> Result<(), AntiRollbackStoreError> {
+        let target_path = self.write_target_path()?;
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
+        }
+        let bytes = serde_json::to_vec_pretty(record)
+            .map_err(|error| AntiRollbackStoreError::Json(error.to_string()))?;
+        let tmp_path = target_path.with_extension("tmp");
+        {
+            let mut file = fs::File::create(&tmp_path)
+                .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
+            file.write_all(&bytes)
+                .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
+            file.write_all(b"\n")
+                .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
+            file.sync_all()
+                .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
+        }
+        fs::rename(&tmp_path, &target_path)
+            .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
+        Ok(())
+    }
+
+    fn write_target_path(&self) -> Result<PathBuf, AntiRollbackStoreError> {
+        match fs::symlink_metadata(&self.path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => self
+                .path
+                .canonicalize()
+                .map_err(|error| AntiRollbackStoreError::Io(error.to_string())),
+            Ok(_) => Ok(self.path.clone()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(self.path.clone()),
+            Err(error) => Err(AntiRollbackStoreError::Io(error.to_string())),
+        }
+    }
+
+    fn acquire_lock(&self) -> Result<AntiRollbackStoreLock, AntiRollbackStoreError> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
+        }
+        let lock_path = self.path.with_extension("lock");
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(lock_path)
+            .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
+        file.lock_exclusive()
+            .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
+        Ok(AntiRollbackStoreLock { file })
+    }
+}
+
+struct AntiRollbackStoreLock {
+    file: fs::File,
+}
+
+impl Drop for AntiRollbackStoreLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
+impl AntiRollbackRecord {
+    fn validate(&self) -> Result<(), AntiRollbackStoreError> {
+        validate_non_empty("product", &self.key.product)?;
+        validate_non_empty("instance_id", &self.key.instance_id)?;
+        validate_non_empty("environment", &self.key.environment)?;
+        validate_non_empty("stream_id", &self.key.stream_id)?;
+        validate_hash(&self.last_config_hash)?;
+        for accepted in &self.break_glass.accepted {
+            validate_non_empty(
+                "break_glass.approval_reference",
+                &accepted.approval_reference,
+            )?;
+            validate_non_empty(
+                "break_glass.rate_limit_identity",
+                &accepted.rate_limit_identity,
+            )?;
+            validate_hash(&accepted.config_hash)?;
+        }
+        for accepted in &self.local_approvals.accepted {
+            validate_non_empty(
+                "local_approvals.approval_reference",
+                &accepted.approval_reference,
+            )?;
+            validate_non_empty("local_approvals.change_class", &accepted.change_class)?;
+            validate_non_empty(
+                "local_approvals.rate_limit_identity",
+                &accepted.rate_limit_identity,
+            )?;
+            validate_hash(&accepted.config_hash)?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_break_glass_approval(
+    approval: &BreakGlassApproval,
+    now_unix_seconds: u64,
+) -> Result<(), AntiRollbackStoreError> {
+    validate_approval_field("approved_by", &approval.approved_by)?;
+    validate_approval_field("reason", &approval.reason)?;
+    validate_approval_field("approval_reference", &approval.approval_reference)?;
+    validate_approval_field("emergency_change_class", &approval.emergency_change_class)?;
+    validate_approval_field("rate_limit_identity", &approval.rate_limit_identity)?;
+    if approval.expires_at_unix_seconds <= now_unix_seconds {
+        return Err(AntiRollbackStoreError::BreakGlassApprovalExpired);
+    }
+    Ok(())
+}
+
+fn validate_local_approval(
+    approval: &LocalOperatorApproval,
+    config_hash: &str,
+    previous_config_hash: Option<&str>,
+    now_unix_seconds: u64,
+) -> Result<(), AntiRollbackStoreError> {
+    validate_local_approval_field("approved_by", &approval.approved_by)?;
+    validate_local_approval_field("reason", &approval.reason)?;
+    validate_local_approval_field("approval_reference", &approval.approval_reference)?;
+    validate_local_approval_field("change_class", &approval.change_class)?;
+    validate_local_approval_field("rate_limit_identity", &approval.rate_limit_identity)?;
+    validate_hash(&approval.config_hash)?;
+    if approval.config_hash != config_hash {
+        return Err(AntiRollbackStoreError::InvalidLocalApproval("config_hash"));
+    }
+    if approval.previous_config_hash.as_deref() != previous_config_hash {
+        return Err(AntiRollbackStoreError::InvalidLocalApproval(
+            "previous_config_hash",
+        ));
+    }
+    validate_break_glass_rate_limit(approval.rate_limit)
+        .map_err(|_| AntiRollbackStoreError::InvalidLocalApproval("rate_limit"))?;
+    if approval.expires_at_unix_seconds <= now_unix_seconds {
+        return Err(AntiRollbackStoreError::LocalApprovalExpired);
+    }
+    Ok(())
+}
+
+fn validate_local_approval_field(
+    name: &'static str,
+    value: &str,
+) -> Result<(), AntiRollbackStoreError> {
+    if value.trim().is_empty() {
+        return Err(AntiRollbackStoreError::InvalidLocalApproval(name));
+    }
+    Ok(())
+}
+
+fn validate_approval_field(name: &'static str, value: &str) -> Result<(), AntiRollbackStoreError> {
+    if value.trim().is_empty() {
+        return Err(AntiRollbackStoreError::InvalidBreakGlassApproval(name));
+    }
+    Ok(())
+}
+
+fn validate_break_glass_rate_limit(
+    rate_limit: BreakGlassRateLimit,
+) -> Result<(), AntiRollbackStoreError> {
+    if rate_limit.max_accepted == 0 {
+        return Err(AntiRollbackStoreError::InvalidBreakGlassRateLimit(
+            "max_accepted",
+        ));
+    }
+    if rate_limit.window_seconds == 0 {
+        return Err(AntiRollbackStoreError::InvalidBreakGlassRateLimit(
+            "window_seconds",
+        ));
+    }
+    Ok(())
+}
+
+fn enforce_local_approval_rate_limit(
+    state: &mut LocalApprovalState,
+    approval: &LocalOperatorApproval,
+    rate_limit: BreakGlassRateLimit,
+    sequence: u64,
+    now_unix_seconds: u64,
+) -> Result<(), AntiRollbackStoreError> {
+    state.accepted.retain(|accepted| {
+        accepted
+            .accepted_at_unix_seconds
+            .saturating_add(rate_limit.window_seconds)
+            > now_unix_seconds
+    });
+    let in_window_for_identity = state
+        .accepted
+        .iter()
+        .filter(|accepted| accepted.rate_limit_identity == approval.rate_limit_identity)
+        .count();
+    if in_window_for_identity >= rate_limit.max_accepted as usize {
+        return Err(AntiRollbackStoreError::LocalApprovalRateLimited);
+    }
+    state.accepted.push(LocalApprovalAcceptance {
+        accepted_at_unix_seconds: now_unix_seconds,
+        approval_reference: approval.approval_reference.clone(),
+        change_class: approval.change_class.clone(),
+        rate_limit_identity: approval.rate_limit_identity.clone(),
+        sequence,
+        config_hash: approval.config_hash.clone(),
+        expires_at_unix_seconds: approval.expires_at_unix_seconds,
+    });
+    Ok(())
+}
+
+fn enforce_break_glass_rate_limit(
+    state: &mut BreakGlassState,
+    approval: &BreakGlassApproval,
+    rate_limit: BreakGlassRateLimit,
+    sequence: u64,
+    config_hash: &str,
+    now_unix_seconds: u64,
+) -> Result<(), AntiRollbackStoreError> {
+    state.accepted.retain(|accepted| {
+        accepted
+            .accepted_at_unix_seconds
+            .saturating_add(rate_limit.window_seconds)
+            > now_unix_seconds
+    });
+    let in_window_for_identity = state
+        .accepted
+        .iter()
+        .filter(|accepted| accepted.rate_limit_identity == approval.rate_limit_identity)
+        .count();
+    if in_window_for_identity >= rate_limit.max_accepted as usize {
+        return Err(AntiRollbackStoreError::BreakGlassRateLimited);
+    }
+    state.accepted.push(BreakGlassAcceptance {
+        accepted_at_unix_seconds: now_unix_seconds,
+        approval_reference: approval.approval_reference.clone(),
+        rate_limit_identity: approval.rate_limit_identity.clone(),
+        sequence,
+        config_hash: config_hash.to_string(),
+        expires_at_unix_seconds: approval.expires_at_unix_seconds,
+    });
+    Ok(())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct LocalApprovalFile {
+    #[serde(default)]
+    pub approvals: Vec<LocalOperatorApproval>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FileLocalApprovalStore {
+    path: PathBuf,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LocalApprovalStoreError {
+    MissingState,
+    ApprovalNotFound,
+    ApprovalExpired,
+    InvalidApproval(&'static str),
+    InvalidState(String),
+    Io(String),
+    Json(String),
+}
+
+impl Display for LocalApprovalStoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingState => write!(f, "local approval state is missing"),
+            Self::ApprovalNotFound => write!(f, "local approval was not found"),
+            Self::ApprovalExpired => write!(f, "local approval is expired"),
+            Self::InvalidApproval(field) => write!(f, "local approval field is invalid: {field}"),
+            Self::InvalidState(message) => write!(f, "invalid local approval state: {message}"),
+            Self::Io(message) => write!(f, "local approval state I/O error: {message}"),
+            Self::Json(message) => write!(f, "local approval state JSON error: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for LocalApprovalStoreError {}
+
+impl FileLocalApprovalStore {
+    pub fn new(path: impl AsRef<Path>) -> Self {
+        Self {
+            path: path.as_ref().to_path_buf(),
+        }
+    }
+
+    pub fn load_for_apply(
+        &self,
+        approval_reference: &str,
+        change_class: &str,
+        config_hash: &str,
+        previous_config_hash: Option<&str>,
+    ) -> Result<LocalOperatorApproval, LocalApprovalStoreError> {
+        self.load_for_apply_at(
+            approval_reference,
+            change_class,
+            config_hash,
+            previous_config_hash,
+            current_unix_seconds()
+                .map_err(|error| LocalApprovalStoreError::Io(error.to_string()))?,
+        )
+    }
+
+    pub fn load_for_apply_at(
+        &self,
+        approval_reference: &str,
+        change_class: &str,
+        config_hash: &str,
+        previous_config_hash: Option<&str>,
+        now_unix_seconds: u64,
+    ) -> Result<LocalOperatorApproval, LocalApprovalStoreError> {
+        let bytes = match fs::read(&self.path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(LocalApprovalStoreError::MissingState);
+            }
+            Err(error) => return Err(LocalApprovalStoreError::Io(error.to_string())),
+        };
+        let state: LocalApprovalFile = serde_json::from_slice(&bytes)
+            .map_err(|error| LocalApprovalStoreError::Json(error.to_string()))?;
+        let approval = state
+            .approvals
+            .into_iter()
+            .find(|approval| {
+                approval.approval_reference == approval_reference
+                    && approval.change_class == change_class
+                    && approval.config_hash == config_hash
+                    && approval.previous_config_hash.as_deref() == previous_config_hash
+            })
+            .ok_or(LocalApprovalStoreError::ApprovalNotFound)?;
+        validate_local_approval(
+            &approval,
+            config_hash,
+            previous_config_hash,
+            now_unix_seconds,
+        )
+        .map_err(local_approval_store_error)?;
+        Ok(approval)
+    }
+}
+
+fn local_approval_store_error(error: AntiRollbackStoreError) -> LocalApprovalStoreError {
+    match error {
+        AntiRollbackStoreError::LocalApprovalExpired => LocalApprovalStoreError::ApprovalExpired,
+        AntiRollbackStoreError::InvalidLocalApproval(field) => {
+            LocalApprovalStoreError::InvalidApproval(field)
+        }
+        other => LocalApprovalStoreError::InvalidState(other.to_string()),
+    }
+}
+
+fn current_unix_seconds() -> Result<u64, AntiRollbackStoreError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))
+}
+
+fn validate_non_empty(name: &str, value: &str) -> Result<(), AntiRollbackStoreError> {
+    if value.trim().is_empty() {
+        return Err(AntiRollbackStoreError::InvalidState(format!(
+            "{name} is empty"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_hash(value: &str) -> Result<(), AntiRollbackStoreError> {
+    let hex = value.strip_prefix("sha256:").ok_or_else(|| {
+        AntiRollbackStoreError::InvalidState("hash must start with sha256:".to_string())
+    })?;
+    if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(AntiRollbackStoreError::InvalidState(
+            "hash must be sha256 plus 64 hex characters".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ConfigValueSensitivity {
+    Public,
+    Secret,
+}
+
+/// Hash the exact source bytes read by the local loader.
+///
+/// This intentionally tracks byte identity for local files. Structured config
+/// hash preimages, including posture-safe hashes, are canonicalized separately.
+pub fn internal_config_hash(bytes: &[u8]) -> String {
+    sha256_hex(bytes)
+}
+
+pub fn posture_safe_runtime_config_hash(value: &Value) -> String {
+    posture_safe_config_hash(value, registry_runtime_config_sensitivity)
+}
+
+pub fn posture_safe_config_hash(
+    value: &Value,
+    classify: impl Fn(&[&str], &Value) -> ConfigValueSensitivity,
+) -> String {
+    let mut path = [""; CONFIG_REDACTION_PATH_STACK_LIMIT];
+    let redacted = redact_config_secrets(value, &mut path, 0, &classify);
+    let bytes = canonicalize_json(&redacted).expect("serde_json::Value canonicalizes");
+    sha256_hex(&bytes)
+}
+
+pub fn registry_runtime_config_sensitivity(
+    path: &[&str],
+    _value: &Value,
+) -> ConfigValueSensitivity {
+    if path.is_empty() || is_public_runtime_config_path(path) || has_public_descendant(path) {
+        ConfigValueSensitivity::Public
+    } else {
+        ConfigValueSensitivity::Secret
+    }
+}
+
+fn is_public_runtime_config_path(path: &[&str]) -> bool {
+    matches!(
+        path,
+        ["instance", "id"]
+            | ["instance", "environment"]
+            | ["instance", "owner"]
+            | ["instance", "jurisdiction"]
+            | ["instance", "public_base_url"]
+            | ["catalog", "base_url"]
+            | ["auth", "mode"]
+            | ["audit", "sink"]
+            | ["replay", "storage"]
+            | ["credential_status", "enabled"]
+            | ["credential_status", "storage"]
+    )
+}
+
+fn has_public_descendant(path: &[&str]) -> bool {
+    PUBLIC_RUNTIME_CONFIG_PATHS
+        .iter()
+        .any(|public_path| path.len() < public_path.len() && public_path.starts_with(path))
+}
+
+const PUBLIC_RUNTIME_CONFIG_PATHS: &[&[&str]] = &[
+    &["instance", "id"],
+    &["instance", "environment"],
+    &["instance", "owner"],
+    &["instance", "jurisdiction"],
+    &["instance", "public_base_url"],
+    &["catalog", "base_url"],
+    &["auth", "mode"],
+    &["audit", "sink"],
+    &["replay", "storage"],
+    &["credential_status", "enabled"],
+    &["credential_status", "storage"],
+];
+
+const CONFIG_REDACTION_PATH_STACK_LIMIT: usize = 64;
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut output = String::with_capacity("sha256:".len() + 64);
+    output.push_str("sha256:");
+    for byte in digest {
+        write!(&mut output, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    output
+}
+
+fn redact_config_secrets<'a>(
+    value: &'a Value,
+    path: &mut [&'a str],
+    depth: usize,
+    classify: &impl Fn(&[&str], &Value) -> ConfigValueSensitivity,
+) -> Value {
+    if classify(&path[..depth], value) == ConfigValueSensitivity::Secret {
+        return Value::String("[secret]".to_string());
+    }
+
+    match value {
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| redact_config_secrets_child(item, path, depth, "*", classify))
+                .collect(),
+        ),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, child)| {
+                    (
+                        key.clone(),
+                        redact_config_secrets_child(child, path, depth, key, classify),
+                    )
+                })
+                .collect(),
+        ),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => value.clone(),
+    }
+}
+
+fn redact_config_secrets_child<'a>(
+    value: &'a Value,
+    path: &mut [&'a str],
+    depth: usize,
+    segment: &'a str,
+    classify: &impl Fn(&[&str], &Value) -> ConfigValueSensitivity,
+) -> Value {
+    if depth < path.len() {
+        path[depth] = segment;
+        redact_config_secrets(value, path, depth + 1, classify)
+    } else {
+        let mut overflow_path = Vec::with_capacity(path.len() + 1);
+        overflow_path.extend_from_slice(path);
+        overflow_path.push(segment);
+        redact_config_secrets_overflow(value, &mut overflow_path, classify)
+    }
+}
+
+fn redact_config_secrets_overflow<'a>(
+    value: &'a Value,
+    path: &mut Vec<&'a str>,
+    classify: &impl Fn(&[&str], &Value) -> ConfigValueSensitivity,
+) -> Value {
+    if classify(path, value) == ConfigValueSensitivity::Secret {
+        return Value::String("[secret]".to_string());
+    }
+
+    match value {
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| {
+                    path.push("*");
+                    let redacted = redact_config_secrets_overflow(item, path, classify);
+                    path.pop();
+                    redacted
+                })
+                .collect(),
+        ),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, child)| {
+                    path.push(key);
+                    let redacted = redact_config_secrets_overflow(child, path, classify);
+                    path.pop();
+                    (key.clone(), redacted)
+                })
+                .collect(),
+        ),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => value.clone(),
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PostureTier {

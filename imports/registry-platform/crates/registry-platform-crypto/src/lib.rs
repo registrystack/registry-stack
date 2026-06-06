@@ -30,6 +30,93 @@ pub enum SigningAlgorithm {
     Rs256,
 }
 
+/// Shared, public provider-kind vocabulary for signing keys.
+///
+/// Provider-specific connection fields remain product-local so simple local
+/// config, PKCS#11, KMS, and future provider syntax can evolve independently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum KeyProviderKind {
+    LocalJwkEnv,
+    FileWatch,
+    Pkcs11,
+    LocalPkcs12File,
+    Kms,
+}
+
+impl KeyProviderKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LocalJwkEnv => "local_jwk_env",
+            Self::FileWatch => "file_watch",
+            Self::Pkcs11 => "pkcs11",
+            Self::LocalPkcs12File => "local_pkcs12_file",
+            Self::Kms => "kms",
+        }
+    }
+}
+
+/// Shared lifecycle status for a configured signing key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum KeyStatus {
+    Active,
+    PublishOnly,
+    Disabled,
+}
+
+impl KeyStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::PublishOnly => "publish_only",
+            Self::Disabled => "disabled",
+        }
+    }
+
+    #[must_use]
+    pub const fn may_sign(self) -> bool {
+        matches!(self, Self::Active)
+    }
+
+    #[must_use]
+    pub const fn may_publish(self) -> bool {
+        matches!(self, Self::Active | Self::PublishOnly)
+    }
+}
+
+/// Shared readiness labels for public posture and apply reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum KeyReadiness {
+    Ready,
+    Degraded,
+    NotReady,
+    Unknown,
+}
+
+impl KeyReadiness {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Degraded => "degraded",
+            Self::NotReady => "not_ready",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    #[must_use]
+    pub const fn is_ready(self) -> bool {
+        matches!(self, Self::Ready)
+    }
+}
+
 #[derive(Clone, Deserialize)]
 pub struct PrivateJwk {
     pub kty: String,
@@ -131,6 +218,14 @@ pub trait SigningProvider: Send + Sync {
     fn key_id(&self) -> &str;
     /// Public verification JWK for this provider.
     fn public_jwk(&self) -> PublicJwk;
+    /// Current readiness of the signing backend.
+    ///
+    /// Local in-memory providers are ready once constructed. Providers backed by
+    /// watched files, HSMs, KMS, or other external systems should override this
+    /// when they can degrade after startup.
+    fn readiness(&self) -> KeyReadiness {
+        KeyReadiness::Ready
+    }
     /// Sign the exact bytes supplied by the caller.
     async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, SigningError>;
 }
@@ -1399,6 +1494,75 @@ mod tests {
             hmac_sha256_base64url_no_pad(b"key", b"The quick brown fox jumps over the lazy dog"),
             "97yD9DBThCSxMpjmqm-xQ-9NWaFJRhdZl0edvC0aPNg"
         );
+    }
+
+    #[test]
+    fn key_provider_kind_serializes_shared_labels() {
+        let cases = [
+            (KeyProviderKind::LocalJwkEnv, "local_jwk_env"),
+            (KeyProviderKind::FileWatch, "file_watch"),
+            (KeyProviderKind::Pkcs11, "pkcs11"),
+            (KeyProviderKind::LocalPkcs12File, "local_pkcs12_file"),
+            (KeyProviderKind::Kms, "kms"),
+        ];
+
+        for (kind, expected) in cases {
+            let serialized = serde_json::to_string(&kind).expect("provider kind serializes");
+            assert_eq!(serialized, format!("\"{expected}\""));
+            let decoded: KeyProviderKind =
+                serde_json::from_str(&serialized).expect("provider kind deserializes");
+            assert_eq!(decoded, kind);
+            assert_eq!(decoded.as_str(), expected);
+        }
+    }
+
+    #[test]
+    fn key_status_serializes_shared_labels_and_capabilities() {
+        let cases = [
+            (KeyStatus::Active, "active", true, true),
+            (KeyStatus::PublishOnly, "publish_only", false, true),
+            (KeyStatus::Disabled, "disabled", false, false),
+        ];
+
+        for (status, expected, may_sign, may_publish) in cases {
+            let serialized = serde_json::to_string(&status).expect("key status serializes");
+            assert_eq!(serialized, format!("\"{expected}\""));
+            let decoded: KeyStatus =
+                serde_json::from_str(&serialized).expect("key status deserializes");
+            assert_eq!(decoded, status);
+            assert_eq!(decoded.as_str(), expected);
+            assert_eq!(decoded.may_sign(), may_sign);
+            assert_eq!(decoded.may_publish(), may_publish);
+        }
+    }
+
+    #[test]
+    fn key_readiness_serializes_shared_labels() {
+        let cases = [
+            (KeyReadiness::Ready, "ready", true),
+            (KeyReadiness::Degraded, "degraded", false),
+            (KeyReadiness::NotReady, "not_ready", false),
+            (KeyReadiness::Unknown, "unknown", false),
+        ];
+
+        for (readiness, expected, is_ready) in cases {
+            let serialized = serde_json::to_string(&readiness).expect("readiness serializes");
+            assert_eq!(serialized, format!("\"{expected}\""));
+            let decoded: KeyReadiness =
+                serde_json::from_str(&serialized).expect("readiness deserializes");
+            assert_eq!(decoded, readiness);
+            assert_eq!(decoded.as_str(), expected);
+            assert_eq!(decoded.is_ready(), is_ready);
+        }
+    }
+
+    #[test]
+    fn local_signing_provider_reports_ready_readiness() {
+        let signer = LocalJwkSigner::new(PrivateJwk::parse(RAW_JWK).expect("jwk parses"))
+            .expect("local signer builds");
+        let provider: &dyn SigningProvider = &signer;
+
+        assert_eq!(provider.readiness(), KeyReadiness::Ready);
     }
 
     #[test]

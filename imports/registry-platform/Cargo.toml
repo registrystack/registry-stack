@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/registry-platform-config",
     "crates/registry-platform-ops",
     "crates/registry-platform-cache",
     "crates/registry-platform-httputil",
@@ -30,7 +31,10 @@ async-trait = { version = "0.1" }
 axum = { version = "0.8" }
 base64 = { version = "0.22" }
 bytes = { version = "1" }
+chrono = { version = "0.4" }
 ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
+fs2 = { version = "0.4" }
+futures-core = { version = "0.3" }
 getrandom = { version = "0.4" }
 hmac = { version = "0.13" }
 http = { version = "1" }
@@ -46,6 +50,7 @@ tempfile = { version = "3" }
 thiserror = { version = "2" }
 time = { version = "0.3", features = ["formatting"] }
 tokio = { version = "1", features = ["fs", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tough = { version = "0.22.0" }
 tower = { version = "0.5" }
 tower-http = { version = "0.6", features = ["cors", "limit", "set-header"] }
 ulid = { version = "1" }

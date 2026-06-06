@@ -77,7 +77,11 @@
       "publish_only": [
         "notary-2026q1"
       ],
-      "disabled": []
+      "disabled": [],
+      "readiness": {
+        "did:web:notary.example.gov#notary-2026q1": "ready",
+        "did:web:notary.example.gov#notary-2026q2": "ready"
+      }
     },
     "replay": {
       "storage": "redis",

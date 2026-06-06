@@ -121,6 +121,14 @@
         "minLength": 1
       }
     },
+    "readiness_status": {
+      "enum": [
+        "ready",
+        "degraded",
+        "not_ready",
+        "unknown"
+      ]
+    },
     "instance": {
       "type": "object",
       "additionalProperties": false,
@@ -193,12 +201,7 @@
           "type": "boolean"
         },
         "readiness": {
-          "enum": [
-            "ready",
-            "degraded",
-            "not_ready",
-            "unknown"
-          ]
+          "$ref": "#/$defs/readiness_status"
         }
       }
     },
@@ -602,8 +605,23 @@
               "type": "string",
               "minLength": 1
             },
+            "active_provider": {
+              "enum": [
+                "local_jwk_env",
+                "file_watch",
+                "pkcs11",
+                "local_pkcs12_file",
+                "kms"
+              ]
+            },
             "retired_kids": {
               "$ref": "#/$defs/string_array"
+            },
+            "key_readiness": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/readiness_status"
+              }
             }
           }
         },
@@ -681,10 +699,17 @@
               "$ref": "#/$defs/string_array"
             },
             "publish_only": {
+              "description": "Publish-only signing key ids that are currently published at posture observation time.",
               "$ref": "#/$defs/string_array"
             },
             "disabled": {
               "$ref": "#/$defs/string_array"
+            },
+            "readiness": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/readiness_status"
+              }
             }
           }
         },
