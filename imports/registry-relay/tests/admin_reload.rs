@@ -1000,7 +1000,7 @@ async fn capabilities_requires_ops_read_and_reports_relay_admin_surface() {
     assert_eq!(body["config"]["apply"]["requires_signed_input"], true);
     assert_eq!(
         body["config"]["apply"]["supported_sources"],
-        json!(["tuf_local"])
+        json!(["tuf_local", "tuf_remote"])
     );
     assert_eq!(body["break_glass"]["rate_limit_scope"], "instance");
     assert_eq!(body["root_transition"]["supported"], true);
@@ -1011,6 +1011,31 @@ async fn capabilities_requires_ops_read_and_reports_relay_admin_surface() {
     assert_eq!(body["reload"]["resource_reload"]["supported"], true);
     assert_eq!(body["reload"]["table_reload"]["supported"], true);
     assert_eq!(body["reload"]["config_reload"]["supported"], false);
+}
+
+#[test]
+fn governed_config_docs_do_not_ship_unresolved_config_trust_placeholders() {
+    let doc = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/configuration.md"),
+    )
+    .expect("configuration doc reads");
+
+    assert!(
+        doc.contains("syntactically valid but illustrative"),
+        "governed config example must be explicitly labeled as illustrative"
+    );
+    assert!(
+        !doc.contains("REPLACE_WITH_FINAL"),
+        "governed config example must not contain replacement placeholders"
+    );
+    assert!(
+        !doc.contains("TUF_TARGETS_ROLE_KEY_ID"),
+        "governed config example must use concrete illustrative key IDs"
+    );
+    assert!(
+        doc.contains("\"1111111111111111111111111111111111111111111111111111111111111111\""),
+        "illustrative all-digit TUF key IDs must be quoted for YAML parsers"
+    );
 }
 
 #[tokio::test]
