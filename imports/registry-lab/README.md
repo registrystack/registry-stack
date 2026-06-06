@@ -623,8 +623,8 @@ behavior.
 
 ## Governed configuration baseline
 
-The committed Relay and Notary YAML files remain simple static configs, but they
-now include local `config_trust` state paths and a one-per-hour break-glass rate
+The committed Relay and Notary YAML files remain simple static configs. They
+include local `config_trust` state paths and a one-per-hour break-glass rate
 limit. They do not include `accepted_roots`; signed governed apply stays disabled
 until an opt-in Lab 2 flow renders demo configs with generated TUF roots under
 `output/lab2/`.
@@ -647,9 +647,10 @@ open the latest story file.
 
 The Bruno API workspace also includes a local-only `40 - Lab 2 Governed Config`
 folder for stepping through the governed apply story request by request. Open
-`requests/registry-lab/` in Bruno, select the `Local Lab 2` environment, paste
-the Lab 2 tokens from `.env`, and run the folder after `just lab2-generate` and
-`just lab2-up`.
+`requests/registry-lab/` in Bruno, select the `Local Lab 2` environment, and
+paste the Lab 2 tokens from `.env`. See `requests/registry-lab/README.md` for
+the full setup sequence, which starts with `just generate` before
+`just lab2-generate` and `just lab2-up`.
 
 ## Source repositories
 

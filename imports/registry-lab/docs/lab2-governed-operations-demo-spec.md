@@ -18,9 +18,9 @@ Lab 1 and Lab 2 have separate configuration jobs:
   roots, then uses signed TUF-profile bundles to verify and apply selected
   runtime changes through Relay and Notary admin APIs.
 
-The product story is not "Lab 1 is old and Lab 2 is new." Lab 1 is the improved
-static baseline for simple deployments; Lab 2 is the operations demo that fully
-leverages the new governed configuration capabilities.
+The product story is not "Lab 1 is old and Lab 2 is advanced." Lab 1 is the
+aligned static baseline for simple deployments; Lab 2 is the operations demo
+that exercises the governed configuration capabilities.
 
 ```mermaid
 flowchart LR
@@ -77,7 +77,7 @@ schemas.
 
 The demo should tell an operator-facing story, not only run a test suite:
 
-1. Simple is improved and still works: start the default Lab 1 static-config
+1. Simple static config still works: start the default Lab 1 static-config
    topology, show that committed Relay and Notary configs use the aligned
    `config_trust` shape without `accepted_roots`, and run `just smoke`.
 2. Governance is opt-in: run `just lab2-generate` and show that the generated
@@ -113,7 +113,7 @@ anti-rollback state assertion under `output/lab2/evidence/`.
 
 ## Static Config Baseline
 
-Lab 1 owns the improved static baseline. The committed static Relay and Notary
+Lab 1 owns the aligned static baseline. The committed static Relay and Notary
 configs include local `config_trust` state paths and a local break-glass rate
 limit. They intentionally omit `accepted_roots`, so governed apply is not
 enabled until Lab 2 renders an overlay config with generated demo trust roots.
@@ -122,7 +122,7 @@ The Lab 1 baseline is intentionally boring from an operator perspective:
 
 - `just generate`, `just up`, and `just smoke` do not require TUF artifacts,
   generated trust roots, generated signing keys, or `output/lab2/`.
-- The static YAML format may use the new aligned schema, but all values are
+- The static YAML format uses the aligned schema, but all values are
   local-file values suitable for a simple Compose deployment.
 - Local trust-state paths are present so the same product binaries can start
   consistently, but there is no accepted root from which a governed apply can
@@ -216,7 +216,7 @@ Add these commands:
 ## Demo Flow
 
 1. Generate normal Lab 1 fixtures and secrets.
-2. Prove the improved Lab 1 static baseline: committed configs load, omit
+2. Prove the Lab 1 static baseline: committed configs load, omit
    `accepted_roots`, and `just smoke` passes without `output/lab2/`.
 3. Generate Lab 2 roots, local TUF repository, rendered configs, and bundles.
 4. Start Relay and Notary from `output/lab2/runtime-config`.
@@ -229,9 +229,9 @@ Add these commands:
    - data-plane smoke still passes.
 8. Apply a signed Notary signing-key rotation and assert:
    - admin apply returns success without process restart;
-   - posture exposes the new key readiness;
-   - credential issuance succeeds with the new `kid`;
-   - the old key remains publish-only only when the bundle says so.
+   - posture exposes the rotated key readiness;
+   - credential issuance succeeds with the rotated `kid`;
+   - the old key remains publish-only when the bundle says so.
 9. Attempt a rollback bundle and assert:
    - apply is rejected;
    - anti-rollback state is not advanced;
@@ -338,7 +338,7 @@ silently change the evidence binary.
   `vendor/registry-relay`, and `vendor/registry-notary` point to product
   `main` commits that contain governed runtime configuration, and
   `scripts/check-release-source-model.sh vendor` exits `0`.
-- Lab 1 remains simple and improved: every committed Relay and Notary config
+- Lab 1 remains simple and aligned: every committed Relay and Notary config
   loads with the aligned `config_trust` schema, contains non-empty local
   anti-rollback and local approval paths, contains a local break-glass rate
   limit, and omits `accepted_roots`.
@@ -371,7 +371,7 @@ silently change the evidence binary.
   passing.
 - Notary governed key rotation is proven: a signed rotation bundle returns HTTP
   `2xx`, does not restart the service, records per-`kid` readiness in posture,
-  issues a credential with the new `kid`, and shows the old key as
+  issues a credential with the rotated `kid`, and shows the old key as
   `publish_only` in the signed candidate config.
 - Guardrails are proven with exact assertions: rollback, unsigned inline apply,
   alternate root, threshold-minus-one signatures, spoofed target custom
