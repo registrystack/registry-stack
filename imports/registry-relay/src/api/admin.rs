@@ -17,10 +17,11 @@ use registry_manifest_core::CompiledMetadata;
 use registry_platform_config::RegistryTrustRoot;
 use registry_platform_crypto::{KeyProviderKind, KeyReadiness};
 use registry_platform_ops::{
-    filter_posture_for_tier, internal_config_hash, posture_safe_runtime_config_hash,
-    AntiRollbackKey, AntiRollbackProposal, AntiRollbackStoreError, ApplyReportResult,
-    BreakGlassApproval, BreakGlassRateLimit, ConfigProvenance, ConfigSource, FileAntiRollbackStore,
-    FileLocalApprovalStore, LocalOperatorApproval, PostureFilterError, PostureTier,
+    filter_posture_for_tier, internal_config_hash, is_sha256_config_hash,
+    posture_safe_runtime_config_hash, AntiRollbackKey, AntiRollbackProposal,
+    AntiRollbackStoreError, ApplyReportResult, BreakGlassApproval, BreakGlassRateLimit,
+    ConfigProvenance, ConfigSource, FileAntiRollbackStore, FileLocalApprovalStore,
+    LocalOperatorApproval, PostureFilterError, PostureTier,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -53,8 +54,10 @@ const RELOAD_UNAVAILABLE_CODE: &str = "admin.reload_unavailable";
 const CONFIG_CANDIDATE_INVALID_CODE: &str = "admin.config_candidate_invalid";
 const CONFIG_BUNDLE_INVALID_CODE: &str = "admin.config_bundle_invalid";
 const CONFIG_APPLY_UNAVAILABLE_CODE: &str = "admin.config_apply_unavailable";
+const CONFIG_INLINE_APPLY_REJECTED_CODE: &str = "registry.admin.config.inline_apply_rejected";
 const POSTURE_FILTER_FAILED_CODE: &str = "admin.posture_filter_failed";
-const POSTURE_TIER_INVALID_CODE: &str = "admin.posture_tier_invalid";
+const POSTURE_TIER_INVALID_CODE: &str = "registry.admin.posture.invalid_tier";
+const ADMIN_SCOPE: &str = "registry_relay:admin";
 const OPS_READ_SCOPE: &str = "registry_relay:ops_read";
 
 #[doc(hidden)]
@@ -89,6 +92,7 @@ where
     S: Clone + Send + Sync + 'static,
 {
     Router::new()
+        .route("/admin/v1/capabilities", get(capabilities))
         .route("/admin/v1/posture", get(posture))
         .route("/admin/v1/reload", post(reload_all))
         .route("/admin/v1/config/verify", post(config_verify))
@@ -98,6 +102,71 @@ where
             "/admin/v1/datasets/{dataset_id}/tables/{table_id}/reload",
             post(reload_table),
         )
+}
+
+async fn capabilities(principal: Option<Extension<Principal>>) -> Response {
+    if let Err(error) = require_ops_scope(principal) {
+        return error.into_response();
+    }
+    let mut response = Json(json!({
+        "schema": "registry.admin.capabilities.v1",
+        "product": "registry-relay",
+        "admin_api_version": "v1",
+        "supported_posture_tiers": ["default", "restricted"],
+        "config": {
+            "verify": {
+                "supported": true,
+                "currently_available": true
+            },
+            "dry_run": {
+                "supported": true,
+                "currently_available": true
+            },
+            "apply": {
+                "supported": true,
+                "currently_available": true,
+                "supported_sources": ["tuf_local"],
+                "requires_signed_input": true
+            }
+        },
+        "break_glass": {
+            "supported": true,
+            "currently_available": true,
+            "rate_limit_scope": "instance"
+        },
+        "root_transition": {
+            "supported": true,
+            "currently_available": true
+        },
+        "hot_swap": {
+            "supported": true,
+            "currently_available": true,
+            "components": [
+                "config_provenance",
+                "compiled_metadata",
+                "provenance_state"
+            ]
+        },
+        "reload": {
+            "resource_reload": {
+                "supported": true,
+                "currently_available": true
+            },
+            "table_reload": {
+                "supported": true,
+                "currently_available": true
+            },
+            "config_reload": {
+                "supported": false,
+                "currently_available": false
+            }
+        }
+    }))
+    .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 #[derive(Debug, Deserialize)]
@@ -520,7 +589,7 @@ async fn config_apply(
             ApplyReportResult::RejectedRestartRequired
         };
         return with_config_audit(
-            config_apply_unavailable("signed config target is required for apply"),
+            config_inline_apply_rejected("signed config target is required for apply"),
             resolved_config_audit(
                 ConfigAdminAction::Apply,
                 &resolved,
@@ -1096,7 +1165,7 @@ async fn resolve_config_candidate(
                 .ok_or(ConfigCandidateError::CandidateInvalid(
                     "sequence is required for inline config",
                 ))?;
-            Ok(ResolvedConfigCandidate {
+            let resolved = ResolvedConfigCandidate {
                 bundle_id,
                 stream_id: request.stream_id.clone().unwrap_or_else(default_stream_id),
                 sequence,
@@ -1107,13 +1176,28 @@ async fn resolve_config_candidate(
                 tuf_root_sha256: None,
                 config_yaml: config_yaml.clone(),
                 source: ConfigSource::LocalFile,
-            })
+            };
+            validate_previous_config_hash(resolved.previous_config_hash.as_deref())?;
+            Ok(resolved)
         }
-        (None, Some(tuf)) => resolve_tuf_config_candidate(tuf, current_config).await,
+        (None, Some(tuf)) => {
+            let resolved = resolve_tuf_config_candidate(tuf, current_config).await?;
+            validate_previous_config_hash(resolved.previous_config_hash.as_deref())?;
+            Ok(resolved)
+        }
         (None, None) => Err(ConfigCandidateError::CandidateInvalid(
             "candidate config source was not provided",
         )),
     }
+}
+
+fn validate_previous_config_hash(value: Option<&str>) -> Result<(), ConfigCandidateError> {
+    if value.is_some_and(|hash| !is_sha256_config_hash(hash)) {
+        return Err(ConfigCandidateError::CandidateInvalid(
+            "previous_config_hash must be sha256:<64 lowercase hex>",
+        ));
+    }
+    Ok(())
 }
 
 fn is_metadata_only_config_change(current: &Config, candidate: &Config) -> bool {
@@ -1756,6 +1840,30 @@ fn config_apply_unavailable(detail: &'static str) -> Response {
     response
 }
 
+fn config_inline_apply_rejected(detail: &'static str) -> Response {
+    let status = StatusCode::BAD_REQUEST;
+    let mut response = (
+        status,
+        Json(json!({
+            "schema": "registry.admin.error.v1",
+            "type": format!("{}admin/config_inline_apply_rejected", crate::error::PROBLEM_TYPE_BASE),
+            "title": "Inline config apply rejected",
+            "status": status.as_u16(),
+            "message": detail,
+            "detail": detail,
+            "code": CONFIG_INLINE_APPLY_REJECTED_CODE,
+        })),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, PROBLEM_JSON);
+    response
+        .extensions_mut()
+        .insert(ErrorCodeExt(CONFIG_INLINE_APPLY_REJECTED_CODE.to_string()));
+    response
+}
+
 fn now_rfc3339() -> String {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
@@ -1808,10 +1916,16 @@ fn posture_tier_invalid_response() -> Response {
             "type": format!("{}admin/posture_tier_invalid", crate::error::PROBLEM_TYPE_BASE),
             "title": "Admin posture tier invalid",
             "status": 400,
+            "schema": "registry.admin.error.v1",
+            "code": POSTURE_TIER_INVALID_CODE,
+            "message": "invalid posture tier",
             "detail": "posture tier must be default or restricted",
         })),
     )
         .into_response();
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, PROBLEM_JSON);
     response
         .extensions_mut()
         .insert(ErrorCodeExt(POSTURE_TIER_INVALID_CODE.to_string()));
@@ -1981,7 +2095,7 @@ fn require_admin_scope(principal: Option<Extension<Principal>>) -> Result<(), Er
     let Some(Extension(principal)) = principal else {
         return Err(AuthError::MissingCredential.into());
     };
-    require_scope(&principal, "admin")
+    require_scope(&principal, ADMIN_SCOPE)
 }
 
 fn require_ops_scope(principal: Option<Extension<Principal>>) -> Result<(), Error> {

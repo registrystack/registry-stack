@@ -132,7 +132,7 @@ auth:
     - id: admin
       hash_env: {ADMIN_TOKEN_HASH_ENV}
       scopes:
-        - admin
+        - registry_relay:admin
     - id: ops
       hash_env: {OPS_TOKEN_HASH_ENV}
       scopes:
@@ -310,7 +310,7 @@ async fn start_live_relay(config_path: &Path, admin_addr: SocketAddr) -> LiveRel
         .no_proxy()
         .build()
         .expect("health client builds");
-    for _ in 0..100 {
+    for _ in 0..300 {
         match client.get(format!("{admin_url}/healthz")).send().await {
             Ok(response) if response.status().is_success() => {
                 return LiveRelayServer { child, admin_url };

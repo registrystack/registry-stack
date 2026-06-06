@@ -63,7 +63,7 @@ fn hex_lower(bytes: &[u8]) -> String {
 /// handlers:
 /// * `/whoami` returns the `Principal` as JSON so tests can assert its
 ///   contents from the wire (instead of poking at extensions).
-/// * `/needs-admin` calls `require_scope(&principal, "admin")` so tests
+/// * `/needs-admin` calls `require_scope(&principal, "registry_relay:admin")` so tests
 ///   can exercise scope denial without depending on the audit track.
 fn router_with_provider(provider: Arc<ApiKeyAuth>) -> Router {
     auth_layer(
@@ -90,7 +90,7 @@ async fn whoami_handler(Extension(principal): Extension<Principal>) -> impl Into
 async fn needs_admin_handler(
     Extension(principal): Extension<Principal>,
 ) -> Result<&'static str, registry_relay::error::Error> {
-    require_scope(&principal, "admin")?;
+    require_scope(&principal, "registry_relay:admin")?;
     Ok("ok")
 }
 
@@ -305,7 +305,10 @@ async fn missing_scope_returns_scope_denied() {
     // The required scope is operator-visible context; assert it
     // reached the response detail per the error taxonomy.
     let detail = value["detail"].as_str().expect("detail present");
-    assert!(detail.contains("admin"), "detail mentions the scope");
+    assert!(
+        detail.contains("registry_relay:admin"),
+        "detail mentions the scope"
+    );
 }
 
 #[tokio::test]

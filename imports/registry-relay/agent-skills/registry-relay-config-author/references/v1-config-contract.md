@@ -73,7 +73,7 @@ auth:
     - id: operations_admin
       hash_env: OPERATIONS_ADMIN_API_KEY_HASH
       scopes:
-        - admin
+        - registry_relay:admin
 
 datasets:
   - id: social_registry

@@ -103,7 +103,7 @@ auth:
     - id: operations_admin
       hash_env: OPERATIONS_ADMIN_HASH
       scopes:
-        - admin
+        - registry_relay:admin
         - registry_relay:ops_read
         - benefits_casework:metadata
         - clinic_capacity:metadata

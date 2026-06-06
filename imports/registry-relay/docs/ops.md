@@ -257,27 +257,30 @@ curl -X POST -H "Authorization: Bearer $ADMIN_API_KEY" \
   http://127.0.0.1:8081/admin/v1/datasets/social_registry/tables/individuals_table/reload
 ```
 
-Manual registry reload:
+Manual source-resource reload:
 
 ```sh
 curl -X POST -H "Authorization: Bearer $ADMIN_API_KEY" \
   http://127.0.0.1:8081/admin/v1/reload
 ```
 
-The reload-all response includes `status` and aggregate `counts` for total, succeeded, and failed resources. A non-zero failure count returns HTTP 500 with `status: "failed"`; inspect the audit and operational logs for the resource-level failure context.
+The reload-all response includes `status` and aggregate `counts` for total, succeeded, and failed resources. A non-zero failure count returns HTTP 500 with `status: "failed"`; inspect the audit and operational logs for the resource-level failure context. This route reloads configured source resources, not startup runtime config.
 
 ## Admin Posture And Config Apply
 
-Operations posture is a read-only admin-listener route with its own scope:
+Admin capabilities and operations posture are read-only admin-listener routes with their own scope:
 
 ```sh
+curl -H "Authorization: Bearer $OPS_READ_API_KEY" \
+  http://127.0.0.1:8081/admin/v1/capabilities
+
 curl -H "Authorization: Bearer $OPS_READ_API_KEY" \
   http://127.0.0.1:8081/admin/v1/posture
 ```
 
 Use `?tier=restricted` only for trusted operations users who need the restricted projection. The default projection is redacted for broader operational sharing.
 
-Governed config routes require a token with the independent `admin` scope:
+Governed config routes require a token with the independent `registry_relay:admin` scope:
 
 ```text
 POST /admin/v1/config/verify
@@ -298,7 +301,7 @@ POST /admin/v1/config/apply
 }
 ```
 
-`apply` requires a signed TUF target and rejects inline config with `admin.config_apply_unavailable`. The local signed target request shape is:
+`apply` requires a signed TUF target and rejects inline config with `registry.admin.config.inline_apply_rejected`. The local signed target request shape is:
 
 ```json
 {

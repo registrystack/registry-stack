@@ -5,6 +5,7 @@ use std::num::NonZeroU64;
 use std::path::Path;
 use std::sync::Arc;
 
+use aws_lc_rs::rand::SystemRandom;
 use axum::http::StatusCode;
 use axum_test::TestServer;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -42,9 +43,10 @@ use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tokio::sync::watch;
 use tough::editor::signed::PathExists;
+use tough::editor::signed::SignedRole;
 use tough::editor::RepositoryEditor;
 use tough::key_source::LocalKeySource;
-use tough::schema::Target;
+use tough::schema::{KeyHolder, Root, Signed, Snapshot, Target, Timestamp};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -55,6 +57,8 @@ const AUDIT_SECRET_VALUE: &str = "relay-admin-reload-audit-secret-32-bytes";
 const NON_KEY_PLACEHOLDER_VALUE: &str = "relay-admin-reload-private-jwk-placeholder";
 const TUF_TARGETS_SIGNER_KID: &str =
     "8ec3a843a0f9328c863cac4046ab1cacbbc67888476ac7acf73d9bcd9a223ada";
+const FORGED_TUF_SIGNER_KID: &str =
+    "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0";
 
 struct ReadinessOverrideResolver {
     readiness: registry_platform_crypto::KeyReadiness,
@@ -167,6 +171,114 @@ fn sha256_uri(bytes: &[u8]) -> String {
     format!("sha256:{}", hex_lower(&Sha256::digest(bytes)))
 }
 
+fn find_metadata_file(dir: &Path, suffix: &str) -> std::path::PathBuf {
+    std::fs::read_dir(dir)
+        .expect("metadata dir reads")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(suffix))
+        })
+        .unwrap_or_else(|| panic!("metadata file ending in {suffix} exists"))
+}
+
+fn forge_extra_targets_signature(metadata_dir: &Path) -> String {
+    let targets_path = find_metadata_file(metadata_dir, "targets.json");
+    let mut value: Value =
+        serde_json::from_slice(&std::fs::read(&targets_path).expect("targets reads"))
+            .expect("targets parses");
+    let signatures = value["signatures"]
+        .as_array_mut()
+        .expect("signatures is an array");
+    let real_keyid = signatures
+        .iter()
+        .filter_map(|signature| signature["keyid"].as_str())
+        .find(|kid| *kid != FORGED_TUF_SIGNER_KID)
+        .expect("real keyid exists")
+        .to_string();
+    signatures.push(json!({
+        "keyid": FORGED_TUF_SIGNER_KID,
+        "sig": "abababababababababababababababababababababababababababababababab"
+    }));
+    std::fs::write(
+        &targets_path,
+        serde_json::to_vec_pretty(&value).expect("targets serializes"),
+    )
+    .expect("targets rewrites");
+    real_keyid
+}
+
+fn set_meta(signed_value: &mut Value, suffix: &str, length: u64, hash_hex: &str) {
+    let meta = signed_value["signed"]["meta"]
+        .as_object_mut()
+        .expect("meta object");
+    let key = meta
+        .keys()
+        .find(|key| key.ends_with(suffix))
+        .cloned()
+        .unwrap_or_else(|| panic!("snapshot/timestamp meta entry for {suffix} exists"));
+    let entry = meta
+        .get_mut(&key)
+        .and_then(Value::as_object_mut)
+        .expect("meta entry object");
+    entry.insert("length".to_string(), json!(length));
+    entry.insert("hashes".to_string(), json!({ "sha256": hash_hex }));
+}
+
+async fn reseal_snapshot_and_timestamp(metadata_dir: &Path) {
+    let root: Signed<Root> = serde_json::from_slice(
+        &std::fs::read(tough_fixture("simple-rsa").join("root.json")).unwrap(),
+    )
+    .expect("root parses");
+    let key_holder = KeyHolder::Root(root.signed.clone());
+    let keys: Vec<Box<dyn tough::key_source::KeySource>> = vec![Box::new(LocalKeySource {
+        path: tough_fixture("snakeoil.pem"),
+    })];
+    let rng = SystemRandom::new();
+
+    let targets_bytes = std::fs::read(find_metadata_file(metadata_dir, "targets.json")).unwrap();
+    let mut snapshot_value: Value = serde_json::from_slice(
+        &std::fs::read(find_metadata_file(metadata_dir, "snapshot.json")).unwrap(),
+    )
+    .expect("snapshot parses");
+    set_meta(
+        &mut snapshot_value,
+        "targets.json",
+        targets_bytes.len() as u64,
+        &hex_lower(&Sha256::digest(&targets_bytes)),
+    );
+    let snapshot: Snapshot =
+        serde_json::from_value(snapshot_value["signed"].clone()).expect("snapshot deserializes");
+    SignedRole::new(snapshot, &key_holder, &keys, &rng)
+        .await
+        .expect("snapshot re-signs")
+        .write(metadata_dir, true)
+        .await
+        .expect("snapshot writes");
+
+    let snapshot_bytes = std::fs::read(find_metadata_file(metadata_dir, "snapshot.json")).unwrap();
+    let mut timestamp_value: Value = serde_json::from_slice(
+        &std::fs::read(find_metadata_file(metadata_dir, "timestamp.json")).unwrap(),
+    )
+    .expect("timestamp parses");
+    set_meta(
+        &mut timestamp_value,
+        "snapshot.json",
+        snapshot_bytes.len() as u64,
+        &hex_lower(&Sha256::digest(&snapshot_bytes)),
+    );
+    let timestamp: Timestamp =
+        serde_json::from_value(timestamp_value["signed"].clone()).expect("timestamp deserializes");
+    SignedRole::new(timestamp, &key_holder, &keys, &rng)
+        .await
+        .expect("timestamp re-signs")
+        .write(metadata_dir, true)
+        .await
+        .expect("timestamp writes");
+}
+
 fn assert_matches_posture_schema(body: &Value) {
     let schema: Value = serde_json::from_str(registry_platform_ops::POSTURE_SCHEMA_V1)
         .expect("posture schema parses");
@@ -179,6 +291,22 @@ fn assert_matches_posture_schema(body: &Value) {
     assert!(
         errors.is_empty(),
         "posture response did not match registry.ops.posture.v1: {errors:?}\n{body:#}"
+    );
+}
+
+fn assert_matches_admin_capabilities_schema(body: &Value) {
+    let schema: Value = serde_json::from_str(registry_platform_ops::ADMIN_CAPABILITIES_SCHEMA_V1)
+        .expect("admin capabilities schema parses");
+    let compiled =
+        jsonschema::JSONSchema::compile(&schema).expect("admin capabilities schema compiles");
+    let errors = compiled
+        .validate(body)
+        .err()
+        .map(|errors| errors.map(|error| error.to_string()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    assert!(
+        errors.is_empty(),
+        "capabilities response did not match registry.admin.capabilities.v1: {errors:?}\n{body:#}"
     );
 }
 
@@ -637,7 +765,11 @@ fn build_auth() -> Arc<ApiKeyAuth> {
     let entries = vec![
         ApiKeyEntry::new(
             "admin".to_string(),
-            ScopeSet::from_iter(["admin", "social_registry:metadata", "social_registry:rows"]),
+            ScopeSet::from_iter([
+                "registry_relay:admin",
+                "social_registry:metadata",
+                "social_registry:rows",
+            ]),
             make_fingerprint(ADMIN_KEY),
         )
         .expect("admin fingerprint parses"),
@@ -747,7 +879,7 @@ async fn table_reload_with_non_admin_key_is_rejected() {
         .await;
 
     let body = assert_problem(resp, StatusCode::FORBIDDEN, "auth.scope_denied").await;
-    assert_eq!(body["detail"], "required scope: admin");
+    assert_eq!(body["detail"], "required scope: registry_relay:admin");
 }
 
 #[tokio::test]
@@ -795,6 +927,93 @@ async fn posture_requires_ops_read_scope() {
 }
 
 #[tokio::test]
+async fn invalid_posture_tier_uses_shared_admin_error_code() {
+    let fixture = build_fixture();
+
+    let resp = fixture
+        .server
+        .get("/admin/v1/posture?tier=complete")
+        .add_header("Authorization", format!("Bearer {OPS_KEY}"))
+        .await;
+
+    let body = assert_problem(
+        resp,
+        StatusCode::BAD_REQUEST,
+        "registry.admin.posture.invalid_tier",
+    )
+    .await;
+    assert_eq!(body["schema"], "registry.admin.error.v1");
+    assert_eq!(body["message"], "invalid posture tier");
+    assert_eq!(body["detail"], "posture tier must be default or restricted");
+}
+
+#[tokio::test]
+async fn capabilities_requires_ops_read_and_reports_relay_admin_surface() {
+    let fixture = build_fixture();
+
+    let missing = fixture.server.get("/admin/v1/capabilities").await;
+    assert_problem(missing, StatusCode::UNAUTHORIZED, "auth.missing_credential").await;
+
+    let admin_only = fixture
+        .server
+        .get("/admin/v1/capabilities")
+        .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
+        .await;
+    let body = assert_problem(admin_only, StatusCode::FORBIDDEN, "auth.scope_denied").await;
+    assert_eq!(body["detail"], "required scope: registry_relay:ops_read");
+
+    let resp = fixture
+        .server
+        .get("/admin/v1/capabilities")
+        .add_header("Authorization", format!("Bearer {OPS_KEY}"))
+        .await;
+    resp.assert_status(StatusCode::OK);
+    assert_eq!(
+        resp.header("cache-control")
+            .to_str()
+            .expect("cache-control is ASCII"),
+        "no-store"
+    );
+    let body: Value = resp.json();
+    assert_matches_admin_capabilities_schema(&body);
+    assert_eq!(body["schema"], "registry.admin.capabilities.v1");
+    assert_eq!(body["product"], "registry-relay");
+    assert_eq!(
+        body["supported_posture_tiers"],
+        json!(["default", "restricted"])
+    );
+    assert_eq!(body.get("scopes"), None);
+    assert_eq!(
+        body["config"]["verify"],
+        json!({
+            "supported": true,
+            "currently_available": true
+        })
+    );
+    assert_eq!(
+        body["config"]["dry_run"],
+        json!({
+            "supported": true,
+            "currently_available": true
+        })
+    );
+    assert_eq!(body["config"]["apply"]["requires_signed_input"], true);
+    assert_eq!(
+        body["config"]["apply"]["supported_sources"],
+        json!(["tuf_local"])
+    );
+    assert_eq!(body["break_glass"]["rate_limit_scope"], "instance");
+    assert_eq!(body["root_transition"]["supported"], true);
+    assert_eq!(
+        body["hot_swap"]["components"],
+        json!(["config_provenance", "compiled_metadata", "provenance_state"])
+    );
+    assert_eq!(body["reload"]["resource_reload"]["supported"], true);
+    assert_eq!(body["reload"]["table_reload"]["supported"], true);
+    assert_eq!(body["reload"]["config_reload"]["supported"], false);
+}
+
+#[tokio::test]
 async fn ops_read_key_cannot_reload() {
     let fixture = build_fixture();
 
@@ -809,7 +1028,10 @@ async fn ops_read_key_cannot_reload() {
             .await;
 
         let body = assert_problem(resp, StatusCode::FORBIDDEN, "auth.scope_denied").await;
-        assert_eq!(body["detail"], "required scope: admin", "route: {route}");
+        assert_eq!(
+            body["detail"], "required scope: registry_relay:admin",
+            "route: {route}"
+        );
     }
 }
 
@@ -1150,7 +1372,10 @@ async fn config_apply_routes_are_admin_only_and_not_public() {
 
         let ops = post_admin_config(&fixture, route, body.clone(), OPS_KEY).await;
         let body = assert_problem(ops, StatusCode::FORBIDDEN, "auth.scope_denied").await;
-        assert_eq!(body["detail"], "required scope: admin", "route: {route}");
+        assert_eq!(
+            body["detail"], "required scope: registry_relay:admin",
+            "route: {route}"
+        );
     }
 }
 
@@ -1408,7 +1633,7 @@ async fn config_apply_auth_change_is_restart_required_without_swapping() {
         .expect("config reads")
         .replace(
             "api_keys: []",
-            "api_keys:\n    - id: rotated_admin\n      hash_env: REGISTRY_RELAY_TEST_ROTATED_API_KEY_HASH\n      scopes:\n        - admin",
+            "api_keys:\n    - id: rotated_admin\n      hash_env: REGISTRY_RELAY_TEST_ROTATED_API_KEY_HASH\n      scopes:\n        - registry_relay:admin",
         );
     let signed = write_signed_config_tuf_fixture_with_change_classes(
         &fixture,
@@ -1965,10 +2190,11 @@ async fn config_apply_inline_metadata_only_change_is_rejected_without_swapping()
 
     let body = assert_problem(
         response,
-        StatusCode::NOT_IMPLEMENTED,
-        "admin.config_apply_unavailable",
+        StatusCode::BAD_REQUEST,
+        "registry.admin.config.inline_apply_rejected",
     )
     .await;
+    assert_eq!(body["schema"], "registry.admin.error.v1");
     assert_eq!(body["detail"], "signed config target is required for apply");
 
     let posture = fixture
@@ -1988,6 +2214,28 @@ async fn config_apply_inline_metadata_only_change_is_rejected_without_swapping()
     );
     assert_eq!(posture["configuration"]["last_apply_result"], Value::Null);
     assert_eq!(posture["configuration"]["restart_required"], false);
+}
+
+#[tokio::test]
+async fn config_admin_rejects_malformed_previous_config_hash_before_evaluation() {
+    let fixture = build_fixture();
+    let candidate = std::fs::read_to_string(&fixture.config_path).expect("config reads");
+    let mut request = config_apply_request(&fixture, candidate, 2);
+    request["previous_config_hash"] = json!("sha256:not-a-digest");
+
+    let response =
+        post_admin_config(&fixture, "/admin/v1/config/dry-run", request, ADMIN_KEY).await;
+
+    let body = assert_problem(
+        response,
+        StatusCode::BAD_REQUEST,
+        "admin.config_candidate_invalid",
+    )
+    .await;
+    assert_eq!(
+        body["detail"],
+        "previous_config_hash must be sha256:<64 lowercase hex>"
+    );
 }
 
 #[tokio::test]
@@ -3332,6 +3580,65 @@ async fn config_apply_signed_tuf_target_rejects_missing_quorum_without_swapping(
 }
 
 #[tokio::test]
+async fn config_apply_signed_tuf_target_rejects_forged_extra_signature_without_swapping() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(&tmp);
+    let config_yaml = std::fs::read_to_string(&config_path).expect("config reads");
+    std::fs::write(
+        &config_path,
+        config_yaml
+            .replace("threshold: 1", "threshold: 2")
+            .replace("kid-b", FORGED_TUF_SIGNER_KID),
+    )
+    .expect("config writes");
+    let fixture = build_fixture_from_config_path(tmp, config_path);
+    let candidate = std::fs::read_to_string(&fixture.config_path)
+        .expect("config reads")
+        .replace("owner: Test Ministry", "owner: Forged Signer Ministry");
+    let signed = write_signed_config_tuf_fixture(
+        &fixture,
+        &candidate,
+        6,
+        "relay-test-instance",
+        &[TUF_TARGETS_SIGNER_KID, FORGED_TUF_SIGNER_KID],
+    )
+    .await;
+
+    let real_keyid = forge_extra_targets_signature(&signed.metadata_dir);
+    assert_eq!(real_keyid, TUF_TARGETS_SIGNER_KID);
+    reseal_snapshot_and_timestamp(&signed.metadata_dir).await;
+
+    let response = post_admin_config(
+        &fixture,
+        "/admin/v1/config/apply",
+        signed_tuf_apply_request(&signed),
+        ADMIN_KEY,
+    )
+    .await;
+
+    let body = assert_problem(
+        response,
+        StatusCode::BAD_REQUEST,
+        "admin.config_bundle_invalid",
+    )
+    .await;
+    assert_eq!(
+        body["detail"],
+        "signed config target was not authorized by local trust roots"
+    );
+
+    let posture = fixture
+        .server
+        .get("/admin/v1/posture")
+        .add_header("Authorization", format!("Bearer {OPS_KEY}"))
+        .await;
+    posture.assert_status(StatusCode::OK);
+    let posture: Value = posture.json();
+    assert_eq!(posture["instance"]["owner"], "Test Ministry");
+    assert_eq!(posture["configuration"]["last_apply_result"], Value::Null);
+}
+
+#[tokio::test]
 async fn config_apply_signed_tuf_target_rejects_untrusted_tuf_root_without_swapping() {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = write_config(&tmp);
@@ -3725,7 +4032,7 @@ async fn reload_all_with_non_admin_key_is_rejected() {
         .await;
 
     let body = assert_problem(resp, StatusCode::FORBIDDEN, "auth.scope_denied").await;
-    assert_eq!(body["detail"], "required scope: admin");
+    assert_eq!(body["detail"], "required scope: registry_relay:admin");
 }
 
 #[tokio::test]

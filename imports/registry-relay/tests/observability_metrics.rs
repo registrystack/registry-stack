@@ -142,7 +142,7 @@ audit:
 fn build_auth() -> Arc<ApiKeyAuth> {
     let entry = ApiKeyEntry::new(
         SENSITIVE_KEY_ID.to_string(),
-        ScopeSet::from_iter(["admin"]),
+        ScopeSet::from_iter(["registry_relay:admin"]),
         make_fingerprint(ADMIN_TOKEN),
     )
     .expect("admin fingerprint parses");

@@ -1741,13 +1741,37 @@
     {
       "service": "registry-relay",
       "listener": "admin",
+      "method": "GET",
+      "path": "/admin/v1/capabilities",
+      "feature": null,
+      "audience": "operator",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "registry_relay:ops_read"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": false,
+      "stability": "admin",
+      "data_classification": "operational",
+      "notes": "Admin listener capabilities route for discovering supported reload and governed config operations.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/admin_reload.rs::capabilities_requires_ops_read_and_reports_relay_admin_surface",
+        "tests/admin_reload.rs::config_apply_routes_are_admin_only_and_not_public"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "admin",
       "method": "POST",
       "path": "/admin/v1/config/verify",
       "feature": null,
       "audience": "operator",
       "auth": "api_key_or_oidc",
       "scopes": [
-        "admin"
+        "registry_relay:admin"
       ],
       "rate_limit": null,
       "audit": "required",
@@ -1771,7 +1795,7 @@
       "audience": "operator",
       "auth": "api_key_or_oidc",
       "scopes": [
-        "admin"
+        "registry_relay:admin"
       ],
       "rate_limit": null,
       "audit": "required",
@@ -1795,7 +1819,7 @@
       "audience": "operator",
       "auth": "api_key_or_oidc",
       "scopes": [
-        "admin"
+        "registry_relay:admin"
       ],
       "rate_limit": null,
       "audit": "required",
@@ -1819,7 +1843,7 @@
       "audience": "operator",
       "auth": "api_key_or_oidc",
       "scopes": [
-        "admin"
+        "registry_relay:admin"
       ],
       "rate_limit": null,
       "audit": "required",
@@ -1845,7 +1869,7 @@
       "audience": "operator",
       "auth": "api_key_or_oidc",
       "scopes": [
-        "admin"
+        "registry_relay:admin"
       ],
       "rate_limit": null,
       "audit": "required",

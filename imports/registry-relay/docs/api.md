@@ -98,6 +98,7 @@ Admin routes on `server.admin_bind`:
 GET /healthz
 GET /ready
 GET /metrics
+GET /admin/v1/capabilities
 GET /admin/v1/posture
 POST /admin/v1/config/verify
 POST /admin/v1/config/dry-run
@@ -108,15 +109,17 @@ POST /admin/v1/reload
 
 `GET /metrics` returns Prometheus-style `text/plain` metrics for operators. It is intentionally admin-listener only and is not mounted on `server.bind`.
 
+`GET /admin/v1/capabilities` returns redacted admin capability metadata for callers with `registry_relay:ops_read`. Use it before invoking product-specific reload or governed config operations.
+
 `GET /admin/v1/posture` returns a redacted operations posture document for callers with `registry_relay:ops_read`. Pass `?tier=restricted` only to trusted operations users who need the restricted posture projection.
 
-`POST /admin/v1/reload` reloads every configured resource and returns a compact `status` plus `counts` summary. Use the table-specific route when you need to reload only one source.
+`POST /admin/v1/reload` reloads every configured source resource and returns a compact `status` plus `counts` summary. It does not reload startup runtime config. Use the table-specific route when you need to reload only one source.
 
-The governed config routes require the independent `admin` scope:
+The governed config routes require the independent `registry_relay:admin` scope:
 
 - `POST /admin/v1/config/verify` validates a candidate config and reports whether Relay could live-apply it or would need a restart.
 - `POST /admin/v1/config/dry-run` performs the same validation path used by apply and returns `rejected_restart_required` for candidates that cannot be swapped live.
-- `POST /admin/v1/config/apply` applies only a signed TUF config target and only when the live-change classifier accepts the change. Inline `config_yaml` candidates are accepted for verify and dry-run, but apply rejects them with `admin.config_apply_unavailable`.
+- `POST /admin/v1/config/apply` applies only a signed TUF config target and only when the live-change classifier accepts the change. Inline `config_yaml` candidates are accepted for verify and dry-run, but apply rejects them with `registry.admin.config.inline_apply_rejected`.
 
 The config request body accepts exactly one candidate source:
 

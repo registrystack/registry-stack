@@ -12,7 +12,7 @@ auth:
     - id: k1
       hash_env: TEST_KEY_HASH_INTERVAL
       scopes:
-        - admin
+        - registry_relay:admin
 audit:
   sink: stdout
 datasets:

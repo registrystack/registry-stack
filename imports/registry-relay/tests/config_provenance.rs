@@ -79,7 +79,7 @@ auth:
   api_keys:
     - id: operator
       hash_env: PROVENANCE_TEST_OPERATOR_HASH
-      scopes: ["admin"]
+      scopes: ["registry_relay:admin"]
 
 audit:
   sink: stdout

@@ -25,8 +25,8 @@ use super::{
     SpatialBboxFieldsConfig, SpatialGeometryConfig, CRS84,
 };
 
-/// Prefix for the special `admin` scope.
-const ADMIN_SCOPE: &str = "admin";
+/// Product-scoped admin capability required by private admin mutations.
+const ADMIN_SCOPE: &str = "registry_relay:admin";
 
 /// Run every cross-field check on a freshly deserialised [`Config`].
 ///
@@ -1622,7 +1622,7 @@ fn validate_scope(
             code = "config.validation_error",
             api_key_id = %api_key_id,
             scope = %scope,
-            "scope must be 'admin', 'registry_relay:ops_read', or '<dataset_id>:<metadata|aggregate|rows|verify|evidence_verification>'"
+            "scope must be 'registry_relay:admin', 'registry_relay:ops_read', or '<dataset_id>:<metadata|aggregate|rows|verify|evidence_verification>'"
         );
         ConfigError::ValidationError
     })?;
