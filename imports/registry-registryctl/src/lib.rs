@@ -29,6 +29,7 @@ const RELAY_BASE_URL: &str = "http://127.0.0.1:4242";
 const NOTARY_BASE_URL: &str = "http://127.0.0.1:4255";
 const NOTARY_SOURCE_RELAY_SERVICE_URL: &str = "http://registry-relay:8080";
 const RELAY_DOCS_PATH: &str = "/docs";
+const NOTARY_DOCS_PATH: &str = "/docs";
 const NOTARY_OPENAPI_PATH: &str = "/openapi.json";
 const NOTARY_CLAIM_RESULT_JSON: &str = "application/vnd.registry-notary.claim-result+json";
 const NOTARY_TUTORIAL_CLAIM: &str = "benefits-person-exists";
@@ -92,7 +93,7 @@ fn start_project_with_timeout(project_dir: &Path, timeout: Duration) -> Result<(
         let notary_base_url = project.notary_base_url()?;
         wait_for_ready("Notary", notary_base_url, timeout)?;
         println!("Notary API: {notary_base_url}");
-        println!("OpenAPI:    {notary_base_url}{NOTARY_OPENAPI_PATH}");
+        println!("API docs:   {notary_base_url}{NOTARY_DOCS_PATH}");
     }
     Ok(())
 }
@@ -118,7 +119,7 @@ pub fn status_project(project_dir: &Path) -> Result<()> {
         print_probe_status("notary healthz", &format!("{notary_base_url}/healthz"));
         print_probe_status("notary ready", &format!("{notary_base_url}/ready"));
         println!("Notary API: {notary_base_url}");
-        println!("OpenAPI:    {notary_base_url}{NOTARY_OPENAPI_PATH}");
+        println!("API docs:   {notary_base_url}{NOTARY_DOCS_PATH}");
     }
     Ok(())
 }
@@ -200,10 +201,10 @@ pub fn notary_smoke_project(project_dir: &Path) -> Result<()> {
 
 pub fn notary_open_project(project_dir: &Path) -> Result<()> {
     let project = Project::load(project_dir)?;
-    let openapi_url = format!("{}{}", project.notary_base_url()?, NOTARY_OPENAPI_PATH);
-    println!("Notary OpenAPI: {openapi_url}");
-    println!("Use the generated local evaluator key:");
-    println!("curl -H \"x-api-key: $REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW\" {openapi_url}");
+    let notary_base_url = project.notary_base_url()?;
+    let docs_url = format!("{notary_base_url}{NOTARY_DOCS_PATH}");
+    println!("Notary API docs: {docs_url}");
+    println!("OpenAPI JSON: {notary_base_url}{NOTARY_OPENAPI_PATH}");
     Ok(())
 }
 
@@ -520,7 +521,7 @@ fn bruno_relay_files(relay_base_url: &str, _secrets: &LocalEnv) -> Vec<Generated
             "Relay OpenAPI",
             3,
             "{{relay_base_url}}/openapi.json",
-            &[("Authorization", "Bearer {{relay_metadata_key}}")],
+            &[],
         ),
         bruno_get(
             "Relay/Unauthorized datasets.bru",
@@ -1569,10 +1570,10 @@ fn run_smoke_checks(base_url: &str, secrets: &LocalEnv) -> SmokeReport {
     record_smoke_check(
         &mut checks,
         base_url,
-        "authorized key can fetch runtime OpenAPI",
+        "anonymous caller can fetch runtime OpenAPI",
         "/openapi.json",
         200,
-        &[bearer_header(secrets.value("METADATA_READER_RAW"))],
+        &[],
     );
 
     SmokeReport {
@@ -1618,6 +1619,22 @@ fn run_notary_smoke_checks(base_url: &str, secrets: &LocalEnv, claim_id: &str) -
         "anonymous claims request is denied",
         "/v1/claims",
         401,
+        &[],
+    );
+    record_smoke_check(
+        &mut checks,
+        base_url,
+        "anonymous caller can open Notary API docs",
+        "/docs",
+        200,
+        &[],
+    );
+    record_smoke_check(
+        &mut checks,
+        base_url,
+        "anonymous caller can fetch Notary OpenAPI",
+        "/openapi.json",
+        200,
         &[],
     );
     record_smoke_check(
@@ -1900,6 +1917,8 @@ mod tests {
         let request =
             fs::read_to_string(project.join("bruno/registry-api/Relay/Read sample people.bru"))
                 .unwrap();
+        let openapi_request =
+            fs::read_to_string(project.join("bruno/registry-api/Relay/OpenAPI.bru")).unwrap();
 
         assert!(local_bru.contains(&env_value(&env, "METADATA_READER_RAW")));
         assert!(local_bru.contains(&env_value(&env, "ROW_READER_RAW")));
@@ -1907,6 +1926,8 @@ mod tests {
         assert!(!request.contains(&env_value(&env, "METADATA_READER_RAW")));
         assert!(!request.contains(&env_value(&env, "ROW_READER_RAW")));
         assert!(request.contains("{{relay_row_key}}"));
+        assert!(!openapi_request.contains("Authorization"));
+        assert!(!openapi_request.contains("{{relay_metadata_key}}"));
     }
 
     #[test]
@@ -1997,6 +2018,8 @@ mod tests {
         assert!(compose.contains("- source_api"));
 
         let config = fs::read_to_string(project.join("notary/config.yaml")).unwrap();
+        let config_yaml: Value = serde_yaml::from_str(&config).unwrap();
+        assert_eq!(config_yaml["server"]["openapi_requires_auth"], false);
         assert!(config.contains("base_url: http://registry-relay:8080"));
         assert!(config.contains("token_env: EVIDENCE_SOURCE_API_TOKEN"));
 
@@ -2111,6 +2134,7 @@ mod tests {
         );
         let notary_config = fs::read_to_string(notary_config_path).unwrap();
         let notary_config_yaml: Value = serde_yaml::from_str(&notary_config).unwrap();
+        assert_eq!(notary_config_yaml["server"]["openapi_requires_auth"], false);
         assert_eq!(
             notary_config_yaml["evidence"]["source_connections"]["relay"]["base_url"],
             "http://registry-relay:8080"
@@ -2251,6 +2275,8 @@ mod tests {
 
         let env = fs::read_to_string(project.join("secrets/local.env")).unwrap();
         let config = fs::read_to_string(project.join("relay/config.yaml")).unwrap();
+        let config_yaml: Value = serde_yaml::from_str(&config).unwrap();
+        assert_eq!(config_yaml["server"]["openapi_requires_auth"], false);
 
         for (id, env_name) in [
             ("metadata_reader", "METADATA_READER_HASH"),
