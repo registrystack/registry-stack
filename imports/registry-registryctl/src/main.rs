@@ -185,7 +185,7 @@ enum AddCommand {
 enum NotaryCommand {
     /// Run built-in local Notary smoke checks.
     Smoke,
-    /// Print the local Notary OpenAPI URL and auth header hint.
+    /// Open or print the local Notary API docs URL.
     Open,
 }
 

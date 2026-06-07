@@ -21,12 +21,11 @@ The generated project contains a local Registry Relay configuration, sample
 XLSX workbook, Compose file, project manifest, local demo credentials, and an
 optional Bruno API collection.
 
-For the full walkthrough, see
-[Publish a spreadsheet as a secured API](docs/tutorial-spreadsheet-api.md).
-After that, add Notary with
-[Add Notary to your first Registry Relay API](docs/tutorial-notary-from-relay.md).
-You can also create a standalone Notary project for an existing API with
-[Create a standalone Registry Notary](docs/tutorial-standalone-notary.md).
+For the full walkthroughs, use the Registry Docs tutorials:
+
+- [Publish a spreadsheet as a secured registry API](https://docs.registrystack.org/tutorials/publish-spreadsheet-secured-registry-api/)
+- [Verify a claim from your registry API](https://docs.registrystack.org/tutorials/verify-claim-registry-api/)
+- [Verify a claim from your own API](https://docs.registrystack.org/tutorials/verify-claim-own-api/)
 
 The installer downloads the `snapshot` release binary for your OS and CPU. To
 install a tagged release instead:
