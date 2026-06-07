@@ -160,7 +160,7 @@ becomes a full IRI) and resolves codelist concept references before any renderer
 
 - `validate`: parse and validate a manifest file. Exits non-zero on any validation error.
 - `render`: compile a manifest and write one renderer's output to stdout. Accepts
-  `--format`, `--profile`, `--dataset`, `--entity`, and `--offering` selectors.
+  `--format`, `--profile`, `--dataset`, `--entity`, `--form`, and `--offering` selectors.
 - `publish`: compile a manifest, run all renderers, write every artifact to an output
   directory, and generate an `index.json` manifest of the bundle.
 - `validate-profiles`: scan a `profiles/` directory for profile descriptors, validate

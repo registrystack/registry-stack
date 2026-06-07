@@ -79,16 +79,20 @@ On success, the command exits with code 0 and prints a summary line for each pro
 
 On failure, it prints structured errors describing which check failed and where.
 
-### 3. Run validate-profiles on a single profile
+### 3. Run validate-profiles on a subset of profiles
 
-To target one profile, pass the path to that profile's directory:
+`validate-profiles` takes a directory and scans its immediate subdirectories for
+`profile.yaml` files. Targeting a single profile is not directly supported; the argument
+must be a directory whose children are profile directories. To iterate on a single profile,
+place it under a scratch directory and pass that directory:
 
 ```sh
-cargo run -p registry-manifest-cli -- validate-profiles \
-  profiles/example-civil-registration
+mkdir -p /tmp/profile-check
+cp -r profiles/example-civil-registration /tmp/profile-check/
+cargo run -p registry-manifest-cli -- validate-profiles /tmp/profile-check
 ```
 
-This is useful when iterating on a single profile fixture without waiting for the full suite.
+This validates only the profiles in `/tmp/profile-check` rather than the full suite.
 
 ### 4. Understand the failure output
 
@@ -125,7 +129,7 @@ program area or official standard), follow these steps to create and validate it
    `cardinality_expectations` for the entities the profile governs.
 4. Add a `fixtures/metadata.yaml` that satisfies all the declared requirements.
 5. List the fixture path under `fixtures:` in `profile.yaml`.
-6. Run `validate-profiles profiles/<your-profile-id>` to confirm the fixture passes.
+6. Run `validate-profiles profiles` to confirm the fixture passes alongside all existing profiles.
 
 See
 [`profiles/example-civil-registration/profile.yaml`](https://github.com/jeremi/registry-manifest/blob/main/profiles/example-civil-registration/profile.yaml)

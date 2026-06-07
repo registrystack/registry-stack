@@ -224,10 +224,12 @@ After `publish`, confirm the key artifacts are present:
 ```sh
 ls target/metadata/public/catalog.json \
    target/metadata/public/dcat.jsonld \
-   target/metadata/public/cpsv-ap.jsonld \
    target/metadata/public/shacl.jsonld \
    target/metadata/public/index.json
 ```
+
+Profile-specific artifacts such as `cpsv-ap.jsonld` or `dcat.<profile-id>.jsonld` are only
+written when the manifest declares the corresponding application profile.
 
 ## Troubleshooting
 
