@@ -20,6 +20,9 @@ registryctl smoke
 The generated project contains a local Registry Relay configuration, sample
 XLSX workbook, Compose file, project manifest, and local demo credentials.
 
+For the full walkthrough, see
+[Publish a spreadsheet as a secured API](docs/tutorial-spreadsheet-api.md).
+
 The installer downloads the `snapshot` release binary for your OS and CPU. To
 install a tagged release instead:
 
