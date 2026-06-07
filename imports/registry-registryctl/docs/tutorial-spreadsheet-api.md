@@ -221,6 +221,11 @@ registryctl stop
 This stops the local containers. It does not delete your workbook, generated
 config, local keys, or smoke results.
 
+## Next Step
+
+After this Relay tutorial passes, continue with
+[Add Notary to your first Registry Relay API](tutorial-notary-from-relay.md).
+
 ## Troubleshooting
 
 | Symptom | Cause | Resolution |

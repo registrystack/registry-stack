@@ -22,6 +22,8 @@ XLSX workbook, Compose file, project manifest, and local demo credentials.
 
 For the full walkthrough, see
 [Publish a spreadsheet as a secured API](docs/tutorial-spreadsheet-api.md).
+After that, add Notary with
+[Add Notary to your first Registry Relay API](docs/tutorial-notary-from-relay.md).
 
 The installer downloads the `snapshot` release binary for your OS and CPU. To
 install a tagged release instead:
