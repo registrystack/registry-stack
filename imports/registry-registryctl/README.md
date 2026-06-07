@@ -27,6 +27,9 @@ install a tagged release instead:
 REGISTRYCTL_VERSION=vX.Y.Z curl -fsSL https://raw.githubusercontent.com/jeremi/registry-registryctl/main/install.sh | sh
 ```
 
+Snapshot binaries are currently published for Linux x86_64, Linux aarch64, and
+macOS aarch64.
+
 ## Development
 
 ```sh

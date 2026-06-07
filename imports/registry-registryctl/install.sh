@@ -52,6 +52,12 @@ case "$arch" in
     ;;
 esac
 
+if [ "$os_label" = "macos" ] && [ "$arch_label" = "x86_64" ]; then
+  echo "registryctl does not publish a macOS x86_64 binary yet." >&2
+  echo "On Intel macOS, install from source for now: cargo install --git https://github.com/${repo} --branch main" >&2
+  exit 1
+fi
+
 asset="registryctl-${os_label}-${arch_label}.tar.gz"
 url="https://github.com/${repo}/releases/download/${version}/${asset}"
 tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t registryctl)"
