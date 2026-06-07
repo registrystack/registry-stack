@@ -203,8 +203,11 @@ pub fn notary_open_project(project_dir: &Path) -> Result<()> {
     let project = Project::load(project_dir)?;
     let notary_base_url = project.notary_base_url()?;
     let docs_url = format!("{notary_base_url}{NOTARY_DOCS_PATH}");
-    println!("Notary API docs: {docs_url}");
-    println!("OpenAPI JSON: {notary_base_url}{NOTARY_OPENAPI_PATH}");
+    let open_result = Command::new("open").arg(&docs_url).status();
+    if !matches!(open_result, Ok(status) if status.success()) {
+        println!("Notary API docs: {docs_url}");
+        println!("OpenAPI JSON: {notary_base_url}{NOTARY_OPENAPI_PATH}");
+    }
     Ok(())
 }
 
