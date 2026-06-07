@@ -2,8 +2,9 @@
 
 Registry Relay has two OpenAPI surfaces:
 
-- Runtime OpenAPI: auth-gated, generated from the running configuration, and
-  filtered to the caller's metadata scopes.
+- Runtime OpenAPI: auth-gated by default, generated from the running
+  configuration, and filtered to the caller's metadata scopes. Demo and
+  controlled tooling configs can expose the full OpenAPI surface without auth.
 - Static OpenAPI: the checked-in abstract artifact under
   [../openapi/](../openapi/), used for release review and contract discussion.
 
@@ -38,7 +39,8 @@ contract unchanged.
 1. Update [api.md](api.md) for any public contract change.
 2. Start Relay with a representative release config.
 3. Fetch the runtime OpenAPI document with a principal that can see the intended
-   release surface.
+   release surface, or with `server.openapi_requires_auth: false` in a controlled
+   local release-artifact config.
 4. Reduce instance-specific dataset/entity names to abstract placeholders if the
    release artifact is meant to stay deployment-neutral.
 5. Validate JSON formatting.

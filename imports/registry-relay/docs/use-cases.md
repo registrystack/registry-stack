@@ -68,8 +68,9 @@ Acceptance criteria:
 - Metadata routes are filtered by the caller's dataset metadata scopes.
 - Relay can expose catalog, dataset, entity, field, relationship, JSON Schema,
   SHACL, DCAT, and OGC Records metadata without granting row access.
-- OpenAPI output is auth-gated and includes only operations visible to the
-  authenticated principal.
+- OpenAPI output is auth-gated by default and includes only operations visible
+  to the authenticated principal. Demo and controlled tooling configs can expose
+  the full OpenAPI surface without auth.
 - Portable metadata manifests stay separate from runtime configuration, so
   source paths, table ids, scopes, backend URLs, and SQL are not published.
 - Dataset ODRL Offers can describe intended purposes, duties, assigners, and

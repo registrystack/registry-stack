@@ -161,6 +161,11 @@ Relay validates the access-token JOSE `typ` header against `auth.oidc.token_type
 
 ## Run Locally
 
+For the first local tutorial, use
+[Publish a spreadsheet as a secured registry API](https://docs.registrystack.org/tutorials/publish-spreadsheet-secured-registry-api/).
+It uses `registryctl` to create a Relay project from a sample workbook, start the protected API, and
+run the smoke checks without cloning this repository.
+
 The example config references data under `./data/social_registry.xlsx`, so either adapt the path or copy a fixture into place:
 
 ```sh
@@ -265,7 +270,7 @@ Registry Notary endpoint directly for claim and evidence verification.
 
 Storage table ids do not appear in these paths. Filters are allowed only when declared under the entity's `api.allowed_filters`. Arbitrary SQL is not exposed.
 
-`GET /docs` serves a local Scalar API reference shell. The shell is public, but it contains no catalog data by itself. It asks for a bearer token and then fetches the auth-gated `GET /openapi.json` document with that token.
+`GET /docs` serves a local Scalar API reference shell. The shell is public, but it contains no catalog data by itself. By default it asks for a bearer token and fetches the auth-gated `GET /openapi.json` document with that token. Local demos and controlled tooling can set `server.openapi_requires_auth: false` to let the shell load the OpenAPI document without a token.
 
 See [docs/api.md](docs/api.md) for scope requirements, query parameters, pagination, `Data-Purpose`, conditional requests, and Problem Details error shapes.
 

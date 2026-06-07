@@ -3,9 +3,10 @@
 This guide is for application teams calling Registry Relay. It describes client
 behavior for the V1 dataset-scoped REST API.
 
-For concrete deployment-specific paths and schemas, fetch the auth-gated
-runtime OpenAPI document from the deployment or use [api.md](api.md) as the
-general contract reference.
+For concrete deployment-specific paths and schemas, fetch the runtime OpenAPI
+document from the deployment or use [api.md](api.md) as the general contract
+reference. Runtime OpenAPI is auth-gated by default unless
+`server.openapi_requires_auth` is disabled for demos or controlled tooling.
 
 ```mermaid
 sequenceDiagram

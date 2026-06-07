@@ -293,7 +293,7 @@ Relay-native discovery remains under `/v1/datasets` and runtime entity routes. P
 
 Metadata responses include private validators for the authenticated view. Clients can send `If-None-Match`; unchanged metadata returns `304 Not Modified`. The gateway also sets `Cache-Control: private, no-store` and `Vary: Authorization` so shared caches do not reuse one principal's scoped catalog for another caller.
 
-`GET /openapi.json` is also auth-gated and metadata-filtered. The generated document includes only the operations and dataset/entity tags visible to the caller. `GET /docs` serves the local Scalar viewer and asks for a bearer token before fetching `GET /openapi.json`.
+`GET /openapi.json` is auth-gated and metadata-filtered by default. The generated document includes only the operations and dataset/entity tags visible to the caller. Local demos and controlled tooling can set `server.openapi_requires_auth: false`; in that mode, unauthenticated callers receive the full configured OpenAPI surface. `GET /docs` serves the local Scalar viewer and can load the document with or without a bearer token depending on that setting.
 
 Static publication uses the same portable metadata model without starting Relay. For local validation and artifact generation:
 

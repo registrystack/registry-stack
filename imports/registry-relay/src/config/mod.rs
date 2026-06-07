@@ -250,6 +250,8 @@ pub struct ServerConfig {
     pub bind: SocketAddr,
     #[serde(default)]
     pub admin_bind: Option<SocketAddr>,
+    #[serde(default = "default_openapi_requires_auth")]
+    pub openapi_requires_auth: bool,
     #[serde(default = "default_cache_dir")]
     pub cache_dir: PathBuf,
     #[serde(default = "default_xlsx_max_file_bytes")]
@@ -287,6 +289,10 @@ fn default_http1_header_read_timeout() -> Duration {
 
 fn default_max_connections() -> usize {
     1024
+}
+
+fn default_openapi_requires_auth() -> bool {
+    true
 }
 
 fn default_cache_dir() -> PathBuf {

@@ -180,10 +180,13 @@ fn build_app_with_provenance_metadata_and_metrics(
     // top-level router *outside* the auth layer. The Scalar viewer
     // (`/docs` + `/docs/scalar.js`) is a static HTML+JS shell with no
     // secrets in it, so it sits on the public surface and a browser
-    // can load it directly. The OpenAPI document it renders
-    // (`/openapi.json`) stays auth-gated below; the user pastes their
-    // API key into Scalar to fetch it.
+    // can load it directly. By default the OpenAPI document it renders
+    // (`/openapi.json`) stays auth-gated below; local testing can opt
+    // into serving it publicly with `server.openapi_requires_auth: false`.
     let mut public = api::health_router().merge(api::docs_router());
+    if !config.server.openapi_requires_auth {
+        public = public.merge(api::openapi_router());
+    }
 
     // When provenance is configured and enabled, the gateway exposes
     // JSON Schemas, JSON-LD contexts, and (gateway mode only) the
@@ -208,8 +211,12 @@ fn build_app_with_provenance_metadata_and_metrics(
         .merge(api::datasets_router())
         .merge(api::aggregates_router())
         .merge(api::entity_router())
-        .merge(api::metadata_router())
-        .merge(api::openapi_router());
+        .merge(api::metadata_router());
+    let protected = if config.server.openapi_requires_auth {
+        protected.merge(api::openapi_router())
+    } else {
+        protected
+    };
     #[cfg(feature = "ogcapi-features")]
     let protected = protected.merge(api::ogc_router());
     #[cfg(feature = "ogcapi-edr")]

@@ -3,18 +3,19 @@
 //!
 //! Two routes:
 //!
-//! - `GET /docs` returns a tiny HTML shell whose job is to collect a
-//!   bearer token, fetch `/openapi.json`, and load Scalar.
+//! - `GET /docs` returns a tiny HTML shell whose job is to fetch
+//!   `/openapi.json`, collect an optional bearer token, and load Scalar.
 //! - `GET /docs/scalar.js` serves the vendored Scalar IIFE bundle
 //!   (`@scalar/api-reference@1.57.1`) verbatim from the embedded
 //!   `SCALAR_BUNDLE` byte slice.
 //!
 //! Both routes sit on the public unauthenticated sub-router so a browser
 //! can open `/docs` directly. The shell and JS bundle contain no catalog
-//! content. The OpenAPI document at `/openapi.json` stays inside the
-//! auth-gated data-plane router; the shell attaches the operator's bearer
-//! token to that fetch and passes the same token to Scalar for "Try it"
-//! calls. A route-local CSP keeps the docs page on same-origin network
+//! content. The OpenAPI document at `/openapi.json` is auth-gated by default,
+//! but demo and controlled tooling deployments can expose it publicly. The
+//! shell attaches the operator's bearer token when present and passes the same
+//! token to Scalar for "Try it" calls. A route-local CSP keeps the docs page
+//! on same-origin network
 //! access and allows only the static bootstrap script hashes plus the
 //! same-origin Scalar bundle. `style-src 'unsafe-inline'` remains because
 //! the vendored Scalar runtime injects styles dynamically.
@@ -41,7 +42,7 @@ const CACHE_CONTROL_7D_IMMUTABLE: HeaderValue =
     HeaderValue::from_static("public, max-age=604800, immutable");
 const CONTENT_SECURITY_POLICY: HeaderName = HeaderName::from_static("content-security-policy");
 const DOCS_HTML_CSP: HeaderValue = HeaderValue::from_static(
-    "default-src 'none'; script-src 'self' 'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=' 'sha256-O+yKSHtPIjBdJ+bty0Fj1HzND1gVaz+ApkQRleQYXIc='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'",
+    "default-src 'none'; script-src 'self' 'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=' 'sha256-mXjlISsy0OwuguNb9taJJ3wvoSPAYdgVGnXB2FmhJgY='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'",
 );
 const SCALAR_BUNDLE_CSP: HeaderValue = HeaderValue::from_static(
     "default-src 'none'; script-src 'none'; style-src 'none'; img-src 'none'; font-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; frame-src 'none'",
@@ -49,14 +50,12 @@ const SCALAR_BUNDLE_CSP: HeaderValue = HeaderValue::from_static(
 
 /// HTML shell that mounts Scalar with a pre-fetched OpenAPI document.
 ///
-/// `/openapi.json` is auth-gated. Scalar's `authentication` config
-/// only governs "Try it" calls, not the initial spec fetch, so the
-/// inline bootstrap fetches `/openapi.json` itself with the bearer
-/// header attached, parses it, and hands the content to Scalar via
-/// `data-configuration.content`. The bundle is loaded dynamically
-/// after the spec is in hand so Scalar never issues an unauthenticated
-/// fetch. The same bearer is also injected into `authentication` so
-/// "Try it" calls inherit it.
+/// Scalar's `authentication` config only governs "Try it" calls, not the
+/// initial spec fetch, so the inline bootstrap fetches `/openapi.json` itself,
+/// parses it, and hands the content to Scalar via `data-configuration.content`.
+/// The bundle is loaded dynamically after the spec is in hand. When a bearer is
+/// stored, the shell attaches it to the spec fetch and injects it into
+/// `authentication` so "Try it" calls inherit it.
 ///
 /// Storing the token in `localStorage` accepts the standard XSS-exfil
 /// risk: any script that lands on this origin can read it. The viewer
@@ -111,9 +110,9 @@ const DOCS_HTML: &str = r#"<!doctype html>
     <script id="api-reference"></script>
     <script>
       // Bootstrap: Scalar's bundle does not attach our bearer to its
-      // own spec fetch, so we fetch /openapi.json ourselves with the
-      // Authorization header, then hand the parsed content to Scalar
-      // via data-configuration.content and load the bundle dynamically.
+      // own spec fetch, so we fetch /openapi.json ourselves, then hand
+      // the parsed content to Scalar via data-configuration.content and
+      // load the bundle dynamically.
       (function () {
         var STORAGE_KEY = 'registry-relay.api_key';
         var SPEC_URL = '/openapi.json';
@@ -156,14 +155,15 @@ const DOCS_HTML: &str = r#"<!doctype html>
           document.body.appendChild(s);
         }
 
-        if (!stored) {
-          status.textContent = 'no key set; paste a bearer token above to load the spec';
-          return;
+        function specHeaders(token) {
+          var headers = { 'Accept': 'application/json' };
+          if (token) { headers.Authorization = 'Bearer ' + token; }
+          return headers;
         }
 
-        status.textContent = 'fetching spec with stored key...';
+        status.textContent = stored ? 'fetching spec with stored key...' : 'fetching public spec...';
         fetch(SPEC_URL, {
-          headers: { 'Authorization': 'Bearer ' + stored, 'Accept': 'application/json' },
+          headers: specHeaders(stored),
           credentials: 'omit',
           cache: 'no-store',
         })
@@ -181,7 +181,10 @@ const DOCS_HTML: &str = r#"<!doctype html>
             mountScalar(spec, stored);
           })
           .catch(function (err) {
-            status.textContent = 'spec fetch failed: ' + (err && err.message ? err.message : err);
+            var message = err && err.message ? err.message : err;
+            status.textContent = stored
+              ? 'spec fetch failed: ' + message
+              : 'spec fetch failed; paste a bearer token above if this deployment protects OpenAPI: ' + message;
           });
       })();
     </script>
@@ -240,21 +243,20 @@ mod tests {
     }
 
     #[test]
-    fn docs_html_wires_bearer_token_from_local_storage_into_scalar_config() {
+    fn docs_html_wires_optional_bearer_token_into_scalar_config() {
         // The page must (a) read a token from localStorage,
-        // (b) fetch /openapi.json itself with the bearer attached so
-        // the spec is in hand before Scalar mounts, and (c) hand the
-        // parsed content to Scalar via the configuration and load the
-        // bundle dynamically. The order check is structural: the
-        // configuration write must appear before the bundle script is
-        // appended to the DOM.
+        // (b) fetch /openapi.json itself so the spec is in hand before
+        // Scalar mounts, and (c) hand the parsed content to Scalar via
+        // the configuration and load the bundle dynamically. The order
+        // check is structural: the configuration write must appear
+        // before the bundle script is appended to the DOM.
         assert!(DOCS_HTML.contains("registry-relay.api_key"));
         assert!(DOCS_HTML.contains("localStorage"));
         assert!(DOCS_HTML.contains("preferredSecurityScheme"));
         assert!(DOCS_HTML.contains("bearerAuth"));
         assert!(
-            DOCS_HTML.contains("'Authorization': 'Bearer '"),
-            "spec fetch must attach the bearer header"
+            DOCS_HTML.contains("headers.Authorization = 'Bearer ' + token"),
+            "spec fetch must attach the bearer header when a token is present"
         );
         assert!(
             DOCS_HTML.contains("dataset.configuration"),

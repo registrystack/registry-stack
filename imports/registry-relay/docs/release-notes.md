@@ -16,4 +16,4 @@ Known limits:
 - Row-level authorization is not available. Use dataset/entity scopes, required filters, purpose headers, explicit field projections, and audit redaction.
 - `sensitive: true` controls audit redaction only; it does not hide fields from authorized API responses.
 - Remote provenance signing backends are reserved for future work; V1 supports local software Ed25519 signing.
-- The static OpenAPI artifact is an abstract contract. Deployments should fetch the auth-gated `/openapi.json` for their concrete dataset/entity shape.
+- The static OpenAPI artifact is an abstract contract. Deployments fetch `/openapi.json` for their concrete dataset/entity shape. The route is auth-gated by default unless `server.openapi_requires_auth` is disabled for demos or controlled tooling.

@@ -350,7 +350,7 @@ def main() -> int:
                 discovered_urls.add(access["discovery_url"])
         step += 1
 
-        openapi = require(request("GET", relay.url, "/openapi.json", token), 200, f"{relay.name} OpenAPI")
+        openapi = require(request("GET", relay.url, "/openapi.json"), 200, f"{relay.name} OpenAPI")
         save(out, step, f"{relay.name}-relay-openapi", openapi)
         step += 1
 
@@ -377,7 +377,7 @@ def main() -> int:
         discovery = require(request("GET", service.url, "/.well-known/evidence-service", token), 200, f"{service.name} discovery")
         save(out, step, f"{service.name}-evidence-discovery", discovery)
         step += 1
-        openapi = require(request("GET", service.url, "/openapi.json", token), 200, f"{service.name} Registry Notary OpenAPI")
+        openapi = require(request("GET", service.url, "/openapi.json"), 200, f"{service.name} Registry Notary OpenAPI")
         save(out, step, f"{service.name}-evidence-openapi", openapi)
         step += 1
         claims = require(request("GET", service.url, "/claims", token), 200, f"{service.name} claims")
@@ -623,7 +623,7 @@ def main() -> int:
         "notes": [
             "Registry Notaries call Relay over HTTP only.",
             "Static metadata was fetched before shared eligibility evaluation.",
-            "Registry Notary OpenAPI was fetched from the authenticated /openapi.json route on each Registry Notary.",
+            "OpenAPI was fetched without demo credentials; data and evidence routes stayed authenticated.",
         ],
     }
     save(out, step, "scenario-summary", scenario_summary)

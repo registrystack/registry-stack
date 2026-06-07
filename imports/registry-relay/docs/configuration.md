@@ -46,6 +46,7 @@ and `jurisdiction` are optional public labels.
 server:
   bind: 0.0.0.0:8080
   admin_bind: 127.0.0.1:8081
+  openapi_requires_auth: true
   cache_dir: ./cache
   max_source_file_bytes: 268435456
   xlsx_max_file_bytes: 268435456
@@ -62,6 +63,8 @@ server:
 ```
 
 `bind` is the public data-plane listener. `admin_bind` is optional and should be private. `cache_dir` must be writable by the process. Source data should be mounted read-only.
+
+`openapi_requires_auth` defaults to `true`. Set it to `false` only for local testing or controlled tooling environments that need unauthenticated access to `/openapi.json`; the unauthenticated document includes the full configured OpenAPI surface.
 
 `request_timeout` bounds total request service time after HTTP headers are parsed. `request_body_timeout` bounds body reads for handlers that consume a request body. `http1_header_read_timeout` closes incomplete HTTP/1 headers before request work is admitted, and `max_connections` caps concurrent accepted sockets per listener. All timeouts must be non-zero and `max_connections` must be greater than zero.
 

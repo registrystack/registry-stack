@@ -6,6 +6,11 @@ This directory has three kinds of documents:
 - Historical design notes under [history/](history/). These are useful context, but the current contract lives in the operator references.
 - Local internal review notes may exist under `docs/internal/`. That directory is ignored and should not be committed.
 
+For first-run tutorials, use Registry Docs:
+
+- [Publish a spreadsheet as a secured registry API](https://docs.registrystack.org/tutorials/publish-spreadsheet-secured-registry-api/)
+- [Verify a claim from your registry API](https://docs.registrystack.org/tutorials/verify-claim-registry-api/)
+
 ## Current References
 
 - [API guide](api.md): auth, scopes, filters, pagination, metadata caching, Problem Details, standards adapters, provenance opt-in, and the dataset-scoped V1 route table.

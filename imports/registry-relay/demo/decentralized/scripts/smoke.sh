@@ -43,6 +43,12 @@ curl_json() {
   curl "${args[@]}"
 }
 
+curl_doc() {
+  local url="$1"
+  local out="$2"
+  curl -fsS -H "Accept: text/html" -H "x-request-id: ${correlation_id}" -o "${out}" "${url}"
+}
+
 curl_status() {
   local method="$1"
   local url="$2"
@@ -112,13 +118,17 @@ check "civil evidence discovery" curl_json GET http://127.0.0.1:4321/.well-known
 check "social evidence discovery" curl_json GET http://127.0.0.1:4322/.well-known/evidence-service "${SOCIAL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-social-evidence-discovery.json"
 check "shared evidence discovery" curl_json GET http://127.0.0.1:4323/.well-known/evidence-service "${SHARED_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-shared-evidence-discovery.json"
 
-check "civil relay OpenAPI" curl_json GET http://127.0.0.1:4311/openapi.json "${CIVIL_METADATA_CLIENT_RAW}" "${output_dir}/smoke-civil-openapi.json"
-check "social relay OpenAPI" curl_json GET http://127.0.0.1:4312/openapi.json "${SOCIAL_METADATA_CLIENT_RAW}" "${output_dir}/smoke-social-openapi.json"
-check "health relay OpenAPI" curl_json GET http://127.0.0.1:4313/openapi.json "${HEALTH_METADATA_CLIENT_RAW}" "${output_dir}/smoke-health-openapi.json"
+check "civil relay OpenAPI" curl_json GET http://127.0.0.1:4311/openapi.json "" "${output_dir}/smoke-civil-openapi.json"
+check "social relay OpenAPI" curl_json GET http://127.0.0.1:4312/openapi.json "" "${output_dir}/smoke-social-openapi.json"
+check "health relay OpenAPI" curl_json GET http://127.0.0.1:4313/openapi.json "" "${output_dir}/smoke-health-openapi.json"
 
-check "civil Registry Notary OpenAPI" curl_json GET http://127.0.0.1:4321/openapi.json "${CIVIL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-civil-evidence-openapi.json"
-check "social Registry Notary OpenAPI" curl_json GET http://127.0.0.1:4322/openapi.json "${SOCIAL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-social-evidence-openapi.json"
-check "shared Registry Notary OpenAPI" curl_json GET http://127.0.0.1:4323/openapi.json "${SHARED_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-shared-evidence-openapi.json"
+check "civil Registry Notary OpenAPI" curl_json GET http://127.0.0.1:4321/openapi.json "" "${output_dir}/smoke-civil-evidence-openapi.json"
+check "social Registry Notary OpenAPI" curl_json GET http://127.0.0.1:4322/openapi.json "" "${output_dir}/smoke-social-evidence-openapi.json"
+check "shared Registry Notary OpenAPI" curl_json GET http://127.0.0.1:4323/openapi.json "" "${output_dir}/smoke-shared-evidence-openapi.json"
+
+check "civil Registry Notary API docs" curl_doc http://127.0.0.1:4321/docs "${output_dir}/smoke-civil-evidence-docs.html"
+check "social Registry Notary API docs" curl_doc http://127.0.0.1:4322/docs "${output_dir}/smoke-social-evidence-docs.html"
+check "shared Registry Notary API docs" curl_doc http://127.0.0.1:4323/docs "${output_dir}/smoke-shared-evidence-docs.html"
 
 check "civil relay evidence offerings" curl_json GET http://127.0.0.1:4311/metadata/evidence-offerings "${CIVIL_METADATA_CLIENT_RAW}" "${output_dir}/smoke-civil-offerings.json"
 check "social relay evidence offerings" curl_json GET http://127.0.0.1:4312/metadata/evidence-offerings "${SOCIAL_METADATA_CLIENT_RAW}" "${output_dir}/smoke-social-offerings.json"

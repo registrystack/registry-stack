@@ -241,6 +241,18 @@ fn server_from_config(path: std::path::PathBuf, scopes: &[&str]) -> TestServer {
     )
 }
 
+fn server_from_config_without_principal(path: std::path::PathBuf) -> TestServer {
+    let cfg = Arc::new(config::load(&path).expect("config loads"));
+    let registry = Arc::new(EntityRegistry::from_config(&cfg).expect("registry compiles"));
+
+    TestServer::new(
+        metadata_router()
+            .merge(openapi_router())
+            .layer(Extension(registry))
+            .layer(Extension(cfg)),
+    )
+}
+
 #[tokio::test]
 async fn metadata_catalog_uses_core_renderer_and_scopes_entities() {
     let resp = server().get("/metadata/catalog").await;
@@ -1206,6 +1218,30 @@ async fn openapi_json_includes_visible_entity_semantic_extensions() {
         household["properties"]["members"]["x-target-entity"],
         "individual"
     );
+}
+
+#[tokio::test]
+async fn openapi_json_can_include_all_entities_without_principal_when_configured_public() {
+    let tmp = TempDir::new().expect("tempdir");
+    let path = write_config(&tmp);
+    let raw = std::fs::read_to_string(&path).expect("config is readable");
+    std::fs::write(
+        &path,
+        raw.replace(
+            "server:\n  bind: 127.0.0.1:0",
+            "server:\n  bind: 127.0.0.1:0\n  openapi_requires_auth: false",
+        ),
+    )
+    .expect("config is writable");
+    let resp = server_from_config_without_principal(path)
+        .get("/openapi.json")
+        .await;
+
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert_eq!(body["openapi"], "3.1.0");
+    assert!(body["paths"]["/v1/datasets/social_registry/entities/household/records"].is_object());
+    assert!(body["paths"]["/v1/datasets/social_registry/entities/individual/records"].is_object());
 }
 
 #[tokio::test]

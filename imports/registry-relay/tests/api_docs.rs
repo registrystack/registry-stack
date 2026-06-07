@@ -4,25 +4,32 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
+use axum::Extension;
 use axum_test::TestServer;
 use registry_relay::api::docs_router;
 use registry_relay::audit::{AuditPipeline, InMemorySink};
 use registry_relay::auth::api_key::ApiKeyAuth;
+use registry_relay::entity::EntityRegistry;
 use registry_relay::server::build_app;
+use serde_json::Value;
 
 fn server() -> TestServer {
     TestServer::new(docs_router::<()>())
 }
 
 fn full_app_server() -> TestServer {
-    let config = Arc::new(
-        registry_relay::config::test_support::load_example_config_for_tests(
-            "relay-api-docs-audit-secret-32-bytes",
-        ),
-    );
+    let config = full_app_config();
     let auth = Arc::new(ApiKeyAuth::new(Vec::new()));
     let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
     TestServer::new(build_app(config, auth, sink).unwrap())
+}
+
+fn full_app_config() -> Arc<registry_relay::config::Config> {
+    Arc::new(
+        registry_relay::config::test_support::load_example_config_for_tests(
+            "relay-api-docs-audit-secret-32-bytes",
+        ),
+    )
 }
 
 #[tokio::test]
@@ -112,4 +119,24 @@ async fn docs_routes_are_public_but_openapi_json_stays_auth_gated() {
         .get("/openapi.json")
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn openapi_json_can_be_moved_to_public_router_for_local_testing() {
+    let mut config = (*full_app_config()).clone();
+    config.server.openapi_requires_auth = false;
+    let config = Arc::new(config);
+    let registry = Arc::new(EntityRegistry::from_config(&config).expect("registry compiles"));
+    let auth = Arc::new(ApiKeyAuth::new(Vec::new()));
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
+    let server = TestServer::new(
+        build_app(Arc::clone(&config), auth, sink)
+            .unwrap()
+            .layer(Extension(registry)),
+    );
+
+    let response = server.get("/openapi.json").await;
+    response.assert_status(StatusCode::OK);
+    let body: Value = response.json();
+    assert_eq!(body["openapi"], "3.1.0");
 }

@@ -3,7 +3,7 @@
   "info": {
     "title": "Registry Relay API",
     "summary": "Read-only data gateway exposing entity records, catalog metadata, and SHACL/DCAT-AP shapes for governed datasets.",
-    "description": "Abstract HTTP contract for Registry Relay v0.1. Paths use placeholders ({dataset_id}, {entity}, {id}, ...) because dataset and entity names are runtime configuration, not part of the contract. For the instance-specific document that lists the concrete datasets and entities exposed by one running gateway, fetch the auth-gated `GET /openapi.json` route on that deployment. Hand-authored from `docs/api.md`; keep both in sync.",
+    "description": "Abstract HTTP contract for Registry Relay v0.1. Paths use placeholders ({dataset_id}, {entity}, {id}, ...) because dataset and entity names are runtime configuration, not part of the contract. For the instance-specific document that lists the concrete datasets and entities exposed by one running gateway, fetch `GET /openapi.json` on that deployment. Runtime deployments gate OpenAPI by default unless `openapi_requires_auth` is disabled for demos or controlled tooling. Hand-authored from `docs/api.md`; keep both in sync.",
     "version": "0.1.0",
     "license": {
       "name": "Apache-2.0",
@@ -58,7 +58,7 @@
     },
     {
       "name": "OpenAPI",
-      "description": "The auth-gated, metadata-filtered OpenAPI document for the running instance. Use this abstract document for the contract; fetch `/openapi.json` from a running gateway for the instance shape."
+      "description": "The OpenAPI document for the running instance. It is auth-gated and metadata-filtered by default; demo and controlled tooling configs can expose the full OpenAPI surface without auth. Use this abstract document for the contract; fetch `/openapi.json` from a running gateway for the instance shape."
     },
     {
       "name": "OGC API Features",
@@ -177,7 +177,7 @@
       "get": {
         "operationId": "get_docs",
         "summary": "Local Scalar API reference shell",
-        "description": "Serves an HTML page that loads the auth-gated `GET /openapi.json` document after the caller pastes a bearer token. The HTML itself is unauthenticated and contains no catalog data.",
+        "description": "Serves an HTML page that loads `GET /openapi.json` with a bearer token when one is stored, or without a token when the deployment exposes OpenAPI publicly. The HTML itself is unauthenticated and contains no catalog data.",
         "security": [],
         "tags": [
           "Service"

@@ -121,6 +121,6 @@ The Relay demo image is built by `Dockerfile.demo` with
 That image is debug/demo-only and intentionally separate from the production
 distroless runtime policy documented in the root README.
 
-Registry Notary exposes OpenAPI at `/openapi.json` under the same auth boundary
-as the rest of the Registry Notary API. The demo client and smoke script fetch
-that document from all three Registry Notary instances.
+The demo configures Relay and Registry Notary to expose API docs at `/docs` and
+OpenAPI at `/openapi.json` without credentials. Data, metadata, claim, and
+evidence routes still use the configured demo credentials.
