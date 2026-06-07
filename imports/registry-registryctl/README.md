@@ -2,16 +2,30 @@
 
 `registryctl` is the local adopter CLI for Registry Commons.
 
-Current status: Relay-first MVP implementation in progress. The first supported
-path is:
+Install the latest main snapshot without cloning this repo:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jeremi/registry-registryctl/main/install.sh | sh
+```
+
+Then create and start your first secured spreadsheet API:
 
 ```sh
 registryctl init spreadsheet-api my-first-api --sample benefits
 cd my-first-api
+registryctl start
+registryctl smoke
 ```
 
 The generated project contains a local Registry Relay configuration, sample
 XLSX workbook, Compose file, project manifest, and local demo credentials.
+
+The installer downloads the `snapshot` release binary for your OS and CPU. To
+install a tagged release instead:
+
+```sh
+REGISTRYCTL_VERSION=vX.Y.Z curl -fsSL https://raw.githubusercontent.com/jeremi/registry-registryctl/main/install.sh | sh
+```
 
 ## Development
 
