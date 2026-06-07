@@ -16,7 +16,7 @@ file, and one local secrets file.
 Complete the Relay spreadsheet API tutorial first:
 
 ```sh
-registryctl init spreadsheet-api my-first-api --sample benefits
+registryctl init relay my-first-api --sample benefits
 cd my-first-api
 registryctl start
 registryctl smoke
@@ -46,6 +46,8 @@ my-first-api/
     config.yaml
   data/
     benefits_casework.xlsx
+  bruno/
+    registry-api/
   secrets/
     local.env
   output/
@@ -233,6 +235,31 @@ curl -sS -X POST \
 
 Use Relay when a caller is allowed to consult configured records. Use Notary
 when a caller should receive a narrow claim result.
+
+## Optional: open the Bruno collection
+
+`registryctl add notary --from local-relay` refreshes the generated Bruno
+collection with Notary requests. Bruno is optional. The tutorial and API work
+without it.
+
+Open the generated collection:
+
+```sh
+registryctl bruno open
+```
+
+If Bruno is installed, the collection opens with Relay and Notary folders. If
+Bruno is not installed, the command prints the collection path and an install
+link.
+
+If the Bruno CLI is installed, you can run the collection:
+
+```sh
+registryctl bruno run
+```
+
+If `bru` is not installed, the command prints a fallback and exits without
+blocking Relay or Notary.
 
 ## Open The Notary API Reference
 

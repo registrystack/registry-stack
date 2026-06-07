@@ -39,7 +39,7 @@ the installer to your `PATH`.
 Create a project from the benefits sample:
 
 ```sh
-registryctl init spreadsheet-api my-first-api --sample benefits
+registryctl init relay my-first-api --sample benefits
 cd my-first-api
 ```
 
@@ -55,6 +55,8 @@ my-first-api/
     metadata.yaml
   data/
     benefits_casework.xlsx
+  bruno/
+    registry-api/
   secrets/
     local.env
   output/
@@ -209,6 +211,29 @@ curl -sS \
   -H "Authorization: Bearer $METADATA_READER_RAW" \
   http://127.0.0.1:4242/openapi.json
 ```
+
+## Optional: open the Bruno collection
+
+`registryctl` generates a Bruno collection so you can inspect and run the local
+API requests visually. Bruno is optional. The tutorial and API work without it.
+
+Open the generated collection:
+
+```sh
+registryctl bruno open
+```
+
+If Bruno is installed, the collection opens. If Bruno is not installed, the
+command prints the collection path and an install link.
+
+If the Bruno CLI is installed, you can also run the collection:
+
+```sh
+registryctl bruno run
+```
+
+If `bru` is not installed, the command prints a fallback and exits without
+blocking the Relay workflow.
 
 ## Stop The Local Project
 

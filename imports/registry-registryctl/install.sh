@@ -95,7 +95,7 @@ cat <<EOF
 registryctl installed to $install_dir/registryctl
 
 Try it:
-  registryctl init spreadsheet-api my-first-api --sample benefits
+  registryctl init relay my-first-api --sample benefits
   cd my-first-api
   registryctl start
 

@@ -11,19 +11,22 @@ curl -fsSL https://raw.githubusercontent.com/jeremi/registry-registryctl/main/in
 Then create and start your first secured spreadsheet API:
 
 ```sh
-registryctl init spreadsheet-api my-first-api --sample benefits
+registryctl init relay my-first-api --sample benefits
 cd my-first-api
 registryctl start
 registryctl smoke
 ```
 
 The generated project contains a local Registry Relay configuration, sample
-XLSX workbook, Compose file, project manifest, and local demo credentials.
+XLSX workbook, Compose file, project manifest, local demo credentials, and an
+optional Bruno API collection.
 
 For the full walkthrough, see
 [Publish a spreadsheet as a secured API](docs/tutorial-spreadsheet-api.md).
 After that, add Notary with
 [Add Notary to your first Registry Relay API](docs/tutorial-notary-from-relay.md).
+You can also create a standalone Notary project for an existing API with
+[Create a standalone Registry Notary](docs/tutorial-standalone-notary.md).
 
 The installer downloads the `snapshot` release binary for your OS and CPU. To
 install a tagged release instead:
@@ -55,7 +58,7 @@ The generated project uses the public Relay image published from current main:
 
 ```sh
 tmpdir="$(mktemp -d)"
-cargo run -- init spreadsheet-api "$tmpdir/my-first-api" --sample benefits
+cargo run -- init relay "$tmpdir/my-first-api" --sample benefits
 cd "$tmpdir/my-first-api"
 registryctl start
 registryctl status

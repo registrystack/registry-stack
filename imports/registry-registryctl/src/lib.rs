@@ -35,16 +35,36 @@ const NOTARY_TUTORIAL_CLAIM: &str = "benefits-person-exists";
 const NOTARY_DEMO_ISSUER_KEY_ID: &str = "registryctl-demo-issuer";
 const NOTARY_DEMO_ISSUER_KID: &str = "did:web:localhost#registryctl-demo";
 const TUTORIAL_PURPOSE: &str = "https://example.local/purpose/tutorial";
+const BRUNO_COLLECTION_DIR: &str = "bruno/registry-api";
+const BRUNO_GENERATED_MANIFEST: &str = "bruno/registry-api/.registryctl-generated";
+const STANDALONE_SOURCE_TOKEN_PLACEHOLDER: &str = "replace-with-source-api-token";
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum NotarySource {
     LocalRelay,
 }
 
+#[derive(Debug)]
+pub struct NotaryInitOptions {
+    pub source_url: String,
+    pub source_token_from_env: Option<String>,
+    pub source_token_env: String,
+    pub source_dataset: String,
+    pub source_entity: String,
+    pub source_lookup_field: String,
+    pub source_network: Option<String>,
+    pub source_claim: String,
+    pub source_claim_title: String,
+}
+
 pub fn init_spreadsheet_api(dir: &Path, sample: Sample) -> Result<()> {
     match sample {
         Sample::Benefits => init_benefits_project(dir),
     }
+}
+
+pub fn init_notary_project(dir: &Path, options: NotaryInitOptions) -> Result<()> {
+    init_standalone_notary_project(dir, options)
 }
 
 pub fn add_notary(project_dir: &Path, from: NotarySource, force: bool) -> Result<()> {
@@ -62,12 +82,12 @@ fn start_project_with_timeout(project_dir: &Path, timeout: Duration) -> Result<(
     validate_project_fingerprints(project_dir, &project)?;
     validate_notary_fingerprint(project_dir, &project)?;
     run_compose(project_dir, &["up", "-d"])?;
-    wait_for_ready("Relay", &project.runtime.relay_base_url, timeout)?;
-    println!("Relay API:  {}", project.runtime.relay_base_url);
-    println!(
-        "API docs:   {}{}",
-        project.runtime.relay_base_url, RELAY_DOCS_PATH
-    );
+    if project.relay.is_some() {
+        let relay_base_url = project.relay_base_url()?;
+        wait_for_ready("Relay", relay_base_url, timeout)?;
+        println!("Relay API:  {relay_base_url}");
+        println!("API docs:   {relay_base_url}{RELAY_DOCS_PATH}");
+    }
     if project.notary.is_some() {
         let notary_base_url = project.notary_base_url()?;
         wait_for_ready("Notary", notary_base_url, timeout)?;
@@ -86,14 +106,13 @@ pub fn stop_project(project_dir: &Path) -> Result<()> {
 pub fn status_project(project_dir: &Path) -> Result<()> {
     let project = Project::load(project_dir)?;
     run_compose(project_dir, &["ps"])?;
-    print_probe_status(
-        "healthz",
-        &format!("{}/healthz", project.runtime.relay_base_url),
-    );
-    print_probe_status(
-        "ready",
-        &format!("{}/ready", project.runtime.relay_base_url),
-    );
+    if project.relay.is_some() {
+        let relay_base_url = project.relay_base_url()?;
+        print_probe_status("healthz", &format!("{relay_base_url}/healthz"));
+        print_probe_status("ready", &format!("{relay_base_url}/ready"));
+        println!("Relay API:  {relay_base_url}");
+        println!("API docs:   {relay_base_url}{RELAY_DOCS_PATH}");
+    }
     if project.notary.is_some() {
         let notary_base_url = project.notary_base_url()?;
         print_probe_status("notary healthz", &format!("{notary_base_url}/healthz"));
@@ -101,17 +120,15 @@ pub fn status_project(project_dir: &Path) -> Result<()> {
         println!("Notary API: {notary_base_url}");
         println!("OpenAPI:    {notary_base_url}{NOTARY_OPENAPI_PATH}");
     }
-    println!("Relay API:  {}", project.runtime.relay_base_url);
-    println!(
-        "API docs:   {}{}",
-        project.runtime.relay_base_url, RELAY_DOCS_PATH
-    );
     Ok(())
 }
 
 pub fn open_project(project_dir: &Path) -> Result<()> {
     let project = Project::load(project_dir)?;
-    let docs_url = format!("{}{}", project.runtime.relay_base_url, RELAY_DOCS_PATH);
+    if project.relay.is_none() {
+        return notary_open_project(project_dir);
+    }
+    let docs_url = format!("{}{}", project.relay_base_url()?, RELAY_DOCS_PATH);
     let open_result = Command::new("open").arg(&docs_url).status();
     if !matches!(open_result, Ok(status) if status.success()) {
         println!("{docs_url}");
@@ -127,9 +144,10 @@ pub fn logs_project(project_dir: &Path) -> Result<()> {
 
 pub fn smoke_project(project_dir: &Path) -> Result<()> {
     let project = Project::load(project_dir)?;
+    let relay_base_url = project.relay_base_url()?;
     validate_project_fingerprints(project_dir, &project)?;
     let secrets = LocalEnv::load(&project_dir.join(&project.local.secrets_env))?;
-    let report = run_smoke_checks(&project.runtime.relay_base_url, &secrets);
+    let report = run_smoke_checks(relay_base_url, &secrets);
     let output_path = project_dir
         .join(project.local.output_dir)
         .join("smoke-results.json");
@@ -156,8 +174,9 @@ pub fn notary_smoke_project(project_dir: &Path) -> Result<()> {
     validate_project_fingerprints(project_dir, &project)?;
     validate_notary_fingerprint(project_dir, &project)?;
     let notary_base_url = project.notary_base_url()?.to_string();
+    let claim_id = project.notary_claim_id();
     let secrets = LocalEnv::load(&project_dir.join(&project.local.secrets_env))?;
-    let report = run_notary_smoke_checks(&notary_base_url, &secrets);
+    let report = run_notary_smoke_checks(&notary_base_url, &secrets, &claim_id);
     let output_path = project_dir
         .join(&project.local.output_dir)
         .join("notary-smoke-results.json");
@@ -188,6 +207,74 @@ pub fn notary_open_project(project_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn bruno_generate_project(project_dir: &Path, force: bool) -> Result<()> {
+    let project = Project::load(project_dir)?;
+    let secrets = LocalEnv::load(&project_dir.join(&project.local.secrets_env))?;
+    let collection_dir = project_dir.join(BRUNO_COLLECTION_DIR);
+    let files = bruno_files(&project, &secrets)?;
+    write_generated_files(project_dir, &collection_dir, files, force)?;
+    println!("Bruno collection: {}", collection_dir.display());
+    Ok(())
+}
+
+pub fn bruno_open_project(project_dir: &Path) -> Result<()> {
+    Project::load(project_dir)?;
+    let collection_dir = project_dir.join(BRUNO_COLLECTION_DIR);
+    if !collection_dir.exists() {
+        println!("Bruno collection has not been generated yet. Run `registryctl bruno generate`.");
+        return Ok(());
+    }
+
+    let open_result = Command::new("open")
+        .arg("-a")
+        .arg("Bruno")
+        .arg(&collection_dir)
+        .status();
+    if matches!(open_result, Ok(status) if status.success()) {
+        return Ok(());
+    }
+
+    println!("Bruno collection generated at:");
+    println!("  {}", collection_dir.display());
+    println!("Install Bruno to open it visually:");
+    println!("  https://www.usebruno.com/downloads");
+    println!("The API still works without Bruno:");
+    println!("  registryctl smoke");
+    println!("  registryctl notary smoke");
+    Ok(())
+}
+
+pub fn bruno_run_project(project_dir: &Path) -> Result<()> {
+    Project::load(project_dir)?;
+    let collection_dir = project_dir.join(BRUNO_COLLECTION_DIR);
+    let env_file = collection_dir.join("environments/local.bru");
+    if !collection_dir.exists() || !env_file.exists() {
+        println!("Bruno collection has not been generated yet. Run `registryctl bruno generate`.");
+        return Ok(());
+    }
+
+    let status = Command::new("bru")
+        .arg("run")
+        .arg("--env-file")
+        .arg("environments/local.bru")
+        .current_dir(&collection_dir)
+        .status();
+    match status {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => bail!("bru run exited with {status}"),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            println!("Bruno CLI `bru` is not installed.");
+            println!("Install Bruno CLI to run the collection from the terminal:");
+            println!("  https://docs.usebruno.com/bru-cli/overview");
+            println!("The API still works without Bruno:");
+            println!("  registryctl smoke");
+            println!("  registryctl notary smoke");
+            Ok(())
+        }
+        Err(err) => Err(err).context("failed to run bru"),
+    }
+}
+
 fn init_benefits_project(dir: &Path) -> Result<()> {
     if dir.exists() {
         let mut entries =
@@ -208,7 +295,7 @@ fn init_benefits_project(dir: &Path) -> Result<()> {
     let credentials = LocalCredentials::generate()?;
     write_text(
         dir.join("registryctl.yaml"),
-        &registryctl_manifest(dir, false)?,
+        &registryctl_manifest(dir, ProjectManifestKind::Relay)?,
     )?;
     write_text(dir.join("compose.yaml"), &compose_yaml(false))?;
     write_text(dir.join("README.md"), project_readme())?;
@@ -218,6 +305,56 @@ fn init_benefits_project(dir: &Path) -> Result<()> {
     write_text(dir.join("secrets/local.env"), &credentials.env_file())?;
     write_text(dir.join("output/.gitkeep"), "")?;
     sample::write_benefits_workbook(&dir.join("data/benefits_casework.xlsx"))?;
+    bruno_generate_project(dir, false)?;
+    Ok(())
+}
+
+fn init_standalone_notary_project(dir: &Path, options: NotaryInitOptions) -> Result<()> {
+    if dir.exists() {
+        let mut entries =
+            fs::read_dir(dir).with_context(|| format!("failed to inspect {}", dir.display()))?;
+        if entries.next().is_some() {
+            bail!(
+                "target directory already exists and is not empty: {}",
+                dir.display()
+            );
+        }
+    }
+
+    fs::create_dir_all(dir.join("notary"))?;
+    fs::create_dir_all(dir.join("secrets"))?;
+    fs::create_dir_all(dir.join("output"))?;
+
+    let source_token = match &options.source_token_from_env {
+        Some(env_name) => std::env::var(env_name)
+            .with_context(|| format!("failed to read source token from ${env_name}"))?,
+        None => STANDALONE_SOURCE_TOKEN_PLACEHOLDER.to_string(),
+    };
+    let notary_credentials = NotaryLocalCredentials::generate(source_token)?;
+
+    write_text(
+        dir.join("registryctl.yaml"),
+        &registryctl_manifest(
+            dir,
+            ProjectManifestKind::StandaloneNotary { options: &options },
+        )?,
+    )?;
+    write_text(
+        dir.join("compose.yaml"),
+        &compose_notary_only_yaml(options.source_network.as_deref()),
+    )?;
+    write_text(dir.join("README.md"), standalone_notary_readme())?;
+    write_text(dir.join(".gitignore"), include_str!("templates/gitignore"))?;
+    write_text(
+        dir.join("notary/config.yaml"),
+        &notary_config_for_source(&notary_credentials.evaluator, &options),
+    )?;
+    write_text(
+        dir.join("secrets/local.env"),
+        &standalone_notary_env_file(&notary_credentials, &options.source_token_env),
+    )?;
+    write_text(dir.join("output/.gitkeep"), "")?;
+    bruno_generate_project(dir, false)?;
     Ok(())
 }
 
@@ -252,13 +389,14 @@ fn add_notary_from_local_relay(project_dir: &Path, force: bool) -> Result<()> {
     )?;
     write_text(
         project_dir.join("registryctl.yaml"),
-        &registryctl_manifest(project_dir, true)?,
+        &registryctl_manifest(project_dir, ProjectManifestKind::RelayWithNotary)?,
     )?;
     write_text(project_dir.join("compose.yaml"), &compose_yaml(true))?;
     write_text(
         secrets_path,
         &upsert_env_values(&secrets_contents, &notary_credentials.env_values()),
     )?;
+    bruno_generate_project(project_dir, false)?;
     Ok(())
 }
 
@@ -266,9 +404,380 @@ fn write_text(path: PathBuf, contents: &str) -> Result<()> {
     fs::write(&path, contents).with_context(|| format!("failed to write {}", path.display()))
 }
 
+#[derive(Debug)]
+struct GeneratedFile {
+    relative_path: String,
+    contents: String,
+}
+
+fn write_generated_files(
+    project_dir: &Path,
+    collection_dir: &Path,
+    mut files: Vec<GeneratedFile>,
+    force: bool,
+) -> Result<()> {
+    let mut manifest_paths: Vec<_> = files
+        .iter()
+        .map(|file| file.relative_path.clone())
+        .collect();
+    manifest_paths.push(".registryctl-generated".to_string());
+    files.push(GeneratedFile {
+        relative_path: ".registryctl-generated".to_string(),
+        contents: generated_manifest_contents(&manifest_paths),
+    });
+    let known = read_generated_manifest(project_dir);
+
+    for file in &files {
+        let path = collection_dir.join(&file.relative_path);
+        if path.exists() && !force && !known.contains_key(&file.relative_path) {
+            bail!(
+                "{} already exists and is not marked as registryctl-generated; rerun with --force to overwrite it",
+                path.display()
+            );
+        }
+    }
+
+    for file in files {
+        let path = collection_dir.join(&file.relative_path);
+        fs::create_dir_all(path.parent().unwrap_or(collection_dir))?;
+        write_text(path, &file.contents)?;
+    }
+
+    Ok(())
+}
+
+fn read_generated_manifest(project_dir: &Path) -> BTreeMap<String, bool> {
+    let path = project_dir.join(BRUNO_GENERATED_MANIFEST);
+    let Ok(contents) = fs::read_to_string(path) else {
+        return BTreeMap::new();
+    };
+    contents
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| (line.to_string(), true))
+        .collect()
+}
+
+fn generated_manifest_contents(paths: &[String]) -> String {
+    let mut paths: Vec<_> = paths.iter().map(String::as_str).collect();
+    paths.sort_unstable();
+    let mut output = paths.join("\n");
+    output.push('\n');
+    output
+}
+
+fn bruno_files(project: &Project, secrets: &LocalEnv) -> Result<Vec<GeneratedFile>> {
+    let mut files = vec![
+        generated_file(
+            "bruno.json",
+            r#"{
+  "version": "1",
+  "name": "Registry API",
+  "type": "collection",
+  "ignore": [
+    "node_modules",
+    ".git"
+  ]
+}
+"#,
+        ),
+        generated_file(
+            "collection.bru",
+            "docs {\nGenerated local Registry Commons API collection.\n}\n",
+        ),
+    ];
+
+    if project.relay.is_some() {
+        files.extend(bruno_relay_files(project.relay_base_url()?, secrets));
+    }
+    if project.notary.is_some() {
+        files.extend(bruno_notary_files(project, secrets)?);
+    }
+    files.push(generated_file(
+        "environments/local.bru",
+        &bruno_local_env(project, secrets)?,
+    ));
+    files.push(generated_file(
+        "environments/local.example.bru",
+        &bruno_example_env(project)?,
+    ));
+    Ok(files)
+}
+
+fn generated_file(path: &str, contents: &str) -> GeneratedFile {
+    GeneratedFile {
+        relative_path: path.to_string(),
+        contents: contents.to_string(),
+    }
+}
+
+fn bruno_relay_files(relay_base_url: &str, _secrets: &LocalEnv) -> Vec<GeneratedFile> {
+    vec![
+        bruno_get("Relay/Health.bru", "Relay health", 1, "{{relay_base_url}}/healthz", &[]),
+        bruno_get("Relay/Ready.bru", "Relay ready", 2, "{{relay_base_url}}/ready", &[]),
+        bruno_get(
+            "Relay/OpenAPI.bru",
+            "Relay OpenAPI",
+            3,
+            "{{relay_base_url}}/openapi.json",
+            &[("Authorization", "Bearer {{relay_metadata_key}}")],
+        ),
+        bruno_get(
+            "Relay/Unauthorized datasets.bru",
+            "Unauthorized datasets",
+            4,
+            "{{relay_base_url}}/v1/datasets",
+            &[],
+        ),
+        bruno_get(
+            "Relay/List datasets.bru",
+            "List datasets",
+            5,
+            "{{relay_base_url}}/v1/datasets",
+            &[("Authorization", "Bearer {{relay_metadata_key}}")],
+        ),
+        bruno_get(
+            "Relay/Read sample people.bru",
+            "Read sample people",
+            6,
+            "{{relay_base_url}}/v1/datasets/benefits_casework/entities/person/records?household_id=hh-1001",
+            &[
+                ("Authorization", "Bearer {{relay_row_key}}"),
+                ("Data-Purpose", "{{purpose}}"),
+            ],
+        ),
+        generated_file(
+            "Relay/folder.bru",
+            "meta {\n  name: Relay\n  type: folder\n  seq: 1\n}\n",
+        ),
+        generated_file(
+            "Relay/README.md",
+            &format!(
+                "Relay requests use the generated local API at {relay_base_url}. Request files use Bruno variables and do not contain raw keys.\n"
+            ),
+        ),
+    ]
+}
+
+fn bruno_notary_files(project: &Project, _secrets: &LocalEnv) -> Result<Vec<GeneratedFile>> {
+    let notary = project
+        .notary
+        .as_ref()
+        .ok_or_else(|| anyhow!("project does not have a Notary section"))?;
+    let claim_id = notary
+        .claims
+        .first()
+        .map(String::as_str)
+        .unwrap_or(NOTARY_TUTORIAL_CLAIM);
+    let source_url = notary
+        .source_url
+        .as_deref()
+        .or(notary.source_relay_service_url.as_deref())
+        .unwrap_or("configured source API");
+    Ok(vec![
+        bruno_get(
+            "Notary/Health.bru",
+            "Notary health",
+            1,
+            "{{notary_base_url}}/healthz",
+            &[],
+        ),
+        bruno_get(
+            "Notary/Ready.bru",
+            "Notary ready",
+            2,
+            "{{notary_base_url}}/ready",
+            &[],
+        ),
+        bruno_get(
+            "Notary/Unauthorized claims.bru",
+            "Unauthorized claims",
+            3,
+            "{{notary_base_url}}/v1/claims",
+            &[],
+        ),
+        bruno_get(
+            "Notary/List claims.bru",
+            "List claims",
+            4,
+            "{{notary_base_url}}/v1/claims",
+            &[
+                ("x-api-key", "{{notary_evaluator_key}}"),
+                ("Accept", "application/json"),
+            ],
+        ),
+        bruno_post_json(
+            "Notary/Evaluate person exists.bru",
+            "Evaluate person exists",
+            5,
+            "{{notary_base_url}}/v1/evaluations",
+            &[
+                ("x-api-key", "{{notary_evaluator_key}}"),
+                ("Content-Type", "application/json"),
+                ("Accept", NOTARY_CLAIM_RESULT_JSON),
+            ],
+            &format!(
+                r#"{{
+  "target": {{
+    "type": "person",
+    "id": "per-2001"
+  }},
+  "claims": ["{claim_id}"],
+  "disclosure": "predicate",
+  "purpose": "{{{{purpose}}}}"
+}}"#
+            ),
+        ),
+        bruno_post_json(
+            "Notary/Evaluate missing person.bru",
+            "Evaluate missing person",
+            6,
+            "{{notary_base_url}}/v1/evaluations",
+            &[
+                ("x-api-key", "{{notary_evaluator_key}}"),
+                ("Content-Type", "application/json"),
+                ("Accept", NOTARY_CLAIM_RESULT_JSON),
+            ],
+            &format!(
+                r#"{{
+  "target": {{
+    "type": "person",
+    "id": "per-missing"
+  }},
+  "claims": ["{claim_id}"],
+  "disclosure": "predicate",
+  "purpose": "{{{{purpose}}}}"
+}}"#
+            ),
+        ),
+        generated_file(
+            "Notary/folder.bru",
+            "meta {\n  name: Notary\n  type: folder\n  seq: 2\n}\n",
+        ),
+        generated_file(
+            "Notary/README.md",
+            &format!(
+                "Notary requests call the generated local Notary API. The source connection is `{}` at {}. Source token env: {}. Starter source: dataset `{}`, entity `{}`, lookup field `{}`. Source network: {}.\n",
+                notary.source,
+                source_url,
+                notary.source_token_env.as_deref().unwrap_or("configured in secrets/local.env"),
+                notary.source_dataset.as_deref().unwrap_or("configured"),
+                notary.source_entity.as_deref().unwrap_or("configured"),
+                notary.source_lookup_field.as_deref().unwrap_or("configured"),
+                notary.source_network.as_deref().unwrap_or("none")
+            ),
+        ),
+    ])
+}
+
+fn bruno_get(
+    path: &str,
+    name: &str,
+    seq: u32,
+    url: &str,
+    headers: &[(&str, &str)],
+) -> GeneratedFile {
+    let mut contents = format!(
+        "meta {{\n  name: {name}\n  type: http\n  seq: {seq}\n}}\n\nget {{\n  url: {url}\n  body: none\n  auth: none\n}}\n"
+    );
+    contents.push_str(&bruno_headers(headers));
+    generated_file(path, &contents)
+}
+
+fn bruno_post_json(
+    path: &str,
+    name: &str,
+    seq: u32,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+) -> GeneratedFile {
+    let mut contents = format!(
+        "meta {{\n  name: {name}\n  type: http\n  seq: {seq}\n}}\n\npost {{\n  url: {url}\n  body: json\n  auth: none\n}}\n"
+    );
+    contents.push_str(&bruno_headers(headers));
+    contents.push_str("\nbody:json {\n");
+    contents.push_str(body);
+    contents.push_str("\n}\n");
+    generated_file(path, &contents)
+}
+
+fn bruno_headers(headers: &[(&str, &str)]) -> String {
+    if headers.is_empty() {
+        return String::new();
+    }
+    let mut contents = "\nheaders {\n".to_string();
+    for (name, value) in headers {
+        contents.push_str("  ");
+        contents.push_str(name);
+        contents.push_str(": ");
+        contents.push_str(value);
+        contents.push('\n');
+    }
+    contents.push_str("}\n");
+    contents
+}
+
+fn bruno_local_env(project: &Project, secrets: &LocalEnv) -> Result<String> {
+    bruno_env(project, secrets, false)
+}
+
+fn bruno_example_env(project: &Project) -> Result<String> {
+    bruno_env(
+        project,
+        &LocalEnv {
+            values: BTreeMap::new(),
+        },
+        true,
+    )
+}
+
+fn bruno_env(project: &Project, secrets: &LocalEnv, example: bool) -> Result<String> {
+    let mut values = Vec::new();
+    values.push(("purpose", TUTORIAL_PURPOSE.to_string()));
+    if project.relay.is_some() {
+        values.push(("relay_base_url", project.relay_base_url()?.to_string()));
+        values.push((
+            "relay_metadata_key",
+            bruno_env_value(secrets, "METADATA_READER_RAW", example),
+        ));
+        values.push((
+            "relay_row_key",
+            bruno_env_value(secrets, "ROW_READER_RAW", example),
+        ));
+    }
+    if project.notary.is_some() {
+        values.push(("notary_base_url", project.notary_base_url()?.to_string()));
+        values.push((
+            "notary_evaluator_key",
+            bruno_env_value(secrets, "REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW", example),
+        ));
+    }
+
+    let mut contents = "vars {\n".to_string();
+    for (name, value) in values {
+        contents.push_str("  ");
+        contents.push_str(name);
+        contents.push_str(": ");
+        contents.push_str(&value);
+        contents.push('\n');
+    }
+    contents.push_str("}\n");
+    Ok(contents)
+}
+
+fn bruno_env_value(secrets: &LocalEnv, name: &str, example: bool) -> String {
+    if example {
+        format!("replace-with-{}", name.to_ascii_lowercase())
+    } else {
+        secrets.value(name).to_string()
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct Project {
-    relay: ProjectRelay,
+    #[serde(default)]
+    relay: Option<ProjectRelay>,
     #[serde(default)]
     notary: Option<ProjectNotary>,
     runtime: ProjectRuntime,
@@ -293,11 +802,29 @@ struct ProjectRelay {
 #[derive(Debug, Deserialize)]
 struct ProjectNotary {
     config: PathBuf,
+    source: String,
+    #[serde(default)]
+    source_relay_service_url: Option<String>,
+    #[serde(default)]
+    source_url: Option<String>,
+    #[serde(default)]
+    source_token_env: Option<String>,
+    #[serde(default)]
+    source_dataset: Option<String>,
+    #[serde(default)]
+    source_entity: Option<String>,
+    #[serde(default)]
+    source_lookup_field: Option<String>,
+    #[serde(default)]
+    source_network: Option<String>,
+    #[serde(default)]
+    claims: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ProjectRuntime {
-    relay_base_url: String,
+    #[serde(default)]
+    relay_base_url: Option<String>,
     notary_base_url: Option<String>,
 }
 
@@ -308,14 +835,34 @@ struct ProjectLocal {
 }
 
 impl Project {
+    fn relay_base_url(&self) -> Result<&str> {
+        if self.relay.is_none() {
+            bail!(
+                "project does not have a Relay section; use `registryctl notary smoke` for standalone Notary projects"
+            );
+        }
+        self.runtime
+            .relay_base_url
+            .as_deref()
+            .ok_or_else(|| anyhow!("project runtime is missing relay_base_url"))
+    }
+
     fn notary_base_url(&self) -> Result<&str> {
         if self.notary.is_none() {
-            bail!("project does not have a Notary section; run `registryctl add notary --from local-relay` first");
+            bail!("project does not have a Notary section; run `registryctl init notary <dir>` or `registryctl add notary --from local-relay` first");
         }
         self.runtime
             .notary_base_url
             .as_deref()
             .ok_or_else(|| anyhow!("project runtime is missing notary_base_url"))
+    }
+
+    fn notary_claim_id(&self) -> String {
+        self.notary
+            .as_ref()
+            .and_then(|notary| notary.claims.first())
+            .cloned()
+            .unwrap_or_else(|| NOTARY_TUTORIAL_CLAIM.to_string())
     }
 }
 
@@ -410,7 +957,10 @@ fn compose_command_args(compose_file: &str, args: &[&str]) -> Vec<String> {
 }
 
 fn validate_project_fingerprints(project_dir: &Path, project: &Project) -> Result<()> {
-    let config_path = project_dir.join(&project.relay.config);
+    let Some(relay) = &project.relay else {
+        return Ok(());
+    };
+    let config_path = project_dir.join(&relay.config);
     let config = fs::read_to_string(&config_path)
         .with_context(|| format!("failed to read {}", config_path.display()))?;
     let config: serde_yaml::Value = serde_yaml::from_str(&config)
@@ -609,6 +1159,10 @@ impl NotaryLocalCredentials {
     }
 
     fn env_values(&self) -> Vec<(String, String)> {
+        self.env_values_for_source("EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN")
+    }
+
+    fn env_values_for_source(&self, source_token_env: &str) -> Vec<(String, String)> {
         vec![
             (
                 "REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW".to_string(),
@@ -623,7 +1177,7 @@ impl NotaryLocalCredentials {
                 self.audit_hash_secret.clone(),
             ),
             (
-                "EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN".to_string(),
+                source_token_env.to_string(),
                 self.relay_source_token.clone(),
             ),
             (
@@ -695,7 +1249,8 @@ struct ProjectManifest<'a> {
     schema_version: &'a str,
     project: ProjectSection<'a>,
     runtime: RuntimeSection<'a>,
-    relay: RelaySection<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    relay: Option<RelaySection<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     notary: Option<NotarySection<'a>>,
     local: LocalSection<'a>,
@@ -712,8 +1267,10 @@ struct ProjectSection<'a> {
 struct RuntimeSection<'a> {
     engine: &'a str,
     compose_file: &'a str,
-    relay_image: &'a str,
-    relay_base_url: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    relay_image: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    relay_base_url: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     notary_image: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -731,7 +1288,20 @@ struct RelaySection<'a> {
 struct NotarySection<'a> {
     config: &'a str,
     source: &'a str,
-    source_relay_service_url: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_relay_service_url: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_url: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_token_env: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_dataset: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_entity: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_lookup_field: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_network: Option<&'a str>,
     claims: Vec<&'a str>,
 }
 
@@ -741,42 +1311,83 @@ struct LocalSection<'a> {
     output_dir: &'a str,
 }
 
-fn registryctl_manifest(dir: &Path, include_notary: bool) -> Result<String> {
+enum ProjectManifestKind<'a> {
+    Relay,
+    RelayWithNotary,
+    StandaloneNotary { options: &'a NotaryInitOptions },
+}
+
+fn registryctl_manifest(dir: &Path, kind: ProjectManifestKind<'_>) -> Result<String> {
     let name = dir
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("my-first-api")
         .to_string();
+    let include_relay = matches!(
+        kind,
+        ProjectManifestKind::Relay | ProjectManifestKind::RelayWithNotary
+    );
+    let include_notary = matches!(
+        kind,
+        ProjectManifestKind::RelayWithNotary | ProjectManifestKind::StandaloneNotary { .. }
+    );
+    let products = match kind {
+        ProjectManifestKind::Relay => vec!["registry-relay"],
+        ProjectManifestKind::RelayWithNotary => vec!["registry-relay", "registry-notary"],
+        ProjectManifestKind::StandaloneNotary { .. } => vec!["registry-notary"],
+    };
+    let project_kind = match kind {
+        ProjectManifestKind::Relay | ProjectManifestKind::RelayWithNotary => "spreadsheet-api",
+        ProjectManifestKind::StandaloneNotary { .. } => "notary",
+    };
+    let notary = match kind {
+        ProjectManifestKind::RelayWithNotary => Some(NotarySection {
+            config: "notary/config.yaml",
+            source: "relay",
+            source_relay_service_url: Some(NOTARY_SOURCE_RELAY_SERVICE_URL),
+            source_url: None,
+            source_token_env: Some("EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN"),
+            source_dataset: Some("benefits_casework"),
+            source_entity: Some("person"),
+            source_lookup_field: Some("id"),
+            source_network: None,
+            claims: vec![NOTARY_TUTORIAL_CLAIM],
+        }),
+        ProjectManifestKind::StandaloneNotary { options } => Some(NotarySection {
+            config: "notary/config.yaml",
+            source: "registry_data_api",
+            source_relay_service_url: None,
+            source_url: Some(&options.source_url),
+            source_token_env: Some(&options.source_token_env),
+            source_dataset: Some(&options.source_dataset),
+            source_entity: Some(&options.source_entity),
+            source_lookup_field: Some(&options.source_lookup_field),
+            source_network: options.source_network.as_deref(),
+            claims: vec![&options.source_claim],
+        }),
+        ProjectManifestKind::Relay => None,
+    };
     let manifest = ProjectManifest {
         schema_version: "registryctl/v1",
         project: ProjectSection {
             name,
-            kind: "spreadsheet-api",
-            products: if include_notary {
-                vec!["registry-relay", "registry-notary"]
-            } else {
-                vec!["registry-relay"]
-            },
+            kind: project_kind,
+            products,
         },
         runtime: RuntimeSection {
             engine: "docker_compose",
             compose_file: "compose.yaml",
-            relay_image: RELAY_IMAGE,
-            relay_base_url: RELAY_BASE_URL,
+            relay_image: include_relay.then_some(RELAY_IMAGE),
+            relay_base_url: include_relay.then_some(RELAY_BASE_URL),
             notary_image: include_notary.then_some(NOTARY_IMAGE),
             notary_base_url: include_notary.then_some(NOTARY_BASE_URL),
         },
-        relay: RelaySection {
+        relay: include_relay.then_some(RelaySection {
             config: "relay/config.yaml",
             metadata: "relay/metadata.yaml",
             data: vec!["data/benefits_casework.xlsx"],
-        },
-        notary: include_notary.then_some(NotarySection {
-            config: "notary/config.yaml",
-            source: "relay",
-            source_relay_service_url: NOTARY_SOURCE_RELAY_SERVICE_URL,
-            claims: vec![NOTARY_TUTORIAL_CLAIM],
         }),
+        notary,
         local: LocalSection {
             secrets_env: "secrets/local.env",
             output_dir: "output",
@@ -794,8 +1405,26 @@ fn compose_yaml(include_notary: bool) -> String {
     }
 }
 
+fn compose_notary_only_yaml(source_network: Option<&str>) -> String {
+    let (service_networks, networks) = match source_network {
+        Some(name) => (
+            "    networks:\n      - default\n      - source_api\n",
+            format!("\nnetworks:\n  source_api:\n    external: true\n    name: {name}\n"),
+        ),
+        None => ("", String::new()),
+    };
+    include_str!("templates/compose-notary.yaml")
+        .replace("{{notary_redis_image}}", NOTARY_REDIS_IMAGE)
+        .replace("{{source_network_service}}", service_networks)
+        .replace("{{source_networks}}", &networks)
+}
+
 fn project_readme() -> &'static str {
     include_str!("templates/project_readme.md")
+}
+
+fn standalone_notary_readme() -> &'static str {
+    include_str!("templates/notary_project_readme.md")
 }
 
 fn relay_config(credentials: &LocalCredentials) -> String {
@@ -820,6 +1449,35 @@ fn notary_config(evaluator: &Credential) -> String {
         .replace("{{evaluator_commitment}}", &evaluator.commitment)
         .replace("{{issuer_key_id}}", NOTARY_DEMO_ISSUER_KEY_ID)
         .replace("{{issuer_kid}}", NOTARY_DEMO_ISSUER_KID)
+}
+
+fn notary_config_for_source(evaluator: &Credential, options: &NotaryInitOptions) -> String {
+    include_str!("templates/notary_standalone_config.yaml.tmpl")
+        .replace("{{evaluator_id}}", evaluator.id)
+        .replace("{{evaluator_commitment}}", &evaluator.commitment)
+        .replace("{{issuer_key_id}}", NOTARY_DEMO_ISSUER_KEY_ID)
+        .replace("{{issuer_kid}}", NOTARY_DEMO_ISSUER_KID)
+        .replace("{{source_url}}", &options.source_url)
+        .replace("{{source_token_env}}", &options.source_token_env)
+        .replace("{{source_dataset}}", &options.source_dataset)
+        .replace("{{source_entity}}", &options.source_entity)
+        .replace("{{source_lookup_field}}", &options.source_lookup_field)
+        .replace("{{source_claim}}", &options.source_claim)
+        .replace("{{source_claim_title}}", &options.source_claim_title)
+}
+
+fn standalone_notary_env_file(
+    credentials: &NotaryLocalCredentials,
+    source_token_env: &str,
+) -> String {
+    let mut env = String::new();
+    for (name, value) in credentials.env_values_for_source(source_token_env) {
+        env.push_str(&name);
+        env.push('=');
+        env.push_str(&value);
+        env.push('\n');
+    }
+    env
 }
 
 fn relay_metadata() -> &'static str {
@@ -924,7 +1582,7 @@ fn run_smoke_checks(base_url: &str, secrets: &LocalEnv) -> SmokeReport {
     }
 }
 
-fn run_notary_smoke_checks(base_url: &str, secrets: &LocalEnv) -> SmokeReport {
+fn run_notary_smoke_checks(base_url: &str, secrets: &LocalEnv, claim_id: &str) -> SmokeReport {
     let mut checks = Vec::new();
     let api_key = secrets.value("REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW");
     let evaluation_body = serde_json::json!({
@@ -932,7 +1590,7 @@ fn run_notary_smoke_checks(base_url: &str, secrets: &LocalEnv) -> SmokeReport {
             "type": "person",
             "id": "per-2001"
         },
-        "claims": [NOTARY_TUTORIAL_CLAIM],
+        "claims": [claim_id],
         "disclosure": "predicate",
         "purpose": TUTORIAL_PURPOSE
     })
@@ -985,6 +1643,7 @@ fn run_notary_smoke_checks(base_url: &str, secrets: &LocalEnv) -> SmokeReport {
             ("Data-Purpose".to_string(), TUTORIAL_PURPOSE.to_string()),
         ],
         &evaluation_body,
+        claim_id,
     );
 
     SmokeReport {
@@ -1036,6 +1695,7 @@ fn record_notary_evaluation_check(
     path: &'static str,
     headers: &[(String, String)],
     body: &str,
+    claim_id: &str,
 ) {
     let url = format!("{base_url}{path}");
     match http_post(&url, headers, body) {
@@ -1046,7 +1706,7 @@ fn record_notary_evaluation_check(
                     .and_then(|value| {
                         value["results"].as_array().map(|results| {
                             results.iter().any(|result| {
-                                result["claim_id"].as_str() == Some(NOTARY_TUTORIAL_CLAIM)
+                                result["claim_id"].as_str() == Some(claim_id)
                                     && result["satisfied"].as_bool() == Some(true)
                             })
                         })
@@ -1215,9 +1875,136 @@ mod tests {
             "data/benefits_casework.xlsx",
             "secrets/local.env",
             "output/.gitkeep",
+            "bruno/registry-api/bruno.json",
+            "bruno/registry-api/collection.bru",
+            "bruno/registry-api/environments/local.bru",
+            "bruno/registry-api/environments/local.example.bru",
+            "bruno/registry-api/Relay/Health.bru",
         ] {
             assert!(project.join(path).exists(), "{path} should exist");
         }
+    }
+
+    #[test]
+    fn bruno_files_for_relay_project_are_generated_and_secret_scoped() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("my-first-api");
+        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
+
+        let env = fs::read_to_string(project.join("secrets/local.env")).unwrap();
+        let local_bru =
+            fs::read_to_string(project.join("bruno/registry-api/environments/local.bru")).unwrap();
+        let example_bru =
+            fs::read_to_string(project.join("bruno/registry-api/environments/local.example.bru"))
+                .unwrap();
+        let request =
+            fs::read_to_string(project.join("bruno/registry-api/Relay/Read sample people.bru"))
+                .unwrap();
+
+        assert!(local_bru.contains(&env_value(&env, "METADATA_READER_RAW")));
+        assert!(local_bru.contains(&env_value(&env, "ROW_READER_RAW")));
+        assert!(example_bru.contains("replace-with-metadata_reader_raw"));
+        assert!(!request.contains(&env_value(&env, "METADATA_READER_RAW")));
+        assert!(!request.contains(&env_value(&env, "ROW_READER_RAW")));
+        assert!(request.contains("{{relay_row_key}}"));
+    }
+
+    #[test]
+    fn bruno_generation_after_notary_add_includes_notary_requests_without_raw_keys() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("my-first-api");
+        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
+        add_notary(&project, NotarySource::LocalRelay, false).unwrap();
+
+        let env = fs::read_to_string(project.join("secrets/local.env")).unwrap();
+        let local_bru =
+            fs::read_to_string(project.join("bruno/registry-api/environments/local.bru")).unwrap();
+        let request =
+            fs::read_to_string(project.join("bruno/registry-api/Notary/List claims.bru")).unwrap();
+
+        assert!(local_bru.contains(&env_value(&env, "REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW")));
+        assert!(!request.contains(&env_value(&env, "REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW")));
+        assert!(request.contains("{{notary_evaluator_key}}"));
+    }
+
+    #[test]
+    fn bruno_generate_is_idempotent_for_generated_files() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("my-first-api");
+        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
+
+        let before =
+            fs::read_to_string(project.join("bruno/registry-api/Relay/Health.bru")).unwrap();
+        bruno_generate_project(&project, false).unwrap();
+        let after =
+            fs::read_to_string(project.join("bruno/registry-api/Relay/Health.bru")).unwrap();
+
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn standalone_notary_init_creates_notary_only_project() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("my-notary");
+        init_notary_project(
+            &project,
+            NotaryInitOptions {
+                source_url: "http://registry-relay:8080".to_string(),
+                source_token_from_env: None,
+                source_token_env: "EVIDENCE_SOURCE_API_TOKEN".to_string(),
+                source_dataset: "benefits_casework".to_string(),
+                source_entity: "person".to_string(),
+                source_lookup_field: "id".to_string(),
+                source_network: Some("my-first-api_default".to_string()),
+                source_claim: "benefits-person-exists".to_string(),
+                source_claim_title: "Benefits person exists".to_string(),
+            },
+        )
+        .unwrap();
+
+        for path in [
+            "registryctl.yaml",
+            "compose.yaml",
+            "README.md",
+            ".gitignore",
+            "notary/config.yaml",
+            "secrets/local.env",
+            "output/.gitkeep",
+            "bruno/registry-api/Notary/Evaluate person exists.bru",
+        ] {
+            assert!(project.join(path).exists(), "{path} should exist");
+        }
+
+        let manifest: Value =
+            serde_yaml::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())
+                .unwrap();
+        assert!(manifest.get("relay").is_none());
+        assert_eq!(manifest["project"]["kind"], "notary");
+        assert_eq!(manifest["runtime"]["notary_image"], NOTARY_IMAGE);
+        assert_eq!(manifest["runtime"]["notary_base_url"], NOTARY_BASE_URL);
+        assert_eq!(manifest["notary"]["source"], "registry_data_api");
+        assert_eq!(
+            manifest["notary"]["source_url"],
+            "http://registry-relay:8080"
+        );
+        assert_eq!(manifest["notary"]["source_network"], "my-first-api_default");
+
+        let compose = fs::read_to_string(project.join("compose.yaml")).unwrap();
+        assert!(compose.contains("registry-notary:"));
+        assert!(!compose.contains("registry-relay:"));
+        assert!(compose.contains("host.docker.internal:host-gateway"));
+        assert!(compose.contains("name: my-first-api_default"));
+        assert!(compose.contains("- source_api"));
+
+        let config = fs::read_to_string(project.join("notary/config.yaml")).unwrap();
+        assert!(config.contains("base_url: http://registry-relay:8080"));
+        assert!(config.contains("token_env: EVIDENCE_SOURCE_API_TOKEN"));
+
+        let env = fs::read_to_string(project.join("secrets/local.env")).unwrap();
+        assert!(env.contains(&format!(
+            "EVIDENCE_SOURCE_API_TOKEN={STANDALONE_SOURCE_TOKEN_PLACEHOLDER}"
+        )));
+        assert!(!config.contains(STANDALONE_SOURCE_TOKEN_PLACEHOLDER));
     }
 
     #[test]
