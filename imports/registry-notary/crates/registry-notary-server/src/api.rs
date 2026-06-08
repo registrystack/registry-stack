@@ -3956,12 +3956,13 @@ async fn oid4vci_token(
     }
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let verified = match preauth
-        .access_token_public_jwks()
+        .access_token_verification_keys()
         .iter()
-        .find_map(|public_jwk| {
+        .filter(|key| key.may_verify_at(now))
+        .find_map(|key| {
             verify_notary_token(
                 code,
-                public_jwk,
+                key.public_jwk(),
                 PRE_AUTHORIZED_CODE_JWT_TYP,
                 preauth.notary_issuer(),
                 &[],

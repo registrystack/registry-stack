@@ -2046,8 +2046,9 @@ pub(crate) struct PreAuthRuntime {
     /// the access token). Distinct from the SD-JWT VC credential key (enforced
     /// by config validation).
     access_token_signer: Arc<dyn SigningProvider>,
-    /// Public JWKs accepted by the in-process second verifier.
-    access_token_public_jwks: Vec<PublicJwk>,
+    /// Public keys accepted by the in-process second verifier, with rotation
+    /// expiry metadata preserved for runtime checks.
+    access_token_verification_keys: Vec<AccessTokenVerificationKey>,
     /// Notary issuer stamped into and pinned for Notary-minted tokens.
     notary_issuer: String,
     /// Audiences stamped into Notary access tokens.
@@ -2211,7 +2212,7 @@ impl PreAuthRuntime {
                     "active access-token signing key was not built",
                 )
             })?;
-        let access_token_public_jwks = access_token_verification_jwks(config)?;
+        let access_token_verification_keys = access_token_verification_keys(config)?;
         let esignet = &pre_auth.esignet;
         let esignet_client_signer = signing_keys
             .signing_provider(esignet.client_signing_key_id.as_str())
@@ -2237,7 +2238,7 @@ impl PreAuthRuntime {
         ));
         Ok(Some(Self {
             access_token_signer,
-            access_token_public_jwks,
+            access_token_verification_keys,
             notary_issuer: signing.issuer.clone(),
             notary_audiences: signing.audiences.clone(),
             access_token_typ: signing.token_typ.clone(),
@@ -2281,8 +2282,8 @@ impl PreAuthRuntime {
         self.access_token_signer.as_ref()
     }
 
-    pub(crate) fn access_token_public_jwks(&self) -> &[PublicJwk] {
-        &self.access_token_public_jwks
+    pub(crate) fn access_token_verification_keys(&self) -> &[AccessTokenVerificationKey] {
+        &self.access_token_verification_keys
     }
 
     pub(crate) fn notary_issuer(&self) -> &str {
@@ -2637,20 +2638,45 @@ impl PreAuthRuntime {
     }
 }
 
-fn access_token_verification_jwks(
+#[derive(Clone)]
+pub(crate) struct AccessTokenVerificationKey {
+    public_jwk: PublicJwk,
+    publish_until_unix_seconds: Option<u64>,
+}
+
+impl AccessTokenVerificationKey {
+    pub(crate) fn public_jwk(&self) -> &PublicJwk {
+        &self.public_jwk
+    }
+
+    pub(crate) fn may_verify_at(&self, now_unix_seconds: i64) -> bool {
+        let Some(publish_until) = self.publish_until_unix_seconds else {
+            return true;
+        };
+        let Ok(now) = u64::try_from(now_unix_seconds) else {
+            return false;
+        };
+        now <= publish_until
+    }
+}
+
+fn access_token_verification_keys(
     config: &StandaloneRegistryNotaryConfig,
-) -> Result<Vec<PublicJwk>, StandaloneServerError> {
+) -> Result<Vec<AccessTokenVerificationKey>, StandaloneServerError> {
     let signing = &config.auth.access_token_signing;
     let mut jwks = Vec::with_capacity(1 + signing.verification_key_ids.len());
-    jwks.push(
+    let public_jwk =
         signing_key_public_jwk_from_config(&config.evidence, signing.signing_key_id.as_str())?
             .ok_or_else(|| {
                 invalid_signing_key(
                     signing.signing_key_id.as_str(),
                     "access-token signing key public JWK was not built",
                 )
-            })?,
-    );
+            })?;
+    jwks.push(AccessTokenVerificationKey {
+        public_jwk,
+        publish_until_unix_seconds: None,
+    });
     let now = current_unix_timestamp_seconds();
     for key_id in &signing.verification_key_ids {
         let Some(key) = config.evidence.signing_keys.get(key_id) else {
@@ -2660,7 +2686,10 @@ fn access_token_verification_jwks(
             continue;
         }
         if let Some(public_jwk) = signing_key_public_jwk_from_config(&config.evidence, key_id)? {
-            jwks.push(public_jwk);
+            jwks.push(AccessTokenVerificationKey {
+                public_jwk,
+                publish_until_unix_seconds: key.publish_until_unix_seconds,
+            });
         }
     }
     Ok(jwks)
@@ -3286,7 +3315,7 @@ enum Authenticator {
 /// in-process (no self-HTTP-call to a JWKS endpoint).
 #[derive(Clone)]
 pub(crate) struct NotaryTokenAnchor {
-    public_jwks: Vec<PublicJwk>,
+    verification_keys: Vec<AccessTokenVerificationKey>,
     issuer: String,
     token_typ: String,
     audiences: Vec<String>,
@@ -3586,7 +3615,7 @@ impl Authenticator {
             return Ok(None);
         }
         Ok(Some(NotaryTokenAnchor {
-            public_jwks: access_token_verification_jwks(config)?,
+            verification_keys: access_token_verification_keys(config)?,
             issuer: signing.issuer.clone(),
             token_typ: signing.token_typ.clone(),
             audiences: signing.audiences.clone(),
@@ -4306,12 +4335,13 @@ fn authenticate_notary_token(
 ) -> Result<EvidencePrincipal, EvidenceError> {
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let verified_notary = anchor
-        .public_jwks
+        .verification_keys
         .iter()
-        .find_map(|public_jwk| {
+        .filter(|key| key.may_verify_at(now))
+        .find_map(|key| {
             registry_notary_core::tokens::verify_notary_token(
                 token,
-                public_jwk,
+                key.public_jwk(),
                 &anchor.token_typ,
                 &anchor.issuer,
                 &anchor.audiences,
@@ -6190,13 +6220,14 @@ mod tests {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     #[cfg(feature = "pkcs11")]
     use base64::Engine;
-    #[cfg(feature = "pkcs11")]
-    use registry_notary_core::{ClaimProvenance, ClaimResultView, TargetRefView};
     use registry_notary_core::{
+        tokens::{mint_access_token, AccessTokenClaims, BoundSubject},
         EvaluateRequest, SelfAttestationDenialCode, SelfAttestationRateLimitsConfig,
         SourceConnectionConfig, SourceLookupConfig, SourceQueryFieldConfig,
         FORMAT_CLAIM_RESULT_JSON,
     };
+    #[cfg(feature = "pkcs11")]
+    use registry_notary_core::{ClaimProvenance, ClaimResultView, TargetRefView};
     use registry_notary_openfn_sidecar::{sidecar_router, SidecarConfig};
 
     const OPENFN_SIDECAR_TOKEN_ENV: &str = "TEST_OPENFN_SIDECAR_TOKEN";
@@ -6291,6 +6322,79 @@ mod tests {
         provider_readiness.store(key_readiness_to_u8(KeyReadiness::Ready), Ordering::SeqCst);
         assert!(readiness.is_ready());
         assert_eq!(readiness.ready_count(), 2);
+    }
+
+    #[test]
+    fn access_token_verification_key_enforces_publish_until_boundary() {
+        let public_jwk = PublicJwk::parse(TEST_OLD_ISSUER_PUBLIC_JWK).expect("public jwk parses");
+        let active_key = AccessTokenVerificationKey {
+            public_jwk: public_jwk.clone(),
+            publish_until_unix_seconds: None,
+        };
+        assert!(active_key.may_verify_at(i64::MAX));
+
+        let expiring_key = AccessTokenVerificationKey {
+            public_jwk,
+            publish_until_unix_seconds: Some(1_000),
+        };
+        assert!(expiring_key.may_verify_at(999));
+        assert!(expiring_key.may_verify_at(1_000));
+        assert!(!expiring_key.may_verify_at(1_001));
+        assert!(!expiring_key.may_verify_at(-1));
+    }
+
+    #[tokio::test]
+    async fn notary_token_auth_rejects_expired_verification_key() {
+        let signer =
+            LocalJwkSigner::new(PrivateJwk::parse(TEST_ISSUER_JWK_WITH_KID).expect("private jwk"))
+                .expect("local signer builds");
+        let public_jwk = PublicJwk::parse(TEST_OLD_ISSUER_PUBLIC_JWK).expect("public jwk parses");
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let token = mint_access_token(
+            &signer,
+            "registry-notary-access+jwt",
+            &AccessTokenClaims {
+                issuer: "https://notary.example".to_string(),
+                audiences: vec!["registry-notary".to_string()],
+                token_type: "Bearer".to_string(),
+                credential_configuration_id: "identity_credential".to_string(),
+                subject: BoundSubject {
+                    subject: "subject-1".to_string(),
+                    subject_binding_claim: "civil_id".to_string(),
+                    subject_binding_value: "civil-1".to_string(),
+                    client_id: "wallet-demo".to_string(),
+                    scopes: vec!["openid".to_string()],
+                    acr: None,
+                    auth_time: None,
+                },
+                iat: now - 1,
+                exp: now + 300,
+            },
+        )
+        .await
+        .expect("token mints");
+
+        let mut anchor = NotaryTokenAnchor {
+            verification_keys: vec![AccessTokenVerificationKey {
+                public_jwk: public_jwk.clone(),
+                publish_until_unix_seconds: Some(1),
+            }],
+            issuer: "https://notary.example".to_string(),
+            token_typ: "registry-notary-access+jwt".to_string(),
+            audiences: vec!["registry-notary".to_string()],
+            principal_claim: "sub".to_string(),
+            subject_binding_claim: Some("civil_id".to_string()),
+        };
+        assert!(matches!(
+            authenticate_notary_token(&token.compact, &anchor),
+            Err(EvidenceError::MissingCredential)
+        ));
+
+        anchor.verification_keys[0] = AccessTokenVerificationKey {
+            public_jwk,
+            publish_until_unix_seconds: Some(u64::try_from(now + 300).expect("future is positive")),
+        };
+        assert!(authenticate_notary_token(&token.compact, &anchor).is_ok());
     }
 
     fn file_watch_key(path: &std::path::Path) -> SigningKeyConfig {
