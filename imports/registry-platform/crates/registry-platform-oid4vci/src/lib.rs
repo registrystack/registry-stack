@@ -540,7 +540,7 @@ pub fn validate_proof_jwt(
             if !same_public_key_material(&kid_jwk, &holder_jwk) {
                 return Err(ProofError::UnsupportedKeyReference);
             }
-            did.to_string()
+            did_jwk_from_public_jwk(&kid_jwk).map_err(|_| ProofError::UnsupportedKeyReference)?
         }
         None => {
             did_jwk_from_public_jwk(&holder_jwk).map_err(|_| ProofError::UnsupportedKeyReference)?
@@ -798,6 +798,7 @@ mod tests {
     #[test]
     fn validates_did_jwk_kid_proof_with_wallet_public_metadata() {
         let key = PrivateJwk::parse(RAW_JWK).expect("key parses");
+        let canonical_did = did_jwk_from_public_jwk(&key.public()).expect("did:jwk encodes");
         let did = format!(
             "did:jwk:{}",
             URL_SAFE_NO_PAD.encode(
@@ -813,7 +814,8 @@ mod tests {
         let validated = validate_proof_jwt(&proof, &policy(Some("n-1")), 1001)
             .expect("wallet did:jwk proof validates");
 
-        assert_eq!(validated.holder_id, did);
+        assert_ne!(did, canonical_did);
+        assert_eq!(validated.holder_id, canonical_did);
     }
 
     #[test]
