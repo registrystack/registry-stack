@@ -127,16 +127,13 @@ the server capabilities advertise it as a partial issuer
 slice only: it does not implement open federation, dynamic trust chains, or
 federated credential issuance.
 
-## How the code is laid out
+Shared security primitives (audit envelopes, auth helpers, replay and cache
+stores, OIDC, OpenID4VCI, and SD-JWT support) come from sibling
+`registry-platform-*` crates.
 
-The behavior above is split across workspace crates, with shared security
-primitives (audit envelopes, auth helpers, replay and cache stores, OIDC,
-OpenID4VCI, and SD-JWT support) coming from sibling `registry-platform-*`
-crates. The [workspace layout](../README.md#layout) lists each crate and what it
-owns.
-
-Registry Relay or Registry Manifest may publish metadata pointing to a Notary,
-but Notary does not import their code.
+Registry Relay and Registry Manifest are other Registry Stack products; either
+may publish metadata pointing to a Notary, but Notary does not import their code
+and does not require them to run.
 
 ## Related
 

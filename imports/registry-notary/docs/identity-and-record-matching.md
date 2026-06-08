@@ -227,9 +227,9 @@ Read `confidence` carefully. It is a value configured on the binding and returne
 verbatim, so it describes the source and method, not how strong this particular
 match was. A match on a full national identifier and a match on name plus birthdate
 against the same binding report the same `confidence`, and `score` is usually
-absent. Treat `confidence` today as a policy assertion about the method, not a
-measured quality of the individual match. Reporting measured per-match confidence
-is tracked in [issue #90](https://github.com/jeremi/registry-notary/issues/90).
+absent. Treat `confidence` as a policy assertion about the method, not a
+measured quality of the individual match; per-match measured confidence is not
+currently reported.
 
 The full result envelope is documented in the
 [API reference](api-reference.md) and the
@@ -265,11 +265,9 @@ allowed and which request paths each may carry, and the requester and relationsh
 produce their own outcomes.
 
 Multi-party authorization is only partly built. The `profile` and `on_behalf_of`
-fields exist on the request model but are reserved for future use. Two planned
-extensions are tracked separately: binding delegation scope to purpose
-([issue #92](https://github.com/jeremi/registry-notary/issues/92)) and gating a
-match on a minimum assurance of the target inputs
-([issue #91](https://github.com/jeremi/registry-notary/issues/91)).
+fields exist on the request model but are reserved for future use. Two further
+extensions are not yet implemented: binding delegation scope to purpose, and
+gating a match on a minimum assurance of the target inputs.
 
 ## Operator checklist
 

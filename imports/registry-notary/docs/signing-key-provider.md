@@ -279,7 +279,7 @@ After changing signing configuration or provider code, run the test suite as des
 
 Note: some server tests bind local sockets and may need to run outside strict network sandboxes.
 
-## Current Limits
+## Limits
 
 - No vendor HSM is certified by this repository yet. SoftHSM verifies the
   PKCS#11 integration path, not vendor-specific behavior.

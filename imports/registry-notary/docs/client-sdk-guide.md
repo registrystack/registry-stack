@@ -103,7 +103,7 @@ Rust returns `NotaryClientError`. Python and Node expose:
 - `NotaryTransportError`
 - `NotaryProblemError`
 
-Safe fields for logs are status, code, title, retryable, and request id. Do not
+Safe fields for logs are `status`, `code`, `title`, `retryable`, and `request_id`. Do not
 log raw request bodies, requester or target identifiers, holder proofs,
 credential bodies, SD-JWT disclosures, nonces, Authorization, `X-Api-Key`, or
 Problem Details `detail`.
@@ -419,8 +419,8 @@ let response = handle
 ## Python
 
 `bindings/python/registry_notary` is the supported Python client package for
-downstream applications. Keep these public names stable for application
-integrations: `RegistryNotaryClient`, `RetryPolicy`, `evaluate`,
+downstream applications. Its public names for application integrations are:
+`RegistryNotaryClient`, `RetryPolicy`, `evaluate`,
 `evaluate_request`, `batch_evaluate_request`, `list_claims`, `get_claim`,
 `issuer_jwks`, `raw_issuer_jwks`, `render_request`,
 `issue_credential_request`, and `credential_status`.

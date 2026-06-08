@@ -39,8 +39,7 @@ the SD-JWT value. The protected header has these Registry Notary invariants:
 
 Only Ed25519 EdDSA signing keys are supported. Local JWK keys are supported for
 development and tests; PKCS#11 keys are available behind the optional server
-feature. Adding ES256, RS256, PS256, or other algorithms requires a separate
-design and test pass.
+feature.
 
 Signing key configuration examples are documented in
 [signing-key-provider.md](signing-key-provider.md).
@@ -116,22 +115,27 @@ When OID4VCI is enabled, Registry Notary serves SD-JWT VC Type Metadata at the
 well-known location derived from each configured HTTPS `vct`. Per the SD-JWT VC
 Type Metadata convention, a consumer dereferences an HTTPS `vct` by inserting
 `/.well-known/vct` between the host and the path, so the metadata is served at
-`GET /.well-known/vct/{vct_path}`. The handler strips the `/.well-known/vct`
-prefix and reconstructs the candidate `vct` as `https://{host}/{vct_path}` before
-matching it exactly against a configured credential configuration. The route uses
-a trailing-wildcard capture, so nested configured paths such as
-`/.well-known/vct/credentials/dhis2/health-status/v1` are supported, not just two
-segments. The bare `GET /credentials/{vct_path}` route is also served for
-consumers that dereference the `vct` directly. Both routes are public (no
-authentication) and expect path-prefix deployments to strip the issuer prefix
-before forwarding to Notary, while preserving the external host and scheme. They
-return `404` when OID4VCI is disabled or the reconstructed absolute URL does not
-exactly match a configured credential configuration `vct`. The Type Metadata
-document includes the exact configured `vct`, display metadata, and one claim
-metadata entry for the OID4VCI configuration's `claim_id`. Current Notary-issued
-claim results are always selectively disclosable, so claim metadata uses
-`sd: "always"`. Browser-based wallets from configured self-attestation wallet
-origins receive CORS headers on the `/.well-known/vct/...` metadata surface.
+`GET /.well-known/vct/{vct_path}`.
+
+- **Matching.** The handler strips the `/.well-known/vct` prefix and reconstructs
+  the candidate `vct` as `https://{host}/{vct_path}`, then matches it exactly
+  against a configured credential configuration. The route uses a trailing-wildcard
+  capture, so nested configured paths such as
+  `/.well-known/vct/credentials/dhis2/health-status/v1` are supported, not just two
+  segments.
+- **Direct dereference.** The bare `GET /credentials/{vct_path}` route is also
+  served for consumers that dereference the `vct` directly.
+- **Auth and prefixes.** Both routes are public (no authentication) and expect
+  path-prefix deployments to strip the issuer prefix before forwarding to Notary,
+  while preserving the external host and scheme.
+- **Not found.** Both return `404` when OID4VCI is disabled or the reconstructed
+  absolute URL does not exactly match a configured credential configuration `vct`.
+- **Document contents.** The Type Metadata document includes the exact configured
+  `vct`, display metadata, and one claim metadata entry for the OID4VCI
+  configuration's `claim_id`. Notary-issued claim results are always selectively
+  disclosable, so claim metadata uses `sd: "always"`.
+- **CORS.** Browser-based wallets from configured self-attestation wallet origins
+  receive CORS headers on the `/.well-known/vct/...` metadata surface.
 
 ## Explicit Non-Support
 

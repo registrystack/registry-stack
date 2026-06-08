@@ -21,8 +21,8 @@ seconds, and profile validity must be between 1 second and that maximum.
 Self-attestation profiles are also bounded by
 `self_attestation.token_policy.max_credential_validity_seconds`.
 
-This default is useful for beta deployments where the safest lifecycle control
-is short expiry rather than maintaining a long-lived revocation surface.
+This default suits deployments that prefer short expiry as the primary lifecycle
+control, avoiding the operational cost of a long-lived revocation surface.
 
 ## When To Enable Status
 
@@ -57,8 +57,8 @@ Fields:
 
 - `enabled`: adds status records during issuance and includes a status claim in
   issued credentials.
-- `base_url`: public HTTP or HTTPS origin used to build status URLs. Use HTTPS
-  in shared environments.
+- `base_url`: public HTTPS origin used to build status URLs. Use plain HTTP only
+  for local or lab deployments.
 - `storage`: `in_memory` or `redis`.
 - `retention_seconds`: how long status records are retained.
 - `redis.url_env`: environment variable containing the Redis URL.
@@ -151,14 +151,13 @@ a second registry of personal data.
 
 ## Status Operations
 
-The current beta implementation exposes:
+Status operations are exposed as:
 
 - Public status retrieval at the credential's status URL.
 - Admin status mutation for operators with `registry_notary:admin`.
 
-The REST route design is still being cleaned up, so avoid building external
-documentation or partner contracts around route names until that design is
-stabilized. For adopter testing, use the SDK methods where possible:
+Use the SDK methods where possible so your integration does not depend on route
+names directly:
 
 - Rust: `credential_status(...)` and `update_credential_status(...)`.
 - Node.js and Python wrappers expose only the read-only status lookup

@@ -7,9 +7,9 @@ the minimum data from a source registry, without becoming a copy of that
 registry. Depending on the claim, it returns a claim result, renders a supported
 format, or issues a short-lived SD-JWT VC credential.
 
-Pick your path below. If you are new and want a runnable local tutorial, start in Registry Docs.
-If you are configuring or operating Notary, start with the architecture overview.
+Pick your path below. New to Registry Notary? Start with the hosted walkthrough or a runnable local tutorial. If you are configuring or operating Notary, start with the [architecture overview](architecture-overview.md).
 
+- [See it live](https://docs.registrystack.org/start/see-it-live/): watch Notary issue a privacy-preserving credential against a hosted lab, with zero install.
 - [Verify a claim from your registry API](https://docs.registrystack.org/tutorials/verify-claim-registry-api/): add Notary to a local registry API project with `registryctl`.
 - [Verify a claim from your own API](https://docs.registrystack.org/tutorials/verify-claim-own-api/): create a standalone Notary project for a source API you operate.
 

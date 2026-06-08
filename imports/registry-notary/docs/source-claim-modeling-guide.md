@@ -500,9 +500,8 @@ operations:
 ```
 
 `evidence.inline_batch_limit` sets a general default. The claim-level
-`max_subjects` config key is retained as the limit name for now, but it applies
-to batch `items[]` target entries and should be lower when a source is sensitive
-or slow.
+`max_subjects` config key caps the number of batch `items[]` target entries for
+a claim, and should be lower when a source is sensitive or slow.
 
 Bulk source modes are separate from API batch evaluation:
 
@@ -515,9 +514,8 @@ Bulk source modes are separate from API batch evaluation:
   shared `query_signature`.
 
 Do not enable bulk modes until contract tests prove response shape,
-cardinality, and source limits. OpenFn worker execution failures are not
-retried in v1; keep `retry_on_5xx: false` on OpenFn sidecar connections unless
-a future explicit retry policy is added.
+cardinality, and source limits. Notary does not retry OpenFn worker execution
+failures; keep `retry_on_5xx: false` on OpenFn sidecar connections.
 
 ## Purpose Propagation
 

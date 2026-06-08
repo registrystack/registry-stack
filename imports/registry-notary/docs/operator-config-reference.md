@@ -2,7 +2,7 @@
 
 > **Page type:** Reference · **Product:** Registry Notary · **Layer:** all · **Audience:** operator
 
-This guide explains how to assemble a deployable Registry Notary configuration.
+This reference describes how to assemble a deployable Registry Notary configuration.
 It is written for teams adopting the service, not for contributors changing the
 implementation.
 
@@ -92,6 +92,10 @@ into the repository.
 
 ## Governed Config Apply
 
+Most deployments can skip this section. `config_trust` is optional; it governs
+signed, threshold-approved config changes for high-assurance deployments. Simple
+local deployments omit it and keep using the local YAML loaded at startup.
+
 This governed example is syntactically valid but illustrative. Generate the
 `tuf_root_sha256` and targets-role signer key IDs from your own trusted TUF
 repository before using governed apply in an environment.
@@ -139,6 +143,9 @@ sources are recorded as `signed_bundle_endpoint`; local repository sources are
 recorded as `signed_bundle_file`. HTTP loopback remote repositories require
 `allow_dev_insecure_fetch_urls: true` and are intended only for tests and local
 development.
+
+### TUF root transition
+
 For TUF root transition, apply a signed local TUF bundle whose target metadata
 includes `root_transition`, changes only `config_trust.accepted_roots`, keeps
 the antirollback and local approval paths unchanged, retains existing roots
@@ -148,9 +155,13 @@ bundles that verify through the rotated root. `valid_from_unix_seconds` and
 `valid_until_unix_seconds` are optional local bounds for overlap windows;
 expired or not-yet-valid roots fail authorization even when TUF verification
 and signer quorum otherwise succeed.
+
+### Hot-apply and reload
+
 `POST /admin/v1/config/apply` can hot-apply governed signed signing-key
 rotations for credential issuer, pre-authorized access-token, eSignet
-client-assertion, and federation response signing paths after TUF verification,
+(an OpenID Connect identity service) client-assertion, and federation response
+signing paths after TUF verification,
 trust-root authorization, and local anti-rollback acceptance. It can also
 hot-apply `signing_key_cleanup` for expired publish-only keys that are no longer
 active signing references. Inline config candidates are accepted only by verify
@@ -163,6 +174,9 @@ automation invokes governed config or reload operations. Standalone Notary does
 not support resource, table, or runtime config reload; the mounted
 `POST /admin/v1/reload` route returns `501
 registry.admin.capability.not_supported`.
+
+### Break-glass apply
+
 Break-glass apply is
 available only for signed targets whose target metadata includes the local
 approval's `emergency_change_class`; the approval fields come from the admin
@@ -555,7 +569,7 @@ Avoid broad source bindings. A claim should read only the fields needed to
 evaluate that claim. If two credentials need different fields, prefer two claims
 or a small dependency graph over one over-broad claim.
 
-## Matching policy
+## Matching Policy
 
 Each source binding has an optional `matching` block that gates and shapes how the
 request is resolved to a source record before the read runs. The block is the
@@ -624,8 +638,6 @@ Notes:
   oracle.
 - `confidence` is a fixed label for the source and method. It is returned verbatim
   on every successful match and does not measure how strong an individual match was.
-  Tracked for improvement in
-  [issue #90](https://github.com/jeremi/registry-notary/issues/90).
 - Config validation rejects blank values: `policy_id`, `method`, `target_type`, and
   `requester_type` must be non-empty when present, and the purpose, relationship,
   and input-path lists must not contain blank entries.
@@ -712,8 +724,8 @@ The main controls are:
   accepted by `auth.oidc.audiences`.
 - `token_policy`: assurance, auth age, access-token lifetime, evaluation age,
   credential validity, and clock leeway ceilings.
-- `allowed_operations`: v1 may enable `evaluate`, `render`, and
-  `issue_credential`; `batch_evaluate` must remain false.
+- `allowed_operations`: may enable `evaluate`, `render`, and `issue_credential`.
+  `batch_evaluate` is not supported for citizen self-attestation flows.
 - `allowed_purposes`, `allowed_claims`, `allowed_formats`,
   `allowed_disclosures`, and `credential_profiles`: explicit allow-lists.
 - `scope_policy` and `required_scopes`: citizen token scope requirements.
