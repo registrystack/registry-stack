@@ -1115,7 +1115,9 @@ fn filter_value<'a>(
     allowed: &[PointerPattern],
 ) -> Option<Value> {
     if allowed.iter().any(|pattern| pattern.matches(path)) {
-        return Some(value.clone());
+        if let Some(allowed_value) = clone_allowed_leaf_value(value) {
+            return Some(allowed_value);
+        }
     }
 
     match value {
@@ -1130,9 +1132,10 @@ fn filter_value<'a>(
                 })
                 .collect::<serde_json::Map<_, _>>();
             (!filtered.is_empty()
-                || allowed
-                    .iter()
-                    .any(|pattern| pattern.has_descendant_of(path)))
+                || (map.is_empty()
+                    && allowed
+                        .iter()
+                        .any(|pattern| pattern.has_descendant_of(path))))
             .then_some(Value::Object(filtered))
         }
         Value::Array(items) => {
@@ -1146,13 +1149,36 @@ fn filter_value<'a>(
                 })
                 .collect::<Vec<_>>();
             (!filtered.is_empty()
-                || allowed
-                    .iter()
-                    .any(|pattern| pattern.has_descendant_of(path)))
+                || (items.is_empty()
+                    && allowed
+                        .iter()
+                        .any(|pattern| pattern.has_descendant_of(path))))
             .then_some(Value::Array(filtered))
         }
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => None,
     }
+}
+
+fn clone_allowed_leaf_value(value: &Value) -> Option<Value> {
+    match value {
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => Some(value.clone()),
+        Value::Array(items) => {
+            let filtered = items
+                .iter()
+                .filter(|item| is_scalar_value(item))
+                .cloned()
+                .collect::<Vec<_>>();
+            (!filtered.is_empty() || items.is_empty()).then_some(Value::Array(filtered))
+        }
+        Value::Object(_) => None,
+    }
+}
+
+fn is_scalar_value(value: &Value) -> bool {
+    matches!(
+        value,
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_)
+    )
 }
 
 #[derive(Clone, Debug)]

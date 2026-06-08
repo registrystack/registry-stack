@@ -219,6 +219,54 @@ fn shared_filter_enforces_default_tier_allowlist() {
 }
 
 #[test]
+fn default_filter_does_not_clone_composite_values_at_allowlisted_scalar_paths() {
+    let mut posture = parse(registry_platform_ops::DEFAULT_REDACTED_POSTURE_FIXTURE_V1);
+    posture["posture"]["findings"][0]["evidence"][0]["value"] = json!({
+        "secret": "nested-sensitive-diagnostic",
+        "details": ["private-node-a", "private-node-b"]
+    });
+    posture["posture"]["warnings"] = json!([
+        "ordinary warning",
+        { "secret": "nested-warning-sensitive-diagnostic" }
+    ]);
+
+    let filtered = registry_platform_ops::filter_posture_for_tier(
+        posture,
+        registry_platform_ops::PostureTier::Default,
+    )
+    .expect("default posture filters");
+    let rendered = serde_json::to_string(&filtered).expect("filtered posture renders");
+
+    assert!(!rendered.contains("nested-sensitive-diagnostic"));
+    assert!(!rendered.contains("private-node-a"));
+    assert!(!rendered.contains("nested-warning-sensitive-diagnostic"));
+    assert!(filtered["posture"]["findings"][0]["evidence"][0]["value"].is_null());
+    assert_eq!(filtered["posture"]["warnings"], json!(["ordinary warning"]));
+}
+
+#[test]
+fn default_filter_drops_nonempty_dynamic_containers_without_allowed_children() {
+    let mut posture = parse(registry_platform_ops::DEFAULT_REDACTED_POSTURE_FIXTURE_V1);
+    posture["standards_artifacts"]["hidden_artifact"] = json!({
+        "url": "https://internal.example.gov/private/spec",
+        "diagnostics": {
+            "secret": "hidden-artifact-sensitive-diagnostic"
+        }
+    });
+
+    let filtered = registry_platform_ops::filter_posture_for_tier(
+        posture,
+        registry_platform_ops::PostureTier::Default,
+    )
+    .expect("default posture filters");
+    let rendered = serde_json::to_string(&filtered).expect("filtered posture renders");
+
+    assert!(filtered["standards_artifacts"]["hidden_artifact"].is_null());
+    assert!(!rendered.contains("hidden-artifact-sensitive-diagnostic"));
+    assert!(!rendered.contains("https://internal.example.gov/private/spec"));
+}
+
+#[test]
 fn shared_filter_preserves_restricted_tier() {
     let restricted_posture = parse(registry_platform_ops::RESTRICTED_POSTURE_FIXTURE_V1);
     let filtered = registry_platform_ops::filter_posture_for_tier(
