@@ -1,15 +1,14 @@
 # Registry Relay Documentation
 
-This directory has three kinds of documents:
+Registry Relay turns registry data you already hold, in spreadsheets or PostgreSQL, into protected, scoped, read-only HTTP APIs. Authorized callers read records over purpose-bound routes, and the gateway never widens reach at request time. Relay also publishes discovery metadata that points callers to a Registry Notary for claim and evidence verification.
 
-- Current operator and adopter references. These describe supported behavior in the current worktree.
-- Historical design notes under [history/](history/). These are useful context, but the current contract lives in the operator references.
-- Local internal review notes may exist under `docs/internal/`. That directory is ignored and should not be committed.
+New here? Start with the hosted walkthrough, then the first-run tutorials in Registry Docs:
 
-For first-run tutorials, use Registry Docs:
-
+- [See it live](https://docs.registrystack.org/start/see-it-live/): read a protected API and get a credential against a hosted lab, with zero install.
 - [Publish a spreadsheet as a secured registry API](https://docs.registrystack.org/tutorials/publish-spreadsheet-secured-registry-api/)
 - [Verify a claim from your registry API](https://docs.registrystack.org/tutorials/verify-claim-registry-api/)
+
+The references below describe supported behavior. Historical design notes under [history/](history/) are context only; the current contract lives in these references. Some links below open the source repository on GitHub.
 
 ## Current References
 
@@ -40,10 +39,3 @@ For first-run tutorials, use Registry Docs:
 Historical files under [history/](history/) may mention removed routes such as `/datasets/{dataset_id}/{entity}` or pre-rename "Evidence Server" wording. Treat them as context only.
 
 Local files under `docs/internal/` capture review findings and work planning. They can be useful during release prep, but they are not normative API, config, or operations documentation and should stay out of commits.
-
-## Missing Documentation Backlog
-
-- Static OpenAPI review whenever public route families, scopes, payloads, or
-  error contracts change.
-- Language-specific client examples or SDKs, if Relay grows a supported client package.
-- Deeper feature-specific conformance notes for standards adapters once each adapter has external consumer feedback.

@@ -1,6 +1,6 @@
-# Registry Notary Discovery
+# Evidence Offering Discovery
 
-Registry Relay no longer verifies claims or evidence. Relay exposes registry data from configured file and PostgreSQL sources and publishes evidence offering metadata for discovery.
+Registry Relay publishes evidence offering metadata for discovery and delegates claim and evidence verification to Registry Notary. Relay exposes registry data from configured file and PostgreSQL sources.
 
 The only evidence offering routes in Relay are:
 
@@ -32,8 +32,5 @@ The `evidence_verification` scope remains available as a distinct label for stan
 
 Use Registry Notary's documentation as the source of truth for verification semantics, claim request bodies, result interpretation, credential issuance, client retries, and verifier behavior:
 
-- [Registry Notary client SDK guide](../../registry-notary/docs/client-sdk-guide.md)
-- [Registry Notary scenario catalog](../../registry-notary/docs/notary-scenario-catalog.md)
-- [Registry Notary release notes](../../registry-notary/docs/release-notes.md)
-
-Relay docs should only describe the discovery metadata Relay publishes and the handoff boundary. Duplicating Notary's verification contract here would make the two projects drift.
+- [Registry Notary client SDK guide](https://docs.registrystack.org/products/registry-notary/client-sdk-guide/)
+- [Registry Notary documentation](https://docs.registrystack.org/products/registry-notary/)

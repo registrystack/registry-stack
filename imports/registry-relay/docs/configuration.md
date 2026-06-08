@@ -1,4 +1,4 @@
-# registry-relay Configuration Guide
+# Registry Relay Configuration Guide
 
 `registry-relay` is configured by one YAML document. The binary chooses the first available source:
 
@@ -26,6 +26,8 @@ standards: {}  # optional, feature-gated adapters
 
 Unknown fields are rejected for most blocks. Config validation runs after YAML parsing and checks ids, scopes, table/entity references, filter references, aggregate references, env var presence, and vocabulary prefixes.
 
+A minimal deployment needs only `server` (a listener), `auth` (one auth mode), and at least one entry in `datasets`. Every other block is optional. See [config/example.yaml](../config/example.yaml) for a complete, working starting point; the sections below document each block in full.
+
 ## Instance
 
 ```yaml
@@ -37,7 +39,7 @@ instance:
 ```
 
 `instance` gives posture and operations tooling a stable public identity for the
-running relay. `id` defaults to `registry-relay-local`; `environment`, `owner`,
+running service. `id` defaults to `registry-relay-local`; `environment`, `owner`,
 and `jurisdiction` are optional public labels.
 
 ## Server
@@ -68,11 +70,15 @@ server:
 
 `request_timeout` bounds total request service time after HTTP headers are parsed. `request_body_timeout` bounds body reads for handlers that consume a request body. `http1_header_read_timeout` closes incomplete HTTP/1 headers before request work is admitted, and `max_connections` caps concurrent accepted sockets per listener. All timeouts must be non-zero and `max_connections` must be greater than zero.
 
-HTTP/2 connections use the same finite connection cap and keepalive timeout, but the beta socket-level slow-header regression test covers HTTP/1. If production terminates HTTP/2 at a reverse proxy, configure bounded proxy header/body read timeouts and per-client connection limits before forwarding to Registry Relay.
+HTTP/2 connections use the same finite connection cap and keepalive timeout. If production terminates HTTP/2 at a reverse proxy, configure bounded proxy header/body read timeouts and per-client connection limits before forwarding to Registry Relay.
 
 The default CORS policy is deny by omission. Add explicit trusted origins only.
 
 ## Governed Config Apply
+
+Most deployments can skip this section. `config_trust` is optional; it governs
+signed, threshold-approved config changes for high-assurance deployments. Simple
+local deployments omit it and keep using the local YAML loaded at startup.
 
 This governed example is syntactically valid but illustrative. Generate the
 `tuf_root_sha256` and targets-role signer key IDs from your own trusted TUF
@@ -138,7 +144,7 @@ them when old and new roots should both authorize bundles only during a planned
 transition window. Expired or not-yet-valid roots fail authorization even when
 the TUF metadata and signer quorum are otherwise valid.
 
-## Catalog And Vocabularies
+## Catalog and Vocabularies
 
 ```yaml
 catalog:
@@ -220,9 +226,9 @@ The demo policy IRIs under `demo.example.gov` are hypothetical examples for
 catalog consumers. They are not official policy, legal advice, or a declaration
 that a client has been approved to use the data.
 
-## Optional Social Protection Digital Convergence Initiative (SP DCI) Sync Adapter
+## SP DCI Sync Adapter
 
-Build with `--features spdci-api-standards` to enable the optional SP DCI sync adapters. Without that feature, any `standards.spdci` config is rejected with `spdci.config.feature_disabled`.
+SP DCI (the Social Protection Digital Convergence Initiative) sync adapters are optional and feature-gated. Build with `--features spdci-api-standards` to enable them. Without that feature, any `standards.spdci` config is rejected with `spdci.config.feature_disabled`.
 
 The adapter does not add new storage semantics. Configure a normal Registry Relay entity, often backed by an XLSX worksheet, then bind the SP DCI sync routes to it:
 
@@ -300,7 +306,7 @@ Store the fingerprint in the platform secret store under the configured `fingerp
 
 ## OIDC (OAuth2)
 
-Set `auth.mode: oidc` to verify bearer JWTs against an external OpenID Connect / OAuth2 IdP. The relay is a resource server: it validates inbound tokens against the IdP's JWKS but never mints, refreshes, or stores tokens. A given deployment runs in exactly one auth mode at a time; mixed-mode operation is not supported.
+Set `auth.mode: oidc` to verify bearer JWTs against an external OpenID Connect / OAuth2 IdP. Registry Relay is a resource server: it validates inbound tokens against the IdP's JWKS but never mints, refreshes, or stores tokens. A given deployment runs in exactly one auth mode at a time; mixed-mode operation is not supported.
 
 ```yaml
 auth:
@@ -337,7 +343,7 @@ A full drop-in alternative to `config/example.yaml` lives at `config/example.oid
 | `jwks_cache_ttl`  | Steady-state JWKS cache TTL. The cache also refreshes on unknown `kid` (rate-limited), so this is the rotation pickup latency, not the upper bound.           |
 | `leeway`          | Clock skew tolerance on `exp` and `nbf`. Bounded at 5 minutes by validation.                                                                                  |
 | `scope_claim`     | Name of the JWT claim to read scopes from (the config field itself is always a single string; defaults to `scope`). The claim's *value* in the token may be a space-separated string (RFC 8693 / RFC 9068), a JSON array of strings, or a JSON object whose keys are the scope names. Object-valued role keys grant scopes only when their values are active: `true`, a non-empty string, or a non-empty object/array containing an active value. |
-| `scope_map`       | Optional rename map applied before scope-based access checks. Adapt IdP role names to the relay's `<dataset_id>:<level>` shape.                               |
+| `scope_map`       | Optional rename map applied before scope-based access checks. Adapt IdP role names to Registry Relay's `<dataset_id>:<level>` shape.                               |
 | `scope_object_required_keys` | Optional allowlist of keys that must appear inside object-valued role claim values before the role key is accepted. For Zitadel organization-scoped role objects, set this to the expected organization id key or keys. Defaults to empty, which accepts any active non-empty object value. |
 | `allowed_clients` | Optional allowlist matched against the token's `azp` (preferred) or `client_id`. Empty list means any client is accepted.                                     |
 | `token_types`     | Accepted JOSE `typ` header values. Defaults to `JWT` and `at+jwt` (RFC 9068). ID tokens (`id+jwt`) are intentionally rejected by default, and tokens without `typ` are rejected by the shared verifier. |
@@ -348,7 +354,7 @@ A full drop-in alternative to `config/example.yaml` lives at `config/example.oid
 
 ### Resource-server semantics
 
-The relay never mints or refreshes tokens. Operators are responsible for provisioning OIDC applications, machine users, and grant types on the IdP. The Principal's `principal_id` is taken from the token's `sub` (preferred), then `client_id`, then `azp`; `auth_mode=oidc` is recorded on every audit record.
+Registry Relay never mints or refreshes tokens. Operators are responsible for provisioning OIDC applications, machine users, and grant types on the IdP. The Principal's `principal_id` is taken from the token's `sub` (preferred), then `client_id`, then `azp`; `auth_mode=oidc` is recorded on every audit record.
 
 ### Granular failure codes
 
@@ -367,9 +373,11 @@ Token verification failures map to specific `auth.*` codes so audit pipelines ca
 | `auth.algorithm_not_allowed`    | 401  | Header `alg` is not in the configured allowlist               |
 | `auth.client_not_allowed`       | 403  | `azp` / `client_id` is not in the configured `allowed_clients`|
 | `auth.invalid_credential`       | 401  | JWT decode failure not covered by a more specific variant      |
-| `auth.jwks_unavailable`         | 503  | JWKS fetch failed; the relay cannot verify any token          |
+| `auth.jwks_unavailable`         | 503  | JWKS fetch failed; Registry Relay cannot verify any token     |
 
 ### Running against a local IdP
+
+The steps below are a worked example for contributors, using the project's own local development stack (a Zitadel instance provisioned by the sibling `publicschema.com` compose stack). For a real deployment, adapt them to your own IdP.
 
 The publicschema.com dev compose stack provisions a Zitadel organisation, project, OIDC application, test user, machine service account, and the relay-facing project roles on first boot. See `apps/publicschema.com/compose/seed/zitadel-bootstrap.md` for the resources created, the env-file shape, and the claim that carries roles in minted access tokens.
 
@@ -440,7 +448,11 @@ audit:
   hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
 ```
 
-`hash_secret_env` is required at runtime and must name an environment variable containing at least 32 bytes of deployment-specific random secret material. Startup fails closed when it is missing, empty, unset, or weak. Audit output uses `registry-platform-audit` envelopes with `prev_hash` and `record_hash` on every record. In beta, those fields detect ordering gaps and accidental corruption in retained logs, but they do not protect against an actor who can rewrite the audit sink. Use an append-only external sink or independent tail-hash anchoring when stronger integrity is required. `chain` is retained in config for compatibility with older deployments, but platform audit envelopes are always chained. Audit records are separate from operational logs, which go to stderr as readable text by default. Set `REGISTRY_RELAY_LOG_FORMAT=json` or `REGISTRY_RELAY_LOG_FORMAT=jsonl` when operational logs should be emitted as JSON Lines for collection or redirected files.
+`hash_secret_env` is required at runtime and must name an environment variable containing at least 32 bytes of deployment-specific random secret material. Startup fails closed when it is missing, empty, unset, or weak.
+
+Audit output uses `registry-platform-audit` envelopes with `prev_hash` and `record_hash` on every record. These fields detect ordering gaps and accidental corruption in retained logs, but they do not protect against an actor who can rewrite the audit sink. Use an append-only external sink or independent tail-hash anchoring when stronger integrity is required. `chain` is retained in config for compatibility with older deployments, but platform audit envelopes are always chained.
+
+Audit records are separate from operational logs, which go to stderr as readable text by default. Set `REGISTRY_RELAY_LOG_FORMAT=json` or `REGISTRY_RELAY_LOG_FORMAT=jsonl` when operational logs should be emitted as JSON Lines for collection or redirected files.
 
 ## Datasets
 
@@ -496,7 +508,7 @@ source:
   change_token_sql: "select max(updated_at)::text from public.individuals"
 ```
 
-`connection_env` is the environment variable name containing the connection string. Validation and logs may mention the env var name but must not read or print its value. The connection string must set `sslmode=require`; missing `sslmode`, `sslmode=prefer`, and `sslmode=disable` are rejected when the connector reads the environment variable. The native TLS connector validates the server certificate and hostname against the system trust store. Use read-only database credentials. Registry Relay also marks Postgres connector sessions as read-only, but credentials should enforce the same boundary at the database. `table` and `query` are mutually exclusive; prefer structured `table` configs for production.
+`connection_env` is the environment variable name containing the connection string. Validation and logs may mention the env var name but must not read or print its value. The connection string must set `sslmode=require`; missing `sslmode`, `sslmode=prefer`, and `sslmode=disable` are rejected when the connector reads the environment variable. The native TLS connector validates the server certificate and hostname against the system trust store. Use read-only database credentials. Registry Relay opens read-only Postgres sessions for live scans, but credentials should enforce the same boundary at the database. `table` and `query` are mutually exclusive; prefer structured `table` configs for production.
 
 Snapshot ingest reads Postgres through `COPY (SELECT ...) TO STDOUT WITH CSV HEADER`, then applies the same declared-schema coercion and validation as CSV files. The exported snapshot is bounded by `server.max_source_file_bytes`. For `table` sources, Registry Relay projects the declared schema fields from the table and casts them to CSV-friendly values. Extra database columns are ignored. For `query` sources, write a single `SELECT` or `WITH` statement without semicolons; public request input is never interpolated into SQL.
 
@@ -684,7 +696,7 @@ entities:
 
 When `fields` is present, only listed fields are exposed. When it is omitted, every table column is exposed. For sensitive datasets, prefer an explicit field list. Use entity `read_scope`, required filters, purpose-header requirements, and explicit field projection for exposure control; `sensitive: true` controls audit redaction only.
 
-Row-level authorization scopes are not available in beta. The former `row_scope` resource setting is rejected by config parsing; model row exposure with dataset/entity read scopes, required filters, purpose headers, and projected fields instead.
+Row-level authorization scopes are not supported. The `row_scope` resource setting is rejected by config parsing; model row exposure with dataset/entity read scopes, required filters, purpose headers, and projected fields instead.
 
 Relationships are dataset-local in V1. Cross-dataset workflows should compose client-side with separate scoped calls and separate audit records.
 

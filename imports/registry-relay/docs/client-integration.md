@@ -4,9 +4,10 @@ This guide is for application teams calling Registry Relay. It describes client
 behavior for the V1 dataset-scoped REST API.
 
 For concrete deployment-specific paths and schemas, fetch the runtime OpenAPI
-document from the deployment or use [api.md](api.md) as the general contract
-reference. Runtime OpenAPI is auth-gated by default unless
-`server.openapi_requires_auth` is disabled for demos or controlled tooling.
+document from the deployment at `GET /openapi.json`, or read the
+[Registry Relay API reference](https://docs.registrystack.org/api/registry-relay.html).
+Runtime OpenAPI is auth-gated by default unless `server.openapi_requires_auth`
+is disabled for demos or controlled tooling.
 
 ```mermaid
 sequenceDiagram
@@ -46,7 +47,7 @@ Before a client is allowed to consume Relay data, confirm:
 - Row reads that serve a human or program decision send `Data-Purpose`.
 - Collection reads include required filters where entities declare them.
 - The client handles RFC 9457 Problem Details instead of parsing text messages.
-- The client treats cursors, ETags, and provenance credentials as opaque values.
+- The client treats cursors, `ETags`, and provenance credentials as opaque values.
 - Logs redact bearer tokens, API keys, query values for sensitive fields, raw
   row bodies, VC-JWT bodies, and Problem Details `detail`.
 
@@ -60,15 +61,16 @@ Relay deployments use one auth mode at startup:
 Do not try both headers in the same client profile. Choose the mode advertised
 by the deployment operator.
 
-Scopes are dataset-local and independent:
+Scopes are dataset-local and independent, written as `<dataset_id>:<level>` (for
+example `social_registry:rows`):
 
-| Scope Class | Use |
+| Scope Level | Use |
 | --- | --- |
 | `metadata` | Discover visible datasets, entities, schemas, policies, and scoped OpenAPI |
 | `rows` | Read entity records and relationships |
 | `aggregate` | Discover and execute configured aggregates |
 | `evidence_verification` | Evidence-oriented standards adapter access, not Relay-local verification |
-| `admin` | Reload sources on the private admin listener |
+| `admin` | Admin-listener operations; uses the fixed scopes `registry_relay:admin` and `registry_relay:ops_read`, not a per-dataset suffix |
 
 A `metadata` scope never implies row access. A row scope never implies
 aggregate access. Evidence-verification scope does not expose a verification
@@ -191,5 +193,3 @@ When a client needs to verify claims or evidence:
 2. Read the advertised Registry Notary endpoint or discovery URL.
 3. Follow Registry Notary's client documentation for request shape, claim
    semantics, presentation, result verification, and credential issuance.
-
-Relay docs should not duplicate Registry Notary's verification contract.
