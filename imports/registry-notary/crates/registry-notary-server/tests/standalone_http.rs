@@ -7233,6 +7233,49 @@ async fn oid4vci_metadata_offer_and_nonce_are_public() {
 }
 
 #[tokio::test]
+async fn oid4vci_nonce_is_rate_limited_before_reservation() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_oid4vci_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    );
+    config
+        .self_attestation
+        .rate_limits
+        .invalid_token_per_client_address_per_minute = 2;
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    server
+        .post("/oid4vci/nonce")
+        .json(&json!({}))
+        .await
+        .assert_status_ok();
+    server
+        .post("/oid4vci/nonce")
+        .json(&json!({}))
+        .await
+        .assert_status_ok();
+
+    let limited = server.post("/oid4vci/nonce").json(&json!({})).await;
+    limited.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        limited.json::<Value>()["error"],
+        json!("temporarily_unavailable")
+    );
+
+    idp.stop().await;
+}
+
+#[tokio::test]
 async fn oid4vci_type_metadata_is_public_and_matches_configured_vct() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");

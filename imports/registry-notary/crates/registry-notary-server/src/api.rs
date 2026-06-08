@@ -55,7 +55,7 @@ use registry_platform_ops::{
     BreakGlassRateLimit, ConfigSource, FileAntiRollbackStore, FileLocalApprovalStore,
     LocalApprovalStoreError, LocalOperatorApproval, PostureApplyResult, PostureFilterError,
 };
-use registry_platform_replay::{ReplayKey, ReplayScope, RequiredReplayError};
+use registry_platform_replay::{ReplayKey, ReplayScope, ReplayStoreError, RequiredReplayError};
 use registry_platform_sdjwt::{validate_holder_proof, HolderProofBindings, HolderProofPolicy};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -3243,6 +3243,8 @@ struct Oid4vciCredentialOfferQuery {
 
 async fn oid4vci_nonce(
     state: Option<Extension<Arc<RegistryNotaryApiState>>>,
+    connect_info: Option<Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> Response {
     let Some(Extension(state)) = state else {
@@ -3250,6 +3252,10 @@ async fn oid4vci_nonce(
     };
     if !state.oid4vci.enabled || !state.oid4vci.nonce.enabled {
         return StatusCode::NOT_FOUND.into_response();
+    }
+    let client_address = token_client_address(&headers, connect_info.as_deref());
+    if consume_public_client_address_rate_limit(&state, &client_address).is_err() {
+        return oid4vci_error_response(Oid4vciWireError::RateLimited);
     }
     let request = if body.is_empty() {
         Oid4vciNonceRequest {
@@ -3288,13 +3294,16 @@ async fn oid4vci_nonce(
     };
     let expires_at =
         OffsetDateTime::now_utc() + time::Duration::seconds(state.oid4vci.nonce.ttl_seconds as i64);
-    if state
+    if let Err(error) = state
         .replay
         .nonce_store()
         .reserve_nonce(&replay_scope, &replay_key, expires_at)
         .await
-        .is_err()
     {
+        if replay_store_error_is_capacity(&error) {
+            state.metrics.record_replay("oid4vci_nonce", "rate_limited");
+            return oid4vci_error_response(Oid4vciWireError::RateLimited);
+        }
         state.metrics.record_replay("oid4vci_nonce", "error");
         return oid4vci_error_response(Oid4vciWireError::ServerError);
     }
@@ -4346,6 +4355,26 @@ fn check_token_client_address_rate_limit(
     state
         .self_attestation_rate_limiter
         .check_invalid_token_for_client_address_available(&hashed)
+}
+
+fn consume_public_client_address_rate_limit(
+    state: &RegistryNotaryApiState,
+    client_address: &str,
+) -> Result<(), SelfAttestationRateLimitError> {
+    let hashed = state
+        .self_attestation_rate_keys
+        .client_address(client_address)?;
+    state
+        .self_attestation_rate_limiter
+        .check_invalid_token_for_client_address(&hashed)
+}
+
+fn replay_store_error_is_capacity(error: &ReplayStoreError) -> bool {
+    matches!(
+        error,
+        ReplayStoreError::Operation { message }
+            if message.contains("in-memory cache store is full")
+    )
 }
 
 /// Record one `tx_code` attempt against the hashed pre-authorized code. After
