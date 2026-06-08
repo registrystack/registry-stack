@@ -2,6 +2,7 @@
 
 server:
   bind: 0.0.0.0:8080
+  openapi_requires_auth: false
   admin_listener:
     mode: dedicated
     bind: 0.0.0.0:8081

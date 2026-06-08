@@ -3,12 +3,15 @@ name: build-hosted-images
 # Builds the feature-complete Registry Lab images for the hosted Coolify deploy
 # and pushes digest-pinned tags to GHCR. Runs natively on amd64 (matches the
 # server), so no cross-arch emulation. Requires the SUBMODULES_PAT secret: a
-# classic PAT with `repo` scope whose owner can read every private vendor
-# submodule, including the cross-org PublicSchema/crosswalk (= vendor/cel-mapping).
+# classic PAT with `repo` + `write:packages` scope whose owner can read every
+# private vendor submodule (including the cross-org PublicSchema/crosswalk =
+# vendor/cel-mapping) and push to the ghcr.io/jeremi/* packages. The repo's
+# GITHUB_TOKEN cannot push to those pre-existing user-owned packages, so the
+# GHCR login below uses the PAT.
 #
-# The technical-preview hosted compose consumes product-repo release images by
-# digest. Use this workflow only as a manual fallback for lab-built images, then
-# record any Coolify image override as a deliberate roll-forward or rollback.
+# After a run, copy the three digests from the job summary into the Coolify
+# app env (REGISTRY_RELAY_IMAGE / REGISTRY_NOTARY_IMAGE /
+# REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE) and redeploy.
 
 on:
   workflow_dispatch:
@@ -18,7 +21,7 @@ on:
         default: "spdci-api-standards,standards-cel-mapping,ogcapi-edr"
       notary_features:
         description: "Cargo features for registry-notary"
-        default: "registry-notary-cel,pkcs11"
+        default: "registry-notary-cel"
 
 permissions:
   contents: read
@@ -41,8 +44,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.SUBMODULES_PAT }}
 
       - name: Build & push registry-relay
         id: relay
@@ -115,7 +118,7 @@ jobs:
           {
             echo "## Hosted image digests"
             echo ""
-            echo "Manual fallback digests. Use only as explicit Coolify overrides:"
+            echo "Paste these into the Coolify app env, then redeploy:"
             echo '```'
             echo "REGISTRY_RELAY_IMAGE=ghcr.io/${owner}/registry-relay@${{ steps.relay.outputs.digest }}"
             echo "REGISTRY_NOTARY_IMAGE=ghcr.io/${owner}/registry-notary@${{ steps.notary.outputs.digest }}"

@@ -255,6 +255,8 @@ def validate_artifacts(
         issues.extend(validate_runtime_commands(artifact, services))
         issues.extend(validate_repo_output_binds(artifact, services))
         issues.extend(validate_public_urls(artifact, compose, root))
+        issues.extend(validate_hosted_openapi_policy(artifact, services, root))
+        issues.extend(validate_config_loader_ref(artifact, services))
 
     issues.extend(validate_cross_artifact_contracts(artifacts, artifact_roots))
     return sorted(dedupe_issues(issues), key=lambda issue: (issue.artifact, issue.path, issue.code))
@@ -522,6 +524,86 @@ def validate_public_urls(artifact: str, compose: dict[str, Any], root: Path) -> 
                     )
                 )
     return issues
+
+
+def validate_hosted_openapi_policy(
+    artifact: str,
+    services: dict[str, Any],
+    root: Path,
+) -> list[Issue]:
+    issues = []
+    if artifact != "registry-lab":
+        return issues
+    for service, config in services.items():
+        if not isinstance(config, dict):
+            continue
+        config_path = hosted_product_config_path(root, config)
+        if config_path is None or not config_path.exists():
+            continue
+        try:
+            config_text = config_path.read_text(encoding="utf-8")
+        except Exception as exc:
+            issues.append(
+                Issue(
+                    "unreadable-product-config",
+                    artifact,
+                    f"services.{service}.command",
+                    f"could not read hosted product config {config_path}: {exc}",
+                )
+            )
+            continue
+        if not hosted_openapi_requires_auth_is_false(config_text):
+            issues.append(
+                Issue(
+                    "openapi-auth-required",
+                    artifact,
+                    f"services.{service}.server.openapi_requires_auth",
+                    "hosted lab Relay and Notary OpenAPI endpoints must be public for demos",
+                )
+            )
+    return issues
+
+
+def validate_config_loader_ref(artifact: str, services: dict[str, Any]) -> list[Issue]:
+    if artifact != "registry-lab":
+        return []
+    config_loader = services.get("config-loader")
+    if not isinstance(config_loader, dict):
+        return []
+    env = normalize_environment(config_loader.get("environment"))
+    config_ref = env.get("CONFIG_REPO_REF")
+    if config_ref in {"main", "${CONFIG_REPO_REF:-main}"}:
+        return []
+    return [
+        Issue(
+            "stale-config-repo-ref",
+            artifact,
+            "services.config-loader.environment.CONFIG_REPO_REF",
+            "hosted config-loader must default to current main config",
+        )
+    ]
+
+
+def hosted_openapi_requires_auth_is_false(text: str) -> bool:
+    in_server = False
+    server_indent = 0
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if stripped == "server:":
+            in_server = True
+            server_indent = indent
+            continue
+        if not in_server:
+            continue
+        if indent <= server_indent:
+            in_server = False
+            continue
+        if re.match(r"openapi_requires_auth\s*:\s*false\b", stripped, flags=re.IGNORECASE):
+            return True
+    return False
 
 
 def validate_cross_artifact_contracts(
@@ -937,16 +1019,30 @@ def collect_service_contract_text(compose: dict[str, Any], root: Path, service: 
 
 
 def hosted_notary_config_path(root: Path, service_config: dict[str, Any]) -> Path | None:
+    return hosted_product_config_path(root, service_config, product="notary")
+
+
+def hosted_product_config_path(
+    root: Path,
+    service_config: dict[str, Any],
+    *,
+    product: str | None = None,
+) -> Path | None:
     command = service_config.get("command")
     if not isinstance(command, list):
         return None
+    product_dirs = [product] if product else ["relay", "notary"]
     for index, value in enumerate(command[:-1]):
         if value != "--config":
             continue
         config_path = str(command[index + 1])
         name = Path(config_path).name
-        if name:
-            return root / "config" / "coolify" / "notary" / name
+        if not name:
+            continue
+        for product_dir in product_dirs:
+            path = root / "config" / "coolify" / product_dir / name
+            if path.exists():
+                return path
     return None
 
 

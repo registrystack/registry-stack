@@ -96,6 +96,17 @@ class HostedDeployValidationTest(unittest.TestCase):
         issues = self._validate(compose, self._valid_esignet())
         self.assertEqual([], issues)
 
+    def test_rejects_stale_config_loader_ref(self) -> None:
+        compose = self._valid_registry_lab()
+        compose["services"]["config-loader"] = {
+            "image": "alpine:3.20",
+            "environment": {
+                "CONFIG_REPO_REF": "registry-stack-technical-preview-2026-06-04"
+            },
+        }
+        issues = self._validate(compose, self._valid_esignet())
+        self.assertIssue(issues, "stale-config-repo-ref")
+
     def test_rejects_localhost_public_urls(self) -> None:
         compose = self._valid_registry_lab()
         compose["services"]["citizen-civil-notary"]["environment"][
@@ -282,6 +293,40 @@ oid4vci:
 
         self.assertNoIssue(issues, "missing-credential-configuration")
         self.assertNoIssue(issues, "missing-oid4vci-format")
+
+    def test_rejects_hosted_configs_that_require_openapi_auth(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            relay_dir = root / "config" / "coolify" / "relay"
+            notary_dir = root / "config" / "coolify" / "notary"
+            relay_dir.mkdir(parents=True)
+            notary_dir.mkdir(parents=True)
+            (relay_dir / "civil-registry-relay.yaml").write_text(
+                "server:\n  bind: 0.0.0.0:8080\n",
+                encoding="utf-8",
+            )
+            (notary_dir / "citizen-civil-notary.yaml").write_text(
+                "server:\n  bind: 0.0.0.0:8080\n  openapi_requires_auth: false\n",
+                encoding="utf-8",
+            )
+            compose = self._valid_registry_lab()
+            compose["services"]["civil-registry-relay"]["command"] = [
+                "--config",
+                "/etc/registry-relay/civil-registry-relay.yaml",
+            ]
+            compose["services"]["citizen-civil-notary"]["command"] = [
+                "--config",
+                "/etc/registry-notary/citizen-civil-notary.yaml",
+            ]
+            issues = self.validator.validate_artifacts(
+                {
+                    "registry-lab": compose,
+                    "esignet": self._valid_esignet(),
+                },
+                {"registry-lab": root, "esignet": root},
+            )
+
+        self.assertIssue(issues, "openapi-auth-required")
 
     def test_rejects_relay_healthcheck_that_calls_notary_binary(self) -> None:
         compose = self._valid_registry_lab()
