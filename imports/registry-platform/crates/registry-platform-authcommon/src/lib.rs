@@ -3,7 +3,7 @@
 
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -14,6 +14,7 @@ use zeroize::Zeroizing;
 const BEARER_SCHEME: &str = "Bearer";
 const FINGERPRINT_PREFIX: &str = "sha256:";
 const SHA256_HEX_LEN: usize = 64;
+const MAX_FINGERPRINT_FILE_BYTES: u64 = (FINGERPRINT_PREFIX.len() + SHA256_HEX_LEN + 2) as u64;
 
 /// Minimum raw API-key size accepted by [`validate_api_key_entropy`].
 ///
@@ -267,8 +268,7 @@ impl CredentialFingerprintRef {
                     .path
                     .as_ref()
                     .ok_or(CredentialFingerprintRefError::InvalidShape)?;
-                fs::read_to_string(path)
-                    .map_err(|_| CredentialFingerprintRefError::MissingSecret)?
+                read_bounded_fingerprint_file(path)?
             }
         };
         let fingerprint = trim_one_line_ending(fingerprint);
@@ -349,6 +349,16 @@ pub fn credential_fingerprint_commitment(
         serde_json::to_vec(&payload).expect("credential commitment payload serializes to JSON");
     let digest = Sha256::digest(&bytes);
     format!("{}{}", FINGERPRINT_PREFIX, hex_lower(&digest))
+}
+
+fn read_bounded_fingerprint_file(path: &Path) -> Result<String, CredentialFingerprintRefError> {
+    let metadata = fs::metadata(path).map_err(|_| CredentialFingerprintRefError::MissingSecret)?;
+    if !metadata.is_file() || metadata.len() > MAX_FINGERPRINT_FILE_BYTES {
+        return Err(CredentialFingerprintRefError::InvalidFingerprint(
+            FingerprintFormatError::InvalidLength,
+        ));
+    }
+    fs::read_to_string(path).map_err(|_| CredentialFingerprintRefError::MissingSecret)
 }
 
 fn trim_one_line_ending(mut value: String) -> String {
@@ -539,6 +549,37 @@ mod tests {
             reference.resolve(context).as_deref(),
             Ok(fingerprint.as_str())
         );
+    }
+
+    #[test]
+    fn credential_fingerprint_ref_rejects_oversized_file_before_parsing() {
+        let fingerprint = fingerprint_api_key(SAMPLE_KEY);
+        let context = CredentialCommitmentContext {
+            product: CredentialProduct::RegistryNotary,
+            credential_type: CredentialType::BearerToken,
+            credential_id: "openfn_sidecar",
+        };
+        let commitment = credential_fingerprint_commitment(context, &fingerprint);
+        let mut file = tempfile::NamedTempFile::new().expect("temp file");
+        write!(
+            file,
+            "{fingerprint}{}",
+            "x".repeat(MAX_FINGERPRINT_FILE_BYTES as usize)
+        )
+        .expect("oversized fingerprint writes");
+        let reference = CredentialFingerprintRef {
+            provider: CredentialFingerprintProvider::File,
+            name: None,
+            path: Some(file.path().to_path_buf()),
+            commitment,
+        };
+
+        assert!(matches!(
+            reference.resolve(context),
+            Err(CredentialFingerprintRefError::InvalidFingerprint(
+                FingerprintFormatError::InvalidLength
+            ))
+        ));
     }
 
     #[test]
