@@ -37,9 +37,10 @@ docker compose -f demo/decentralized/compose.yaml --profile client run --rm demo
 docker compose -f demo/decentralized/compose.yaml down -v
 ```
 
-Generated artifacts are written to `demo/decentralized/output/`. Generated
-static publication files are written under `demo/decentralized/static-metadata/`.
-Both directories keep only their `.gitignore` files in git.
+Generated credentials are written under `demo/decentralized/env/`. Generated
+artifacts are written to `demo/decentralized/output/`. Generated static
+publication files are written under `demo/decentralized/static-metadata/`.
+Those directories keep only their `.gitignore` files in git.
 
 ## Fixture Data
 
@@ -59,9 +60,19 @@ subjects, and health-linked support cases.
 
 ## Credentials
 
-`scripts/generate-demo-secrets.py` writes `demo/decentralized/.env` with local
-demo credentials and matching Relay SHA-256 hashes. The committed
-`.env.example` contains inert examples only.
+`scripts/generate-demo-secrets.py` writes scoped local credential files under
+`demo/decentralized/env/`. Regenerate them whenever Compose reports a missing
+env file.
+
+Generated files:
+
+- `env/civil-registry-relay.env`
+- `env/social-protection-registry-relay.env`
+- `env/health-registry-relay.env`
+- `env/civil-registry-notary.env`
+- `env/social-protection-registry-notary.env`
+- `env/shared-eligibility-registry-notary.env`
+- `env/demo-client.env`
 
 Credential classes:
 
@@ -74,10 +85,14 @@ Credential classes:
 - separate Registry Notary client API keys and bearer tokens;
 - distinct shared Registry Notary source tokens for civil, social, and health.
 
+Relay env files contain only `*_HASH` values plus
+`REGISTRY_RELAY_AUDIT_HASH_SECRET`. Registry Notary env files contain only that
+service's client token, bearer token, source token, and issuer key. The demo
+client env file contains only walkthrough tokens and no hashes or issuer keys.
+
 The social protection Relay config keeps row and aggregate scopes on separate
 credentials so the smoke flow can prove row-reader credentials cannot run the
-aggregate endpoint. Civil and health aggregate credentials are generated for
-future symmetry but are not used by the v1 walkthrough.
+aggregate endpoint.
 
 Relay configs should reference only `*_HASH` env vars. Registry Notary configs
 should reference only `token_env` names. No raw token should be committed.

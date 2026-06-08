@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Generate local credentials for the decentralized evidence demo.
+"""Generate scoped local credentials for the decentralized evidence demo.
 
-The Relay side stores SHA-256 fingerprints in config through hash env vars.
-Raw values are used only by demo clients and Registry Notary source connectors.
+Relay containers receive only SHA-256 fingerprints and the audit hash secret.
+Registry Notary containers receive only their own source/client credentials and
+issuer key. The demo client receives only the raw tokens needed for the demo
+walkthrough.
 """
 
 from __future__ import annotations
@@ -50,6 +52,65 @@ EVIDENCE_CLIENT_NAMES = [
     "SHARED_EVIDENCE_CLIENT",
 ]
 
+SCOPED_ENV_FILES: dict[str, list[str]] = {
+    "civil-registry-relay.env": [
+        "REGISTRY_RELAY_AUDIT_HASH_SECRET",
+        "CIVIL_METADATA_CLIENT_HASH",
+        "CIVIL_EVIDENCE_SOURCE_HASH",
+        "CIVIL_EVIDENCE_ONLY_HASH",
+        "CIVIL_ROW_READER_HASH",
+        "SHARED_CIVIL_EVIDENCE_SOURCE_HASH",
+    ],
+    "social-protection-registry-relay.env": [
+        "REGISTRY_RELAY_AUDIT_HASH_SECRET",
+        "SOCIAL_METADATA_CLIENT_HASH",
+        "SOCIAL_EVIDENCE_SOURCE_HASH",
+        "SOCIAL_EVIDENCE_ONLY_HASH",
+        "SOCIAL_ROW_READER_HASH",
+        "SOCIAL_AGGREGATE_READER_HASH",
+        "SHARED_SOCIAL_EVIDENCE_SOURCE_HASH",
+    ],
+    "health-registry-relay.env": [
+        "REGISTRY_RELAY_AUDIT_HASH_SECRET",
+        "HEALTH_METADATA_CLIENT_HASH",
+        "HEALTH_EVIDENCE_SOURCE_HASH",
+        "HEALTH_EVIDENCE_ONLY_HASH",
+        "HEALTH_ROW_READER_HASH",
+        "SHARED_HEALTH_EVIDENCE_SOURCE_HASH",
+    ],
+    "civil-registry-notary.env": [
+        "CIVIL_EVIDENCE_CLIENT_TOKEN",
+        "CIVIL_EVIDENCE_CLIENT_BEARER",
+        "CIVIL_EVIDENCE_SOURCE_RAW",
+        "CIVIL_EVIDENCE_ISSUER_JWK",
+    ],
+    "social-protection-registry-notary.env": [
+        "SOCIAL_EVIDENCE_CLIENT_TOKEN",
+        "SOCIAL_EVIDENCE_CLIENT_BEARER",
+        "SOCIAL_EVIDENCE_SOURCE_RAW",
+        "SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK",
+    ],
+    "shared-eligibility-registry-notary.env": [
+        "SHARED_EVIDENCE_CLIENT_TOKEN",
+        "SHARED_EVIDENCE_CLIENT_BEARER",
+        "SHARED_CIVIL_EVIDENCE_SOURCE_RAW",
+        "SHARED_SOCIAL_EVIDENCE_SOURCE_RAW",
+        "SHARED_HEALTH_EVIDENCE_SOURCE_RAW",
+        "SHARED_ELIGIBILITY_EVIDENCE_ISSUER_JWK",
+    ],
+    "demo-client.env": [
+        "CIVIL_METADATA_CLIENT_RAW",
+        "SOCIAL_METADATA_CLIENT_RAW",
+        "HEALTH_METADATA_CLIENT_RAW",
+        "SOCIAL_EVIDENCE_ONLY_RAW",
+        "SOCIAL_ROW_READER_RAW",
+        "SOCIAL_AGGREGATE_READER_RAW",
+        "CIVIL_EVIDENCE_CLIENT_BEARER",
+        "SOCIAL_EVIDENCE_CLIENT_BEARER",
+        "SHARED_EVIDENCE_CLIENT_BEARER",
+    ],
+}
+
 
 def fingerprint(raw: str) -> str:
     return f"sha256:{hashlib.sha256(raw.encode('ascii')).hexdigest()}"
@@ -62,33 +123,34 @@ def env_line(key: str, value: str) -> str:
 
 
 def generate_env() -> dict[str, str]:
-    issuer_jwk = generate_registry_notary_issuer_jwk()
     values: dict[str, str] = {
         "REGISTRY_RELAY_AUDIT_HASH_SECRET": generate_audit_hash_secret(),
-        "REGISTRY_NOTARY_ISSUER_JWK": issuer_jwk,
-        "CIVIL_EVIDENCE_ISSUER_JWK": issuer_jwk,
-        "SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK": issuer_jwk,
-        "SHARED_ELIGIBILITY_EVIDENCE_ISSUER_JWK": issuer_jwk,
+        "CIVIL_EVIDENCE_ISSUER_JWK": generate_registry_notary_issuer_jwk(),
+        "SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK": generate_registry_notary_issuer_jwk(),
+        "SHARED_ELIGIBILITY_EVIDENCE_ISSUER_JWK": generate_registry_notary_issuer_jwk(),
     }
     for name in TOKEN_NAMES:
         raw = generate_raw_key()
         values[f"{name}_RAW"] = raw
         values[f"{name}_HASH"] = fingerprint(raw)
-    values["SOCIAL_PROTECTION_EVIDENCE_SOURCE_RAW"] = values["SOCIAL_EVIDENCE_SOURCE_RAW"]
-    values["SOCIAL_PROTECTION_EVIDENCE_SOURCE_HASH"] = values["SOCIAL_EVIDENCE_SOURCE_HASH"]
     for name in EVIDENCE_CLIENT_NAMES:
         values[f"{name}_TOKEN"] = generate_raw_key()
         values[f"{name}_BEARER"] = generate_raw_key()
-    values["SOCIAL_PROTECTION_EVIDENCE_CLIENT_TOKEN"] = values["SOCIAL_EVIDENCE_CLIENT_TOKEN"]
-    values["SOCIAL_PROTECTION_EVIDENCE_CLIENT_BEARER"] = values["SOCIAL_EVIDENCE_CLIENT_BEARER"]
     return values
 
 
-def write_env_file(path: Path, values: dict[str, str]) -> None:
+def scoped_values(values: dict[str, str], names: list[str]) -> dict[str, str]:
+    missing = [name for name in names if name not in values]
+    if missing:
+        raise KeyError(f"missing generated values: {', '.join(missing)}")
+    return {name: values[name] for name in names}
+
+
+def write_env_file(path: Path, values: dict[str, str], scope: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
-        "# Generated local credentials for the decentralized evidence demo.",
-        "# Do not commit this file. Regenerate with scripts/generate-demo-secrets.py.",
+        f"# Generated local credentials for {scope}.",
+        "# Do not commit this file. Regenerate with demo/decentralized/scripts/generate-demo-secrets.py.",
         "",
     ]
     for key in sorted(values):
@@ -96,33 +158,40 @@ def write_env_file(path: Path, values: dict[str, str]) -> None:
     write_secret_file(path, "\n".join(lines) + "\n")
 
 
+def write_scoped_env_files(env_dir: Path, values: dict[str, str]) -> list[Path]:
+    paths: list[Path] = []
+    for filename, names in SCOPED_ENV_FILES.items():
+        path = env_dir / filename
+        write_env_file(path, scoped_values(values, names), filename)
+        paths.append(path)
+    return paths
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--env-file",
-        default=Path(__file__).resolve().parents[1] / ".env",
+        "--env-dir",
+        default=Path(__file__).resolve().parents[1] / "env",
         type=Path,
-        help="destination .env file, default: demo/decentralized/.env",
+        help="destination directory for scoped env files, default: demo/decentralized/env",
     )
     parser.add_argument(
         "--print-summary",
         action="store_true",
-        help="print generated variable names without raw secret values",
+        help="print generated file and variable names without raw secret values",
     )
     args = parser.parse_args()
 
     values = generate_env()
-    write_env_file(args.env_file, values)
+    written = write_scoped_env_files(args.env_dir, values)
     print(
-        f"wrote local demo credentials to {args.env_file}; raw values are for this machine only",
+        f"wrote scoped local demo credentials to {args.env_dir}; raw values are for this machine only",
         file=sys.stderr,
     )
     if args.print_summary:
         summary = {
-            "raw_token_variables": sorted(k for k in values if k.endswith(("_RAW", "_TOKEN", "_BEARER"))),
-            "hash_variables": sorted(k for k in values if k.endswith("_HASH")),
-            "issuer_jwk": "REGISTRY_NOTARY_ISSUER_JWK",
-            "audit_hash_secret": "REGISTRY_RELAY_AUDIT_HASH_SECRET",
+            path.name: sorted(SCOPED_ENV_FILES[path.name])
+            for path in written
         }
         print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
