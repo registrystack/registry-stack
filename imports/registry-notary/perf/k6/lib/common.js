@@ -7,7 +7,6 @@
 //   Auth: Authorization: Bearer <token> on the hot path. X-Api-Key is exercised
 //     in auth_deny.js to verify both header forms reach the same code path.
 
-import { textSummary } from 'https://jslib.k6.io/k6-summary/0.0.2/index.js';
 import { Counter, Rate } from 'k6/metrics';
 import { fail } from 'k6';
 
@@ -282,6 +281,58 @@ export function handleSummaryFor(scenarioName, data) {
     [`${base}.json`]: JSON.stringify(data, null, 2),
     [`${base}.txt`]: textSummary(data, { indent: ' ', enableColors: false }),
   };
+}
+
+function formatMetricValue(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return String(value);
+  }
+  if (Math.abs(value) >= 1000) {
+    return value.toFixed(0);
+  }
+  if (Math.abs(value) >= 10) {
+    return value.toFixed(2);
+  }
+  return value.toFixed(3);
+}
+
+function formatMetricValues(values) {
+  return Object.keys(values)
+    .sort()
+    .map((key) => `${key}=${formatMetricValue(values[key])}`)
+    .join(', ');
+}
+
+function textSummary(data, options) {
+  const indent = (options && options.indent) || '';
+  const lines = ['registry-notary k6 summary'];
+  const root = data.root_group || {};
+  const checks = root.checks || [];
+  if (checks.length > 0) {
+    lines.push('', 'checks');
+    for (const check of checks) {
+      const passes = check.passes || 0;
+      const fails = check.fails || 0;
+      const total = passes + fails;
+      const rate = total === 0 ? 0 : (passes / total) * 100;
+      lines.push(`${indent}${check.name}: ${passes}/${total} passed (${rate.toFixed(2)}%)`);
+    }
+  }
+
+  const metrics = data.metrics || {};
+  const metricNames = Object.keys(metrics).sort();
+  if (metricNames.length > 0) {
+    lines.push('', 'metrics');
+    for (const name of metricNames) {
+      const metric = metrics[name];
+      if (!metric || !metric.values) {
+        continue;
+      }
+      lines.push(`${indent}${name}: ${formatMetricValues(metric.values)}`);
+    }
+  }
+
+  return `${lines.join('\n')}\n`;
 }
 
 // Write a stable (non-timestamped) result file consumed by the baseline
