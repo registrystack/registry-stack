@@ -494,6 +494,7 @@ pub fn validate_proof_jwt(
     let header = decode_json(header_b64).map_err(|_| ProofError::InvalidHeader)?;
     reject_header(&header)?;
     let holder_jwk = holder_jwk_from_header(&header)?;
+    require_eddsa_holder_key(&holder_jwk)?;
     if policy
         .forbidden_holder_keys
         .iter()
@@ -541,7 +542,9 @@ pub fn validate_proof_jwt(
             }
             did.to_string()
         }
-        None => did_jwk_from_public_jwk(&holder_jwk).expect("public jwk encodes"),
+        None => {
+            did_jwk_from_public_jwk(&holder_jwk).map_err(|_| ProofError::UnsupportedKeyReference)?
+        }
     };
     if claims.get("iss").is_some_and(|issuer| !issuer.is_string()) {
         return Err(ProofError::InvalidClaims);
@@ -634,6 +637,13 @@ fn holder_jwk_from_header(header: &Value) -> Result<PublicJwk, ProofError> {
         return Err(ProofError::UnsupportedKeyReference);
     }
     parse_did_jwk(kid).map_err(|_| ProofError::UnsupportedKeyReference)
+}
+
+fn require_eddsa_holder_key(jwk: &PublicJwk) -> Result<(), ProofError> {
+    if jwk.kty == "OKP" && jwk.crv.as_deref() == Some("Ed25519") {
+        return Ok(());
+    }
+    Err(ProofError::UnsupportedKeyReference)
 }
 
 fn same_public_key_material(left: &PublicJwk, right: &PublicJwk) -> bool {
@@ -887,6 +897,21 @@ mod tests {
 
         assert_eq!(
             validate_proof_jwt(&valid_proof(&key, "n-1"), &p, 1001),
+            Err(ProofError::UnsupportedKeyReference)
+        );
+    }
+
+    #[test]
+    fn rejects_rsa_proof_jwk_before_signature_verification() {
+        let header = URL_SAFE_NO_PAD.encode(
+            br#"{"alg":"EdDSA","typ":"openid4vci-proof+jwt","jwk":{"kty":"RSA","alg":"RS256","n":"sXchDaQebHnPiGvyDOAT4saGEUetSyo9MKLOoWFsueri23bOdgWp4PBO8BxG7NXXjO4IhYGoOi0Lem4xXeUq7W57RtgGF4wSGZ4HAvY8R9H_JVU3tO7K0XG3L8m5vB2T2KQeJ0gJg9g4nG9QpXJYpJ2NmgH6L7ZqQHX7I4M","e":"AQAB"}}"#,
+        );
+        let payload =
+            URL_SAFE_NO_PAD.encode(br#"{"aud":"https://issuer.example","iat":1000,"nonce":"n-1"}"#);
+        let proof = format!("{header}.{payload}.invalid-signature");
+
+        assert_eq!(
+            validate_proof_jwt(&proof, &policy(Some("n-1")), 1001),
             Err(ProofError::UnsupportedKeyReference)
         );
     }
