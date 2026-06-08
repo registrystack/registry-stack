@@ -107,6 +107,31 @@ class HostedDeployValidationTest(unittest.TestCase):
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "stale-config-repo-ref")
 
+    def test_rejects_config_loader_that_does_not_seed_static_content(self) -> None:
+        compose = self._valid_registry_lab()
+        compose["services"]["config-loader"]["command"] = ["echo no static metadata"]
+        compose["services"]["config-loader"]["volumes"] = [
+            volume
+            for volume in compose["services"]["config-loader"]["volumes"]
+            if not volume.startswith("static-content:")
+        ]
+        issues = self._validate(compose, self._valid_esignet())
+        self.assertIssue(issues, "missing-static-content-seed")
+
+    def test_rejects_config_loader_that_does_not_prepare_relay_cache_volumes(self) -> None:
+        compose = self._valid_registry_lab()
+        compose["services"]["config-loader"]["command"] = [
+            command.replace("chown -R 65532:65532", "chown -R 1000:1000")
+            for command in compose["services"]["config-loader"]["command"]
+        ]
+        compose["services"]["config-loader"]["volumes"] = [
+            volume
+            for volume in compose["services"]["config-loader"]["volumes"]
+            if not volume.startswith("social-protection-registry-cache:")
+        ]
+        issues = self._validate(compose, self._valid_esignet())
+        self.assertIssue(issues, "relay-cache-not-chowned")
+
     def test_rejects_localhost_public_urls(self) -> None:
         compose = self._valid_registry_lab()
         compose["services"]["citizen-civil-notary"]["environment"][
@@ -486,6 +511,25 @@ oid4vci:
         }
         return {
             "services": {
+                "config-loader": {
+                    "image": "alpine:3.20",
+                    "environment": {"CONFIG_REPO_REF": "${CONFIG_REPO_REF:-main}"},
+                    "command": [
+                        """
+cp -a /tmp/repo/static-metadata/. /out/static-content/
+for d in civil-cache social-cache health-cache; do
+  mkdir -p "/out/$d"
+  chown -R 65532:65532 "/out/$d"
+done
+"""
+                    ],
+                    "volumes": [
+                        "static-content:/out/static-content",
+                        "civil-registry-cache:/out/civil-cache",
+                        "social-protection-registry-cache:/out/social-cache",
+                        "health-registry-cache:/out/health-cache",
+                    ],
+                },
                 "postgres": {"image": "postgres:16-alpine", "environment": required_env},
                 "redis": {"image": "redis:7.4-alpine"},
                 "citizen-civil-notary": {

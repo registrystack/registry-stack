@@ -20,6 +20,7 @@ LAB_DOMAIN = "lab.registrystack.org"
 
 REQUIRED_SERVICES = {
     "registry-lab": {
+        "config-loader",
         "postgres",
         "redis",
         "citizen-civil-notary",
@@ -257,6 +258,7 @@ def validate_artifacts(
         issues.extend(validate_public_urls(artifact, compose, root))
         issues.extend(validate_hosted_openapi_policy(artifact, services, root))
         issues.extend(validate_config_loader_ref(artifact, services))
+        issues.extend(validate_config_loader_hosted_outputs(artifact, services))
 
     issues.extend(validate_cross_artifact_contracts(artifacts, artifact_roots))
     return sorted(dedupe_issues(issues), key=lambda issue: (issue.artifact, issue.path, issue.code))
@@ -582,6 +584,80 @@ def validate_config_loader_ref(artifact: str, services: dict[str, Any]) -> list[
             "hosted config-loader must default to current main config",
         )
     ]
+
+
+def validate_config_loader_hosted_outputs(
+    artifact: str,
+    services: dict[str, Any],
+) -> list[Issue]:
+    if artifact != "registry-lab":
+        return []
+    config_loader = services.get("config-loader")
+    if not isinstance(config_loader, dict):
+        return []
+
+    command_text = shell_command_text(config_loader.get("command"))
+    volumes = config_loader.get("volumes") or []
+    issues = []
+    if (
+        not has_service_volume(volumes, "static-content", "/out/static-content")
+        or "/tmp/repo/static-metadata/." not in command_text
+        or "/out/static-content/" not in command_text
+    ):
+        issues.append(
+            Issue(
+                "missing-static-content-seed",
+                artifact,
+                "services.config-loader",
+                "hosted config-loader must seed the static metadata content volume",
+            )
+        )
+
+    if not all(
+        has_service_volume(volumes, source, target)
+        for source, target in (
+            ("civil-registry-cache", "/out/civil-cache"),
+            ("social-protection-registry-cache", "/out/social-cache"),
+            ("health-registry-cache", "/out/health-cache"),
+        )
+    ) or not all(
+        token in command_text
+        for token in (
+            "chown -R 65532:65532",
+            "civil-cache social-cache health-cache",
+        )
+    ):
+        issues.append(
+            Issue(
+                "relay-cache-not-chowned",
+                artifact,
+                "services.config-loader",
+                "hosted Relay cache volumes must be writable by distroless UID/GID 65532",
+            )
+        )
+    return issues
+
+
+def has_service_volume(volumes: Any, source: str, target: str) -> bool:
+    for volume in volumes or []:
+        if isinstance(volume, str):
+            parts = volume.split(":")
+            if len(parts) >= 2 and parts[0] == source and parts[1] == target:
+                return True
+        elif isinstance(volume, dict):
+            if volume.get("source") == source and volume.get("target") == target:
+                return True
+    return False
+
+
+def shell_command_text(command: Any) -> str:
+    if command is None:
+        return ""
+    if isinstance(command, str):
+        return command
+    if isinstance(command, list):
+        return "\n".join(str(item) for item in command)
+    return str(command)
 
 
 def hosted_openapi_requires_auth_is_false(text: str) -> bool:

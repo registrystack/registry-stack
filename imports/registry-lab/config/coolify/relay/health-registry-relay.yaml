@@ -33,14 +33,14 @@ auth:
       fingerprint:
         provider: env
         name: HEALTH_METADATA_CLIENT_HASH
-        commitment: sha256:01c348240085780f1478c5ffdc3ee274932862204ff34911388afef15c00e4c3
+        commitment: sha256:8f3a2adfb284ee95f900423eeaa5c3289a2892005259a3645161d20104624240
       scopes:
         - health_registry:metadata
     - id: evidence_source
       fingerprint:
         provider: env
         name: HEALTH_EVIDENCE_SOURCE_HASH
-        commitment: sha256:e5f0ccae7a577fe41a6ecc814001d89c3b2f83bf9f7908b2a9ffe2717a9c66b6
+        commitment: sha256:8400ff4accb8ba035fbdc65f90ee17d656bf2adecf96462714ab836de8e7de99
       scopes:
         - health_registry:metadata
         - health_registry:rows
@@ -49,7 +49,7 @@ auth:
       fingerprint:
         provider: env
         name: HEALTH_EVIDENCE_ONLY_HASH
-        commitment: sha256:328a52475bfc456a3d017ad0e9b2ea5754a7e221a11d8899479d08fb8359fa71
+        commitment: sha256:dec62675be7c3b69dc4b57c9288280ef58d8b6cfebcee7bc81266e19d97c2269
       scopes:
         - health_registry:metadata
         - health_registry:evidence_verification
@@ -57,7 +57,7 @@ auth:
       fingerprint:
         provider: env
         name: HEALTH_ROW_READER_HASH
-        commitment: sha256:18325cdfe158fc1008495cfdf04f60422927ac289a0091f9c3ce3e81e174545e
+        commitment: sha256:51aecc569d8c252be814df392b38a4df55c87dc221942416038199a584af2f39
       scopes:
         - health_registry:metadata
         - health_registry:rows
@@ -65,7 +65,7 @@ auth:
       fingerprint:
         provider: env
         name: SHARED_HEALTH_EVIDENCE_SOURCE_HASH
-        commitment: sha256:9f8d7161f9eb839738efad770cfe4ff20b14d9b8687e6ef468106dd67c0e6335
+        commitment: sha256:b050f3c13021368ef1426c9f19c2c9f08cac5554d73238d07c53a4a4e6b5b3bc
       scopes:
         - health_registry:metadata
         - health_registry:rows

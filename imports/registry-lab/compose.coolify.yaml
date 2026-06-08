@@ -82,7 +82,7 @@ services:
         apk add --no-cache git >/dev/null
         rm -rf /tmp/repo
         git clone --depth 1 --branch "$$CONFIG_REPO_REF" "$$CONFIG_REPO_URL" /tmp/repo
-        for d in relay notary data pginit openfn-tmpl openfn-jobs static-scripts lab-homepage; do
+        for d in relay notary data pginit openfn-tmpl openfn-jobs static-scripts lab-homepage static-content; do
           mkdir -p "/out/$$d"
           find "/out/$$d" -mindepth 1 -delete 2>/dev/null || true
         done
@@ -97,6 +97,11 @@ services:
         cp -a /tmp/repo/scripts/static-metadata-server.py /out/static-scripts/
         cp -a /tmp/repo/scripts/lab-homepage-server.py /out/static-scripts/
         cp -a /tmp/repo/config/lab-homepage/. /out/lab-homepage/
+        cp -a /tmp/repo/static-metadata/. /out/static-content/
+        for d in civil-cache social-cache health-cache; do
+          mkdir -p "/out/$$d"
+          chown -R 65532:65532 "/out/$$d"
+        done
         echo "config-loader: populated config volumes from $$CONFIG_REPO_REF"
     volumes:
       - cfg-relay:/out/relay
@@ -107,6 +112,10 @@ services:
       - cfg-openfn-jobs:/out/openfn-jobs
       - cfg-static-scripts:/out/static-scripts
       - cfg-lab-homepage:/out/lab-homepage
+      - static-content:/out/static-content
+      - civil-registry-cache:/out/civil-cache
+      - social-protection-registry-cache:/out/social-cache
+      - health-registry-cache:/out/health-cache
 
   postgres:
     image: ${REGISTRY_LAB_POSTGRES_IMAGE:-postgres:16-alpine}

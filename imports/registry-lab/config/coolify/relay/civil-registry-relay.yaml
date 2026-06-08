@@ -34,14 +34,14 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_METADATA_CLIENT_HASH
-        commitment: sha256:c8f84ec9824df8649e522c3afcdf1de9faf7e833b982a62e86d9c869cd5d223d
+        commitment: sha256:7ca2ea1fd42ece201135d5c83e4993973dd82b6f1204df1f29f4499507b8960e
       scopes:
         - civil_registry:metadata
     - id: evidence_source
       fingerprint:
         provider: env
         name: CIVIL_EVIDENCE_SOURCE_HASH
-        commitment: sha256:9a2e787ab4965f7a35cacf7e69b3c438fa2eeb4efbe0cf38141e5ef16cacf426
+        commitment: sha256:5bf199b9c27d4340c34af1e324e67a0f4ae69d049940a2226042596373b9c653
       scopes:
         - civil_registry:metadata
         - civil_registry:rows
@@ -50,7 +50,7 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_EVIDENCE_ONLY_HASH
-        commitment: sha256:b47c4fcc6e276bd066421184bdadb712bae39306cf605809582f02567b365931
+        commitment: sha256:66a323a33169a35224e00330be684498e85db8d502899c77cffe8ca5bd6d6468
       scopes:
         - civil_registry:metadata
         - civil_registry:evidence_verification
@@ -58,7 +58,7 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_ROW_READER_HASH
-        commitment: sha256:853526a807e8896c689029a29c2f6fe1d4836e60fc433c762f8a3b8887bdb656
+        commitment: sha256:935fd68f1cd82bfc7019dd73d6b903851e8b0d2053722e4dd0ad412250b4f9c0
       scopes:
         - civil_registry:metadata
         - civil_registry:rows
@@ -66,7 +66,7 @@ auth:
       fingerprint:
         provider: env
         name: SHARED_CIVIL_EVIDENCE_SOURCE_HASH
-        commitment: sha256:9674b1ecd51e498c3ac94e6033ef418ce30640bbf06e37501993cf4feca7f12a
+        commitment: sha256:8d6493ee42cd49c661b99eb194f7177d0157513dc3f541d2b1e43b0ee6c4c5bc
       scopes:
         - civil_registry:metadata
         - civil_registry:rows
