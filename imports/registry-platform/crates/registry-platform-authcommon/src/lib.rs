@@ -353,8 +353,13 @@ pub fn credential_fingerprint_commitment(
 }
 
 fn read_bounded_fingerprint_file(path: &Path) -> Result<String, CredentialFingerprintRefError> {
-    let mut file =
-        fs::File::open(path).map_err(|_| CredentialFingerprintRefError::MissingSecret)?;
+    let metadata = fs::metadata(path).map_err(|_| CredentialFingerprintRefError::MissingSecret)?;
+    if !metadata.is_file() || metadata.len() > MAX_FINGERPRINT_FILE_BYTES {
+        return Err(CredentialFingerprintRefError::InvalidFingerprint(
+            FingerprintFormatError::InvalidLength,
+        ));
+    }
+    let file = fs::File::open(path).map_err(|_| CredentialFingerprintRefError::MissingSecret)?;
     let metadata = file
         .metadata()
         .map_err(|_| CredentialFingerprintRefError::MissingSecret)?;
@@ -364,8 +369,14 @@ fn read_bounded_fingerprint_file(path: &Path) -> Result<String, CredentialFinger
         ));
     }
     let mut contents = String::new();
-    file.read_to_string(&mut contents)
+    file.take(MAX_FINGERPRINT_FILE_BYTES + 1)
+        .read_to_string(&mut contents)
         .map_err(|_| CredentialFingerprintRefError::MissingSecret)?;
+    if contents.len() as u64 > MAX_FINGERPRINT_FILE_BYTES {
+        return Err(CredentialFingerprintRefError::InvalidFingerprint(
+            FingerprintFormatError::InvalidLength,
+        ));
+    }
     Ok(contents)
 }
 
@@ -579,6 +590,31 @@ mod tests {
             provider: CredentialFingerprintProvider::File,
             name: None,
             path: Some(file.path().to_path_buf()),
+            commitment,
+        };
+
+        assert!(matches!(
+            reference.resolve(context),
+            Err(CredentialFingerprintRefError::InvalidFingerprint(
+                FingerprintFormatError::InvalidLength
+            ))
+        ));
+    }
+
+    #[test]
+    fn credential_fingerprint_ref_rejects_non_regular_file_before_reading() {
+        let fingerprint = fingerprint_api_key(SAMPLE_KEY);
+        let context = CredentialCommitmentContext {
+            product: CredentialProduct::RegistryNotary,
+            credential_type: CredentialType::BearerToken,
+            credential_id: "openfn_sidecar",
+        };
+        let commitment = credential_fingerprint_commitment(context, &fingerprint);
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let reference = CredentialFingerprintRef {
+            provider: CredentialFingerprintProvider::File,
+            name: None,
+            path: Some(dir.path().to_path_buf()),
             commitment,
         };
 
