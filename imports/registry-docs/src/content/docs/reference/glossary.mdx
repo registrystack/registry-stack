@@ -65,6 +65,9 @@ Product names are always in English, including on future translated pages.
   <dt>entity route</dt>
   <dd>A Relay API route shaped around a domain resource such as `household` or `individual`, not around storage table identifiers.</dd>
 
+  <dt>eSignet</dt>
+  <dd>Open-source identity and authentication service (part of MOSIP). The hosted lab uses eSignet as the authorization server a citizen signs in to before Registry Notary issues a self-attestation credential.</dd>
+
   <dt>evidence offering</dt>
   <dd>Metadata entry that describes a verification capability and the access path a client uses to reach it. Can point to a Relay-native verification endpoint or to an external evidence service.</dd>
 
@@ -79,6 +82,9 @@ Product names are always in English, including on future translated pages.
 
   <dt>historical docs</dt>
   <dd>Older specs, implementation reviews, or pre-rename documents that remain useful evidence but are not current user guidance. Current public docs link to them only when they explain a current product boundary or decision.</dd>
+
+  <dt>holder</dt>
+  <dd>The party that holds a credential in a wallet and presents it to a verifier. Registry Notary binds each credential to a holder key (`did:jwk`) in the `cnf` claim, so only the holder can present it.</dd>
 
   <dt>interoperability</dt>
   <dd>Commitment that every registry in the stack publishes its catalog, schemas, services, and policies in standards-shaped form (DCAT, BRegDCAT-AP, CPSV-AP, CCCEV, SHACL, JSON Schema, ODRL, OpenAPI, SD-JWT VC), so downstream systems integrate against stable contracts rather than per-deployment ones.</dd>
@@ -97,6 +103,9 @@ Product names are always in English, including on future translated pages.
 
   <dt>OGC API Records</dt>
   <dd>Open Geospatial Consortium API specification for records. Relay exposes records endpoints behind the `ogcapi-records` feature flag. Manifest renders OGC Records item bodies.</dd>
+
+  <dt>OID4VCI</dt>
+  <dd>OpenID for Verifiable Credential Issuance. The protocol a wallet uses to obtain a credential from an issuer. Registry Notary implements an OID4VCI issuance flow: a credential offer, issuer metadata at `/.well-known/openid-credential-issuer`, a nonce, and a holder proof.</dd>
 
   <dt>PROV-O</dt>
   <dd>W3C Provenance Ontology. Currently listed as design influence (`inspired_by`). Provenance-shaped concepts appear in audit fields and the claim provenance struct, but no PROV-O vocabulary terms are emitted as JSON-LD at reviewed commits.</dd>
@@ -140,6 +149,9 @@ Product names are always in English, including on future translated pages.
   <dt>SD-JWT VC</dt>
   <dd>Selective Disclosure JWT Verifiable Credential (IETF draft). Registry Notary issues SD-JWT VC credentials signed with EdDSA. Media type: `application/dc+sd-jwt`.</dd>
 
+  <dt>self-attestation</dt>
+  <dd>Credential issuance pattern where the credential subject is bound to the identity the requester authenticated as. The hosted lab issues a `person_is_alive` self-attestation: Registry Notary will not issue a credential for a subject the caller did not sign in as.</dd>
+
   <dt>SHACL</dt>
   <dd>Shapes Constraint Language. W3C recommendation. Relay and Manifest emit SHACL node shapes for entity validation.</dd>
 
@@ -151,6 +163,9 @@ Product names are always in English, including on future translated pages.
 
   <dt>standards-shaped metadata</dt>
   <dd>Registry Stack product term for machine-readable metadata emitted through formats such as DCAT, CPSV-AP, CCCEV, SHACL, JSON Schema, ODRL, OpenAPI, and OGC API Records.</dd>
+
+  <dt>wallet</dt>
+  <dd>Holder-owned application that stores credentials and presents them to verifiers. Registry Notary issues credentials; the wallet that stores, unlocks, and presents them is a separate component, owned by the holder.</dd>
 </dl>
 
 ## Style notes

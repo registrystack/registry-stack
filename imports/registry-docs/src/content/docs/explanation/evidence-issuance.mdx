@@ -61,16 +61,16 @@ evaluation, or receipt.
 <figure>
   <img src="/images/registry-evidence-transports.svg"
        alt="Four transports for a claim evaluation, sharing one claim model. (1) Direct API:
-            a backend calls /claims/evaluate; pair with /credentials/issue to mint an SD-JWT
+            a backend calls /v1/evaluations; pair with /v1/credentials to mint an SD-JWT
             VC. (2) OID4VCI offer: a wallet caller discovers the issuer via /.well-known and
             completes a nonce-bound flow at /oid4vci/credential. (3) Receipt only: a backend
-            calls /claims/evaluate and stores the audit-stamped result; no credential is
+            calls /v1/evaluations and stores the audit-stamped result; no credential is
             issued. (4) Federated: a peer Notary posts a signed JWT to
             /federation/v1/evaluations and receives a signed JWT response." />
 </figure>
 
-1. Direct API. The caller calls `POST /claims/evaluate` to evaluate the claim, then
-   `POST /credentials/issue` to materialize an SD-JWT VC from the stored evaluation. The caller
+1. Direct API. The caller calls `POST /v1/evaluations` to evaluate the claim, then
+   `POST /v1/credentials` to materialize an SD-JWT VC from the stored evaluation. The caller
    is a backend (a program registry, a benefits portal) that holds a Registry Notary API key or
    an OIDC token. The credential ends up wherever the calling backend chooses to send it.
 2. OID4VCI offer flow. The caller is a wallet, not a backend. Registry Notary publishes
@@ -82,8 +82,11 @@ evaluation, or receipt.
    key, and posts the bearer access token plus the proof to `POST /oid4vci/credential`. The
    choreography is implemented in the Notary server's API module at
    [`crates/registry-notary-server/src/api.rs`](https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-server/src/api.rs).
+   The offer can carry an authorization-code grant (the user authenticates at the authorization
+   server, as above) or a pre-authorized-code grant; the hosted lab uses pre-authorized-code with
+   eSignet as the authorization server.
 3. Verifiable receipt only. The caller does not need a credential at all. It calls
-   `POST /claims/evaluate`, accepts the disclosure mode the claim allows (often `predicate` or
+   `POST /v1/evaluations`, accepts the disclosure mode the claim allows (often `predicate` or
    `redacted`), and stores the audit-stamped result. Every evaluation, credential or not, is
    recorded in the JSONL audit log alongside `verification_id` and `claim_hash` for redacted
    results.

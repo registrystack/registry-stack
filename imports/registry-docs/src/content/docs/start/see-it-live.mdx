@@ -13,9 +13,11 @@ standards_referenced:
   - sd-jwt-vc
 ---
 
-In about two minutes, and without installing anything, you can see the core of Registry Stack working
-against a public hosted lab. You will read a protected registry API from your terminal, then get a
-signed, privacy-preserving credential into a wallet. Everything runs in the hosted lab at
+In about two minutes you can see the core of Registry Stack working against a public hosted lab. You
+will read a protected registry API from your terminal (**Registry Relay**, which returns records to
+authorized callers), then watch **Registry Notary** issue a signed credential that answers a question
+without exposing the record. The Relay reads are pure `curl` with zero install; the credential step is
+a guided browser flow. Everything runs in the hosted lab at
 [lab.registrystack.org](https://lab.registrystack.org), so there is no setup on your machine.
 
 This lab uses synthetic data and public demo-only credentials by design.
@@ -85,10 +87,23 @@ curl -sS \
   "https://civil-relay.lab.registrystack.org/v1/datasets/civil_registry/entities/civil_person/records?limit=1"
 ```
 
-The Relay returns `200 OK` with one record and pagination metadata:
+The Relay returns `200 OK` with one record and pagination metadata (synthetic demo data):
 
 ```json
-{ "data": [ {} ], "pagination": {} }
+{
+  "data": [
+    {
+      "national_id": "NID-1001",
+      "given_name": "Miguel",
+      "surname": "Santos",
+      "birth_date": "2016-01-15",
+      "civil_status": "child",
+      "deceased": false,
+      "district": "north"
+    }
+  ],
+  "pagination": { "has_more": true, "next_cursor": "..." }
+}
 ```
 
 ### See access control hold
@@ -107,42 +122,41 @@ The Relay returns `403 Forbidden` with `{"code":"auth.scope_denied"}`. Same API,
 different scope, different answer. For more on this service, see
 [Registry Relay](../../products/registry-relay/).
 
-## Get a signed credential in a wallet
+## Get a signed credential
 
-Now see the issuance side. The citizen Notary issues a Verifiable Credential of type
+Now see the issuance side. The citizen Notary issues an SD-JWT VC credential of type
 `person_is_alive_sd_jwt` (format `dc+sd-jwt`). The credential discloses a single predicate, whether
 the person is alive, as a true or false claim. It never hands over the underlying civil record.
 
-This step is a browser and wallet click-through using a credential offer, not a curl sequence: a real
-[OID4VCI](../../reference/glossary/) issuance flow needs a holder key and a sign-in token, which is
-wallet territory. Open the offer in a wallet:
+Unlike the Relay reads above, this part is a guided browser flow, not a curl sequence: a real
+[OID4VCI](../../reference/glossary/) issuance needs a holder key and a sign-in, which is wallet
+territory. To receive the credential you need an OID4VCI-compatible wallet; if you do not have one,
+you can still follow the flow on the lab homepage and watch the sign-in and issuance without
+installing anything.
 
-```text
-https://citizen-notary.lab.registrystack.org/oid4vci/credential-offer?credential_configuration_id=person_is_alive_sd_jwt
-```
-
-The Notary requires you to sign in (via eSignet) before it issues. Use the demo identity:
+Start at [lab.registrystack.org](https://lab.registrystack.org), which links the credential flow end
+to end. The Notary requires you to sign in (via eSignet) before it issues. Use the demo identity:
 
 - National ID: `NID-1001`
 - Name: Miguel Santos
 - Login and OTP code: `111111`
 - PIN: `545411`
 
-After sign-in, the wallet receives the signed `person_is_alive` credential, with the alive predicate
-set to true.
+After sign-in, the wallet receives the signed `person_is_alive_sd_jwt` credential, with the alive
+predicate set to true. If you already have a wallet, you can open the credential offer directly
+instead:
 
-:::note
-The lab homepage links the wallet flow end to end. If you do not have a wallet set up, start from
-[lab.registrystack.org](https://lab.registrystack.org) instead of the raw offer URL above.
-:::
+```text
+https://citizen-notary.lab.registrystack.org/oid4vci/credential-offer?credential_configuration_id=person_is_alive_sd_jwt
+```
 
 ### The negative control
 
-Self-attestation binds the credential subject to the identity you signed in as. Identity `NID-1002`
-is a different person (also alive). If you sign in as one identity and ask for a credential bound to a
-different subject, the Notary refuses: the lab will not issue a credential for a subject you did not
-authenticate as. The issuer cannot be talked into vouching for someone else. For more on this service,
-see [Registry Notary](../../products/registry-notary/).
+Try this in the same browser flow. Self-attestation binds the credential subject to the identity you
+signed in as. If you sign in as `NID-1001` but ask for a credential bound to a different subject
+(`NID-1002`, a different person, also alive), the Notary refuses: it will not issue a credential for a
+subject you did not authenticate as. The issuer cannot be talked into vouching for someone else. For
+more on this service, see [Registry Notary](../../products/registry-notary/).
 
 ## Now run your own
 
@@ -151,7 +165,8 @@ start with the local single-node tutorials:
 
 - [Publish a spreadsheet as a secured registry API](../../tutorials/publish-spreadsheet-secured-registry-api/):
   stand up your own protected Relay from a sample workbook.
-- [Verify a claim from your own API](../../tutorials/verify-claim-own-api/): point a standalone Notary
-  at an API you operate and evaluate a claim.
+- [Verify a claim from your registry API](../../tutorials/verify-claim-registry-api/): run a Notary
+  against the Relay you published and evaluate a claim. Already have your own API? Use
+  [Verify a claim from your own API](../../tutorials/verify-claim-own-api/) instead.
 
 Not sure which path fits your problem? See [When to use Registry Stack](../when-to-use/).

@@ -90,13 +90,15 @@ consume the output by parsing the `@graph` for `cccev:Evidence` nodes.
 
 ## Source connectors
 
-Notary reads registry facts from external sources over HTTP. Two connector kinds are configured
+Notary reads registry facts from external sources over HTTP. Three connector kinds are configured
 under `source_connections`:
 
 - **Registry Data API** connector queries a Registry Relay instance, authenticating with a
   per-connection bearer token.
 - **SP-DCI** connector sends DCI-shaped search requests and parses the response using configured
   field paths.
+- **OpenFn sidecar** connector calls an OpenFn worker sidecar over HTTP, using a static bearer
+  token, for sources reached through an OpenFn job.
 
 There is no generic file-based or database connector; source connectors must reach their targets
 over HTTP.

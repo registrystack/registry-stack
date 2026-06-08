@@ -26,7 +26,7 @@ Estimated time: about 10 minutes after Docker is installed.
 Install:
 
 - `curl`, `tar`, and `shasum` or `sha256sum`
-- Docker Desktop, Colima, Podman, or another Docker Compose provider
+- Docker Desktop, OrbStack, Colima, Podman, or another Docker Compose provider
 
 Install `registryctl` without cloning a product repository:
 
@@ -270,7 +270,7 @@ It does not delete your workbook, generated config, local keys, or smoke results
 | --- | --- | --- |
 | `registryctl` is not found | The install directory is not on `PATH`. | Add the directory printed by the installer, usually `~/.local/bin`, to `PATH`. |
 | The installer reports an unsupported platform | No binary is published for that OS or CPU yet. | Use a supported Linux or macOS aarch64 machine, or install from source with Cargo. |
-| `registryctl start` cannot find Docker | Docker or another Compose provider is not installed or running. | Start Docker Desktop, Colima, Podman, or your supported provider, then run `registryctl start` again. |
+| `registryctl start` cannot find Docker | Docker or another Compose provider is not installed or running. | Start Docker Desktop, OrbStack, Colima, Podman, or your supported provider, then run `registryctl start` again. |
 | A row read returns `403 Forbidden` | The key is valid but lacks the row-read scope. | Use `ROW_READER_RAW` for row reads. |
 | A row read returns `400 auth.purpose_required` | The entity requires a `Data-Purpose` header. | Send `Data-Purpose: https://example.local/purpose/tutorial` or another purpose URI. |
 | A collection row read returns a filter error | The entity requires at least one configured filter. | Add a filter such as `household_id=hh-1001`. |

@@ -10,13 +10,15 @@ locale: en
 standards_referenced: []
 ---
 
-This site is the documentation hub for the registry stack: the tutorials, how-to guides, product
-docs, explanation, and reference for building with Registry Relay (protected read APIs over
-existing registry data) and Registry Notary (privacy-preserving evidence and credentials).
+Registry Stack turns sensitive registry data you already hold into protected, audited, read-only
+APIs, and answers evidence questions without handing over the underlying records. Two products do
+the work: **Registry Relay** returns records to authorized callers over scoped, purpose-bound read
+APIs, and **Registry Notary** returns a yes or no answer, a selected value, or a signed credential
+without exposing the full record.
 
-It is organized as a Diataxis hub. Product detail is owned by each repository and pulled in at
-build time, so the product pages always match the code. For the pitch (why registry surfaces
-matter, who benefits, where the stack fits), see the marketing site at
+These docs are how you build with both. Product detail is owned by each repository and pulled in at
+build time, so the product pages always match the code. For the pitch (why registry surfaces matter,
+who benefits, where the stack fits), see the marketing site at
 [registrystack.org](https://registrystack.org/).
 
 ## Where to go
@@ -46,9 +48,3 @@ Read the product docs for the two documented products:
 Behind them, the [architecture overview](explanation/architecture/) explains the model, and the
 [API reference](reference/apis/) and [glossary](reference/glossary/) cover the details. For the
 broader stack, see [registrystack.org](https://registrystack.org/).
-
-## Boundary
-
-The pitch lives on [registrystack.org](https://registrystack.org/). This site keeps one concise
-[when-to-use and non-goals](start/when-to-use/) page; everything else here is a tutorial, how-to,
-product doc, explanation, or reference.

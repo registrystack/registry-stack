@@ -37,6 +37,10 @@ Registry Platform provides shared Rust primitives consumed by both runtime servi
 Registry Atlas inspects the published artifacts.
 Registry Lab runs all services together in a local demo.
 
+These docs document the two runtime products you build against directly, Registry Relay and Registry
+Notary. Registry Manifest, Registry Atlas, Registry Platform, and Registry Lab are part of the wider
+stack; see [registrystack.org](https://registrystack.org/) for them.
+
 This split matters because it separates the obligation to describe (what a registry declares it can expose
 and under what policy) from the obligation to enforce (what a running service will actually return to an
 authorized caller). A reviewer can audit the portable metadata bundle before any runtime service is
@@ -84,7 +88,7 @@ offerings are inspectable, so metadata comes first.
 
 | Capability | Use it when | Primary project |
 | --- | --- | --- |
-| Describe registries | Other teams need to inspect fields, schemas, policies, services, and evidence offerings before integration. | Registry Manifest |
+| Describe registries | Other teams need to inspect fields, schemas, policies, services, and evidence offerings before integration. | [Registry Manifest](https://registrystack.org/) |
 | Expose protected APIs | A file, extract, database, or legacy registry needs a governed read-only API without replacing the source. | [Registry Relay](../../products/registry-relay/) |
 | Certify evidence | A caller needs a status, predicate, selected value, or supported credential instead of the source record. | [Registry Notary](../../products/registry-notary/) |
 

@@ -31,20 +31,17 @@ Registry Stack is a set of repositories with distinct responsibilities, organize
 capability sequence: describe what a registry can provide, expose protected read-only access, then
 certify evidence that fits the purpose of the request.
 
-- Registry Manifest describes a registry surface (fields, schemas, services, policies, evidence
-  offerings) as portable metadata, before any integration is written.
+These docs cover the two products you build against directly:
+
 - Registry Relay exposes existing source data (a file, extract, database, or legacy system) through
   protected, scoped, read-only HTTP routes, without giving callers database access.
 - Registry Notary evaluates configured claims and returns a status, predicate, selected value, or
   signed credential, instead of the full source record.
-- Registry Atlas inspects what a registry actually publishes before an integration is built.
-- Registry Platform supplies the shared primitives (auth, HTTP security, audit, crypto, SD-JWT)
-  that the runtime services compose.
-- Registry Lab runs the runtime services together as a local compose demo.
 
-These docs cover Registry Relay and Registry Notary; the other surfaces are part of the wider stack
-described at [registrystack.org](https://registrystack.org/). For how the pieces connect at runtime,
-see the [architecture overview](../../explanation/architecture/).
+The wider stack (Registry Manifest for portable metadata, Registry Atlas for inspection, Registry
+Platform for shared primitives, and Registry Lab for a local compose demo) is described at
+[registrystack.org](https://registrystack.org/). For how the pieces connect at runtime, see the
+[architecture overview](../../explanation/architecture/).
 
 ## When to use it
 
@@ -74,7 +71,7 @@ Registry Stack deliberately leaves these to other systems:
 - It does not solve foundational identity, deduplication, legal authority, semantic governance, or
   institutional approval by itself. It makes those boundaries explicit so they can be reviewed
   before data moves.
-- Registry Relay is read-only in v1: write operations (provisioning, inserts, updates) are out of
+- Registry Relay is read-only in v0: write operations (provisioning, inserts, updates) are out of
   scope.
 - Registry Relay is not an open-data portal: it publishes restricted consultation APIs for
   authorized systems only.
