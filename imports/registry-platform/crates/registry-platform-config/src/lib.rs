@@ -112,9 +112,9 @@ impl TufConfigVerifier {
         let root = tokio::fs::read(&input.root_path)
             .await
             .map_err(|error| ConfigVerificationError::Io(error.to_string()))?;
-        let verified_roots = VerifiedRootBytes::from_bootstrap(&root)?;
         let metadata_url = dir_url(&input.metadata_dir)?;
         let targets_url = dir_url(&input.targets_dir)?;
+        let verified_roots = VerifiedRootBytes::from_bootstrap(&root, &metadata_url)?;
         let repository = RepositoryLoader::new(&root, metadata_url, targets_url)
             .transport(RootRecordingTransport::new(
                 FilesystemTransport,
@@ -174,7 +174,7 @@ impl TufConfigVerifier {
         let root = tokio::fs::read(&input.root_path)
             .await
             .map_err(|error| ConfigVerificationError::Io(error.to_string()))?;
-        let verified_roots = VerifiedRootBytes::from_bootstrap(&root)?;
+        let verified_roots = VerifiedRootBytes::from_bootstrap(&root, &metadata_url)?;
         let guarded_transport = GuardedRemoteTransport::new(input.fetch_policy());
         guarded_transport.validate_base_url(&metadata_url)?;
         guarded_transport.validate_base_url(&targets_url)?;
@@ -260,15 +260,22 @@ impl TufConfigVerifier {
 #[derive(Clone, Debug)]
 struct VerifiedRootBytes {
     roots: Arc<Mutex<BTreeMap<u64, Vec<u8>>>>,
+    // Normalized (trailing-slash) metadata base URL. Recording is restricted to URLs under this
+    // prefix so a like-named target fetched from the targets base URL cannot poison root bytes.
+    metadata_base_url: Url,
 }
 
 impl VerifiedRootBytes {
-    fn from_bootstrap(bootstrap_root: &[u8]) -> Result<Self, ConfigVerificationError> {
+    fn from_bootstrap(
+        bootstrap_root: &[u8],
+        metadata_base_url: &Url,
+    ) -> Result<Self, ConfigVerificationError> {
         let bootstrap_version = bootstrap_root_version(bootstrap_root)?;
         let mut roots = BTreeMap::new();
         roots.insert(bootstrap_version, bootstrap_root.to_vec());
         Ok(Self {
             roots: Arc::new(Mutex::new(roots)),
+            metadata_base_url: normalize_base_url(metadata_base_url),
         })
     }
 
@@ -285,6 +292,12 @@ impl VerifiedRootBytes {
     }
 
     fn record_url(&self, url: &Url, bytes: &[u8]) -> Result<(), TransportError> {
+        // Only metadata fetches under the metadata base URL may define root bytes. The same
+        // transport also wraps target fetches, so a target literally named `<N>.root.json` from the
+        // targets base URL must be ignored here.
+        if !url.as_str().starts_with(self.metadata_base_url.as_str()) {
+            return Ok(());
+        }
         let Some(root_version) = root_metadata_version(url) else {
             return Ok(());
         };
@@ -295,8 +308,23 @@ impl VerifiedRootBytes {
                 "verified TUF root byte recorder failed",
             )
         })?;
-        roots.insert(root_version, bytes.to_vec());
+        // Defense in depth: record each root version only the first time it is seen. The genuine
+        // root chain is fetched and recorded during `load()` before any target fetch, so a later
+        // collision is a no-op and can never overwrite verified bytes.
+        roots.entry(root_version).or_insert_with(|| bytes.to_vec());
         Ok(())
+    }
+}
+
+/// Normalize a base URL to end with `/`, matching tough's own `parse_url` so that a recorded
+/// `base.join("<version>.root.json")` URL is correctly recognized as being under the base prefix.
+fn normalize_base_url(url: &Url) -> Url {
+    if url.as_str().ends_with('/') {
+        url.clone()
+    } else {
+        let mut normalized = url.as_str().to_string();
+        normalized.push('/');
+        Url::parse(&normalized).unwrap_or_else(|_| url.clone())
     }
 }
 
@@ -1080,7 +1108,8 @@ mod tests {
     fn verified_root_bytes_hashes_bootstrap_root_without_rotation() {
         let base = tough_fixture_dir("rotated-root");
         let bootstrap_root = std::fs::read(base.join("1.root.json")).expect("bootstrap root reads");
-        let roots = VerifiedRootBytes::from_bootstrap(&bootstrap_root)
+        let metadata_base = Url::parse("https://repo.example/metadata/").expect("base parses");
+        let roots = VerifiedRootBytes::from_bootstrap(&bootstrap_root, &metadata_base)
             .expect("bootstrap root bytes are captured");
 
         let hash = roots.root_sha256(1).expect("root hash resolves");
@@ -1093,7 +1122,8 @@ mod tests {
         let base = tough_fixture_dir("rotated-root");
         let bootstrap_root = std::fs::read(base.join("1.root.json")).expect("bootstrap root reads");
         let final_root = std::fs::read(base.join("2.root.json")).expect("final root reads");
-        let roots = VerifiedRootBytes::from_bootstrap(&bootstrap_root)
+        let metadata_base = Url::parse("https://repo.example/metadata/").expect("base parses");
+        let roots = VerifiedRootBytes::from_bootstrap(&bootstrap_root, &metadata_base)
             .expect("bootstrap root bytes are captured");
         let root_url = Url::parse("https://repo.example/metadata/2.root.json").expect("url parses");
 
@@ -1103,5 +1133,49 @@ mod tests {
         let hash = roots.root_sha256(2).expect("root hash resolves");
 
         assert_eq!(hash, sha256_uri(&final_root));
+    }
+
+    #[test]
+    fn verified_root_bytes_ignores_target_fetch_with_root_json_name() {
+        let base = tough_fixture_dir("rotated-root");
+        let genuine_root = std::fs::read(base.join("2.root.json")).expect("genuine root reads");
+        let metadata_base = Url::parse("https://repo.example/metadata/").expect("base parses");
+        let roots = VerifiedRootBytes::from_bootstrap(&genuine_root, &metadata_base)
+            .expect("genuine root bytes are captured");
+
+        // A signed target literally named `2.root.json`, fetched from the targets base URL,
+        // must never overwrite the recorded genuine root bytes for the same version.
+        let poison_bytes = b"poison target masquerading as a root".to_vec();
+        let poison_url =
+            Url::parse("https://repo.example/targets/2.root.json").expect("url parses");
+        roots
+            .record_url(&poison_url, &poison_bytes)
+            .expect("recording a non-metadata url is a no-op");
+
+        let hash = roots.root_sha256(2).expect("root hash resolves");
+        assert_eq!(hash, sha256_uri(&genuine_root));
+        assert_ne!(hash, sha256_uri(&poison_bytes));
+    }
+
+    #[test]
+    fn verified_root_bytes_never_overwrites_recorded_version() {
+        let base = tough_fixture_dir("rotated-root");
+        let genuine_root = std::fs::read(base.join("2.root.json")).expect("genuine root reads");
+        let metadata_base = Url::parse("https://repo.example/metadata/").expect("base parses");
+        let roots = VerifiedRootBytes::from_bootstrap(&genuine_root, &metadata_base)
+            .expect("genuine root bytes are captured");
+
+        // Even a same-named file under the metadata base must not overwrite an already-recorded
+        // version (defense in depth: record-if-absent).
+        let poison_bytes = b"poison root re-record".to_vec();
+        let metadata_url =
+            Url::parse("https://repo.example/metadata/2.root.json").expect("url parses");
+        roots
+            .record_url(&metadata_url, &poison_bytes)
+            .expect("re-recording an existing version is a no-op");
+
+        let hash = roots.root_sha256(2).expect("root hash resolves");
+        assert_eq!(hash, sha256_uri(&genuine_root));
+        assert_ne!(hash, sha256_uri(&poison_bytes));
     }
 }
