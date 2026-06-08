@@ -105,6 +105,27 @@ def main() -> int:
     failures.extend(
         require(
             build_script,
+            'manifest_ref="${REGISTRY_MANIFEST_REF:-a2e648aaac864563a3311b9d95b8143afa1b7334}"',
+            "registry-manifest immutable default ref",
+        )
+    )
+    failures.extend(
+        require(
+            build_script,
+            'verify_pinned_git_context "REGISTRY_MANIFEST" "$manifest_dir" "$manifest_ref"',
+            "registry-manifest local context pin check",
+        )
+    )
+    failures.extend(
+        require(
+            build_script,
+            "REGISTRY_RELAY_ALLOW_UNPINNED_LOCAL_CONTEXTS",
+            "explicit local unpinned context bypass",
+        )
+    )
+    failures.extend(
+        require(
+            build_script,
             '--build-context "registry-manifest=$manifest_dir"',
             "registry-manifest build context",
         )
