@@ -213,12 +213,29 @@ jobs:
             echo "::notice::COOLIFY_API_TOKEN is not configured; hosted deploy trigger skipped."
             exit 0
           fi
-          curl -fsS -o /dev/null \
+          payload="$(jq -n \
+            --arg key REGISTRY_LAB_STATIC_METADATA_IMAGE \
+            --arg value "${STATIC_METADATA_IMAGE}" \
+            '{key: $key, value: $value, is_preview: false}')"
+          status="$(curl -sS -o /tmp/coolify-env-response.json -w "%{http_code}" \
             -X PATCH \
             -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
             -H "Content-Type: application/json" \
             "${COOLIFY_API_BASE_URL}/applications/${REGISTRY_LAB_APP_UUID}/envs" \
-            -d "{\"key\":\"REGISTRY_LAB_STATIC_METADATA_IMAGE\",\"value\":\"${STATIC_METADATA_IMAGE}\",\"is_preview\":false}"
+            -d "${payload}")"
+          if [ "${status}" = "404" ]; then
+            status="$(curl -sS -o /tmp/coolify-env-response.json -w "%{http_code}" \
+              -X POST \
+              -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              "${COOLIFY_API_BASE_URL}/applications/${REGISTRY_LAB_APP_UUID}/envs" \
+              -d "${payload}")"
+          fi
+          case "${status}" in
+            200|201) ;;
+            *) echo "Coolify env upsert failed with HTTP ${status}" >&2; exit 1 ;;
+          esac
+          rm -f /tmp/coolify-env-response.json
           echo "Patched REGISTRY_LAB_STATIC_METADATA_IMAGE to the static metadata image built from this commit."
           for app in \
             "${REGISTRY_LAB_APP_UUID}" \
