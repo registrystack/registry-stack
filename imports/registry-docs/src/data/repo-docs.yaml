@@ -27,7 +27,7 @@
 repos:
   registry-relay:
     remote: https://github.com/jeremi/registry-relay
-    ref: 5dfe0fe3dad5b69586fbcb4a1f040c9b6def9e80
+    ref: be897c321376e9a755c959065556fa29c07cd20e
     local: ../registry-relay
     docs:
       - src: docs/README.md
@@ -50,7 +50,7 @@ repos:
         dest: products/registry-relay/evidence-verification
         label: Evidence verification
         nav_order: 70
-        doc_type: how-to
+        doc_type: explanation
     # Excluded (intentionally not public via the docs site):
     #   docs/history/*                      historical design specs
     #   docs/release-notes.md               release notes (repo-owned)

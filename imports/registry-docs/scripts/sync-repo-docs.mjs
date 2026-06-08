@@ -18,6 +18,7 @@ import { access, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { dirname, join, normalize, posix, relative, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import YAML from 'yaml';
 
@@ -122,6 +123,27 @@ function firstH1(md) {
 // Starlight page title is not repeated immediately in the body.
 function dropLeadingH1(md) {
   return md.replace(/^\s*#\s+.+?\s*(?:\r?\n|$)/, '');
+}
+
+// Strip a leading "> **Page type:** ..." metadata banner that the product repos
+// carry under the H1. It is a repo-side navigation aid for contributors reading
+// the docs on GitHub; on the rendered site it is noise (and can leak a stale
+// "Status: draft" marker). Only a leading blockquote whose first line declares
+// the Page type is removed; ordinary blockquotes are left intact. Runs after
+// dropLeadingH1, so the banner is the leading content for manifest entries.
+export function stripPageTypeBanner(md) {
+  const lines = md.split('\n');
+  let start = 0;
+  while (start < lines.length && lines[start].trim() === '') start += 1;
+  if (start >= lines.length || !/^>\s*\*\*Page type:\*\*/.test(lines[start])) {
+    return md;
+  }
+  let end = start;
+  while (end < lines.length && lines[end].startsWith('>')) end += 1;
+  while (end < lines.length && lines[end].trim() === '') end += 1;
+  // Everything before `start` is blank (the first non-blank line is the banner),
+  // so dropping through `end` removes the banner and its surrounding blank lines.
+  return lines.slice(end).join('\n');
 }
 
 // The site route for a destination slug, as an absolute path (used for the
@@ -283,7 +305,7 @@ async function syncEntry(repoId, repo, entry, source, destIndex) {
 
   // Drop the leading H1 only when we are using the manifest label as the title,
   // to avoid a duplicate page heading.
-  const bodyBase = entry.label ? dropLeadingH1(stripped) : stripped;
+  const bodyBase = stripPageTypeBanner(entry.label ? dropLeadingH1(stripped) : stripped);
 
   const outFile = resolve(docsDir, `${entry.dest}.mdx`);
   const assetsToCopy = [];
@@ -355,4 +377,8 @@ async function main() {
   );
 }
 
-await main();
+// Run the pipeline only when invoked directly, so tests can import the pure
+// helpers above without triggering a full clone-and-write run.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
+}
