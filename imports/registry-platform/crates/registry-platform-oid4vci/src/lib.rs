@@ -413,9 +413,20 @@ impl WireError {
 pub struct ProofValidationPolicy<'a> {
     pub audience: &'a str,
     pub expected_nonce: Option<&'a str>,
+    pub issuer: ProofIssuerPolicy<'a>,
     pub max_lifetime: Duration,
     pub future_skew: Duration,
     pub forbidden_holder_keys: &'a [PublicJwk],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProofIssuerPolicy<'a> {
+    /// Anonymous or pre-authorized credential flows where proof `iss`
+    /// may be omitted or may carry wallet-specific metadata.
+    Optional,
+    /// Authenticated credential flows where proof `iss` must match the
+    /// wallet OAuth client bound to the credential request.
+    Required(&'a str),
 }
 
 impl<'a> ProofValidationPolicy<'a> {
@@ -429,10 +440,17 @@ impl<'a> ProofValidationPolicy<'a> {
         Self {
             audience,
             expected_nonce,
+            issuer: ProofIssuerPolicy::Optional,
             max_lifetime,
             future_skew,
             forbidden_holder_keys: &[],
         }
+    }
+
+    #[must_use]
+    pub fn with_expected_issuer(mut self, expected_issuer: &'a str) -> Self {
+        self.issuer = ProofIssuerPolicy::Required(expected_issuer);
+        self
     }
 
     #[must_use]
@@ -470,6 +488,8 @@ pub enum ProofError {
     InvalidNonce,
     #[error("proof audience is invalid")]
     InvalidAudience,
+    #[error("proof issuer is invalid")]
+    InvalidIssuer,
     #[error("proof time bounds are invalid")]
     InvalidTime,
 }
@@ -477,7 +497,7 @@ pub enum ProofError {
 /// Validate an OID4VCI proof JWT presented at the credential endpoint.
 ///
 /// Validates structure, `typ` (`openid4vci-proof+jwt`), EdDSA signature,
-/// audience, optional nonce, optional issuer claim shape, time bounds, and
+/// audience, optional nonce, configured issuer policy, time bounds, and
 /// holder binding (`did:jwk` or inline `jwk` header). Returns the verified
 /// holder JWK, holder DID, and raw claims on success.
 ///
@@ -546,9 +566,7 @@ pub fn validate_proof_jwt(
             did_jwk_from_public_jwk(&holder_jwk).map_err(|_| ProofError::UnsupportedKeyReference)?
         }
     };
-    if claims.get("iss").is_some_and(|issuer| !issuer.is_string()) {
-        return Err(ProofError::InvalidClaims);
-    }
+    validate_proof_issuer(&claims, policy.issuer)?;
 
     Ok(ValidatedProof {
         holder_jwk,
@@ -559,6 +577,22 @@ pub fn validate_proof_jwt(
         exp,
         raw_claims: claims,
     })
+}
+
+fn validate_proof_issuer(
+    claims: &Value,
+    issuer_policy: ProofIssuerPolicy<'_>,
+) -> Result<(), ProofError> {
+    let issuer = match claims.get("iss") {
+        Some(Value::String(issuer)) => Some(issuer.as_str()),
+        Some(_) => return Err(ProofError::InvalidClaims),
+        None => None,
+    };
+    match issuer_policy {
+        ProofIssuerPolicy::Optional => Ok(()),
+        ProofIssuerPolicy::Required(expected) if issuer == Some(expected) => Ok(()),
+        ProofIssuerPolicy::Required(_) => Err(ProofError::InvalidIssuer),
+    }
 }
 
 /// Validate a production credential-endpoint proof with a reserved, single-use
@@ -742,6 +776,7 @@ mod tests {
             &ProofValidationPolicy {
                 audience: "https://issuer.example",
                 expected_nonce: Some("n-1"),
+                issuer: ProofIssuerPolicy::Optional,
                 max_lifetime: Duration::from_secs(300),
                 future_skew: Duration::from_secs(30),
                 forbidden_holder_keys: &[],
@@ -784,6 +819,7 @@ mod tests {
             &ProofValidationPolicy {
                 audience: "https://issuer.example",
                 expected_nonce: None,
+                issuer: ProofIssuerPolicy::Optional,
                 max_lifetime: Duration::from_secs(300),
                 future_skew: Duration::from_secs(30),
                 forbidden_holder_keys: &[],
@@ -945,6 +981,39 @@ mod tests {
         assert_eq!(
             validate_proof_jwt(&invalid_iss, &policy(Some("n-1")), 1001),
             Err(ProofError::InvalidClaims)
+        );
+    }
+
+    #[test]
+    fn authenticated_proof_policy_requires_matching_issuer() {
+        let key = PrivateJwk::parse(RAW_JWK).expect("key parses");
+        let policy = policy(Some("n-1")).with_expected_issuer("wallet-client-1");
+
+        let matching = sign_proof(
+            json!({"alg":"EdDSA","typ":PROOF_JWT_TYPE,"jwk": key.public()}),
+            json!({"iss":"wallet-client-1","aud":"https://issuer.example","iat":1000,"nonce":"n-1"}),
+            &key,
+        );
+        validate_proof_jwt(&matching, &policy, 1001).expect("matching issuer validates");
+
+        let missing = sign_proof(
+            json!({"alg":"EdDSA","typ":PROOF_JWT_TYPE,"jwk": key.public()}),
+            json!({"aud":"https://issuer.example","iat":1000,"nonce":"n-1"}),
+            &key,
+        );
+        assert_eq!(
+            validate_proof_jwt(&missing, &policy, 1001),
+            Err(ProofError::InvalidIssuer)
+        );
+
+        let wrong = sign_proof(
+            json!({"alg":"EdDSA","typ":PROOF_JWT_TYPE,"jwk": key.public()}),
+            json!({"iss":"other-wallet-client","aud":"https://issuer.example","iat":1000,"nonce":"n-1"}),
+            &key,
+        );
+        assert_eq!(
+            validate_proof_jwt(&wrong, &policy, 1001),
+            Err(ProofError::InvalidIssuer)
         );
     }
 
@@ -1413,6 +1482,7 @@ mod tests {
         ProofValidationPolicy {
             audience: "https://issuer.example",
             expected_nonce,
+            issuer: ProofIssuerPolicy::Optional,
             max_lifetime: Duration::from_secs(300),
             future_skew: Duration::from_secs(30),
             forbidden_holder_keys: &[],
