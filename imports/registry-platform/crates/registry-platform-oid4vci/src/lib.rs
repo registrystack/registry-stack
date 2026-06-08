@@ -306,11 +306,20 @@ pub struct CredentialRequest {
     pub proof: CredentialRequestProof,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialRequestProof {
     #[serde(rename = "proof_type")]
     pub proof_type: String,
     pub jwt: String,
+}
+
+impl fmt::Debug for CredentialRequestProof {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CredentialRequestProof")
+            .field("proof_type", &self.proof_type)
+            .field("jwt", &Redacted)
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -460,7 +469,7 @@ impl<'a> ProofValidationPolicy<'a> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct ValidatedProof {
     pub holder_jwk: PublicJwk,
     pub holder_id: String,
@@ -469,6 +478,20 @@ pub struct ValidatedProof {
     pub iat: i64,
     pub exp: Option<i64>,
     pub raw_claims: Value,
+}
+
+impl fmt::Debug for ValidatedProof {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ValidatedProof")
+            .field("holder_jwk", &self.holder_jwk)
+            .field("holder_id", &self.holder_id)
+            .field("kid", &self.kid)
+            .field("nonce", &self.nonce.as_ref().map(|_| Redacted))
+            .field("iat", &self.iat)
+            .field("exp", &self.exp)
+            .field("raw_claims", &Redacted)
+            .finish()
+    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -1420,9 +1443,23 @@ mod tests {
             c_nonce: Some("credential-nonce-secret".to_string()),
             c_nonce_expires_in: Some(120),
         };
+        let holder_jwk = PrivateJwk::parse(RAW_JWK).expect("key parses").public();
+        let validated_proof = ValidatedProof {
+            holder_jwk,
+            holder_id: "did:jwk:holder".to_string(),
+            kid: Some("kid-1".to_string()),
+            nonce: Some("validated-nonce-secret".to_string()),
+            iat: 1000,
+            exp: Some(1060),
+            raw_claims: json!({"nonce": "validated-nonce-secret"}),
+        };
+        let credential_request_proof = CredentialRequestProof {
+            proof_type: "jwt".to_string(),
+            jwt: "proof-jwt-secret".to_string(),
+        };
 
         let debug = format!(
-            "{offer:?} {token_request:?} {token_response:?} {nonce_response:?} {credential_response:?}"
+            "{offer:?} {token_request:?} {token_response:?} {nonce_response:?} {credential_response:?} {validated_proof:?} {credential_request_proof:?}"
         );
 
         for secret in [
@@ -1433,11 +1470,16 @@ mod tests {
             "nonce-secret",
             "credential-secret",
             "credential-nonce-secret",
+            "validated-nonce-secret",
+            "proof-jwt-secret",
         ] {
             assert!(!debug.contains(secret), "debug leaked {secret}");
         }
         assert!(debug.contains("<redacted>"));
         assert!(debug.contains("https://issuer.example"));
+        // Non-secret fields stay visible.
+        assert!(debug.contains("did:jwk:holder"));
+        assert!(debug.contains("kid-1"));
     }
 
     #[test]
