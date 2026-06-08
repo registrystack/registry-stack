@@ -987,7 +987,7 @@ fn scope_values(value: &Value, separator: char) -> Vec<String> {
             .filter_map(Value::as_str)
             .map(ToOwned::to_owned)
             .collect(),
-        Value::Object(map) => map.keys().cloned().collect(),
+        Value::Object(_) => Vec::new(),
         _ => Vec::new(),
     }
 }
@@ -1609,6 +1609,55 @@ mod tests {
             verifier.scopes(&claims),
             vec!["social_protection_registry:rows".to_string()]
         );
+    }
+
+    #[test]
+    fn object_scope_claim_keys_do_not_grant_scopes() {
+        let fetcher = Arc::new(JwksFetcher::new(
+            "http://127.0.0.1/jwks".to_string(),
+            JwksFetcherConfig::defaults(),
+        ));
+        let verifier = TokenVerifier::new(
+            TokenVerifierConfig {
+                issuer: "https://issuer.example".to_string(),
+                audiences: vec!["registry-lab-api".to_string()],
+                allowed_algorithms: vec![Algorithm::EdDSA],
+                allowed_typ: vec!["JWT".to_string()],
+                allowed_id_typ: vec!["JWT".to_string(), "id_token".to_string()],
+                allowed_userinfo_typ: vec!["JWT".to_string()],
+                userinfo_requires_exp: true,
+                scope_claim: "realm_access".to_string(),
+                scope_separator: ' ',
+                scope_map: Some(HashMap::from([(
+                    "admin:write".to_string(),
+                    vec!["registry:admin".to_string()],
+                )])),
+                allowed_clients: Vec::new(),
+                leeway: Duration::from_secs(60),
+            },
+            fetcher,
+        );
+        let mut extra = Map::new();
+        extra.insert(
+            "realm_access".to_string(),
+            json!({
+                "admin:write": false,
+                "registry:read": true
+            }),
+        );
+        let claims = Claims {
+            sub: Some("machine-user".to_string()),
+            iss: None,
+            aud: Some(Audience::One("registry-lab-api".to_string())),
+            exp: None,
+            iat: None,
+            nbf: None,
+            azp: None,
+            client_id: None,
+            extra,
+        };
+
+        assert!(verifier.scopes(&claims).is_empty());
     }
 
     #[tokio::test]
