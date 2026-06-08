@@ -5,8 +5,10 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use registry_notary_core::RegistryNotaryCelConfig;
 use registry_notary_server::cel_worker::{
     cel_policy_hash, CelWorker, CelWorkerConfig, CelWorkerError, CelWorkerLimits,
+    CEL_WORKER_MAX_STDIN_BYTES,
 };
 use registry_notary_worker_harness::WorkerError;
 use serde_json::json;
@@ -59,6 +61,35 @@ fn config() -> CelWorkerConfig {
             OsString::from("REGISTRY_NOTARY_TEST_SOURCE_TOKEN"),
         ]),
     }
+}
+
+#[test]
+fn cel_worker_default_standalone_request_size_fits_stdio_frame() {
+    let worker = CelWorkerConfig::from_standalone_config(&RegistryNotaryCelConfig::default());
+
+    assert!(
+        worker.max_request_bytes <= CEL_WORKER_MAX_STDIN_BYTES,
+        "default standalone CEL request cap {} exceeds worker stdin cap {}",
+        worker.max_request_bytes,
+        CEL_WORKER_MAX_STDIN_BYTES
+    );
+}
+
+#[test]
+fn cel_worker_max_standalone_request_size_fits_stdio_frame() {
+    let config = RegistryNotaryCelConfig {
+        max_binding_json_bytes: 1024 * 1024,
+        max_expression_bytes: 256 * 1024,
+        ..RegistryNotaryCelConfig::default()
+    };
+    let worker = CelWorkerConfig::from_standalone_config(&config);
+
+    assert!(
+        worker.max_request_bytes <= CEL_WORKER_MAX_STDIN_BYTES,
+        "maximum standalone CEL request cap {} exceeds worker stdin cap {}",
+        worker.max_request_bytes,
+        CEL_WORKER_MAX_STDIN_BYTES
+    );
 }
 
 #[cfg(feature = "cel-worker-fixture")]
@@ -278,7 +309,7 @@ async fn cel_stdio_worker_rejects_oversized_stdin_frame() {
         .spawn()
         .expect("worker process starts");
     let mut stdin = child.stdin.take().expect("worker stdin is piped");
-    let oversized = format!("{}\n", "x".repeat(128 * 1024));
+    let oversized = format!("{}\n", "x".repeat(CEL_WORKER_MAX_STDIN_BYTES + 1));
 
     if let Err(error) = stdin.write_all(oversized.as_bytes()).await {
         assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
