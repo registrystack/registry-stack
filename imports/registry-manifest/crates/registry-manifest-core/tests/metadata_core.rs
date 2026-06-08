@@ -2134,6 +2134,61 @@ fn dcat_profiles_render_separate_artifacts() {
 }
 
 #[test]
+fn compiled_metadata_filter_prunes_hidden_codelists() {
+    let manifest = manifest_with_body(
+        r#"
+datasets:
+  - id: people
+    title: People
+    entities:
+      - name: public
+        title: Public Person
+        identifiers:
+          - name: id
+            kind: local
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: public_status
+            type: code
+            codelist: public_status
+      - name: hidden
+        title: Hidden Person
+        identifiers:
+          - name: id
+            kind: local
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: hidden_status
+            type: code
+            codelist: hidden_status
+codelists:
+  - id: public_status
+    scheme_iri: https://registry.example.test/codelists/public-status
+    concepts:
+      - code: active
+  - id: hidden_status
+    scheme_iri: https://registry.example.test/codelists/hidden-status
+    concepts:
+      - code: secret
+"#,
+    );
+    let compiled = compile_manifest(&manifest).expect("compile");
+    let scoped = compiled.filter(|_dataset, entity| entity.name == "public");
+    let shacl = render_shacl(&scoped);
+    let raw = serde_json::to_string(&shacl).expect("SHACL serializes");
+
+    assert!(raw.contains("https://registry.example.test/codelists/public-status"));
+    assert!(
+        !raw.contains("https://registry.example.test/codelists/hidden-status"),
+        "filtered metadata must not retain codelists referenced only by hidden entities"
+    );
+}
+
+#[test]
 fn breg_dcat_emits_standard_public_service_evidence_without_source_truth_claims() {
     let mut manifest = fixture("example-civil-registration");
     manifest.datasets[0].applicable_legislation =
