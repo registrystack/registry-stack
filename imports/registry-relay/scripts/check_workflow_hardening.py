@@ -27,6 +27,14 @@ NEXTEST_FORBIDDEN_PATTERNS: list[tuple[str, str]] = [
     ),
 ]
 
+BINARY_RELEASE_PWSH_FORBIDDEN_PATTERNS: list[tuple[str, str]] = [
+    (r"pwsh[^\n]*\$\{\{\s*github\.ref_name\s*\}\}", "GitHub tag interpolation in PowerShell"),
+    (r"pwsh[^\n]*\$GITHUB_REF_NAME", "shell tag interpolation in PowerShell"),
+    (r"pwsh[^\n]*\$version", "tag-derived version interpolation in PowerShell"),
+    (r"pwsh[^\n]*\$package(?:_dir)?", "tag-derived package path interpolation in PowerShell"),
+    (r"pwsh[^\n]*target/dist", "archive path literal interpolation in PowerShell"),
+]
+
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
@@ -64,6 +72,37 @@ def require_immutable_refs(paths: list[Path]) -> list[str]:
     return failures
 
 
+def require_binary_release_powershell_hardening(text: str, path: Path) -> list[str]:
+    failures: list[str] = []
+    failures.extend(
+        require(
+            text,
+            '[[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]',
+            path,
+            "stable semver tag validation before package-name derivation",
+        )
+    )
+    failures.extend(
+        require(
+            text,
+            'PACKAGE_DIR="$package_dir" PACKAGE_ZIP="target/dist/${package}.zip"',
+            path,
+            "PowerShell archive paths passed through environment variables",
+        )
+    )
+    failures.extend(
+        require(
+            text,
+            r"Compress-Archive -Path (Join-Path \$env:PACKAGE_DIR '*') -DestinationPath \$env:PACKAGE_ZIP -Force",
+            path,
+            "PowerShell archive command using environment variables",
+        )
+    )
+    for pattern, detail in BINARY_RELEASE_PWSH_FORBIDDEN_PATTERNS:
+        failures.extend(forbid(text, pattern, path, detail))
+    return failures
+
+
 def main() -> int:
     ci_workflows = [
         WORKFLOWS / "ci.yml",
@@ -81,6 +120,10 @@ def main() -> int:
 
     container = WORKFLOWS / "container.yml"
     container_text = read(container)
+    binary_release = WORKFLOWS / "binary-release.yml"
+    binary_release_text = read(binary_release)
+    failures.extend(require_binary_release_powershell_hardening(binary_release_text, binary_release))
+
     failures.extend(
         require(
             container_text,
