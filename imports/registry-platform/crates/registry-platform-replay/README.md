@@ -12,6 +12,8 @@ Replay-store primitives for one-time JWT ids and nonce values.
   exactly once later.
 - `require_insert_once`, a fail-closed helper for routes where replay
   protection is mandatory.
+- `require_consume_once`, a fail-closed helper for mandatory issued-nonce
+  consumption.
 - `CacheReplayStore` and `ConsumableNonceCacheStore`, adapters over
   `registry-platform-cache`.
 - `InMemoryReplayStore` for tests and single-process development.
@@ -45,7 +47,8 @@ consume it when the holder proof arrives:
 
 ```rust
 use registry_platform_replay::{
-    ConsumableNonceStore, InMemoryConsumableNonceStore, ReplayKey, ReplayScope,
+    require_consume_once, ConsumableNonceStore, InMemoryConsumableNonceStore, ReplayKey,
+    ReplayScope,
 };
 use time::OffsetDateTime;
 
@@ -56,7 +59,7 @@ let key = ReplayKey::new("service-owned-nonce-digest")?;
 let expires_at = OffsetDateTime::now_utc() + std::time::Duration::from_secs(300);
 
 store.reserve_nonce(&scope, &key, expires_at).await?;
-store.consume_nonce(&scope, &key).await?;
+require_consume_once(&store, &scope, &key).await?;
 Ok(())
 }
 ```
@@ -78,14 +81,17 @@ application code when a structured `ReplayScope` can carry the same boundaries.
 ## Security Notes
 
 - Every replay record requires an absolute UTC expiry.
-- `require_insert_once` fails closed: duplicate keys and store errors both deny
-  the operation.
+- `require_insert_once` and `require_consume_once` fail closed: duplicate,
+  missing, already-consumed, and store-error cases all deny the operation.
+- Use raw `consume_nonce` only for optional or diagnostic flows. Security
+  checks must require `ReplayInsertOutcome::Inserted`.
 - `InMemoryReplayStore` is for tests, local development, and single-process
   deployments only. Production multi-instance or active-active deployments need
   a durable shared backend such as Redis or Postgres.
-- Prefer `ReplayStore`, `ConsumableNonceStore`, and `require_insert_once` from
-  this crate for replay-sensitive paths. Do not call a generic cache directly
-  where security depends on one-time insertion or consume-once semantics.
+- Prefer `ReplayStore`, `ConsumableNonceStore`, `require_insert_once`, and
+  `require_consume_once` from this crate for replay-sensitive paths. Do not
+  call a generic cache directly where security depends on one-time insertion or
+  consume-once semantics.
 - Do not store compact JWTs, raw credentials, subject identifiers, holder
   secrets, or token bodies as replay keys. Use a one-time identifier such as a
   `jti`, nonce, or service-owned digest.

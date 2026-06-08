@@ -168,6 +168,7 @@ impl fmt::Debug for ReplayKey {
 
 /// Result of an attempt to record a one-time replay identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use = "check ReplayInsertOutcome::Inserted or use require_insert_once/require_consume_once for fail-closed replay protection"]
 pub enum ReplayInsertOutcome {
     /// The scoped key was not already active and is now recorded until expiry.
     Inserted,
@@ -192,6 +193,7 @@ pub trait ReplayStore: Send + Sync {
 
 #[async_trait]
 pub trait ConsumableNonceStore: Send + Sync {
+    /// Reserve a nonce until it is consumed or expires.
     async fn reserve_nonce(
         &self,
         scope: &ReplayScope,
@@ -199,6 +201,11 @@ pub trait ConsumableNonceStore: Send + Sync {
         expires_at: OffsetDateTime,
     ) -> Result<(), ReplayStoreError>;
 
+    /// Consume a nonce and report whether it existed.
+    ///
+    /// Callers that require nonce replay protection should prefer
+    /// [`require_consume_once`] so missing, already-consumed, and store-error
+    /// cases all fail closed.
     async fn consume_nonce(
         &self,
         scope: &ReplayScope,
@@ -764,14 +771,20 @@ mod tests {
         let second_key = key("nonce-2");
 
         let now = OffsetDateTime::now_utc();
-        store
-            .insert_once(&first_scope, &first_key, now + Duration::from_millis(10))
-            .await
-            .expect("first insert succeeds");
-        store
-            .insert_once(&second_scope, &second_key, now + Duration::from_secs(60))
-            .await
-            .expect("second insert succeeds");
+        assert_eq!(
+            store
+                .insert_once(&first_scope, &first_key, now + Duration::from_millis(10))
+                .await
+                .expect("first insert succeeds"),
+            ReplayInsertOutcome::Inserted
+        );
+        assert_eq!(
+            store
+                .insert_once(&second_scope, &second_key, now + Duration::from_secs(60))
+                .await
+                .expect("second insert succeeds"),
+            ReplayInsertOutcome::Inserted
+        );
         tokio::time::sleep(Duration::from_millis(20)).await;
 
         assert_eq!(store.len(), 2);
@@ -840,10 +853,13 @@ mod tests {
         let store = InMemoryReplayStore::with_max_entries(1);
         let scope = scope("openid4vci");
 
-        store
-            .insert_once(&scope, &key("nonce-1"), future())
-            .await
-            .expect("first replay key stores");
+        assert_eq!(
+            store
+                .insert_once(&scope, &key("nonce-1"), future())
+                .await
+                .expect("first replay key stores"),
+            ReplayInsertOutcome::Inserted
+        );
         let err = store
             .insert_once(&scope, &key("nonce-2"), future())
             .await
@@ -856,19 +872,25 @@ mod tests {
         let store = InMemoryReplayStore::with_max_entries(1);
         let scope = scope("openid4vci");
 
-        store
-            .insert_once(
-                &scope,
-                &key("nonce-1"),
-                OffsetDateTime::now_utc() + Duration::from_millis(10),
-            )
-            .await
-            .expect("first replay key stores");
+        assert_eq!(
+            store
+                .insert_once(
+                    &scope,
+                    &key("nonce-1"),
+                    OffsetDateTime::now_utc() + Duration::from_millis(10),
+                )
+                .await
+                .expect("first replay key stores"),
+            ReplayInsertOutcome::Inserted
+        );
         tokio::time::sleep(Duration::from_millis(20)).await;
-        store
-            .insert_once(&scope, &key("nonce-2"), future())
-            .await
-            .expect("expired record is purged before capacity is enforced");
+        assert_eq!(
+            store
+                .insert_once(&scope, &key("nonce-2"), future())
+                .await
+                .expect("expired record is purged before capacity is enforced"),
+            ReplayInsertOutcome::Inserted
+        );
         assert_eq!(store.len(), 1);
     }
 
@@ -909,6 +931,44 @@ mod tests {
         assert!(matches!(
             require_consume_once(&store, &scope, &key).await,
             Err(RequiredReplayError::AlreadySeen)
+        ));
+    }
+
+    #[tokio::test]
+    async fn required_consume_helper_fails_closed_on_store_errors() {
+        struct FailingNonceStore;
+
+        #[async_trait]
+        impl ConsumableNonceStore for FailingNonceStore {
+            async fn reserve_nonce(
+                &self,
+                _scope: &ReplayScope,
+                _key: &ReplayKey,
+                _expires_at: OffsetDateTime,
+            ) -> Result<(), ReplayStoreError> {
+                Err(ReplayStoreError::Operation {
+                    message: "simulated reserve failure".to_string(),
+                })
+            }
+
+            async fn consume_nonce(
+                &self,
+                _scope: &ReplayScope,
+                _key: &ReplayKey,
+            ) -> Result<ReplayInsertOutcome, ReplayStoreError> {
+                Err(ReplayStoreError::Operation {
+                    message: "simulated consume failure".to_string(),
+                })
+            }
+        }
+
+        let scope =
+            ReplayScope::oid4vci_nonce("tenant-a", "issuer-a", "profile-a").expect("valid scope");
+        let key = key("nonce-1");
+
+        assert!(matches!(
+            require_consume_once(&FailingNonceStore, &scope, &key).await,
+            Err(RequiredReplayError::Store { .. })
         ));
     }
 
