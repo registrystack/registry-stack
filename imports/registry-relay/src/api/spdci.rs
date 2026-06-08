@@ -639,11 +639,14 @@ fn filters_from_idtype_query(
         .identifiers
         .get(&id_type)
         .ok_or(FilterError::NotAllowed)?;
-    let value = query.get("value").ok_or(FilterError::InvalidValue)?;
+    let value = query
+        .get("value")
+        .and_then(scalar_query_value)
+        .ok_or(FilterError::InvalidValue)?;
     Ok(vec![EntityFilter {
         field: field.clone(),
         op: EntityFilterOp::Eq,
-        value: value.clone(),
+        value,
     }])
 }
 
@@ -795,9 +798,17 @@ fn filter_from_operator_object(field: &str, value: &Value) -> Result<EntityFilte
 fn query_value(query: &Value, key: &str) -> Option<Value> {
     let direct = query.get(key).or_else(|| dotted_lookup(query, key))?;
     if let Some(eq) = direct.get("eq").or_else(|| direct.get("$eq")) {
-        return Some(eq.clone());
+        return scalar_query_value(eq);
     }
-    Some(direct.clone())
+    scalar_query_value(direct)
+}
+
+fn scalar_query_value(value: &Value) -> Option<Value> {
+    match value {
+        Value::String(value) if !value.trim().is_empty() => Some(Value::String(value.clone())),
+        Value::Bool(_) | Value::Number(_) => Some(value.clone()),
+        _ => None,
+    }
 }
 
 fn dotted_lookup<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
@@ -974,4 +985,38 @@ fn with_search_audit_context(
         ..AuditContextExt::default()
     });
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::query_value;
+    use serde_json::{json, Value};
+
+    #[test]
+    fn query_value_accepts_only_nonblank_scalars() {
+        for accepted in [
+            json!("ABC451123"),
+            json!(true),
+            json!(false),
+            json!(123),
+            json!(12.5),
+        ] {
+            let query = json!({ "member.member_identifier": { "eq": accepted.clone() } });
+            assert_eq!(
+                query_value(&query, "member.member_identifier"),
+                Some(accepted)
+            );
+        }
+
+        for rejected in [
+            json!(""),
+            json!("   "),
+            Value::Null,
+            json!(["ABC451123"]),
+            json!({ "id": "ABC451123" }),
+        ] {
+            let query = json!({ "member.member_identifier": { "eq": rejected } });
+            assert_eq!(query_value(&query, "member.member_identifier"), None);
+        }
+    }
 }

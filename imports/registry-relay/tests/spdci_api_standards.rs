@@ -388,6 +388,14 @@ fn sync_search_body(message_id: &str, transaction_id: &str) -> Value {
 }
 
 fn disabled_criteria_body(message_id: &str, transaction_id: &str) -> Value {
+    disabled_criteria_body_with_query_value(message_id, transaction_id, json!("ABC451123"))
+}
+
+fn disabled_criteria_body_with_query_value(
+    message_id: &str,
+    transaction_id: &str,
+    query_value: Value,
+) -> Value {
     json!({
         "header": valid_header(message_id),
         "message": {
@@ -395,12 +403,43 @@ fn disabled_criteria_body(message_id: &str, transaction_id: &str) -> Value {
             "disabled_criteria": {
                 "query": {
                     "member.member_identifier": {
-                        "eq": "ABC451123"
+                        "eq": query_value
                     }
                 }
             }
         }
     })
+}
+
+#[tokio::test]
+async fn dci_disabled_details_support_reject_invalid_query_values_before_read() {
+    let server = server().await;
+
+    for (name, query_value) in [
+        ("empty", json!("")),
+        ("blank", json!("   ")),
+        ("null", Value::Null),
+        ("array", json!(["ABC451123"])),
+        ("object", json!({ "id": "ABC451123" })),
+    ] {
+        for path in [
+            "/dci/dr/registry/sync/disabled",
+            "/dci/dr/registry/sync/get-disability-details",
+            "/dci/dr/registry/sync/get-disability-support",
+        ] {
+            let response = server
+                .post(path)
+                .json(&disabled_criteria_body_with_query_value(
+                    &format!("msg-invalid-query-{name}"),
+                    &format!("txn-invalid-query-{name}"),
+                    query_value.clone(),
+                ))
+                .await;
+            response.assert_status(StatusCode::BAD_REQUEST);
+            let body: Value = response.json();
+            assert_eq!(body["code"], "filter.invalid_value", "{path}: {name}");
+        }
+    }
 }
 
 #[tokio::test]
@@ -870,7 +909,37 @@ async fn sync_search_rejects_empty_criteria_before_collection_read() {
                 }
             }),
         ),
+        (
+            "blank-idtype-value",
+            sync_search_body("msg-blank-idtype-value", "txn-blank-idtype-value"),
+        ),
+        (
+            "null-idtype-value",
+            sync_search_body("msg-null-idtype-value", "txn-null-idtype-value"),
+        ),
+        (
+            "array-idtype-value",
+            sync_search_body("msg-array-idtype-value", "txn-array-idtype-value"),
+        ),
+        (
+            "object-idtype-value",
+            sync_search_body("msg-object-idtype-value", "txn-object-idtype-value"),
+        ),
     ];
+
+    let cases = cases.into_iter().map(|(name, mut body)| {
+        let replacement = match name {
+            "blank-idtype-value" => Some(json!("   ")),
+            "null-idtype-value" => Some(Value::Null),
+            "array-idtype-value" => Some(json!(["ABC451123"])),
+            "object-idtype-value" => Some(json!({ "id": "ABC451123" })),
+            _ => None,
+        };
+        if let Some(value) = replacement {
+            body["message"]["search_request"][0]["search_criteria"]["query"]["value"] = value;
+        }
+        (name, body)
+    });
 
     for (name, body) in cases {
         let response = server
