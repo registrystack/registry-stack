@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -111,10 +112,14 @@ impl TufConfigVerifier {
         let root = tokio::fs::read(&input.root_path)
             .await
             .map_err(|error| ConfigVerificationError::Io(error.to_string()))?;
+        let verified_roots = VerifiedRootBytes::from_bootstrap(&root)?;
         let metadata_url = dir_url(&input.metadata_dir)?;
         let targets_url = dir_url(&input.targets_dir)?;
         let repository = RepositoryLoader::new(&root, metadata_url, targets_url)
-            .transport(FilesystemTransport)
+            .transport(RootRecordingTransport::new(
+                FilesystemTransport,
+                verified_roots.clone(),
+            ))
             .expiration_enforcement(ExpirationEnforcement::Safe)
             .datastore(&input.datastore_dir)
             .load()
@@ -146,8 +151,7 @@ impl TufConfigVerifier {
             })
             .ok_or_else(|| ConfigVerificationError::TargetNotFound(input.target_name.clone()))?;
         let root_version = repository.root().signed.version.into();
-        let root_sha256 =
-            verified_local_root_sha256(&input.metadata_dir, &root, root_version).await?;
+        let root_sha256 = verified_roots.root_sha256(root_version)?;
         let signer_kids =
             verified_targets_signer_kids(&repository.root().signed, repository.targets())?;
         Ok(TufVerifiedTarget {
@@ -170,12 +174,13 @@ impl TufConfigVerifier {
         let root = tokio::fs::read(&input.root_path)
             .await
             .map_err(|error| ConfigVerificationError::Io(error.to_string()))?;
-        let transport = GuardedRemoteTransport::new(input.fetch_policy());
-        transport.validate_base_url(&metadata_url)?;
-        transport.validate_base_url(&targets_url)?;
-        let metadata_base_url = metadata_url.clone();
+        let verified_roots = VerifiedRootBytes::from_bootstrap(&root)?;
+        let guarded_transport = GuardedRemoteTransport::new(input.fetch_policy());
+        guarded_transport.validate_base_url(&metadata_url)?;
+        guarded_transport.validate_base_url(&targets_url)?;
+        let transport = RootRecordingTransport::new(guarded_transport, verified_roots.clone());
         let repository = RepositoryLoader::new(&root, metadata_url, targets_url)
-            .transport(transport.clone())
+            .transport(transport)
             .expiration_enforcement(ExpirationEnforcement::Safe)
             .datastore(&input.datastore_dir)
             .load()
@@ -207,8 +212,7 @@ impl TufConfigVerifier {
             })
             .ok_or_else(|| ConfigVerificationError::TargetNotFound(input.target_name.clone()))?;
         let root_version = repository.root().signed.version.into();
-        let root_sha256 =
-            verified_remote_root_sha256(metadata_base_url, &transport, &root, root_version).await?;
+        let root_sha256 = verified_roots.root_sha256(root_version)?;
         let signer_kids =
             verified_targets_signer_kids(&repository.root().signed, repository.targets())?;
         Ok(TufVerifiedTarget {
@@ -251,6 +255,84 @@ impl TufConfigVerifier {
         metadata.signer_kids = tuf.signer_kids.iter().cloned().collect();
         Ok(VerifiedConfigTarget { tuf, metadata })
     }
+}
+
+#[derive(Clone, Debug)]
+struct VerifiedRootBytes {
+    roots: Arc<Mutex<BTreeMap<u64, Vec<u8>>>>,
+}
+
+impl VerifiedRootBytes {
+    fn from_bootstrap(bootstrap_root: &[u8]) -> Result<Self, ConfigVerificationError> {
+        let bootstrap_version = bootstrap_root_version(bootstrap_root)?;
+        let mut roots = BTreeMap::new();
+        roots.insert(bootstrap_version, bootstrap_root.to_vec());
+        Ok(Self {
+            roots: Arc::new(Mutex::new(roots)),
+        })
+    }
+
+    fn root_sha256(&self, root_version: u64) -> Result<String, ConfigVerificationError> {
+        let roots = self.roots.lock().map_err(|_| {
+            ConfigVerificationError::Tuf("verified TUF root byte recorder failed".to_string())
+        })?;
+        let root = roots.get(&root_version).ok_or_else(|| {
+            ConfigVerificationError::Tuf(format!(
+                "verified TUF root version {root_version} bytes were not captured"
+            ))
+        })?;
+        Ok(sha256_uri(root))
+    }
+
+    fn record_url(&self, url: &Url, bytes: &[u8]) -> Result<(), TransportError> {
+        let Some(root_version) = root_metadata_version(url) else {
+            return Ok(());
+        };
+        let mut roots = self.roots.lock().map_err(|_| {
+            TransportError::new_with_cause(
+                TransportErrorKind::Other,
+                url.as_str(),
+                "verified TUF root byte recorder failed",
+            )
+        })?;
+        roots.insert(root_version, bytes.to_vec());
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+struct RootRecordingTransport<T> {
+    inner: T,
+    verified_roots: VerifiedRootBytes,
+}
+
+impl<T> RootRecordingTransport<T> {
+    fn new(inner: T, verified_roots: VerifiedRootBytes) -> Self {
+        Self {
+            inner,
+            verified_roots,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl<T> Transport for RootRecordingTransport<T>
+where
+    T: Transport + Clone + Send + Sync + 'static,
+{
+    async fn fetch(&self, url: Url) -> Result<TransportStream, TransportError> {
+        let stream = self.inner.fetch(url.clone()).await?;
+        let bytes = stream.into_vec().await?;
+        self.verified_roots.record_url(&url, &bytes)?;
+        Ok(Box::pin(SingleBytesStream {
+            item: Some(Bytes::from(bytes)),
+        }))
+    }
+}
+
+fn root_metadata_version(url: &Url) -> Option<u64> {
+    let filename = url.path_segments()?.next_back()?;
+    filename.strip_suffix(".root.json")?.parse().ok()
 }
 
 #[derive(Clone, Debug)]
@@ -959,64 +1041,10 @@ fn verify_tuf_signature(key: &Key, message: &[u8], signature: &[u8]) -> bool {
         .is_ok()
 }
 
-async fn verified_local_root_sha256(
-    metadata_dir: &Path,
-    bootstrap_root: &[u8],
-    root_version: u64,
-) -> Result<String, ConfigVerificationError> {
-    let bootstrap_version = bootstrap_root_version(bootstrap_root)?;
-    if root_version == bootstrap_version {
-        return Ok(sha256_uri(bootstrap_root));
-    }
-    let versioned_root_path = metadata_dir.join(format!("{root_version}.root.json"));
-    let final_root = tokio::fs::read(&versioned_root_path)
-        .await
-        .map_err(|error| ConfigVerificationError::Io(error.to_string()))?;
-    Ok(sha256_uri(&final_root))
-}
-
-async fn verified_remote_root_sha256(
-    metadata_base_url: Url,
-    transport: &GuardedRemoteTransport,
-    bootstrap_root: &[u8],
-    root_version: u64,
-) -> Result<String, ConfigVerificationError> {
-    let bootstrap_version = bootstrap_root_version(bootstrap_root)?;
-    if root_version == bootstrap_version {
-        return Ok(sha256_uri(bootstrap_root));
-    }
-    let versioned_root_url = append_url_path_segment(
-        metadata_base_url,
-        &format!("{root_version}.root.json"),
-        "metadata_base_url",
-    )?;
-    let final_root = transport
-        .fetch_bytes(versioned_root_url)
-        .await
-        .map_err(|error| ConfigVerificationError::Tuf(error.to_string()))?;
-    Ok(sha256_uri(&final_root))
-}
-
 fn bootstrap_root_version(bootstrap_root: &[u8]) -> Result<u64, ConfigVerificationError> {
     let root: Signed<Root> = serde_json::from_slice(bootstrap_root)
         .map_err(|error| ConfigVerificationError::Tuf(error.to_string()))?;
     Ok(root.signed.version.into())
-}
-
-fn append_url_path_segment(
-    mut base: Url,
-    segment: &str,
-    field: &'static str,
-) -> Result<Url, ConfigVerificationError> {
-    base.path_segments_mut()
-        .map_err(|_| {
-            ConfigVerificationError::UnsafeRemoteUrl(format!(
-                "{field} cannot be used as a base URL"
-            ))
-        })?
-        .pop_if_empty()
-        .push(segment);
-    Ok(base)
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
@@ -1048,48 +1076,32 @@ mod tests {
         registry.join("tough-0.22.0/tests/data").join(name)
     }
 
-    #[tokio::test]
-    async fn verified_local_root_hash_uses_final_versioned_root_after_rotation() {
+    #[test]
+    fn verified_root_bytes_hashes_bootstrap_root_without_rotation() {
         let base = tough_fixture_dir("rotated-root");
-        let bootstrap_root = tokio::fs::read(base.join("1.root.json"))
-            .await
-            .expect("bootstrap root reads");
-        let final_root = tokio::fs::read(base.join("2.root.json"))
-            .await
-            .expect("final root reads");
-        let input = LocalTufRepositoryInput {
-            root_path: base.join("1.root.json"),
-            metadata_dir: base,
-            targets_dir: PathBuf::from("unused-targets"),
-            datastore_dir: PathBuf::from("unused-datastore"),
-            target_name: "unused".to_string(),
-        };
+        let bootstrap_root = std::fs::read(base.join("1.root.json")).expect("bootstrap root reads");
+        let roots = VerifiedRootBytes::from_bootstrap(&bootstrap_root)
+            .expect("bootstrap root bytes are captured");
 
-        let hash = verified_local_root_sha256(&input.metadata_dir, &bootstrap_root, 2)
-            .await
-            .expect("root hash resolves");
-
-        assert_eq!(hash, sha256_uri(&final_root));
-    }
-
-    #[tokio::test]
-    async fn verified_local_root_hash_uses_bootstrap_root_without_rotation() {
-        let base = tough_fixture_dir("rotated-root");
-        let bootstrap_root = tokio::fs::read(base.join("1.root.json"))
-            .await
-            .expect("bootstrap root reads");
-        let input = LocalTufRepositoryInput {
-            root_path: base.join("1.root.json"),
-            metadata_dir: base,
-            targets_dir: PathBuf::from("unused-targets"),
-            datastore_dir: PathBuf::from("unused-datastore"),
-            target_name: "unused".to_string(),
-        };
-
-        let hash = verified_local_root_sha256(&input.metadata_dir, &bootstrap_root, 1)
-            .await
-            .expect("root hash resolves");
+        let hash = roots.root_sha256(1).expect("root hash resolves");
 
         assert_eq!(hash, sha256_uri(&bootstrap_root));
+    }
+
+    #[test]
+    fn verified_root_bytes_hashes_recorded_final_root_after_rotation() {
+        let base = tough_fixture_dir("rotated-root");
+        let bootstrap_root = std::fs::read(base.join("1.root.json")).expect("bootstrap root reads");
+        let final_root = std::fs::read(base.join("2.root.json")).expect("final root reads");
+        let roots = VerifiedRootBytes::from_bootstrap(&bootstrap_root)
+            .expect("bootstrap root bytes are captured");
+        let root_url = Url::parse("https://repo.example/metadata/2.root.json").expect("url parses");
+
+        roots
+            .record_url(&root_url, &final_root)
+            .expect("final root bytes record");
+        let hash = roots.root_sha256(2).expect("root hash resolves");
+
+        assert_eq!(hash, sha256_uri(&final_root));
     }
 }

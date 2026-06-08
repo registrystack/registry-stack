@@ -388,6 +388,56 @@ async fn verifies_remote_tuf_target_through_guarded_dev_transport() {
 }
 
 #[tokio::test]
+async fn remote_tuf_root_hash_uses_root_bytes_fetched_during_verification() {
+    let repo = TempDir::new().expect("repo tempdir");
+    let datastore = TempDir::new().expect("datastore tempdir");
+    let target_name = "file4.txt";
+    let local = generated_repository_input(&repo, &datastore, target_name, 1).await;
+    let final_root_path = write_rotated_root_with_same_keys(&local.metadata_dir).await;
+    let final_root = std::fs::read(&final_root_path).expect("final root reads");
+    let poisoned_root = br#"{"signed":{"_type":"root","version":2}}"#.to_vec();
+    let server = MockServer::start().await;
+    mount_directory_files(&server, "/metadata", &local.metadata_dir).await;
+    mount_directory_files(&server, "/targets", &local.targets_dir).await;
+    Mock::given(method("GET"))
+        .and(path("/metadata/2.root.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(final_root.clone()))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/metadata/2.root.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(poisoned_root.clone()))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/metadata/3.root.json"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    let remote_datastore = datastore.path().join("remote-datastore");
+    std::fs::create_dir(&remote_datastore).expect("remote datastore dir exists");
+    let remote = RemoteTufRepositoryInput {
+        root_path: local.root_path,
+        metadata_base_url: format!("{}/metadata", server.uri()),
+        targets_base_url: format!("{}/targets", server.uri()),
+        datastore_dir: remote_datastore,
+        target_name: target_name.to_string(),
+        allow_dev_insecure_fetch_urls: true,
+    };
+
+    let target = TufConfigVerifier::verify_remote_target(&remote)
+        .await
+        .expect("remote target verifies using the first final root response");
+
+    assert_eq!(target.root_version, 2);
+    assert_eq!(target.root_sha256, sha256_uri(&final_root));
+    assert_ne!(target.root_sha256, sha256_uri(&poisoned_root));
+}
+
+#[tokio::test]
 async fn remote_tuf_rejects_loopback_http_without_dev_opt_in_before_fetch() {
     let server = serve_tuf_reference_fixture().await;
     let base = tough_fixture_dir("tuf-reference-impl");
