@@ -6078,8 +6078,9 @@ fn require_evaluation_access(
     if principal.is_self_attestation() {
         return Ok(());
     }
-    for claim_id in &evaluation.claim_ids {
-        for scope in source.required_scopes(evidence, claim_id)? {
+    for claim_ref in evaluation.selected_claim_refs() {
+        let claim = find_requested_claim(evidence, &claim_ref)?;
+        for scope in source.required_scopes_for_claim(evidence, claim)? {
             if !principal.has_scope(&scope) {
                 return Err(EvidenceError::ScopeDenied { required: scope });
             }
@@ -9100,6 +9101,36 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct VersionScopedSource;
+
+    impl SourceReader for VersionScopedSource {
+        fn read_one<'a>(
+            &'a self,
+            _binding: &'a SourceBindingConfig,
+            _subject: &'a SubjectRequest,
+            _purpose: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+            Box::pin(async { Err(EvidenceError::SourceUnavailable) })
+        }
+
+        fn required_scopes(
+            &self,
+            _evidence: &EvidenceConfig,
+            claim_id: &str,
+        ) -> Result<Vec<String>, EvidenceError> {
+            Ok(vec![format!("{claim_id}:1.0")])
+        }
+
+        fn required_scopes_for_claim(
+            &self,
+            _evidence: &EvidenceConfig,
+            claim: &registry_notary_core::ClaimDefinition,
+        ) -> Result<Vec<String>, EvidenceError> {
+            Ok(vec![format!("{}:{}", claim.id, claim.version)])
+        }
+    }
+
     struct NoopIssuerResolver;
 
     impl EvidenceIssuerResolver for NoopIssuerResolver {
@@ -9660,6 +9691,7 @@ mod tests {
             client_id: "client".to_string(),
             purpose: "test".to_string(),
             claim_ids: vec!["claim-a".to_string()],
+            claim_refs: Vec::new(),
             disclosure: "redacted".to_string(),
             format: FORMAT_SD_JWT_VC.to_string(),
             results: Vec::new(),
@@ -9738,6 +9770,7 @@ mod tests {
             client_id: "caseworker".to_string(),
             purpose: "test".to_string(),
             claim_ids: vec!["person-is-alive".to_string()],
+            claim_refs: Vec::new(),
             disclosure: "predicate".to_string(),
             format: FORMAT_SD_JWT_VC.to_string(),
             results: vec![claim_result_view(
@@ -9808,6 +9841,50 @@ mod tests {
             .expect("body reads");
         let body: Value = serde_json::from_slice(&body).expect("problem body parses");
         assert_eq!(body["code"], json!("credential.issuance_failed"));
+    }
+
+    #[test]
+    fn evaluation_access_uses_stored_claim_version_scope() {
+        let mut evidence = evidence_config();
+        let mut older_claim = evidence.claims[0].clone();
+        older_claim.version = "1.0".to_string();
+        let mut newer_claim = older_claim.clone();
+        newer_claim.version = "2.0".to_string();
+        evidence.claims = vec![older_claim, newer_claim];
+        let evaluation = registry_notary_core::StoredEvaluation {
+            client_id: "caseworker".to_string(),
+            purpose: "test".to_string(),
+            claim_ids: vec!["person-is-alive".to_string()],
+            claim_refs: vec![ClaimRef::with_version("person-is-alive", "2.0")],
+            disclosure: "predicate".to_string(),
+            format: FORMAT_SD_JWT_VC.to_string(),
+            results: Vec::new(),
+            created_at: "2026-05-23T00:00:00Z".to_string(),
+            expires_at: "2999-01-01T00:00:00Z".to_string(),
+            request_hash: "request-hash".to_string(),
+            self_attestation: None,
+        };
+        let source = VersionScopedSource;
+        let principal = EvidencePrincipal {
+            principal_id: "caseworker".to_string(),
+            scopes: vec!["person-is-alive:1.0".to_string()],
+            access_mode: AccessMode::MachineClient,
+            verified_claims: None,
+        };
+
+        let err = require_evaluation_access(&evidence, &source, &principal, &evaluation)
+            .expect_err("version 1 scope must not authorize stored version 2 evaluation");
+        assert!(matches!(
+            err,
+            EvidenceError::ScopeDenied { required } if required == "person-is-alive:2.0"
+        ));
+
+        let principal = EvidencePrincipal {
+            scopes: vec!["person-is-alive:2.0".to_string()],
+            ..principal
+        };
+        require_evaluation_access(&evidence, &source, &principal, &evaluation)
+            .expect("version 2 scope authorizes stored version 2 evaluation");
     }
 
     fn issue_request() -> CredentialIssueRequest {

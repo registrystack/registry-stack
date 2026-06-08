@@ -1134,6 +1134,8 @@ pub struct StoredEvaluation {
     pub client_id: String,
     pub purpose: String,
     pub claim_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub claim_refs: Vec<ClaimRef>,
     pub disclosure: String,
     pub format: String,
     pub results: Vec<ClaimResultView>,
@@ -1151,6 +1153,18 @@ impl StoredEvaluation {
             .as_ref()
             .map(|metadata| metadata.access_mode)
             .unwrap_or(AccessMode::MachineClient)
+    }
+
+    #[must_use]
+    pub fn selected_claim_refs(&self) -> Vec<ClaimRef> {
+        if self.claim_refs.is_empty() {
+            self.claim_ids
+                .iter()
+                .map(|claim_id| ClaimRef::from(claim_id.as_str()))
+                .collect()
+        } else {
+            self.claim_refs.clone()
+        }
     }
 }
 
@@ -1808,6 +1822,10 @@ mod tests {
         let stored: StoredEvaluation =
             serde_json::from_value(raw).expect("legacy stored evaluation deserializes");
         assert_eq!(stored.access_mode(), AccessMode::MachineClient);
+        assert_eq!(
+            stored.selected_claim_refs(),
+            vec![ClaimRef::from("person-is-alive")]
+        );
         assert!(stored.self_attestation.is_none());
     }
 }

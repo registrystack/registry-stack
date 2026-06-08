@@ -1183,8 +1183,17 @@ impl SourceReader for HttpEvidenceSources {
         evidence: &EvidenceConfig,
         claim_id: &str,
     ) -> Result<Vec<String>, EvidenceError> {
+        let claim = crate::find_claim(evidence, claim_id)?;
+        self.required_scopes_for_claim(evidence, claim)
+    }
+
+    fn required_scopes_for_claim(
+        &self,
+        evidence: &EvidenceConfig,
+        claim: &registry_notary_core::ClaimDefinition,
+    ) -> Result<Vec<String>, EvidenceError> {
         let mut scopes = Vec::new();
-        collect_claim_required_scopes(evidence, claim_id, &mut scopes)?;
+        collect_claim_required_scopes_for_claim(evidence, claim, &mut scopes)?;
         scopes.sort();
         scopes.dedup();
         Ok(scopes)
@@ -6167,6 +6176,14 @@ fn collect_claim_required_scopes(
     scopes: &mut Vec<String>,
 ) -> Result<(), EvidenceError> {
     let claim = crate::find_claim(evidence, claim_id)?;
+    collect_claim_required_scopes_for_claim(evidence, claim, scopes)
+}
+
+fn collect_claim_required_scopes_for_claim(
+    evidence: &EvidenceConfig,
+    claim: &registry_notary_core::ClaimDefinition,
+    scopes: &mut Vec<String>,
+) -> Result<(), EvidenceError> {
     for binding in claim.source_bindings.values() {
         if let Some(scope) = binding.required_scope.as_deref() {
             scopes.push(scope.to_string());
