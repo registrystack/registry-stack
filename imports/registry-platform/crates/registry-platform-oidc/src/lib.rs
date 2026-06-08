@@ -794,6 +794,7 @@ impl TokenVerifier {
             .collect();
         let data = decode::<Claims>(token, &key, &validation)
             .map_err(|err| map_jwt_error(err, &self.config.issuer, token))?;
+        self.enforce_present_azp(&data.claims)?;
         self.enforce_multi_audience_azp(&data.claims, &audiences)?;
         let matched_client = self.match_client(&data.claims).ok().flatten();
         let scopes = self.scopes(&data.claims);
@@ -900,6 +901,16 @@ impl TokenVerifier {
             if self.allowed_clients.contains(client_id) {
                 return Ok(Some(format!("client_id:{client_id}")));
             }
+        }
+        Err(OidcError::ClientNotAllowed)
+    }
+
+    fn enforce_present_azp(&self, claims: &Claims) -> Result<(), OidcError> {
+        let Some(azp) = claims.azp.as_deref() else {
+            return Ok(());
+        };
+        if self.allowed_clients.is_empty() || self.allowed_clients.contains(azp) {
+            return Ok(());
         }
         Err(OidcError::ClientNotAllowed)
     }
@@ -2071,6 +2082,37 @@ mod tests {
             .verify_related_token(&valid)
             .await
             .expect("azp matching client audience accepts");
+    }
+
+    #[tokio::test]
+    async fn oidc_related_id_token_rejects_wrong_present_azp_for_single_audience_tokens() {
+        let secret = b"registry-platform-id-token-single-aud-azp-test-secret";
+        let verifier = hs256_test_verifier(
+            "https://issuer.example",
+            vec!["registry-api".to_string()],
+            vec!["citizen-client".to_string()],
+            "kid",
+            secret,
+        )
+        .await;
+        let mut claims = test_claims(
+            Some("https://issuer.example"),
+            Some("citizen-client"),
+            Some("subject-1"),
+        );
+        claims.azp = Some("other-client".to_string());
+        let wrong_azp = signed_hs256_token("kid", claims.clone(), secret, Some("JWT"));
+        assert!(matches!(
+            verifier.verify_related_token(&wrong_azp).await,
+            Err(OidcError::ClientNotAllowed)
+        ));
+
+        claims.azp = Some("citizen-client".to_string());
+        let valid = signed_hs256_token("kid", claims, secret, Some("JWT"));
+        verifier
+            .verify_related_token(&valid)
+            .await
+            .expect("single-audience ID token with allowed azp accepts");
     }
 
     #[test]
