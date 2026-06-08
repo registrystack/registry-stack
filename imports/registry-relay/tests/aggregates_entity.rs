@@ -580,6 +580,20 @@ async fn required_filters_are_enforced_for_aggregate_queries() {
     let body: Value = missing.json();
     assert_eq!(body["code"], "aggregate.filter_required");
 
+    for filters in [
+        json!({ "municipality_code": ["mun-1", "mun-2"] }),
+        json!({ "municipality_code": "" }),
+        json!({ "municipality_code": {} }),
+    ] {
+        let rejected = server
+            .post("/v1/datasets/social_registry/aggregates/by_required_municipality/query")
+            .json(&json!({ "filters": filters }))
+            .await;
+        rejected.assert_status_bad_request();
+        let body: Value = rejected.json();
+        assert_eq!(body["code"], "aggregate.filter_required");
+    }
+
     let satisfied = server
         .post("/v1/datasets/social_registry/aggregates/by_required_municipality/query")
         .json(&json!({
