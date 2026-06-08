@@ -332,6 +332,7 @@ class HomepageHtmlTest(unittest.TestCase):
         self.assertIn("/oid4vci/offer/start?credential_configuration_id=", self.html)
         self.assertIn("https://wallet.lab.registrystack.org/signup", self.html)
         self.assertIn("openid-credential-offer://", self.html)
+        self.assertIn("within 120 seconds", self.html)
         self.assertIn("no longer requires a separate issuer PIN", self.html)
 
 
