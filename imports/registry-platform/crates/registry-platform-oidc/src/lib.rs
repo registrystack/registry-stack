@@ -959,9 +959,16 @@ impl TokenVerifier {
             "client_id" => claims.client_id.iter().cloned().collect(),
             "azp" => claims.azp.iter().cloned().collect(),
             "aud" => match claims.aud.as_ref() {
-                Some(Audience::One(value)) => vec![value.clone()],
-                Some(Audience::Many(values)) => values.clone(),
+                Some(Audience::One(value)) if self.config.audiences.contains(value) => {
+                    vec![value.clone()]
+                }
+                Some(Audience::Many(values)) => values
+                    .iter()
+                    .filter(|value| self.config.audiences.contains(*value))
+                    .cloned()
+                    .collect(),
                 None => Vec::new(),
+                _ => Vec::new(),
             },
             _ => Vec::new(),
         }
@@ -1600,10 +1607,7 @@ mod tests {
         };
         assert_eq!(
             verifier.scopes(&claims),
-            vec![
-                "social_protection_registry:rows".to_string(),
-                "other-audience".to_string()
-            ]
+            vec!["social_protection_registry:rows".to_string()]
         );
     }
 
