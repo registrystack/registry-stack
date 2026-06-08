@@ -3,7 +3,7 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use std::time::{Duration, SystemTime};
 
-use http::header::{HeaderName, AUTHORIZATION, CONNECTION, COOKIE};
+use http::header::{HeaderName, AUTHORIZATION, CONNECTION, COOKIE, HOST};
 use http::HeaderMap;
 use thiserror::Error;
 
@@ -133,6 +133,8 @@ pub async fn read_bounded(
 pub struct ProxyHeaderPolicy {
     allow_authorization: bool,
     allow_cookie: bool,
+    allow_forwarding_headers: bool,
+    allow_host: bool,
     private_prefixes: Vec<String>,
 }
 
@@ -144,12 +146,15 @@ impl Default for ProxyHeaderPolicy {
 
 impl ProxyHeaderPolicy {
     /// Create a policy that strips hop-by-hop headers, `Connection`-nominated
-    /// headers, `Authorization`, and `Cookie`.
+    /// headers, caller identity/authority forwarding headers, `Authorization`,
+    /// and `Cookie`.
     #[must_use]
     pub fn strict() -> Self {
         Self {
             allow_authorization: false,
             allow_cookie: false,
+            allow_forwarding_headers: false,
+            allow_host: false,
             private_prefixes: Vec::new(),
         }
     }
@@ -165,6 +170,27 @@ impl ProxyHeaderPolicy {
     #[must_use]
     pub fn allow_cookie(mut self, allow: bool) -> Self {
         self.allow_cookie = allow;
+        self
+    }
+
+    /// Allow or deny forwarding caller-supplied proxy identity headers.
+    ///
+    /// The strict default strips `Forwarded`, `X-Forwarded-*`, and `X-Real-IP`
+    /// so an upstream only receives forwarding metadata injected by a trusted
+    /// proxy boundary.
+    #[must_use]
+    pub fn allow_forwarding_headers(mut self, allow: bool) -> Self {
+        self.allow_forwarding_headers = allow;
+        self
+    }
+
+    /// Allow or deny forwarding the caller's `Host` header.
+    ///
+    /// The strict default strips `Host` so a proxy adapter can set the
+    /// authority expected by its upstream.
+    #[must_use]
+    pub fn allow_host(mut self, allow: bool) -> Self {
+        self.allow_host = allow;
         self
     }
 
@@ -189,7 +215,8 @@ impl ProxyHeaderPolicy {
 ///
 /// The filter removes RFC hop-by-hop headers, headers nominated by the request's
 /// `Connection` header, service private prefixes from [`ProxyHeaderPolicy`],
-/// and caller auth material unless explicitly allowed by the policy.
+/// caller-supplied forwarding/authority metadata, and caller auth material
+/// unless explicitly allowed by the policy.
 #[must_use]
 pub fn filter_proxy_request_headers(headers: &HeaderMap, policy: &ProxyHeaderPolicy) -> HeaderMap {
     let mut out = HeaderMap::with_capacity(headers.len());
@@ -205,6 +232,12 @@ pub fn filter_proxy_request_headers(headers: &HeaderMap, policy: &ProxyHeaderPol
             continue;
         }
         if !policy.allow_cookie && name == COOKIE {
+            continue;
+        }
+        if !policy.allow_forwarding_headers && is_forwarding_header(name) {
+            continue;
+        }
+        if !policy.allow_host && name == HOST {
             continue;
         }
         out.append(name.clone(), value.clone());
@@ -241,6 +274,11 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
             | "transfer-encoding"
             | "upgrade"
     )
+}
+
+fn is_forwarding_header(name: &HeaderName) -> bool {
+    let name = name.as_str();
+    name == "forwarded" || name == "x-real-ip" || name.starts_with("x-forwarded-")
 }
 
 fn connection_header_tokens(headers: &HeaderMap) -> Vec<HeaderName> {
@@ -905,6 +943,49 @@ mod tests {
 
         assert_eq!(filtered[header::AUTHORIZATION], "Bearer caller-token");
         assert_eq!(filtered[header::COOKIE], "session=caller-cookie");
+    }
+
+    #[test]
+    fn proxy_request_policy_strips_spoofable_forwarding_and_authority_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, "trusted.internal".parse().unwrap());
+        headers.insert("forwarded", "for=10.0.0.1;proto=https".parse().unwrap());
+        headers.insert("x-forwarded-for", "10.0.0.1".parse().unwrap());
+        headers.insert("x-forwarded-host", "admin.internal".parse().unwrap());
+        headers.insert("x-forwarded-proto", "https".parse().unwrap());
+        headers.insert("x-forwarded-port", "443".parse().unwrap());
+        headers.insert("x-real-ip", "10.0.0.1".parse().unwrap());
+        headers.insert("x-normal", "forwarded".parse().unwrap());
+
+        let filtered = filter_proxy_request_headers(&headers, &ProxyHeaderPolicy::strict());
+
+        assert!(!filtered.contains_key(header::HOST));
+        assert!(!filtered.contains_key("forwarded"));
+        assert!(!filtered.contains_key("x-forwarded-for"));
+        assert!(!filtered.contains_key("x-forwarded-host"));
+        assert!(!filtered.contains_key("x-forwarded-proto"));
+        assert!(!filtered.contains_key("x-forwarded-port"));
+        assert!(!filtered.contains_key("x-real-ip"));
+        assert_eq!(filtered["x-normal"], "forwarded");
+    }
+
+    #[test]
+    fn proxy_request_policy_can_preserve_forwarding_and_authority_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, "trusted.internal".parse().unwrap());
+        headers.insert("forwarded", "for=10.0.0.1;proto=https".parse().unwrap());
+        headers.insert("x-forwarded-for", "10.0.0.1".parse().unwrap());
+        headers.insert("x-real-ip", "10.0.0.1".parse().unwrap());
+
+        let policy = ProxyHeaderPolicy::strict()
+            .allow_forwarding_headers(true)
+            .allow_host(true);
+        let filtered = filter_proxy_request_headers(&headers, &policy);
+
+        assert_eq!(filtered[header::HOST], "trusted.internal");
+        assert_eq!(filtered["forwarded"], "for=10.0.0.1;proto=https");
+        assert_eq!(filtered["x-forwarded-for"], "10.0.0.1");
+        assert_eq!(filtered["x-real-ip"], "10.0.0.1");
     }
 
     #[test]
