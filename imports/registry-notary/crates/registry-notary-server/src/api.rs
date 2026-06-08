@@ -1244,7 +1244,7 @@ fn is_client_credential_rotation_change(
     current: &StandaloneRegistryNotaryConfig,
     candidate: &StandaloneRegistryNotaryConfig,
 ) -> Result<bool, &'static str> {
-    Ok(equivalent_except_auth(current, candidate)?
+    Ok(equivalent_except_static_credentials(current, candidate)?
         && static_auth_changed(current, candidate)
         && same_credential_ids_and_scopes(&current.auth.api_keys, &candidate.auth.api_keys)
         && same_credential_ids_and_scopes(
@@ -1257,7 +1257,8 @@ fn is_client_access_change(
     current: &StandaloneRegistryNotaryConfig,
     candidate: &StandaloneRegistryNotaryConfig,
 ) -> Result<bool, &'static str> {
-    Ok(equivalent_except_auth(current, candidate)? && static_auth_changed(current, candidate))
+    Ok(equivalent_except_static_credentials(current, candidate)?
+        && static_auth_changed(current, candidate))
 }
 
 fn static_auth_changed(
@@ -1300,7 +1301,7 @@ fn credential_scopes_by_id(
     Some(by_id)
 }
 
-fn equivalent_except_auth(
+fn equivalent_except_static_credentials(
     current: &StandaloneRegistryNotaryConfig,
     candidate: &StandaloneRegistryNotaryConfig,
 ) -> Result<bool, &'static str> {
@@ -1308,14 +1309,15 @@ fn equivalent_except_auth(
         serde_json::to_value(current).map_err(|_| "current config could not be normalized")?;
     let mut candidate =
         serde_json::to_value(candidate).map_err(|_| "candidate config could not be normalized")?;
-    normalize_auth(&mut current);
-    normalize_auth(&mut candidate);
+    normalize_static_credentials(&mut current);
+    normalize_static_credentials(&mut candidate);
     Ok(current == candidate)
 }
 
-fn normalize_auth(value: &mut Value) {
-    if let Some(object) = value.as_object_mut() {
-        object.insert("auth".to_string(), json!({}));
+fn normalize_static_credentials(value: &mut Value) {
+    if let Some(auth) = value.get_mut("auth").and_then(Value::as_object_mut) {
+        auth.remove("api_keys");
+        auth.remove("bearer_tokens");
     }
 }
 
@@ -7750,6 +7752,124 @@ mod tests {
             assert_eq!(result, ApplyReportResult::RejectedRollback);
             assert_eq!(status, StatusCode::CONFLICT);
         }
+    }
+
+    fn classifier_config() -> StandaloneRegistryNotaryConfig {
+        serde_json::from_value(json!({
+            "evidence": {
+                "enabled": true
+            },
+            "auth": {
+                "mode": "api_key",
+                "api_keys": [{
+                    "id": "primary-api-key",
+                    "fingerprint": {
+                        "provider": "env",
+                        "name": "PRIMARY_API_KEY_HASH",
+                        "commitment": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                    },
+                    "scopes": ["claims:read"]
+                }],
+                "bearer_tokens": [{
+                    "id": "primary-bearer-token",
+                    "fingerprint": {
+                        "provider": "env",
+                        "name": "PRIMARY_BEARER_TOKEN_HASH",
+                        "commitment": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                    },
+                    "scopes": ["claims:write"]
+                }]
+            }
+        }))
+        .expect("classifier config parses")
+    }
+
+    #[test]
+    fn client_access_change_allows_api_key_and_bearer_token_value_changes() {
+        let current = classifier_config();
+
+        let mut api_key_candidate = current.clone();
+        api_key_candidate.auth.api_keys[0].fingerprint.commitment =
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222".to_string();
+        assert!(is_client_access_change(&current, &api_key_candidate)
+            .expect("api key change classifies"));
+        assert!(
+            is_client_credential_rotation_change(&current, &api_key_candidate)
+                .expect("api key rotation classifies")
+        );
+
+        let mut bearer_candidate = current.clone();
+        bearer_candidate.auth.bearer_tokens[0]
+            .fingerprint
+            .commitment =
+            "sha256:3333333333333333333333333333333333333333333333333333333333333333".to_string();
+        assert!(is_client_access_change(&current, &bearer_candidate)
+            .expect("bearer token change classifies"));
+        assert!(
+            is_client_credential_rotation_change(&current, &bearer_candidate)
+                .expect("bearer token rotation classifies")
+        );
+    }
+
+    #[test]
+    fn client_access_change_rejects_governed_auth_changes_with_credentials() {
+        let mut current = classifier_config();
+        current.auth.oidc = Some(
+            serde_json::from_value(json!({
+                "issuer": "https://issuer.example",
+                "jwks_uri": "https://issuer.example/jwks",
+                "audiences": ["registry-notary"],
+                "allowed_clients": ["client-a"]
+            }))
+            .expect("OIDC config parses"),
+        );
+
+        let mut access_token_signing_candidate = current.clone();
+        access_token_signing_candidate.auth.api_keys[0]
+            .fingerprint
+            .commitment =
+            "sha256:4444444444444444444444444444444444444444444444444444444444444444".to_string();
+        access_token_signing_candidate
+            .auth
+            .access_token_signing
+            .enabled = true;
+        access_token_signing_candidate
+            .auth
+            .access_token_signing
+            .issuer = "https://notary.example".to_string();
+        access_token_signing_candidate
+            .auth
+            .access_token_signing
+            .audiences = vec!["registry-notary".to_string()];
+        access_token_signing_candidate
+            .auth
+            .access_token_signing
+            .signing_key_id = "access-token-key".to_string();
+        assert!(
+            !is_client_access_change(&current, &access_token_signing_candidate)
+                .expect("access-token signing candidate classifies")
+        );
+
+        let mut oidc_candidate = current.clone();
+        oidc_candidate.auth.bearer_tokens[0].fingerprint.commitment =
+            "sha256:5555555555555555555555555555555555555555555555555555555555555555".to_string();
+        oidc_candidate
+            .auth
+            .oidc
+            .as_mut()
+            .expect("OIDC config exists")
+            .allowed_clients
+            .push("client-b".to_string());
+        assert!(
+            !is_client_access_change(&current, &oidc_candidate).expect("OIDC candidate classifies")
+        );
+
+        let mut mode_candidate = current.clone();
+        mode_candidate.auth.api_keys[0].fingerprint.commitment =
+            "sha256:6666666666666666666666666666666666666666666666666666666666666666".to_string();
+        mode_candidate.auth.mode = "oidc".to_string();
+        assert!(!is_client_access_change(&current, &mode_candidate)
+            .expect("auth mode candidate classifies"));
     }
 
     #[test]
