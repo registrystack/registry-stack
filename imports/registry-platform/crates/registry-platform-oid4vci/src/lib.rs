@@ -10,6 +10,7 @@ use registry_platform_replay::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::fmt;
 use std::time::Duration;
 use thiserror::Error;
 
@@ -196,12 +197,25 @@ impl TxCode {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialOffer {
     pub credential_issuer: String,
     pub credential_configuration_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub grants: BTreeMap<String, Value>,
+}
+
+impl fmt::Debug for CredentialOffer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CredentialOffer")
+            .field("credential_issuer", &self.credential_issuer)
+            .field(
+                "credential_configuration_ids",
+                &self.credential_configuration_ids,
+            )
+            .field("grants", &Redacted)
+            .finish()
+    }
 }
 
 impl CredentialOffer {
@@ -265,10 +279,19 @@ pub struct NonceRequest {
     pub credential_configuration_id: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NonceResponse {
     pub c_nonce: String,
     pub c_nonce_expires_in: u64,
+}
+
+impl fmt::Debug for NonceResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NonceResponse")
+            .field("c_nonce", &Redacted)
+            .field("c_nonce_expires_in", &self.c_nonce_expires_in)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -290,7 +313,7 @@ pub struct CredentialRequestProof {
     pub jwt: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialResponse {
     pub credential: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -301,7 +324,18 @@ pub struct CredentialResponse {
     pub c_nonce_expires_in: Option<u64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl fmt::Debug for CredentialResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CredentialResponse")
+            .field("credential", &Redacted)
+            .field("format", &self.format)
+            .field("c_nonce", &self.c_nonce.as_ref().map(|_| Redacted))
+            .field("c_nonce_expires_in", &self.c_nonce_expires_in)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenRequest {
     pub grant_type: String,
     #[serde(
@@ -314,7 +348,20 @@ pub struct TokenRequest {
     pub tx_code: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl fmt::Debug for TokenRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TokenRequest")
+            .field("grant_type", &self.grant_type)
+            .field(
+                "pre_authorized_code",
+                &self.pre_authorized_code.as_ref().map(|_| Redacted),
+            )
+            .field("tx_code", &self.tx_code.as_ref().map(|_| Redacted))
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenResponse {
     pub access_token: String,
     pub token_type: String,
@@ -324,6 +371,26 @@ pub struct TokenResponse {
     pub c_nonce: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub c_nonce_expires_in: Option<u64>,
+}
+
+impl fmt::Debug for TokenResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TokenResponse")
+            .field("access_token", &Redacted)
+            .field("token_type", &self.token_type)
+            .field("expires_in", &self.expires_in)
+            .field("c_nonce", &self.c_nonce.as_ref().map(|_| Redacted))
+            .field("c_nonce_expires_in", &self.c_nonce_expires_in)
+            .finish()
+    }
+}
+
+struct Redacted;
+
+impl fmt::Debug for Redacted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("\"<redacted>\"")
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1225,6 +1292,56 @@ mod tests {
             serde_json::from_value(value).expect("round-trip deserializes");
         assert_eq!(round_tripped.access_token, "access-token-abc");
         assert_eq!(round_tripped.c_nonce.as_deref(), Some("c-nonce-xyz"));
+    }
+
+    #[test]
+    fn debug_redacts_oid4vci_secrets() {
+        let offer = CredentialOffer::pre_authorized_code(
+            "https://issuer.example",
+            vec!["person".to_string()],
+            "pre-auth-code-secret",
+            Some(TxCode::new(6, Some("tx-code-secret".to_string()))),
+        );
+        let token_request = TokenRequest {
+            grant_type: PRE_AUTHORIZED_CODE_GRANT_TYPE.to_string(),
+            pre_authorized_code: Some("pre-auth-code-secret".to_string()),
+            tx_code: Some("tx-code-secret".to_string()),
+        };
+        let token_response = TokenResponse {
+            access_token: "access-token-secret".to_string(),
+            token_type: "Bearer".to_string(),
+            expires_in: Some(300),
+            c_nonce: Some("c-nonce-secret".to_string()),
+            c_nonce_expires_in: Some(120),
+        };
+        let nonce_response = NonceResponse {
+            c_nonce: "nonce-secret".to_string(),
+            c_nonce_expires_in: 120,
+        };
+        let credential_response = CredentialResponse {
+            credential: "credential-secret".to_string(),
+            format: Some(SD_JWT_VC_FORMAT.to_string()),
+            c_nonce: Some("credential-nonce-secret".to_string()),
+            c_nonce_expires_in: Some(120),
+        };
+
+        let debug = format!(
+            "{offer:?} {token_request:?} {token_response:?} {nonce_response:?} {credential_response:?}"
+        );
+
+        for secret in [
+            "pre-auth-code-secret",
+            "tx-code-secret",
+            "access-token-secret",
+            "c-nonce-secret",
+            "nonce-secret",
+            "credential-secret",
+            "credential-nonce-secret",
+        ] {
+            assert!(!debug.contains(secret), "debug leaked {secret}");
+        }
+        assert!(debug.contains("<redacted>"));
+        assert!(debug.contains("https://issuer.example"));
     }
 
     #[test]
