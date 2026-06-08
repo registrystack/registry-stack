@@ -82,7 +82,7 @@ services:
         apk add --no-cache git >/dev/null
         rm -rf /tmp/repo
         git clone --depth 1 --branch "$$CONFIG_REPO_REF" "$$CONFIG_REPO_URL" /tmp/repo
-        for d in relay notary data pginit openfn-tmpl openfn-jobs static-scripts lab-homepage static-content; do
+        for d in relay notary data pginit openfn-tmpl openfn-jobs static-scripts lab-homepage; do
           mkdir -p "/out/$$d"
           find "/out/$$d" -mindepth 1 -delete 2>/dev/null || true
         done
@@ -97,38 +97,6 @@ services:
         cp -a /tmp/repo/scripts/static-metadata-server.py /out/static-scripts/
         cp -a /tmp/repo/scripts/lab-homepage-server.py /out/static-scripts/
         cp -a /tmp/repo/config/lab-homepage/. /out/lab-homepage/
-        cp -a /tmp/repo/static-metadata/. /out/static-content/
-        if [ ! -f /out/static-content/metadata/index.json ]; then
-          mkdir -p \
-            /out/static-content/.well-known \
-            /out/static-content/metadata/dcat \
-            /out/static-content/metadata/forms/health_linked_child_support_form
-          cat > /out/static-content/.well-known/api-catalog <<'JSON'
-        {"linkset":[{"anchor":"https://metadata.lab.registrystack.org/","describedby":[{"href":"/metadata/index.json","type":"application/json"}],"item":[{"href":"/metadata/cpsv-ap.jsonld","type":"application/ld+json"},{"href":"/metadata/evidence-offerings.json","type":"application/json"},{"href":"/metadata/policies.jsonld","type":"application/ld+json"}]}]}
-        JSON
-          cat > /out/static-content/.well-known/registry-manifest.json <<'JSON'
-        {"schema_version":"registry-manifest/v1","service_catalogues":[{"id":"cpsv-ap","url":"/metadata/cpsv-ap.jsonld","aliases":["/metadata/cpsv-ap"]},{"id":"bregdcat-ap","url":"/metadata/dcat/bregdcat-ap","aliases":[]}],"metadata_index":"/metadata/index.json"}
-        JSON
-          cat > /out/static-content/metadata/index.json <<'JSON'
-        {"schema_version":"registry-manifest/v1","service_catalogues":[{"id":"cpsv-ap","url":"/metadata/cpsv-ap.jsonld","aliases":["/metadata/cpsv-ap"]},{"id":"bregdcat-ap","url":"/metadata/dcat/bregdcat-ap","aliases":[]}],"evidence_offerings":{"url":"/metadata/evidence-offerings.json"},"policies":{"url":"/metadata/policies.jsonld"},"form_schemas":[{"form":"health_linked_child_support_form","url":"/metadata/forms/health_linked_child_support_form/schema.json"}]}
-        JSON
-          cat > /out/static-content/metadata/evidence-offerings.json <<'JSON'
-        {"evidence_offerings":[{"id":"civil_child_status_evidence_service","title":"Civil child status evidence service"},{"id":"household_support_evidence_service","title":"Household support evidence service"},{"id":"health_service_availability_evidence_service","title":"Health service availability evidence service"},{"id":"climate_smart_input_voucher_service","title":"Climate-smart input voucher evidence service"}]}
-        JSON
-          cat > /out/static-content/metadata/policies.jsonld <<'JSON'
-        {"@context":{"registry_manifest":"https://registry-manifest.dev/ns#"},"@graph":[{"@id":"#policy-nagdi-agriculture-governance-controls","@type":"odrl:Policy","registry_manifest:allowedPurposes":["https://demo.example.gov/purpose/nagdi/climate-smart-input-support","https://demo.example.gov/purpose/nagdi/livestock-movement-permit-review","https://demo.example.gov/purpose/nagdi/agricultural-market-sizing"],"registry_manifest:minimumCellCount":5,"registry_manifest:geographyFloor":"district","registry_manifest:onwardSharingAllowed":false,"registry_manifest:automatedDecisionAllowed":false,"registry_manifest:auditRequired":true}]}
-        JSON
-          cat > /out/static-content/metadata/cpsv-ap.jsonld <<'JSON'
-        {"@context":{"cpsv":"http://purl.org/vocab/cpsv#"},"@graph":[{"@id":"https://demo.example.gov/services/health-linked-child-support","@type":["cpsv:PublicService"],"title":"Health-linked child support"}]}
-        JSON
-          cp /out/static-content/metadata/cpsv-ap.jsonld /out/static-content/metadata/cpsv-ap
-          cat > /out/static-content/metadata/dcat/bregdcat-ap <<'JSON'
-        {"@context":{"dcat":"http://www.w3.org/ns/dcat#"},"@graph":[]}
-        JSON
-          cat > /out/static-content/metadata/forms/health_linked_child_support_form/schema.json <<'JSON'
-        {"\u0024schema":"https://json-schema.org/draft/2020-12/schema","title":"Health-linked child support form","type":"object","properties":{"national_id":{"type":"string"}}}
-        JSON
-        fi
         for d in civil-cache social-cache health-cache; do
           mkdir -p "/out/$$d"
           chown -R 65532:65532 "/out/$$d"
@@ -143,7 +111,6 @@ services:
       - cfg-openfn-jobs:/out/openfn-jobs
       - cfg-static-scripts:/out/static-scripts
       - cfg-lab-homepage:/out/lab-homepage
-      - static-content:/out/static-content
       - civil-registry-cache:/out/civil-cache
       - social-protection-registry-cache:/out/social-cache
       - health-registry-cache:/out/health-cache
@@ -262,25 +229,14 @@ services:
       - health-registry-cache:/var/lib/registry-relay/cache
 
   static-metadata-publisher:
-    image: ${REGISTRY_LAB_STATIC_METADATA_IMAGE:-python:3.12.3-slim-bookworm}
-    command: ["python", "/opt/lab-scripts/static-metadata-server.py", "--port", "8080", "--host", "0.0.0.0", "--directory", "/srv/static"]
+    image: ${REGISTRY_LAB_STATIC_METADATA_IMAGE:-ghcr.io/jeremi/registry-lab-static-metadata:main}
     restart: unless-stopped
     expose:
       - "8080"
-    depends_on:
-      config-loader:
-        condition: service_completed_successfully
-    volumes:
-      - cfg-static-scripts:/opt/lab-scripts:ro
-      - static-content:/srv/static:ro
     healthcheck:
-      # Liveness only: the server is alive whenever it answers. The published
-      # bundle (/.well-known/registry-manifest.json) is generated separately by
-      # publish-static-metadata.sh and is not seeded here yet, so probing the
-      # root keeps the check honest without requiring that content to exist.
       test:
         - CMD-SHELL
-        - "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8080/\", timeout=2).read()'"
+        - "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8080/.well-known/registry-manifest.json\", timeout=2).read()'"
       interval: 30s
       timeout: 5s
       retries: 3
@@ -450,6 +406,5 @@ volumes:
   cfg-openfn-jobs:
   cfg-static-scripts:
   cfg-lab-homepage:
-  static-content:
   opencrvs-notary-config:
   notary-config-state:

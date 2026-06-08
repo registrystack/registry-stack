@@ -1,0 +1,38 @@
+# syntax=docker/dockerfile:1.7
+
+FROM rust:1-bookworm AS publisher
+
+WORKDIR /app
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends openssl python3 && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=registry_manifest_src /Cargo.toml /app/vendor/registry-manifest/
+COPY --from=registry_manifest_src /Cargo.lock /app/vendor/registry-manifest/
+COPY --from=registry_manifest_src /crates /app/vendor/registry-manifest/crates
+COPY --from=registry_relay_src /demo/scripts /app/vendor/registry-relay/demo/scripts
+COPY scripts/check-service-first-deps.sh scripts/generate-demo-secrets.py scripts/publish-static-metadata.sh /app/scripts/
+COPY config/static-metadata /app/config/static-metadata
+COPY static-metadata/.gitignore /app/static-metadata/.gitignore
+
+ENV REGISTRY_MANIFEST_REPO=/app/vendor/registry-manifest
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/vendor/registry-manifest/target \
+    python3 scripts/generate-demo-secrets.py --env-file /app/.env >/dev/null && \
+    scripts/publish-static-metadata.sh /app/config/static-metadata/metadata.yaml /app/static-metadata/metadata && \
+    test -f /app/static-metadata/.well-known/api-catalog && \
+    test -f /app/static-metadata/.well-known/registry-manifest.json && \
+    test -f /app/static-metadata/metadata/index.json
+
+FROM python:3.12.3-slim-bookworm AS runtime
+
+COPY scripts/static-metadata-server.py /usr/local/bin/static-metadata-server.py
+COPY --from=publisher /app/static-metadata /srv/static
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/.well-known/registry-manifest.json', timeout=2).read()"]
+
+CMD ["python", "/usr/local/bin/static-metadata-server.py", "--port", "8080", "--host", "0.0.0.0", "--directory", "/srv/static"]

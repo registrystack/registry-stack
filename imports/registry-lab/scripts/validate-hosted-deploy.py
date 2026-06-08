@@ -259,6 +259,13 @@ def validate_artifacts(
         issues.extend(validate_hosted_openapi_policy(artifact, services, root))
         issues.extend(validate_config_loader_ref(artifact, services))
         issues.extend(validate_config_loader_hosted_outputs(artifact, services))
+        issues.extend(
+            validate_static_metadata_publisher(
+                artifact,
+                services,
+                artifact_texts.get(artifact, ""),
+            )
+        )
 
     issues.extend(validate_cross_artifact_contracts(artifacts, artifact_roots))
     return sorted(dedupe_issues(issues), key=lambda issue: (issue.artifact, issue.path, issue.code))
@@ -599,33 +606,6 @@ def validate_config_loader_hosted_outputs(
     command_text = shell_command_text(config_loader.get("command"))
     volumes = config_loader.get("volumes") or []
     issues = []
-    if (
-        not has_service_volume(volumes, "static-content", "/out/static-content")
-        or "/tmp/repo/static-metadata/." not in command_text
-        or "/out/static-content/" not in command_text
-        or not all(
-            token in command_text
-            for token in (
-                "/out/static-content/.well-known/api-catalog",
-                "/out/static-content/.well-known/registry-manifest.json",
-                "/out/static-content/metadata/index.json",
-                "/out/static-content/metadata/evidence-offerings.json",
-                "/out/static-content/metadata/policies.jsonld",
-                "/out/static-content/metadata/cpsv-ap.jsonld",
-                "/out/static-content/metadata/dcat/bregdcat-ap",
-                "/out/static-content/metadata/forms/health_linked_child_support_form/schema.json",
-            )
-        )
-    ):
-        issues.append(
-            Issue(
-                "missing-static-content-seed",
-                artifact,
-                "services.config-loader",
-                "hosted config-loader must seed the static metadata content volume",
-            )
-        )
-
     if not all(
         has_service_volume(volumes, source, target)
         for source, target in (
@@ -646,6 +626,52 @@ def validate_config_loader_hosted_outputs(
                 artifact,
                 "services.config-loader",
                 "hosted Relay cache volumes must be writable by distroless UID/GID 65532",
+            )
+        )
+    return issues
+
+
+def validate_static_metadata_publisher(
+    artifact: str,
+    services: dict[str, Any],
+    raw_text: str = "",
+) -> list[Issue]:
+    if artifact != "registry-lab":
+        return []
+    service = services.get("static-metadata-publisher")
+    if not isinstance(service, dict):
+        return []
+    issues = []
+    image = str(service.get("image", ""))
+    if (
+        "REGISTRY_LAB_STATIC_METADATA_IMAGE" not in image
+        and "REGISTRY_LAB_STATIC_METADATA_IMAGE" not in raw_text
+    ):
+        issues.append(
+            Issue(
+                "static-metadata-image-env-var",
+                artifact,
+                "services.static-metadata-publisher.image",
+                "hosted static metadata must run the generated registry-manifest image",
+            )
+        )
+    if service_mounts_target(service, "/srv/static"):
+        issues.append(
+            Issue(
+                "static-metadata-volume-mount",
+                artifact,
+                "services.static-metadata-publisher.volumes",
+                "hosted static metadata content must come from the generated image, not a Coolify volume",
+            )
+        )
+    healthcheck_text = json.dumps(service.get("healthcheck"), sort_keys=True)
+    if "/.well-known/registry-manifest.json" not in healthcheck_text:
+        issues.append(
+            Issue(
+                "static-metadata-healthcheck",
+                artifact,
+                "services.static-metadata-publisher.healthcheck",
+                "static metadata healthcheck must require the generated registry manifest",
             )
         )
     return issues

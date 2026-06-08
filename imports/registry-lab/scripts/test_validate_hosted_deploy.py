@@ -107,16 +107,29 @@ class HostedDeployValidationTest(unittest.TestCase):
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "stale-config-repo-ref")
 
-    def test_rejects_config_loader_that_does_not_seed_static_content(self) -> None:
+    def test_rejects_static_metadata_publisher_without_generated_image(self) -> None:
         compose = self._valid_registry_lab()
-        compose["services"]["config-loader"]["command"] = ["echo no static metadata"]
-        compose["services"]["config-loader"]["volumes"] = [
-            volume
-            for volume in compose["services"]["config-loader"]["volumes"]
-            if not volume.startswith("static-content:")
+        compose["services"]["static-metadata-publisher"][
+            "image"
+        ] = "python:3.12.3-slim-bookworm"
+        issues = self._validate(compose, self._valid_esignet())
+        self.assertIssue(issues, "static-metadata-image-env-var")
+
+    def test_rejects_static_metadata_publisher_volume_content(self) -> None:
+        compose = self._valid_registry_lab()
+        compose["services"]["static-metadata-publisher"]["volumes"] = [
+            "static-content:/srv/static:ro"
         ]
         issues = self._validate(compose, self._valid_esignet())
-        self.assertIssue(issues, "missing-static-content-seed")
+        self.assertIssue(issues, "static-metadata-volume-mount")
+
+    def test_rejects_static_metadata_healthcheck_without_manifest_probe(self) -> None:
+        compose = self._valid_registry_lab()
+        compose["services"]["static-metadata-publisher"]["healthcheck"] = {
+            "test": ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8080/\").read()'"]
+        }
+        issues = self._validate(compose, self._valid_esignet())
+        self.assertIssue(issues, "static-metadata-healthcheck")
 
     def test_rejects_config_loader_that_does_not_prepare_relay_cache_volumes(self) -> None:
         compose = self._valid_registry_lab()
@@ -516,15 +529,6 @@ oid4vci:
                     "environment": {"CONFIG_REPO_REF": "${CONFIG_REPO_REF:-main}"},
                     "command": [
                         """
-cp -a /tmp/repo/static-metadata/. /out/static-content/
-cat > /out/static-content/.well-known/api-catalog
-cat > /out/static-content/.well-known/registry-manifest.json
-cat > /out/static-content/metadata/index.json
-cat > /out/static-content/metadata/evidence-offerings.json
-cat > /out/static-content/metadata/policies.jsonld
-cat > /out/static-content/metadata/cpsv-ap.jsonld
-cat > /out/static-content/metadata/dcat/bregdcat-ap
-cat > /out/static-content/metadata/forms/health_linked_child_support_form/schema.json
 for d in civil-cache social-cache health-cache; do
   mkdir -p "/out/$d"
   chown -R 65532:65532 "/out/$d"
@@ -532,7 +536,6 @@ done
 """
                     ],
                     "volumes": [
-                        "static-content:/out/static-content",
                         "civil-registry-cache:/out/civil-cache",
                         "social-protection-registry-cache:/out/social-cache",
                         "health-registry-cache:/out/health-cache",
@@ -577,8 +580,14 @@ done
                     "expose": ["8080"],
                 },
                 "static-metadata-publisher": {
-                    "image": "python:3.12.3-slim-bookworm",
+                    "image": "${REGISTRY_LAB_STATIC_METADATA_IMAGE:-ghcr.io/jeremi/registry-lab-static-metadata:main}",
                     "expose": ["8080"],
+                    "healthcheck": {
+                        "test": [
+                            "CMD-SHELL",
+                            "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8080/.well-known/registry-manifest.json\", timeout=2).read()'",
+                        ]
+                    },
                 },
                 "lab-homepage": {
                     "image": "python:3.12.3-slim-bookworm",

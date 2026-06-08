@@ -4,10 +4,19 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 demo_dir="$(cd "${script_dir}/.." && pwd)"
 
-manifest="${1:-"${demo_dir}/config/static-metadata/metadata.yaml"}"
-out_dir="${2:-"${demo_dir}/static-metadata/metadata"}"
+resolve_path() {
+  local raw="$1"
+  if [[ "${raw}" = /* ]]; then
+    printf '%s\n' "${raw}"
+  else
+    printf '%s\n' "${demo_dir}/${raw}"
+  fi
+}
+
+manifest="$(resolve_path "${1:-"config/static-metadata/metadata.yaml"}")"
+out_dir="$(resolve_path "${2:-"static-metadata/metadata"}")"
 public_root="$(dirname "${out_dir}")"
-env_file="${REGISTRY_LAB_ENV_FILE:-"${demo_dir}/.env"}"
+env_file="$(resolve_path "${REGISTRY_LAB_ENV_FILE:-".env"}")"
 
 if [[ ! -f "${manifest}" ]]; then
   echo "static metadata manifest not found: ${manifest}" >&2
