@@ -1,6 +1,6 @@
 ---
 title: First run with Registry Lab
-description: Run the Registry Lab compose demo on a laptop, verify the full service topology, and trace the three narrated demo scenarios.
+description: Run the Registry Lab compose demo on a laptop, verify the topology with the smoke suite, and walk the three narrated scenarios, including credential issuance and a cross-authority claim.
 status: current
 owner: registry-docs
 source_repos:
@@ -8,311 +8,342 @@ source_repos:
   - registry-platform
   - registry-relay
   - registry-notary
-last_reviewed: "2026-06-05"
+last_reviewed: "2026-06-07"
 doc_type: tutorial
 locale: en
 standards_referenced:
   - cpsv-ap
   - cccev
   - openapi
+  - sd-jwt-vc
 ---
 
 [Registry Lab](../../products/registry-lab/) is the compose-based local demo for the registry stack.
-It wires Registry Platform source crates, three [Registry Relay](../../products/registry-relay/) instances,
-four [Registry Notary](../../products/registry-notary/) instances, live Postgres and Zitadel services,
-a private OpenFn sidecar path, a static metadata publisher, and narrated demo clients into a single
-topology you can run on a laptop.
+It wires Registry Platform source crates, three [Registry Relay](../../products/registry-relay/)
+instances, the [Registry Notary](../../products/registry-notary/) instances, live Postgres and
+Zitadel services, a private OpenFn sidecar path, a static metadata publisher, and narrated demo
+clients into a single topology that runs on a laptop.
 
-This tutorial brings the topology up, verifies it with smoke tests, runs the narrated demo client,
-and explains what each of the three demo scenarios exercises across the Relay and Notary services.
+This tutorial brings the topology up with the `just` recipes the lab provides, verifies it with the
+smoke suite, runs the narrated demo client, and explains what each of the three scenarios exercises
+across the Relay and Notary services. If you only want the shortest path to a single Relay read and a
+single Notary evaluation, start with [Your first call](../../start/your-first-call/) instead; this
+page is the full tour.
 
 ## Prerequisites
 
-- Docker with Compose v2.20 or later (required for `additional_contexts` support in the Dockerfiles).
-- `uv` CLI installed (used to run `scripts/generate-fixtures.py`, which is a PEP 723 inline-dependency script).
-- `python3` and `openssl` on your PATH (used by `scripts/generate-demo-secrets.py` and `scripts/demo-flow.py`).
-- GitHub SSH access for submodules, or equivalent local Git configuration for the `vendor/*` submodule URLs.
-- No production secrets in the demo environment. The generated `.env` uses inert local credentials only.
-- A sibling `../registry-notary` checkout when running the OpenFn sidecar path before the
-  `vendor/registry-notary` submodule includes `crates/registry-notary-openfn-sidecar`.
+- Docker with Compose v2.20 or later (required for the `additional_contexts` build feature the
+  Dockerfiles use).
+- The [`just`](https://github.com/casey/just) command runner. Every step below is a `just` recipe.
+- `uv`, `python3`, and `openssl` on your PATH. `just generate` runs a `uv`-managed fixture script
+  (PEP 723 inline dependencies), a stdlib Python secrets script, and an `openssl`-based TLS step.
+- `git` with GitHub SSH access. The repository and its `vendor/*` submodules clone over SSH.
+- No production secrets. `just generate` writes a `.env` of inert local credentials only.
+
+## Get the repository
+
+Clone with submodules, or run `just setup` after a plain clone to initialise them.
+
+```sh
+git clone --recurse-submodules git@github.com:jeremi/registry-lab.git
+cd registry-lab
+```
 
 ## Steps
 
-Run the following commands in order from the `registry-lab` checkout root.
+Run these from the `registry-lab` checkout, in order.
 
-Step 1 uses `uv run` because `generate-fixtures.py` declares inline PEP 723 dependencies. Step 2 is a stdlib-only Python script; later steps are plain shell or Docker commands.
-
-1. Generate synthetic fixture data for civil, social protection, and health registries:
+1. Generate fixtures, demo credentials, Postgres TLS material, and the static metadata bundle:
 
     ```sh
-    uv run scripts/generate-fixtures.py
+    just generate
     ```
 
-2. Generate the local demo `.env` with credential hashes and JWK issuer keys:
+2. Build the container images (several minutes on the first run; do not abort if it appears to pause):
 
     ```sh
-    scripts/generate-demo-secrets.py
+    just build
     ```
 
-3. Publish the static metadata bundle (requires Step 1 to have completed, so the fixture data is present):
+3. Start the default demo topology in the background:
 
     ```sh
-    scripts/publish-static-metadata.sh
+    just up
     ```
 
-4. Build the compose images:
+4. Run the smoke suite, the primary verification (over 100 endpoint, authorization, audit, and credential assertions):
 
     ```sh
-    docker compose -f compose.yaml build
+    just smoke
     ```
 
-    Steps 4-5 (image build) can take several minutes on first run. Don't abort if it appears to pause.
-
-5. Start all background services:
+5. Run the narrated demo client, which writes evidence artifacts to `output/`:
 
     ```sh
-    docker compose -f compose.yaml up -d
+    just client
     ```
 
-6. Run the smoke tests:
-
-    ```sh
-    scripts/smoke.sh
-    ```
-
-7. Run the narrated demo client flow:
-
-    ```sh
-    docker compose -f compose.yaml --profile client run --rm demo-client
-    ```
-
-8. Inspect the service-first graph in Registry Atlas:
-
-    ```sh
-    cd ../registry-atlas
-    pnpm dev
-    ```
-
-    In the Atlas UI, use the Registry Lab Core Public Service Vocabulary Application Profile
-    (CPSV-AP) service catalogue demo chip, or enter
-    `http://127.0.0.1:4331/metadata/cpsv-ap.jsonld` and open the Services tab.
+`just up` starts the civil, social protection, and health Relay instances, the civil, social
+protection, and shared eligibility Notary instances, Postgres, Zitadel, the OpenFn sidecar services,
+and the static metadata publisher. The DHIS2, OpenCRVS, and agriculture services stay behind compose
+profiles and do not start by default.
 
 ## Service topology
 
-The compose file starts three Relay instances, four Notary instances, live Postgres and Zitadel services,
-a private OpenFn sidecar, a static metadata publisher, and a narrated demo client.
-For the full service inventory with host ports and network layout, see the
-[Registry Lab documentation](../../products/registry-lab/).
+The default topology runs three Relay instances (civil `4311`, social protection `4312`, health
+`4313`), the core Notary instances (civil `4321`, social protection `4322`, shared eligibility
+`4323`), live Postgres and Zitadel services, the OpenFn sidecar, the static metadata publisher
+(`4331`), and a profile-gated narrated demo client. For the full service inventory with host ports
+and network layout, see the [Registry Lab documentation](../../products/registry-lab/).
 
 ## Expected output
 
-After step 5, all Relay and Notary services start in the background.
-`scripts/smoke.sh` runs more than 30 checks, including:
+After `just up`, all Relay and Notary services run in the background. `just smoke` then runs more
+than 100 checks, including:
 
-- Health and readiness endpoints (`/health`, `/ready`) on all three Relay instances.
-- Discovery endpoint (`/.well-known/evidence-service`) on all three core Notary instances,
-  with bearer-token and `x-api-key` coverage.
-- OpenAPI endpoints (`/openapi.json`) on all Relay and Notary instances.
-- Authorization scope denial responses (403 with `auth.scope_denied`) for out-of-scope credentials.
+- Health and readiness endpoints (`/healthz`, `/ready`) on all three Relay instances.
+- Discovery endpoint (`/.well-known/evidence-service`) on the core Notary instances, with
+  bearer-token and `x-api-key` coverage.
+- API docs (`/docs`) and OpenAPI endpoints (`/openapi.json`) on the Relay and Notary instances without demo credentials.
+- Authorization scope-denial responses (`403` with `auth.scope_denied`) for out-of-scope
+  credentials.
 - Positive row-read and aggregate-read responses on the social protection Relay.
-- Evidence evaluation (`POST /claims/evaluate`) on civil, social protection, and shared eligibility notaries.
-- A cross-authority claim result with `source_count >= 2` on the shared eligibility notary.
+- Evidence evaluation (`POST /v1/evaluations`) on the civil, social protection, and shared
+  eligibility Notary instances.
+- A cross-authority claim result with `source_count >= 2` on the shared eligibility Notary.
+- A stable `409` with `evidence.not_available` for an unknown subject.
 - Credential-bound evaluation returning `application/dc+sd-jwt`.
-- Audit log assertions, including a check that generated raw secrets are not emitted in service logs.
+- Audit-log assertions, including a check that generated raw secrets are never emitted in service
+  logs.
 
-The demo client (step 7) runs three narrated scenarios and writes artifacts to `output/`.
-The Atlas inspection step (step 8) shows the health-linked child support public service, grouped Core
-Criterion and Core Evidence Vocabulary (CCCEV) evidence options, provider routes, and the linked form.
-All requests use the correlation ID `decentralized-demo-correlation-001` by default
-(overridable via the `DEMO_CORRELATION_ID` environment variable).
+`just client` (the demo client) runs three narrated scenarios and writes numbered artifacts to
+`output/`. Every request carries a correlation id as `x-request-id`, so the scenario steps are
+traceable in the Relay and Notary logs. The default correlation id is
+`decentralized-demo-correlation-001`; override it with the `DEMO_CORRELATION_ID` environment
+variable:
+
+```sh
+DEMO_CORRELATION_ID=my-trace-id just client
+```
 
 ## What the demo client does
 
-The demo client in step 7 runs three narrated scenarios in order, connecting to services via their
-compose DNS names (for example, `http://civil-registry-relay:8080`) and exiting when done.
-Every request carries the correlation ID as `x-request-id`, so the scenario steps are traceable in
-the Relay and Notary logs.
-To override the correlation ID:
-
-```sh
-DEMO_CORRELATION_ID=my-trace-id docker compose -f compose.yaml --profile client run --rm demo-client
-```
+The demo client runs three narrated scenarios in order, connecting to services by their compose DNS
+names (for example, `http://civil-notary:8080`) and exiting when done. Artifacts are named
+`NN-<label>.json`, where `NN` is a sequential step counter.
 
 ### Scenario 1: Birth registration to child support
 
-This scenario exercises `civil-notary` (port 4321 on the host, `http://civil-notary:8080` inside compose).
-The demo client:
+This scenario exercises the civil Notary (host port `4321`, `http://civil-notary:8080` inside
+compose). The demo client:
 
-1. Calls `GET /.well-known/evidence-service` on `civil-notary` to discover the available claims.
-   This endpoint requires the `CIVIL_EVIDENCE_CLIENT_BEARER` token.
-2. Sends `POST /claims/evaluate` to `civil-notary` with a subject identifier and a
-   birth-registration claim, using predicate disclosure: the credential returns only whether the
-   predicate (born in a registered district, caregiver present) is satisfied, not the raw civil row.
-3. Optionally sends the same request with `Accept: application/dc+sd-jwt` to receive an SD-JWT VC
-   signed with the issuer JWK.
+1. Calls `GET /.well-known/evidence-service` on the civil Notary, using the
+   `CIVIL_EVIDENCE_CLIENT_BEARER` token, to discover the available claims.
+2. Sends `POST /v1/evaluations` to the civil Notary with a person target and a civil claim, using
+   predicate disclosure: the result returns only whether the predicate holds, not the underlying
+   civil row.
+3. Optionally repeats the evaluation with `Accept: application/dc+sd-jwt` to receive a verifiable
+   credential (see [Issue a verifiable credential](#issue-a-verifiable-credential)).
 
-What this proves: the Notary fetches facts from the Relay on your behalf using a configured bearer
-token, the civil Relay writes nothing back, and predicate disclosure confirms a fact without
-exposing the underlying registry row.
+What this proves: the Notary fetches facts from the Relay on the caller's behalf using its own
+configured token, the civil Relay writes nothing back, and predicate disclosure confirms a fact
+without exposing the underlying registry row.
 
 What to inspect:
 
-- `output/scenario1-civil-credential.json`: the claim result artifact.
-- Relay logs (`docker compose logs civil-registry-relay`): the `evaluate` event and the `200`
-  response to the Notary source call.
-- Notary logs (`docker compose logs civil-notary`): the evaluation event with the correlation ID.
+- `output/*-civil-evidence-discovery.json`: the discovered claim catalogue.
+- `output/*-demo-credential.json`: the issued credential artifact.
+- Notary logs (`docker compose -f compose.yaml logs civil-notary`): the evaluation event with the
+  correlation id.
 
 ### Scenario 2: Household benefit review from registry data
 
-This scenario exercises `social-protection-registry-relay` (port 4312 on the host) and scope enforcement.
-The demo client:
+This scenario exercises the social protection Relay (host port `4312`) and route-level scope
+enforcement. The demo client:
 
-1. Calls `GET /datasets/social_protection_registry/household` with the `SOCIAL_ROW_READER_RAW` token
-   and a `Data-Purpose` header. This protected row read requires the row-reader scope.
-2. Calls `GET /datasets/social_protection_registry/household/aggregates/households_by_eligibility_band`
-   with the `SOCIAL_AGGREGATE_READER_RAW` token. This aggregate consultation path requires the
-   aggregate-reader scope.
-3. Attempts the aggregate endpoint with the row-reader token. Registry Relay returns 403 with
+1. Reads `GET /v1/datasets/social_protection_registry/entities/household/records` with the
+   `SOCIAL_ROW_READER_RAW` token and a `Data-Purpose` header. This protected row read requires the
+   `social_protection_registry:rows` scope.
+2. Reads
+   `GET /v1/datasets/social_protection_registry/aggregates/households_by_eligibility_band` with the
+   `SOCIAL_AGGREGATE_READER_RAW` token. This aggregate path requires the
+   `social_protection_registry:aggregate` scope.
+3. Attempts the aggregate endpoint with the row-reader token. The Relay returns `403` with
    `auth.scope_denied`.
-4. Writes a household-benefit-decision artifact locally from the aggregate result. Registry Relay
-   has no write-back path; the artifact exists only in `output/`.
+4. Writes a household-benefit-decision artifact locally from the aggregate result. The Relay has no
+   write-back path; the artifact exists only in `output/`.
 
-What this proves: scope enforcement is route-level. Row-reader and aggregate-reader credentials have
-distinct scopes and cannot substitute for each other; all reads are protected. You can issue
-purpose-scoped tokens so that a benefit-decision system reads aggregate bands but cannot reach
+What this proves: scope enforcement is route-level. The row-reader and aggregate-reader credentials
+hold distinct scopes and cannot substitute for each other, and all reads are protected. You can
+issue purpose-scoped tokens so that a benefit-decision system reads aggregate bands but cannot reach
 individual household rows.
 
 What to inspect:
 
-- `output/scenario2-household-benefit-decision.json`: the decision artifact, including
-  `boundary.relay_write_back = false`.
-- Relay logs (`docker compose logs social-protection-registry-relay`): the `auth.scope_denied`
-  rejection and the `200` on the permitted reads.
+- `output/*-household-benefit-decision.json`: the decision artifact, derived from the aggregate
+  result.
+- `output/*-aggregate-denial-row-reader-only.json`: the `403 auth.scope_denied` rejection.
+- Relay logs (`docker compose -f compose.yaml logs social-protection-registry-relay`): the
+  `auth.scope_denied` rejection and the `200` responses on the permitted reads.
 
 ### Scenario 3: Cross-authority conditional support
 
-This scenario exercises `static-metadata-publisher` (port 4331), `shared-eligibility-notary`
-(port 4323), and the three Relay instances acting as sources.
-The demo client:
+This scenario exercises the static metadata publisher (port `4331`), the shared eligibility Notary
+(port `4323`), and the three Relay instances acting as sources. The demo client:
 
-1. Fetches `GET /metadata/evidence-offerings.json` from `static-metadata-publisher` (no
-   authentication) to discover that `shared-eligibility-notary` handles cross-authority claims.
-2. Calls `GET /.well-known/evidence-service` on `shared-eligibility-notary` using the
+1. Fetches `GET /metadata/evidence-offerings.json` from the static metadata publisher (no
+   authentication) to discover that the shared eligibility Notary handles cross-authority claims.
+2. Calls `GET /.well-known/evidence-service` on the shared eligibility Notary using the
    `SHARED_EVIDENCE_CLIENT_BEARER` token.
-3. Sends `POST /claims/evaluate` to `shared-eligibility-notary` with a cross-authority claim that
-   requires evidence from civil, social protection, and health registries.
+3. Sends `POST /v1/evaluations` to the shared eligibility Notary with the
+   `eligible-for-combined-support` claim, which requires evidence from the civil, social protection,
+   and health registries.
 
 What this proves: the Notary fans out to all three Relay services using per-source bearer tokens
 configured in
 [`config/notary/shared-eligibility-notary.yaml`](https://github.com/jeremi/registry-lab/blob/main/config/notary/shared-eligibility-notary.yaml).
-The result carries `source_count >= 2` when at least two sources contributed. A single Notary can
-aggregate evidence across independently operated registries and report how many authorities
+The result carries `source_count >= 2` once at least two sources contribute. A single Notary
+aggregates evidence across independently operated registries and reports how many authorities
 contributed, without merging or exposing the underlying rows.
 
 What to inspect:
 
-- `output/scenario3-cross-authority-result.json`: the multi-source claim result.
-- Notary logs (`docker compose logs shared-eligibility-notary`): the source-fetch events to each
-  Relay and the final evaluation result.
+- `output/*-shared-cross-source-evaluation.json`: the multi-source claim result.
+- `output/*-scenario-summary.json`: the end-of-run summary across all three scenarios.
+- Notary logs (`docker compose -f compose.yaml logs shared-eligibility-notary`): the source-fetch
+  events to each Relay and the final evaluation result.
+
+## Issue a verifiable credential
+
+The demo client issues an SD-JWT VC in scenario 1. Issuance is a two-step flow, separate from a plain
+claim evaluation:
+
+1. Evaluate the claim with `format: "application/dc+sd-jwt"`. This stores the evaluation and returns
+   an `evaluation_id`.
+2. Call `POST /v1/credentials` with that `evaluation_id`, a `credential_profile`, and a holder
+   binding proof. The civil Notary issues the credential under the DID
+   `did:web:civil-evidence.demo.example`, signed with the key from the `REGISTRY_NOTARY_ISSUER_JWK`
+   environment variable that `just generate` produced. The response is a JSON object whose
+   `credential` field holds the compact SD-JWT VC string.
+
+The holder binding proof (a key-bound JWT) is signed by the caller, so the demo client performs this
+step for you rather than a hand-written `curl`. For the credential request and response schema, the
+issuer and key configuration, and the wallet-driven OID4VCI alternative, see
+[Registry Notary](../../products/registry-notary/). The lab also drives an end-to-end citizen wallet
+flow through the `just citizen-oid4vci-login`, `just citizen-oid4vci-code`,
+`just citizen-oid4vci-token`, and `just citizen-oid4vci-report` recipes; see the
+[Registry Lab documentation](../../products/registry-lab/) for that path and its extra services.
+
+## Cross-authority evaluation
+
+You can reproduce the scenario 3 cross-authority call directly. With the demo credentials loaded into
+your shell (the `set -a; . ./.env; set +a` step from [Your first call](../../start/your-first-call/)),
+evaluate the combined-support claim on the shared eligibility Notary for subject `NID-1001`:
+
+```sh
+curl -fsS -X POST \
+  -H "Authorization: Bearer ${SHARED_EVIDENCE_CLIENT_BEARER}" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/vnd.registry-notary.claim-result+json" \
+  -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" \
+  -H "x-request-id: first-run-cross-authority" \
+  "http://127.0.0.1:4323/v1/evaluations" \
+  --data '{
+    "target": {"type": "Person", "identifiers": [{"scheme": "national_id", "value": "NID-1001"}]},
+    "claims": ["eligible-for-combined-support"],
+    "disclosure": "predicate",
+    "format": "application/vnd.registry-notary.claim-result+json"
+  }'
+```
+
+The `eligible-for-combined-support` claim depends on three sub-claims, `civil-record-present`,
+`social-program-active`, and `health-service-available`, each sourced from a different Relay. The
+response carries `provenance.source_count`, the number of distinct sources that contributed.
+
+For an unknown subject, the Notary returns a stable error rather than a false negative. Change
+`NID-1001` to `NID-9999` and the shared eligibility Notary responds with `409` and the code
+`evidence.not_available`.
 
 ## Verify
 
-Run `scripts/smoke.sh` as the primary verification command.
-A passing smoke run means all endpoint, authorization, audit, and credential checks pass.
-
-Confirm the cross-authority result has at least two sources:
+`just smoke` (step 4) is the authoritative check. These commands confirm the narrated demo client
+also produced its evidence artifacts under `output/`.
 
 ```sh
-python3 -c "import json,sys; d=json.load(open('output/scenario3-cross-authority-result.json')); sys.exit(0 if d.get('source_count', 0) >= 2 else 1)"
+ls output/*-scenario-summary.json
 ```
-
-Confirm the household benefit decision records no write-back:
 
 ```sh
-python3 -c "import json,sys; d=json.load(open('output/scenario2-household-benefit-decision.json')); b=d.get('boundary',{}); sys.exit(0 if b.get('relay_write_back') is False else 1)"
+ls output/*-demo-credential.json
 ```
-
-Confirm scope-denial events appear in Relay logs:
 
 ```sh
-docker compose logs social-protection-registry-relay 2>&1 | grep auth.scope_denied
+ls output/*-household-benefit-decision.json
 ```
-
-To manually spot-check the static metadata publisher:
 
 ```sh
-curl http://127.0.0.1:4331/metadata/index.json
+python3 -c "import json, glob; f = sorted(glob.glob('output/*-missing-subject-evaluation.json'))[-1]; d = json.load(open(f)); raise SystemExit(0 if str(d.get('status')) == '409' else 1)"
 ```
 
-The static publisher endpoints require no authentication.
+## Inspect in Registry Atlas (optional)
+
+Registry Atlas is a separate web app, not part of the compose stack. To inspect the service-first
+graph the lab publishes, run Atlas from its own checkout. It needs Node 22 or later, `pnpm`, and a
+Rust toolchain (the dev script compiles a WebAssembly module first):
+
+```sh
+cd ../registry-atlas
+pnpm install
+pnpm dev
+```
+
+Open the UI at `http://127.0.0.1:5177`. Load the `Registry Lab CPSV-AP service catalogue` demo chip,
+or paste `http://127.0.0.1:4331/metadata/cpsv-ap.jsonld`, then open the Services tab. For the full
+walkthrough, see [Run Atlas locally](../../products/registry-atlas/run-locally/).
 
 ## Troubleshooting
 
 The demo client exits immediately without producing artifacts.
-Confirm all background services are healthy before starting the client.
-Run `docker compose ps` and `scripts/smoke.sh`. A service not yet healthy causes the client to fail
-on its first HTTP request.
+Confirm all background services are healthy before starting the client. Run
+`docker compose -f compose.yaml ps` and `just smoke`. A service that is not yet healthy causes the
+client to fail on its first request.
 
-A 403 on evidence discovery (`/.well-known/evidence-service`).
-The bearer token in `.env` may be stale or mismatched.
-Regenerate credentials with `scripts/generate-demo-secrets.py` and restart the affected
-Notary service: `docker compose restart civil-notary`.
-
-A missing `source_count` field in scenario 3 output.
-The shared eligibility notary received responses from fewer than two Relay sources.
-Check that all three Relay services are running and reachable inside the compose network:
+A `403` on evidence discovery (`/.well-known/evidence-service`).
+The bearer token in `.env` may be stale. Regenerate credentials with `just generate` and restart the
+affected Notary:
 
 ```sh
-docker compose exec shared-eligibility-notary wget -q -O- http://civil-registry-relay:8080/health
+docker compose -f compose.yaml restart civil-notary
 ```
 
-## Advanced: live services
-
-These steps require sibling checkouts or live credentials and are not needed to verify the core topology.
-Run them after the smoke tests pass.
-
-Run the OpenFn sidecar smoke path (requires a sibling `registry-notary` checkout):
+A low `source_count` in scenario 3.
+The shared eligibility Notary received responses from fewer than two Relay sources. Confirm all three
+Relay services are running and reachable inside the compose network:
 
 ```sh
-env REGISTRY_OPENFN_NOTARY_SOURCE_DIR=../registry-notary \
-    REGISTRY_NOTARY_SOURCE_DIR=../registry-notary \
-    REGISTRY_PLATFORM_SOURCE_DIR=../registry-platform \
-    scripts/smoke-openfn.sh
+docker compose -f compose.yaml exec shared-eligibility-notary wget -q -O- http://civil-registry-relay:8080/healthz
 ```
-
-This writes `output/smoke-openfn-notary-evaluation.json`.
-
-Run the live-service checks (Postgres cutover, Zitadel OIDC flow, OpenFn story, service-first
-discovery story):
-
-```sh
-scripts/check-relay-postgres.sh
-scripts/check-relay-zitadel.sh
-scripts/smoke-oidc-relay.sh
-scripts/demo-live-stories.sh
-```
-
-These write artifacts to `output/live-stories/`.
-The `demo-live-stories.sh` script also writes the service-first discovery artifact that shows which
-Core Criterion and Core Evidence Vocabulary (CCCEV) evidence option Registry Atlas selected from the
-published Core Public Service Vocabulary Application Profile (CPSV-AP) catalogue.
 
 ## Cleanup
 
-Remove all containers and named cache volumes:
+Stop the containers and remove the named cache volumes:
 
 ```sh
-docker compose -f compose.yaml down -v
+just down
 ```
 
-The `-v` flag removes the named volumes `civil-registry-cache`, `social-protection-registry-cache`,
-`health-registry-cache`, `postgres-data`, and `zitadel-seed`.
+`just down` runs `docker compose -f compose.yaml down -v`, removing the demo volumes
+(`civil-registry-cache`, `social-protection-registry-cache`, `health-registry-cache`,
+`postgres-data`, and `zitadel-seed`).
 
 ## Next
 
-- [Registry Lab](../../products/registry-lab/): the full demo topology, fixture data contract, and tutorials.
-- [Registry Relay](../../products/registry-relay/): route reference, auth scopes, and configuration guide.
-- [Registry Notary](../../products/registry-notary/): claim configuration, disclosure modes, and OID4VCI issuance.
+- [Registry Lab](../../products/registry-lab/): the full demo topology, fixture data contract, and
+  per-scenario tutorials.
+- [Registry Relay](../../products/registry-relay/): route reference, auth scopes, and configuration
+  guide.
+- [Registry Notary](../../products/registry-notary/): claim configuration, disclosure modes, and
+  credential issuance.
 - [Architecture overview](../../explanation/architecture/): how the six projects connect at runtime.
 
-{/* Stable identifiers note: decentralized-demo-correlation-001 (correlation ID) and decentralized-demo-static-publication (manifest ID) are intentionally stable protocol and log-correlation values baked into credentials and spec URLs. They are not renamed when the directory moves from decentralized-evidence-demo to registry-lab. */}
+{/* Stable identifiers note: decentralized-demo-correlation-001 (correlation ID) is an intentionally stable protocol and log-correlation value baked into credentials and spec URLs. It is not renamed when the directory moves from decentralized-evidence-demo to registry-lab. */}

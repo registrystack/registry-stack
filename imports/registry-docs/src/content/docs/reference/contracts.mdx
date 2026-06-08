@@ -52,7 +52,7 @@ The table is generated from `src/data/contracts.yaml`.
 - **Consumer note** records the current limitation or regeneration path.
 
 **What the status values mean for you:**
-`hand-authored-abstract-contract` artifacts document the full HTTP surface but leave runtime-shaped fields (such as `{dataset_id}` and `{entity}`) as path parameters. For instance-specific shapes, fetch the auth-gated runtime OpenAPI route on a configured gateway.
+`hand-authored-abstract-contract` artifacts document the full HTTP surface but leave runtime-shaped fields (such as `{dataset_id}` and `{entity}`) as path parameters. For instance-specific shapes, fetch the runtime OpenAPI route on a configured gateway. Runtime deployments gate that route by default unless `openapi_requires_auth` is disabled for demos or controlled tooling.
 `pinned-generated-snapshot` artifacts are stable for integration: they were produced from the owning repo's source and will not change without an explicit re-pin.
 `pinned-demo-snapshot` artifacts are preview quality: generated from a demo run and may not cover all configurations. Use them to explore the API shape, but regenerate from a running instance before building a production client.
 
@@ -72,6 +72,6 @@ The table is generated from `src/data/contracts.yaml`.
 
 - The [Registry Relay](../../products/registry-relay/) OpenAPI artifact is a hand-authored abstract contract (`hand-authored-abstract-contract`).
   It documents the full surface using templated paths and capability tags, with feature-gate notes in each tag description.
-  Registry Relay also exposes a per-instance OpenAPI dump through the auth-gated `GET /openapi.json`, which callers can fetch from a configured gateway to discover the concrete `{dataset_id}` and `{entity}` shape for that deployment.
+  Registry Relay also exposes a per-instance OpenAPI dump through `GET /openapi.json`, which callers can fetch from a configured gateway to discover the concrete `{dataset_id}` and `{entity}` shape for that deployment. Runtime deployments gate that route by default unless `openapi_requires_auth` is disabled for demos or controlled tooling.
   A release-grade automated export of the abstract contract from the owning repo does not yet exist; the artifact is kept in sync by hand.
 - Contract freshness checks are data-backed in v0 but are not yet generated from owning-repo release metadata.

@@ -1,4 +1,5 @@
 // @ts-check
+import { readFileSync } from 'node:fs';
 import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
@@ -7,6 +8,29 @@ import mermaid from 'astro-mermaid';
 // Marketing site that now owns the persuasion layer (the pitch). Old docs
 // routes that migrated there redirect to these pages.
 const marketing = 'https://registrystack.org';
+
+// Product navigation is generated from src/data/repo-docs.yaml by
+// scripts/generate-sidebar.mjs (run via `npm run generate`), so the menu is
+// derived from the manifest's doc_type/nav_order and never drifts from it.
+// Read it resiliently: a missing file (astro run without generating first)
+// warns loudly and falls back to an empty product nav rather than failing the
+// whole config; malformed JSON still throws.
+function loadProductSidebar() {
+  const path = new URL('./src/data/generated/sidebar.json', import.meta.url);
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+      console.warn(
+        '[sidebar] src/data/generated/sidebar.json missing; run `npm run generate`. Product nav will be empty.',
+      );
+      return [];
+    }
+    throw error;
+  }
+}
+
+const productSidebar = loadProductSidebar();
 
 export default defineConfig({
   site: 'https://docs.registrystack.org',
@@ -106,153 +130,40 @@ export default defineConfig({
           href: 'https://github.com/jeremi/registry-docs',
         },
       ],
-      // Diataxis IA (Wave 4): Start, Tutorials, How-to, Products, Explanation,
-      // Reference. Product pages are pulled at build time by
-      // scripts/sync-repo-docs.mjs (manifest: src/data/repo-docs.yaml) and live
-      // under the single Products section. The cross-product lab recipes are
-      // also surfaced under How-to as the cross-product entry point.
+      // Diataxis IA, product-first (Wave 5): Get started, Products, Explanation,
+      // Reference. The per-product groups inside Products are generated from
+      // src/data/repo-docs.yaml by scripts/generate-sidebar.mjs (the
+      // productSidebar array), so the menu follows each product's
+      // doc_type/nav_order and never drifts from the manifest. Within a
+      // product, pages are sub-grouped by Diataxis type once the product grows
+      // past a threshold; smaller products stay flat. Product labels drop the
+      // shared "Registry" prefix (Relay, Notary, ...) since the site title and
+      // the Products group already supply that context.
+      //
+      // "Get started" is the newcomer funnel: orient (Overview, Where to
+      // start, When to use), then act. The registryctl tutorials are the
+      // first local adoption path. The Registry Lab pages remain the deeper
+      // stack tour once a reader wants the full multi-service topology.
       sidebar: [
         {
-          label: 'Start',
+          label: 'Get started',
           items: [
+            // Short nav labels to avoid wrapping in the narrow sidebar; page
+            // titles keep the full wording. Ordered as the newcomer funnel:
+            // orient, then the minimal call, then the full tour.
             { label: 'Overview', link: '/' },
-            { label: 'Choose where to start', slug: 'start/quickstart' },
-            { label: 'When to use Registry Stack', slug: 'start/when-to-use' },
-          ],
-        },
-        {
-          label: 'Tutorials',
-          items: [
-            { label: 'First run with Registry Lab', slug: 'tutorials/first-run-with-registry-lab' },
+            { label: 'Where to start', slug: 'start/quickstart' },
+            { label: 'When to use', slug: 'start/when-to-use' },
+            { label: 'Spreadsheet API', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
+            { label: 'Registry claim', slug: 'tutorials/verify-claim-registry-api' },
+            { label: 'Own API claim', slug: 'tutorials/verify-claim-own-api' },
             { label: 'Your first call', slug: 'start/your-first-call' },
-          ],
-        },
-        {
-          label: 'How-to',
-          collapsed: true,
-          items: [
-            { label: 'Citizen self-attestation with eSignet', slug: 'products/registry-lab/citizen-self-attestation-esignet' },
-            { label: 'Wallet interop testing', slug: 'products/registry-lab/wallet-interop-testing' },
+            { label: 'First run', slug: 'tutorials/first-run-with-registry-lab' },
           ],
         },
         {
           label: 'Products',
-          collapsed: true,
-          items: [
-            {
-              label: 'Registry Relay',
-              collapsed: true,
-              items: [
-                { label: 'Registry Relay', slug: 'products/registry-relay' },
-                { label: 'API guide', slug: 'products/registry-relay/api' },
-                { label: 'Client integration', slug: 'products/registry-relay/client-integration' },
-                { label: 'Configuration', slug: 'products/registry-relay/configuration' },
-                { label: 'Operations runbook', slug: 'products/registry-relay/ops' },
-                { label: 'Deployment hardening', slug: 'products/registry-relay/deployment-hardening' },
-                { label: 'Portable metadata', slug: 'products/registry-relay/metadata' },
-                { label: 'Evidence verification', slug: 'products/registry-relay/evidence-verification' },
-                {
-                  label: 'Standards adapter operator guide',
-                  slug: 'products/registry-relay/standards-adapter-operator-guide',
-                },
-                { label: 'Development', slug: 'products/registry-relay/development' },
-                { label: 'Use cases', slug: 'products/registry-relay/use-cases' },
-              ],
-            },
-            {
-              label: 'Registry Notary',
-              collapsed: true,
-              items: [
-                { label: 'Registry Notary', slug: 'products/registry-notary' },
-                { label: 'Architecture overview', slug: 'products/registry-notary/architecture-overview' },
-                { label: 'Capability matrix', slug: 'products/registry-notary/capability-matrix' },
-                { label: 'API reference', slug: 'products/registry-notary/api-reference' },
-                { label: 'Client SDK guide', slug: 'products/registry-notary/client-sdk-guide' },
-                {
-                  label: 'Identity and record matching',
-                  slug: 'products/registry-notary/identity-and-record-matching',
-                },
-                {
-                  label: 'Source and claim modeling',
-                  slug: 'products/registry-notary/source-claim-modeling-guide',
-                },
-                {
-                  label: 'Operator configuration reference',
-                  slug: 'products/registry-notary/operator-config-reference',
-                },
-                {
-                  label: 'Credential lifecycle and status',
-                  slug: 'products/registry-notary/credential-lifecycle-status',
-                },
-                { label: 'Signing key provider', slug: 'products/registry-notary/signing-key-provider' },
-                {
-                  label: 'Self-attestation operator guide',
-                  slug: 'products/registry-notary/self-attestation-operator-guide',
-                },
-                {
-                  label: 'Federated evaluation operator guide',
-                  slug: 'products/registry-notary/federated-evaluation-operator-guide',
-                },
-                { label: 'OID4VCI wallet interop', slug: 'products/registry-notary/oid4vci-wallet-interop' },
-                {
-                  label: 'SD-JWT VC conformance profile',
-                  slug: 'products/registry-notary/sd-jwt-vc-conformance-profile',
-                },
-                { label: 'Scenario patterns', slug: 'products/registry-notary/scenario-patterns' },
-                {
-                  label: 'OpenCRVS DCI tutorial',
-                  slug: 'products/registry-notary/opencrvs-dci-standalone-tutorial',
-                },
-                { label: 'OpenSPP disability DCI', slug: 'products/registry-notary/openspp-disability-dci' },
-                {
-                  label: 'Deployment hardening runbook',
-                  slug: 'products/registry-notary/deployment-hardening-runbook',
-                },
-              ],
-            },
-            {
-              label: 'Registry Manifest',
-              collapsed: true,
-              items: [
-                { label: 'Registry Manifest', slug: 'products/registry-manifest' },
-                { label: 'Validate and render a manifest', slug: 'products/registry-manifest/validate-and-render' },
-                { label: 'Validate against profile fixtures', slug: 'products/registry-manifest/profile-fixtures' },
-                { label: 'Reference', slug: 'products/registry-manifest/reference' },
-              ],
-            },
-            {
-              label: 'Registry Atlas',
-              collapsed: true,
-              items: [
-                { label: 'Registry Atlas', slug: 'products/registry-atlas' },
-                { label: 'Run Atlas locally', slug: 'products/registry-atlas/run-locally' },
-                { label: 'Inspect a registry', slug: 'products/registry-atlas/inspect-a-registry' },
-                { label: 'Reference', slug: 'products/registry-atlas/reference' },
-              ],
-            },
-            {
-              label: 'Registry Platform',
-              collapsed: true,
-              items: [
-                { label: 'Security principles', slug: 'products/registry-platform' },
-                { label: 'Versioning', slug: 'products/registry-platform/versioning' },
-                { label: 'Audit reference hashing', slug: 'products/registry-platform/audit-reference-hashing' },
-              ],
-            },
-            {
-              label: 'Registry Lab',
-              collapsed: true,
-              items: [
-                { label: 'Registry Lab', slug: 'products/registry-lab' },
-                { label: 'OpenCRVS DCI tutorial', slug: 'products/registry-lab/opencrvs-dci-notary-tutorial' },
-                { label: 'DHIS2 OpenFn tutorial', slug: 'products/registry-lab/dhis2-openfn-notary-tutorial' },
-                { label: 'OpenFn sidecar tutorial', slug: 'products/registry-lab/openfn-sidecar-notary-tutorial' },
-                { label: 'Citizen self-attestation with eSignet', slug: 'products/registry-lab/citizen-self-attestation-esignet' },
-                { label: 'Wallet interop testing', slug: 'products/registry-lab/wallet-interop-testing' },
-                { label: 'Service-first discovery', slug: 'products/registry-lab/service-first-discovery' },
-              ],
-            },
-          ],
+          items: productSidebar,
         },
         {
           label: 'Explanation',
@@ -275,8 +186,8 @@ export default defineConfig({
               collapsed: true,
               items: [
                 { label: 'Overview', slug: 'reference/apis' },
-                { label: 'Registry Relay', slug: 'reference/apis/registry-relay' },
-                { label: 'Registry Notary', slug: 'reference/apis/registry-notary' },
+                { label: 'Relay', slug: 'reference/apis/registry-relay' },
+                { label: 'Notary', slug: 'reference/apis/registry-notary' },
               ],
             },
             { label: 'Contracts', slug: 'reference/contracts' },

@@ -1,0 +1,240 @@
+---
+title: Verify a claim from your own API
+description: Create a standalone Registry Notary project for an API you operate, configure the source connection, and evaluate one claim.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-registryctl
+  - registry-notary
+  - registry-relay
+last_reviewed: "2026-06-07"
+doc_type: tutorial
+locale: en
+standards_referenced: []
+---
+
+Use this tutorial when you already have an API and want Registry Notary to evaluate claims from it
+without placing Notary inside a Relay project.
+You will create a standalone Notary project, point it at a source API, start Notary from a separate
+folder, and evaluate one claim.
+
+The tutorial uses the local registry API from
+[Publish a spreadsheet as a secured registry API](../publish-spreadsheet-secured-registry-api/) as a
+reproducible stand-in for an API you operate.
+That keeps the tutorial runnable without external credentials.
+For your own API, use the same command shape with your source URL, source token environment
+variable, dataset, entity, and lookup field.
+
+This tutorial uses synthetic data and local demo credentials.
+Do not use the generated local keys in production.
+Estimated time: about 10 minutes after the first tutorial passes.
+
+## Before you start
+
+Complete the spreadsheet registry API tutorial first and leave Relay running:
+
+```sh
+registryctl init relay my-first-api --sample benefits
+cd my-first-api
+registryctl start
+registryctl smoke
+```
+
+Load the Relay local demo keys into your shell:
+
+```sh
+set -a
+. secrets/local.env
+set +a
+```
+
+Keep that Relay project running.
+The standalone Notary project joins the Relay project's Docker Compose network and calls the Relay
+service by name.
+
+For an API you operate, replace this local Relay source with a source API that exposes the Registry
+Data API-shaped record route Notary is configured to call.
+
+## Create the standalone Notary project
+
+From the parent directory of `my-first-api`, create a Notary project:
+
+```sh
+cd ..
+registryctl init notary my-standalone-notary \
+  --source-url http://registry-relay:8080 \
+  --source-network my-first-api_default \
+  --source-token-from-env ROW_READER_RAW
+cd my-standalone-notary
+```
+
+`registryctl` creates:
+
+```text
+my-standalone-notary/
+  registryctl.yaml
+  compose.yaml
+  README.md
+  notary/
+    config.yaml
+  bruno/
+    registry-api/
+  secrets/
+    local.env
+  output/
+```
+
+The Notary config contains the source API URL, source dataset, entity, lookup field, environment
+variable names, and credential commitments.
+The raw Notary evaluator key, source API token, audit secret, local demo issuer key, and Redis URL
+live only in `secrets/local.env`.
+
+If you do not pass `--source-token-from-env`, `registryctl` writes a placeholder source token in
+`secrets/local.env`.
+Replace it before running the Notary smoke test.
+
+## Configure a different source API
+
+For your own API, change the source options at project creation time.
+The source must be reachable from the Notary container.
+
+```sh
+registryctl init notary my-notary \
+  --source-url https://api.example.com \
+  --source-token-env EVIDENCE_SOURCE_API_TOKEN \
+  --source-dataset benefits_casework \
+  --source-entity person \
+  --source-lookup-field id
+```
+
+Then edit `secrets/local.env` and set `EVIDENCE_SOURCE_API_TOKEN` to the source token.
+If the source API is another Compose service, pass `--source-network <compose-network>` so Notary can
+join that network.
+
+## Start standalone Notary
+
+Start the Notary project:
+
+```sh
+registryctl start
+```
+
+The command starts Notary and a local Redis replay store, then waits for `/healthz` and `/ready`:
+
+```text
+Notary API: http://127.0.0.1:4255
+API docs:   http://127.0.0.1:4255/docs
+```
+
+Check status:
+
+```sh
+registryctl status
+```
+
+Notary reports healthy and ready when startup is complete.
+
+## Run the Notary smoke test
+
+Run the Notary smoke checks:
+
+```sh
+registryctl notary smoke
+```
+
+The smoke test passes with these checks:
+
+```text
+PASS notary healthz is public
+PASS notary ready is public
+PASS anonymous claims request is denied
+PASS notary evaluator can list claims
+PASS notary evaluator can verify benefits person exists
+```
+
+`registryctl` writes detailed results to:
+
+```text
+output/notary-smoke-results.json
+```
+
+The smoke result must not contain raw API keys, source tokens, local env values, Relay source rows,
+or sensitive sample column values.
+
+## Evaluate the claim with curl
+
+Load the standalone Notary keys:
+
+```sh
+set -a
+. secrets/local.env
+set +a
+```
+
+Evaluate whether the synthetic person `per-2001` exists in the source API:
+
+```sh
+curl -sS -X POST \
+  -H "x-api-key: $REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/vnd.registry-notary.claim-result+json" \
+  -d '{
+    "target": {
+      "type": "person",
+      "id": "per-2001"
+    },
+    "claims": ["benefits-person-exists"],
+    "disclosure": "predicate",
+    "purpose": "https://example.local/purpose/tutorial"
+  }' \
+  http://127.0.0.1:4255/v1/evaluations
+```
+
+Notary returns a successful claim result for `benefits-person-exists`.
+
+## Explore requests in Bruno
+
+`registryctl` generates a Bruno collection for the standalone Notary project.
+Bruno is optional.
+The tutorial and API work without it.
+
+Open the generated collection:
+
+```sh
+registryctl bruno open
+```
+
+If Bruno is installed, the collection opens.
+If Bruno is not installed, the command prints the collection path and an install link.
+
+If the Bruno CLI is installed, you can run the collection:
+
+```sh
+registryctl bruno run
+```
+
+If `bru` is not installed, the command prints a fallback and exits without blocking Notary.
+
+## Clean up
+
+Stop standalone Notary:
+
+```sh
+registryctl stop
+```
+
+Then stop the source registry API:
+
+```sh
+cd ../my-first-api
+registryctl stop
+```
+
+## Next
+
+- [Source and claim modeling](../../products/registry-notary/source-claim-modeling-guide/):
+  configure source bindings, lookup fields, disclosure, and claim boundaries.
+- [OpenCRVS DCI tutorial](../../products/registry-notary/opencrvs-dci-standalone-tutorial/):
+  connect Notary to a DCI source and issue a demo credential.
+- [First run with Registry Lab](../first-run-with-registry-lab/): run Relay, Notary, OpenFn sidecar
+  examples, and narrated cross-authority flows.

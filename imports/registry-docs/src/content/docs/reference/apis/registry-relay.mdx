@@ -59,7 +59,8 @@ owns scope naming and route enforcement. For the exact scope strings and configu
 
 - **Per-deployment shape.** Concrete dataset ids, entity names, aggregate ids, evidence-offering
   ids, and SP-DCI registry ids are runtime configuration, not contract data. To see what a specific
-  gateway exposes, fetch its auth-gated `GET /openapi.json` or read `GET /metadata/catalog`.
+  gateway exposes, fetch `GET /openapi.json` or read `GET /metadata/catalog`. Runtime deployments
+  gate OpenAPI by default unless `openapi_requires_auth` is disabled for demos or controlled tooling.
 - **Feature-gated surfaces.** OGC API Features, Records, and EDR adapters, SP-DCI sync routes, and
   the provenance routes (DID document, JSON Schemas, JSON-LD contexts, VC-JWT serialization) only
   mount when the gateway is built and configured with the matching Cargo feature.

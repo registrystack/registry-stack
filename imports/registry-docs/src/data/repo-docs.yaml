@@ -27,7 +27,7 @@
 repos:
   registry-relay:
     remote: https://github.com/jeremi/registry-relay
-    ref: 49cf076b8c29461bdf9c0328d068ab65913f6a94
+    ref: 5dfe0fe3dad5b69586fbcb4a1f040c9b6def9e80
     local: ../registry-relay
     docs:
       - src: docs/README.md
@@ -99,7 +99,7 @@ repos:
     #   docs/xlsx-readiness-contract.md     deep source contract, repo-owned
   registry-notary:
     remote: https://github.com/jeremi/registry-notary
-    ref: fa472c5a18398d8360a32b2accdfcaacd22cef17
+    ref: 3eb55478c32afa1c74bd6a5031849a3b77a358f2
     local: ../registry-notary
     docs:
       - src: docs/README.md
@@ -200,7 +200,7 @@ repos:
     #   docs/security-assurance.md          release/supply-chain detail, repo-owned
   registry-manifest:
     remote: https://github.com/jeremi/registry-manifest
-    ref: 43ef8338d9774c90910279a7ec6fd25d6e9f1325
+    ref: a2e648aaac864563a3311b9d95b8143afa1b7334
     local: ../registry-manifest
     docs:
       - src: docs/overview.md
@@ -255,7 +255,7 @@ repos:
         doc_type: reference
   registry-platform:
     remote: https://github.com/jeremi/registry-platform
-    ref: 11afbc0d00ffebf2cae18a290959bde5b5ef3cea
+    ref: ee298e00e76ad6b1e56373fe85d6c1e3a95ea238
     local: ../registry-platform
     docs:
       - src: docs/SECURITY_PRINCIPLES.md
@@ -279,7 +279,7 @@ repos:
     #   docs/config-drift-inventory.md      internal config-drift inventory
   registry-lab:
     remote: https://github.com/jeremi/registry-lab
-    ref: 8da8f8e187ed84b931178fac7c69bc9306d29d87
+    ref: 884b7a0aeb43fb6b75ba785bd03bd700a4705d18
     local: ../registry-lab
     docs:
       - src: docs/README.md

@@ -15,7 +15,7 @@
   source_of_truth:
     label: Registry Relay abstract OpenAPI contract
     url: https://github.com/jeremi/registry-relay/blob/main/openapi/registry-relay.openapi.json
-  consumer_note: Hand-authored from `docs/api.md` and the runtime route table. Uses templated paths and capability tags. For instance-specific shape of `{dataset_id}` and `{entity}`, fetch the auth-gated `GET /openapi.json` from a configured gateway.
+  consumer_note: Hand-authored from `docs/api.md` and the runtime route table. Uses templated paths and capability tags. For instance-specific shape of `{dataset_id}` and `{entity}`, fetch `GET /openapi.json` from a configured gateway. Runtime deployments gate that route by default unless `openapi_requires_auth` is disabled for demos or controlled tooling.
 - id: registry-notary.openapi
   name: Registry Notary OpenAPI
   owner: registry-notary

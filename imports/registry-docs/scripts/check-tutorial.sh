@@ -34,7 +34,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TUTORIAL="$REPO_ROOT/src/content/docs/tutorials/first-run-with-registry-lab.mdx"
-EXPECTED_STEP_COUNT=9
+EXPECTED_STEP_COUNT=5
 EXPECTED_VERIFY_COUNT=4
 EXPECTED_DEMO_ARTIFACTS=3
 EXPECTED_SERVICES=(
@@ -154,7 +154,7 @@ if [[ ! -d "$LAB_DIR" ]]; then
 fi
 LAB_DIR="$(cd "$LAB_DIR" && pwd)"
 
-for tool in docker uv python3 openssl; do
+for tool in just docker uv python3 openssl; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
 		printf 'required tool not on PATH: %s\n' "$tool" >&2
 		exit 1
