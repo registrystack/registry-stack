@@ -63,7 +63,8 @@ auth:
     # space-separated string) is the default; some IdPs emit an array
     # under `scp` or `permissions`, or an object keyed by role name
     # (Zitadel's `urn:zitadel:iam:org:project:roles`). For object shape,
-    # keys are used as scopes only when their values are active.
+    # keys are used as scopes only when `scope_object_required_keys` matches
+    # an active value entry.
     scope_claim: "urn:zitadel:iam:org:project:roles"
     # Optional rename map applied before scope-based access checks.
     # Adapt IdP role names to the relay's `<dataset_id>:<level>` shape.
@@ -72,10 +73,11 @@ auth:
     scope_map:
       "social-registry-reader":    "social_registry:rows"
       "social-registry-aggregate": "social_registry:aggregate"
-    # Optional object-value key guard for org-scoped role claims. Set
-    # this to the expected Zitadel org id key or keys when the Relay
-    # should reject roles granted only for another organization.
-    scope_object_required_keys: []
+    # Object-value key guard for org-scoped role claims. Set this to the
+    # expected Zitadel org id key or keys so the Relay rejects roles granted
+    # only for another organization.
+    scope_object_required_keys:
+      - orgId-123
     # Optional allowlist matched against the token's `azp` (preferred)
     # or `client_id`. Empty list means any client is accepted.
     allowed_clients: []

@@ -1635,7 +1635,10 @@ fn example_oidc_config_loads_and_validates() {
             .map(String::as_str),
         Some("social_registry:aggregate"),
     );
-    assert!(oidc.scope_object_required_keys.is_empty());
+    assert_eq!(
+        oidc.scope_object_required_keys,
+        vec!["orgId-123".to_string()]
+    );
     assert!(oidc.allowed_clients.is_empty());
     assert_eq!(
         oidc.token_types,
@@ -1905,9 +1908,25 @@ fn oidc_config_rejects_scope_claim_with_whitespace() {
 }
 
 #[test]
+fn oidc_config_rejects_audience_as_scope_claim() {
+    let tmp = TempDir::new().expect("tempdir");
+    let extra = "    scope_claim: aud\n";
+    let path = write_config(&tmp, &oidc_config_body(extra));
+    assert_config_code(config::load(&path), "config.validation_error");
+}
+
+#[test]
 fn oidc_config_rejects_empty_scope_object_required_key() {
     let tmp = TempDir::new().expect("tempdir");
     let extra = "    scope_object_required_keys:\n      - \"\"\n";
+    let path = write_config(&tmp, &oidc_config_body(extra));
+    assert_config_code(config::load(&path), "config.validation_error");
+}
+
+#[test]
+fn oidc_config_rejects_zitadel_object_claim_without_required_keys() {
+    let tmp = TempDir::new().expect("tempdir");
+    let extra = "    scope_claim: \"urn:zitadel:iam:org:project:roles\"\n";
     let path = write_config(&tmp, &oidc_config_body(extra));
     assert_config_code(config::load(&path), "config.validation_error");
 }

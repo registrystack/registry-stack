@@ -22,8 +22,10 @@
 //! 6. Build the [`super::super::Principal`]: `principal_id` is `sub` if
 //!    present, else `client_id`, else `azp`. Scopes are extracted from
 //!    the configured claim (string with whitespace separators, array of
-//!    strings, object keys, or explicitly configured verified reserved
-//!    claims such as `client_id`) and renamed through `scope_map`.
+//!    strings, object keys with configured active-value guards, or explicitly
+//!    configured verified reserved claims such as `client_id`) and renamed
+//!    through `scope_map`. The `aud` claim is validated as audience only and
+//!    is never projected into Relay authorization scopes.
 //!
 //! ## What this module does *not* do
 //!
@@ -43,8 +45,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use jsonwebtoken::{decode_header, Algorithm};
 use registry_platform_oidc::{
-    Audience, Claims, OidcError as PlatformOidcError, TokenVerifier, TokenVerifierConfig,
-    VerifiedToken,
+    Claims, OidcError as PlatformOidcError, TokenVerifier, TokenVerifierConfig, VerifiedToken,
 };
 #[cfg(test)]
 use serde_json::Map;
@@ -184,13 +185,19 @@ impl OidcAuth {
             );
             AuthError::MalformedCredential
         })?;
+        if kid.chars().any(char::is_control) {
+            tracing::warn!(
+                auth_error = "auth.malformed_credential",
+                "oidc: token header kid rejected",
+            );
+            return Err(AuthError::MalformedCredential);
+        }
 
         let verified = self.verifier.verify(presented).await.map_err(|err| {
             let mapped = map_platform_error(&err, presented);
-            tracing::debug!(
-                target: "registry_relay::auth",
-                error = %err,
-                mapped = ?mapped,
+            tracing::warn!(
+                provider_error = platform_error_kind(&err),
+                auth_error = auth_error_code(&mapped),
                 "oidc: jwt validation failed",
             );
             mapped
@@ -305,7 +312,8 @@ fn map_platform_error(err: &PlatformOidcError, token: &str) -> AuthError {
         PlatformOidcError::IssuerMismatch { .. } => AuthError::IssuerMismatch,
         PlatformOidcError::MalformedToken
         | PlatformOidcError::TokenTypeNotAllowed
-        | PlatformOidcError::MissingKid => AuthError::MalformedCredential,
+        | PlatformOidcError::MissingKid
+        | PlatformOidcError::KidTooLong => AuthError::MalformedCredential,
         PlatformOidcError::AlgorithmNotAllowed => AuthError::AlgorithmNotAllowed,
         PlatformOidcError::UnknownKid => AuthError::KidUnknown,
         PlatformOidcError::TokenExpired => AuthError::TokenExpired,
@@ -343,6 +351,52 @@ fn unverified_payload(token: &str) -> Option<Value> {
     serde_json::from_slice(&bytes).ok()
 }
 
+fn platform_error_kind(err: &PlatformOidcError) -> &'static str {
+    match err {
+        PlatformOidcError::Transport(_) => "transport",
+        PlatformOidcError::BoundedRead(_) => "bounded_read",
+        PlatformOidcError::FetchUrl(_) => "fetch_url",
+        PlatformOidcError::HttpStatus(_) => "http_status",
+        PlatformOidcError::InvalidUrl => "invalid_url",
+        PlatformOidcError::Parse => "parse",
+        PlatformOidcError::InvalidJwk => "invalid_jwk",
+        PlatformOidcError::IssuerMismatch { .. } => "issuer_mismatch",
+        PlatformOidcError::MalformedToken => "malformed_token",
+        PlatformOidcError::TokenTypeNotAllowed => "token_type_not_allowed",
+        PlatformOidcError::MissingKid => "missing_kid",
+        PlatformOidcError::KidTooLong => "kid_too_long",
+        PlatformOidcError::AlgorithmNotAllowed => "algorithm_not_allowed",
+        PlatformOidcError::UnknownKid => "unknown_kid",
+        PlatformOidcError::TokenExpired => "token_expired",
+        PlatformOidcError::TokenNotYetValid => "token_not_yet_valid",
+        PlatformOidcError::AudienceMismatch => "audience_mismatch",
+        PlatformOidcError::SignatureInvalid => "signature_invalid",
+        PlatformOidcError::ClientNotAllowed => "client_not_allowed",
+        PlatformOidcError::InvalidToken => "invalid_token",
+        _ => "other",
+    }
+}
+
+fn auth_error_code(err: &AuthError) -> &'static str {
+    match err {
+        AuthError::MissingCredential => "auth.missing_credential",
+        AuthError::InvalidCredential => "auth.invalid_credential",
+        AuthError::MalformedCredential => "auth.malformed_credential",
+        AuthError::ScopeDenied { .. } => "auth.scope_denied",
+        AuthError::PurposeRequired => "auth.purpose_required",
+        AuthError::AdminRequired => "auth.admin_required",
+        AuthError::TokenExpired => "auth.token_expired",
+        AuthError::TokenNotYetValid => "auth.token_not_yet_valid",
+        AuthError::TokenSignatureInvalid => "auth.token_signature_invalid",
+        AuthError::IssuerMismatch => "auth.issuer_mismatch",
+        AuthError::AudienceMismatch => "auth.audience_mismatch",
+        AuthError::KidUnknown => "auth.kid_unknown",
+        AuthError::AlgorithmNotAllowed => "auth.algorithm_not_allowed",
+        AuthError::ClientNotAllowed => "auth.client_not_allowed",
+        AuthError::JwksUnavailable => "auth.jwks_unavailable",
+    }
+}
+
 /// Read scopes off the configured claim. Three shapes are accepted so the
 /// same `scope_claim` field can target different IdP conventions:
 ///
@@ -351,20 +405,20 @@ fn unverified_payload(token: &str) -> Option<Value> {
 ///   IdPs that emit roles as a flat list.
 /// * `Object`: Zitadel emits roles under
 ///   `urn:zitadel:iam:org:project:roles` as an object whose **keys** are
-///   the role names. Role keys are returned only when their values carry
+///   the role names. Role keys are returned only when the value contains one
+///   of the configured required object keys and that nested value carries
 ///   active-grant semantics; `scope_map` then renames them into the relay's
 ///   `<dataset_id>:<level>` shape.
 ///
 /// Reserved claims are accepted only when explicitly named as `scope_claim`.
 /// They are verified by the OIDC library before Relay sees them, and are useful
-/// for demo or provider setups where policy maps a principal/client/audience to
-/// local Relay scopes. When `aud` is configured as the source, only accepted
-/// Relay audiences are eligible for scope mapping. Role/entitlement claims
-/// remain the production default.
+/// for demo or provider setups where policy maps a principal or client to
+/// local Relay scopes. `aud` remains a routing claim and is not a scope source.
+/// Role/entitlement claims remain the production default.
 fn extract_scopes(
     claims: &Claims,
     claim_name: &str,
-    accepted_audiences: &HashSet<String>,
+    _accepted_audiences: &HashSet<String>,
     scope_object_required_keys: &HashSet<String>,
 ) -> Vec<String> {
     if let Some(value) = claims.extra.get(claim_name) {
@@ -374,18 +428,7 @@ fn extract_scopes(
         "sub" => claims.sub.iter().cloned().collect(),
         "client_id" => claims.client_id.iter().cloned().collect(),
         "azp" => claims.azp.iter().cloned().collect(),
-        "aud" => match claims.aud.as_ref() {
-            Some(Audience::One(value)) if accepted_audiences.contains(value) => {
-                vec![value.clone()]
-            }
-            Some(Audience::Many(values)) => values
-                .iter()
-                .filter(|value| accepted_audiences.contains(*value))
-                .cloned()
-                .collect(),
-            None => Vec::new(),
-            _ => Vec::new(),
-        },
+        "aud" => Vec::new(),
         _ => Vec::new(),
     }
 }
@@ -400,11 +443,12 @@ fn extract_scope_values(
             .iter()
             .filter_map(|item| item.as_str().map(String::from))
             .collect(),
-        Value::Object(map) => map
+        Value::Object(map) if !scope_object_required_keys.is_empty() => map
             .iter()
             .filter(|(_, value)| scope_object_value_is_active(value, scope_object_required_keys))
             .map(|(key, _)| key.clone())
             .collect(),
+        Value::Object(_) => Vec::new(),
         _ => Vec::new(),
     }
 }
@@ -676,6 +720,7 @@ mod tests {
         );
         let mut config = base_config();
         config.scope_claim = "urn:zitadel:iam:org:project:roles".to_string();
+        config.scope_object_required_keys = vec!["orgId-123".to_string()];
         config.scope_map.insert(
             "social-registry-reader".to_string(),
             "social_registry:rows".to_string(),
@@ -709,6 +754,7 @@ mod tests {
         );
         let mut config = base_config();
         config.scope_claim = "urn:zitadel:iam:org:project:roles".to_string();
+        config.scope_object_required_keys = vec!["orgId-123".to_string()];
         config.scope_map.insert(
             "social-registry-reader".to_string(),
             "social_registry:rows".to_string(),
@@ -727,6 +773,59 @@ mod tests {
         assert!(!principal.scopes.contains("social_registry:rows"));
         assert!(!principal.scopes.contains("social_registry:aggregate"));
         assert!(!principal.scopes.contains("social_registry:metadata"));
+    }
+
+    #[tokio::test]
+    async fn scope_object_form_requires_configured_keys() {
+        let (sk, vk) = fresh_keypair();
+        let token = mint(
+            &sk,
+            TokenOpts {
+                extra: Map::from_iter([(
+                    "urn:zitadel:iam:org:project:roles".to_string(),
+                    json!({
+                        "social-registry-reader": { "orgId-123": "zitadel.localhost" },
+                    }),
+                )]),
+                ..Default::default()
+            },
+        );
+        let mut config = base_config();
+        config.scope_claim = "urn:zitadel:iam:org:project:roles".to_string();
+        config.scope_map.insert(
+            "social-registry-reader".to_string(),
+            "social_registry:rows".to_string(),
+        );
+
+        let provider = provider_from(config, jwks_for(TEST_KID, &vk));
+        let principal = provider.verify(&token).await.expect("ok");
+        assert!(!principal.scopes.contains("social_registry:rows"));
+    }
+
+    #[tokio::test]
+    async fn custom_object_scope_claim_requires_configured_keys() {
+        let (sk, vk) = fresh_keypair();
+        let token = mint(
+            &sk,
+            TokenOpts {
+                extra: Map::from_iter([(
+                    "permissions".to_string(),
+                    json!({
+                        "reader": true,
+                    }),
+                )]),
+                ..Default::default()
+            },
+        );
+        let mut config = base_config();
+        config.scope_claim = "permissions".to_string();
+        config
+            .scope_map
+            .insert("reader".to_string(), "social_registry:rows".to_string());
+
+        let provider = provider_from(config, jwks_for(TEST_KID, &vk));
+        let principal = provider.verify(&token).await.expect("ok");
+        assert!(!principal.scopes.contains("social_registry:rows"));
     }
 
     #[tokio::test]
@@ -847,7 +946,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reserved_audience_scope_claim_can_be_mapped() {
+    async fn reserved_audience_scope_claim_does_not_grant_scopes() {
         let (sk, vk) = fresh_keypair();
         let token = mint(
             &sk,
@@ -865,7 +964,8 @@ mod tests {
         );
         let provider = provider_from(config, jwks_for(TEST_KID, &vk));
         let principal = provider.verify(&token).await.expect("ok");
-        assert!(principal.scopes.contains("social_protection_registry:rows"));
+        assert!(!principal.scopes.contains("social_protection_registry:rows"));
+        assert!(!principal.scopes.contains("registry-lab-api"));
     }
 
     #[tokio::test]
@@ -883,7 +983,7 @@ mod tests {
         let provider = provider_from(config, jwks_for(TEST_KID, &vk));
         let principal = provider.verify(&token).await.expect("ok");
         assert!(!principal.scopes.contains("social_protection_registry:rows"));
-        assert!(principal.scopes.contains(TEST_AUDIENCE));
+        assert!(!principal.scopes.contains(TEST_AUDIENCE));
     }
 
     #[tokio::test]
@@ -973,8 +1073,8 @@ mod tests {
         assert!(matches!(err, AuthError::KidUnknown), "got {err:?}");
     }
 
-    #[tokio::test]
-    async fn unknown_kid_text_logs_do_not_include_raw_kid() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn control_char_kid_text_logs_do_not_include_raw_kid() {
         let (sk, vk) = fresh_keypair();
         let raw_kid = "not-the-cached-kid\nforged=true";
         let token = mint(
@@ -995,14 +1095,14 @@ mod tests {
             .finish();
 
         let guard = tracing::subscriber::set_default(subscriber);
-        let err = provider.verify(&token).await.expect_err("unknown kid");
+        let err = provider.verify(&token).await.expect_err("malformed kid");
         drop(guard);
 
-        assert!(matches!(err, AuthError::KidUnknown), "got {err:?}");
+        assert!(matches!(err, AuthError::MalformedCredential), "got {err:?}");
         let rendered = String::from_utf8(logs.0.lock().expect("log buffer lock").clone())
             .expect("logs are utf-8");
         assert!(
-            rendered.contains("oidc: jwt validation failed"),
+            rendered.contains("oidc: token header kid rejected"),
             "expected validation diagnostic in logs: {rendered}"
         );
         assert!(!rendered.contains(raw_kid), "raw kid reached text logs");
@@ -1010,6 +1110,41 @@ mod tests {
             !rendered.contains("forged=true"),
             "kid suffix reached text logs"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn overlong_kid_uses_stable_provider_error_code() {
+        let (sk, vk) = fresh_keypair();
+        let raw_kid = "k".repeat(1025);
+        let token = mint(
+            &sk,
+            TokenOpts {
+                kid: Some(raw_kid.clone()),
+                ..Default::default()
+            },
+        );
+        let provider = provider_from(base_config(), jwks_for(TEST_KID, &vk));
+        let logs = SharedLog::default();
+        let subscriber = tracing_subscriber::fmt()
+            .compact()
+            .with_ansi(false)
+            .with_target(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(logs.clone())
+            .finish();
+
+        let guard = tracing::subscriber::set_default(subscriber);
+        let err = provider.verify(&token).await.expect_err("overlong kid");
+        drop(guard);
+
+        assert!(matches!(err, AuthError::MalformedCredential), "got {err:?}");
+        let rendered = String::from_utf8(logs.0.lock().expect("log buffer lock").clone())
+            .expect("logs are utf-8");
+        assert!(
+            rendered.contains("provider_error=\"kid_too_long\""),
+            "expected stable provider code in logs: {rendered}"
+        );
+        assert!(!rendered.contains(&raw_kid), "raw kid reached text logs");
     }
 
     #[tokio::test]
