@@ -10424,12 +10424,69 @@ async fn preauth_offer_start_redirects_to_esignet_and_mints_nothing() {
     );
     assert!(query_param(&location, "state").is_some());
     assert!(query_param(&location, "nonce").is_some());
+    assert!(query_param(&location, "claims").is_none());
     // No code or PIN is in the redirect; nothing is minted.
     assert!(!location.contains("pre-authorized_code"));
 
     // The audit log carries no minted material from a start.
     let audit = std::fs::read_to_string(&audit_path).unwrap_or_default();
     assert!(!audit.contains("pre-authorized_code"));
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn preauth_offer_start_requests_userinfo_subject_binding_claim_when_required() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    );
+    config.self_attestation.subject_binding.claim_source = SelfAttestationClaimSource::Userinfo;
+    config.self_attestation.subject_binding.token_claim = "individual_id".to_string();
+    config.oid4vci.pre_authorized_code.esignet.userinfo_url =
+        format!("{}/userinfo", token_upstream.url());
+    config
+        .auth
+        .oidc
+        .as_mut()
+        .expect("oidc config exists")
+        .userinfo_endpoint = Some(format!("{}/userinfo", token_upstream.url()));
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let start = server
+        .get("/oid4vci/offer/start?credential_configuration_id=person_is_alive_sd_jwt")
+        .await;
+    start.assert_status(StatusCode::SEE_OTHER);
+    let location = start
+        .headers()
+        .get("location")
+        .expect("redirect location")
+        .to_str()
+        .expect("location is valid")
+        .to_string();
+    let claims =
+        query_param(&location, "claims").expect("redirect requests required userinfo claim");
+    let claims: Value = serde_json::from_str(&claims).expect("claims param is JSON");
+    assert_eq!(
+        claims,
+        json!({
+            "userinfo": {
+                "individual_id": {
+                    "essential": true
+                }
+            }
+        })
+    );
+    assert!(!location.contains("pre-authorized_code"));
     idp.stop().await;
 }
 

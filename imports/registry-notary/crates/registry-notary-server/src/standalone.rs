@@ -2080,6 +2080,9 @@ pub(crate) struct PreAuthRuntime {
     /// fetch the eSignet userinfo JWS; otherwise the binding value is read from
     /// the `id_token`.
     subject_binding_claim_source: SelfAttestationClaimSource,
+    /// Claim name that must bind the credential subject during the citizen
+    /// login leg.
+    subject_binding_claim: String,
     /// eSignet `id_token` verifier (pins eSignet `iss`, `aud`=RP client_id,
     /// signature via the eSignet JWKS, `exp`/`nbf`). Also verifies the userinfo
     /// JWS (same eSignet signing keys) when the binding is userinfo-sourced.
@@ -2254,6 +2257,7 @@ impl PreAuthRuntime {
                 (!url.is_empty()).then(|| url.to_string())
             },
             subject_binding_claim_source: config.self_attestation.subject_binding.claim_source,
+            subject_binding_claim: config.self_attestation.subject_binding.token_claim.clone(),
             esignet_id_token_verifier,
             fetch_url_policy,
             login_state_ttl_seconds: esignet.login_state_ttl_seconds,
@@ -2351,7 +2355,26 @@ impl PreAuthRuntime {
             .append_pair("nonce", nonce)
             .append_pair("code_challenge", pkce_challenge)
             .append_pair("code_challenge_method", "S256");
+        if let Some(claims) = self.authorization_claims_param() {
+            url.query_pairs_mut().append_pair("claims", &claims);
+        }
         Ok(url.to_string())
+    }
+
+    fn authorization_claims_param(&self) -> Option<String> {
+        if !matches!(
+            self.subject_binding_claim_source,
+            SelfAttestationClaimSource::Userinfo
+        ) {
+            return None;
+        }
+        let claim = self.subject_binding_claim.trim();
+        if claim.is_empty() {
+            return None;
+        }
+        let mut userinfo = Map::new();
+        userinfo.insert(claim.to_string(), json!({ "essential": true }));
+        Some(json!({ "userinfo": Value::Object(userinfo) }).to_string())
     }
 
     /// Exchange the eSignet authorization `code` for an `id_token` (and
