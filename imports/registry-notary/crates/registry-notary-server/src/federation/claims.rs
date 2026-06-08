@@ -34,7 +34,10 @@ pub(super) fn validate_federation_claims(
     if nbf < iat.saturating_sub(federation.clock_leeway_seconds as i64) {
         return Err(FederationProblem::invalid_token());
     }
-    if exp - iat > federation.max_request_lifetime_seconds as i64 {
+    let Some(lifetime) = exp.checked_sub(iat).filter(|lifetime| *lifetime > 0) else {
+        return Err(FederationProblem::invalid_token());
+    };
+    if lifetime as u64 > federation.max_request_lifetime_seconds {
         return Err(FederationProblem::invalid_token());
     }
     let jti = string_extra(verified, "jti").ok_or_else(FederationProblem::invalid_token)?;
@@ -158,4 +161,86 @@ pub(super) fn decode_unverified_jwt_payload(token: &str) -> Result<Value, Federa
         .decode(payload)
         .map_err(|_| FederationProblem::invalid_token())?;
     serde_json::from_slice(&bytes).map_err(|_| FederationProblem::invalid_token())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use registry_platform_oidc::{Claims, VerifiedToken};
+    use serde_json::{json, Map};
+
+    fn federation() -> FederationConfig {
+        FederationConfig {
+            max_request_lifetime_seconds: 300,
+            clock_leeway_seconds: 60,
+            ..FederationConfig::default()
+        }
+    }
+
+    fn peer() -> FederationPeerConfig {
+        FederationPeerConfig {
+            node_id: "did:web:peer.example".to_string(),
+            allowed_protocol_versions: vec![FEDERATION_PROTOCOL_V0_1.to_string()],
+            allowed_profiles: vec!["basic".to_string()],
+            allowed_purposes: vec!["https://purpose.example/federation".to_string()],
+            ..FederationPeerConfig::default()
+        }
+    }
+
+    fn verified_token(iat: i64, nbf: i64, exp: i64) -> VerifiedToken {
+        let mut extra = Map::new();
+        extra.insert("jti".to_string(), json!(Ulid::new().to_string()));
+        extra.insert("protocol".to_string(), json!(FEDERATION_PROTOCOL_V0_1));
+        extra.insert("action".to_string(), json!("evaluate"));
+        extra.insert("profile".to_string(), json!("basic"));
+        extra.insert(
+            "purpose".to_string(),
+            json!("https://purpose.example/federation"),
+        );
+
+        VerifiedToken {
+            claims: Claims {
+                sub: Some("did:web:peer.example".to_string()),
+                iat: Some(iat),
+                nbf: Some(nbf),
+                exp: Some(exp),
+                iss: None,
+                aud: None,
+                azp: None,
+                client_id: None,
+                extra,
+            },
+            matched_client: None,
+            scopes: Vec::new(),
+        }
+    }
+
+    fn validate(iat: i64, nbf: i64, exp: i64) -> Result<(), FederationProblem> {
+        validate_federation_claims(&federation(), &peer(), &verified_token(iat, nbf, exp))
+    }
+
+    #[test]
+    fn accepts_token_with_valid_lifetime() {
+        assert!(validate(1_000, 1_000, 1_300).is_ok());
+    }
+
+    #[test]
+    fn rejects_token_with_equal_exp_and_iat() {
+        assert!(validate(1_000, 1_000, 1_000).is_err());
+    }
+
+    #[test]
+    fn rejects_token_with_exp_before_iat() {
+        assert!(validate(1_000, 1_000, 999).is_err());
+    }
+
+    #[test]
+    fn rejects_token_lifetime_subtraction_overflow() {
+        assert!(validate(i64::MIN, i64::MIN, i64::MAX).is_err());
+    }
+
+    #[test]
+    fn accepts_extreme_values_with_valid_lifetime() {
+        assert!(validate(i64::MAX - 1, i64::MAX - 1, i64::MAX).is_ok());
+    }
 }
