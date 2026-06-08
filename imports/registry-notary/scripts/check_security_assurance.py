@@ -48,6 +48,7 @@ SECRET_COPY_RE = re.compile(
     re.IGNORECASE,
 )
 CONST_STR_RE = re.compile(r'const\s+([A-Z][A-Z0-9_]*)\s*:\s*&str\s*=\s*"([^"]+)"\s*;')
+IMMUTABLE_GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def fail(message: str) -> None:
@@ -413,6 +414,22 @@ def openapi_path_shape(path: str) -> str:
     return re.sub(r"\{\*?[^}]+\}", "{}", path)
 
 
+def check_workflow_external_refs() -> None:
+    workflow_dir = ROOT / ".github" / "workflows"
+    if not workflow_dir.is_dir():
+        fail("missing .github/workflows directory")
+    for path in sorted(workflow_dir.glob("*.yml")):
+        rel = path.relative_to(ROOT)
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            stripped = line.strip()
+            if not stripped.startswith("REGISTRY_PLATFORM_REF:"):
+                continue
+            _, value = stripped.split(":", 1)
+            ref = value.strip().strip("'\"")
+            if not IMMUTABLE_GIT_SHA_RE.fullmatch(ref):
+                fail(f"{rel}:{lineno} must pin REGISTRY_PLATFORM_REF to a full commit SHA")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -424,11 +441,17 @@ def main() -> None:
             "dockerfile-secrets",
             "openapi-baseline",
             "openapi-coverage",
+            "workflow-external-refs",
         ],
         default=None,
     )
     args = parser.parse_args()
-    checks = args.checks or ["manifest", "dockerfile-secrets", "openapi-baseline"]
+    checks = args.checks or [
+        "manifest",
+        "dockerfile-secrets",
+        "openapi-baseline",
+        "workflow-external-refs",
+    ]
     if "manifest" in checks:
         validate_manifest()
     if "route-sources" in checks:
@@ -439,6 +462,8 @@ def main() -> None:
         check_openapi_baseline()
     if "openapi-coverage" in checks:
         check_openapi_manifest_coverage(ROOT / "openapi" / "registry-notary.openapi.json")
+    if "workflow-external-refs" in checks:
+        check_workflow_external_refs()
 
 
 if __name__ == "__main__":
