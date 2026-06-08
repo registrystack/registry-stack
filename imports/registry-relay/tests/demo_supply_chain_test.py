@@ -28,6 +28,15 @@ class DemoSupplyChainTest(unittest.TestCase):
         self.assertIn('"fetch", "--depth", "1", "origin", git_rev', script)
         self.assertIn('"checkout", "--detach", "FETCH_HEAD"', script)
 
+    def test_zitadel_token_helper_keeps_client_secret_out_of_curl_argv(self):
+        script = (ROOT / "scripts" / "mint-zitadel-token.sh").read_text()
+
+        self.assertNotIn('--user "${OIDC_SA_CLIENT_ID}:${OIDC_SA_CLIENT_SECRET}"', script)
+        self.assertNotIn("--user ${OIDC_SA_CLIENT_ID}:${OIDC_SA_CLIENT_SECRET}", script)
+        self.assertIn('chmod 600 "${curl_config}"', script)
+        self.assertIn('curl --config "${curl_config}"', script)
+        self.assertIn('user = "%s"', script)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -54,15 +54,45 @@ token_url="${OIDC_ISSUER%/}/oauth/v2/token"
 
 scope="${OIDC_SCOPE:-openid}"
 
-curl_args=(
-  --silent --show-error --fail-with-body
-  --user "${OIDC_SA_CLIENT_ID}:${OIDC_SA_CLIENT_SECRET}"
-  --data-urlencode 'grant_type=client_credentials'
-  --data-urlencode "scope=${scope}"
-  "${token_url}"
-)
+reject_multiline() {
+  local name="$1"
+  local value="$2"
+  if [[ "${value}" == *$'\n'* || "${value}" == *$'\r'* ]]; then
+    printf 'mint-zitadel-token: %s must be a single line\n' "${name}" >&2
+    exit 2
+  fi
+}
 
-response="$(curl "${curl_args[@]}")"
+curl_config_escape() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '%s' "${value}"
+}
+
+reject_multiline OIDC_ISSUER "${OIDC_ISSUER}"
+reject_multiline OIDC_SA_CLIENT_ID "${OIDC_SA_CLIENT_ID}"
+reject_multiline OIDC_SA_CLIENT_SECRET "${OIDC_SA_CLIENT_SECRET}"
+reject_multiline OIDC_SCOPE "${scope}"
+
+curl_config="$(mktemp "${TMPDIR:-/tmp}/mint-zitadel-token.XXXXXX")"
+chmod 600 "${curl_config}"
+cleanup() {
+  rm -f "${curl_config}"
+}
+trap cleanup EXIT
+
+{
+  printf 'silent\n'
+  printf 'show-error\n'
+  printf 'fail-with-body\n'
+  printf 'user = "%s"\n' "$(curl_config_escape "${OIDC_SA_CLIENT_ID}:${OIDC_SA_CLIENT_SECRET}")"
+  printf 'data-urlencode = "grant_type=client_credentials"\n'
+  printf 'data-urlencode = "%s"\n' "$(curl_config_escape "scope=${scope}")"
+  printf 'url = "%s"\n' "$(curl_config_escape "${token_url}")"
+} >"${curl_config}"
+
+response="$(curl --config "${curl_config}")"
 
 token="$(printf '%s' "${response}" | jq -r '.access_token // empty')"
 
