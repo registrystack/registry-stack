@@ -319,13 +319,12 @@ impl VerifiedRootBytes {
 /// Normalize a base URL to end with `/`, matching tough's own `parse_url` so that a recorded
 /// `base.join("<version>.root.json")` URL is correctly recognized as being under the base prefix.
 fn normalize_base_url(url: &Url) -> Url {
-    if url.as_str().ends_with('/') {
-        url.clone()
-    } else {
-        let mut normalized = url.as_str().to_string();
-        normalized.push('/');
-        Url::parse(&normalized).unwrap_or_else(|_| url.clone())
+    let mut normalized = url.clone();
+    if let Ok(mut path) = normalized.path_segments_mut() {
+        path.pop_if_empty();
+        path.push("");
     }
+    normalized
 }
 
 #[derive(Clone, Debug)]
@@ -1177,5 +1176,17 @@ mod tests {
         let hash = roots.root_sha256(2).expect("root hash resolves");
         assert_eq!(hash, sha256_uri(&genuine_root));
         assert_ne!(hash, sha256_uri(&poison_bytes));
+    }
+
+    #[test]
+    fn normalize_base_url_preserves_query_and_fragment() {
+        let url = Url::parse("https://repo.example/metadata?token=abc#root").expect("url parses");
+
+        let normalized = normalize_base_url(&url);
+
+        assert_eq!(
+            normalized.as_str(),
+            "https://repo.example/metadata/?token=abc#root"
+        );
     }
 }

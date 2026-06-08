@@ -3,6 +3,7 @@
 
 use std::env;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -352,13 +353,20 @@ pub fn credential_fingerprint_commitment(
 }
 
 fn read_bounded_fingerprint_file(path: &Path) -> Result<String, CredentialFingerprintRefError> {
-    let metadata = fs::metadata(path).map_err(|_| CredentialFingerprintRefError::MissingSecret)?;
+    let mut file =
+        fs::File::open(path).map_err(|_| CredentialFingerprintRefError::MissingSecret)?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| CredentialFingerprintRefError::MissingSecret)?;
     if !metadata.is_file() || metadata.len() > MAX_FINGERPRINT_FILE_BYTES {
         return Err(CredentialFingerprintRefError::InvalidFingerprint(
             FingerprintFormatError::InvalidLength,
         ));
     }
-    fs::read_to_string(path).map_err(|_| CredentialFingerprintRefError::MissingSecret)
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)
+        .map_err(|_| CredentialFingerprintRefError::MissingSecret)?;
+    Ok(contents)
 }
 
 fn trim_one_line_ending(mut value: String) -> String {

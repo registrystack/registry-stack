@@ -1170,7 +1170,24 @@ fn clone_allowed_leaf_value(value: &Value) -> Option<Value> {
                 .collect::<Vec<_>>();
             (!filtered.is_empty() || items.is_empty()).then_some(Value::Array(filtered))
         }
-        Value::Object(_) => None,
+        Value::Object(map) => map
+            .is_empty()
+            .then_some(Value::Object(serde_json::Map::new())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn clone_allowed_leaf_value_preserves_only_empty_objects() {
+        assert_eq!(clone_allowed_leaf_value(&json!({})), Some(json!({})));
+        assert_eq!(
+            clone_allowed_leaf_value(&json!({ "secret": "value" })),
+            None
+        );
     }
 }
 
