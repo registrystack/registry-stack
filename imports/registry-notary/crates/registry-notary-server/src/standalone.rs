@@ -28,11 +28,11 @@ use registry_notary_core::{
     AccessMode, BoundedCorrelationId, BoundedVerifiedClaims, BulkMode, DciSourceConnectionConfig,
     EvidenceAuditEvent, EvidenceConfig, EvidenceCredentialConfig, EvidenceEntity, EvidenceError,
     EvidencePrincipal, EvidenceRequestContext, Hashed, Oauth2ClientCredentialsSourceAuthConfig,
-    PrincipalIdentifier, RateLimitBucket, RequestIdentifier, SelfAttestationAssuranceClaimSource,
-    SelfAttestationClaimSource, SelfAttestationDenialCode, SigningKeyConfig,
-    SigningKeyProviderConfig, SourceAuthConfig, SourceBindingConfig, SourceConnectionConfig,
-    SourceConnectorKind, StandaloneRegistryNotaryConfig, SubjectRequest, VerifiedClaimName,
-    VerifiedClaimValue,
+    PrincipalIdentifier, RateLimitBucket, RegistryNotaryAdminListenerMode, RequestIdentifier,
+    SelfAttestationAssuranceClaimSource, SelfAttestationClaimSource, SelfAttestationDenialCode,
+    SigningKeyConfig, SigningKeyProviderConfig, SourceAuthConfig, SourceBindingConfig,
+    SourceConnectionConfig, SourceConnectorKind, StandaloneRegistryNotaryConfig, SubjectRequest,
+    VerifiedClaimName, VerifiedClaimValue,
 };
 use registry_platform_audit::{
     AuditError, AuditKeyHasher, AuditProfile, AuditSink as PlatformAuditSink, ChainState,
@@ -107,7 +107,14 @@ pub(crate) fn current_request_correlation_id() -> Option<BoundedCorrelationId> {
 pub fn standalone_router(
     config: StandaloneRegistryNotaryConfig,
 ) -> Result<Router, StandaloneServerError> {
-    Ok(notary_router_from_runtime(compile_notary_runtime(config)?))
+    let admin_listener_mode = config.server.admin_listener.mode;
+    let runtime = compile_notary_runtime(config)?;
+    Ok(match admin_listener_mode {
+        RegistryNotaryAdminListenerMode::SharedWithPublic => notary_router_from_runtime(runtime),
+        RegistryNotaryAdminListenerMode::Dedicated | RegistryNotaryAdminListenerMode::Disabled => {
+            notary_routers_from_runtime(runtime).public
+        }
+    })
 }
 
 pub(crate) fn credential_issuer_runtime_from_config(

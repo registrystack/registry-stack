@@ -9245,6 +9245,46 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
 }
 
 #[tokio::test]
+async fn standalone_router_hides_admin_and_metrics_when_admin_listener_is_not_shared() {
+    for mode in [
+        RegistryNotaryAdminListenerMode::Dedicated,
+        RegistryNotaryAdminListenerMode::Disabled,
+    ] {
+        set_audit_secret();
+        std::env::set_var(
+            "TEST_EVIDENCE_API_KEY_HASH",
+            "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+        );
+        std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+        let tmp = TempDir::new().expect("tempdir");
+        let audit_path = tmp.path().join("audit.jsonl");
+        let mut config = registry_data_api_config(
+            "http://127.0.0.1:1",
+            audit_path.to_str().expect("audit path is UTF-8"),
+        );
+        add_admin_api_key(&mut config);
+        config.server.admin_listener.mode = mode;
+        config.server.admin_listener.bind = "127.0.0.1:19091".parse().expect("valid admin bind");
+
+        let app = standalone_router(config).expect("standalone router builds");
+        let server = TestServer::builder().http_transport().build(app);
+
+        server.get("/healthz").await.assert_status_ok();
+        server
+            .post("/admin/v1/reload")
+            .add_header("x-api-key", "admin-token")
+            .await
+            .assert_status(StatusCode::NOT_FOUND);
+        server
+            .get("/metrics")
+            .add_header("x-api-key", "admin-token")
+            .await
+            .assert_status(StatusCode::NOT_FOUND);
+    }
+}
+
+#[tokio::test]
 async fn standalone_server_can_serve_openapi_without_auth_when_configured() {
     set_audit_secret();
     std::env::set_var(
