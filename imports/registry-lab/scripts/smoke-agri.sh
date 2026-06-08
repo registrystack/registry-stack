@@ -66,6 +66,12 @@ curl_json() {
   curl "${args[@]}"
 }
 
+curl_doc() {
+  local url="$1"
+  local out="$2"
+  curl -fsS -H "Accept: text/html" -H "x-request-id: ${correlation_id}" -o "${out}" "${url}"
+}
+
 curl_status() {
   local method="$1"
   local url="$2"
@@ -423,12 +429,13 @@ wait_http "agricultural static metadata publisher" "${static_url}/.well-known/ap
 
 check "agricultural relay health" curl_json GET "${relay_url}/healthz" "${AGRI_METADATA_CLIENT_RAW}" "${output_dir}/agri-relay-health.json"
 check "agricultural relay ready" curl_json GET "${relay_url}/ready" "${AGRI_METADATA_CLIENT_RAW}" "${output_dir}/agri-relay-ready.json"
-check "agricultural relay OpenAPI" curl_json GET "${relay_url}/openapi.json" "${AGRI_METADATA_CLIENT_RAW}" "${output_dir}/agri-relay-openapi.json"
+check "agricultural relay OpenAPI" curl_json GET "${relay_url}/openapi.json" "" "${output_dir}/agri-relay-openapi.json"
 check "agricultural datasets" curl_json GET "${relay_url}/v1/datasets" "${AGRI_METADATA_CLIENT_RAW}" "${output_dir}/agri-datasets.json"
 check "agricultural evidence offerings" curl_json GET "${relay_url}/metadata/evidence-offerings" "${AGRI_METADATA_CLIENT_RAW}" "${output_dir}/agri-relay-evidence-offerings.json"
 
 check "agriculture Notary discovery" curl_json GET "${notary_url}/.well-known/evidence-service" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-notary-discovery.json"
-check "agriculture Notary OpenAPI" curl_json GET "${notary_url}/openapi.json" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-notary-openapi.json"
+check "agriculture Notary OpenAPI" curl_json GET "${notary_url}/openapi.json" "" "${output_dir}/agri-notary-openapi.json"
+check "agriculture Notary API docs" curl_doc "${notary_url}/docs" "${output_dir}/agri-notary-docs.html"
 check "agriculture Notary claims" curl_json GET "${notary_url}/v1/claims" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-notary-claims.json"
 
 check "agricultural static api catalog" curl_json GET "${static_url}/.well-known/api-catalog" "" "${output_dir}/agri-static-api-catalog.json"

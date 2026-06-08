@@ -108,7 +108,7 @@ def request(
     method: str,
     base_url: str,
     path: str,
-    token: str | None,
+    token: str | None = None,
     body: Any | None = None,
     headers: dict[str, str] | None = None,
     timeout: int = 15,
@@ -369,7 +369,7 @@ def main() -> int:
                 discovered_urls.add(access["discovery_url"])
         step += 1
 
-        openapi = require(request("GET", relay.url, "/openapi.json", token), 200, f"{relay.name} OpenAPI")
+        openapi = require(request("GET", relay.url, "/openapi.json"), 200, f"{relay.name} OpenAPI")
         save(out, step, f"{relay.name}-relay-openapi", openapi)
         step += 1
 
@@ -396,7 +396,7 @@ def main() -> int:
         discovery = require(request("GET", service.url, "/.well-known/evidence-service", token), 200, f"{service.name} discovery")
         save(out, step, f"{service.name}-evidence-discovery", discovery)
         step += 1
-        openapi = require(request("GET", service.url, "/openapi.json", token), 200, f"{service.name} Evidence Server OpenAPI")
+        openapi = require(request("GET", service.url, "/openapi.json"), 200, f"{service.name} Evidence Server OpenAPI")
         save(out, step, f"{service.name}-evidence-openapi", openapi)
         step += 1
         claims = require(request("GET", service.url, "/v1/claims", token), 200, f"{service.name} claims")
@@ -741,7 +741,7 @@ def main() -> int:
         "notes": [
             "Evidence Servers call Relay over HTTP only.",
             "Static metadata was fetched before shared eligibility evaluation.",
-            "Evidence Server OpenAPI was fetched from the authenticated /openapi.json route on each Evidence Server.",
+            "OpenAPI was fetched without demo credentials; data and evidence routes stayed authenticated.",
         ],
     }
     save(out, step, "scenario-summary", scenario_summary)

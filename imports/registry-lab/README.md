@@ -839,6 +839,6 @@ The social protection walkthrough uses the dataset-scoped aggregate endpoint at
 and the EDR collection at
 `/ogc/edr/v1/collections/social_protection_households_by_district`.
 
-Registry Notary exposes OpenAPI at `/openapi.json` under the same auth boundary
-as the rest of the Registry Notary API. The demo client and smoke script fetch
-that document from all three Registry Notary instances.
+Registry Lab configures Relay and Registry Notary to expose API docs at `/docs`
+and demo OpenAPI at `/openapi.json` without credentials. Data, metadata, claim,
+and evidence routes still use the configured demo credentials.

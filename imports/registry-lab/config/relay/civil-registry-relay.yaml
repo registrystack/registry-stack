@@ -3,6 +3,7 @@
 server:
   bind: 0.0.0.0:8080
   admin_bind: 0.0.0.0:8081
+  openapi_requires_auth: false
   cache_dir: /var/lib/registry-relay/cache
 
 config_trust:
