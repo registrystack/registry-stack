@@ -6345,6 +6345,72 @@ async fn admin_posture_reports_self_attestation_summary_and_redacts_signing_key_
 }
 
 #[tokio::test]
+async fn admin_posture_reports_oid4vci_bearer_offer_mode() {
+    set_preauth_env();
+    let issuer = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &issuer.issuer(),
+        &issuer.jwks_uri(),
+        &format!("{}/authorize", issuer.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    );
+    config.oid4vci.pre_authorized_code.tx_code.required = false;
+    config
+        .oid4vci
+        .pre_authorized_code
+        .pre_authorized_code_ttl_seconds = 120;
+    config
+        .auth
+        .oidc
+        .as_mut()
+        .expect("oidc config exists")
+        .scope_map
+        .insert(
+            "ops_read".to_string(),
+            vec!["registry_notary:ops_read".to_string()],
+        );
+    let ops_token = issuer.mint_token(json!({
+        "sub": "trust-ops",
+        "aud": "registry-notary-citizen",
+        "azp": "citizen-portal",
+        "scope": "ops_read",
+    }));
+
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let posture = server
+        .get("/admin/v1/posture")
+        .add_header("authorization", format!("Bearer {ops_token}"))
+        .await;
+    posture.assert_status_ok();
+    let body: Value = posture.json();
+    assert_matches_posture_schema(&body);
+    assert!(body["posture"]["warnings"]
+        .as_array()
+        .expect("warnings is an array")
+        .iter()
+        .any(|warning| warning == "notary.oid4vci.bearer_offer"));
+    let finding = body["posture"]["findings"]
+        .as_array()
+        .expect("findings is an array")
+        .iter()
+        .find(|finding| finding["id"] == "notary.oid4vci.bearer_offer")
+        .expect("bearer-offer finding is reported");
+    assert!(finding["evidence"]
+        .as_array()
+        .expect("finding evidence is an array")
+        .iter()
+        .any(|entry| entry["value"] == json!("bearer_offer")));
+
+    issuer.stop().await;
+}
+
+#[tokio::test]
 async fn admin_posture_redacts_runtime_config_secrets_and_private_topology() {
     set_audit_secret();
     std::env::set_var(
@@ -10557,6 +10623,10 @@ async fn preauth_callback_omits_tx_code_when_optional() {
     );
     config.oid4vci.pre_authorized_code.tx_code.required = false;
     config
+        .oid4vci
+        .pre_authorized_code
+        .pre_authorized_code_ttl_seconds = 120;
+    config
         .self_attestation
         .rate_limits
         .tx_code_attempts_per_code_per_minute = 0;
@@ -11461,6 +11531,10 @@ async fn preauth_token_accepts_missing_tx_code_when_optional() {
         &format!("{}/token", token_upstream.url()),
     );
     config.oid4vci.pre_authorized_code.tx_code.required = false;
+    config
+        .oid4vci
+        .pre_authorized_code
+        .pre_authorized_code_ttl_seconds = 120;
     config
         .self_attestation
         .rate_limits

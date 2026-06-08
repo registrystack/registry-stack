@@ -764,6 +764,24 @@ oid4vci:
   proof:
     max_age_seconds: 300
     max_clock_skew_seconds: 60
+  pre_authorized_code:
+    enabled: true
+    pre_authorized_code_ttl_seconds: 300
+    tx_code:
+      required: true
+      input_mode: numeric
+      length: 6
+    esignet:
+      client_id: registry-notary-rp
+      client_signing_key_id: esignet-rp-key
+      redirect_uri: https://notary.example.gov/oid4vci/offer/callback
+      authorize_url: https://idp.example.gov/authorize
+      token_url: https://idp.example.gov/oauth/v2/token
+      issuer: https://idp.example.gov
+      jwks_uri: https://idp.example.gov/.well-known/jwks.json
+      scopes:
+        - openid
+      login_state_ttl_seconds: 300
   credential_configurations:
     birth_record_sd_jwt:
       claim_id: birth-record-exists
@@ -791,6 +809,12 @@ authentication.
 use. `proof.max_age_seconds` bounds how fresh a holder proof JWT must be, and
 `proof.max_clock_skew_seconds` is the only clock difference tolerated when
 checking that freshness.
+
+`pre_authorized_code.tx_code.required` defaults to `true`. Set it to `false`
+only for wallets that cannot send a transaction code. That compatibility mode
+is reported as `bearer_offer` in admin posture and validates only when
+`pre_authorized_code_ttl_seconds` is at most `120`, because the offer URI is
+then sufficient to redeem the code.
 
 Each `credential_configurations` entry must be consistent with both the claim
 and the credential profile it references:

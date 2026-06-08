@@ -178,9 +178,12 @@ the code. A flood of random codes from one client address is throttled by the
 existing per-address invalid-attempt limiter.
 
 Operators may set `oid4vci.pre_authorized_code.tx_code.required: false` for
-wallets that cannot present a transaction code. This makes the pre-authorized
-code a bearer credential until it is redeemed, so keep a short TTL and use this
-only for controlled deployments.
+wallets that cannot present a transaction code. Registry Notary reports this as
+`bearer_offer` mode in the admin posture document. In this mode, the
+pre-authorized code is bearer credential material until it is redeemed, so
+validation requires `pre_authorized_code_ttl_seconds <= 120`. Use it only for
+controlled demos or compatibility deployments where the wallet cannot send a
+`tx_code`.
 
 The Notary mints its access token with a dedicated signing key separate from the
 SD-JWT VC credential key, with its own issuer, audience, and a distinct header

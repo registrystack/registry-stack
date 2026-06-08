@@ -1767,9 +1767,18 @@ impl Oid4vciPreAuthorizedCodeConfig {
                 "pre_authorized_code.pre_authorized_code_ttl_seconds must be between 1 and 600",
             );
         }
+        if !self.tx_code.required
+            && self.pre_authorized_code_ttl_seconds > MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS
+        {
+            return invalid_oid4vci(
+                "pre_authorized_code.pre_authorized_code_ttl_seconds must be between 1 and 120 when pre_authorized_code.tx_code.required = false",
+            );
+        }
         Ok(())
     }
 }
+
+pub const MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS: u64 = 120;
 
 const fn default_pre_authorized_code_ttl_seconds() -> u64 {
     300
@@ -8756,8 +8765,32 @@ access_token_ttl_seconds: 300
         let mut config = valid_pre_auth_config();
         config.oid4vci.pre_authorized_code.tx_code.required = false;
         config
+            .oid4vci
+            .pre_authorized_code
+            .pre_authorized_code_ttl_seconds = MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS;
+        config
             .validate()
             .expect("operators may explicitly disable tx_code when required for wallet interop");
+    }
+
+    #[test]
+    fn pre_auth_optional_tx_code_caps_bearer_offer_ttl() {
+        let mut config = valid_pre_auth_config();
+        config.oid4vci.pre_authorized_code.tx_code.required = false;
+        config
+            .oid4vci
+            .pre_authorized_code
+            .pre_authorized_code_ttl_seconds = MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS + 1;
+        let reason = expect_oid4vci_error(&config);
+        assert!(reason.contains("tx_code.required = false"));
+
+        config
+            .oid4vci
+            .pre_authorized_code
+            .pre_authorized_code_ttl_seconds = MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS;
+        config
+            .validate()
+            .expect("bearer-offer mode validates at the explicit cap");
     }
 
     #[test]
@@ -8794,6 +8827,10 @@ access_token_ttl_seconds: 300
     fn pre_auth_optional_tx_code_does_not_require_tx_code_rate_limit() {
         let mut config = valid_pre_auth_config();
         config.oid4vci.pre_authorized_code.tx_code.required = false;
+        config
+            .oid4vci
+            .pre_authorized_code
+            .pre_authorized_code_ttl_seconds = MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS;
         config
             .self_attestation
             .rate_limits
