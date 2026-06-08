@@ -658,6 +658,7 @@ fn postgres_table_source_descriptor_loads_without_reading_secret() {
             connect_timeout,
             query_timeout,
             live_max_connections,
+            live_max_rows,
         } => {
             assert_eq!(connection_env, "SOCIAL_REGISTRY_DATABASE_URL");
             let table = table.as_ref().expect("table descriptor");
@@ -668,6 +669,7 @@ fn postgres_table_source_descriptor_loads_without_reading_secret() {
             assert_eq!(*connect_timeout, std::time::Duration::from_secs(5));
             assert_eq!(*query_timeout, std::time::Duration::from_secs(30));
             assert_eq!(*live_max_connections, 8);
+            assert_eq!(*live_max_rows, 10_000);
         }
         other => panic!("expected postgres source, got {other:?}"),
     }
@@ -843,6 +845,205 @@ fn postgres_configured_sql_rejects_semicolons() {
 }
 
 #[test]
+fn postgres_configured_sql_rejects_data_modifying_cte() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(
+        &tmp,
+        &minimal_config(
+            r#"
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    tables:
+      - id: records_table
+        materialization: snapshot
+        source:
+          type: postgres
+          connection_env: SOCIAL_REGISTRY_DATABASE_URL
+          query: "with changed as (update public.records set exported = true returning record_id) select record_id from changed"
+        refresh:
+          mode: interval
+          interval: 5m
+        schema:
+          strict: false
+          fields:
+            - name: record_id
+              type: string
+    entities: []
+"#,
+        ),
+    );
+
+    let msg = assert_config_code(config::load(&config_path), "config.validation_error");
+    assert!(!msg.contains("changed"), "query leaked in error: {msg}");
+}
+
+#[test]
+fn postgres_configured_sql_rejects_session_state_changes() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(
+        &tmp,
+        &minimal_config(
+            r#"
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    tables:
+      - id: records_table
+        materialization: snapshot
+        source:
+          type: postgres
+          connection_env: SOCIAL_REGISTRY_DATABASE_URL
+          change_token_sql: "select set_config('default_transaction_read_only', 'off', false)"
+          table:
+            schema: public
+            name: records
+        refresh:
+          mode: mtime
+          interval: 5m
+        schema:
+          strict: false
+          fields:
+            - name: record_id
+              type: string
+    entities: []
+"#,
+        ),
+    );
+
+    let msg = assert_config_code(config::load(&config_path), "config.validation_error");
+    assert!(!msg.contains("set_config"), "query leaked in error: {msg}");
+}
+
+#[test]
+fn postgres_configured_sql_rejects_quoted_session_state_functions() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(
+        &tmp,
+        &minimal_config(
+            r#"
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    tables:
+      - id: records_table
+        materialization: snapshot
+        source:
+          type: postgres
+          connection_env: SOCIAL_REGISTRY_DATABASE_URL
+          change_token_sql: "select pg_catalog.\"set_config\"('default_transaction_read_only', 'off', false)"
+          table:
+            schema: public
+            name: records
+        refresh:
+          mode: mtime
+          interval: 5m
+        schema:
+          strict: false
+          fields:
+            - name: record_id
+              type: string
+    entities: []
+"#,
+        ),
+    );
+
+    let msg = assert_config_code(config::load(&config_path), "config.validation_error");
+    assert!(!msg.contains("set_config"), "query leaked in error: {msg}");
+}
+
+#[test]
+fn postgres_configured_sql_rejects_escape_string_bypass() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(
+        &tmp,
+        &minimal_config(
+            r#"
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    tables:
+      - id: records_table
+        materialization: snapshot
+        source:
+          type: postgres
+          connection_env: SOCIAL_REGISTRY_DATABASE_URL
+          change_token_sql: "select E'foo\\' ' from pg_sleep(10)"
+          table:
+            schema: public
+            name: records
+        refresh:
+          mode: mtime
+          interval: 5m
+        schema:
+          strict: false
+          fields:
+            - name: record_id
+              type: string
+    entities: []
+"#,
+        ),
+    );
+
+    let msg = assert_config_code(config::load(&config_path), "config.validation_error");
+    assert!(!msg.contains("pg_sleep"), "query leaked in error: {msg}");
+}
+
+#[test]
+fn postgres_configured_sql_allows_disallowed_words_inside_strings() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(
+        &tmp,
+        &minimal_config(
+            r#"
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    tables:
+      - id: records_table
+        materialization: snapshot
+        source:
+          type: postgres
+          connection_env: SOCIAL_REGISTRY_DATABASE_URL
+          query: "select 'update' as record_id from public.records"
+        refresh:
+          mode: interval
+          interval: 5m
+        primary_key: record_id
+        schema:
+          strict: false
+          fields:
+            - name: record_id
+              type: string
+    entities: []
+"#,
+        ),
+    );
+
+    config::load(&config_path).expect("quoted text does not fail read-only validation");
+}
+
+#[test]
 fn file_source_live_materialization_is_rejected() {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = write_config(
@@ -979,6 +1180,45 @@ fn postgres_live_max_connections_must_be_nonzero() {
             schema: public
             name: records
           live_max_connections: 0
+        refresh:
+          mode: manual
+        schema:
+          strict: false
+          fields:
+            - name: record_id
+              type: string
+    entities: []
+"#,
+        ),
+    );
+
+    assert_config_code(config::load(&config_path), "config.validation_error");
+}
+
+#[test]
+fn postgres_live_max_rows_must_be_nonzero() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(
+        &tmp,
+        &minimal_config(
+            r#"
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    tables:
+      - id: records_table
+        materialization: live
+        source:
+          type: postgres
+          connection_env: SOCIAL_REGISTRY_DATABASE_URL
+          table:
+            schema: public
+            name: records
+          live_max_rows: 0
         refresh:
           mode: manual
         schema:
@@ -1280,6 +1520,7 @@ fn oidc_config_loads_with_defaults() {
     assert_eq!(oidc.leeway.as_secs(), 60);
     assert_eq!(oidc.scope_claim, "scope");
     assert!(oidc.scope_map.is_empty());
+    assert!(oidc.scope_object_required_keys.is_empty());
     assert!(oidc.allowed_clients.is_empty());
     assert_eq!(
         oidc.token_types,
@@ -1298,6 +1539,8 @@ fn oidc_config_accepts_overrides() {
     scope_claim: scp
     scope_map:
       role/registry-reader: clinic_capacity:rows
+    scope_object_required_keys:
+      - orgId-123
     allowed_clients:
       - openspp-client
     token_types:
@@ -1319,6 +1562,10 @@ fn oidc_config_accepts_overrides() {
             .get("role/registry-reader")
             .map(String::as_str),
         Some("clinic_capacity:rows")
+    );
+    assert_eq!(
+        oidc.scope_object_required_keys,
+        vec!["orgId-123".to_string()]
     );
     assert_eq!(oidc.allowed_clients, vec!["openspp-client".to_string()]);
     assert_eq!(oidc.token_types, vec!["at+jwt".to_string()]);
@@ -1388,6 +1635,7 @@ fn example_oidc_config_loads_and_validates() {
             .map(String::as_str),
         Some("social_registry:aggregate"),
     );
+    assert!(oidc.scope_object_required_keys.is_empty());
     assert!(oidc.allowed_clients.is_empty());
     assert_eq!(
         oidc.token_types,
@@ -1652,6 +1900,14 @@ fn oidc_config_rejects_jwks_cache_ttl_out_of_range() {
 fn oidc_config_rejects_scope_claim_with_whitespace() {
     let tmp = TempDir::new().expect("tempdir");
     let extra = "    scope_claim: \"my scope\"\n";
+    let path = write_config(&tmp, &oidc_config_body(extra));
+    assert_config_code(config::load(&path), "config.validation_error");
+}
+
+#[test]
+fn oidc_config_rejects_empty_scope_object_required_key() {
+    let tmp = TempDir::new().expect("tempdir");
+    let extra = "    scope_object_required_keys:\n      - \"\"\n";
     let path = write_config(&tmp, &oidc_config_body(extra));
     assert_config_code(config::load(&path), "config.validation_error");
 }

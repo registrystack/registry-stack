@@ -116,7 +116,24 @@ pub struct ConfigTrustConfig {
     #[serde(default = "default_break_glass_rate_limit")]
     pub break_glass_rate_limit: BreakGlassRateLimit,
     #[serde(default)]
+    pub remote_tuf_repositories: Vec<RemoteTufRepositoryConfig>,
+    #[serde(default)]
     pub accepted_roots: Vec<RegistryTrustRoot>,
+}
+
+/// Operator-owned remote TUF source allowlist for governed config admin flows.
+///
+/// HTTP admin requests may name one of these sources, but cannot introduce new
+/// repository URLs or opt the server into insecure dev fetching.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteTufRepositoryConfig {
+    pub root_path: PathBuf,
+    pub metadata_base_url: String,
+    pub targets_base_url: String,
+    pub datastore_dir: PathBuf,
+    #[serde(default)]
+    pub allow_dev_insecure_fetch_urls: bool,
 }
 
 fn default_break_glass_rate_limit() -> BreakGlassRateLimit {
@@ -446,6 +463,12 @@ pub struct OidcConfig {
     /// relay's `<dataset_id>:<level>` shape.
     #[serde(default)]
     pub scope_map: BTreeMap<String, String>,
+    /// Optional keys that must be present inside object-valued role
+    /// claim values before the role key is treated as an active scope.
+    /// This is useful for IdPs such as Zitadel where role values are
+    /// keyed by organization id.
+    #[serde(default)]
+    pub scope_object_required_keys: Vec<String>,
     /// Optional allowlist of client identifiers, matched against the
     /// token's `azp` (preferred) or `client_id` claim. Empty list
     /// means any client is accepted.
@@ -680,6 +703,8 @@ pub enum SourceConfig {
         query_timeout: Duration,
         #[serde(default = "default_postgres_live_max_connections")]
         live_max_connections: usize,
+        #[serde(default = "default_postgres_live_max_rows")]
+        live_max_rows: usize,
     },
 }
 
@@ -711,6 +736,10 @@ fn default_postgres_query_timeout() -> Duration {
 
 fn default_postgres_live_max_connections() -> usize {
     8
+}
+
+fn default_postgres_live_max_rows() -> usize {
+    10_000
 }
 
 /// Refresh policy. Tagged on `mode:`.

@@ -27,7 +27,10 @@ use crate::entity::{EntityModel, EntityRegistry};
 use crate::error::{AuthError, EntityError, Error, InternalError, SchemaError};
 use crate::ingest::ReadinessSnapshot;
 use crate::metadata;
-use crate::query::{EntityCollectionQuery, EntityFilter, EntityFilterOp, RelationshipPageQuery};
+use crate::query::{
+    satisfies_required_filter, EntityCollectionQuery, EntityFilter, EntityFilterOp,
+    RelationshipPageQuery,
+};
 use crate::runtime_config::{CursorSigner, RuntimeSnapshot, CURSOR_MAC_LEN};
 
 const PROBLEM_JSON: HeaderValue = HeaderValue::from_static("application/problem+json");
@@ -221,9 +224,10 @@ async fn entity_collection(
     };
     if !required_filters.is_empty() {
         let satisfied = query_params
+            .query
             .filters
             .iter()
-            .any(|f| required_filters.iter().any(|r| r == &f.field));
+            .any(|filter| satisfies_required_filter(&required_filters, filter));
         if !satisfied {
             return Error::from(EntityError::FilterRequired {
                 required: required_filters,

@@ -164,9 +164,11 @@ or a remote TUF repository:
 
 Remote TUF sources are recorded as `signed_bundle_endpoint`; local TUF directory
 sources are recorded as `signed_bundle_file`; inline diagnostics are recorded as
-`local_file`. HTTP loopback remote repositories require
-`allow_dev_insecure_fetch_urls: true` and are intended only for tests and local
-development.
+`local_file`. Remote TUF requests must match a repository configured by the
+operator under `config_trust.remote_tuf_repositories` before any fetch occurs.
+HTTP loopback remote repositories are accepted only when that configured
+repository sets `allow_dev_insecure_fetch_urls: true`; request bodies cannot
+enable insecure fetching by themselves.
 
 Break-glass is apply-only. `verify` and `dry-run` reject any break-glass fields. `apply` accepts break-glass only for signed TUF targets and only when the approval is present, the signed bundle includes the requested emergency change class, and local anti-rollback rate limits allow it. The rolling-window rate-limit policy comes from local `config_trust.break_glass_rate_limit`; clients must not include it in the request:
 

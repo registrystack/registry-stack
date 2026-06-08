@@ -1101,13 +1101,16 @@ async fn middleware_records_jwks_unavailable_auth_failure() {
     assert_eq!(parsed["principal_id"], Value::Null);
 }
 
-#[tokio::test]
-async fn middleware_uses_x_forwarded_for_from_trusted_proxy() {
+async fn remote_addr_from_x_forwarded_for(
+    x_forwarded_for: Option<&str>,
+    peer: &str,
+    trusted_proxies: Vec<String>,
+) -> Value {
     let (sink, pipeline) = in_memory_pipeline();
     let settings = AuditSettings {
         include_health: true,
         trust_proxy_enabled: true,
-        trusted_proxies: vec!["10.0.0.0/8".to_string()],
+        trusted_proxies,
         sensitive_fields: Vec::new(),
         hash_hasher: AuditKeyHasher::unkeyed_dev_only(),
     };
@@ -1117,14 +1120,13 @@ async fn middleware_uses_x_forwarded_for_from_trusted_proxy() {
         .layer(Extension(settings))
         .layer(Extension(pipeline.clone()));
 
-    let mut req = Request::builder()
-        .method(Method::GET)
-        .uri("/probe")
-        .header("x-forwarded-for", "203.0.113.10, 10.1.2.3")
-        .body(Body::empty())
-        .unwrap();
+    let mut builder = Request::builder().method(Method::GET).uri("/probe");
+    if let Some(x_forwarded_for) = x_forwarded_for {
+        builder = builder.header("x-forwarded-for", x_forwarded_for);
+    }
+    let mut req = builder.body(Body::empty()).unwrap();
     req.extensions_mut().insert(axum::extract::ConnectInfo(
-        "10.1.2.3:12345".parse::<SocketAddr>().unwrap(),
+        peer.parse::<SocketAddr>().unwrap(),
     ));
 
     let resp = app.oneshot(req).await.unwrap();
@@ -1132,41 +1134,94 @@ async fn middleware_uses_x_forwarded_for_from_trusted_proxy() {
 
     let records = sink.snapshot();
     assert_eq!(records.len(), 1);
-    let parsed = captured_record(&records[0]);
-    assert_eq!(parsed["remote_addr"], "203.0.113.10");
+    captured_record(&records[0])["remote_addr"].clone()
+}
+
+#[tokio::test]
+async fn middleware_uses_x_forwarded_for_from_trusted_proxy() {
+    let remote_addr = remote_addr_from_x_forwarded_for(
+        Some("203.0.113.10, 10.1.2.3"),
+        "10.1.2.3:12345",
+        vec!["10.0.0.0/8".to_string()],
+    )
+    .await;
+    assert_eq!(remote_addr, "203.0.113.10");
 }
 
 #[tokio::test]
 async fn middleware_ignores_x_forwarded_for_from_untrusted_peer() {
-    let (sink, pipeline) = in_memory_pipeline();
-    let settings = AuditSettings {
-        include_health: true,
-        trust_proxy_enabled: true,
-        trusted_proxies: vec!["10.0.0.0/8".to_string()],
-        sensitive_fields: Vec::new(),
-        hash_hasher: AuditKeyHasher::unkeyed_dev_only(),
-    };
-    let app = Router::new()
-        .route("/probe", get(|| async { StatusCode::OK }))
-        .layer(from_fn(audit_layer))
-        .layer(Extension(settings))
-        .layer(Extension(pipeline.clone()));
+    let remote_addr = remote_addr_from_x_forwarded_for(
+        Some("203.0.113.10"),
+        "192.0.2.1:12345",
+        vec!["10.0.0.0/8".to_string()],
+    )
+    .await;
+    assert_eq!(remote_addr, "192.0.2.1");
+}
 
-    let mut req = Request::builder()
-        .method(Method::GET)
-        .uri("/probe")
-        .header("x-forwarded-for", "203.0.113.10")
-        .body(Body::empty())
-        .unwrap();
-    req.extensions_mut().insert(axum::extract::ConnectInfo(
-        "192.0.2.1:12345".parse::<SocketAddr>().unwrap(),
-    ));
+#[tokio::test]
+async fn middleware_uses_append_style_x_forwarded_for_trust_boundary() {
+    let remote_addr = remote_addr_from_x_forwarded_for(
+        Some("203.0.113.10, 198.51.100.20, 10.2.0.5"),
+        "10.1.2.3:12345",
+        vec!["10.0.0.0/8".to_string()],
+    )
+    .await;
+    assert_eq!(remote_addr, "198.51.100.20");
+}
 
-    let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+#[tokio::test]
+async fn middleware_uses_overwrite_style_x_forwarded_for_trust_boundary() {
+    let remote_addr = remote_addr_from_x_forwarded_for(
+        Some("203.0.113.10"),
+        "10.1.2.3:12345",
+        vec!["10.0.0.0/8".to_string()],
+    )
+    .await;
+    assert_eq!(remote_addr, "203.0.113.10");
+}
 
-    let records = sink.snapshot();
-    assert_eq!(records.len(), 1);
-    let parsed = captured_record(&records[0]);
-    assert_eq!(parsed["remote_addr"], "192.0.2.1");
+#[tokio::test]
+async fn middleware_stops_at_untrusted_trailing_x_forwarded_for_hop() {
+    let remote_addr = remote_addr_from_x_forwarded_for(
+        Some("203.0.113.10, 198.51.100.20"),
+        "10.1.2.3:12345",
+        vec!["10.0.0.0/8".to_string()],
+    )
+    .await;
+    assert_eq!(remote_addr, "198.51.100.20");
+}
+
+#[tokio::test]
+async fn middleware_falls_back_to_peer_for_malformed_x_forwarded_for() {
+    let remote_addr = remote_addr_from_x_forwarded_for(
+        Some("203.0.113.10, not-an-ip"),
+        "10.1.2.3:12345",
+        vec!["10.0.0.0/8".to_string()],
+    )
+    .await;
+    assert_eq!(remote_addr, "10.1.2.3");
+}
+
+#[tokio::test]
+async fn middleware_falls_back_to_peer_without_x_forwarded_for() {
+    let remote_addr =
+        remote_addr_from_x_forwarded_for(None, "10.1.2.3:12345", vec!["10.0.0.0/8".to_string()])
+            .await;
+    assert_eq!(remote_addr, "10.1.2.3");
+}
+
+#[tokio::test]
+async fn middleware_falls_back_to_peer_when_full_forwarded_chain_is_trusted() {
+    // Every hop (the injected X-Forwarded-For entry and the socket peer) sits
+    // inside the trusted range, so there is no untrusted hop to select. The
+    // resolver must record the authentic peer, not the attacker-injected
+    // leftmost X-Forwarded-For value.
+    let remote_addr = remote_addr_from_x_forwarded_for(
+        Some("10.99.99.99"),
+        "10.1.2.3:12345",
+        vec!["10.0.0.0/8".to_string()],
+    )
+    .await;
+    assert_eq!(remote_addr, "10.1.2.3");
 }

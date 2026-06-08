@@ -118,7 +118,10 @@ VALUES
         .batch_execute(&format!(r#"DROP SCHEMA "{schema_name}" CASCADE"#))
         .await?;
 
-    result?;
+    assert!(
+        result.is_err(),
+        "mutating change_token_sql must fail before deleting rows"
+    );
     assert_eq!(count, 1, "read-only connector session must not delete rows");
     Ok(())
 }
@@ -152,6 +155,42 @@ VALUES
         .await?;
 
     let result = run_live_ingest(&db_url, &schema_name).await;
+    client
+        .batch_execute(&format!(r#"DROP SCHEMA "{schema_name}" CASCADE"#))
+        .await?;
+    result
+}
+
+#[tokio::test]
+#[ignore = "requires DATA_GATE_POSTGRES_TEST_URL"]
+async fn postgres_live_table_enforces_configured_row_cap() -> Result<(), Box<dyn std::error::Error>>
+{
+    let db_url = env::var("DATA_GATE_POSTGRES_TEST_URL")?;
+    let schema_name = format!(
+        "data_gate_test_{}",
+        ulid::Ulid::new().to_string().to_lowercase()
+    );
+    let client = postgres_client(&db_url).await?;
+    client
+        .batch_execute(&format!(
+            r#"
+CREATE SCHEMA "{schema_name}";
+CREATE TABLE "{schema_name}".beneficiaries (
+  beneficiary_id integer primary key,
+  program text,
+  amount numeric,
+  unsafe_number text
+);
+INSERT INTO "{schema_name}".beneficiaries
+  (beneficiary_id, program, amount, unsafe_number)
+VALUES
+  (1, 'cash', 12.50, '1'),
+  (2, 'food', 8.25, '2');
+"#
+        ))
+        .await?;
+
+    let result = run_live_ingest_with_max_rows(&db_url, &schema_name, 1).await;
     client
         .batch_execute(&format!(r#"DROP SCHEMA "{schema_name}" CASCADE"#))
         .await?;
@@ -298,6 +337,14 @@ async fn run_live_ingest(
     db_url: &str,
     schema_name: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    run_live_ingest_with_max_rows(db_url, schema_name, 10_000).await
+}
+
+async fn run_live_ingest_with_max_rows(
+    db_url: &str,
+    schema_name: &str,
+    live_max_rows: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
     let tmp = TempDir::new()?;
     let cache_dir = tmp.path().join("cache");
     env::set_var("DATA_GATE_POSTGRES_RUNTIME_URL", db_url);
@@ -340,6 +387,7 @@ datasets:
             name: beneficiaries
           query_timeout: 10s
           live_max_connections: 2
+          live_max_rows: {live_max_rows}
         refresh:
           mode: manual
         primary_key: beneficiary_id
@@ -387,6 +435,29 @@ audit:
     let dataset: DatasetId = id("social_registry");
     let resource: ResourceId = id("beneficiaries_postgres");
     let table = table_name(&dataset, &resource);
+    if live_max_rows == 1 {
+        let bounded = ctx
+            .sql(&format!("select beneficiary_id from {table} limit 1"))
+            .await?
+            .collect()
+            .await?;
+        assert_eq!(bounded.len(), 1);
+        assert_eq!(bounded[0].num_rows(), 1);
+
+        let err = ctx
+            .sql(&format!("select beneficiary_id from {table}"))
+            .await?
+            .collect()
+            .await
+            .expect_err("unbounded live query over the row cap fails");
+        assert!(
+            err.to_string()
+                .contains("postgres live export exceeds configured row maximum"),
+            "unexpected error: {err}"
+        );
+        return Ok(());
+    }
+
     let initial = ctx
         .sql(&format!(
             "select beneficiary_id, program, amount from {table} order by beneficiary_id"

@@ -341,8 +341,9 @@ Full responses are written under `demo/output/registry-notary-demo/`; the
 script clears that directory at startup so each run has a clean numbered
 artifact set. When `--start-server` is used, the demo uses
 `REGISTRY_NOTARY_ROOT` when set, a sibling `../registry-notary` checkout when
-available, or a tagged clone of `https://github.com/jeremi/registry-notary`
-under `target/registry-notary-demo/`. The source registry config is
+available, or a pinned-commit clone of
+`https://github.com/jeremi/registry-notary` under
+`target/registry-notary-demo/`. The source registry config is
 `demo/config/evidence_registries.yaml`, the registry metadata manifest is
 `demo/config/evidence_registries.metadata.yaml`, and the synthetic source rows
 live under `demo/data/evidence_server/`. The source registry config does not

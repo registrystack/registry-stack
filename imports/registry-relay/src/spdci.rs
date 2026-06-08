@@ -17,7 +17,10 @@ use crate::config::{Config, SpdciRegistryConfig};
 use crate::error::{ConfigError, Error};
 
 #[cfg(feature = "standards-cel-mapping")]
-use crosswalk_core::{CompiledMapping, EvaluationInput, MappingRuntime, RuntimeOptions};
+use crosswalk_core::{
+    CompiledMapping, EvaluationInput, MappingError, MappingRuntime, RuntimeOptions,
+};
+use jsonschema::error::{ValidationError, ValidationErrorKind};
 
 #[derive(Debug, Clone, Default)]
 pub struct SpdciResponseMapper {
@@ -231,23 +234,25 @@ impl SpdciResponseProfile {
             },
         );
         if !out.errors.is_empty() {
+            let errors = mapping_issue_diagnostics(&out.errors, "error");
             tracing::error!(
                 registry = %self.registry,
                 dataset_id = %self.dataset,
                 entity = %self.entity,
                 mapping_path = ?self.mapping_path,
-                errors = ?out.errors,
+                errors = ?errors,
                 "SP DCI response mapping failed"
             );
             return Err(SpdciResponseMappingError::MappingFailed);
         }
         if !out.warnings.is_empty() {
+            let warnings = mapping_issue_diagnostics(&out.warnings, "warning");
             tracing::warn!(
                 registry = %self.registry,
                 dataset_id = %self.dataset,
                 entity = %self.entity,
                 mapping_path = ?self.mapping_path,
-                warnings = ?out.warnings,
+                warnings = ?warnings,
                 "SP DCI response mapping produced warnings"
             );
         }
@@ -268,7 +273,7 @@ impl SpdciResponseProfile {
             return Ok(());
         };
         if let Err(errors) = schema.validate(record) {
-            let messages: Vec<String> = errors.map(|error| error.to_string()).collect();
+            let messages = schema_validation_diagnostics(errors);
             tracing::error!(
                 registry = %self.registry,
                 dataset_id = %self.dataset,
@@ -281,6 +286,76 @@ impl SpdciResponseProfile {
         }
         Ok(())
     }
+}
+
+fn schema_validation_diagnostics<'a>(
+    errors: impl IntoIterator<Item = ValidationError<'a>>,
+) -> Vec<String> {
+    errors
+        .into_iter()
+        .map(|error| {
+            format!(
+                "instance_path={} schema_path={} kind={}",
+                error.instance_path,
+                error.schema_path,
+                schema_validation_kind(&error.kind)
+            )
+        })
+        .collect()
+}
+
+fn schema_validation_kind(kind: &ValidationErrorKind) -> &'static str {
+    match kind {
+        ValidationErrorKind::AdditionalItems { .. } => "additional_items",
+        ValidationErrorKind::AdditionalProperties { .. } => "additional_properties",
+        ValidationErrorKind::AnyOf => "any_of",
+        ValidationErrorKind::BacktrackLimitExceeded { .. } => "backtrack_limit_exceeded",
+        ValidationErrorKind::Constant { .. } => "constant",
+        ValidationErrorKind::Contains => "contains",
+        ValidationErrorKind::ContentEncoding { .. } => "content_encoding",
+        ValidationErrorKind::ContentMediaType { .. } => "content_media_type",
+        ValidationErrorKind::Custom { .. } => "custom",
+        ValidationErrorKind::Enum { .. } => "enum",
+        ValidationErrorKind::ExclusiveMaximum { .. } => "exclusive_maximum",
+        ValidationErrorKind::ExclusiveMinimum { .. } => "exclusive_minimum",
+        ValidationErrorKind::FalseSchema => "false_schema",
+        ValidationErrorKind::FileNotFound { .. } => "file_not_found",
+        ValidationErrorKind::Format { .. } => "format",
+        ValidationErrorKind::FromUtf8 { .. } => "from_utf8",
+        ValidationErrorKind::Utf8 { .. } => "utf8",
+        ValidationErrorKind::JSONParse { .. } => "json_parse",
+        ValidationErrorKind::InvalidReference { .. } => "invalid_reference",
+        ValidationErrorKind::InvalidURL { .. } => "invalid_url",
+        ValidationErrorKind::MaxItems { .. } => "max_items",
+        ValidationErrorKind::Maximum { .. } => "maximum",
+        ValidationErrorKind::MaxLength { .. } => "max_length",
+        ValidationErrorKind::MaxProperties { .. } => "max_properties",
+        ValidationErrorKind::MinItems { .. } => "min_items",
+        ValidationErrorKind::Minimum { .. } => "minimum",
+        ValidationErrorKind::MinLength { .. } => "min_length",
+        ValidationErrorKind::MinProperties { .. } => "min_properties",
+        ValidationErrorKind::MultipleOf { .. } => "multiple_of",
+        ValidationErrorKind::Not { .. } => "not",
+        ValidationErrorKind::OneOfMultipleValid => "one_of_multiple_valid",
+        ValidationErrorKind::OneOfNotValid => "one_of_not_valid",
+        ValidationErrorKind::Pattern { .. } => "pattern",
+        ValidationErrorKind::PropertyNames { .. } => "property_names",
+        ValidationErrorKind::Required { .. } => "required",
+        ValidationErrorKind::Schema => "schema",
+        ValidationErrorKind::Type { .. } => "type",
+        ValidationErrorKind::UnevaluatedProperties { .. } => "unevaluated_properties",
+        ValidationErrorKind::UniqueItems => "unique_items",
+        ValidationErrorKind::UnknownReferenceScheme { .. } => "unknown_reference_scheme",
+        ValidationErrorKind::Resolver { .. } => "resolver",
+    }
+}
+
+#[cfg(feature = "standards-cel-mapping")]
+fn mapping_issue_diagnostics(issues: &[MappingError], kind: &str) -> Vec<String> {
+    issues
+        .iter()
+        .map(|issue| format!("path={} kind={kind}", issue.path.as_deref().unwrap_or("$")))
+        .collect()
 }
 
 fn read_file(
@@ -372,4 +447,53 @@ fn one_record(records: BTreeMap<String, Vec<Value>>) -> Option<Value> {
         return None;
     }
     Some(first)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn schema_validation_diagnostics_omit_instance_values() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "member_identifier": { "type": "number" }
+            }
+        });
+        let record = json!({
+            "member_identifier": "SECRET-ROW-VALUE-451123"
+        });
+        let compiled = jsonschema::JSONSchema::compile(&schema).expect("schema compiles");
+        let errors = compiled
+            .validate(&record)
+            .expect_err("record should fail schema validation");
+        let formatted = schema_validation_diagnostics(errors).join("\n");
+
+        assert!(formatted.contains("instance_path=/member_identifier"));
+        assert!(formatted.contains("schema_path=/properties/member_identifier/type"));
+        assert!(formatted.contains("kind=type"));
+        assert!(!formatted.contains("SECRET-ROW-VALUE-451123"));
+    }
+
+    #[cfg(feature = "standards-cel-mapping")]
+    #[test]
+    fn cel_issue_diagnostics_omit_instance_values() {
+        let issues = vec![crosswalk_core::MappingError {
+            code: crosswalk_core::ErrorCode::EvaluationError,
+            path: Some("records.disabled_person.fields.member_identifier".to_string()),
+            message: "failed while reading SECRET-ROW-VALUE-451123".to_string(),
+            expression: None,
+            source_path: None,
+            record: None,
+            index: None,
+            severity: crosswalk_core::ErrorSeverity::Error,
+        }];
+        let formatted = mapping_issue_diagnostics(&issues, "error").join("\n");
+
+        assert!(formatted.contains("path=records.disabled_person.fields.member_identifier"));
+        assert!(formatted.contains("kind=error"));
+        assert!(!formatted.contains("SECRET-ROW-VALUE-451123"));
+    }
 }

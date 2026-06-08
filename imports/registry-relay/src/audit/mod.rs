@@ -661,8 +661,10 @@ pub async fn audit_layer(
     // `ConnectInfo` is propagated by axum when the server is started with
     // `into_make_service_with_connect_info`. In unit tests using
     // `oneshot`, no such extension is present, so we fall back to
-    // unspecified. When trust-proxy support is enabled, a trusted socket
-    // peer may project the first `X-Forwarded-For` address into audit.
+    // unspecified. When trust-proxy support is enabled and the socket peer
+    // is trusted, audit records the rightmost `X-Forwarded-For` hop that is
+    // not itself a trusted proxy, falling back to the socket peer when every
+    // hop in the chain is trusted.
     let remote_addr = resolve_remote_addr(
         &headers,
         request
@@ -997,13 +999,36 @@ fn resolve_remote_addr(
         return peer;
     }
 
-    headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
-        .map(str::trim)
-        .and_then(|v| v.parse::<IpAddr>().ok())
+    x_forwarded_for_chain(headers)
+        .map(|mut chain| {
+            chain.push(peer);
+            chain
+                .iter()
+                .rev()
+                .find(|hop| !trusted_proxy_contains(**hop, &settings.trusted_proxies))
+                .copied()
+                .unwrap_or(peer)
+        })
         .unwrap_or(peer)
+}
+
+fn x_forwarded_for_chain(headers: &HeaderMap) -> Option<Vec<IpAddr>> {
+    let mut chain = Vec::new();
+    for value in headers.get_all("x-forwarded-for") {
+        let value = value.to_str().ok()?;
+        for hop in value.split(',') {
+            let hop = hop.trim();
+            if hop.is_empty() {
+                return None;
+            }
+            chain.push(hop.parse::<IpAddr>().ok()?);
+        }
+    }
+    if chain.is_empty() {
+        None
+    } else {
+        Some(chain)
+    }
 }
 
 fn trusted_proxy_contains(peer: IpAddr, trusted_proxies: &[String]) -> bool {

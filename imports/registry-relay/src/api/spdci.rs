@@ -25,8 +25,13 @@ use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
 use crate::config::{Config, SpdciDisabilityRegistryConfig, SpdciRegistryConfig};
 use crate::entity::EntityModel;
-use crate::error::{AuthError, Error, FilterError, InternalError, SchemaError, SpdciError};
-use crate::query::{EntityCollectionQuery, EntityFilter, EntityFilterOp, EntityQueryEngine};
+use crate::error::{
+    AuthError, EntityError, Error, FilterError, InternalError, SchemaError, SpdciError,
+};
+use crate::query::{
+    satisfies_required_filter, EntityCollectionQuery, EntityFilter, EntityFilterOp,
+    EntityQueryEngine,
+};
 use crate::runtime_config::RuntimeSnapshot;
 use crate::spdci::SpdciResponseMapper;
 
@@ -39,6 +44,7 @@ const REQUIRED_HEADER_FIELDS: &[&str] = &[
     "sender_id",
     "total_count",
 ];
+const DATA_PURPOSE_HEADER: &str = "data-purpose";
 
 struct RouteDeps {
     runtime: RuntimeSnapshot,
@@ -119,7 +125,16 @@ async fn run_disabled_status(
     body: Value,
 ) -> Result<(Response, u64), Error> {
     require_scope_for(principal, &route.entity.access.evidence_verification_scope)?;
+    require_entity_route_gates(&route.entity, &headers)?;
     let request = SpdciRequest::from_body(body, &route.config)?;
+    require_entity_filters_for_query(
+        &route.entity,
+        &[EntityFilter {
+            field: route.config.query_field.clone(),
+            op: EntityFilterOp::Eq,
+            value: request.query_value.clone(),
+        }],
+    )?;
     let rows = read_rows(route, &request, Some(projected_status_fields(route))).await?;
     let row_count = rows.len() as u64;
     let disabled = rows.first().is_some_and(|row| {
@@ -177,7 +192,11 @@ async fn run_sync_search_response(
     body: Value,
 ) -> Result<(Response, u64), Error> {
     require_scope_for(principal, &route.entity.access.read_scope)?;
+    require_entity_route_gates(&route.entity, &headers)?;
     let request = SearchRequest::from_body(body, &route.config)?;
+    for item in &request.items {
+        require_entity_filters_for_query(&route.entity, &item.filters)?;
+    }
     let mut search_response = Vec::with_capacity(request.items.len());
     let mut total_count = 0_u64;
     for item in request.items {
@@ -278,7 +297,16 @@ async fn run_search_response(
     body: Value,
 ) -> Result<(Response, u64), Error> {
     require_scope_for(principal, &route.entity.access.read_scope)?;
+    require_entity_route_gates(&route.entity, &headers)?;
     let request = SpdciRequest::from_body(body, &route.config)?;
+    require_entity_filters_for_query(
+        &route.entity,
+        &[EntityFilter {
+            field: route.config.query_field.clone(),
+            op: EntityFilterOp::Eq,
+            value: request.query_value.clone(),
+        }],
+    )?;
     let rows = read_rows(route, &request, None).await?;
     let row_count = rows.len() as u64;
     let reg_records =
@@ -454,6 +482,9 @@ impl SearchRequest {
         let Some(items) = message.get("search_request").and_then(Value::as_array) else {
             return Err(FilterError::InvalidValue.into());
         };
+        if items.is_empty() {
+            return Err(FilterError::InvalidValue.into());
+        }
         let mut parsed = Vec::with_capacity(items.len());
         for item in items {
             let criteria = item
@@ -463,6 +494,9 @@ impl SearchRequest {
                 string_field(criteria, "query_type").ok_or(FilterError::InvalidValue)?;
             let query = criteria.get("query").ok_or(FilterError::InvalidValue)?;
             let filters = filters_from_search_query(&query_type, query, config)?;
+            if filters.is_empty() {
+                return Err(FilterError::InvalidValue.into());
+            }
             let limit = criteria
                 .pointer("/pagination/page_size")
                 .and_then(Value::as_u64)
@@ -630,6 +664,9 @@ fn parse_expression_object(
     config: &SpdciRegistryConfig,
 ) -> Result<Vec<EntityFilter>, Error> {
     if let Some(and) = expression.get("$and").and_then(Value::as_array) {
+        if and.is_empty() {
+            return Err(FilterError::InvalidValue.into());
+        }
         let mut filters = Vec::new();
         for part in and {
             filters.extend(parse_expression_object(part, config)?);
@@ -639,6 +676,9 @@ fn parse_expression_object(
     let Some(object) = expression.as_object() else {
         return Err(FilterError::InvalidValue.into());
     };
+    if object.is_empty() {
+        return Err(FilterError::InvalidValue.into());
+    }
     let mut filters = Vec::new();
     for (attribute, value) in object {
         let field = config
@@ -657,6 +697,9 @@ fn filters_from_predicate_query(
     let Some(predicates) = query.as_array() else {
         return Err(FilterError::InvalidValue.into());
     };
+    if predicates.is_empty() {
+        return Err(FilterError::InvalidValue.into());
+    }
     let mut filters = Vec::new();
     for predicate in predicates {
         if let Some(condition) = string_field(predicate, "condition") {
@@ -664,10 +707,15 @@ fn filters_from_predicate_query(
                 return Err(FilterError::UnsupportedOp.into());
             }
         }
+        let mut has_expression = false;
         for key in ["expression1", "expression2"] {
             if let Some(expression) = predicate.get(key) {
+                has_expression = true;
                 filters.push(filter_from_predicate_expression(expression, config)?);
             }
+        }
+        if !has_expression {
+            return Err(FilterError::InvalidValue.into());
         }
     }
     Ok(filters)
@@ -831,6 +879,40 @@ fn require_scope_for(principal: Option<Extension<Principal>>, required: &str) ->
         return Err(AuthError::MissingCredential.into());
     };
     require_scope(&principal, required)
+}
+
+fn require_entity_route_gates(entity: &EntityModel, headers: &HeaderMap) -> Result<(), Error> {
+    if entity.api.require_purpose_header && !has_purpose_header(headers) {
+        return Err(AuthError::PurposeRequired.into());
+    }
+    Ok(())
+}
+
+fn require_entity_filters_for_query(
+    entity: &EntityModel,
+    filters: &[EntityFilter],
+) -> Result<(), Error> {
+    if entity.api.required_filters.is_empty() {
+        return Ok(());
+    }
+    if filters
+        .iter()
+        .any(|filter| satisfies_required_filter(&entity.api.required_filters, filter))
+    {
+        return Ok(());
+    }
+    Err(EntityError::FilterRequired {
+        required: entity.api.required_filters.clone(),
+    }
+    .into())
+}
+
+fn has_purpose_header(headers: &HeaderMap) -> bool {
+    headers
+        .get(DATA_PURPOSE_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .is_some_and(|s| !s.is_empty())
 }
 
 fn spdci_envelope_with_count(

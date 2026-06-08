@@ -15,7 +15,7 @@ use tokio::sync::watch;
 use crate::audit::{AuditContextExt, ErrorCodeExt};
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
-use crate::config::DatasetConfig;
+use crate::config::{DatasetConfig, EntityConfig};
 use crate::error::{AuthError, Error, FilterError, SchemaError};
 use crate::ingest::ReadinessSnapshot;
 use crate::query::{AggregateFilter, AggregateFilterOp, AggregateQueryRequest, AggregateResult};
@@ -105,7 +105,7 @@ async fn list_aggregates(
     runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    if let Err(error) = require_metadata_scope(principal, &path.dataset_id, None) {
+    if let Err(error) = require_metadata_scope(principal.clone(), &path.dataset_id, None) {
         return error.into_response();
     }
     let Some(query) = runtime.aggregate_query() else {
@@ -114,13 +114,16 @@ async fn list_aggregates(
         );
     };
     match query.list_aggregates(&path.dataset_id) {
-        Ok(aggregates) => Json(json!({
-            "data": aggregates.into_iter().map(aggregate_list_json).collect::<Vec<_>>(),
-            "links": [
-                { "rel": "self", "href": format!("/v1/datasets/{}/aggregates", path.dataset_id), "type": "application/json" }
-            ]
-        }))
-        .into_response(),
+        Ok(aggregates) => {
+            let aggregates = filter_visible_aggregates(principal.as_ref(), aggregates);
+            Json(json!({
+                "data": aggregates.into_iter().map(aggregate_list_json).collect::<Vec<_>>(),
+                "links": [
+                    { "rel": "self", "href": format!("/v1/datasets/{}/aggregates", path.dataset_id), "type": "application/json" }
+                ]
+            }))
+            .into_response()
+        }
         Err(error) => error.into_response(),
     }
 }
@@ -137,7 +140,12 @@ async fn aggregate_metadata(
     };
     let aggregate = match query.aggregate_config(&path.dataset_id, &path.aggregate_id) {
         Ok((dataset, aggregate)) => {
-            if let Err(error) = require_metadata_scope(principal, &path.dataset_id, Some(aggregate))
+            if let Err(error) =
+                require_metadata_scope(principal.clone(), &path.dataset_id, Some(aggregate))
+            {
+                return error.into_response();
+            }
+            if let Err(error) = require_source_entity_metadata_scope(principal, dataset, aggregate)
             {
                 return error.into_response();
             }
@@ -153,7 +161,7 @@ async fn list_indicators(
     runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    if let Err(error) = require_metadata_scope(principal, &path.dataset_id, None) {
+    if let Err(error) = require_metadata_scope(principal.clone(), &path.dataset_id, None) {
         return error.into_response();
     }
     let Some(query) = runtime.aggregate_query() else {
@@ -163,7 +171,10 @@ async fn list_indicators(
     };
     match query.list_aggregates(&path.dataset_id) {
         Ok(aggregates) => Json(json!({
-            "data": indicator_discovery_items(&path.dataset_id, &aggregates),
+            "data": indicator_discovery_items(
+                &path.dataset_id,
+                &filter_visible_aggregates(principal.as_ref(), aggregates),
+            ),
             "links": [
                 { "rel": "self", "href": format!("/v1/datasets/{}/indicators", path.dataset_id), "type": "application/json" }
             ]
@@ -178,7 +189,7 @@ async fn get_indicator(
     runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    if let Err(error) = require_metadata_scope(principal, &path.dataset_id, None) {
+    if let Err(error) = require_metadata_scope(principal.clone(), &path.dataset_id, None) {
         return error.into_response();
     }
     let Some(query) = runtime.aggregate_query() else {
@@ -187,12 +198,15 @@ async fn get_indicator(
         );
     };
     match query.list_aggregates(&path.dataset_id) {
-        Ok(aggregates) => indicator_discovery_items(&path.dataset_id, &aggregates)
-            .into_iter()
-            .find(|item| item.get("id").and_then(Value::as_str) == Some(path.item_id.as_str()))
-            .map(Json)
-            .map(IntoResponse::into_response)
-            .unwrap_or_else(|| Error::from(SchemaError::UnknownAggregate).into_response()),
+        Ok(aggregates) => indicator_discovery_items(
+            &path.dataset_id,
+            &filter_visible_aggregates(principal.as_ref(), aggregates),
+        )
+        .into_iter()
+        .find(|item| item.get("id").and_then(Value::as_str) == Some(path.item_id.as_str()))
+        .map(Json)
+        .map(IntoResponse::into_response)
+        .unwrap_or_else(|| Error::from(SchemaError::UnknownAggregate).into_response()),
         Err(error) => error.into_response(),
     }
 }
@@ -202,7 +216,7 @@ async fn list_dimensions(
     runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    if let Err(error) = require_metadata_scope(principal, &path.dataset_id, None) {
+    if let Err(error) = require_metadata_scope(principal.clone(), &path.dataset_id, None) {
         return error.into_response();
     }
     let Some(query) = runtime.aggregate_query() else {
@@ -212,7 +226,10 @@ async fn list_dimensions(
     };
     match query.list_aggregates(&path.dataset_id) {
         Ok(aggregates) => Json(json!({
-            "data": dimension_discovery_items(&path.dataset_id, &aggregates),
+            "data": dimension_discovery_items(
+                &path.dataset_id,
+                &filter_visible_aggregates(principal.as_ref(), aggregates),
+            ),
             "links": [
                 { "rel": "self", "href": format!("/v1/datasets/{}/dimensions", path.dataset_id), "type": "application/json" }
             ]
@@ -227,7 +244,7 @@ async fn get_dimension(
     runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    if let Err(error) = require_metadata_scope(principal, &path.dataset_id, None) {
+    if let Err(error) = require_metadata_scope(principal.clone(), &path.dataset_id, None) {
         return error.into_response();
     }
     let Some(query) = runtime.aggregate_query() else {
@@ -236,12 +253,15 @@ async fn get_dimension(
         );
     };
     match query.list_aggregates(&path.dataset_id) {
-        Ok(aggregates) => dimension_discovery_items(&path.dataset_id, &aggregates)
-            .into_iter()
-            .find(|item| item.get("id").and_then(Value::as_str) == Some(path.item_id.as_str()))
-            .map(Json)
-            .map(IntoResponse::into_response)
-            .unwrap_or_else(|| Error::from(FilterError::UnknownField).into_response()),
+        Ok(aggregates) => dimension_discovery_items(
+            &path.dataset_id,
+            &filter_visible_aggregates(principal.as_ref(), aggregates),
+        )
+        .into_iter()
+        .find(|item| item.get("id").and_then(Value::as_str) == Some(path.item_id.as_str()))
+        .map(Json)
+        .map(IntoResponse::into_response)
+        .unwrap_or_else(|| Error::from(FilterError::UnknownField).into_response()),
         Err(error) => error.into_response(),
     }
 }
@@ -297,7 +317,12 @@ async fn run_aggregate(
     if let Err(error) = require_purpose_header(dataset, aggregate, &headers) {
         return error.into_response();
     }
-    if let Err(error) = require_aggregate_scope(principal, &path.dataset_id, Some(aggregate)) {
+    if let Err(error) =
+        require_aggregate_scope(principal.clone(), &path.dataset_id, Some(aggregate))
+    {
+        return error.into_response();
+    }
+    if let Err(error) = require_source_entity_read_scope(principal, dataset, aggregate) {
         return error.into_response();
     }
     let format = body.format.clone().unwrap_or_else(|| "json".to_string());
@@ -550,6 +575,28 @@ fn aggregate_list_json(item: crate::query::aggregates::AggregateListItem) -> Val
     })
 }
 
+fn filter_visible_aggregates(
+    principal: Option<&Extension<Principal>>,
+    aggregates: Vec<crate::query::aggregates::AggregateListItem>,
+) -> Vec<crate::query::aggregates::AggregateListItem> {
+    aggregates
+        .into_iter()
+        .filter(|aggregate| {
+            principal_has_scope(principal, &aggregate.metadata_scope)
+                && aggregate
+                    .source_entity_metadata_scope
+                    .as_deref()
+                    .is_none_or(|scope| principal_has_scope(principal, scope))
+        })
+        .collect()
+}
+
+fn principal_has_scope(principal: Option<&Extension<Principal>>, required: &str) -> bool {
+    principal
+        .map(|Extension(principal)| principal.scopes.contains(required))
+        .unwrap_or(false)
+}
+
 fn aggregate_metadata_json(
     dataset: &DatasetConfig,
     aggregate: &crate::config::AggregateConfig,
@@ -558,6 +605,16 @@ fn aggregate_metadata_json(
         aggregate_id: aggregate.id.to_string(),
         title: aggregate.title.clone(),
         description: aggregate.description.clone(),
+        metadata_scope: aggregate
+            .access
+            .as_ref()
+            .and_then(|access| access.metadata_scope.clone())
+            .unwrap_or_else(|| format!("{}:metadata", dataset.id)),
+        source_entity_metadata_scope: aggregate
+            .source_entity
+            .as_deref()
+            .and_then(|name| dataset.entities.iter().find(|entity| entity.name == name))
+            .map(|entity| entity.access.metadata_scope.clone()),
         dimensions: aggregate
             .dimensions
             .iter()
@@ -874,10 +931,17 @@ fn csv_row_value(object: &serde_json::Map<String, Value>, header: &str) -> Strin
 fn csv_value(value: &Value) -> String {
     match value {
         Value::Null => String::new(),
-        Value::String(value) => value.clone(),
+        Value::String(value) => escape_csv_formula_cell(value),
         Value::Bool(value) => value.to_string(),
         Value::Number(value) => value.to_string(),
         Value::Array(_) | Value::Object(_) => value.to_string(),
+    }
+}
+
+fn escape_csv_formula_cell(value: &str) -> String {
+    match value.as_bytes().first() {
+        Some(b'=' | b'+' | b'-' | b'@' | b'\t' | b'\r') => format!("'{value}"),
+        _ => value.to_string(),
     }
 }
 
@@ -924,14 +988,9 @@ fn require_purpose_header(
     aggregate: &crate::config::AggregateConfig,
     headers: &HeaderMap,
 ) -> Result<(), Error> {
-    let Some(source_entity) = aggregate.source_entity.as_deref() else {
-        return Err(SchemaError::UnknownAggregate.into());
-    };
-    let require = dataset
-        .entities
-        .iter()
-        .find(|entity| entity.name == source_entity)
-        .is_some_and(|entity| entity.api.require_purpose_header);
+    let require = source_entity(dataset, aggregate)?
+        .api
+        .require_purpose_header;
     if !require {
         return Ok(());
     }
@@ -944,6 +1003,42 @@ fn require_purpose_header(
     } else {
         Err(AuthError::PurposeRequired.into())
     }
+}
+
+fn require_source_entity_metadata_scope(
+    principal: Option<Extension<Principal>>,
+    dataset: &DatasetConfig,
+    aggregate: &crate::config::AggregateConfig,
+) -> Result<(), Error> {
+    require_principal_scope(
+        principal,
+        &source_entity(dataset, aggregate)?.access.metadata_scope,
+    )
+}
+
+fn require_source_entity_read_scope(
+    principal: Option<Extension<Principal>>,
+    dataset: &DatasetConfig,
+    aggregate: &crate::config::AggregateConfig,
+) -> Result<(), Error> {
+    require_principal_scope(
+        principal,
+        &source_entity(dataset, aggregate)?.access.read_scope,
+    )
+}
+
+fn source_entity<'a>(
+    dataset: &'a DatasetConfig,
+    aggregate: &crate::config::AggregateConfig,
+) -> Result<&'a EntityConfig, Error> {
+    let Some(source_entity) = aggregate.source_entity.as_deref() else {
+        return Err(SchemaError::UnknownAggregate.into());
+    };
+    dataset
+        .entities
+        .iter()
+        .find(|entity| entity.name == source_entity)
+        .ok_or_else(|| SchemaError::UnknownAggregate.into())
 }
 
 fn resolve_as_of_rfc3339(

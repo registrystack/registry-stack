@@ -3,7 +3,6 @@
 
 //! SP DCI Disability Registry adapter coverage.
 
-#[cfg(feature = "standards-cel-mapping")]
 use std::env;
 #[cfg(feature = "standards-cel-mapping")]
 use std::path::PathBuf;
@@ -85,6 +84,10 @@ impl From<Error> for TestServerBuildError {
 }
 
 fn spdci_config(registry_extra: &str) -> String {
+    spdci_config_with_entity_api_extra(registry_extra, "")
+}
+
+fn spdci_config_with_entity_api_extra(registry_extra: &str, entity_api_extra: &str) -> String {
     format!(
         r#"
 server:
@@ -181,6 +184,7 @@ datasets:
               ops: [eq, in]
             - field: impairment_type
               ops: [eq, in]
+{entity_api_extra}
 "#
     )
 }
@@ -201,9 +205,27 @@ async fn try_server_with_options(
     registry_extra: &str,
     install_response_mapper: bool,
 ) -> Result<TestServer, TestServerBuildError> {
+    try_server_with_options_and_entity_api_extra(registry_extra, "", install_response_mapper).await
+}
+
+async fn try_server_with_entity_api_extra(
+    entity_api_extra: &str,
+) -> Result<TestServer, TestServerBuildError> {
+    try_server_with_options_and_entity_api_extra("", entity_api_extra, true).await
+}
+
+async fn try_server_with_options_and_entity_api_extra(
+    registry_extra: &str,
+    entity_api_extra: &str,
+    install_response_mapper: bool,
+) -> Result<TestServer, TestServerBuildError> {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = tmp.path().join("spdci.yaml");
-    std::fs::write(&config_path, spdci_config(registry_extra)).expect("write config");
+    std::fs::write(
+        &config_path,
+        spdci_config_with_entity_api_extra(registry_extra, entity_api_extra),
+    )
+    .expect("write config");
     env::set_var(
         "REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET",
         "relay-spdci-audit-secret-32-bytes",
@@ -345,6 +367,42 @@ fn valid_header(message_id: &str) -> Value {
     })
 }
 
+fn sync_search_body(message_id: &str, transaction_id: &str) -> Value {
+    json!({
+        "header": valid_header(message_id),
+        "message": {
+            "transaction_id": transaction_id,
+            "search_request": [{
+                "reference_id": format!("ref-{transaction_id}"),
+                "timestamp": "2026-01-01T00:00:00Z",
+                "search_criteria": {
+                    "query_type": "idtype-value",
+                    "query": {
+                        "type": "DISABILITY_ID",
+                        "value": "ABC451123"
+                    }
+                }
+            }]
+        }
+    })
+}
+
+fn disabled_criteria_body(message_id: &str, transaction_id: &str) -> Value {
+    json!({
+        "header": valid_header(message_id),
+        "message": {
+            "transaction_id": transaction_id,
+            "disabled_criteria": {
+                "query": {
+                    "member.member_identifier": {
+                        "eq": "ABC451123"
+                    }
+                }
+            }
+        }
+    })
+}
+
 #[tokio::test]
 async fn sync_disabled_returns_spdci_status_from_entity_row() {
     let server = server().await;
@@ -372,6 +430,116 @@ async fn sync_disabled_returns_spdci_status_from_entity_row() {
         body["message"]["disabled_response"][0]["disabled_status"],
         "yes"
     );
+}
+
+#[tokio::test]
+async fn spdci_routes_enforce_entity_purpose_header_gate() {
+    let server = try_server_with_entity_api_extra("          require_purpose_header: true\n")
+        .await
+        .expect("test server builds");
+    for (path, body) in [
+        (
+            "/dci/dr/registry/sync/search",
+            sync_search_body("msg-purpose-search", "txn-purpose-search"),
+        ),
+        (
+            "/dci/dr/registry/sync/disabled",
+            disabled_criteria_body("msg-purpose-disabled", "txn-purpose-disabled"),
+        ),
+        (
+            "/dci/dr/registry/sync/get-disability-details",
+            disabled_criteria_body("msg-purpose-details", "txn-purpose-details"),
+        ),
+        (
+            "/dci/dr/registry/sync/get-disability-support",
+            disabled_criteria_body("msg-purpose-support", "txn-purpose-support"),
+        ),
+    ] {
+        let response = server.post(path).json(&body).await;
+        response.assert_status(StatusCode::BAD_REQUEST);
+        let body: Value = response.json();
+        assert_eq!(body["code"], "auth.purpose_required", "{path}");
+    }
+
+    let blank = server
+        .post("/dci/dr/registry/sync/search")
+        .add_header("data-purpose", "   ")
+        .json(&sync_search_body(
+            "msg-purpose-search-blank",
+            "txn-purpose-search-blank",
+        ))
+        .await;
+    blank.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = blank.json();
+    assert_eq!(body["code"], "auth.purpose_required");
+}
+
+#[tokio::test]
+async fn spdci_routes_enforce_entity_required_filter_gate() {
+    let server =
+        try_server_with_entity_api_extra("          required_filters: [impairment_type]\n")
+            .await
+            .expect("test server builds");
+    for (path, body) in [
+        (
+            "/dci/dr/registry/sync/search",
+            sync_search_body("msg-required-search", "txn-required-search"),
+        ),
+        (
+            "/dci/dr/registry/sync/disabled",
+            disabled_criteria_body("msg-required-disabled", "txn-required-disabled"),
+        ),
+        (
+            "/dci/dr/registry/sync/get-disability-details",
+            disabled_criteria_body("msg-required-details", "txn-required-details"),
+        ),
+        (
+            "/dci/dr/registry/sync/get-disability-support",
+            disabled_criteria_body("msg-required-support", "txn-required-support"),
+        ),
+    ] {
+        let response = server.post(path).json(&body).await;
+        response.assert_status(StatusCode::BAD_REQUEST);
+        let body: Value = response.json();
+        assert_eq!(body["code"], "entity.filter_required", "{path}");
+    }
+}
+
+#[tokio::test]
+async fn spdci_required_filter_gate_rejects_broad_predicates() {
+    let server =
+        try_server_with_entity_api_extra("          required_filters: [impairment_type]\n")
+            .await
+            .expect("test server builds");
+
+    let response = server
+        .post("/dci/dr/registry/sync/search")
+        .json(&json!({
+            "header": valid_header("msg-required-broad-predicate"),
+            "message": {
+                "transaction_id": "txn-required-broad-predicate",
+                "search_request": [{
+                    "reference_id": "ref-required-broad-predicate",
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "search_criteria": {
+                        "query_type": "predicate",
+                        "query": [{
+                            "seq_num": 1,
+                            "expression1": {
+                                "attribute_name": "disability_details.impairment_type",
+                                "operator": "in",
+                                "attribute_value": ["mobility", "vision"]
+                            }
+                        }]
+                    }
+                }]
+            }
+        }))
+        .await;
+
+    response.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = response.json();
+    assert_eq!(body["code"], "entity.filter_required");
 }
 
 #[tokio::test]
@@ -621,6 +789,98 @@ async fn sync_search_rejects_unsupported_predicate_operator() {
     response.assert_status(StatusCode::BAD_REQUEST);
     let body: Value = response.json();
     assert_eq!(body["code"], "filter.unsupported_op");
+}
+
+#[tokio::test]
+async fn sync_search_rejects_empty_criteria_before_collection_read() {
+    let server = server().await;
+    let cases = [
+        (
+            "empty-search-request",
+            json!({
+                "header": valid_header("msg-empty-search-request"),
+                "message": {
+                    "transaction_id": "txn-empty-search-request",
+                    "search_request": []
+                }
+            }),
+        ),
+        (
+            "empty-expression-query",
+            json!({
+                "header": valid_header("msg-empty-expression-query"),
+                "message": {
+                    "transaction_id": "txn-empty-expression-query",
+                    "search_request": [{
+                        "reference_id": "ref-empty-expression-query",
+                        "timestamp": "2026-01-01T00:00:00Z",
+                        "search_criteria": {
+                            "query_type": "expression",
+                            "query": {
+                                "type": "ns:org:QueryType:expression",
+                                "value": {
+                                    "expression": {
+                                        "query": {}
+                                    }
+                                }
+                            }
+                        }
+                    }]
+                }
+            }),
+        ),
+        (
+            "empty-and-expression",
+            json!({
+                "header": valid_header("msg-empty-and-expression"),
+                "message": {
+                    "transaction_id": "txn-empty-and-expression",
+                    "search_request": [{
+                        "reference_id": "ref-empty-and-expression",
+                        "timestamp": "2026-01-01T00:00:00Z",
+                        "search_criteria": {
+                            "query_type": "expression",
+                            "query": {
+                                "type": "ns:org:QueryType:expression",
+                                "value": {
+                                    "expression": {
+                                        "query": {"$and": []}
+                                    }
+                                }
+                            }
+                        }
+                    }]
+                }
+            }),
+        ),
+        (
+            "predicate-without-expression",
+            json!({
+                "header": valid_header("msg-predicate-without-expression"),
+                "message": {
+                    "transaction_id": "txn-predicate-without-expression",
+                    "search_request": [{
+                        "reference_id": "ref-predicate-without-expression",
+                        "timestamp": "2026-01-01T00:00:00Z",
+                        "search_criteria": {
+                            "query_type": "predicate",
+                            "query": [{"seq_num": 1}]
+                        }
+                    }]
+                }
+            }),
+        ),
+    ];
+
+    for (name, body) in cases {
+        let response = server
+            .post("/dci/dr/registry/sync/search")
+            .json(&body)
+            .await;
+        response.assert_status(StatusCode::BAD_REQUEST);
+        let body: Value = response.json();
+        assert_eq!(body["code"], "filter.invalid_value", "{name}");
+    }
 }
 
 #[tokio::test]

@@ -240,6 +240,7 @@ pub struct PostgresConnector {
     connect_timeout: Duration,
     query_timeout: Duration,
     live_semaphore: Arc<Semaphore>,
+    live_max_rows: usize,
 }
 
 impl PostgresConnector {
@@ -254,6 +255,7 @@ impl PostgresConnector {
         connect_timeout: Duration,
         query_timeout: Duration,
         live_max_connections: usize,
+        live_max_rows: usize,
     ) -> Self {
         Self {
             connection_env,
@@ -265,6 +267,7 @@ impl PostgresConnector {
             connect_timeout,
             query_timeout,
             live_semaphore: Arc::new(Semaphore::new(live_max_connections)),
+            live_max_rows,
         }
     }
 
@@ -365,7 +368,11 @@ impl PostgresConnector {
         query.trim_end_matches(';').trim().to_string()
     }
 
-    fn projected_select_sql_for(&self, declared: &DeclaredSchema) -> String {
+    fn projected_select_sql_for(
+        &self,
+        declared: &DeclaredSchema,
+        row_limit: Option<usize>,
+    ) -> String {
         let base = self.base_select_sql();
         let projections = declared
             .fields
@@ -379,13 +386,20 @@ impl PostgresConnector {
             })
             .collect::<Vec<_>>()
             .join(", ");
-        format!("SELECT {projections} FROM ({base}) AS data_gate_source")
+        let limit = row_limit
+            .map(|limit| format!(" LIMIT {limit}"))
+            .unwrap_or_default();
+        format!("SELECT {projections} FROM ({base}) AS data_gate_source{limit}")
     }
 
-    fn copy_sql_for(&self, declared: &DeclaredSchema) -> String {
+    fn copy_sql_for_with_limit(
+        &self,
+        declared: &DeclaredSchema,
+        row_limit: Option<usize>,
+    ) -> String {
         format!(
             "COPY ({}) TO STDOUT WITH (FORMAT CSV, HEADER TRUE)",
-            self.projected_select_sql_for(declared)
+            self.projected_select_sql_for(declared, row_limit)
         )
     }
 
@@ -407,9 +421,10 @@ impl PostgresConnector {
         &self,
         client: &Client,
         declared: Arc<DeclaredSchema>,
+        row_limit: Option<usize>,
     ) -> Result<SnapshotTable, ConnectorError> {
         let copy_stream = client
-            .copy_out(&self.copy_sql_for(&declared))
+            .copy_out(&self.copy_sql_for_with_limit(&declared, row_limit))
             .await
             .map_err(|e| ConnectorError::SourceUnreadable(e.to_string()))?;
         futures::pin_mut!(copy_stream);
@@ -464,8 +479,29 @@ impl PostgresConnector {
         projection: Option<&[usize]>,
     ) -> Result<SnapshotTable, ConnectorError> {
         let declared = self.declared_for_projection(projection)?;
-        self.with_query_timeout("postgres export", self.copy_decoded_for(client, declared))
-            .await
+        self.with_query_timeout(
+            "postgres export",
+            self.copy_decoded_for(client, declared, None),
+        )
+        .await
+    }
+
+    async fn timed_copy_decoded_live_projected(
+        &self,
+        client: &Client,
+        projection: Option<&[usize]>,
+        requested_limit: Option<usize>,
+    ) -> Result<SnapshotTable, ConnectorError> {
+        let declared = self.declared_for_projection(projection)?;
+        let fetch_limit = match requested_limit {
+            Some(limit) if limit <= self.live_max_rows => limit,
+            _ => self.live_max_rows.saturating_add(1),
+        };
+        self.with_query_timeout(
+            "postgres live export",
+            self.copy_decoded_for(client, declared, Some(fetch_limit)),
+        )
+        .await
     }
 
     async fn acquire_live_permit(&self) -> Result<OwnedSemaphorePermit, ConnectorError> {
@@ -644,7 +680,7 @@ impl TableProvider for PostgresLiveTableProvider {
         };
         let snapshot = match self
             .connector
-            .timed_copy_decoded_projected(&client, remote_projection)
+            .timed_copy_decoded_live_projected(&client, remote_projection, limit)
             .await
         {
             Ok(snapshot) => snapshot,
@@ -667,6 +703,17 @@ impl TableProvider for PostgresLiveTableProvider {
             };
             rows = rows.saturating_add(batch.num_rows() as u64);
             batches.push(batch);
+        }
+        if limit.is_none_or(|limit| limit > self.connector.live_max_rows)
+            && rows > self.connector.live_max_rows as u64
+        {
+            observe_postgres_live_scan_error(started, wait_seconds, projection_pushdown);
+            return Err(postgres_to_datafusion_error(
+                ConnectorError::SourceUnreadable(format!(
+                    "postgres live export exceeds configured row maximum: > {}",
+                    self.connector.live_max_rows
+                )),
+            ));
         }
 
         let table = match MemTable::try_new(snapshot.observed_schema, vec![batches]) {
@@ -825,9 +872,10 @@ mod tests {
             Duration::from_secs(5),
             Duration::from_secs(30),
             8,
+            10_000,
         );
 
-        let sql = connector.copy_sql_for(&connector.declared);
+        let sql = connector.copy_sql_for_with_limit(&connector.declared, None);
         assert!(sql.contains(r#"FROM (SELECT * FROM "public"."people") AS data_gate_source"#));
         assert!(sql.contains(r#"data_gate_source."id"::bigint AS "id""#));
         assert!(sql.contains(r#"data_gate_source."active"::boolean AS "active""#));
@@ -855,12 +903,13 @@ mod tests {
             Duration::from_secs(5),
             Duration::from_secs(30),
             8,
+            10_000,
         );
         let projected = connector
             .declared_for_projection(Some(&[2, 0]))
             .expect("projection is valid");
 
-        let sql = connector.copy_sql_for(&projected);
+        let sql = connector.copy_sql_for_with_limit(&projected, None);
 
         assert!(sql.contains(r#"data_gate_source."active"::boolean AS "active""#));
         assert!(sql.contains(r#"data_gate_source."id"::bigint AS "id""#));
@@ -869,6 +918,31 @@ mod tests {
             sql.find(r#""active""#).expect("active appears")
                 < sql.find(r#""id""#).expect("id appears")
         );
+    }
+
+    #[test]
+    fn postgres_live_copy_sql_applies_remote_row_limit() {
+        let connector = PostgresConnector::new(
+            "DATABASE_URL".to_string(),
+            Some(PostgresTableConfig {
+                schema: "public".to_string(),
+                name: "people".to_string(),
+            }),
+            None,
+            None,
+            declared(vec![("id", FieldType::Integer)]),
+            256 * 1024 * 1024,
+            Duration::from_secs(5),
+            Duration::from_secs(30),
+            8,
+            10_000,
+        );
+
+        let sql = connector.copy_sql_for_with_limit(&connector.declared, Some(10_001));
+
+        assert!(sql
+            .contains(r#"FROM (SELECT * FROM "public"."people") AS data_gate_source LIMIT 10001"#));
+        assert!(sql.ends_with(") TO STDOUT WITH (FORMAT CSV, HEADER TRUE)"));
     }
 
     #[test]
@@ -886,6 +960,7 @@ mod tests {
             Duration::from_secs(5),
             Duration::from_secs(30),
             8,
+            10_000,
         );
 
         assert!(connector.declared_for_projection(Some(&[1])).is_err());

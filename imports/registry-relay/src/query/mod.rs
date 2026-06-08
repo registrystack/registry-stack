@@ -60,6 +60,22 @@ pub enum EntityFilterOp {
     Between,
 }
 
+pub fn satisfies_required_filter(required_filters: &[String], filter: &EntityFilter) -> bool {
+    required_filters
+        .iter()
+        .any(|required| required == &filter.field)
+        && filter.op == EntityFilterOp::Eq
+        && is_single_scalar_filter_value(&filter.value)
+}
+
+fn is_single_scalar_filter_value(value: &Value) -> bool {
+    match value {
+        Value::String(value) => !value.trim().is_empty(),
+        Value::Number(_) | Value::Bool(_) => true,
+        Value::Null | Value::Array(_) | Value::Object(_) => false,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct EntityRows {
     pub rows: Vec<Value>,

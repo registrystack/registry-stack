@@ -317,6 +317,7 @@ auth:
     scope_claim: scope
     scope_map:
       "role:social-registry-reader": "social_registry:rows"
+    scope_object_required_keys: []
     allowed_clients: []
     token_types:
       - JWT
@@ -335,8 +336,9 @@ A full drop-in alternative to `config/example.yaml` lives at `config/example.oid
 | `algorithms`      | Signature algorithms accepted by the verifier. RS256, ES256, EdDSA. HS\* and `none` are intentionally absent.                                                 |
 | `jwks_cache_ttl`  | Steady-state JWKS cache TTL. The cache also refreshes on unknown `kid` (rate-limited), so this is the rotation pickup latency, not the upper bound.           |
 | `leeway`          | Clock skew tolerance on `exp` and `nbf`. Bounded at 5 minutes by validation.                                                                                  |
-| `scope_claim`     | Name of the JWT claim to read scopes from (the config field itself is always a single string; defaults to `scope`). The claim's *value* in the token may be a space-separated string (RFC 8693 / RFC 9068), a JSON array of strings, or a JSON object whose keys are the scope names (Zitadel's `urn:zitadel:iam:org:project:roles`); all three shapes are accepted at verify time. |
+| `scope_claim`     | Name of the JWT claim to read scopes from (the config field itself is always a single string; defaults to `scope`). The claim's *value* in the token may be a space-separated string (RFC 8693 / RFC 9068), a JSON array of strings, or a JSON object whose keys are the scope names. Object-valued role keys grant scopes only when their values are active: `true`, a non-empty string, or a non-empty object/array containing an active value. |
 | `scope_map`       | Optional rename map applied before scope-based access checks. Adapt IdP role names to the relay's `<dataset_id>:<level>` shape.                               |
+| `scope_object_required_keys` | Optional allowlist of keys that must appear inside object-valued role claim values before the role key is accepted. For Zitadel organization-scoped role objects, set this to the expected organization id key or keys. Defaults to empty, which accepts any active non-empty object value. |
 | `allowed_clients` | Optional allowlist matched against the token's `azp` (preferred) or `client_id`. Empty list means any client is accepted.                                     |
 | `token_types`     | Accepted JOSE `typ` header values. Defaults to `JWT` and `at+jwt` (RFC 9068). ID tokens (`id+jwt`) are intentionally rejected by default, and tokens without `typ` are rejected by the shared verifier. |
 

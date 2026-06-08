@@ -770,6 +770,18 @@ fn bregdcat_server() -> TestServer {
     server_from_config(path, &["social_registry:metadata"])
 }
 
+fn hidden_codelist_bregdcat_server() -> TestServer {
+    let tmp = TempDir::new().expect("tempdir");
+    let path = write_config(&tmp);
+    let mut body = std::fs::read_to_string(&path).expect("read config");
+    body = body.replace(
+        "            - name: age\n              type: integer\n              nullable: true\n",
+        "            - name: age\n              type: integer\n              nullable: true\n              codelist: ex:codelists/HiddenAgeBand\n",
+    );
+    std::fs::write(&path, body).expect("write hidden codelist config");
+    server_from_config(path, &["social_registry:metadata"])
+}
+
 // Note: `dcterms:identifier` on dcat:Dataset is pre-existing DCAT-AP behavior
 // and is implicitly exercised by the BRegDCAT-AP tests below that read other
 // `dcterms:*` fields from the same dataset object. It is not BRegDCAT-AP-specific
@@ -972,6 +984,21 @@ async fn bregdcat_dataset_has_dcterms_references_typed_as_concept_schemes() {
     );
     assert_eq!(region_ref["dcterms:title"], "Region");
     assert_eq!(region_ref["skos:prefLabel"], "Region");
+}
+
+#[tokio::test]
+async fn scoped_bregdcat_references_only_visible_entity_codelists() {
+    let resp = hidden_codelist_bregdcat_server()
+        .get("/metadata/dcat/bregdcat-ap")
+        .await;
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    let raw = serde_json::to_string(&body).expect("bregdcat serializes");
+    assert!(raw.contains("https://example.test/vocab/codelists/Region"));
+    assert!(
+        !raw.contains("HiddenAgeBand"),
+        "hidden entity codelist must not appear in scoped SHACL/DCAT metadata"
+    );
 }
 
 #[tokio::test]

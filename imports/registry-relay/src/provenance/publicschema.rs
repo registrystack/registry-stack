@@ -38,9 +38,10 @@ mod enabled {
     use std::sync::Arc;
 
     use crosswalk_core::{
-        CompiledPublicSchemaMapping, MappingRuntime, PrivacyMode, PublicSchemaEvaluateOptions,
-        PublicSchemaEvaluationInput, RuntimeOptions,
+        CompiledPublicSchemaMapping, MappingError, MappingRuntime, PrivacyMode,
+        PublicSchemaEvaluateOptions, PublicSchemaEvaluationInput, RuntimeOptions,
     };
+    use jsonschema::error::{ValidationError, ValidationErrorKind};
     use serde_json::json;
 
     const DEFAULT_PUBLICSCHEMA_CONTEXT_URL: &str = "https://publicschema.org/ctx/draft.jsonld";
@@ -104,20 +105,20 @@ mod enabled {
             );
             if !transform.ok {
                 tracing::error!(
-                    errors = ?transform.errors,
+                    errors = ?mapping_issue_diagnostics(&transform.errors, "error"),
                     "publicschema.mapping_failed"
                 );
                 return Err(PublicSchemaIssueError::MappingFailed);
             }
             if !transform.warnings.is_empty() {
                 tracing::warn!(
-                    warnings = ?transform.warnings,
+                    warnings = ?mapping_issue_diagnostics(&transform.warnings, "warning"),
                     "publicschema.mapping_warnings"
                 );
             }
             if let Some(schema) = &profile.compiled_schema {
                 if let Err(errors) = schema.validate(&transform.output) {
-                    let messages: Vec<String> = errors.map(|error| error.to_string()).collect();
+                    let messages = schema_validation_diagnostics(errors);
                     tracing::error!(
                         errors = ?messages,
                         "publicschema.schema_validation_failed"
@@ -264,6 +265,84 @@ mod enabled {
             }))
         }
     }
+
+    // Mirrors the value-free diagnostics in `crate::spdci`. Entity rows are
+    // PII, so validation errors must report only the failing instance/schema
+    // paths and the error kind, never the offending instance value embedded in
+    // `ValidationError`'s `Display`. Kept local because `crate::spdci` is gated
+    // behind the `spdci-api-standards` feature and these helpers are private to
+    // that module.
+    pub(super) fn schema_validation_diagnostics<'a>(
+        errors: impl IntoIterator<Item = ValidationError<'a>>,
+    ) -> Vec<String> {
+        errors
+            .into_iter()
+            .map(|error| {
+                format!(
+                    "instance_path={} schema_path={} kind={}",
+                    error.instance_path,
+                    error.schema_path,
+                    schema_validation_kind(&error.kind)
+                )
+            })
+            .collect()
+    }
+
+    fn schema_validation_kind(kind: &ValidationErrorKind) -> &'static str {
+        match kind {
+            ValidationErrorKind::AdditionalItems { .. } => "additional_items",
+            ValidationErrorKind::AdditionalProperties { .. } => "additional_properties",
+            ValidationErrorKind::AnyOf => "any_of",
+            ValidationErrorKind::BacktrackLimitExceeded { .. } => "backtrack_limit_exceeded",
+            ValidationErrorKind::Constant { .. } => "constant",
+            ValidationErrorKind::Contains => "contains",
+            ValidationErrorKind::ContentEncoding { .. } => "content_encoding",
+            ValidationErrorKind::ContentMediaType { .. } => "content_media_type",
+            ValidationErrorKind::Custom { .. } => "custom",
+            ValidationErrorKind::Enum { .. } => "enum",
+            ValidationErrorKind::ExclusiveMaximum { .. } => "exclusive_maximum",
+            ValidationErrorKind::ExclusiveMinimum { .. } => "exclusive_minimum",
+            ValidationErrorKind::FalseSchema => "false_schema",
+            ValidationErrorKind::FileNotFound { .. } => "file_not_found",
+            ValidationErrorKind::Format { .. } => "format",
+            ValidationErrorKind::FromUtf8 { .. } => "from_utf8",
+            ValidationErrorKind::Utf8 { .. } => "utf8",
+            ValidationErrorKind::JSONParse { .. } => "json_parse",
+            ValidationErrorKind::InvalidReference { .. } => "invalid_reference",
+            ValidationErrorKind::InvalidURL { .. } => "invalid_url",
+            ValidationErrorKind::MaxItems { .. } => "max_items",
+            ValidationErrorKind::Maximum { .. } => "maximum",
+            ValidationErrorKind::MaxLength { .. } => "max_length",
+            ValidationErrorKind::MaxProperties { .. } => "max_properties",
+            ValidationErrorKind::MinItems { .. } => "min_items",
+            ValidationErrorKind::Minimum { .. } => "minimum",
+            ValidationErrorKind::MinLength { .. } => "min_length",
+            ValidationErrorKind::MinProperties { .. } => "min_properties",
+            ValidationErrorKind::MultipleOf { .. } => "multiple_of",
+            ValidationErrorKind::Not { .. } => "not",
+            ValidationErrorKind::OneOfMultipleValid => "one_of_multiple_valid",
+            ValidationErrorKind::OneOfNotValid => "one_of_not_valid",
+            ValidationErrorKind::Pattern { .. } => "pattern",
+            ValidationErrorKind::PropertyNames { .. } => "property_names",
+            ValidationErrorKind::Required { .. } => "required",
+            ValidationErrorKind::Schema => "schema",
+            ValidationErrorKind::Type { .. } => "type",
+            ValidationErrorKind::UnevaluatedProperties { .. } => "unevaluated_properties",
+            ValidationErrorKind::UniqueItems => "unique_items",
+            ValidationErrorKind::UnknownReferenceScheme { .. } => "unknown_reference_scheme",
+            ValidationErrorKind::Resolver { .. } => "resolver",
+        }
+    }
+
+    // `MappingError::message` is free-form and can echo row values, so log only
+    // the failing path and the issue kind. Mirrors `crate::spdci`'s
+    // `mapping_issue_diagnostics`.
+    pub(super) fn mapping_issue_diagnostics(issues: &[MappingError], kind: &str) -> Vec<String> {
+        issues
+            .iter()
+            .map(|issue| format!("path={} kind={kind}", issue.path.as_deref().unwrap_or("$")))
+            .collect()
+    }
 }
 
 #[cfg(not(feature = "publicschema-cel"))]
@@ -308,3 +387,52 @@ mod disabled {
 pub use disabled::{build_publicschema_registry, PublicSchemaVcRegistry};
 #[cfg(feature = "publicschema-cel")]
 pub use enabled::{build_publicschema_registry, PublicSchemaVcRegistry};
+
+#[cfg(all(test, feature = "publicschema-cel"))]
+mod tests {
+    use super::enabled::{mapping_issue_diagnostics, schema_validation_diagnostics};
+    use crosswalk_core::{ErrorCode, ErrorSeverity, MappingError};
+    use serde_json::json;
+
+    #[test]
+    fn schema_validation_diagnostics_omit_instance_values() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "member_identifier": { "type": "number" }
+            }
+        });
+        let record = json!({
+            "member_identifier": "SECRET-ROW-VALUE-451123"
+        });
+        let compiled = jsonschema::JSONSchema::compile(&schema).expect("schema compiles");
+        let errors = compiled
+            .validate(&record)
+            .expect_err("record should fail schema validation");
+        let formatted = schema_validation_diagnostics(errors).join("\n");
+
+        assert!(formatted.contains("instance_path=/member_identifier"));
+        assert!(formatted.contains("schema_path=/properties/member_identifier/type"));
+        assert!(formatted.contains("kind=type"));
+        assert!(!formatted.contains("SECRET-ROW-VALUE-451123"));
+    }
+
+    #[test]
+    fn mapping_issue_diagnostics_omit_instance_values() {
+        let issues = vec![MappingError {
+            code: ErrorCode::EvaluationError,
+            path: Some("records.disabled_person.fields.member_identifier".to_string()),
+            message: "failed while reading SECRET-ROW-VALUE-451123".to_string(),
+            expression: None,
+            source_path: None,
+            record: None,
+            index: None,
+            severity: ErrorSeverity::Error,
+        }];
+        let formatted = mapping_issue_diagnostics(&issues, "error").join("\n");
+
+        assert!(formatted.contains("path=records.disabled_person.fields.member_identifier"));
+        assert!(formatted.contains("kind=error"));
+        assert!(!formatted.contains("SECRET-ROW-VALUE-451123"));
+    }
+}

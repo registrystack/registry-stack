@@ -14,7 +14,7 @@ use chrono::Utc;
 use datafusion::execution::context::SessionContext;
 use ed25519_dalek::SigningKey;
 use rand_core::OsRng;
-use registry_manifest_core::{source_manifest_digest, MetadataManifest};
+use registry_manifest_core::{canonicalize_json, source_manifest_digest, MetadataManifest};
 use registry_platform_authcommon::{
     credential_fingerprint_commitment, CredentialCommitmentContext, CredentialProduct,
     CredentialType,
@@ -907,6 +907,36 @@ fn build_fixture() -> AdminFixture {
     build_fixture_from_config_path(tmp, config_path)
 }
 
+fn build_fixture_with_remote_tuf_repository(server: &MockServer) -> AdminFixture {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(&tmp);
+    insert_remote_tuf_repository(&config_path, &tmp, server);
+    build_fixture_from_config_path(tmp, config_path)
+}
+
+fn insert_remote_tuf_repository(config_path: &Path, tmp: &TempDir, server: &MockServer) {
+    let yaml = std::fs::read_to_string(config_path).expect("config reads");
+    let repo_dir = tmp.path().join("signed-config-5");
+    let remote = format!(
+        r#"  remote_tuf_repositories:
+    - root_path: "{}"
+      metadata_base_url: "{}/metadata"
+      targets_base_url: "{}/targets"
+      datastore_dir: "{}"
+      allow_dev_insecure_fetch_urls: true
+"#,
+        repo_dir.join("metadata/1.root.json").display(),
+        server.uri(),
+        server.uri(),
+        repo_dir.join("datastore").display()
+    );
+    std::fs::write(
+        config_path,
+        yaml.replace("  accepted_roots:\n", &(remote + "  accepted_roots:\n")),
+    )
+    .expect("config writes");
+}
+
 fn build_fixture_without_admin_bind() -> AdminFixture {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = write_config_without_admin_bind(&tmp);
@@ -1273,16 +1303,14 @@ fn remote_signed_tuf_apply_request(signed: &SignedConfigFixture, server: &MockSe
     })
 }
 
-async fn serve_signed_tuf_fixture(signed: &SignedConfigFixture) -> MockServer {
-    let server = MockServer::start().await;
-    mount_directory_files(&server, "/metadata", &signed.metadata_dir).await;
-    mount_directory_files(&server, "/targets", &signed.targets_dir).await;
+async fn mount_signed_tuf_fixture(server: &MockServer, signed: &SignedConfigFixture) {
+    mount_directory_files(server, "/metadata", &signed.metadata_dir).await;
+    mount_directory_files(server, "/targets", &signed.targets_dir).await;
     Mock::given(method("GET"))
         .and(path("/metadata/2.root.json"))
         .respond_with(ResponseTemplate::new(404))
-        .mount(&server)
+        .mount(server)
         .await;
-    server
 }
 
 async fn mount_directory_files(server: &MockServer, url_prefix: &str, dir: &Path) {
@@ -2713,6 +2741,31 @@ async fn config_apply_signed_metadata_package_swaps_compiled_metadata() {
         posture["relay"]["metadata_manifest"]["source_digest"],
         source_digest
     );
+    let config_value: Value = serde_saphyr::from_str(&candidate).expect("candidate parses");
+    let posture_safe_hash = posture_safe_runtime_config_hash(&config_value);
+    let package_config_hash = {
+        let config: Config = serde_saphyr::from_str(&candidate).expect("candidate config parses");
+        let preimage = json!({
+            "schema_version": "registry-runtime-package/v1",
+            "product": "registry-relay",
+            "instance_id": config.instance.id,
+            "environment": config.instance.environment.as_deref().unwrap_or("development"),
+            "runtime_config_digest": internal_config_hash(candidate.as_bytes()),
+            "source": "signed_bundle_file",
+            "source_manifest_digest": source_digest,
+        });
+        let bytes =
+            canonicalize_json(&preimage).expect("package config hash preimage canonicalizes");
+        internal_config_hash(&bytes)
+    };
+    assert_eq!(
+        posture["configuration"]["last_config_hash"],
+        posture_safe_hash
+    );
+    assert_ne!(posture_safe_hash, package_config_hash);
+    let raw_posture = serde_json::to_string(&posture).expect("posture serializes");
+    assert!(!raw_posture.contains(&package_config_hash));
+    assert!(!raw_posture.contains(&internal_config_hash(candidate.as_bytes())));
 }
 
 #[tokio::test]
@@ -2804,7 +2857,8 @@ async fn config_apply_signed_tuf_stale_sequence_rejects_without_swapping() {
 
 #[tokio::test]
 async fn config_apply_remote_signed_tuf_target_swaps_runtime_snapshot() {
-    let fixture = build_fixture();
+    let server = MockServer::start().await;
+    let fixture = build_fixture_with_remote_tuf_repository(&server);
     let candidate = std::fs::read_to_string(&fixture.config_path)
         .expect("config reads")
         .replace("owner: Test Ministry", "owner: Remote Signed Ministry");
@@ -2816,7 +2870,7 @@ async fn config_apply_remote_signed_tuf_target_swaps_runtime_snapshot() {
         &["kid-a", "kid-b"],
     )
     .await;
-    let server = serve_signed_tuf_fixture(&signed).await;
+    mount_signed_tuf_fixture(&server, &signed).await;
 
     let response = post_admin_config(
         &fixture,

@@ -46,7 +46,7 @@ APPS_ROOT = RELAY_ROOT.parent
 SIBLING_REGISTRY_NOTARY_ROOT = APPS_ROOT / "registry-notary"
 CLONED_REGISTRY_NOTARY_ROOT = RELAY_ROOT / "target/registry-notary-demo/registry-notary"
 REGISTRY_NOTARY_GIT_URL = "https://github.com/jeremi/registry-notary"
-REGISTRY_NOTARY_GIT_TAG = "v0.1.1"
+REGISTRY_NOTARY_GIT_REV = "67924098738024843d62e7e4df4d468629a5407a"
 DEFAULT_REGISTRY_CONFIG = RELAY_ROOT / "demo/config/evidence_registries.yaml"
 DEFAULT_OUTPUT_DIR = RELAY_ROOT / "demo/output/registry-notary-demo"
 DEFAULT_FEATURES = "spdci-api-standards"
@@ -203,22 +203,29 @@ def ensure_registry_notary_root(root: Path, explicit: bool) -> Path:
         raise DemoError(f"Registry Notary checkout is missing Cargo.toml: {root}")
     if shutil.which("git") is None:
         raise DemoError("git is required to clone the Registry Notary demo dependency")
+    git_rev = os.environ.get("REGISTRY_NOTARY_GIT_REV", REGISTRY_NOTARY_GIT_REV)
+    if len(git_rev) != 40 or any(ch not in "0123456789abcdef" for ch in git_rev):
+        raise DemoError("REGISTRY_NOTARY_GIT_REV must be a 40-character lowercase commit SHA")
     root.parent.mkdir(parents=True, exist_ok=True)
     print(
-        f"Cloning Registry Notary {REGISTRY_NOTARY_GIT_TAG} into {root}",
+        f"Cloning Registry Notary commit {git_rev} into {root}",
         flush=True,
     )
+    root.mkdir(parents=True, exist_ok=True)
     subprocess.run(
-        [
-            "git",
-            "clone",
-            "--depth",
-            "1",
-            "--branch",
-            REGISTRY_NOTARY_GIT_TAG,
-            REGISTRY_NOTARY_GIT_URL,
-            str(root),
-        ],
+        ["git", "init", str(root)],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(root), "remote", "add", "origin", REGISTRY_NOTARY_GIT_URL],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(root), "fetch", "--depth", "1", "origin", git_rev],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(root), "checkout", "--detach", "FETCH_HEAD"],
         check=True,
     )
     return root

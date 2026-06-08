@@ -608,6 +608,7 @@ impl IngestRegistry {
                         connect_timeout,
                         query_timeout,
                         live_max_connections,
+                        live_max_rows,
                     } => Arc::new(PostgresConnector::new(
                         connection_env.clone(),
                         table.clone(),
@@ -618,6 +619,7 @@ impl IngestRegistry {
                         *connect_timeout,
                         *query_timeout,
                         *live_max_connections,
+                        *live_max_rows,
                     )),
                 };
 

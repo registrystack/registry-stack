@@ -112,6 +112,32 @@ audit:
     config_path
 }
 
+fn insert_remote_tuf_repository(
+    config_path: &Path,
+    signed: &SignedConfigFixture,
+    server: &MockServer,
+) {
+    let yaml = std::fs::read_to_string(config_path).expect("config reads");
+    let remote = format!(
+        r#"  remote_tuf_repositories:
+    - root_path: "{}"
+      metadata_base_url: "{}/metadata"
+      targets_base_url: "{}/targets"
+      datastore_dir: "{}"
+      allow_dev_insecure_fetch_urls: true
+"#,
+        signed.root_path.display(),
+        server.uri(),
+        server.uri(),
+        signed.datastore_dir.display()
+    );
+    std::fs::write(
+        config_path,
+        yaml.replace("  accepted_roots:\n", &(remote + "  accepted_roots:\n")),
+    )
+    .expect("config writes");
+}
+
 fn candidate_config_yaml(tmp: &TempDir) -> String {
     format!(
         r#"
@@ -666,6 +692,7 @@ async fn config_verify_bundle_cli_reports_verified_remote_signed_bundle() {
     let candidate_yaml = candidate_config_yaml(&tmp);
     let signed = write_signed_config_tuf_fixture(&tmp, &candidate_yaml).await;
     let server = serve_signed_tuf_fixture(&signed).await;
+    insert_remote_tuf_repository(&current_config, &signed, &server);
 
     let output = remote_verify_bundle_command(&current_config, &signed, &server)
         .output()

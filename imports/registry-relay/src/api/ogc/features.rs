@@ -25,7 +25,9 @@ use crate::entity::{EntityModel, EntityRegistry, EntitySpatialModel};
 use crate::error::{
     AuthError, Error, FilterError, InternalError, OgcError, QueryError, SpatialError,
 };
-use crate::query::{EntityCollectionQuery, EntityFilter, EntityFilterOp};
+use crate::query::{
+    satisfies_required_filter, EntityCollectionQuery, EntityFilter, EntityFilterOp,
+};
 use crate::runtime_config::{CursorSigner, RuntimeSnapshot, CURSOR_MAC_LEN};
 
 const GEOJSON: HeaderValue = HeaderValue::from_static("application/geo+json");
@@ -769,13 +771,10 @@ fn enforce_required_filters(entity: &EntityModel, filters: &[EntityFilter]) -> R
     if entity.api.required_filters.is_empty() {
         return Ok(());
     }
-    if filters.iter().any(|filter| {
-        entity
-            .api
-            .required_filters
-            .iter()
-            .any(|required| required == &filter.field)
-    }) {
+    if filters
+        .iter()
+        .any(|filter| satisfies_required_filter(&entity.api.required_filters, filter))
+    {
         Ok(())
     } else {
         Err(crate::error::EntityError::FilterRequired {

@@ -283,10 +283,15 @@ Use `?tier=restricted` only for trusted operations users who need the restricted
 Governed config routes require a token with the independent `registry_relay:admin` scope:
 
 ```text
+POST /admin/reload
 POST /admin/v1/config/verify
 POST /admin/v1/config/dry-run
 POST /admin/v1/config/apply
 ```
+
+Treat `registry_relay:admin` as deployment authority. A holder can validate,
+dry-run, apply, or reload runtime configuration, which can replace active data
+sources, trust roots, scopes, and provenance settings.
 
 `verify` and `dry-run` accept either inline `config_yaml` plus bundle metadata or a local signed TUF target reference. They validate the candidate and return:
 
@@ -331,9 +336,15 @@ datastore, but fetches TUF metadata and targets from guarded base URLs:
 ```
 
 Remote sources are recorded as `signed_bundle_endpoint`; local repository
-sources are recorded as `signed_bundle_file`. The default remote URL policy
-requires safe HTTPS endpoints. HTTP loopback is accepted only with
-`allow_dev_insecure_fetch_urls: true` for tests and local development.
+sources are recorded as `signed_bundle_file`. Remote admin requests must match
+an operator-configured `config_trust.remote_tuf_repositories` entry before
+Relay contacts the repository. The configured entry owns `root_path`,
+`metadata_base_url`, `targets_base_url`, `datastore_dir`, and
+`allow_dev_insecure_fetch_urls`; request bodies cannot introduce a new remote
+repository or opt the server into insecure fetching. The default remote URL
+policy requires safe HTTPS endpoints. HTTP loopback is accepted only with
+`allow_dev_insecure_fetch_urls: true` in the configured allowlist entry for
+tests and local development.
 
 Break-glass requests are apply-only and must include all current fields:
 
@@ -385,7 +396,7 @@ Flags:
 - `--targets-dir`: local TUF targets directory. Required for a local source.
 - `--metadata-base-url`: remote TUF metadata base URL. Required for a remote source.
 - `--targets-base-url`: remote TUF targets base URL. Required for a remote source.
-- `--allow-dev-insecure-fetch-urls`: allow HTTP loopback fetch URLs for tests and local development. Optional; defaults to off. Remote sources otherwise require safe HTTPS endpoints.
+- `--allow-dev-insecure-fetch-urls`: compatibility flag for HTTP loopback fetch URLs in local CLI verification. Admin HTTP remote fetches use the matching `config_trust.remote_tuf_repositories[].allow_dev_insecure_fetch_urls` value instead of the request value.
 
 The report includes the resolved `bundle_id`, `stream_id`, `sequence`, `previous_config_hash`, `config_hash`, `posture_config_hash`, TUF `root_version` and `tuf_root_sha256`, source posture (`signed_bundle_file` or `signed_bundle_endpoint`), `change_classes`, and `signer_kids`.
 

@@ -109,6 +109,7 @@ mod tests {
             connect_timeout: Duration::from_secs(5),
             query_timeout: Duration::from_secs(30),
             live_max_connections: 8,
+            live_max_rows: 10_000,
         }
     }
 
@@ -121,6 +122,7 @@ mod tests {
             connect_timeout: Duration::from_secs(5),
             query_timeout: Duration::from_secs(30),
             live_max_connections: 8,
+            live_max_rows: 10_000,
         }
     }
 

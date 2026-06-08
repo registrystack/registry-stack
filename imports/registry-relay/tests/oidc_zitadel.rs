@@ -183,6 +183,7 @@ fn oidc_config(env: &ZitadelEnv, audience: Vec<String>) -> OidcConfig {
         leeway: Duration::from_secs(60),
         scope_claim: "scope".to_string(),
         scope_map: BTreeMap::new(),
+        scope_object_required_keys: Vec::new(),
         allowed_clients: Vec::new(),
         token_types: vec!["JWT".to_string(), "at+jwt".to_string()],
     }

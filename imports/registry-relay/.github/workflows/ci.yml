@@ -18,9 +18,9 @@ env:
   CARGO_NET_GIT_FETCH_WITH_CLI: true
   RUST_BACKTRACE: 1
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: ${{ (github.head_ref || github.ref_name) == 'codex/audit-hash-helpers' && 'codex/audit-reference-hashing' || ((github.head_ref || github.ref_name) == 'commons-release-cleanup' && 'commons-release-cleanup' || 'main') }}
+  REGISTRY_PLATFORM_REF: ee298e00e76ad6b1e56373fe85d6c1e3a95ea238
   REGISTRY_MANIFEST_REPOSITORY: jeremi/registry-manifest
-  REGISTRY_MANIFEST_REF: main
+  REGISTRY_MANIFEST_REF: a2e648aaac864563a3311b9d95b8143afa1b7334
   CEL_MAPPING_REPOSITORY: PublicSchema/crosswalk
   CEL_MAPPING_REF: ca7411d735f1507b9db0db637f79aff7e4ae4611
 
@@ -96,12 +96,14 @@ jobs:
       - name: Check Docker build contract
         run: python3 scripts/check_docker_build_contract.py
 
+      - name: Check workflow hardening contract
+        run: python3 scripts/check_workflow_hardening.py
+
       - name: Install cargo-nextest
-        # Pinned to 0.9.136 so CI matches the version contributors install
-        # via `cargo install cargo-nextest --locked`. The installer is
-        # hosted by the nextest project; the binary is pre-built.
-        run: |
-          curl -LsSf https://get.nexte.st/0.9.136/linux | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        with:
+          tool: nextest@0.9.136
+          fallback: none
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -248,9 +250,10 @@ jobs:
           key: postgres-integration
 
       - name: Install cargo-nextest
-        # Pinned to 0.9.136; see build-and-test job for rationale.
-        run: |
-          curl -LsSf https://get.nexte.st/0.9.136/linux | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        with:
+          tool: nextest@0.9.136
+          fallback: none
 
       - name: Enable TLS for Postgres integration tests
         run: |

@@ -75,7 +75,9 @@ The script emits JSON describing CSV columns, XLSX sheets, or Parquet schema whe
    - Declare `metadata_scope`, `aggregate_scope`, and `read_scope` on each entity. Add `evidence_verification_scope` only when the entity backs an evidence offering.
    - Common default strings are `<dataset>:metadata`, `<dataset>:aggregate`, `<dataset>:rows`, and `<dataset>:evidence_verification`.
    - Do not assume aggregate or evidence-verification access implies row access.
-   - Use the `registry_relay:admin` scope only for `/admin/reload`.
+   - Use the `registry_relay:admin` scope only for private admin operations.
+     It grants `/admin/reload`, `/admin/v1/config/verify`,
+     `/admin/v1/config/dry-run`, and `/admin/v1/config/apply`.
    - `auth.api_keys[].fingerprint` is a governed credential reference. `provider: env` reads a `sha256:<64 lowercase hex chars>` fingerprint from the environment variable named by `name`; `provider: file` reads it from `path`. `commitment` is the governed `sha256:` commitment over the product, credential type, credential id, and fingerprint. Never put raw keys or fingerprint values directly in comments, examples, logs, or final answers.
 
 9. Keep query access narrow.

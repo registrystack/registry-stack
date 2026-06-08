@@ -301,7 +301,11 @@ async fn landing_conformance_and_collections_are_metadata_scoped() {
 
 #[tokio::test]
 async fn area_get_wkt_returns_grouped_admin_features() {
-    let server = server(&["social_registry:metadata", "social_registry:aggregate"]);
+    let server = server(&[
+        "social_registry:metadata",
+        "social_registry:aggregate",
+        "social_registry:rows",
+    ]);
 
     let resp = server
         .get("/ogc/edr/v1/collections/social_registry_beneficiaries_by_municipality/area")
@@ -336,7 +340,11 @@ async fn area_get_wkt_returns_grouped_admin_features() {
 
 #[tokio::test]
 async fn area_post_geojson_returns_single_submitted_geometry_feature() {
-    let server = server(&["social_registry:metadata", "social_registry:aggregate"]);
+    let server = server(&[
+        "social_registry:metadata",
+        "social_registry:aggregate",
+        "social_registry:rows",
+    ]);
 
     let resp = server
         .post("/ogc/edr/v1/collections/social_registry_beneficiaries_by_municipality/area")
@@ -368,7 +376,11 @@ async fn area_post_geojson_returns_single_submitted_geometry_feature() {
 #[tokio::test]
 async fn area_enforces_source_entity_purpose_header() {
     let server = server_with_options(
-        &["social_registry:metadata", "social_registry:aggregate"],
+        &[
+            "social_registry:metadata",
+            "social_registry:aggregate",
+            "social_registry:rows",
+        ],
         true,
         true,
         100,
@@ -400,7 +412,11 @@ async fn area_enforces_source_entity_purpose_header() {
 #[tokio::test]
 async fn area_rejects_oversized_request_geometry() {
     let server = server_with_options(
-        &["social_registry:metadata", "social_registry:aggregate"],
+        &[
+            "social_registry:metadata",
+            "social_registry:aggregate",
+            "social_registry:rows",
+        ],
         false,
         true,
         5,
@@ -427,7 +443,11 @@ async fn area_rejects_oversized_request_geometry() {
 
 #[tokio::test]
 async fn area_no_matching_admin_geometry_returns_empty_feature_collection() {
-    let server = server(&["social_registry:metadata", "social_registry:aggregate"]);
+    let server = server(&[
+        "social_registry:metadata",
+        "social_registry:aggregate",
+        "social_registry:rows",
+    ]);
 
     let resp = server
         .get("/ogc/edr/v1/collections/social_registry_beneficiaries_by_municipality/area")
@@ -454,6 +474,20 @@ fn spatial_aggregate_requires_in_filter_on_area_dimension() {
 #[tokio::test]
 async fn area_requires_aggregate_scope() {
     let server = server(&["social_registry:metadata"]);
+
+    let resp = server
+        .get("/ogc/edr/v1/collections/social_registry_beneficiaries_by_municipality/area")
+        .add_query_param("coords", "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))")
+        .await;
+
+    resp.assert_status_forbidden();
+    let body: Value = resp.json();
+    assert_eq!(body["code"], "auth.scope_denied");
+}
+
+#[tokio::test]
+async fn area_requires_source_entity_read_scope() {
+    let server = server(&["social_registry:metadata", "social_registry:aggregate"]);
 
     let resp = server
         .get("/ogc/edr/v1/collections/social_registry_beneficiaries_by_municipality/area")

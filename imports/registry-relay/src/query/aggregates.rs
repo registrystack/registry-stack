@@ -39,6 +39,8 @@ pub struct AggregateListItem {
     pub aggregate_id: String,
     pub title: Option<String>,
     pub description: String,
+    pub metadata_scope: String,
+    pub source_entity_metadata_scope: Option<String>,
     pub dimensions: Vec<AggregateDimensionItem>,
     pub indicators: Vec<AggregateIndicatorItem>,
     pub default_group_by: Vec<String>,
@@ -674,6 +676,16 @@ fn aggregate_list_item(dataset: &DatasetConfig, aggregate: &AggregateConfig) -> 
         aggregate_id: aggregate.id.to_string(),
         title: aggregate.title.clone(),
         description: aggregate.description.clone(),
+        metadata_scope: aggregate
+            .access
+            .as_ref()
+            .and_then(|access| access.metadata_scope.clone())
+            .unwrap_or_else(|| format!("{}:metadata", dataset.id)),
+        source_entity_metadata_scope: aggregate
+            .source_entity
+            .as_deref()
+            .and_then(|name| dataset.entities.iter().find(|entity| entity.name == name))
+            .map(|entity| entity.access.metadata_scope.clone()),
         dimensions: aggregate.dimensions.iter().map(dimension_item).collect(),
         indicators: aggregate.indicators.iter().map(indicator_item).collect(),
         default_group_by: aggregate.default_group_by.clone(),

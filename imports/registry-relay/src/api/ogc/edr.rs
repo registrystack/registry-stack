@@ -18,7 +18,7 @@ use tokio::sync::watch;
 use crate::audit::AuditContextExt;
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
-use crate::config::{AggregateConfig, AggregateSpatialConfig, Config};
+use crate::config::{AggregateConfig, AggregateSpatialConfig, Config, DatasetConfig};
 use crate::entity::EntityRegistry;
 use crate::error::{AuthError, Error, FilterError, OgcError, SpatialError};
 use crate::ingest::ReadinessSnapshot;
@@ -162,6 +162,9 @@ async fn collection_detail(
     if let Err(error) = require_scope(&principal, &collection.metadata_scope) {
         return error.into_response();
     }
+    if let Err(error) = require_collection_source_metadata_scope(&principal, &collection) {
+        return error.into_response();
+    }
     Json(collection_json(&collection)).into_response()
 }
 
@@ -236,6 +239,9 @@ async fn area_common(
         return Error::from(OgcError::CollectionNotFound).into_response();
     };
     if let Err(error) = require_scope(&principal, &collection.aggregate_scope) {
+        return error.into_response();
+    }
+    if let Err(error) = require_collection_source_read_scope(&principal, &collection) {
         return error.into_response();
     }
     if let Err(error) = require_purpose_header(&config, &collection, &headers) {
@@ -383,6 +389,8 @@ struct EdrCollection<'a> {
     collection_id: String,
     metadata_scope: String,
     aggregate_scope: String,
+    source_entity_metadata_scope: Option<String>,
+    source_entity_read_scope: Option<String>,
     aggregate: &'a AggregateConfig,
 }
 
@@ -398,8 +406,11 @@ fn edr_collections<'a>(config: &'a Config, principal: &Principal) -> Vec<EdrColl
         .iter()
         .flat_map(|dataset| {
             dataset.aggregates.iter().filter_map(move |aggregate| {
-                let collection = edr_collection(dataset.id.as_str(), aggregate)?;
+                let collection = edr_collection(dataset, aggregate)?;
                 require_scope(principal, &collection.metadata_scope).ok()?;
+                if let Some(scope) = collection.source_entity_metadata_scope.as_deref() {
+                    require_scope(principal, scope).ok()?;
+                }
                 Some(collection)
             })
         })
@@ -411,16 +422,17 @@ fn find_edr_collection<'a>(config: &'a Config, collection_id: &str) -> Option<Ed
         dataset
             .aggregates
             .iter()
-            .filter_map(|aggregate| edr_collection(dataset.id.as_str(), aggregate))
+            .filter_map(|aggregate| edr_collection(dataset, aggregate))
             .find(|collection| collection.collection_id == collection_id)
     })
 }
 
 fn edr_collection<'a>(
-    dataset_id: &str,
+    dataset: &'a DatasetConfig,
     aggregate: &'a AggregateConfig,
 ) -> Option<EdrCollection<'a>> {
     let spatial = aggregate.spatial.as_ref()?;
+    let dataset_id = dataset.id.as_str();
     let collection_id = match spatial {
         AggregateSpatialConfig::AdminArea { collection_id, .. } => collection_id
             .clone()
@@ -440,6 +452,16 @@ fn edr_collection<'a>(
             .as_ref()
             .and_then(|access| access.aggregate_scope.clone())
             .unwrap_or_else(|| format!("{dataset_id}:aggregate")),
+        source_entity_metadata_scope: aggregate
+            .source_entity
+            .as_deref()
+            .and_then(|name| dataset.entities.iter().find(|entity| entity.name == name))
+            .map(|entity| entity.access.metadata_scope.clone()),
+        source_entity_read_scope: aggregate
+            .source_entity
+            .as_deref()
+            .and_then(|name| dataset.entities.iter().find(|entity| entity.name == name))
+            .map(|entity| entity.access.read_scope.clone()),
         aggregate,
     })
 }
@@ -808,6 +830,26 @@ fn require_purpose_header(
         return Ok(());
     }
     Err(AuthError::PurposeRequired.into())
+}
+
+fn require_collection_source_metadata_scope(
+    principal: &Principal,
+    collection: &EdrCollection<'_>,
+) -> Result<(), Error> {
+    if let Some(scope) = collection.source_entity_metadata_scope.as_deref() {
+        require_scope(principal, scope)?;
+    }
+    Ok(())
+}
+
+fn require_collection_source_read_scope(
+    principal: &Principal,
+    collection: &EdrCollection<'_>,
+) -> Result<(), Error> {
+    if let Some(scope) = collection.source_entity_read_scope.as_deref() {
+        require_scope(principal, scope)?;
+    }
+    Ok(())
 }
 
 fn purpose_header_value(headers: &HeaderMap) -> Option<&str> {

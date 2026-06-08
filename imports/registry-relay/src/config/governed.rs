@@ -16,7 +16,7 @@ use registry_platform_ops::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::config::{self, Config};
+use crate::config::{self, Config, RemoteTufRepositoryConfig};
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -43,8 +43,20 @@ pub struct RemoteTufConfigTargetRequest {
     pub targets_base_url: String,
     pub datastore_dir: PathBuf,
     pub target_name: String,
+    /// Deprecated request field retained for old clients. Remote fetch policy
+    /// is taken only from `config_trust.remote_tuf_repositories`.
     #[serde(default)]
     pub allow_dev_insecure_fetch_urls: bool,
+}
+
+#[derive(Debug, Clone)]
+struct AuthorizedRemoteTufConfigTarget {
+    root_path: PathBuf,
+    metadata_base_url: String,
+    targets_base_url: String,
+    datastore_dir: PathBuf,
+    target_name: String,
+    allow_dev_insecure_fetch_urls: bool,
 }
 
 pub struct ResolvedConfigCandidate {
@@ -128,6 +140,7 @@ pub async fn resolve_tuf_config_candidate(
             (verified, metadata_yaml, ConfigSource::SignedBundleFile)
         }
         TufConfigTargetRequest::Remote(request) => {
+            let request = authorize_remote_tuf_config_request(request, current_config)?;
             let input = RemoteTufRepositoryInput {
                 root_path: request.root_path.clone(),
                 metadata_base_url: request.metadata_base_url.clone(),
@@ -143,8 +156,8 @@ pub async fn resolve_tuf_config_candidate(
                         "signed config target could not be verified",
                     )
                 })?;
-            let metadata_yaml = resolve_remote_metadata_target(request, &verified).await?;
-            validate_remote_package_index_target(request, &verified).await?;
+            let metadata_yaml = resolve_remote_metadata_target(&request, &verified).await?;
+            validate_remote_package_index_target(&request, &verified).await?;
             (verified, metadata_yaml, ConfigSource::SignedBundleEndpoint)
         }
     };
@@ -166,6 +179,44 @@ pub async fn resolve_tuf_config_candidate(
         package_digest: verified.metadata.package_digest,
         source,
     })
+}
+
+fn authorize_remote_tuf_config_request(
+    request: &RemoteTufConfigTargetRequest,
+    current_config: &Config,
+) -> Result<AuthorizedRemoteTufConfigTarget, ConfigCandidateError> {
+    let Some(config_trust) = &current_config.config_trust else {
+        return Err(ConfigCandidateError::BundleInvalid(
+            "remote signed config repositories are not configured",
+        ));
+    };
+    let Some(allowed) = config_trust
+        .remote_tuf_repositories
+        .iter()
+        .find(|allowed| remote_tuf_source_matches(allowed, request))
+    else {
+        return Err(ConfigCandidateError::BundleInvalid(
+            "remote signed config repository is not authorized",
+        ));
+    };
+    Ok(AuthorizedRemoteTufConfigTarget {
+        root_path: allowed.root_path.clone(),
+        metadata_base_url: allowed.metadata_base_url.clone(),
+        targets_base_url: allowed.targets_base_url.clone(),
+        datastore_dir: allowed.datastore_dir.clone(),
+        target_name: request.target_name.clone(),
+        allow_dev_insecure_fetch_urls: allowed.allow_dev_insecure_fetch_urls,
+    })
+}
+
+fn remote_tuf_source_matches(
+    allowed: &RemoteTufRepositoryConfig,
+    request: &RemoteTufConfigTargetRequest,
+) -> bool {
+    allowed.root_path == request.root_path
+        && allowed.metadata_base_url == request.metadata_base_url
+        && allowed.targets_base_url == request.targets_base_url
+        && allowed.datastore_dir == request.datastore_dir
 }
 
 pub fn authorize_signed_config_candidate(
@@ -261,11 +312,7 @@ pub fn parse_resolved_config_candidate_with_provenance(
     let mut provenance = ConfigProvenance {
         source: candidate.source,
         internal_config_hash: internal_hash.clone(),
-        posture_config_hash: if metadata_source_digest.is_some() || package_digest.is_some() {
-            internal_hash
-        } else {
-            posture_safe_runtime_config_hash(&config_value)
-        },
+        posture_config_hash: posture_safe_runtime_config_hash(&config_value),
         dynamic_reload_supported: true,
         last_bundle_id: Some(candidate.bundle_id.clone()),
         last_bundle_sequence: Some(candidate.sequence),
@@ -315,7 +362,7 @@ async fn resolve_local_metadata_target(
 }
 
 async fn resolve_remote_metadata_target(
-    request: &RemoteTufConfigTargetRequest,
+    request: &AuthorizedRemoteTufConfigTarget,
     verified: &registry_platform_config::VerifiedConfigTarget,
 ) -> Result<Option<String>, ConfigCandidateError> {
     let Some(target_name) = verified.metadata.metadata_target_name.as_deref() else {
@@ -367,7 +414,7 @@ async fn validate_local_package_index_target(
 }
 
 async fn validate_remote_package_index_target(
-    request: &RemoteTufConfigTargetRequest,
+    request: &AuthorizedRemoteTufConfigTarget,
     verified: &registry_platform_config::VerifiedConfigTarget,
 ) -> Result<(), ConfigCandidateError> {
     let Some(target_name) = verified.metadata.package_index_target_name.as_deref() else {
@@ -523,4 +570,77 @@ fn runtime_package_digest(
     let bytes = metadata_core::canonicalize_json(&preimage)
         .map_err(|_| "runtime package digest could not be computed")?;
     Ok(internal_config_hash(&bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_with_remote_tuf_repo() -> Config {
+        serde_saphyr::from_str(
+            r#"
+server:
+  bind: 127.0.0.1:0
+config_trust:
+  antirollback_state_path: /tmp/relay-antirollback.json
+  local_approval_state_path: /tmp/relay-local-approvals.json
+  remote_tuf_repositories:
+    - root_path: /etc/registry-relay/tuf/root.json
+      metadata_base_url: https://config.example.test/metadata
+      targets_base_url: https://config.example.test/targets
+      datastore_dir: /var/lib/registry-relay/tuf
+      allow_dev_insecure_fetch_urls: false
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {}
+auth:
+  mode: api_key
+  api_keys: []
+datasets: []
+audit:
+  sink: stdout
+"#,
+        )
+        .expect("config parses")
+    }
+
+    fn remote_request(metadata_base_url: &str) -> RemoteTufConfigTargetRequest {
+        RemoteTufConfigTargetRequest {
+            root_path: "/etc/registry-relay/tuf/root.json".into(),
+            metadata_base_url: metadata_base_url.to_string(),
+            targets_base_url: "https://config.example.test/targets".to_string(),
+            datastore_dir: "/var/lib/registry-relay/tuf".into(),
+            target_name: "registry-relay.yaml".to_string(),
+            allow_dev_insecure_fetch_urls: true,
+        }
+    }
+
+    #[test]
+    fn remote_tuf_request_must_match_configured_repository() {
+        let config = config_with_remote_tuf_repo();
+
+        let err = authorize_remote_tuf_config_request(
+            &remote_request("https://evil.example/metadata"),
+            &config,
+        )
+        .expect_err("unlisted repository fails closed");
+
+        assert!(matches!(err, ConfigCandidateError::BundleInvalid(_)));
+    }
+
+    #[test]
+    fn remote_tuf_request_uses_operator_fetch_policy() {
+        let config = config_with_remote_tuf_repo();
+
+        let authorized = authorize_remote_tuf_config_request(
+            &remote_request("https://config.example.test/metadata"),
+            &config,
+        )
+        .expect("configured repository is authorized");
+
+        assert!(!authorized.allow_dev_insecure_fetch_urls);
+        assert_eq!(authorized.target_name, "registry-relay.yaml");
+    }
 }

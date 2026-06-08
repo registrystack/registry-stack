@@ -67,8 +67,10 @@ const BEARER_SCHEME: &str = "Bearer";
 /// instance serves every concurrent request.
 pub struct OidcAuth {
     algorithms: Vec<Algorithm>,
+    audiences: HashSet<String>,
     scope_claim: String,
     scope_map: BTreeMap<String, String>,
+    scope_object_required_keys: HashSet<String>,
     /// Accepted JOSE `typ` values, normalised to lowercase for the
     /// case-insensitive match RFC 7515 prescribes.
     token_types: HashSet<String>,
@@ -103,6 +105,7 @@ impl OidcAuth {
             .iter()
             .map(|t| t.to_ascii_lowercase())
             .collect();
+        let audiences = config.audience.iter().cloned().collect();
         let verifier = TokenVerifier::new(
             TokenVerifierConfig::registry_relay_access_profile(
                 config.issuer.clone(),
@@ -118,8 +121,10 @@ impl OidcAuth {
         );
         Self {
             algorithms,
+            audiences,
             scope_claim: config.scope_claim.clone(),
             scope_map: config.scope_map.clone(),
+            scope_object_required_keys: config.scope_object_required_keys.iter().cloned().collect(),
             token_types,
             cache,
             verifier,
@@ -197,10 +202,15 @@ impl OidcAuth {
             scopes: _,
         } = verified;
 
-        let scopes: ScopeSet = extract_scopes(&claims, &self.scope_claim)
-            .into_iter()
-            .map(|s| self.scope_map.get(&s).cloned().unwrap_or(s))
-            .collect();
+        let scopes: ScopeSet = extract_scopes(
+            &claims,
+            &self.scope_claim,
+            &self.audiences,
+            &self.scope_object_required_keys,
+        )
+        .into_iter()
+        .map(|s| self.scope_map.get(&s).cloned().unwrap_or(s))
+        .collect();
 
         let principal_id = claims
             .sub
@@ -341,40 +351,88 @@ fn unverified_payload(token: &str) -> Option<Value> {
 ///   IdPs that emit roles as a flat list.
 /// * `Object`: Zitadel emits roles under
 ///   `urn:zitadel:iam:org:project:roles` as an object whose **keys** are
-///   the role names (the values carry per-org metadata that the relay
-///   does not consume). The keys are returned as scopes; `scope_map`
-///   then renames them into the relay's `<dataset_id>:<level>` shape.
+///   the role names. Role keys are returned only when their values carry
+///   active-grant semantics; `scope_map` then renames them into the relay's
+///   `<dataset_id>:<level>` shape.
 ///
 /// Reserved claims are accepted only when explicitly named as `scope_claim`.
 /// They are verified by the OIDC library before Relay sees them, and are useful
 /// for demo or provider setups where policy maps a principal/client/audience to
-/// local Relay scopes. Role/entitlement claims remain the production default.
-fn extract_scopes(claims: &Claims, claim_name: &str) -> Vec<String> {
+/// local Relay scopes. When `aud` is configured as the source, only accepted
+/// Relay audiences are eligible for scope mapping. Role/entitlement claims
+/// remain the production default.
+fn extract_scopes(
+    claims: &Claims,
+    claim_name: &str,
+    accepted_audiences: &HashSet<String>,
+    scope_object_required_keys: &HashSet<String>,
+) -> Vec<String> {
     if let Some(value) = claims.extra.get(claim_name) {
-        return extract_scope_values(value);
+        return extract_scope_values(value, scope_object_required_keys);
     }
     match claim_name {
         "sub" => claims.sub.iter().cloned().collect(),
         "client_id" => claims.client_id.iter().cloned().collect(),
         "azp" => claims.azp.iter().cloned().collect(),
         "aud" => match claims.aud.as_ref() {
-            Some(Audience::One(value)) => vec![value.clone()],
-            Some(Audience::Many(values)) => values.clone(),
+            Some(Audience::One(value)) if accepted_audiences.contains(value) => {
+                vec![value.clone()]
+            }
+            Some(Audience::Many(values)) => values
+                .iter()
+                .filter(|value| accepted_audiences.contains(*value))
+                .cloned()
+                .collect(),
             None => Vec::new(),
+            _ => Vec::new(),
         },
         _ => Vec::new(),
     }
 }
 
-fn extract_scope_values(value: &Value) -> Vec<String> {
+fn extract_scope_values(
+    value: &Value,
+    scope_object_required_keys: &HashSet<String>,
+) -> Vec<String> {
     match value {
         Value::String(s) => s.split_whitespace().map(String::from).collect(),
         Value::Array(items) => items
             .iter()
             .filter_map(|item| item.as_str().map(String::from))
             .collect(),
-        Value::Object(map) => map.keys().cloned().collect(),
+        Value::Object(map) => map
+            .iter()
+            .filter(|(_, value)| scope_object_value_is_active(value, scope_object_required_keys))
+            .map(|(key, _)| key.clone())
+            .collect(),
         _ => Vec::new(),
+    }
+}
+
+fn scope_object_value_is_active(value: &Value, required_keys: &HashSet<String>) -> bool {
+    if !required_keys.is_empty() {
+        let Some(object) = value.as_object() else {
+            return false;
+        };
+        return required_keys.iter().any(|key| {
+            object
+                .get(key)
+                .is_some_and(scope_object_value_has_active_content)
+        });
+    }
+
+    scope_object_value_has_active_content(value)
+}
+
+fn scope_object_value_has_active_content(value: &Value) -> bool {
+    match value {
+        Value::Bool(value) => *value,
+        Value::String(value) => !value.trim().is_empty(),
+        Value::Array(values) => values.iter().any(scope_object_value_has_active_content),
+        Value::Object(object) => {
+            !object.is_empty() && object.values().any(scope_object_value_has_active_content)
+        }
+        Value::Null | Value::Number(_) => false,
     }
 }
 
@@ -391,8 +449,11 @@ mod tests {
     use jsonwebtoken::{encode, EncodingKey, Header};
     use rand_core::OsRng;
     use serde_json::json;
+    use std::io;
+    use std::sync::Mutex;
     use std::time::Duration;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tracing_subscriber::fmt::MakeWriter;
 
     const TEST_ISSUER: &str = "https://idp.example.test/realms/demo";
     const TEST_AUDIENCE: &str = "registry-relay";
@@ -438,6 +499,7 @@ mod tests {
             leeway: Duration::from_secs(60),
             scope_claim: "scope".to_string(),
             scope_map: BTreeMap::new(),
+            scope_object_required_keys: Vec::new(),
             allowed_clients: Vec::new(),
             token_types: vec!["JWT".to_string(), "at+jwt".to_string()],
         }
@@ -536,6 +598,33 @@ mod tests {
         format!("{header}.{payload}.")
     }
 
+    #[derive(Clone, Default)]
+    struct SharedLog(Arc<Mutex<Vec<u8>>>);
+
+    struct SharedLogWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl<'a> MakeWriter<'a> for SharedLog {
+        type Writer = SharedLogWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            SharedLogWriter(Arc::clone(&self.0))
+        }
+    }
+
+    impl io::Write for SharedLogWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0
+                .lock()
+                .expect("log buffer lock")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
     #[tokio::test]
     async fn valid_bearer_resolves_principal_with_scopes() {
         let (sk, vk) = fresh_keypair();
@@ -570,7 +659,7 @@ mod tests {
     #[tokio::test]
     async fn scope_object_form_treats_keys_as_scopes() {
         // Zitadel's `urn:zitadel:iam:org:project:roles` shape: an object
-        // keyed by role name with per-org metadata as the value.
+        // keyed by role name with active per-org metadata as the value.
         let (sk, vk) = fresh_keypair();
         let token = mint(
             &sk,
@@ -598,6 +687,79 @@ mod tests {
         let provider = provider_from(config, jwks_for(TEST_KID, &vk));
         let principal = provider.verify(&token).await.expect("ok");
         assert!(principal.scopes.contains("social_registry:rows"));
+        assert!(principal.scopes.contains("social_registry:aggregate"));
+    }
+
+    #[tokio::test]
+    async fn scope_object_form_requires_active_values() {
+        let (sk, vk) = fresh_keypair();
+        let token = mint(
+            &sk,
+            TokenOpts {
+                extra: Map::from_iter([(
+                    "urn:zitadel:iam:org:project:roles".to_string(),
+                    json!({
+                        "social-registry-reader": false,
+                        "social-registry-aggregate": null,
+                        "social-registry-metadata": {},
+                    }),
+                )]),
+                ..Default::default()
+            },
+        );
+        let mut config = base_config();
+        config.scope_claim = "urn:zitadel:iam:org:project:roles".to_string();
+        config.scope_map.insert(
+            "social-registry-reader".to_string(),
+            "social_registry:rows".to_string(),
+        );
+        config.scope_map.insert(
+            "social-registry-aggregate".to_string(),
+            "social_registry:aggregate".to_string(),
+        );
+        config.scope_map.insert(
+            "social-registry-metadata".to_string(),
+            "social_registry:metadata".to_string(),
+        );
+
+        let provider = provider_from(config, jwks_for(TEST_KID, &vk));
+        let principal = provider.verify(&token).await.expect("ok");
+        assert!(!principal.scopes.contains("social_registry:rows"));
+        assert!(!principal.scopes.contains("social_registry:aggregate"));
+        assert!(!principal.scopes.contains("social_registry:metadata"));
+    }
+
+    #[tokio::test]
+    async fn scope_object_form_requires_configured_org_key_when_set() {
+        let (sk, vk) = fresh_keypair();
+        let token = mint(
+            &sk,
+            TokenOpts {
+                extra: Map::from_iter([(
+                    "urn:zitadel:iam:org:project:roles".to_string(),
+                    json!({
+                        "social-registry-reader": { "orgId-999": "zitadel.localhost" },
+                        "social-registry-aggregate": { "orgId-123": "zitadel.localhost" },
+                    }),
+                )]),
+                ..Default::default()
+            },
+        );
+        let mut config = base_config();
+        config.scope_claim = "urn:zitadel:iam:org:project:roles".to_string();
+        config.scope_object_required_keys = vec!["orgId-123".to_string()];
+        config.scope_map.insert(
+            "social-registry-reader".to_string(),
+            "social_registry:rows".to_string(),
+        );
+        config.scope_map.insert(
+            "social-registry-aggregate".to_string(),
+            "social_registry:aggregate".to_string(),
+        );
+
+        let provider = provider_from(config, jwks_for(TEST_KID, &vk));
+        let principal = provider.verify(&token).await.expect("ok");
+        assert!(!principal.scopes.contains("social_registry:rows"));
         assert!(principal.scopes.contains("social_registry:aggregate"));
     }
 
@@ -695,6 +857,7 @@ mod tests {
             },
         );
         let mut config = base_config();
+        config.audience.push("registry-lab-api".to_string());
         config.scope_claim = "aud".to_string();
         config.scope_map.insert(
             "registry-lab-api".to_string(),
@@ -703,6 +866,24 @@ mod tests {
         let provider = provider_from(config, jwks_for(TEST_KID, &vk));
         let principal = provider.verify(&token).await.expect("ok");
         assert!(principal.scopes.contains("social_protection_registry:rows"));
+    }
+
+    #[tokio::test]
+    async fn reserved_audience_scope_claim_ignores_unaccepted_audiences() {
+        let (sk, vk) = fresh_keypair();
+        let token = mint(
+            &sk,
+            TokenOpts {
+                aud: Some(json!([TEST_AUDIENCE, "social_protection_registry:rows"])),
+                ..Default::default()
+            },
+        );
+        let mut config = base_config();
+        config.scope_claim = "aud".to_string();
+        let provider = provider_from(config, jwks_for(TEST_KID, &vk));
+        let principal = provider.verify(&token).await.expect("ok");
+        assert!(!principal.scopes.contains("social_protection_registry:rows"));
+        assert!(principal.scopes.contains(TEST_AUDIENCE));
     }
 
     #[tokio::test]
@@ -790,6 +971,45 @@ mod tests {
         let provider = provider_from(base_config(), jwks_for(TEST_KID, &vk));
         let err = provider.verify(&token).await.expect_err("unknown kid");
         assert!(matches!(err, AuthError::KidUnknown), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn unknown_kid_text_logs_do_not_include_raw_kid() {
+        let (sk, vk) = fresh_keypair();
+        let raw_kid = "not-the-cached-kid\nforged=true";
+        let token = mint(
+            &sk,
+            TokenOpts {
+                kid: Some(raw_kid.to_string()),
+                ..Default::default()
+            },
+        );
+        let provider = provider_from(base_config(), jwks_for(TEST_KID, &vk));
+        let logs = SharedLog::default();
+        let subscriber = tracing_subscriber::fmt()
+            .compact()
+            .with_ansi(false)
+            .with_target(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(logs.clone())
+            .finish();
+
+        let guard = tracing::subscriber::set_default(subscriber);
+        let err = provider.verify(&token).await.expect_err("unknown kid");
+        drop(guard);
+
+        assert!(matches!(err, AuthError::KidUnknown), "got {err:?}");
+        let rendered = String::from_utf8(logs.0.lock().expect("log buffer lock").clone())
+            .expect("logs are utf-8");
+        assert!(
+            rendered.contains("oidc: jwt validation failed"),
+            "expected validation diagnostic in logs: {rendered}"
+        );
+        assert!(!rendered.contains(raw_kid), "raw kid reached text logs");
+        assert!(
+            !rendered.contains("forged=true"),
+            "kid suffix reached text logs"
+        );
     }
 
     #[tokio::test]

@@ -286,6 +286,19 @@ async fn bbox_alone_does_not_satisfy_required_filters() {
 }
 
 #[tokio::test]
+async fn broad_ogc_required_filter_ops_return_filter_required() {
+    let server = server(&["civic_registry:metadata", "civic_registry:rows"]).await;
+
+    let response = server
+        .get("/ogc/v1/datasets/civic_registry/collections/facilities/items?facility_type.in=clinic,hospital")
+        .await;
+
+    response.assert_status_bad_request();
+    let body: Value = response.json();
+    assert_eq!(body["code"], "entity.filter_required");
+}
+
+#[tokio::test]
 async fn item_by_id_preserves_required_filter_context_and_null_geometry() {
     let server = server(&["civic_registry:metadata", "civic_registry:rows"]).await;
 

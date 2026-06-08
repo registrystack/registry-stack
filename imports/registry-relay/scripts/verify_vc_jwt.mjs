@@ -234,34 +234,41 @@ async function loadDidDocument(source, kid) {
   return parseJson(await readText(location, "application/did+json, application/json"), location);
 }
 
-function methodCandidates(didDocument) {
-  const candidates = [];
+function verificationMethodCandidates(didDocument) {
   const verificationMethods = didDocument.verificationMethod;
   if (Array.isArray(verificationMethods)) {
-    candidates.push(...verificationMethods.filter((entry) => typeof entry === "object" && entry));
-  } else if (verificationMethods && typeof verificationMethods === "object") {
-    candidates.push(verificationMethods);
+    return verificationMethods.filter((entry) => typeof entry === "object" && entry);
   }
+  if (verificationMethods && typeof verificationMethods === "object") {
+    return [verificationMethods];
+  }
+  return [];
+}
 
-  for (const relationship of [
-    "assertionMethod",
-    "authentication",
-    "capabilityDelegation",
-    "capabilityInvocation",
-  ]) {
-    const entries = didDocument[relationship];
-    if (!Array.isArray(entries)) continue;
-    for (const entry of entries) {
-      if (entry && typeof entry === "object") candidates.push(entry);
+function findAssertionMethod(didDocument, kid) {
+  const assertionMethods = didDocument.assertionMethod;
+  if (!assertionMethods) {
+    throw new VerificationError("DID Document assertionMethod is missing");
+  }
+  const methods = Array.isArray(assertionMethods) ? assertionMethods : [assertionMethods];
+
+  for (const entry of methods) {
+    if (entry === kid) {
+      return verificationMethodCandidates(didDocument).find((method) => method.id === kid);
+    }
+    if (entry && typeof entry === "object" && entry.id === kid) {
+      return entry;
     }
   }
-  return candidates;
+  throw new VerificationError(`DID Document assertionMethod does not authorize kid ${kid}`);
 }
 
 function findPublicJwk(didDocument, kid) {
-  const method = methodCandidates(didDocument).find((entry) => entry.id === kid);
+  const method = findAssertionMethod(didDocument, kid);
   if (!method) {
-    throw new VerificationError(`DID Document does not contain verificationMethod id ${kid}`);
+    throw new VerificationError(
+      `DID Document assertionMethod references ${kid} but does not contain matching verificationMethod`,
+    );
   }
   const publicJwk = method.publicKeyJwk;
   if (!publicJwk || typeof publicJwk !== "object" || Array.isArray(publicJwk)) {

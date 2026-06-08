@@ -74,8 +74,17 @@ fn tough_fixture(name: &str) -> PathBuf {
     registry.join("tough-0.22.0/tests/data").join(name)
 }
 
-fn current_config_yaml(tmp: &TempDir, public_bind: SocketAddr, admin_bind: SocketAddr) -> String {
-    config_yaml(tmp, public_bind, admin_bind, false)
+fn current_config_yaml_with_remote_tuf_repository(
+    tmp: &TempDir,
+    public_bind: SocketAddr,
+    admin_bind: SocketAddr,
+    remote: &MockServer,
+) -> String {
+    insert_remote_tuf_repository_yaml(
+        &config_yaml(tmp, public_bind, admin_bind, false),
+        tmp,
+        remote,
+    )
 }
 
 fn candidate_config_yaml(tmp: &TempDir, public_bind: SocketAddr, admin_bind: SocketAddr) -> String {
@@ -188,6 +197,24 @@ config_trust:
         tmp.path().join("antirollback.json").display(),
         tmp.path().join("local-approvals.json").display(),
     )
+}
+
+fn insert_remote_tuf_repository_yaml(yaml: &str, tmp: &TempDir, remote: &MockServer) -> String {
+    let repo_dir = tmp.path().join("signed-root-transition");
+    let remote = format!(
+        r#"  remote_tuf_repositories:
+    - root_path: "{}"
+      metadata_base_url: "{}/metadata"
+      targets_base_url: "{}/targets"
+      datastore_dir: "{}"
+      allow_dev_insecure_fetch_urls: true
+"#,
+        repo_dir.join("metadata/1.root.json").display(),
+        remote.uri(),
+        remote.uri(),
+        repo_dir.join("datastore").display()
+    );
+    yaml.replace("  accepted_roots:\n", &(remote + "  accepted_roots:\n"))
 }
 
 fn write_local_approval(
@@ -415,16 +442,14 @@ fn remote_apply_bundle_command(
     command
 }
 
-async fn serve_signed_tuf_fixture(signed: &SignedConfigFixture) -> MockServer {
-    let server = MockServer::start().await;
-    mount_directory_files(&server, "/metadata", &signed.metadata_dir).await;
-    mount_directory_files(&server, "/targets", &signed.targets_dir).await;
+async fn mount_signed_tuf_fixture(server: &MockServer, signed: &SignedConfigFixture) {
+    mount_directory_files(server, "/metadata", &signed.metadata_dir).await;
+    mount_directory_files(server, "/targets", &signed.targets_dir).await;
     Mock::given(method("GET"))
         .and(path("/metadata/2.root.json"))
         .respond_with(ResponseTemplate::new(404))
-        .mount(&server)
+        .mount(server)
         .await;
-    server
 }
 
 async fn mount_directory_files(server: &MockServer, url_prefix: &str, dir: &Path) {
@@ -461,7 +486,9 @@ async fn config_apply_bundle_cli_drives_live_admin_root_transition_with_local_ap
     let tmp = TempDir::new().expect("tempdir");
     let public_bind = allocate_loopback_addr();
     let admin_bind = allocate_loopback_addr();
-    let current_yaml = current_config_yaml(&tmp, public_bind, admin_bind);
+    let remote = MockServer::start().await;
+    let current_yaml =
+        current_config_yaml_with_remote_tuf_repository(&tmp, public_bind, admin_bind, &remote);
     let current_config_path = tmp.path().join("current.yaml");
     std::fs::write(&current_config_path, &current_yaml).expect("current config writes");
     registry_relay::config::load(&current_config_path).expect("current config validates");
@@ -552,7 +579,9 @@ async fn config_apply_bundle_cli_drives_live_admin_remote_root_transition_with_l
     let tmp = TempDir::new().expect("tempdir");
     let public_bind = allocate_loopback_addr();
     let admin_bind = allocate_loopback_addr();
-    let current_yaml = current_config_yaml(&tmp, public_bind, admin_bind);
+    let remote = MockServer::start().await;
+    let current_yaml =
+        current_config_yaml_with_remote_tuf_repository(&tmp, public_bind, admin_bind, &remote);
     let current_config_path = tmp.path().join("current.yaml");
     std::fs::write(&current_config_path, &current_yaml).expect("current config writes");
     registry_relay::config::load(&current_config_path).expect("current config validates");
@@ -565,7 +594,7 @@ async fn config_apply_bundle_cli_drives_live_admin_remote_root_transition_with_l
     write_local_approval(&tmp, &candidate_hash, &current_config_hash);
     let signed =
         write_signed_root_transition_fixture(&tmp, &current_config_hash, &candidate_yaml).await;
-    let remote = serve_signed_tuf_fixture(&signed).await;
+    mount_signed_tuf_fixture(&remote, &signed).await;
     let server = start_live_relay(&current_config_path, admin_bind).await;
 
     let output = remote_apply_bundle_command(&server, &signed, &remote)

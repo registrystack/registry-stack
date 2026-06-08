@@ -66,7 +66,8 @@ pub(crate) fn signed_vc_requested<'a>(
 /// VC `credentialSubject.id` and JWT `sub`.
 pub(crate) fn entity_subject_uri(config: &Config, dataset: &str, entity: &str, id: &str) -> String {
     let base = config.catalog.base_url.trim_end_matches('/');
-    format!("{base}/v1/datasets/{dataset}/entities/{entity}/records/{id}")
+    let encoded_id = percent_encode_path_segment(id);
+    format!("{base}/v1/datasets/{dataset}/entities/{entity}/records/{encoded_id}")
 }
 
 /// Build the canonical subject URI for an aggregate result, used as the
@@ -244,4 +245,65 @@ pub(crate) fn now_rfc3339() -> String {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .unwrap_or_else(|_| String::new())
+}
+
+fn percent_encode_path_segment(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => {
+                const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                encoded.push('%');
+                encoded.push(HEX[(byte >> 4) as usize] as char);
+                encoded.push(HEX[(byte & 0x0F) as usize] as char);
+            }
+        }
+    }
+    encoded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_with_base_url(base_url: &str) -> Config {
+        serde_saphyr::from_str(&format!(
+            r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: {base_url}
+  publisher: Test
+vocabularies: {{}}
+auth:
+  mode: api_key
+  api_keys: []
+datasets: []
+audit:
+  sink: stdout
+"#
+        ))
+        .expect("config parses")
+    }
+
+    #[test]
+    fn entity_subject_uri_encodes_entity_id_as_single_path_segment() {
+        let config = config_with_base_url("https://data.example.test/");
+
+        let uri = entity_subject_uri(
+            &config,
+            "civil_registry",
+            "person",
+            "NID/../1001?x=1#frag %\n",
+        );
+
+        assert_eq!(
+            uri,
+            "https://data.example.test/v1/datasets/civil_registry/entities/person/records/NID%2F..%2F1001%3Fx%3D1%23frag%20%25%0A"
+        );
+    }
 }

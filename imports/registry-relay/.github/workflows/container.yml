@@ -24,9 +24,9 @@ concurrency:
 
 env:
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: ${{ (github.head_ref || github.ref_name) == 'codex/audit-hash-helpers' && 'codex/audit-reference-hashing' || ((github.head_ref || github.ref_name) == 'commons-release-cleanup' && 'commons-release-cleanup' || 'main') }}
+  REGISTRY_PLATFORM_REF: ee298e00e76ad6b1e56373fe85d6c1e3a95ea238
   REGISTRY_MANIFEST_REPOSITORY: jeremi/registry-manifest
-  REGISTRY_MANIFEST_REF: main
+  REGISTRY_MANIFEST_REF: a2e648aaac864563a3311b9d95b8143afa1b7334
   CEL_MAPPING_REPOSITORY: PublicSchema/crosswalk
   CEL_MAPPING_REF: ca7411d735f1507b9db0db637f79aff7e4ae4611
   REGISTRY_RELAY_IMAGE: ghcr.io/jeremi/registry-relay
@@ -108,6 +108,27 @@ jobs:
         with:
           path: registry-relay
           persist-credentials: false
+
+      - name: Verify release tag is protected-main reachable
+        if: steps.channel.outputs.publish == 'true' && steps.channel.outputs.channel == 'release'
+        working-directory: registry-relay
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          protected="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.protected')"
+          if [[ "$protected" != "true" ]]; then
+            echo "Official release image aliases require the repository's main branch to be protected." >&2
+            exit 1
+          fi
+
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: bearer ${GH_TOKEN}" \
+            fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "Official release image aliases require tag commit $GITHUB_SHA to be reachable from protected main." >&2
+            exit 1
+          fi
 
       - name: Checkout registry-platform
         if: steps.channel.outputs.build == 'true'

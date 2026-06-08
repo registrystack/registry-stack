@@ -1538,6 +1538,22 @@ async fn entity_collection_with_required_filter_group_id_satisfied_returns_200()
 }
 
 #[tokio::test]
+async fn entity_collection_with_broad_required_filter_ops_returns_filter_required() {
+    for query in ["id.in=item-1,item-2", "id.gte=item-1", "id="] {
+        let resp = server_with_required_filters()
+            .await
+            .get(&format!(
+                "/v1/datasets/test_dataset/entities/item/records?{query}"
+            ))
+            .await;
+
+        resp.assert_status(StatusCode::BAD_REQUEST);
+        let body: Value = resp.json();
+        assert_eq!(body["code"], "entity.filter_required", "{query}");
+    }
+}
+
+#[tokio::test]
 async fn entity_collection_with_unrelated_filter_returns_filter_required() {
     let resp = server_with_required_filters()
         .await

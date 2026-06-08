@@ -13,6 +13,7 @@ use std::net::IpAddr;
 use std::time::Duration;
 
 use crate::error::{ConfigError, Error, RuntimeBindingError};
+use crate::table_provider::table_name;
 use registry_manifest_core::CompiledMetadata;
 use registry_platform_authcommon::{
     CredentialCommitmentContext, CredentialFingerprintRefError, CredentialProduct, CredentialType,
@@ -30,6 +31,8 @@ use super::{
 
 /// Product-scoped admin capability required by private admin mutations.
 const ADMIN_SCOPE: &str = "registry_relay:admin";
+const OPS_READ_SCOPE: &str = "registry_relay:ops_read";
+const RESERVED_SCOPE_DATASET_IDS: &[&str] = &["registry_relay"];
 
 /// Run every cross-field check on a freshly deserialised [`Config`].
 ///
@@ -100,6 +103,27 @@ fn validate_config_trust(config: &Config) -> Result<(), ConfigError> {
                 code = "config.validation_error",
                 error = %error,
                 "config_trust.accepted_roots contains an invalid trust root"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
+    for repo in &config_trust.remote_tuf_repositories {
+        if repo.root_path.as_os_str().is_empty() || repo.datastore_dir.as_os_str().is_empty() {
+            tracing::error!(
+                code = "config.validation_error",
+                "config_trust.remote_tuf_repositories paths must not be empty"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        if !is_allowed_remote_tuf_url(&repo.metadata_base_url, repo.allow_dev_insecure_fetch_urls)
+            || !is_allowed_remote_tuf_url(
+                &repo.targets_base_url,
+                repo.allow_dev_insecure_fetch_urls,
+            )
+        {
+            tracing::error!(
+                code = "config.validation_error",
+                "config_trust.remote_tuf_repositories URLs must be https:// unless allow_dev_insecure_fetch_urls is true for loopback dev"
             );
             return Err(ConfigError::ValidationError);
         }
@@ -1164,6 +1188,7 @@ fn is_trusted_proxy_spec(s: &str) -> bool {
 
 fn validate_ids_and_uniqueness(config: &Config) -> Result<(), ConfigError> {
     let mut dataset_ids: HashSet<&str> = HashSet::new();
+    let mut datafusion_table_names: BTreeMap<String, (String, String)> = BTreeMap::new();
     for dataset in &config.datasets {
         if !is_valid_id(dataset.id.as_str()) {
             tracing::error!(
@@ -1244,6 +1269,22 @@ fn validate_ids_and_uniqueness(config: &Config) -> Result<(), ConfigError> {
                     dataset_id = %dataset.id,
                     resource_id = %resource.id,
                     "duplicate resource id within dataset"
+                );
+                return Err(ConfigError::DuplicateId);
+            }
+            let datafusion_table_name = table_name(&dataset.id, &resource.id);
+            if let Some((existing_dataset, existing_resource)) = datafusion_table_names.insert(
+                datafusion_table_name.clone(),
+                (dataset.id.to_string(), resource.id.to_string()),
+            ) {
+                tracing::error!(
+                    code = "config.duplicate_id",
+                    dataset_id = %dataset.id,
+                    resource_id = %resource.id,
+                    datafusion_table_name,
+                    existing_dataset,
+                    existing_resource,
+                    "duplicate derived DataFusion table name"
                 );
                 return Err(ConfigError::DuplicateId);
             }
@@ -1451,6 +1492,19 @@ fn validate_oidc(oidc: &OidcConfig) -> Result<(), ConfigError> {
     }
 
     if oidc
+        .scope_object_required_keys
+        .iter()
+        .any(|key| key.trim().is_empty())
+    {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "auth.oidc.scope_object_required_keys",
+            "scope_object_required_keys entries must be non-empty"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    if oidc
         .allowed_clients
         .iter()
         .any(|client| client.trim().is_empty())
@@ -1476,17 +1530,33 @@ fn validate_oidc(oidc: &OidcConfig) -> Result<(), ConfigError> {
 }
 
 fn is_allowed_oidc_url(url: &str, allow_dev_insecure_fetch_urls: bool) -> bool {
-    if let Some(rest) = url.strip_prefix("https://") {
-        return !rest.is_empty();
-    }
-    if !allow_dev_insecure_fetch_urls {
+    is_https_or_dev_loopback_url(url, allow_dev_insecure_fetch_urls)
+}
+
+fn is_allowed_remote_tuf_url(url: &str, allow_dev_insecure_fetch_urls: bool) -> bool {
+    is_https_or_dev_loopback_url(url, allow_dev_insecure_fetch_urls)
+}
+
+fn is_https_or_dev_loopback_url(url: &str, allow_dev_insecure_fetch_urls: bool) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    if !parsed.username().is_empty() || parsed.password().is_some() || parsed.host_str().is_none() {
         return false;
     }
-    if let Some(rest) = url.strip_prefix("http://") {
-        let host = rest.split(['/', ':']).next().unwrap_or("");
-        return host == "localhost" || host == "127.0.0.1" || host == "[::1]";
+    match parsed.scheme() {
+        "https" => true,
+        "http" if allow_dev_insecure_fetch_urls => parsed
+            .host_str()
+            .is_some_and(|host| host.eq_ignore_ascii_case("localhost") || is_loopback_ip(host)),
+        _ => false,
     }
-    false
+}
+
+fn is_loopback_ip(host: &str) -> bool {
+    host.trim_matches(['[', ']'])
+        .parse::<IpAddr>()
+        .is_ok_and(|ip| ip.is_loopback())
 }
 
 fn validate_scopes(config: &Config) -> Result<(), ConfigError> {
@@ -1606,6 +1676,17 @@ fn validate_entity_scope(
         );
         return Err(ConfigError::ValidationError);
     }
+    if RESERVED_SCOPE_DATASET_IDS.contains(&scope_dataset) {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset_id,
+            entity = %entity_name,
+            field = %field,
+            scope = %scope,
+            "entity access scope must not use a reserved operations scope namespace"
+        );
+        return Err(ConfigError::ValidationError);
+    }
     Ok(())
 }
 
@@ -1617,7 +1698,7 @@ fn validate_scope(
     if scope == ADMIN_SCOPE {
         return Ok(());
     }
-    if scope == "registry_relay:ops_read" {
+    if scope == OPS_READ_SCOPE {
         return Ok(());
     }
     let (dataset, level) = scope.split_once(':').ok_or_else(|| {
@@ -1888,6 +1969,7 @@ fn validate_source_config(
             connect_timeout,
             query_timeout,
             live_max_connections,
+            live_max_rows,
         } => {
             if !is_valid_env_var_name(connection_env) {
                 tracing::error!(
@@ -1956,13 +2038,17 @@ fn validate_source_config(
                 validate_configured_postgres_query(dataset, resource, connection_env, sql)?;
             }
 
-            if connect_timeout.is_zero() || query_timeout.is_zero() || *live_max_connections == 0 {
+            if connect_timeout.is_zero()
+                || query_timeout.is_zero()
+                || *live_max_connections == 0
+                || *live_max_rows == 0
+            {
                 tracing::error!(
                     code = "config.validation_error",
                     dataset_id = %dataset.id,
                     resource_id = resource.map(|r| r.id.as_str()).unwrap_or("<dataset>"),
                     connection_env = %connection_env,
-                    "postgres timeouts must be non-zero and live_max_connections must be greater than zero"
+                    "postgres timeouts must be non-zero and live limits must be greater than zero"
                 );
                 return Err(ConfigError::ValidationError);
             }
@@ -2004,7 +2090,155 @@ fn validate_configured_postgres_query(
         return Err(ConfigError::ValidationError);
     }
 
+    if postgres_configured_sql_has_disallowed_token(trimmed) {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            resource_id = resource.map(|r| r.id.as_str()).unwrap_or("<dataset>"),
+            connection_env = %connection_env,
+            "postgres configured SQL must be read-only and must not change session state"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
     Ok(())
+}
+
+fn postgres_configured_sql_has_disallowed_token(sql: &str) -> bool {
+    const DISALLOWED: &[&str] = &[
+        "alter",
+        "analyze",
+        "begin",
+        "call",
+        "cluster",
+        "commit",
+        "copy",
+        "create",
+        "delete",
+        "drop",
+        "execute",
+        "grant",
+        "insert",
+        "listen",
+        "load",
+        "lock",
+        "merge",
+        "nextval",
+        "notify",
+        "perform",
+        "pg_advisory_lock",
+        "pg_read_binary_file",
+        "pg_read_file",
+        "pg_sleep",
+        "refresh",
+        "reindex",
+        "reset",
+        "revoke",
+        "rollback",
+        "set",
+        "set_config",
+        "truncate",
+        "update",
+        "vacuum",
+    ];
+    postgres_sql_tokens(sql)
+        .iter()
+        .any(|token| DISALLOWED.contains(&token.as_str()))
+}
+
+fn postgres_sql_tokens(sql: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut chars = sql.chars().peekable();
+    let mut in_single_quote = false;
+    let mut is_escape_quote = false;
+    let mut in_line_comment = false;
+    let mut in_block_comment = false;
+
+    while let Some(ch) = chars.next() {
+        if in_line_comment {
+            if ch == '\n' {
+                in_line_comment = false;
+            }
+            continue;
+        }
+        if in_block_comment {
+            if ch == '*' && chars.peek() == Some(&'/') {
+                chars.next();
+                in_block_comment = false;
+            }
+            continue;
+        }
+        if in_single_quote {
+            if is_escape_quote && ch == '\\' {
+                chars.next();
+            } else if ch == '\'' {
+                if chars.peek() == Some(&'\'') {
+                    chars.next();
+                } else {
+                    in_single_quote = false;
+                    is_escape_quote = false;
+                }
+            }
+            continue;
+        }
+        match ch {
+            '-' if chars.peek() == Some(&'-') => {
+                chars.next();
+                push_postgres_sql_token(&mut tokens, &mut current);
+                in_line_comment = true;
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                push_postgres_sql_token(&mut tokens, &mut current);
+                in_block_comment = true;
+            }
+            '\'' => {
+                is_escape_quote = current.eq_ignore_ascii_case("e");
+                push_postgres_sql_token(&mut tokens, &mut current);
+                in_single_quote = true;
+            }
+            '"' => {
+                push_postgres_sql_token(&mut tokens, &mut current);
+                let token = read_postgres_quoted_identifier(&mut chars);
+                if !token.is_empty() {
+                    tokens.push(token.to_ascii_lowercase());
+                }
+            }
+            ch if ch.is_ascii_alphanumeric() || ch == '_' => {
+                current.push(ch.to_ascii_lowercase());
+            }
+            _ => push_postgres_sql_token(&mut tokens, &mut current),
+        }
+    }
+    push_postgres_sql_token(&mut tokens, &mut current);
+    tokens
+}
+
+fn read_postgres_quoted_identifier<I>(chars: &mut std::iter::Peekable<I>) -> String
+where
+    I: Iterator<Item = char>,
+{
+    let mut identifier = String::new();
+    while let Some(ch) = chars.next() {
+        if ch == '"' {
+            if chars.peek() == Some(&'"') {
+                chars.next();
+                identifier.push('"');
+            } else {
+                break;
+            }
+        } else {
+            identifier.push(ch);
+        }
+    }
+    identifier
+}
+
+fn push_postgres_sql_token(tokens: &mut Vec<String>, current: &mut String) {
+    if !current.is_empty() {
+        tokens.push(std::mem::take(current));
+    }
 }
 
 fn validate_materialization_refresh(
@@ -3354,6 +3588,31 @@ mod tests {
         assert!(!is_trusted_proxy_spec("not-an-ip"));
         assert!(!is_trusted_proxy_spec("10.0.0.0/99"));
         assert!(!is_trusted_proxy_spec("2001:db8::/129"));
+    }
+
+    #[test]
+    fn oidc_dev_http_url_exception_requires_parsed_loopback_host() {
+        assert!(is_allowed_oidc_url("http://127.0.0.1:8080/jwks", true));
+        assert!(is_allowed_oidc_url("http://[::1]:8080/jwks", true));
+        assert!(is_allowed_oidc_url(
+            "http://localhost/.well-known/openid-configuration",
+            true
+        ));
+
+        assert!(!is_allowed_oidc_url(
+            "http://127.0.0.1:80@evil.example/jwks",
+            true
+        ));
+        assert!(!is_allowed_oidc_url(
+            "http://localhost:pw@evil.example/jwks",
+            true
+        ));
+        assert!(!is_allowed_oidc_url("http://10.0.0.1/jwks", true));
+        assert!(!is_allowed_oidc_url("http://evil.example/jwks", true));
+        assert!(!is_allowed_oidc_url(
+            "https://user:pw@idp.example.test/jwks",
+            false
+        ));
     }
 
     fn provenance_with_retired_verification_method(retired_vm_id: &str) -> ProvenanceConfig {

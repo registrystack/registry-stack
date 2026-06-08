@@ -57,6 +57,12 @@ where
     tokio::pin!(shutdown);
 
     loop {
+        while let Some(joined) = tasks.try_join_next() {
+            if let Err(error) = joined {
+                warn!(error = %error, bind = %local_addr, "http connection task failed");
+            }
+        }
+
         let permit = tokio::select! {
             biased;
             _ = &mut shutdown => {

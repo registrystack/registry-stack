@@ -387,7 +387,10 @@ fn build_aggregate_harness(env_name: &str) -> Harness {
         .layer(Extension(query))
         .layer(Extension(registry))
         .layer(Extension(Arc::clone(&cfg)))
-        .layer(Extension(principal(&["social_registry:aggregate"])))
+        .layer(Extension(principal(&[
+            "social_registry:aggregate",
+            "social_registry:rows",
+        ])))
         .layer(Extension(state));
     let router = with_audit(router, sink_arc);
     Harness {
@@ -577,7 +580,10 @@ async fn aggregate_vc_as_of_reflects_resource_registered_at() {
         .layer(Extension(registry))
         .layer(Extension(Arc::clone(&cfg)))
         .layer(Extension(readiness))
-        .layer(Extension(principal(&["social_registry:aggregate"])))
+        .layer(Extension(principal(&[
+            "social_registry:aggregate",
+            "social_registry:rows",
+        ])))
         .layer(Extension(state));
     let router = with_audit(router, sink_arc);
     let server = TestServer::new(router);
@@ -638,7 +644,10 @@ async fn aggregate_vc_subject_reflects_disclosure_suppression() {
         .layer(Extension(query))
         .layer(Extension(registry))
         .layer(Extension(Arc::clone(&cfg)))
-        .layer(Extension(principal(&["social_registry:aggregate"])))
+        .layer(Extension(principal(&[
+            "social_registry:aggregate",
+            "social_registry:rows",
+        ])))
         .layer(Extension(state));
     let router = with_audit(router, sink_arc);
     let server = TestServer::new(router);

@@ -12,7 +12,7 @@ use std::process::{Command, Output};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tempfile::NamedTempFile;
 
 fn repo_root() -> PathBuf {
@@ -134,6 +134,91 @@ fn node_verifier_accepts_golden_fixtures() {
             String::from_utf8_lossy(&output.stderr),
         );
     }
+}
+
+#[test]
+fn node_verifier_accepts_assertion_method_key() {
+    let args = fixture_args(&FIXTURES[0]);
+    let output = run_with_owned_args(&args);
+    assert!(
+        output.status.success(),
+        "verifier must accept a key authorized by assertionMethod\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
+fn node_verifier_accepts_single_assertion_method_reference() {
+    let fixture = &FIXTURES[0];
+    let fixture_path = fixture_path(fixture);
+    let mut did: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture_path.join("did.json")).unwrap())
+            .expect("did fixture json");
+    let assertion = did["assertionMethod"]
+        .as_array()
+        .and_then(|values| values.first())
+        .cloned()
+        .expect("fixture has assertionMethod reference");
+    did["assertionMethod"] = assertion;
+
+    let mut did_file = NamedTempFile::new().expect("did temp file");
+    write!(
+        did_file,
+        "{}",
+        serde_json::to_string_pretty(&did).expect("did serializes")
+    )
+    .expect("did temp write");
+
+    let mut args = fixture_args(fixture);
+    replace_arg(
+        &mut args,
+        "--did-document",
+        did_file.path().display().to_string(),
+    );
+    let output = run_with_owned_args(&args);
+    assert!(
+        output.status.success(),
+        "verifier must accept a singleton assertionMethod reference\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
+fn node_verifier_rejects_authentication_only_key() {
+    let fixture = &FIXTURES[0];
+    let fixture_path = fixture_path(fixture);
+    let mut did: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture_path.join("did.json")).unwrap())
+            .expect("did fixture json");
+    did["authentication"] = did["assertionMethod"].clone();
+    did["assertionMethod"] = json!([]);
+
+    let mut did_file = NamedTempFile::new().expect("did temp file");
+    write!(
+        did_file,
+        "{}",
+        serde_json::to_string_pretty(&did).expect("did serializes")
+    )
+    .expect("did temp write");
+
+    let mut args = fixture_args(fixture);
+    replace_arg(
+        &mut args,
+        "--did-document",
+        did_file.path().display().to_string(),
+    );
+    let output = run_with_owned_args(&args);
+    assert!(
+        !output.status.success(),
+        "verifier must fail when the signing key is authentication-only"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("assertionMethod does not authorize kid"),
+        "unexpected stderr: {stderr}"
+    );
 }
 
 #[test]

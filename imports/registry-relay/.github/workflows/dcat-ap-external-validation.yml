@@ -34,9 +34,9 @@ env:
   SEMIC_REPORT_PATH: target/dcat-ap/semic-report.json
   SEMIC_BREGDCATAP_REPORT_PATH: target/dcat-ap/semic-bregdcatap-report.json
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: ${{ (github.head_ref || github.ref_name) == 'commons-release-cleanup' && 'commons-release-cleanup' || 'main' }}
+  REGISTRY_PLATFORM_REF: ee298e00e76ad6b1e56373fe85d6c1e3a95ea238
   REGISTRY_MANIFEST_REPOSITORY: jeremi/registry-manifest
-  REGISTRY_MANIFEST_REF: main
+  REGISTRY_MANIFEST_REF: a2e648aaac864563a3311b9d95b8143afa1b7334
   CEL_MAPPING_REPOSITORY: PublicSchema/crosswalk
   CEL_MAPPING_REF: ca7411d735f1507b9db0db637f79aff7e4ae4611
 
