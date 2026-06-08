@@ -112,11 +112,17 @@ where
     public_router().merge(admin_router())
 }
 
+/// Routes mounted on the public listener.
+///
+/// This is not an unauthenticated router. Standalone composition wraps these
+/// routes in the auth/audit middleware, which exempts only explicit public
+/// protocol and probe paths.
 pub fn public_router<S>() -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
     Router::new()
+        .merge(crate::docs::router())
         .route("/healthz", get(healthz))
         .route("/ready", get(ready))
         .route("/openapi.json", get(openapi_json))
@@ -698,6 +704,32 @@ async fn admin_config_apply(
                 );
             }
         }
+    } else if let Some(change_class) =
+        openapi_auth_policy_change_class(&state, &candidate_config, &candidate)
+    {
+        match load_local_approval(&request, &state, &candidate, change_class) {
+            Ok(local_approval) => GovernedConfigApply::OpenApiAuthPolicyChange { local_approval },
+            Err(_) => {
+                consume_apply_metadata(&request);
+                return config_apply_report(
+                    candidate.bundle_id.clone(),
+                    candidate.sequence,
+                    ApplyReportResult::RejectedLocalApproval,
+                    false,
+                    false,
+                    StatusCode::CONFLICT,
+                    resolved_config_audit(
+                        ConfigAdminAction::Apply,
+                        &candidate,
+                        "rejected",
+                        ApplyReportResult::RejectedLocalApproval.as_str(),
+                        false,
+                        false,
+                    )
+                    .with_local_approval_request(&request),
+                );
+            }
+        }
     } else {
         let signing_change_authorization = signing_change_authorization(&candidate);
         if !signing_change_authorization.any() {
@@ -887,6 +919,12 @@ async fn admin_config_apply(
             }
             state.swap_runtime_config(candidate_config.clone());
         }
+        GovernedConfigApply::OpenApiAuthPolicyChange { .. } => {
+            state.swap_runtime_config(candidate_config.clone());
+        }
+    }
+    if let Some(auth_state) = state.auth_state.as_ref() {
+        auth_state.swap_openapi_requires_auth(candidate_config.server.openapi_requires_auth);
     }
     state.swap_config_governance(ConfigGovernanceContext::from_config(&candidate_config));
     state.record_config_apply(ConfigApplyPosture {
@@ -1064,6 +1102,9 @@ enum GovernedConfigApply {
         authenticator: PreparedAuthenticator,
         local_approval: LocalOperatorApproval,
     },
+    OpenApiAuthPolicyChange {
+        local_approval: LocalOperatorApproval,
+    },
 }
 
 impl GovernedConfigApply {
@@ -1071,7 +1112,8 @@ impl GovernedConfigApply {
         match self {
             Self::SigningRotation { .. } => None,
             Self::RootTransition { local_approval }
-            | Self::ClientAuthChange { local_approval, .. } => Some(local_approval),
+            | Self::ClientAuthChange { local_approval, .. }
+            | Self::OpenApiAuthPolicyChange { local_approval } => Some(local_approval),
         }
     }
 }
@@ -1151,6 +1193,51 @@ fn client_auth_change_class(
         return Some("client_access_change");
     }
     None
+}
+
+fn openapi_auth_policy_change_class(
+    state: &RegistryNotaryApiState,
+    candidate: &StandaloneRegistryNotaryConfig,
+    resolved: &ResolvedConfigCandidate,
+) -> Option<&'static str> {
+    let current = state.runtime_config()?;
+    if resolved
+        .change_classes
+        .contains("openapi_auth_policy_change")
+        && is_openapi_auth_policy_change(&current, candidate).ok()?
+    {
+        return Some("openapi_auth_policy_change");
+    }
+    None
+}
+
+fn is_openapi_auth_policy_change(
+    current: &StandaloneRegistryNotaryConfig,
+    candidate: &StandaloneRegistryNotaryConfig,
+) -> Result<bool, &'static str> {
+    Ok(
+        current.server.openapi_requires_auth != candidate.server.openapi_requires_auth
+            && equivalent_except_openapi_auth_policy(current, candidate)?,
+    )
+}
+
+fn equivalent_except_openapi_auth_policy(
+    current: &StandaloneRegistryNotaryConfig,
+    candidate: &StandaloneRegistryNotaryConfig,
+) -> Result<bool, &'static str> {
+    let mut current =
+        serde_json::to_value(current).map_err(|_| "current config could not be normalized")?;
+    let mut candidate =
+        serde_json::to_value(candidate).map_err(|_| "candidate config could not be normalized")?;
+    normalize_openapi_auth_policy(&mut current);
+    normalize_openapi_auth_policy(&mut candidate);
+    Ok(current == candidate)
+}
+
+fn normalize_openapi_auth_policy(value: &mut Value) {
+    if let Some(server) = value.get_mut("server").and_then(Value::as_object_mut) {
+        server.remove("openapi_requires_auth");
+    }
 }
 
 fn is_client_credential_rotation_change(
@@ -2478,11 +2565,19 @@ fn posture_filter_failed(error: PostureFilterError) -> Response {
     response
 }
 
-async fn openapi_json(principal: Option<Extension<EvidencePrincipal>>) -> Response {
-    if principal.is_none() {
+async fn openapi_json(
+    principal: Option<Extension<EvidencePrincipal>>,
+    state: Option<Extension<Arc<RegistryNotaryApiState>>>,
+) -> Response {
+    let state = state.map(|Extension(state)| state);
+    if openapi_requires_auth_from_state(state.as_deref()) && principal.is_none() {
         return evidence_error_response(EvidenceError::MissingCredential);
     }
     Json(openapi_document()).into_response()
+}
+
+fn openapi_requires_auth_from_state(state: Option<&RegistryNotaryApiState>) -> bool {
+    state.is_none_or(RegistryNotaryApiState::openapi_requires_auth)
 }
 
 pub trait EvidenceIssuerResolver: Send + Sync {
@@ -2799,6 +2894,17 @@ impl RegistryNotaryApiState {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
+    }
+
+    fn openapi_requires_auth(&self) -> bool {
+        self.auth_state.as_ref().map_or_else(
+            || {
+                self.runtime_config()
+                    .map(|config| config.server.openapi_requires_auth)
+                    .unwrap_or(true)
+            },
+            |auth_state| auth_state.openapi_requires_auth(),
+        )
     }
 
     fn swap_runtime_config(&self, config: Arc<StandaloneRegistryNotaryConfig>) {

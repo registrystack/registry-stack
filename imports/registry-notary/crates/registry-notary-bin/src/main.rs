@@ -339,7 +339,7 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
             Ok(ExitCode::SUCCESS)
         }
         Some(Command::Openapi) => {
-            println!("{}", openapi_document().to_pretty_json()?);
+            println!("{}", serde_json::to_string_pretty(&openapi_document())?);
             Ok(ExitCode::SUCCESS)
         }
         Some(Command::Doctor {

@@ -182,6 +182,17 @@ scrape_configs:
       - targets: ["registry-notary:8081"]
 ```
 
+## Try locally with registryctl
+
+For the first local tutorial, use
+[Verify a claim from your registry API](https://docs.registrystack.org/tutorials/verify-claim-registry-api/).
+It uses `registryctl` to add Registry Notary to a local registry API project, start both services,
+and run the Notary smoke checks without cloning this repository.
+
+If you already have a source API, use
+[Verify a claim from your own API](https://docs.registrystack.org/tutorials/verify-claim-own-api/).
+That path creates a standalone Notary project and points it at an API you operate.
+
 ## Local Run
 
 ```bash

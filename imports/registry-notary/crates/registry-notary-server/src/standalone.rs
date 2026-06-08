@@ -343,6 +343,10 @@ pub fn notary_routers_from_runtime(snapshot: NotaryRuntimeSnapshot) -> NotaryRou
     }
 }
 
+/// Build the router mounted on the public listener.
+///
+/// The returned router is still wrapped in auth/audit middleware; only explicit
+/// probe and public protocol routes are exempted from authentication.
 pub fn notary_public_router_from_runtime(snapshot: NotaryRuntimeSnapshot) -> Router {
     notary_routers_from_runtime(snapshot).public
 }
@@ -3208,6 +3212,7 @@ pub(crate) struct AuthAuditState {
     authenticator: RwLock<Arc<Authenticator>>,
     audit: AuditPipeline,
     metrics: Arc<AppMetrics>,
+    openapi_requires_auth: AtomicBool,
     self_attestation_invalid_token_limiter: Option<Arc<SelfAttestationRateLimiter>>,
     self_attestation_rate_keys: Option<Arc<SelfAttestationRateLimitKeys>>,
 }
@@ -3296,6 +3301,7 @@ impl AuthAuditState {
             authenticator: RwLock::new(Arc::new(Authenticator::from_config(config)?)),
             audit,
             metrics,
+            openapi_requires_auth: AtomicBool::new(config.server.openapi_requires_auth),
             self_attestation_invalid_token_limiter,
             self_attestation_rate_keys,
         })
@@ -3369,6 +3375,14 @@ impl AuthAuditState {
 
     pub(crate) fn swap_prepared_authenticator(&self, updated: PreparedAuthenticator) {
         self.swap_authenticator(updated.0);
+    }
+
+    pub(crate) fn swap_openapi_requires_auth(&self, value: bool) {
+        self.openapi_requires_auth.store(value, Ordering::Relaxed);
+    }
+
+    pub(crate) fn openapi_requires_auth(&self) -> bool {
+        self.openapi_requires_auth.load(Ordering::Relaxed)
     }
 
     pub(crate) fn audit_pipeline(&self) -> AuditPipeline {
@@ -3693,7 +3707,7 @@ async fn auth_audit_middleware(
     let method = request.method().to_string();
     let path = audit_path(&request);
     let correlation_id = correlation_id_from_headers(request.headers());
-    if is_public_probe_path(&path) {
+    if is_auth_exempt_path(&path, state.auth_exemption_policy()) {
         return next.run(request).await;
     }
     let credentials = request_credentials(&request);
@@ -3889,7 +3903,20 @@ fn consume_invalid_token_after_auth_failure(
     limiter.check_invalid_token_for_client_address(&client_address)
 }
 
-fn is_public_probe_path(path: &str) -> bool {
+#[derive(Debug, Clone, Copy)]
+struct AuthExemptionPolicy {
+    openapi_requires_auth: bool,
+}
+
+impl AuthAuditState {
+    fn auth_exemption_policy(&self) -> AuthExemptionPolicy {
+        AuthExemptionPolicy {
+            openapi_requires_auth: self.openapi_requires_auth(),
+        }
+    }
+}
+
+fn is_auth_exempt_path(path: &str, policy: AuthExemptionPolicy) -> bool {
     matches!(
         path,
         "/healthz"
@@ -3901,9 +3928,12 @@ fn is_public_probe_path(path: &str) -> bool {
             | "/oid4vci/token"
             | "/oid4vci/nonce"
             | "/federation/v1/evaluations"
+            | "/docs"
+            | "/docs/scalar.js"
             | "/credentials/{*vct_path}"
             | "/v1/credentials/{credential_id}/status"
-    ) || path.starts_with("/.well-known/vct/")
+    ) || (!policy.openapi_requires_auth && path == "/openapi.json")
+        || path.starts_with("/.well-known/vct/")
 }
 
 async fn admin_metrics_handler(
@@ -6652,6 +6682,7 @@ credential_profiles:
             })),
             audit,
             metrics: Arc::new(AppMetrics::default()),
+            openapi_requires_auth: AtomicBool::new(true),
             self_attestation_invalid_token_limiter: None,
             self_attestation_rate_keys: None,
         })
@@ -7815,6 +7846,7 @@ sources:
             })),
             audit: audit.clone(),
             metrics: Arc::new(AppMetrics::default()),
+            openapi_requires_auth: AtomicBool::new(true),
             self_attestation_invalid_token_limiter: Some(Arc::new(
                 SelfAttestationRateLimiter::new(rate_limits),
             )),
@@ -7855,6 +7887,7 @@ sources:
             })),
             audit: AuditPipeline::for_sink_dev_only(Arc::new(JsonlStdoutSink::new())),
             metrics: Arc::new(AppMetrics::default()),
+            openapi_requires_auth: AtomicBool::new(true),
             self_attestation_invalid_token_limiter: None,
             self_attestation_rate_keys: None,
         };

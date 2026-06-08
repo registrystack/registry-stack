@@ -3159,6 +3159,11 @@ fn detect_depends_on_cycle(
 pub struct RegistryNotaryHttpConfig {
     #[serde(default = "default_bind_addr")]
     pub bind: SocketAddr,
+    #[serde(
+        default = "default_openapi_requires_auth",
+        skip_serializing_if = "openapi_requires_auth_is_default"
+    )]
+    pub openapi_requires_auth: bool,
     #[serde(default, skip_serializing_if = "admin_listener_config_is_default")]
     pub admin_listener: RegistryNotaryAdminListenerConfig,
     #[serde(default)]
@@ -3169,6 +3174,7 @@ impl Default for RegistryNotaryHttpConfig {
     fn default() -> Self {
         Self {
             bind: default_bind_addr(),
+            openapi_requires_auth: default_openapi_requires_auth(),
             admin_listener: RegistryNotaryAdminListenerConfig::default(),
             cors: RegistryNotaryCorsConfig::default(),
         }
@@ -3180,6 +3186,14 @@ fn default_bind_addr() -> SocketAddr {
     "127.0.0.1:8081"
         .parse()
         .expect("default bind address is valid")
+}
+
+fn default_openapi_requires_auth() -> bool {
+    true
+}
+
+fn openapi_requires_auth_is_default(value: &bool) -> bool {
+    *value == default_openapi_requires_auth()
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]

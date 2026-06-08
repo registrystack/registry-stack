@@ -66,6 +66,48 @@
     },
     {
       "service": "registry-notary",
+      "listener": "public",
+      "method": "GET",
+      "path": "/docs",
+      "feature": null,
+      "audience": "external",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "not_applicable",
+      "openapi": false,
+      "stability": "beta",
+      "data_classification": "metadata",
+      "notes": "Public static Scalar docs shell. It does not inline the OpenAPI document; /openapi.json remains authenticated by default.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_serves_docs_shell_without_auth"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "GET",
+      "path": "/docs/scalar.js",
+      "feature": null,
+      "audience": "external",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "not_applicable",
+      "openapi": false,
+      "stability": "beta",
+      "data_classification": "metadata",
+      "notes": "Public static Scalar bundle. It contains no generated OpenAPI document or catalog data.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_serves_docs_shell_without_auth"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
       "listener": "admin",
       "method": "GET",
       "path": "/admin/v1/capabilities",

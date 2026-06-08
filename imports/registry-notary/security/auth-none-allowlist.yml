@@ -10,6 +10,14 @@ allowed:
     reason: Readiness probe.
   - listener: public
     method: GET
+    path: /docs
+    reason: Public static API docs shell; it does not inline the OpenAPI document.
+  - listener: public
+    method: GET
+    path: /docs/scalar.js
+    reason: Public static Scalar bundle with no generated OpenAPI document or catalog data.
+  - listener: public
+    method: GET
     path: /.well-known/openid-credential-issuer
     reason: Public OID4VCI issuer metadata.
   - listener: public

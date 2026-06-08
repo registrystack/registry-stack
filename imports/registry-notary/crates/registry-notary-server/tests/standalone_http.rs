@@ -6,7 +6,7 @@ use axum::body::Bytes;
 use axum::extract::Query;
 #[cfg(feature = "registry-notary-cel")]
 use axum::extract::State;
-use axum::http::{HeaderMap, Method, StatusCode};
+use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 #[cfg(feature = "registry-notary-cel")]
@@ -541,6 +541,7 @@ fn add_config_trust_with_local_approval_path(
                     "root_transition".to_string(),
                     "client_credential_rotation".to_string(),
                     "client_access_change".to_string(),
+                    "openapi_auth_policy_change".to_string(),
                 ]),
             }],
         }],
@@ -3419,6 +3420,173 @@ async fn admin_config_apply_signed_client_access_change_swaps_auth_without_resta
         .add_header("x-api-key", ROTATED_ADMIN_KEY)
         .await;
     rotated_admin.assert_status(StatusCode::OK);
+}
+
+#[tokio::test]
+async fn admin_config_apply_signed_openapi_auth_policy_change_updates_runtime_policy() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let antirollback_path = tmp.path().join("config-antirollback.json");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    add_admin_api_key(&mut config);
+    add_config_trust(&mut config, antirollback_path.clone());
+    let current_config_yaml = serde_norway::to_string(&config).expect("current config serializes");
+    initialize_notary_antirollback_state(&antirollback_path, &current_config_yaml, 1);
+    let current_config_hash = internal_config_hash(current_config_yaml.as_bytes());
+
+    let mut candidate = config.clone();
+    candidate.server.openapi_requires_auth = false;
+    let candidate_yaml = serde_norway::to_string(&candidate).expect("candidate serializes");
+    let local_approval_path = config
+        .config_trust
+        .as_ref()
+        .expect("config trust exists")
+        .local_approval_state_path
+        .clone();
+    write_local_approval_state(
+        &local_approval_path,
+        local_operator_approval_for_change_class(
+            &candidate_yaml,
+            &current_config_hash,
+            "openapi_auth_policy_change",
+            "OPENAPI-AUTH-1",
+        ),
+    );
+    let signed = write_signed_notary_config_tuf_fixture_with_change_classes(
+        &tmp,
+        &current_config_hash,
+        &candidate_yaml,
+        2,
+        "registry-notary-standalone",
+        &["kid-a", "kid-b"],
+        &["openapi_auth_policy_change"],
+    )
+    .await;
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    server
+        .get("/openapi.json")
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    let response = server
+        .post("/admin/v1/config/apply")
+        .add_header("x-api-key", "admin-token")
+        .json(&signed_tuf_apply_request_with_local_approval(
+            &signed,
+            "OPENAPI-AUTH-1",
+        ))
+        .await;
+
+    response.assert_status(StatusCode::OK);
+    let body: Value = response.json();
+    assert_eq!(body["result"], "applied");
+    assert_eq!(body["restart_required"], false);
+
+    let openapi = server.get("/openapi.json").await;
+    openapi.assert_status_ok();
+    let openapi_body: Value = openapi.json();
+    assert_eq!(openapi_body["openapi"], json!("3.1.0"));
+
+    server
+        .get("/v1/claims")
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn admin_config_apply_signed_openapi_auth_policy_change_can_relock_runtime_policy() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let antirollback_path = tmp.path().join("config-antirollback.json");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    config.server.openapi_requires_auth = false;
+    add_admin_api_key(&mut config);
+    add_config_trust(&mut config, antirollback_path.clone());
+    let current_config_yaml = serde_norway::to_string(&config).expect("current config serializes");
+    initialize_notary_antirollback_state(&antirollback_path, &current_config_yaml, 1);
+    let current_config_hash = internal_config_hash(current_config_yaml.as_bytes());
+
+    let mut candidate = config.clone();
+    candidate.server.openapi_requires_auth = true;
+    let candidate_yaml = serde_norway::to_string(&candidate).expect("candidate serializes");
+    let local_approval_path = config
+        .config_trust
+        .as_ref()
+        .expect("config trust exists")
+        .local_approval_state_path
+        .clone();
+    write_local_approval_state(
+        &local_approval_path,
+        local_operator_approval_for_change_class(
+            &candidate_yaml,
+            &current_config_hash,
+            "openapi_auth_policy_change",
+            "OPENAPI-AUTH-2",
+        ),
+    );
+    let signed = write_signed_notary_config_tuf_fixture_with_change_classes(
+        &tmp,
+        &current_config_hash,
+        &candidate_yaml,
+        2,
+        "registry-notary-standalone",
+        &["kid-a", "kid-b"],
+        &["openapi_auth_policy_change"],
+    )
+    .await;
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    server.get("/openapi.json").await.assert_status_ok();
+
+    let response = server
+        .post("/admin/v1/config/apply")
+        .add_header("x-api-key", "admin-token")
+        .json(&signed_tuf_apply_request_with_local_approval(
+            &signed,
+            "OPENAPI-AUTH-2",
+        ))
+        .await;
+
+    response.assert_status(StatusCode::OK);
+    let body: Value = response.json();
+    assert_eq!(body["result"], "applied");
+    assert_eq!(body["restart_required"], false);
+
+    server
+        .get("/openapi.json")
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    let authenticated_openapi = server
+        .get("/openapi.json")
+        .add_header("x-api-key", "api-token")
+        .await;
+    authenticated_openapi.assert_status_ok();
+    let openapi_body: Value = authenticated_openapi.json();
+    assert_eq!(openapi_body["openapi"], json!("3.1.0"));
 }
 
 #[tokio::test]
@@ -8855,6 +9023,9 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
     let denied = server.get("/v1/claims").await;
     denied.assert_status(StatusCode::UNAUTHORIZED);
 
+    let denied_openapi = server.get("/openapi.json").await;
+    denied_openapi.assert_status(StatusCode::UNAUTHORIZED);
+
     let openapi = server
         .get("/openapi.json")
         .add_header("x-api-key", "api-token")
@@ -8962,6 +9133,103 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
     assert!(!metrics_body.contains("farmer-under-4ha"));
     assert!(!metrics_body.contains("purpose.example.test"));
     assert!(!metrics_body.contains(base_url.trim_end_matches('/')));
+}
+
+#[tokio::test]
+async fn standalone_server_can_serve_openapi_without_auth_when_configured() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route(
+            "/v1/datasets/farmer_registry/entities/farmer/records",
+            get(registry_data_api),
+        ));
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+
+    let mut config = registry_data_api_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    config.server.openapi_requires_auth = false;
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let openapi = server.get("/openapi.json").await;
+    openapi.assert_status_ok();
+    let openapi_body: Value = openapi.json();
+    assert_eq!(openapi_body["openapi"], json!("3.1.0"));
+    assert!(openapi_body["paths"]["/v1/evaluations"].is_object());
+}
+
+#[tokio::test]
+async fn openapi_json_handler_denies_without_runtime_state_by_default() {
+    let server = TestServer::new(registry_notary_server::api::public_router());
+
+    server
+        .get("/openapi.json")
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn standalone_server_serves_docs_shell_without_auth() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route(
+            "/v1/datasets/farmer_registry/entities/farmer/records",
+            get(registry_data_api),
+        ));
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+
+    let config = registry_data_api_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let docs = server.get("/docs").await;
+    docs.assert_status_ok();
+    let docs_body = docs.text();
+    assert!(docs_body.contains("Registry Notary API"));
+    assert!(docs_body.contains("/openapi.json"));
+    assert!(docs_body.contains("/docs/scalar.js"));
+    assert!(docs_body.contains("X-Api-Key"));
+
+    let bundle = server.get("/docs/scalar.js").await;
+    bundle.assert_status_ok();
+    let content_type = bundle
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .expect("bundle content type");
+    assert!(content_type.starts_with("application/javascript"));
+
+    let denied_openapi = server.get("/openapi.json").await;
+    denied_openapi.assert_status(StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

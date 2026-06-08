@@ -178,6 +178,7 @@ from one DCI source and can later issue a credential from that claim.
 ```yaml
 server:
   bind: 127.0.0.1:8081
+  openapi_requires_auth: true
 
 auth:
   mode: api_key
@@ -270,6 +271,8 @@ evidence:
       credential_profiles:
         - birth_record_sd_jwt
 ```
+
+`server.openapi_requires_auth` defaults to `true`. Set it to `false` only for local testing or controlled tooling environments that need unauthenticated access to `/openapi.json`.
 
 ## Authentication
 

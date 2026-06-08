@@ -77,6 +77,22 @@
     },
     {
       "listener": "public",
+      "path": "/docs",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/docs.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/docs/scalar.js",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/docs.rs"
+    },
+    {
+      "listener": "public",
       "path": "/.well-known/evidence-service",
       "methods": [
         "GET"

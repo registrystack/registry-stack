@@ -10,6 +10,7 @@ pub mod api;
 pub mod cel_worker;
 pub mod config_governed;
 pub(crate) mod credential_status;
+pub mod docs;
 pub(crate) mod federation;
 pub(crate) mod metrics;
 pub mod openapi;
