@@ -10501,6 +10501,42 @@ async fn preauth_offer_start_redirects_to_esignet_and_mints_nothing() {
 }
 
 #[tokio::test]
+async fn preauth_offer_start_returns_429_when_login_state_store_is_full() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(self_attestation_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    for _ in 0..4096 {
+        server
+            .get("/oid4vci/offer/start?credential_configuration_id=person_is_alive_sd_jwt")
+            .await
+            .assert_status(StatusCode::SEE_OTHER);
+    }
+
+    let limited = server
+        .get("/oid4vci/offer/start?credential_configuration_id=person_is_alive_sd_jwt")
+        .await;
+    limited.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        limited.json::<Value>()["error"],
+        json!("temporarily_unavailable")
+    );
+    idp.stop().await;
+}
+
+#[tokio::test]
 async fn preauth_offer_start_requests_userinfo_subject_binding_claim_when_required() {
     set_preauth_env();
     let idp = MockIdp::start().await;

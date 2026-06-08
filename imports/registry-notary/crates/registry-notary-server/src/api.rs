@@ -76,7 +76,7 @@ use crate::{
     metrics::AppMetrics,
     openapi_document,
     posture::{posture_document, PostureContext},
-    preauth_state::LoginState,
+    preauth_state::{LoginState, SingleUseReserveError},
     replay::{require_replay_insert, ReplayReadiness, ReplayStores},
     runtime::claim_ids,
     standalone::{
@@ -3716,7 +3716,7 @@ async fn oid4vci_offer_start(
         return oid4vci_error_response(Oid4vciWireError::ServerError);
     };
     let pkce_challenge = pkce_s256_challenge(&pkce_verifier);
-    let reserved = preauth.login_states().reserve(
+    let reserved = preauth.login_states().try_reserve(
         &login_state,
         LoginState {
             pkce_verifier,
@@ -3725,8 +3725,15 @@ async fn oid4vci_offer_start(
         },
         preauth.login_state_ttl_seconds(),
     );
-    if !reserved {
-        return oid4vci_error_response(Oid4vciWireError::ServerError);
+    if let Err(error) = reserved {
+        return match error {
+            SingleUseReserveError::Capacity => {
+                oid4vci_error_response(Oid4vciWireError::RateLimited)
+            }
+            SingleUseReserveError::Duplicate | SingleUseReserveError::Unavailable => {
+                oid4vci_error_response(Oid4vciWireError::ServerError)
+            }
+        };
     }
     let redirect_url = match preauth.authorize_redirect_url(&login_state, &nonce, &pkce_challenge) {
         Ok(url) => url,

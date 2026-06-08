@@ -376,7 +376,7 @@
       "audience": "external",
       "auth": "none",
       "scopes": [],
-      "rate_limit": null,
+      "rate_limit": "bounded_login_state",
       "audit": "not_applicable",
       "openapi": true,
       "stability": "beta",
@@ -385,6 +385,7 @@
       "source": "manual",
       "enforcement_tests": [
         "crates/registry-notary-server/tests/standalone_http.rs::preauth_offer_start_redirects_to_esignet_and_mints_nothing",
+        "crates/registry-notary-server/tests/standalone_http.rs::preauth_offer_start_returns_429_when_login_state_store_is_full",
         "crates/registry-notary-server/tests/standalone_http.rs::preauth_disabled_returns_404_and_offer_is_authorization_code"
       ],
       "waiver": null

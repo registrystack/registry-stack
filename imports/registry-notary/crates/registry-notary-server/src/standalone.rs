@@ -78,6 +78,7 @@ const SOURCE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const FILE_WATCH_METADATA_CHECK_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_SOURCE_JSON_BYTES: usize = 1024 * 1024;
 const MAX_INBOUND_REQUEST_BODY_BYTES: usize = 1024 * 1024;
+const PREAUTH_LOGIN_STATE_MAX_ENTRIES: usize = 4096;
 const SELF_ATTESTATION_CORS_METHODS: &str = "GET,POST,OPTIONS";
 const OIDC_ID_TOKEN_HEADER: &str = "x-registry-notary-oidc-id-token";
 const SELF_ATTESTATION_CORS_DEFAULT_HEADERS: &str =
@@ -2273,7 +2274,11 @@ impl PreAuthRuntime {
             login_state_ttl_seconds: esignet.login_state_ttl_seconds,
             login_states: previous
                 .map(|runtime| Arc::clone(&runtime.login_states))
-                .unwrap_or_else(|| Arc::new(crate::preauth_state::SingleUseStore::new())),
+                .unwrap_or_else(|| {
+                    Arc::new(crate::preauth_state::SingleUseStore::new_with_max_entries(
+                        PREAUTH_LOGIN_STATE_MAX_ENTRIES,
+                    ))
+                }),
             tx_code_sessions: previous
                 .map(|runtime| Arc::clone(&runtime.tx_code_sessions))
                 .unwrap_or_else(|| Arc::new(crate::preauth_state::SingleUseStore::new())),
