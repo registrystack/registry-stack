@@ -4,14 +4,28 @@ FROM rust:1-bookworm AS publisher
 
 WORKDIR /app
 
+ARG REGISTRY_MANIFEST_REPO_URL=https://github.com/jeremi/registry-manifest.git
+ARG REGISTRY_MANIFEST_REF=a2e648aaac864563a3311b9d95b8143afa1b7334
+ARG REGISTRY_RELAY_REPO_URL=https://github.com/jeremi/registry-relay.git
+ARG REGISTRY_RELAY_REF=0d6b569397bf792678283c2c89a2d85d6424556e
+
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends openssl python3 && \
+    apt-get install -y --no-install-recommends ca-certificates git openssl python3 && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=registry_manifest_src /Cargo.toml /app/vendor/registry-manifest/
-COPY --from=registry_manifest_src /Cargo.lock /app/vendor/registry-manifest/
-COPY --from=registry_manifest_src /crates /app/vendor/registry-manifest/crates
-COPY --from=registry_relay_src /demo/scripts /app/vendor/registry-relay/demo/scripts
+RUN git init /app/vendor/registry-manifest && \
+    cd /app/vendor/registry-manifest && \
+    git remote add origin "${REGISTRY_MANIFEST_REPO_URL}" && \
+    git fetch --depth 1 origin "${REGISTRY_MANIFEST_REF}" && \
+    git checkout --detach FETCH_HEAD && \
+    rm -rf .git && \
+    git init /app/vendor/registry-relay && \
+    cd /app/vendor/registry-relay && \
+    git remote add origin "${REGISTRY_RELAY_REPO_URL}" && \
+    git fetch --depth 1 origin "${REGISTRY_RELAY_REF}" && \
+    git checkout --detach FETCH_HEAD && \
+    rm -rf .git
+
 COPY scripts/check-service-first-deps.sh scripts/generate-demo-secrets.py scripts/publish-static-metadata.sh /app/scripts/
 COPY config/static-metadata /app/config/static-metadata
 COPY static-metadata/.gitignore /app/static-metadata/.gitignore

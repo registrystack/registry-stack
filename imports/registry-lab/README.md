@@ -801,10 +801,9 @@ The static bundle is generated from portable metadata, not scraped from a
 running Relay. It must not include source paths, table ids, scopes, cache paths,
 or backend runtime details.
 
-For the hosted lab, `Dockerfile.static-metadata` generates this bundle during
-the image build with `registry-manifest-cli publish`. The hosted workflow pushes
-the image and sets `REGISTRY_LAB_STATIC_METADATA_IMAGE` in Coolify before
-redeploying.
+For the hosted lab, Coolify builds `Dockerfile.static-metadata`, which generates
+this bundle with `registry-manifest-cli publish` from the pinned
+`registry-manifest` ref in `compose.coolify.yaml`.
 
 ## Demo flow
 

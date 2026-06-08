@@ -133,77 +133,8 @@ jobs:
       - name: Validate public API workspace
         run: python3 scripts/validate-public-api-workspace.py
 
-  build-static-metadata-image:
-    needs: validate-hosted-artifacts
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    permissions:
-      contents: read
-      packages: write
-    outputs:
-      image: ${{ steps.image-ref.outputs.image }}
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          token: ${{ secrets.SUBMODULES_PAT || github.token }}
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.SUBMODULES_PAT || github.token }}
-
-      - name: Build and push static metadata image
-        id: static-metadata
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.static-metadata
-          platforms: linux/amd64
-          provenance: false
-          sbom: false
-          push: true
-          build-contexts: |
-            registry_manifest_src=vendor/registry-manifest
-            registry_relay_src=vendor/registry-relay
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/registry-lab-static-metadata:main
-            ghcr.io/${{ github.repository_owner }}/registry-lab-static-metadata:sha-${{ github.sha }}
-          cache-from: type=gha,scope=static-metadata
-          cache-to: type=gha,mode=max,scope=static-metadata
-
-      - name: Make static metadata package public
-        env:
-          GH_TOKEN: ${{ secrets.SUBMODULES_PAT || github.token }}
-        run: |
-          gh api \
-            --method PATCH \
-            /user/packages/container/registry-lab-static-metadata/visibility \
-            -f visibility=public >/dev/null
-
-      - name: Resolve digest-pinned image
-        id: image-ref
-        run: |
-          image="ghcr.io/${{ github.repository_owner }}/registry-lab-static-metadata@${{ steps.static-metadata.outputs.digest }}"
-          echo "image=${image}" >> "$GITHUB_OUTPUT"
-          {
-            echo "## Static metadata image"
-            echo ""
-            echo '```'
-            echo "REGISTRY_LAB_STATIC_METADATA_IMAGE=${image}"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
   deploy-coolify:
-    needs:
-      - validate-hosted-artifacts
-      - build-static-metadata-image
+    needs: validate-hosted-artifacts
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     permissions: {}
@@ -216,36 +147,11 @@ jobs:
           COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
           COOLIFY_API_BASE_URL: https://cool.pitgenius.com/api/v1
           REGISTRY_LAB_APP_UUID: klhnsuoye8lwuamp0bko387t
-          STATIC_METADATA_IMAGE: ${{ needs.build-static-metadata-image.outputs.image }}
         run: |
           if [ -z "$COOLIFY_API_TOKEN" ]; then
             echo "::notice::COOLIFY_API_TOKEN is not configured; hosted deploy trigger skipped."
             exit 0
           fi
-          payload="$(jq -n \
-            --arg key REGISTRY_LAB_STATIC_METADATA_IMAGE \
-            --arg value "${STATIC_METADATA_IMAGE}" \
-            '{key: $key, value: $value, is_preview: false}')"
-          status="$(curl -sS -o /tmp/coolify-env-response.json -w "%{http_code}" \
-            -X PATCH \
-            -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
-            -H "Content-Type: application/json" \
-            "${COOLIFY_API_BASE_URL}/applications/${REGISTRY_LAB_APP_UUID}/envs" \
-            -d "${payload}")"
-          if [ "${status}" = "404" ]; then
-            status="$(curl -sS -o /tmp/coolify-env-response.json -w "%{http_code}" \
-              -X POST \
-              -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
-              -H "Content-Type: application/json" \
-              "${COOLIFY_API_BASE_URL}/applications/${REGISTRY_LAB_APP_UUID}/envs" \
-              -d "${payload}")"
-          fi
-          case "${status}" in
-            200|201) ;;
-            *) echo "Coolify env upsert failed with HTTP ${status}" >&2; exit 1 ;;
-          esac
-          rm -f /tmp/coolify-env-response.json
-          echo "Patched REGISTRY_LAB_STATIC_METADATA_IMAGE to the static metadata image built from this commit."
           for app in \
             "${REGISTRY_LAB_APP_UUID}" \
             cewwn93kknzsfzicen9nul6v \

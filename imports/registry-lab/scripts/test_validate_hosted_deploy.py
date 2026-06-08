@@ -107,13 +107,19 @@ class HostedDeployValidationTest(unittest.TestCase):
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "stale-config-repo-ref")
 
-    def test_rejects_static_metadata_publisher_without_generated_image(self) -> None:
+    def test_rejects_static_metadata_publisher_with_remote_image(self) -> None:
         compose = self._valid_registry_lab()
         compose["services"]["static-metadata-publisher"][
             "image"
-        ] = "python:3.12.3-slim-bookworm"
+        ] = "ghcr.io/jeremi/registry-lab-static-metadata:main"
         issues = self._validate(compose, self._valid_esignet())
-        self.assertIssue(issues, "static-metadata-image-env-var")
+        self.assertIssue(issues, "static-metadata-image-name")
+
+    def test_rejects_static_metadata_publisher_without_generator_build(self) -> None:
+        compose = self._valid_registry_lab()
+        compose["services"]["static-metadata-publisher"].pop("build")
+        issues = self._validate(compose, self._valid_esignet())
+        self.assertIssue(issues, "static-metadata-build")
 
     def test_rejects_static_metadata_publisher_volume_content(self) -> None:
         compose = self._valid_registry_lab()
@@ -580,7 +586,11 @@ done
                     "expose": ["8080"],
                 },
                 "static-metadata-publisher": {
-                    "image": "${REGISTRY_LAB_STATIC_METADATA_IMAGE:-ghcr.io/jeremi/registry-lab-static-metadata:main}",
+                    "image": "registry-lab-static-metadata:hosted",
+                    "build": {
+                        "context": ".",
+                        "dockerfile": "Dockerfile.static-metadata",
+                    },
                     "expose": ["8080"],
                     "healthcheck": {
                         "test": [

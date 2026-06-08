@@ -229,7 +229,13 @@ services:
       - health-registry-cache:/var/lib/registry-relay/cache
 
   static-metadata-publisher:
-    image: ${REGISTRY_LAB_STATIC_METADATA_IMAGE:-ghcr.io/jeremi/registry-lab-static-metadata:main}
+    image: registry-lab-static-metadata:hosted
+    build:
+      context: .
+      dockerfile: Dockerfile.static-metadata
+      args:
+        REGISTRY_MANIFEST_REF: a2e648aaac864563a3311b9d95b8143afa1b7334
+        REGISTRY_RELAY_REF: 0d6b569397bf792678283c2c89a2d85d6424556e
     restart: unless-stopped
     expose:
       - "8080"
