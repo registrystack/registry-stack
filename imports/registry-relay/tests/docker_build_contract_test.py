@@ -36,6 +36,18 @@ class DockerBuildContractTest(unittest.TestCase):
             script,
         )
 
+    def test_flags_documented_direct_local_manifest_builds(self):
+        module = self.module
+        path = ROOT / "README.md"
+        module._CONTENT_CACHE[path] = (
+            "```sh\n"
+            "docker buildx build --load \\\n"
+            "  --build-context registry-manifest=../registry-manifest \\\n"
+            "  -t registry-relay:local .\n"
+            "```\n"
+        )
+        self.assertTrue(module.forbid_documented_unpinned_build_context(path))
+
     def test_real_docker_build_contract_passes(self):
         self.assertEqual(self.module.main(), 0)
 

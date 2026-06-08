@@ -62,19 +62,13 @@ just build
 Build a container image:
 
 ```sh
-docker buildx build --load \
-  --build-context registry-platform=../registry-platform \
-  --build-context registry-manifest=../registry-manifest \
-  --build-context cel-mapping=../cel-mapping \
-  -t registry-relay:<version> \
-  .
-```
-
-or:
-
-```sh
 scripts/build-image.sh registry-relay:<version>
 ```
+
+The helper verifies that the local `registry-manifest` build context is a clean
+checkout at the reviewed commit. Set
+`REGISTRY_RELAY_ALLOW_UNPINNED_LOCAL_CONTEXTS=1` only for local development
+builds that will not be published.
 
 The base image is built with no optional Cargo features. Standards-enabled
 release or lab images must opt in explicitly:

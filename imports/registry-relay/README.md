@@ -331,22 +331,16 @@ through the same path dependency layout as local Cargo builds. Keep those
 checkouts next to this repository, or set `REGISTRY_PLATFORM_DIR` and
 `REGISTRY_MANIFEST_DIR` and `CEL_MAPPING_DIR` when using the helper script.
 
-Build the production image with Docker:
-
-```sh
-docker buildx build --load \
-  --build-context registry-platform=../registry-platform \
-  --build-context registry-manifest=../registry-manifest \
-  --build-context cel-mapping=../cel-mapping \
-  -t registry-relay:local \
-  .
-```
-
-or with the helper:
+Build the production image with the helper script:
 
 ```sh
 scripts/build-image.sh registry-relay:local
 ```
+
+The helper verifies that the local `registry-manifest` build context is a clean
+checkout at the reviewed commit. Set
+`REGISTRY_RELAY_ALLOW_UNPINNED_LOCAL_CONTEXTS=1` only for local development
+builds that will not be published.
 
 The base image is built with no optional Cargo features. For a standards-enabled
 release or lab image, pass feature flags explicitly:
@@ -355,9 +349,8 @@ release or lab image, pass feature flags explicitly:
 REGISTRY_RELAY_FEATURES=spdci-api-standards,standards-cel-mapping,ogcapi-edr \
   scripts/build-image.sh registry-relay:standards
 ```
-
-The equivalent direct Docker build argument is
-`--build-arg REGISTRY_RELAY_FEATURES=spdci-api-standards,standards-cel-mapping,ogcapi-edr`.
+The helper forwards feature flags through Docker's
+`REGISTRY_RELAY_FEATURES` build argument.
 
 When the release story claims SP DCI, standards CEL mapping, or OGC EDR support,
 the release evidence must identify the standards-enabled image tag or digest,

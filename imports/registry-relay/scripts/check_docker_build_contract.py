@@ -60,11 +60,23 @@ def forbid(path: Path, needle: str, detail: str) -> list[str]:
     return [f"{path.relative_to(ROOT)}: forbidden {detail}: {needle!r}"]
 
 
+def forbid_documented_unpinned_build_context(path: Path) -> list[str]:
+    if path not in _CONTENT_CACHE:
+        _CONTENT_CACHE[path] = path.read_text(encoding="utf-8")
+    text = _CONTENT_CACHE[path]
+    if "docker buildx build" not in text or "--build-context registry-manifest=../registry-manifest" not in text:
+        return []
+    return [
+        f"{path.relative_to(ROOT)}: forbidden documented unpinned registry-manifest Docker build context"
+    ]
+
+
 def main() -> int:
     dockerfile = ROOT / "Dockerfile"
     build_script = ROOT / "scripts" / "build-image.sh"
     ci_workflow = ROOT / ".github" / "workflows" / "ci.yml"
     container_workflow = ROOT / ".github" / "workflows" / "container.yml"
+    docs = [ROOT / "README.md", ROOT / "docs" / "ops.md"]
 
     failures: list[str] = []
     failures.extend(
@@ -239,6 +251,15 @@ def main() -> int:
             "curl-based official image verification",
         )
     )
+    for path in docs:
+        failures.extend(forbid_documented_unpinned_build_context(path))
+        failures.extend(
+            require(
+                path,
+                "scripts/build-image.sh",
+                "guarded container image build helper",
+            )
+        )
 
     if failures:
         print("Docker build contract check failed:", file=sys.stderr)
