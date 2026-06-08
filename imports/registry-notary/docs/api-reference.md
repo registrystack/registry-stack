@@ -9,7 +9,9 @@ specification, fetch `GET /openapi.json` from any running Notary, or read the
 
 The problem-code registry below is a curated, stable subset for policy mapping;
 it does not list every code the server can emit. Match an unrecognized `code`
-value on its category prefix (for example `credential.*` or `evaluation.*`).
+value on its category prefix. The server emits categories beyond those tabled
+here, such as `credential.*` (issuance and holder-proof errors) and
+`evaluation.*` (lookup and binding errors).
 
 ## Route To Client Method Matrix
 
