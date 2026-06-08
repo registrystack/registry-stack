@@ -92,8 +92,8 @@ evaluation, or receipt.
    policy, replay state, purpose, profile, and audience before source reads, then returns a compact
    signed JWT response. This path returns a scoped evaluation result, not a credential.
 
-The [Registry Lab](../../products/registry-lab/) citizen self-attestation scenario uses path 2: a
-host-side Notary on port `4321` runs against the lab's civil registry, eSignet provides the
+The [hosted lab walkthrough](../../start/see-it-live/) citizen self-attestation scenario uses path 2: a
+host-side Notary runs against the lab's civil registry, eSignet provides the
 access token, and a wallet completes the OID4VCI flow.
 
 ## Selective disclosure properties
@@ -123,8 +123,7 @@ Registry Relay surfaces evidence-offering metadata under `/metadata/evidence-off
 The metadata document points at a Registry Notary instance, names the claim ids the offering
 covers, and describes the supported disclosure modes and formats. A consumer that finds an
 offering on Relay learns where to call Notary; nothing in the Relay code path issues
-credentials. For the publishing side, see
-[Publishing pipeline](../publishing-pipeline/).
+credentials.
 
 For delegated evaluation, Registry Manifest can also publish `federation` and
 `evaluation_profiles` metadata. That metadata helps a partner configure a static peer relationship.
@@ -150,7 +149,4 @@ A few things Registry Notary is not.
 ## Next
 
 - [Registry Notary overview](../../products/registry-notary/)
-- [Publishing pipeline](../publishing-pipeline/)
-- [Consultation flow](../consultation-flow/)
-- [Standards register](../../reference/standards/)
 - [Glossary](../../reference/glossary/)

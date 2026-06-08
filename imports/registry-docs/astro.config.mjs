@@ -69,26 +69,16 @@ export default defineConfig({
     '/capabilities/inspect-published-artifacts/': '/explanation/architecture/',
     // Hand-authored projects/* -> pulled products/* (internal)
     '/projects/registry-relay/': '/products/registry-relay/',
-    '/projects/registry-relay/run-locally/': '/products/registry-relay/ops/',
+    '/projects/registry-relay/run-locally/': '/products/registry-relay/',
     '/projects/registry-relay/authorize-callers/': '/products/registry-relay/client-integration/',
     '/projects/registry-relay/reference/': '/products/registry-relay/configuration/',
     '/projects/registry-notary/': '/products/registry-notary/',
     '/projects/registry-notary/run-locally/': '/products/registry-notary/',
     '/projects/registry-notary/configure-a-claim/': '/products/registry-notary/source-claim-modeling-guide/',
     '/projects/registry-notary/reference/': '/products/registry-notary/operator-config-reference/',
-    '/projects/registry-manifest/': '/products/registry-manifest/',
-    '/projects/registry-manifest/validate-and-render/': '/products/registry-manifest/validate-and-render/',
-    '/projects/registry-manifest/profile-fixtures/': '/products/registry-manifest/profile-fixtures/',
-    '/projects/registry-manifest/reference/': '/products/registry-manifest/reference/',
-    '/projects/registry-atlas/': '/products/registry-atlas/',
-    '/projects/registry-atlas/run-locally/': '/products/registry-atlas/run-locally/',
-    '/projects/registry-atlas/inspect-a-registry/': '/products/registry-atlas/inspect-a-registry/',
-    '/projects/registry-atlas/reference/': '/products/registry-atlas/reference/',
-    '/projects/registry-platform/': '/products/registry-platform/',
-    '/projects/registry-platform/reference/': '/products/registry-platform/versioning/',
-    '/projects/registry-lab/': '/products/registry-lab/',
-    '/projects/registry-lab/reference/': '/products/registry-lab/',
-    '/projects/registry-lab/demo-flow/': '/tutorials/first-run-with-registry-lab/',
+    // registry-manifest, registry-atlas, registry-platform, registry-lab projects/*
+    // redirects removed: targets are deferred from the MVP docs cut.
+    '/projects/registry-lab/demo-flow/': '/start/see-it-live/',
   },
   integrations: [
     // Mermaid must come BEFORE starlight: its rehype plugin rewrites
@@ -152,13 +142,12 @@ export default defineConfig({
             // titles keep the full wording. Ordered as the newcomer funnel:
             // orient, then the minimal call, then the full tour.
             { label: 'Overview', link: '/' },
-            { label: 'Where to start', slug: 'start/quickstart' },
+            { label: 'See it live', slug: 'start/see-it-live' },
             { label: 'When to use', slug: 'start/when-to-use' },
+            { label: 'Where to start', slug: 'start/quickstart' },
             { label: 'Spreadsheet API', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
             { label: 'Registry claim', slug: 'tutorials/verify-claim-registry-api' },
             { label: 'Own API claim', slug: 'tutorials/verify-claim-own-api' },
-            { label: 'Your first call', slug: 'start/your-first-call' },
-            { label: 'First run', slug: 'tutorials/first-run-with-registry-lab' },
           ],
         },
         {
@@ -170,11 +159,7 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Architecture', slug: 'explanation/architecture' },
-            { label: 'DPI safeguards alignment', slug: 'explanation/dpi-safeguards-alignment' },
-            { label: 'Consultation flow', slug: 'explanation/consultation-flow' },
             { label: 'Evidence issuance', slug: 'explanation/evidence-issuance' },
-            { label: 'Publishing pipeline', slug: 'explanation/publishing-pipeline' },
-            { label: 'Integration patterns', slug: 'explanation/integration-patterns' },
           ],
         },
         {
@@ -190,11 +175,7 @@ export default defineConfig({
                 { label: 'Notary', slug: 'reference/apis/registry-notary' },
               ],
             },
-            { label: 'Contracts', slug: 'reference/contracts' },
-            { label: 'Standards register', slug: 'reference/standards' },
             { label: 'Glossary', slug: 'reference/glossary' },
-            { label: 'Boundaries and map', slug: 'map/boundaries-and-map' },
-            { label: 'Decisions', slug: 'decisions/rename-2026-05-23' },
           ],
         },
       ],

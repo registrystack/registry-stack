@@ -27,9 +27,9 @@ the stack fits in a wider stack, see the marketing site at
 
 ## What it is
 
-Registry Stack is six repositories with distinct responsibilities, organized around one capability
-sequence: describe what a registry can provide, expose protected read-only access, then certify
-evidence that fits the purpose of the request.
+Registry Stack is a set of repositories with distinct responsibilities, organized around one
+capability sequence: describe what a registry can provide, expose protected read-only access, then
+certify evidence that fits the purpose of the request.
 
 - Registry Manifest describes a registry surface (fields, schemas, services, policies, evidence
   offerings) as portable metadata, before any integration is written.
@@ -42,8 +42,9 @@ evidence that fits the purpose of the request.
   that the runtime services compose.
 - Registry Lab runs the runtime services together as a local compose demo.
 
-For how the six connect at runtime, see the [architecture overview](../../explanation/architecture/)
-and the [boundaries and map](../../map/boundaries-and-map/).
+These docs cover Registry Relay and Registry Notary; the other surfaces are part of the wider stack
+described at [registrystack.org](https://registrystack.org/). For how the pieces connect at runtime,
+see the [architecture overview](../../explanation/architecture/).
 
 ## When to use it
 
@@ -61,7 +62,7 @@ more of the following is true:
 - A registry-backed issuer needs to produce SD-JWT VC credentials or run an OID4VCI issuance flow.
 
 For how the stack wires in behind exchange layers, workflow engines, wallets, and domain platforms,
-see [integration patterns](../../explanation/integration-patterns/).
+see the [architecture overview](../../explanation/architecture/).
 
 ## Non-goals
 
@@ -81,6 +82,5 @@ Registry Stack deliberately leaves these to other systems:
 ## Next
 
 - [Choose where to start](../quickstart/)
+- [See it live](../see-it-live/)
 - [Architecture overview](../../explanation/architecture/)
-- [Boundaries and map](../../map/boundaries-and-map/)
-- [Integration patterns](../../explanation/integration-patterns/)

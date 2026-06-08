@@ -36,11 +36,6 @@ repos:
         nav_order: 0
         doc_type: explanation
         description: Operator and adopter documentation for Registry Relay, pulled from the product repository.
-      - src: docs/api.md
-        dest: products/registry-relay/api
-        label: API guide
-        nav_order: 10
-        doc_type: reference
       - src: docs/client-integration.md
         dest: products/registry-relay/client-integration
         label: Client integration
@@ -51,41 +46,11 @@ repos:
         label: Configuration
         nav_order: 30
         doc_type: reference
-      - src: docs/ops.md
-        dest: products/registry-relay/ops
-        label: Operations runbook
-        nav_order: 40
-        doc_type: how-to
-      - src: docs/deployment-hardening.md
-        dest: products/registry-relay/deployment-hardening
-        label: Deployment hardening
-        nav_order: 50
-        doc_type: how-to
-      - src: docs/metadata.md
-        dest: products/registry-relay/metadata
-        label: Portable metadata
-        nav_order: 60
-        doc_type: reference
       - src: docs/evidence-verification.md
         dest: products/registry-relay/evidence-verification
         label: Evidence verification
         nav_order: 70
         doc_type: how-to
-      - src: docs/standards-adapter-operator-guide.md
-        dest: products/registry-relay/standards-adapter-operator-guide
-        label: Standards adapter operator guide
-        nav_order: 80
-        doc_type: how-to
-      - src: docs/development.md
-        dest: products/registry-relay/development
-        label: Development
-        nav_order: 90
-        doc_type: how-to
-      - src: docs/use-cases.md
-        dest: products/registry-relay/use-cases
-        label: Use cases
-        nav_order: 100
-        doc_type: explanation
     # Excluded (intentionally not public via the docs site):
     #   docs/history/*                      historical design specs
     #   docs/release-notes.md               release notes (repo-owned)
@@ -97,6 +62,13 @@ repos:
     #   docs/security-assurance.md          release/supply-chain detail, repo-owned
     #   docs/relay-scenario-catalog.md      product/demo guide (marketing-adjacent)
     #   docs/xlsx-readiness-contract.md     deep source contract, repo-owned
+    #   docs/api.md                         deferred from MVP docs cut (duplicates Redoc reference at /api/registry-relay.html)
+    #   docs/ops.md                         deferred from MVP docs cut
+    #   docs/deployment-hardening.md        deferred from MVP docs cut
+    #   docs/metadata.md                    deferred from MVP docs cut
+    #   docs/standards-adapter-operator-guide.md  deferred from MVP docs cut
+    #   docs/development.md                 deferred from MVP docs cut
+    #   docs/use-cases.md                   deferred from MVP docs cut
   registry-notary:
     remote: https://github.com/jeremi/registry-notary
     ref: 3eb55478c32afa1c74bd6a5031849a3b77a358f2
@@ -112,11 +84,6 @@ repos:
         dest: products/registry-notary/architecture-overview
         label: Architecture overview
         nav_order: 10
-        doc_type: explanation
-      - src: docs/notary-capability-matrix.md
-        dest: products/registry-notary/capability-matrix
-        label: Capability matrix
-        nav_order: 20
         doc_type: explanation
       - src: docs/api-reference.md
         dest: products/registry-notary/api-reference
@@ -153,174 +120,148 @@ repos:
         label: Signing key provider
         nav_order: 90
         doc_type: how-to
-      - src: docs/self-attestation-operator-guide.md
-        dest: products/registry-notary/self-attestation-operator-guide
-        label: Self-attestation operator guide
-        nav_order: 100
-        doc_type: how-to
-      - src: docs/federated-evaluation-operator-guide.md
-        dest: products/registry-notary/federated-evaluation-operator-guide
-        label: Federated evaluation operator guide
-        nav_order: 110
-        doc_type: how-to
-      - src: docs/oid4vci-wallet-interop.md
-        dest: products/registry-notary/oid4vci-wallet-interop
-        label: OID4VCI wallet interop
-        nav_order: 120
-        doc_type: how-to
       - src: docs/sd-jwt-vc-conformance-profile.md
         dest: products/registry-notary/sd-jwt-vc-conformance-profile
         label: SD-JWT VC conformance profile
         nav_order: 130
         doc_type: reference
-      - src: docs/notary-scenario-patterns.md
-        dest: products/registry-notary/scenario-patterns
-        label: Scenario patterns
-        nav_order: 140
-        doc_type: explanation
-      - src: docs/opencrvs-dci-standalone-tutorial.md
-        dest: products/registry-notary/opencrvs-dci-standalone-tutorial
-        label: OpenCRVS DCI tutorial
-        nav_order: 150
-        doc_type: tutorial
-      - src: docs/openspp-disability-dci.md
-        dest: products/registry-notary/openspp-disability-dci
-        label: OpenSPP disability DCI
-        nav_order: 160
-        doc_type: how-to
-      - src: docs/deployment-hardening-runbook.md
-        dest: products/registry-notary/deployment-hardening-runbook
-        label: Deployment hardening runbook
-        nav_order: 170
-        doc_type: how-to
     # Excluded (intentionally not public via the docs site):
     #   docs/release-notes.md               release notes (repo-owned)
     #   docs/user-stories.md                internal user stories
     #   docs/openfn-sidecar-source-spike.md  spike notes
     #   docs/security-assurance.md          release/supply-chain detail, repo-owned
-  registry-manifest:
-    remote: https://github.com/jeremi/registry-manifest
-    ref: a2e648aaac864563a3311b9d95b8143afa1b7334
-    local: ../registry-manifest
-    docs:
-      - src: docs/overview.md
-        dest: products/registry-manifest/index
-        label: Registry Manifest
-        nav_order: 0
-        doc_type: explanation
-        description: Operator and integrator documentation for Registry Manifest, pulled from the product repository.
-      - src: docs/validate-and-render.md
-        dest: products/registry-manifest/validate-and-render
-        label: Validate and render a manifest
-        nav_order: 10
-        doc_type: how-to
-      - src: docs/profile-fixtures.md
-        dest: products/registry-manifest/profile-fixtures
-        label: Validate against profile fixtures
-        nav_order: 20
-        doc_type: how-to
-      - src: docs/reference.md
-        dest: products/registry-manifest/reference
-        label: Reference
-        nav_order: 30
-        doc_type: reference
-    # Excluded (intentionally not public via the docs site):
-    #   docs/release-notes.md               release notes (repo-owned)
-    #   docs/repository-split.md            historical metadata/evidence split note
-  registry-atlas:
-    remote: https://github.com/jeremi/registry-atlas
-    ref: d46f943b9fdcbab787d1d4eed114058aa43980be
-    local: ../registry-atlas
-    docs:
-      - src: docs/overview.md
-        dest: products/registry-atlas/index
-        label: Registry Atlas
-        nav_order: 0
-        doc_type: explanation
-        description: Reviewer and integrator documentation for Registry Atlas, pulled from the product repository.
-      - src: docs/run-locally.md
-        dest: products/registry-atlas/run-locally
-        label: Run Atlas locally
-        nav_order: 10
-        doc_type: how-to
-      - src: docs/inspect-a-registry.md
-        dest: products/registry-atlas/inspect-a-registry
-        label: Inspect a registry
-        nav_order: 20
-        doc_type: how-to
-      - src: docs/reference.md
-        dest: products/registry-atlas/reference
-        label: Reference
-        nav_order: 30
-        doc_type: reference
-  registry-platform:
-    remote: https://github.com/jeremi/registry-platform
-    ref: ee298e00e76ad6b1e56373fe85d6c1e3a95ea238
-    local: ../registry-platform
-    docs:
-      - src: docs/SECURITY_PRINCIPLES.md
-        dest: products/registry-platform/index
-        label: Registry Platform security principles
-        nav_order: 0
-        doc_type: explanation
-        description: The platform security house rules consumer apps cite when adopting platform primitives.
-      - src: docs/versioning.md
-        dest: products/registry-platform/versioning
-        label: Versioning
-        nav_order: 10
-        doc_type: reference
-      - src: docs/audit-reference-hashing.md
-        dest: products/registry-platform/audit-reference-hashing
-        label: Audit reference hashing
-        nav_order: 20
-        doc_type: reference
-    # Excluded (intentionally not public via the docs site):
-    #   docs/release-review-0.1.2.md        internal release review
-    #   docs/config-drift-inventory.md      internal config-drift inventory
-  registry-lab:
-    remote: https://github.com/jeremi/registry-lab
-    ref: 884b7a0aeb43fb6b75ba785bd03bd700a4705d18
-    local: ../registry-lab
-    docs:
-      - src: docs/README.md
-        dest: products/registry-lab/index
-        label: Registry Lab
-        nav_order: 0
-        doc_type: explanation
-        description: Demo-operator and integrator documentation for Registry Lab, pulled from the product repository.
-      - src: docs/opencrvs-dci-notary-tutorial.md
-        dest: products/registry-lab/opencrvs-dci-notary-tutorial
-        label: OpenCRVS DCI tutorial
-        nav_order: 10
-        doc_type: tutorial
-      - src: docs/dhis2-openfn-notary-tutorial.md
-        dest: products/registry-lab/dhis2-openfn-notary-tutorial
-        label: DHIS2 OpenFn tutorial
-        nav_order: 20
-        doc_type: tutorial
-      - src: docs/openfn-sidecar-notary-tutorial.md
-        dest: products/registry-lab/openfn-sidecar-notary-tutorial
-        label: OpenFn sidecar tutorial
-        nav_order: 30
-        doc_type: tutorial
-      - src: docs/citizen-self-attestation-esignet-use-case.md
-        dest: products/registry-lab/citizen-self-attestation-esignet
-        label: Citizen self-attestation with eSignet
-        nav_order: 40
-        doc_type: how-to
-      - src: docs/wallet-interop-testing.md
-        dest: products/registry-lab/wallet-interop-testing
-        label: Wallet interop testing
-        nav_order: 50
-        doc_type: how-to
-      - src: docs/service-first-discovery.md
-        dest: products/registry-lab/service-first-discovery
-        label: Service-first discovery
-        nav_order: 60
-        doc_type: explanation
-    # Excluded (intentionally not public via the docs site):
-    #   docs/nagdi-agricultural-registries-demo-spec.md  internal demo design spec
-    #   docs/nagdi-consumer-integration-demo-spec.md     internal demo design spec
-    #   docs/commons-release-cleanup-plan.md             maintainer cleanup plan
-    #   docs/ops-posture-lab-contract.md                 deep source contract, repo-owned
-    #   docs/public-api-workspace.md                     implementation spec, repo-owned
+    #   docs/notary-capability-matrix.md    deferred from MVP docs cut
+    #   docs/self-attestation-operator-guide.md  deferred from MVP docs cut
+    #   docs/federated-evaluation-operator-guide.md  deferred from MVP docs cut
+    #   docs/oid4vci-wallet-interop.md      deferred from MVP docs cut
+    #   docs/notary-scenario-patterns.md    deferred from MVP docs cut
+    #   docs/opencrvs-dci-standalone-tutorial.md  deferred from MVP docs cut
+    #   docs/openspp-disability-dci.md      deferred from MVP docs cut
+    #   docs/deployment-hardening-runbook.md  deferred from MVP docs cut
+# Deferred from the MVP docs cut (2026-06-08): re-enable when reviewed and ready.
+#   registry-manifest:
+#     remote: https://github.com/jeremi/registry-manifest
+#     ref: a2e648aaac864563a3311b9d95b8143afa1b7334
+#     local: ../registry-manifest
+#     docs:
+#       - src: docs/overview.md
+#         dest: products/registry-manifest/index
+#         label: Registry Manifest
+#         nav_order: 0
+#         doc_type: explanation
+#         description: Operator and integrator documentation for Registry Manifest, pulled from the product repository.
+#       - src: docs/validate-and-render.md
+#         dest: products/registry-manifest/validate-and-render
+#         label: Validate and render a manifest
+#         nav_order: 10
+#         doc_type: how-to
+#       - src: docs/profile-fixtures.md
+#         dest: products/registry-manifest/profile-fixtures
+#         label: Validate against profile fixtures
+#         nav_order: 20
+#         doc_type: how-to
+#       - src: docs/reference.md
+#         dest: products/registry-manifest/reference
+#         label: Reference
+#         nav_order: 30
+#         doc_type: reference
+#     # Excluded (intentionally not public via the docs site):
+#     #   docs/release-notes.md               release notes (repo-owned)
+#     #   docs/repository-split.md            historical metadata/evidence split note
+#   registry-atlas:
+#     remote: https://github.com/jeremi/registry-atlas
+#     ref: d46f943b9fdcbab787d1d4eed114058aa43980be
+#     local: ../registry-atlas
+#     docs:
+#       - src: docs/overview.md
+#         dest: products/registry-atlas/index
+#         label: Registry Atlas
+#         nav_order: 0
+#         doc_type: explanation
+#         description: Reviewer and integrator documentation for Registry Atlas, pulled from the product repository.
+#       - src: docs/run-locally.md
+#         dest: products/registry-atlas/run-locally
+#         label: Run Atlas locally
+#         nav_order: 10
+#         doc_type: how-to
+#       - src: docs/inspect-a-registry.md
+#         dest: products/registry-atlas/inspect-a-registry
+#         label: Inspect a registry
+#         nav_order: 20
+#         doc_type: how-to
+#       - src: docs/reference.md
+#         dest: products/registry-atlas/reference
+#         label: Reference
+#         nav_order: 30
+#         doc_type: reference
+#   registry-platform:
+#     remote: https://github.com/jeremi/registry-platform
+#     ref: ee298e00e76ad6b1e56373fe85d6c1e3a95ea238
+#     local: ../registry-platform
+#     docs:
+#       - src: docs/SECURITY_PRINCIPLES.md
+#         dest: products/registry-platform/index
+#         label: Registry Platform security principles
+#         nav_order: 0
+#         doc_type: explanation
+#         description: The platform security house rules consumer apps cite when adopting platform primitives.
+#       - src: docs/versioning.md
+#         dest: products/registry-platform/versioning
+#         label: Versioning
+#         nav_order: 10
+#         doc_type: reference
+#       - src: docs/audit-reference-hashing.md
+#         dest: products/registry-platform/audit-reference-hashing
+#         label: Audit reference hashing
+#         nav_order: 20
+#         doc_type: reference
+#     # Excluded (intentionally not public via the docs site):
+#     #   docs/release-review-0.1.2.md        internal release review
+#     #   docs/config-drift-inventory.md      internal config-drift inventory
+#   registry-lab:
+#     remote: https://github.com/jeremi/registry-lab
+#     ref: 884b7a0aeb43fb6b75ba785bd03bd700a4705d18
+#     local: ../registry-lab
+#     docs:
+#       - src: docs/README.md
+#         dest: products/registry-lab/index
+#         label: Registry Lab
+#         nav_order: 0
+#         doc_type: explanation
+#         description: Demo-operator and integrator documentation for Registry Lab, pulled from the product repository.
+#       - src: docs/opencrvs-dci-notary-tutorial.md
+#         dest: products/registry-lab/opencrvs-dci-notary-tutorial
+#         label: OpenCRVS DCI tutorial
+#         nav_order: 10
+#         doc_type: tutorial
+#       - src: docs/dhis2-openfn-notary-tutorial.md
+#         dest: products/registry-lab/dhis2-openfn-notary-tutorial
+#         label: DHIS2 OpenFn tutorial
+#         nav_order: 20
+#         doc_type: tutorial
+#       - src: docs/openfn-sidecar-notary-tutorial.md
+#         dest: products/registry-lab/openfn-sidecar-notary-tutorial
+#         label: OpenFn sidecar tutorial
+#         nav_order: 30
+#         doc_type: tutorial
+#       - src: docs/citizen-self-attestation-esignet-use-case.md
+#         dest: products/registry-lab/citizen-self-attestation-esignet
+#         label: Citizen self-attestation with eSignet
+#         nav_order: 40
+#         doc_type: how-to
+#       - src: docs/wallet-interop-testing.md
+#         dest: products/registry-lab/wallet-interop-testing
+#         label: Wallet interop testing
+#         nav_order: 50
+#         doc_type: how-to
+#       - src: docs/service-first-discovery.md
+#         dest: products/registry-lab/service-first-discovery
+#         label: Service-first discovery
+#         nav_order: 60
+#         doc_type: explanation
+#     # Excluded (intentionally not public via the docs site):
+#     #   docs/nagdi-agricultural-registries-demo-spec.md  internal demo design spec
+#     #   docs/nagdi-consumer-integration-demo-spec.md     internal demo design spec
+#     #   docs/commons-release-cleanup-plan.md             maintainer cleanup plan
+#     #   docs/ops-posture-lab-contract.md                 deep source contract, repo-owned
+#     #   docs/public-api-workspace.md                     implementation spec, repo-owned

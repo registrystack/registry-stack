@@ -6,12 +6,11 @@ Documentation for the registry stack: six projects that publish registry metadat
 
 Core pages:
 - /start/
-- /map/
+- /start/see-it-live/
 - /explanation/architecture/
-- /reference/standards/
-- /reference/contracts/
 - /reference/apis/
-- /tutorials/first-run-with-registry-lab/
+- /tutorials/publish-spreadsheet-secured-registry-api/
+- /tutorials/verify-claim-own-api/
 
 Machine-readable companion:
 - /llms-full.txt

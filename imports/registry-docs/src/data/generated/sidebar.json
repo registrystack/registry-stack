@@ -8,59 +8,16 @@
         "slug": "products/registry-relay"
       },
       {
-        "label": "How-to",
-        "items": [
-          {
-            "label": "Client integration",
-            "slug": "products/registry-relay/client-integration"
-          },
-          {
-            "label": "Operations runbook",
-            "slug": "products/registry-relay/ops"
-          },
-          {
-            "label": "Deployment hardening",
-            "slug": "products/registry-relay/deployment-hardening"
-          },
-          {
-            "label": "Evidence verification",
-            "slug": "products/registry-relay/evidence-verification"
-          },
-          {
-            "label": "Standards adapter operator guide",
-            "slug": "products/registry-relay/standards-adapter-operator-guide"
-          },
-          {
-            "label": "Development",
-            "slug": "products/registry-relay/development"
-          }
-        ]
+        "label": "Client integration",
+        "slug": "products/registry-relay/client-integration"
       },
       {
-        "label": "Reference",
-        "items": [
-          {
-            "label": "API guide",
-            "slug": "products/registry-relay/api"
-          },
-          {
-            "label": "Configuration",
-            "slug": "products/registry-relay/configuration"
-          },
-          {
-            "label": "Portable metadata",
-            "slug": "products/registry-relay/metadata"
-          }
-        ]
+        "label": "Configuration",
+        "slug": "products/registry-relay/configuration"
       },
       {
-        "label": "Explanation",
-        "items": [
-          {
-            "label": "Use cases",
-            "slug": "products/registry-relay/use-cases"
-          }
-        ]
+        "label": "Evidence verification",
+        "slug": "products/registry-relay/evidence-verification"
       }
     ]
   },
@@ -71,15 +28,6 @@
       {
         "label": "Overview",
         "slug": "products/registry-notary"
-      },
-      {
-        "label": "Tutorials",
-        "items": [
-          {
-            "label": "OpenCRVS DCI tutorial",
-            "slug": "products/registry-notary/opencrvs-dci-standalone-tutorial"
-          }
-        ]
       },
       {
         "label": "How-to",
@@ -99,26 +47,6 @@
           {
             "label": "Signing key provider",
             "slug": "products/registry-notary/signing-key-provider"
-          },
-          {
-            "label": "Self-attestation operator guide",
-            "slug": "products/registry-notary/self-attestation-operator-guide"
-          },
-          {
-            "label": "Federated evaluation operator guide",
-            "slug": "products/registry-notary/federated-evaluation-operator-guide"
-          },
-          {
-            "label": "OID4VCI wallet interop",
-            "slug": "products/registry-notary/oid4vci-wallet-interop"
-          },
-          {
-            "label": "OpenSPP disability DCI",
-            "slug": "products/registry-notary/openspp-disability-dci"
-          },
-          {
-            "label": "Deployment hardening runbook",
-            "slug": "products/registry-notary/deployment-hardening-runbook"
           }
         ]
       },
@@ -147,114 +75,10 @@
             "slug": "products/registry-notary/architecture-overview"
           },
           {
-            "label": "Capability matrix",
-            "slug": "products/registry-notary/capability-matrix"
-          },
-          {
             "label": "Identity and record matching",
             "slug": "products/registry-notary/identity-and-record-matching"
-          },
-          {
-            "label": "Scenario patterns",
-            "slug": "products/registry-notary/scenario-patterns"
           }
         ]
-      }
-    ]
-  },
-  {
-    "label": "Manifest",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "products/registry-manifest"
-      },
-      {
-        "label": "Validate and render a manifest",
-        "slug": "products/registry-manifest/validate-and-render"
-      },
-      {
-        "label": "Validate against profile fixtures",
-        "slug": "products/registry-manifest/profile-fixtures"
-      },
-      {
-        "label": "Reference",
-        "slug": "products/registry-manifest/reference"
-      }
-    ]
-  },
-  {
-    "label": "Atlas",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "products/registry-atlas"
-      },
-      {
-        "label": "Run Atlas locally",
-        "slug": "products/registry-atlas/run-locally"
-      },
-      {
-        "label": "Inspect a registry",
-        "slug": "products/registry-atlas/inspect-a-registry"
-      },
-      {
-        "label": "Reference",
-        "slug": "products/registry-atlas/reference"
-      }
-    ]
-  },
-  {
-    "label": "Platform",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "products/registry-platform"
-      },
-      {
-        "label": "Versioning",
-        "slug": "products/registry-platform/versioning"
-      },
-      {
-        "label": "Audit reference hashing",
-        "slug": "products/registry-platform/audit-reference-hashing"
-      }
-    ]
-  },
-  {
-    "label": "Lab",
-    "collapsed": true,
-    "items": [
-      {
-        "label": "Overview",
-        "slug": "products/registry-lab"
-      },
-      {
-        "label": "OpenCRVS DCI tutorial",
-        "slug": "products/registry-lab/opencrvs-dci-notary-tutorial"
-      },
-      {
-        "label": "DHIS2 OpenFn tutorial",
-        "slug": "products/registry-lab/dhis2-openfn-notary-tutorial"
-      },
-      {
-        "label": "OpenFn sidecar tutorial",
-        "slug": "products/registry-lab/openfn-sidecar-notary-tutorial"
-      },
-      {
-        "label": "Citizen self-attestation with eSignet",
-        "slug": "products/registry-lab/citizen-self-attestation-esignet"
-      },
-      {
-        "label": "Wallet interop testing",
-        "slug": "products/registry-lab/wallet-interop-testing"
-      },
-      {
-        "label": "Service-first discovery",
-        "slug": "products/registry-lab/service-first-discovery"
       }
     ]
   }

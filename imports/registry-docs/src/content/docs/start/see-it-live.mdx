@@ -1,0 +1,157 @@
+---
+title: See it live
+description: In about two minutes and with zero install, read a protected registry API and get a privacy-preserving credential from the public hosted lab.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-lab
+last_reviewed: "2026-06-08"
+doc_type: tutorial
+locale: en
+standards_referenced:
+  - oid4vci
+  - sd-jwt-vc
+---
+
+In about two minutes, and without installing anything, you can see the core of Registry Stack working
+against a public hosted lab. You will read a protected registry API from your terminal, then get a
+signed, privacy-preserving credential into a wallet. Everything runs in the hosted lab at
+[lab.registrystack.org](https://lab.registrystack.org), so there is no setup on your machine.
+
+This lab uses synthetic data and public demo-only credentials by design.
+Do not reuse anything you copy here outside the lab.
+
+## What is running
+
+The lab runs two services that you will touch directly:
+
+- A civil-registry **Relay**: a protected, scoped, read-only HTTP API over a civil registry source,
+  at [civil-relay.lab.registrystack.org](https://civil-relay.lab.registrystack.org).
+- A citizen **Notary**: an issuer that hands out a privacy-preserving credential instead of the raw
+  record, at [citizen-notary.lab.registrystack.org](https://citizen-notary.lab.registrystack.org).
+
+For how these connect to the rest of the stack, see the
+[architecture overview](../../explanation/architecture/). For the full set of live demo
+credentials, identities, and ready-made requests, open the lab homepage at
+[lab.registrystack.org](https://lab.registrystack.org).
+
+:::note
+Tokens in this lab are public demo-only tokens and can rotate. Do not copy them from this page.
+Get the current tokens and identities from the lab homepage, which shows every demo credential with a
+copy button and a prebuilt curl example. The same data is available unauthenticated as JSON at
+[lab.registrystack.org/api/lab.json](https://lab.registrystack.org/api/lab.json).
+:::
+
+## Read a protected registry API
+
+This is the part you can run right now from a terminal. The civil Relay authenticates callers with
+`Authorization: Bearer <token>`. Each token carries a scope, so the same API answers some requests
+and refuses others.
+
+Open [lab.registrystack.org](https://lab.registrystack.org) and copy two bearer tokens from the demo
+credential cards: a metadata-scope token and a row-reader token. Set them in your shell. The
+placeholders below stand in for the live tokens.
+
+```sh
+export CIVIL_METADATA_TOKEN="<metadata token from lab.registrystack.org>"
+export CIVIL_ROW_READER_TOKEN="<row-reader token from lab.registrystack.org>"
+```
+
+### List datasets (metadata scope)
+
+The metadata-scope token can list the datasets the Relay publishes:
+
+```sh
+curl -sS \
+  -H "Authorization: Bearer $CIVIL_METADATA_TOKEN" \
+  https://civil-relay.lab.registrystack.org/v1/datasets
+```
+
+The Relay returns `200 OK` with the catalog:
+
+```json
+{ "data": [ { "dataset_id": "civil_registry" } ] }
+```
+
+### Read rows (row scope plus a purpose)
+
+Reading actual records needs a token with the row scope and a `Data-Purpose` header that declares why
+you are reading:
+
+```sh
+curl -sS \
+  -H "Authorization: Bearer $CIVIL_ROW_READER_TOKEN" \
+  -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" \
+  "https://civil-relay.lab.registrystack.org/v1/datasets/civil_registry/entities/civil_person/records?limit=1"
+```
+
+The Relay returns `200 OK` with one record and pagination metadata:
+
+```json
+{ "data": [ {} ], "pagination": {} }
+```
+
+### See access control hold
+
+The point of the gateway is that it never widens reach at request time. Send the metadata-scope token
+to the rows endpoint and the Relay refuses it:
+
+```sh
+curl -sS -o /dev/null -w "%{http_code}\n" \
+  -H "Authorization: Bearer $CIVIL_METADATA_TOKEN" \
+  -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" \
+  "https://civil-relay.lab.registrystack.org/v1/datasets/civil_registry/entities/civil_person/records?limit=1"
+```
+
+The Relay returns `403 Forbidden` with `{"code":"auth.scope_denied"}`. Same API, same network call,
+different scope, different answer. For more on this service, see
+[Registry Relay](../../products/registry-relay/).
+
+## Get a signed credential in a wallet
+
+Now see the issuance side. The citizen Notary issues a Verifiable Credential of type
+`person_is_alive_sd_jwt` (format `dc+sd-jwt`). The credential discloses a single predicate, whether
+the person is alive, as a true or false claim. It never hands over the underlying civil record.
+
+This step is a browser and wallet click-through using a credential offer, not a curl sequence: a real
+[OID4VCI](../../reference/glossary/) issuance flow needs a holder key and a sign-in token, which is
+wallet territory. Open the offer in a wallet:
+
+```text
+https://citizen-notary.lab.registrystack.org/oid4vci/credential-offer?credential_configuration_id=person_is_alive_sd_jwt
+```
+
+The Notary requires you to sign in (via eSignet) before it issues. Use the demo identity:
+
+- National ID: `NID-1001`
+- Name: Miguel Santos
+- Login and OTP code: `111111`
+- PIN: `545411`
+
+After sign-in, the wallet receives the signed `person_is_alive` credential, with the alive predicate
+set to true.
+
+:::note
+The lab homepage links the wallet flow end to end. If you do not have a wallet set up, start from
+[lab.registrystack.org](https://lab.registrystack.org) instead of the raw offer URL above.
+:::
+
+### The negative control
+
+Self-attestation binds the credential subject to the identity you signed in as. Identity `NID-1002`
+is a different person (also alive). If you sign in as one identity and ask for a credential bound to a
+different subject, the Notary refuses: the lab will not issue a credential for a subject you did not
+authenticate as. The issuer cannot be talked into vouching for someone else. For more on this service,
+see [Registry Notary](../../products/registry-notary/).
+
+## Now run your own
+
+You have seen the two payoffs against the hosted lab. To run the same shapes on your own machine,
+start with the local single-node tutorials:
+
+- [Publish a spreadsheet as a secured registry API](../../tutorials/publish-spreadsheet-secured-registry-api/):
+  stand up your own protected Relay from a sample workbook.
+- [Verify a claim from your own API](../../tutorials/verify-claim-own-api/): point a standalone Notary
+  at an API you operate and evaluate a claim.
+
+Not sure which path fits your problem? See [When to use Registry Stack](../when-to-use/).

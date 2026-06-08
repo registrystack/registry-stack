@@ -73,8 +73,7 @@ updated policy documents without touching deployment config.
 7. Registry Atlas fetches published catalog and discovery artifacts through its proxy, classifies them
    by artifact kind, and runs strict capability queries over the indexed metadata terms.
 
-For what each project does and does not own, see
-[ownership boundaries and map](../../map/boundaries-and-map/).
+For what each project does and does not own, refer to the product overview pages linked in the table below.
 
 ## Capabilities at a glance
 
@@ -85,24 +84,18 @@ offerings are inspectable, so metadata comes first.
 
 | Capability | Use it when | Primary project |
 | --- | --- | --- |
-| Describe registries | Other teams need to inspect fields, schemas, policies, services, and evidence offerings before integration. | [Registry Manifest](../../products/registry-manifest/) |
+| Describe registries | Other teams need to inspect fields, schemas, policies, services, and evidence offerings before integration. | Registry Manifest |
 | Expose protected APIs | A file, extract, database, or legacy registry needs a governed read-only API without replacing the source. | [Registry Relay](../../products/registry-relay/) |
 | Certify evidence | A caller needs a status, predicate, selected value, or supported credential instead of the source record. | [Registry Notary](../../products/registry-notary/) |
 
 Two supporting capabilities sit alongside the sequence.
-[Registry Atlas](../../products/registry-atlas/) inspects what a registry actually publishes before
-an integration is built, by reading the generated metadata artifacts and running strict capability
-queries against known machine terms.
+Registry Atlas inspects what a registry actually publishes before an integration is built, by reading
+the generated metadata artifacts and running strict capability queries against known machine terms.
 Shared audit and operational behavior makes Registry Relay and Registry Notary reviewable:
-[Registry Platform](../../products/registry-platform/) supplies the shared primitives for
-authentication, HTTP security, audit envelopes, cryptography, and credential support that both
-runtime services compose.
+Registry Platform supplies the shared primitives for authentication, HTTP security, audit envelopes,
+cryptography, and credential support that both runtime services compose.
 
 ## Next
 
-- [Publishing pipeline](../publishing-pipeline/) explains the metadata compilation and
-  artifact rendering path.
-- [Consultation flow](../consultation-flow/) explains how Registry Relay serves authorized
-  callers and scopes metadata by caller visibility.
 - [Evidence issuance](../evidence-issuance/) explains claim evaluation, disclosure policy,
   delegated evaluation, and credential issuance in Registry Notary.
