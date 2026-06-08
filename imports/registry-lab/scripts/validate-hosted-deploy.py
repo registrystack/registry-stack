@@ -603,6 +603,19 @@ def validate_config_loader_hosted_outputs(
         not has_service_volume(volumes, "static-content", "/out/static-content")
         or "/tmp/repo/static-metadata/." not in command_text
         or "/out/static-content/" not in command_text
+        or not all(
+            token in command_text
+            for token in (
+                "/out/static-content/.well-known/api-catalog",
+                "/out/static-content/.well-known/registry-manifest.json",
+                "/out/static-content/metadata/index.json",
+                "/out/static-content/metadata/evidence-offerings.json",
+                "/out/static-content/metadata/policies.jsonld",
+                "/out/static-content/metadata/cpsv-ap.jsonld",
+                "/out/static-content/metadata/dcat/bregdcat-ap",
+                "/out/static-content/metadata/forms/health_linked_child_support_form/schema.json",
+            )
+        )
     ):
         issues.append(
             Issue(

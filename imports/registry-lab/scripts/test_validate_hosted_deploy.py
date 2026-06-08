@@ -517,6 +517,14 @@ oid4vci:
                     "command": [
                         """
 cp -a /tmp/repo/static-metadata/. /out/static-content/
+cat > /out/static-content/.well-known/api-catalog
+cat > /out/static-content/.well-known/registry-manifest.json
+cat > /out/static-content/metadata/index.json
+cat > /out/static-content/metadata/evidence-offerings.json
+cat > /out/static-content/metadata/policies.jsonld
+cat > /out/static-content/metadata/cpsv-ap.jsonld
+cat > /out/static-content/metadata/dcat/bregdcat-ap
+cat > /out/static-content/metadata/forms/health_linked_child_support_form/schema.json
 for d in civil-cache social-cache health-cache; do
   mkdir -p "/out/$d"
   chown -R 65532:65532 "/out/$d"
