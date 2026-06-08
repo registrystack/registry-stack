@@ -524,9 +524,12 @@ async fn prefetch_bulk_bindings(
             .await;
         let observed_at = OffsetDateTime::now_utc();
         for (entry, result) in entries.into_iter().zip(results) {
-            let (_, _, cache_key) = entry;
+            let (binding, _, cache_key) = entry;
             match result {
                 Ok(value) => {
+                    if validate_required_binding_fields(&binding, &value).is_err() {
+                        continue;
+                    }
                     let mut guard = fetch_memo.lock();
                     // Insert Ready directly. No Pending phase is needed: the
                     // memo is empty at this point and subject tasks have not
@@ -2513,13 +2516,21 @@ async fn fetch_binding_direct(
             purpose,
         )
         .await?;
+    validate_required_binding_fields(binding, &row)?;
+    Ok((row, None))
+}
+
+fn validate_required_binding_fields(
+    binding: &registry_notary_core::SourceBindingConfig,
+    row: &Value,
+) -> Result<(), EvidenceError> {
     for field in binding.fields.values().filter(|field| field.required) {
         match crate::standalone::get_json_path(&row, &field.field) {
             Some(value) if !value.is_null() => {}
             _ => return Err(EvidenceError::SourceNotFound),
         }
     }
-    Ok((row, None))
+    Ok(())
 }
 
 /// Derive the lookup value for a binding from the request context.
@@ -3670,6 +3681,71 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Default)]
+    struct BulkInvalidThenDirectSource {
+        bulk_count: AtomicU64,
+        direct_count: AtomicU64,
+    }
+
+    impl SourceReader for BulkInvalidThenDirectSource {
+        fn read_one<'a>(
+            &'a self,
+            _binding: &'a SourceBindingConfig,
+            subject: &'a SubjectRequest,
+            _purpose: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+            Box::pin(async move {
+                self.direct_count.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({
+                    "id": subject.id.clone(),
+                    "value": true,
+                }))
+            })
+        }
+
+        fn read_one_for_context<'a>(
+            &'a self,
+            binding: &'a SourceBindingConfig,
+            context: &'a EvidenceRequestContext,
+            purpose: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+            Box::pin(async move {
+                let subject = context
+                    .target_subject()
+                    .ok_or(EvidenceError::TargetAttributesInsufficient)?;
+                self.read_one(binding, &subject, purpose).await
+            })
+        }
+
+        fn read_many_context<'a>(
+            &'a self,
+            bindings: Vec<(SourceBindingConfig, EvidenceRequestContext)>,
+            _purpose: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Vec<Result<Value, EvidenceError>>> + Send + 'a>> {
+            Box::pin(async move {
+                self.bulk_count.fetch_add(1, Ordering::SeqCst);
+                bindings
+                    .into_iter()
+                    .map(|(_, context)| {
+                        let id = context
+                            .target_subject()
+                            .map(|subject| subject.id)
+                            .unwrap_or_default();
+                        Ok(json!({ "id": id }))
+                    })
+                    .collect()
+            })
+        }
+
+        fn required_scopes(
+            &self,
+            _evidence: &EvidenceConfig,
+            _claim_id: &str,
+        ) -> Result<Vec<String>, EvidenceError> {
+            Ok(Vec::new())
+        }
+    }
+
     fn test_source_binding() -> SourceBindingConfig {
         SourceBindingConfig {
             connector: registry_notary_core::SourceConnectorKind::RegistryDataApi,
@@ -3747,6 +3823,22 @@ mod tests {
             claims,
             ..EvidenceConfig::default()
         })
+    }
+
+    fn bulk_source_connection() -> registry_notary_core::SourceConnectionConfig {
+        registry_notary_core::SourceConnectionConfig {
+            base_url: "https://source.test".to_string(),
+            allow_insecure_localhost: false,
+            allow_insecure_private_network: false,
+            token_env: String::new(),
+            source_auth: None,
+            dci: registry_notary_core::DciSourceConnectionConfig::default(),
+            max_in_flight: 1,
+            retry_on_5xx: false,
+            bulk_mode: BulkMode::OpenFnSidecarBatch,
+            bulk_mode_lookup_unique: true,
+            bulk_timeout_max_ms: 1_000,
+        }
     }
 
     fn test_request(claim: &str) -> EvaluateRequest {
@@ -4199,6 +4291,66 @@ mod tests {
             .starts_with("rnref:v1:"));
         assert!(target_ref.get("id_type").is_none());
         assert!(!target_ref.to_string().contains("person-1"));
+    }
+
+    #[tokio::test]
+    async fn bulk_prefetch_does_not_cache_rows_missing_required_fields() {
+        let source = Arc::new(BulkInvalidThenDirectSource::default());
+        let mut claim = test_claim("selected", Vec::new(), true);
+        claim.operations.batch_evaluate.enabled = true;
+        claim.operations.batch_evaluate.max_subjects = 1;
+        claim
+            .source_bindings
+            .get_mut("src")
+            .expect("test claim has source binding")
+            .connection = Some("bulk-source".to_string());
+        let mut evidence_config = (*test_evidence(vec![claim])).clone();
+        evidence_config.inline_batch_limit = 1;
+        evidence_config.source_connections =
+            BTreeMap::from([("bulk-source".to_string(), bulk_source_connection())]);
+        let evidence = Arc::new(evidence_config);
+        let store = EvidenceStore::default();
+        let memo = Arc::new(MemoState::new());
+        let request = BatchEvaluateRequest {
+            items: vec![registry_notary_core::BatchEvaluateItemRequest::from(
+                registry_notary_core::BatchSubjectRequest {
+                    id: "person-1".to_string(),
+                    id_type: None,
+                    purpose: None,
+                },
+            )],
+            claims: vec![ClaimRef::from("selected")],
+            disclosure: Some("value".to_string()),
+            format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+            purpose: Some("test".to_string()),
+        };
+
+        let response = RegistryNotaryRuntime::new()
+            .batch_evaluate(
+                evidence,
+                source.clone() as Arc<dyn SourceReader>,
+                &store,
+                &machine_principal(),
+                request,
+                BatchEvaluateOptions {
+                    memo_observer: Some(&memo),
+                    ..BatchEvaluateOptions::default()
+                },
+            )
+            .await
+            .expect("batch evaluate succeeds after direct retry");
+
+        assert_eq!(response.summary.succeeded, 1);
+        assert_eq!(response.summary.failed, 0);
+        assert!(matches!(
+            response.items[0].status,
+            BatchItemStatus::Succeeded
+        ));
+        assert_eq!(response.items[0].claim_results[0].value, Some(json!(true)));
+        assert_eq!(source.bulk_count.load(Ordering::SeqCst), 1);
+        assert_eq!(source.direct_count.load(Ordering::SeqCst), 1);
+        assert_eq!(memo.hits(), 0);
+        assert_eq!(memo.misses(), 1);
     }
 
     #[tokio::test]
