@@ -740,6 +740,41 @@ async fn adapter_receives_minimized_context_when_allowed_inputs_are_configured()
 }
 
 #[tokio::test]
+async fn target_wildcard_allowlist_requires_segment_boundary() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    let matching = &mut claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching;
+    matching.allowed_target_inputs = vec![
+        "target.attributes.given_name".to_string(),
+        "target.attributes.family_name".to_string(),
+        "target.attributes.birth.*".to_string(),
+    ];
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            evaluate_request(
+                person_target("Amina", "Diallo", Some("1984-02-10")),
+                "person-is-alive",
+            ),
+            None,
+        )
+        .await
+        .expect_err("partial-segment target wildcard does not authorize birthdate");
+
+    assert_eq!(error.code(), "target.matching_policy_rejected");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
 async fn default_context_batch_read_runs_concurrently_and_preserves_order() {
     let source = DelayedContextSource;
     let binding = SourceBindingConfig {
@@ -898,6 +933,44 @@ async fn requester_overprovision_is_rejected_before_adapter_read() {
         )
         .await
         .expect_err("over-provisioned requester context is rejected");
+
+    assert_eq!(error.code(), "requester.matching_policy_rejected");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
+async fn requester_wildcard_allowlist_requires_segment_boundary() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching
+        .allowed_requester_inputs = vec!["requester.attributes.off.*".to_string()];
+
+    let mut request = evaluate_request(
+        person_target("Amina", "Diallo", Some("1984-02-10")),
+        "person-is-alive",
+    );
+    let mut requester = EvidenceEntity::new("Person");
+    requester
+        .attributes
+        .insert("office".to_string(), json!("district-7"));
+    request.requester = Some(requester);
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            request,
+            None,
+        )
+        .await
+        .expect_err("partial-segment requester wildcard does not authorize office");
 
     assert_eq!(error.code(), "requester.matching_policy_rejected");
     assert_eq!(source.reads(), 0);

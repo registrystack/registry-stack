@@ -2823,9 +2823,10 @@ fn present_entity_paths(prefix: &str, entity: &EvidenceEntity) -> Vec<String> {
 fn path_allowed(path: &str, allowed: &[String]) -> bool {
     allowed.iter().any(|candidate| {
         candidate == path
-            || candidate
-                .strip_suffix(".*")
-                .is_some_and(|prefix| path.starts_with(prefix))
+            || candidate.strip_suffix(".*").is_some_and(|prefix| {
+                path.strip_prefix(prefix)
+                    .is_some_and(|rest| rest.starts_with('.'))
+            })
     })
 }
 
