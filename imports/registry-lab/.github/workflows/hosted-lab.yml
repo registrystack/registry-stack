@@ -178,6 +178,15 @@ jobs:
           cache-from: type=gha,scope=static-metadata
           cache-to: type=gha,mode=max,scope=static-metadata
 
+      - name: Make static metadata package public
+        env:
+          GH_TOKEN: ${{ secrets.SUBMODULES_PAT || github.token }}
+        run: |
+          gh api \
+            --method PATCH \
+            /user/packages/container/registry-lab-static-metadata/visibility \
+            -f visibility=public >/dev/null
+
       - name: Resolve digest-pinned image
         id: image-ref
         run: |
