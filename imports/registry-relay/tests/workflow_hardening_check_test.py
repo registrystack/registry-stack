@@ -93,6 +93,23 @@ class WorkflowHardeningCheckTest(unittest.TestCase):
 
         self.assertTrue(any("tag-derived package path interpolation in PowerShell" in failure for failure in failures))
 
+    def test_flags_multiline_tag_interpolation_inside_release_powershell(self):
+        text = (
+            '[[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]\n'
+            'PACKAGE_DIR="$package_dir" PACKAGE_ZIP="target/dist/${package}.zip" \\\n'
+            "  pwsh -NoProfile -Command \"Compress-Archive -Path (Join-Path \\$env:PACKAGE_DIR '*') -DestinationPath \\$env:PACKAGE_ZIP -Force\"\n"
+            "  pwsh -NoProfile -Command @'\n"
+            "    Compress-Archive \\\n"
+            "      -Path target/dist/${{ github.ref_name }}/* \\\n"
+            "      -DestinationPath target/dist/out.zip \\\n"
+            "      -Force\n"
+            "'@\n"
+        )
+
+        failures = self.binary_release_failures(text)
+
+        self.assertTrue(any("GitHub tag interpolation in PowerShell" in failure for failure in failures))
+
     def test_accepts_env_only_release_powershell_paths(self):
         text = (
             '[[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]\n'
