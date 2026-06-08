@@ -219,13 +219,36 @@ async fn try_server_with_options_and_entity_api_extra(
     entity_api_extra: &str,
     install_response_mapper: bool,
 ) -> Result<TestServer, TestServerBuildError> {
+    try_server_with_config(
+        spdci_config_with_entity_api_extra(registry_extra, entity_api_extra),
+        install_response_mapper,
+    )
+    .await
+}
+
+fn spdci_disability_only_config() -> String {
+    let mut config = spdci_config_with_entity_api_extra("", "");
+    let registries_start = config
+        .find("    registries:\n      dr:\n")
+        .expect("fixture has explicit registries block");
+    let datasets_start = config
+        .find("\ndatasets:\n")
+        .expect("fixture has datasets block");
+    config.replace_range(registries_start..datasets_start + 1, "");
+    config
+}
+
+async fn try_disability_only_server() -> Result<TestServer, TestServerBuildError> {
+    try_server_with_config(spdci_disability_only_config(), true).await
+}
+
+async fn try_server_with_config(
+    config_contents: String,
+    install_response_mapper: bool,
+) -> Result<TestServer, TestServerBuildError> {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = tmp.path().join("spdci.yaml");
-    std::fs::write(
-        &config_path,
-        spdci_config_with_entity_api_extra(registry_extra, entity_api_extra),
-    )
-    .expect("write config");
+    std::fs::write(&config_path, config_contents).expect("write config");
     env::set_var(
         "REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET",
         "relay-spdci-audit-secret-32-bytes",
@@ -387,6 +410,26 @@ fn sync_search_body(message_id: &str, transaction_id: &str) -> Value {
     })
 }
 
+fn disability_only_sync_search_body(message_id: &str, transaction_id: &str) -> Value {
+    json!({
+        "header": valid_header(message_id),
+        "message": {
+            "transaction_id": transaction_id,
+            "search_request": [{
+                "reference_id": format!("ref-{transaction_id}"),
+                "timestamp": "2026-01-01T00:00:00Z",
+                "search_criteria": {
+                    "query_type": "idtype-value",
+                    "query": {
+                        "type": "member.member_identifier",
+                        "value": "ABC451123"
+                    }
+                }
+            }]
+        }
+    })
+}
+
 fn disabled_criteria_body(message_id: &str, transaction_id: &str) -> Value {
     disabled_criteria_body_with_query_value(message_id, transaction_id, json!("ABC451123"))
 }
@@ -468,6 +511,75 @@ async fn sync_disabled_returns_spdci_status_from_entity_row() {
     assert_eq!(
         body["message"]["disabled_response"][0]["disabled_status"],
         "yes"
+    );
+}
+
+#[tokio::test]
+async fn disability_only_config_serves_advertised_dr_endpoints() {
+    let server = try_disability_only_server()
+        .await
+        .expect("disability-only config should build");
+
+    let disabled = server
+        .post("/dci/dr/registry/sync/disabled")
+        .json(&disabled_criteria_body(
+            "msg-disability-only-disabled",
+            "txn-disabled",
+        ))
+        .await;
+    disabled.assert_status(StatusCode::OK);
+    let body: Value = disabled.json();
+    assert_eq!(
+        body["message"]["disabled_response"][0]["disabled_status"],
+        "yes"
+    );
+
+    for (path, txn) in [
+        (
+            "/dci/dr/registry/sync/get-disability-details",
+            "txn-details",
+        ),
+        (
+            "/dci/dr/registry/sync/get-disability-support",
+            "txn-support",
+        ),
+    ] {
+        let response = server
+            .post(path)
+            .json(&disabled_criteria_body(
+                &format!("msg-disability-only-{txn}"),
+                txn,
+            ))
+            .await;
+        response.assert_status(StatusCode::OK);
+        let body: Value = response.json();
+        assert_eq!(body["message"]["transaction_id"], txn);
+        assert_eq!(
+            body["message"]["search_response"][0]["data"]["reg_records"][0]["id"],
+            "ABC451123"
+        );
+    }
+
+    let search = server
+        .post("/dci/dr/registry/sync/search")
+        .json(&disability_only_sync_search_body(
+            "msg-disability-only-search",
+            "txn-search",
+        ))
+        .await;
+    search.assert_status(StatusCode::OK);
+    let body: Value = search.json();
+    assert_eq!(
+        body["message"]["search_response"][0]["data"]["reg_type"],
+        "ns:org:RegistryType:DR"
+    );
+    assert_eq!(
+        body["message"]["search_response"][0]["data"]["reg_record_type"],
+        "spdci-extensions-dci:DisabledPerson"
+    );
+    assert_eq!(
+        body["message"]["search_response"][0]["data"]["reg_records"][0]["id"],
+        "ABC451123"
     );
 }
 
