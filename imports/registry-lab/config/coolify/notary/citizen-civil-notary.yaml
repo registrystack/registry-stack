@@ -99,7 +99,7 @@ evidence:
       issuer: did:web:citizen-notary.lab.registrystack.org
       signing_key: citizen-civil-hosted
       vct: https://citizen-notary.lab.registrystack.org/credentials/citizen-civil-status/v1
-      validity_seconds: 600
+      validity_seconds: 31536000
       allowed_claims:
         - person-is-alive
       holder_binding:
@@ -165,7 +165,7 @@ self_attestation:
     max_auth_age_seconds: 1200
     max_access_token_lifetime_seconds: 1200
     max_evaluation_age_seconds: 600
-    max_credential_validity_seconds: 600
+    max_credential_validity_seconds: 31536000
     max_clock_leeway_seconds: 60
   allowed_operations:
     evaluate: true
