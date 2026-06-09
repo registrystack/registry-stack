@@ -15,7 +15,7 @@ config_trust:
 metadata:
   source:
     path: civil-registry-relay.metadata.yaml
-    digest: sha256:cd65861ac3e7fdbecf746f1f32df763979da0886fbc63388ede42a5b0f0a8cd6
+    digest: sha256:3891fcc186d637c3b3db790c1592b7a426c4998e73e600e40b8e58fddd10539a
 
 catalog:
   title: Civil Registry Relay (Decentralized Demo)

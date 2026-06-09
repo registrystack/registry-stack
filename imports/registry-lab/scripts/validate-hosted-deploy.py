@@ -757,20 +757,22 @@ def validate_config_loader_hosted_outputs(
             ("civil-registry-cache", "/out/civil-cache"),
             ("social-protection-registry-cache", "/out/social-cache"),
             ("health-registry-cache", "/out/health-cache"),
+            ("openfn-sidecar-tuf-state", "/out/openfn-tuf-state"),
+            ("openfn-sidecar-config-state", "/out/openfn-config-state"),
         )
     ) or not all(
         token in command_text
         for token in (
             "chown -R 65532:65532",
-            "civil-cache social-cache health-cache",
+            "civil-cache social-cache health-cache openfn-tuf-state openfn-config-state",
         )
     ):
         issues.append(
             Issue(
-                "relay-cache-not-chowned",
+                "runtime-state-not-chowned",
                 artifact,
                 "services.config-loader",
-                "hosted Relay cache volumes must be writable by distroless UID/GID 65532",
+                "hosted runtime state volumes must be writable by distroless UID/GID 65532",
             )
         )
     if "cp -a /tmp/repo/scripts/lab_homepage_scenarios /out/static-scripts/" not in command_text:

@@ -15,7 +15,7 @@ config_trust:
 metadata:
   source:
     path: social-protection-registry-relay.metadata.yaml
-    digest: sha256:c1b4b2e8e22670270d2445b661b6324816719ecb4cbd5e7f00fd68082f39b0d0
+    digest: sha256:241321a442e7ad7605480ea569e86ccb9f5acdefc2d6df3eaeb6b4a52b19f5a9
 
 catalog:
   title: Social Protection Registry Relay (Decentralized Demo)

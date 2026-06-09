@@ -149,7 +149,25 @@ class HostedDeployValidationTest(unittest.TestCase):
             if not volume.startswith("social-protection-registry-cache:")
         ]
         issues = self._validate(compose, self._valid_esignet())
-        self.assertIssue(issues, "relay-cache-not-chowned")
+        self.assertIssue(issues, "runtime-state-not-chowned")
+
+    def test_rejects_config_loader_that_does_not_prepare_openfn_state_volumes(self) -> None:
+        compose = self._valid_registry_lab()
+        compose["services"]["config-loader"]["command"] = [
+            command.replace(
+                "civil-cache social-cache health-cache openfn-tuf-state openfn-config-state",
+                "civil-cache social-cache health-cache",
+            )
+            for command in compose["services"]["config-loader"]["command"]
+        ]
+        compose["services"]["config-loader"]["volumes"] = [
+            volume
+            for volume in compose["services"]["config-loader"]["volumes"]
+            if not volume.startswith("openfn-sidecar-tuf-state:")
+            and not volume.startswith("openfn-sidecar-config-state:")
+        ]
+        issues = self._validate(compose, self._valid_esignet())
+        self.assertIssue(issues, "runtime-state-not-chowned")
 
     def test_rejects_config_loader_that_does_not_copy_lab_homepage_scenarios(self) -> None:
         compose = self._valid_registry_lab()
@@ -609,7 +627,7 @@ evidence:
                     "environment": {"CONFIG_REPO_REF": "${CONFIG_REPO_REF:-main}"},
                     "command": [
                         """
-for d in civil-cache social-cache health-cache; do
+for d in civil-cache social-cache health-cache openfn-tuf-state openfn-config-state; do
   mkdir -p "/out/$d"
   chown -R 65532:65532 "/out/$d"
 done
@@ -620,6 +638,8 @@ cp -a /tmp/repo/scripts/lab_homepage_scenarios /out/static-scripts/
                         "civil-registry-cache:/out/civil-cache",
                         "social-protection-registry-cache:/out/social-cache",
                         "health-registry-cache:/out/health-cache",
+                        "openfn-sidecar-tuf-state:/out/openfn-tuf-state",
+                        "openfn-sidecar-config-state:/out/openfn-config-state",
                     ],
                 },
                 "postgres": {"image": "postgres:16-alpine", "environment": required_env},
