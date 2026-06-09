@@ -83,6 +83,7 @@ issue_credential() {
   local profile="$3"
   local disclosure="$4"
   local claims_json="$5"
+  local holder_file="${6:-}"
   local evaluation_id
   evaluation_id="$(
     python - "${evaluation_file}" <<'PY'
@@ -93,6 +94,40 @@ body = json.load(open(sys.argv[1], encoding="utf-8"))
 print(body["results"][0]["evaluation_id"])
 PY
   )"
+  local payload
+  if [[ -n "${holder_file}" ]]; then
+    payload="$(
+      jq -nc \
+        --arg evaluation_id "${evaluation_id}" \
+        --arg profile "${profile}" \
+        --arg disclosure "${disclosure}" \
+        --argjson claims "${claims_json}" \
+        --slurpfile holder "${holder_file}" \
+        '{
+          evaluation_id: $evaluation_id,
+          credential_profile: $profile,
+          format: "application/dc+sd-jwt",
+          claims: $claims,
+          disclosure: $disclosure,
+          holder: $holder[0].holder
+        }'
+    )"
+  else
+    payload="$(
+      jq -nc \
+        --arg evaluation_id "${evaluation_id}" \
+        --arg profile "${profile}" \
+        --arg disclosure "${disclosure}" \
+        --argjson claims "${claims_json}" \
+        '{
+          evaluation_id: $evaluation_id,
+          credential_profile: $profile,
+          format: "application/dc+sd-jwt",
+          claims: $claims,
+          disclosure: $disclosure
+        }'
+    )"
+  fi
   curl -fsS \
     -X POST \
     -H "Authorization: Bearer ${DHIS2_EVIDENCE_CLIENT_BEARER}" \
@@ -100,18 +135,7 @@ PY
     -H "x-request-id: ${correlation_id}-vc-issue" \
     -o "${output_file}" \
     http://127.0.0.1:4326/v1/credentials \
-    --data "$(jq -nc \
-      --arg evaluation_id "${evaluation_id}" \
-      --arg profile "${profile}" \
-      --arg disclosure "${disclosure}" \
-      --argjson claims "${claims_json}" \
-      '{
-        evaluation_id: $evaluation_id,
-        credential_profile: $profile,
-        format: "application/dc+sd-jwt",
-        claims: $claims,
-        disclosure: $disclosure
-      }')"
+    --data "${payload}"
 }
 
 mkdir -p "${output_dir}"
@@ -158,6 +182,84 @@ issue_credential \
   "dhis2_child_program_sd_jwt" \
   "value" \
   "${vc_claims}"
+
+programme_claims='["dhis2-tracked-entity-first-name","dhis2-tracked-entity-last-name","dhis2-child-age-band","dhis2-programme-code","dhis2-child-program-active","dhis2-reconciliation-ref"]'
+curl -fsS \
+  -X POST \
+  -H "Authorization: Bearer ${DHIS2_EVIDENCE_CLIENT_BEARER}" \
+  -H "Content-Type: application/json" \
+  -H "Data-Purpose: https://demo.example.gov/purpose/dhis2-openfn-health-evidence" \
+  -H "x-request-id: ${correlation_id}-programme-vc-evaluation" \
+  -o "${output_dir}/smoke-dhis2-programme-participation-evaluation.json" \
+  http://127.0.0.1:4326/v1/evaluations \
+  --data "$(jq -nc \
+    --arg subject "PQfMcpmXeFE" \
+    --argjson claims "${programme_claims}" \
+    '{
+      target: {
+        type: "TrackedEntity",
+        identifiers: [{scheme: "dhis2_tracked_entity", value: $subject}]
+      },
+      claims: $claims,
+      disclosure: "value",
+      format: "application/dc+sd-jwt"
+    }')"
+
+programme_evaluation_id="$(
+  python - "${output_dir}/smoke-dhis2-programme-participation-evaluation.json" <<'PY'
+import json
+import sys
+
+body = json.load(open(sys.argv[1], encoding="utf-8"))
+print(body["results"][0]["evaluation_id"])
+PY
+)"
+node "${script_dir}/generate-holder-proof.js" \
+  --audience "dhis2-health-notary" \
+  --evaluation-id "${programme_evaluation_id}" \
+  --credential-profile "dhis2_programme_participation_sd_jwt" \
+  --disclosure "value" \
+  --claims-json "${programme_claims}" \
+  > "${output_dir}/smoke-dhis2-programme-participation-holder.json"
+
+issue_credential \
+  "${output_dir}/smoke-dhis2-programme-participation-evaluation.json" \
+  "${output_dir}/smoke-dhis2-programme-participation-credential.json" \
+  "dhis2_programme_participation_sd_jwt" \
+  "value" \
+  "${programme_claims}" \
+  "${output_dir}/smoke-dhis2-programme-participation-holder.json"
+
+reconciliation_ref="$(
+  jq -er '.results[] | select(.claim_id == "dhis2-reconciliation-ref") | .value' \
+    "${output_dir}/smoke-dhis2-programme-participation-evaluation.json"
+)"
+curl -fsS \
+  -X POST \
+  -H "Authorization: Bearer ${DHIS2_EVIDENCE_CLIENT_BEARER}" \
+  -H "Content-Type: application/json" \
+  -H "Data-Purpose: https://demo.example.gov/purpose/dhis2-openfn-health-evidence" \
+  -H "x-request-id: ${correlation_id}-programme-followup" \
+  -o "${output_dir}/smoke-dhis2-programme-participation-followup.json" \
+  http://127.0.0.1:4326/v1/evaluations \
+  --data "$(jq -nc \
+    --arg subject "${reconciliation_ref}" \
+    '{
+      target: {
+        type: "TrackedEntity",
+        identifiers: [{scheme: "dhis2_tracked_entity", value: $subject}]
+      },
+      claims: ["dhis2-child-program-active"],
+      disclosure: "predicate",
+      format: "application/vnd.registry-notary.claim-result+json"
+    }')"
+
+python "${script_dir}/summarize-dhis2-programme-vc.py" \
+  "${output_dir}/smoke-dhis2-programme-participation-evaluation.json" \
+  "${output_dir}/smoke-dhis2-programme-participation-credential.json" \
+  "${output_dir}/smoke-dhis2-programme-participation-holder.json" \
+  "${output_dir}/smoke-dhis2-programme-participation-followup.json" \
+  "${output_dir}/smoke-dhis2-programme-participation-credential-summary.json"
 
 python - "${output_dir}" "${output_dir}/smoke-dhis2-child-program-vc-evaluation.json" "${output_dir}/smoke-dhis2-child-program-credential.json" <<'PY'
 import json
@@ -227,4 +329,6 @@ PY
 
 printf '\nIssued DHIS2 child programme SD-JWT VC summary:\n'
 cat "${output_dir}/smoke-dhis2-child-program-credential-summary.json"
+printf '\nIssued DHIS2 programme participation SD-JWT VC summary:\n'
+cat "${output_dir}/smoke-dhis2-programme-participation-credential-summary.json"
 printf 'DHIS2 OpenFn health evidence and VC smoke passed\n'

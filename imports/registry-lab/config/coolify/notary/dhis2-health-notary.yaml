@@ -14,7 +14,7 @@ auth:
       fingerprint:
         provider: env
         name: DHIS2_EVIDENCE_CLIENT_TOKEN_HASH
-        commitment: sha256:54ea977bf2e0bd6e85df03a7559c8f630492f76fd58472ebe64cebac7f8d8170
+        commitment: sha256:ab1b96b4af50f27f4d614c8e1230d3b33c4764f8b062f2f56ba28e1fd10b8b5b
       scopes:
         - dhis2_health:evidence_verification
   bearer_tokens:
@@ -22,7 +22,7 @@ auth:
       fingerprint:
         provider: env
         name: DHIS2_EVIDENCE_CLIENT_BEARER_HASH
-        commitment: sha256:465cc6c36004ff6844f20a7cdcbc14f7cbf6411a9d06145e095cf3f5c4c882a8
+        commitment: sha256:a0facefca59ae358710616319c9a2651fc40e4999b33caef44ae960e6c459d40
       scopes:
         - dhis2_health:evidence_verification
 
@@ -42,6 +42,9 @@ evidence:
   service_id: dhis2-health-notary
   api_base_url: https://dhis2-notary.lab.registrystack.org
   inline_batch_limit: 20
+  max_credential_validity_seconds: 31536000
+  concurrency:
+    bindings: 4
   source_connections:
     dhis2_openfn:
       base_url: http://openfn-dhis2-sidecar:8080
@@ -89,6 +92,28 @@ evidence:
         allowed:
           - value
           - redacted
+    dhis2_programme_participation_sd_jwt:
+      format: application/dc+sd-jwt
+      issuer: did:web:dhis2-notary.lab.registrystack.org
+      signing_key: dhis2-health-demo
+      vct: https://dhis2-notary.lab.registrystack.org/credentials/dhis2/programme-participation/v1
+      validity_seconds: 31536000
+      allowed_claims:
+        - dhis2-tracked-entity-first-name
+        - dhis2-tracked-entity-last-name
+        - dhis2-child-age-band
+        - dhis2-programme-code
+        - dhis2-child-program-active
+        - dhis2-reconciliation-ref
+      holder_binding:
+        mode: did
+        proof_of_possession: required
+        allowed_did_methods:
+          - did:jwk
+      disclosure:
+        allowed:
+          - value
+          - redacted
   claims:
     - id: dhis2-tracked-entity-first-name
       title: DHIS2 tracked entity first name
@@ -127,6 +152,7 @@ evidence:
         - application/dc+sd-jwt
       credential_profiles:
         - dhis2_child_program_sd_jwt
+        - dhis2_programme_participation_sd_jwt
     - id: dhis2-tracked-entity-last-name
       title: DHIS2 tracked entity last name
       version: 2026-05
@@ -164,6 +190,7 @@ evidence:
         - application/dc+sd-jwt
       credential_profiles:
         - dhis2_child_program_sd_jwt
+        - dhis2_programme_participation_sd_jwt
     - id: dhis2-child-program-active
       title: DHIS2 child programme active
       version: 2026-05
@@ -202,6 +229,118 @@ evidence:
       credential_profiles:
         - dhis2_health_status_sd_jwt
         - dhis2_child_program_sd_jwt
+        - dhis2_programme_participation_sd_jwt
+    - id: dhis2-child-age-band
+      title: DHIS2 child age band
+      version: 2026-06
+      subject_type: person
+      value:
+        type: string
+      source_bindings:
+        dhis2:
+          connector: registry_data_api
+          connection: dhis2_openfn
+          required_scope: dhis2_health:evidence_verification
+          dataset: dhis2_tracker
+          entity: person
+          lookup:
+            input: target.identifiers.dhis2_tracked_entity
+            field: tracked_entity
+            op: eq
+            cardinality: one
+          fields:
+            child_age_band:
+              field: child_age_band
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: dhis2
+        field: child_age_band
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - dhis2_programme_participation_sd_jwt
+    - id: dhis2-programme-code
+      title: DHIS2 programme code
+      version: 2026-06
+      subject_type: person
+      value:
+        type: string
+      source_bindings:
+        dhis2:
+          connector: registry_data_api
+          connection: dhis2_openfn
+          required_scope: dhis2_health:evidence_verification
+          dataset: dhis2_tracker
+          entity: person
+          lookup:
+            input: target.identifiers.dhis2_tracked_entity
+            field: tracked_entity
+            op: eq
+            cardinality: one
+          fields:
+            child_program_code:
+              field: child_program_code
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: dhis2
+        field: child_program_code
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - dhis2_programme_participation_sd_jwt
+    - id: dhis2-reconciliation-ref
+      title: DHIS2 reconciliation reference
+      version: 2026-06
+      subject_type: person
+      value:
+        type: string
+      source_bindings:
+        dhis2:
+          connector: registry_data_api
+          connection: dhis2_openfn
+          required_scope: dhis2_health:evidence_verification
+          dataset: dhis2_tracker
+          entity: person
+          lookup:
+            input: target.identifiers.dhis2_tracked_entity
+            field: tracked_entity
+            op: eq
+            cardinality: one
+          fields:
+            reconciliation_ref:
+              field: reconciliation_ref
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: dhis2
+        field: reconciliation_ref
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - dhis2_programme_participation_sd_jwt
     - id: dhis2-maternal-pnc-active
       title: DHIS2 maternal and postnatal care active
       version: 2026-05

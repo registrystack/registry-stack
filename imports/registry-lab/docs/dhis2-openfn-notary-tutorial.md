@@ -1,25 +1,39 @@
-# Issue a DHIS2 child programme credential
+# Issue a DHIS2 programme participation credential
 
 Page type: tutorial
 Product: Registry Lab, Registry Notary, OpenFn sidecar
 Layer: evaluation and credential
 Audience: integrators testing Registry Notary with DHIS2
 
-Use this tutorial to run the live DHIS2 demo and issue one SD-JWT verifiable
-credential from public DHIS2 sandbox data.
+Use this tutorial to run the live DHIS2 demo and issue SD-JWT verifiable
+credentials from public DHIS2 sandbox data. The main demo credential is a
+holder-bound programme participation VC that can be shared offline for up to one
+year, while still carrying a reconciliation reference that can be used later to
+fetch fresh Notary evidence from DHIS2.
 
 The demo starts two local services:
 
 - `openfn-dhis2-sidecar`: a private sidecar that calls the DHIS2 Tracker API.
 - `dhis2-health-notary`: a Registry Notary service on `http://127.0.0.1:4326`.
 
-The smoke first checks the configured health predicates. Then it evaluates one
-tracked entity for first name, last name, and child programme status, and issues
-an `application/dc+sd-jwt` credential with profile:
+The smoke first checks the configured health predicates. Then it issues two
+`application/dc+sd-jwt` credentials:
+
+- `dhis2_child_program_sd_jwt`: compatibility credential with first name, last
+  name, and child programme status.
+- `dhis2_programme_participation_sd_jwt`: one-year holder-bound credential with
+  first name, last name, child age band, programme code, programme status, and a
+  reconciliation reference.
 
 ```text
-dhis2_child_program_sd_jwt
+dhis2_programme_participation_sd_jwt
 ```
+
+The public DHIS2 child programme used by the smoke does not expose date of birth
+on the tracked entity. For the lab demo, the sidecar therefore emits
+`child_age_band: "5_to_17"` when the entity has an active child programme
+enrollment. Treat this as lab-derived programme context, not a clinical age
+calculation.
 
 ## Before you start
 
@@ -58,8 +72,12 @@ The script will:
 1. Start the DHIS2 OpenFn sidecar and Notary services.
 2. Wait for Notary discovery on port `4326`.
 3. Evaluate positive and negative DHIS2 health predicate claims.
-4. Evaluate the credential claims for tracked entity `PQfMcpmXeFE`.
-5. Issue an SD-JWT VC with first name, last name, and child programme status.
+4. Evaluate the compatibility child programme credential claims.
+5. Evaluate the programme participation credential claims for tracked entity
+   `PQfMcpmXeFE`.
+6. Generate a `did:jwk` holder proof of possession.
+7. Issue a one-year holder-bound SD-JWT VC.
+8. Reuse the VC reconciliation reference to fetch fresh programme status proof.
 
 Expected ending:
 
@@ -78,29 +96,63 @@ output/dhis2-openfn/
 Useful files:
 
 - `smoke-dhis2-child-program-vc-evaluation.json`: evaluation results prepared
-  for credential issuance.
+  for the compatibility credential.
 - `smoke-dhis2-child-program-credential-summary.json`: safe credential response
-  summary.
+  summary for the compatibility credential.
 - `smoke-dhis2-child-program-credential.json`: full SD-JWT VC issuance
-  response.
+  response for the compatibility credential.
+- `smoke-dhis2-programme-participation-evaluation.json`: evaluation results for
+  the one-year programme participation credential.
+- `smoke-dhis2-programme-participation-holder.json`: generated holder DID and
+  proof used for issuance.
+- `smoke-dhis2-programme-participation-credential-summary.json`: safe redacted
+  summary for the programme participation credential.
+- `smoke-dhis2-programme-participation-credential.json`: full SD-JWT VC issuance
+  response for the programme participation credential.
+- `smoke-dhis2-programme-participation-followup.json`: fresh evidence fetched by
+  using the reconciliation reference from the VC.
 
 Example summary shape:
 
 ```json
 {
   "credential_id": "urn:ulid:...",
-  "credential_profile": "dhis2_child_program_sd_jwt",
+  "credential_profile": "dhis2_programme_participation_sd_jwt",
   "format": "application/dc+sd-jwt",
   "issuer": "did:web:dhis2-health-notary.demo.example.gov",
-  "expires_at": "2026-06-01T00:00:00Z",
-  "disclosure_count": 3,
-  "credential_compact_length": 1800
+  "vct": "https://demo.example.gov/credentials/dhis2/programme-participation/v1",
+  "expires_at": "2027-06-01T00:00:00Z",
+  "validity_seconds": 31536000,
+  "holder_bound": true,
+  "holder_binding": "did:jwk",
+  "holder_id_prefix": "did:jwk:...",
+  "disclosure_count": 6,
+  "disclosure_claim_ids": [
+    "dhis2-child-age-band",
+    "dhis2-child-program-active",
+    "dhis2-programme-code",
+    "dhis2-reconciliation-ref",
+    "dhis2-tracked-entity-first-name",
+    "dhis2-tracked-entity-last-name"
+  ],
+  "child_age_band": "5_to_17",
+  "programme_code": "DHIS2_CHILD_PROGRAM",
+  "programme_active": true,
+  "reconciliation_ref_available": true,
+  "reconciliation_ref_redacted": "dhis2:tracked-entity:<redacted>",
+  "followup_satisfied": true,
+  "credential_compact_length": 2600
 }
 ```
 
+The full credential and holder files are useful for local debugging. Do not copy
+them into public docs or tickets. The summary intentionally redacts the
+reconciliation reference and avoids printing the holder proof.
+
 ## Try the evaluation manually
 
-Keep the services running after the smoke, then evaluate the credential claims:
+Keep the services running after the smoke, then evaluate the programme
+participation credential claims:
 
 ```bash
 source .env
@@ -122,34 +174,56 @@ curl -fsS -X POST http://127.0.0.1:4326/v1/evaluations \
     "claims": [
       "dhis2-tracked-entity-first-name",
       "dhis2-tracked-entity-last-name",
-      "dhis2-child-program-active"
+      "dhis2-child-age-band",
+      "dhis2-programme-code",
+      "dhis2-child-program-active",
+      "dhis2-reconciliation-ref"
     ],
     "disclosure": "value",
     "format": "application/dc+sd-jwt"
   }' | jq .
 ```
 
-Use the returned `evaluation_id` to issue a credential:
+Use the returned `evaluation_id` to generate a holder proof and issue a
+credential:
 
 ```bash
 EVAL_ID="$(
   jq -r '.results[0].evaluation_id' \
-    output/dhis2-openfn/smoke-dhis2-child-program-vc-evaluation.json
+    output/dhis2-openfn/smoke-dhis2-programme-participation-evaluation.json
 )"
+
+CLAIMS='[
+  "dhis2-tracked-entity-first-name",
+  "dhis2-tracked-entity-last-name",
+  "dhis2-child-age-band",
+  "dhis2-programme-code",
+  "dhis2-child-program-active",
+  "dhis2-reconciliation-ref"
+]'
+
+scripts/generate-holder-proof.js \
+  --audience dhis2-health-notary \
+  --evaluation-id "$EVAL_ID" \
+  --credential-profile dhis2_programme_participation_sd_jwt \
+  --disclosure value \
+  --claims-json "$CLAIMS" \
+  > output/dhis2-openfn/manual-programme-holder.json
 
 curl -fsS -X POST http://127.0.0.1:4326/v1/credentials \
   -H "Authorization: Bearer ${DHIS2_EVIDENCE_CLIENT_BEARER}" \
   -H "content-type: application/json" \
-  -d "$(jq -nc --arg evaluation_id "$EVAL_ID" '{
+  -d "$(jq -nc \
+    --arg evaluation_id "$EVAL_ID" \
+    --argjson claims "$CLAIMS" \
+    --slurpfile holder output/dhis2-openfn/manual-programme-holder.json \
+    '{
     evaluation_id: $evaluation_id,
-    credential_profile: "dhis2_child_program_sd_jwt",
+    credential_profile: "dhis2_programme_participation_sd_jwt",
     format: "application/dc+sd-jwt",
-    claims: [
-      "dhis2-tracked-entity-first-name",
-      "dhis2-tracked-entity-last-name",
-      "dhis2-child-program-active"
-    ],
-    disclosure: "value"
+    claims: $claims,
+    disclosure: "value",
+    holder: $holder[0].holder
   }')" | jq .
 ```
 

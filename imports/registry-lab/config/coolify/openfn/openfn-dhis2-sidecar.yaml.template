@@ -53,5 +53,5 @@ sources:
     smoke_lookup:
       field: tracked_entity
       value: PQfMcpmXeFE
-      fields: ["tracked_entity", "child_program_active", "tb_program_active"]
+      fields: ["tracked_entity", "child_program_active", "child_age_band", "child_program_code", "reconciliation_ref", "tb_program_active"]
       purpose: startup-readiness-smoke
