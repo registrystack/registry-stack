@@ -572,6 +572,7 @@ function redirectInitForNextRequest(init, headers, status) {
   const method = (init.method ?? "GET").toUpperCase();
   if (status === 303 || ((status === 301 || status === 302) && method === "POST")) {
     headers.delete("content-type");
+    headers.delete("content-length");
     const next = { ...init, method: "GET", headers, redirect: MANUAL_REDIRECT };
     delete next.body;
     return next;

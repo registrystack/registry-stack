@@ -673,6 +673,32 @@ test("same-origin redirects preserve SDK auth headers", async () => {
   assert.equal(calls[1].init.headers.get("authorization"), "Bearer secret-bearer");
 });
 
+test("POST redirects converted to GET drop body headers", async () => {
+  const calls = [];
+  const client = new RegistryNotaryClient({
+    baseUrl: "https://notary.example",
+    fetch: async (url, init) => {
+      calls.push({ url, init });
+      if (calls.length === 1) {
+        init.headers.set("content-length", "64");
+        return new Response("", {
+          status: 303,
+          headers: { location: "/v1/claims" },
+        });
+      }
+      return jsonResponse({ data: [] });
+    },
+  });
+
+  await client.evaluateRequest({ target: { type: "Person", id: "subj-0000001" }, claims: ["age"] });
+
+  assert.equal(calls[0].init.method, "POST");
+  assert.equal(calls[1].init.method, "GET");
+  assert.equal(calls[1].init.body, undefined);
+  assert.equal(calls[1].init.headers.get("content-type"), null);
+  assert.equal(calls[1].init.headers.get("content-length"), null);
+});
+
 function jsonResponse(body, init = {}) {
   return new Response(JSON.stringify(body), {
     status: init.status ?? 200,
