@@ -98,9 +98,13 @@ services:
         cp -a /tmp/repo/scripts/lab-homepage-server.py /out/static-scripts/
         cp -a /tmp/repo/scripts/lab_homepage_scenarios /out/static-scripts/
         cp -a /tmp/repo/config/lab-homepage/. /out/lab-homepage/
-        for d in civil-cache social-cache health-cache openfn-tuf-state openfn-config-state; do
+        for d in civil-cache social-cache health-cache; do
           mkdir -p "/out/$$d"
           chown -R 65532:65532 "/out/$$d"
+        done
+        for d in openfn-tuf-state openfn-config-state; do
+          mkdir -p "/out/$$d"
+          chown -R 1000:1000 "/out/$$d"
         done
         echo "config-loader: populated config volumes from $$CONFIG_REPO_REF"
     volumes:

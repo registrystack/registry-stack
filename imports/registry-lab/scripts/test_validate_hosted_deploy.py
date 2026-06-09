@@ -155,8 +155,8 @@ class HostedDeployValidationTest(unittest.TestCase):
         compose = self._valid_registry_lab()
         compose["services"]["config-loader"]["command"] = [
             command.replace(
-                "civil-cache social-cache health-cache openfn-tuf-state openfn-config-state",
-                "civil-cache social-cache health-cache",
+                "chown -R 1000:1000",
+                "chown -R 65532:65532",
             )
             for command in compose["services"]["config-loader"]["command"]
         ]
@@ -627,9 +627,13 @@ evidence:
                     "environment": {"CONFIG_REPO_REF": "${CONFIG_REPO_REF:-main}"},
                     "command": [
                         """
-for d in civil-cache social-cache health-cache openfn-tuf-state openfn-config-state; do
+for d in civil-cache social-cache health-cache; do
   mkdir -p "/out/$d"
   chown -R 65532:65532 "/out/$d"
+done
+for d in openfn-tuf-state openfn-config-state; do
+  mkdir -p "/out/$d"
+  chown -R 1000:1000 "/out/$d"
 done
 cp -a /tmp/repo/scripts/lab_homepage_scenarios /out/static-scripts/
 """

@@ -764,7 +764,9 @@ def validate_config_loader_hosted_outputs(
         token in command_text
         for token in (
             "chown -R 65532:65532",
-            "civil-cache social-cache health-cache openfn-tuf-state openfn-config-state",
+            "civil-cache social-cache health-cache",
+            "chown -R 1000:1000",
+            "openfn-tuf-state openfn-config-state",
         )
     ):
         issues.append(
@@ -772,7 +774,7 @@ def validate_config_loader_hosted_outputs(
                 "runtime-state-not-chowned",
                 artifact,
                 "services.config-loader",
-                "hosted runtime state volumes must be writable by distroless UID/GID 65532",
+                "hosted Relay and OpenFn runtime state volumes must be writable by their runtime users",
             )
         )
     if "cp -a /tmp/repo/scripts/lab_homepage_scenarios /out/static-scripts/" not in command_text:
