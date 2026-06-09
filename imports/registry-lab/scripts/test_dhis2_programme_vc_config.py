@@ -89,6 +89,11 @@ class Dhis2ProgrammeVcConfigTest(unittest.TestCase):
         for claim_id in EXPECTED_CLAIMS:
             self.assertIn(f"- {claim_id}", body)
             self.assertIn(
+                '- \'application/ld+json; profile="cccev"\'',
+                claim_block(body, claim_id),
+                msg=f"{claim_id} must allow CCCEV JSON-LD rendering",
+            )
+            self.assertIn(
                 "- dhis2_programme_participation_sd_jwt",
                 claim_block(body, claim_id),
                 msg=f"{claim_id} must allow the programme participation profile",
@@ -217,12 +222,16 @@ class Dhis2ProgrammeVcConfigTest(unittest.TestCase):
                 "01 - Evaluate programme participation claims.bru",
                 "02 - Issue holder-bound programme participation VC.bru",
                 "03 - Reconcile with fresh online evidence.bru",
+                "04 - Evaluate programme participation for CCCEV JSON-LD.bru",
+                "05 - Render programme participation CCCEV JSON-LD.bru",
             ],
             files,
         )
 
         evaluate = read(BRUNO_PROGRAMME_VC_DIR / files[0])
-        self.assertIn('crypto.generateKeyPairSync("ed25519")', evaluate)
+        self.assertIn('nodeCrypto.generateKeyPairSync("ed25519")', evaluate)
+        self.assertIn('globalThis.crypto.subtle.generateKey', evaluate)
+        self.assertIn("needs Bruno Developer Mode", evaluate)
         self.assertIn('bru.setVar("dhis2_programme_evaluation_id"', evaluate)
         self.assertIn('bru.setVar("dhis2_programme_reconciliation_ref"', evaluate)
         self.assertIn("dhis2-reconciliation-ref", evaluate)
@@ -236,6 +245,18 @@ class Dhis2ProgrammeVcConfigTest(unittest.TestCase):
         followup = read(BRUNO_PROGRAMME_VC_DIR / files[2])
         self.assertIn("{{dhis2_programme_reconciliation_ref}}", followup)
         self.assertIn('claims": [\n      "dhis2-child-program-active"', followup)
+
+        cccev_evaluate = read(BRUNO_PROGRAMME_VC_DIR / files[3])
+        self.assertIn('Accept: application/ld+json; profile="cccev"', cccev_evaluate)
+        self.assertIn('"format": "application/ld+json; profile=\\"cccev\\""', cccev_evaluate)
+        self.assertIn("claim.format_not_supported", cccev_evaluate)
+        self.assertIn('bru.setVar("dhis2_programme_cccev_evaluation_id"', cccev_evaluate)
+
+        cccev_render = read(BRUNO_PROGRAMME_VC_DIR / files[4])
+        self.assertIn("{{dhis2_programme_cccev_evaluation_id}}", cccev_render)
+        self.assertIn('"format": "application/ld+json; profile=\\"cccev\\""', cccev_render)
+        self.assertIn('"@graph"', cccev_render)
+        self.assertIn("cccev:Evidence", cccev_render)
 
 
 if __name__ == "__main__":

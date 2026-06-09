@@ -149,6 +149,7 @@ evidence:
           - redacted
       formats:
         - application/vnd.registry-notary.claim-result+json
+        - 'application/ld+json; profile="cccev"'
         - application/dc+sd-jwt
       credential_profiles:
         - dhis2_child_program_sd_jwt
@@ -187,6 +188,7 @@ evidence:
           - redacted
       formats:
         - application/vnd.registry-notary.claim-result+json
+        - 'application/ld+json; profile="cccev"'
         - application/dc+sd-jwt
       credential_profiles:
         - dhis2_child_program_sd_jwt
@@ -225,6 +227,7 @@ evidence:
           - redacted
       formats:
         - application/vnd.registry-notary.claim-result+json
+        - 'application/ld+json; profile="cccev"'
         - application/dc+sd-jwt
       credential_profiles:
         - dhis2_health_status_sd_jwt
@@ -264,6 +267,7 @@ evidence:
           - redacted
       formats:
         - application/vnd.registry-notary.claim-result+json
+        - 'application/ld+json; profile="cccev"'
         - application/dc+sd-jwt
       credential_profiles:
         - dhis2_programme_participation_sd_jwt
@@ -301,6 +305,7 @@ evidence:
           - redacted
       formats:
         - application/vnd.registry-notary.claim-result+json
+        - 'application/ld+json; profile="cccev"'
         - application/dc+sd-jwt
       credential_profiles:
         - dhis2_programme_participation_sd_jwt
@@ -338,6 +343,7 @@ evidence:
           - redacted
       formats:
         - application/vnd.registry-notary.claim-result+json
+        - 'application/ld+json; profile="cccev"'
         - application/dc+sd-jwt
       credential_profiles:
         - dhis2_programme_participation_sd_jwt

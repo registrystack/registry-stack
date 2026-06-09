@@ -41,11 +41,11 @@ body:json {
 }
 
 script:post-response {
-  let crypto;
+  let nodeCrypto;
   try {
-    crypto = require("crypto");
+    nodeCrypto = require("crypto");
   } catch (error) {
-    throw new Error("This Bruno request needs access to Node crypto to generate a did:jwk holder proof.");
+    nodeCrypto = null;
   }
 
   const body = res.getBody();
@@ -60,14 +60,125 @@ script:post-response {
     "dhis2-reconciliation-ref",
   ];
 
-  function base64url(input) {
-    return Buffer.from(input).toString("base64url");
+  function bytes(input) {
+    if (typeof input === "string") {
+      if (typeof TextEncoder !== "undefined") {
+        return new TextEncoder().encode(input);
+      }
+      return Buffer.from(input, "utf8");
+    }
+    if (input instanceof ArrayBuffer) {
+      return new Uint8Array(input);
+    }
+    return input;
   }
 
-  function signJwt(header, payload, key) {
+  function base64url(input) {
+    const value = bytes(input);
+    if (typeof Buffer !== "undefined") {
+      return Buffer.from(value).toString("base64url");
+    }
+    let binary = "";
+    for (const byte of value) {
+      binary += String.fromCharCode(byte);
+    }
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  }
+
+  function nodeSignJwt(header, payload, key) {
     const signingInput = `${base64url(JSON.stringify(header))}.${base64url(JSON.stringify(payload))}`;
-    const signature = crypto.sign(null, Buffer.from(signingInput), key);
-    return `${signingInput}.${signature.toString("base64url")}`;
+    const signature = nodeCrypto.sign(null, Buffer.from(signingInput), key);
+    return `${signingInput}.${base64url(signature)}`;
+  }
+
+  async function webSignJwt(header, payload, key) {
+    const signingInput = `${base64url(JSON.stringify(header))}.${base64url(JSON.stringify(payload))}`;
+    const signature = await globalThis.crypto.subtle.sign(
+      { name: "Ed25519" },
+      key,
+      bytes(signingInput),
+    );
+    return `${signingInput}.${base64url(signature)}`;
+  }
+
+  async function createHolderProof(evaluationId, claims) {
+    const header = {
+      alg: "EdDSA",
+      typ: "kb+jwt",
+    };
+    if (!nodeCrypto && (!globalThis.crypto || !globalThis.crypto.subtle)) {
+      if (typeof bru.isSafeMode === "function" && bru.isSafeMode()) {
+        throw new Error("This holder-bound VC walkthrough needs Bruno Developer Mode. Safe Mode does not expose Ed25519 signing primitives. In the desktop app, switch this collection to Developer Mode. In CLI, pass --sandbox developer.");
+      }
+      throw new Error("This Bruno runtime does not expose Node crypto or Web Crypto Ed25519 support for the required did:jwk holder proof.");
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const payload = {
+      aud: "dhis2-health-notary",
+      iat: now,
+      exp: now + 60,
+      jti: `dhis2-bruno-holder-proof-${randomId()}`,
+      evaluation_id: evaluationId,
+      credential_profile: "dhis2_programme_participation_sd_jwt",
+      disclosure: await holderDisclosureHash(),
+      claims,
+    };
+
+    if (nodeCrypto) {
+      const keys = nodeCrypto.generateKeyPairSync("ed25519");
+      const publicJwk = keys.publicKey.export({ format: "jwk" });
+      const holderId = `did:jwk:${base64url(JSON.stringify(publicJwk))}`;
+      header.kid = holderId;
+      payload.sub = holderId;
+      return {
+        holderId,
+        proof: nodeSignJwt(header, payload, keys.privateKey),
+      };
+    }
+
+    let keys;
+    try {
+      keys = await globalThis.crypto.subtle.generateKey(
+        { name: "Ed25519" },
+        true,
+        ["sign", "verify"],
+      );
+    } catch (error) {
+      throw new Error("This Bruno runtime has Web Crypto, but not Ed25519 key generation. Run the collection in Developer Mode or use Bruno CLI with Node crypto available.");
+    }
+    const exported = await globalThis.crypto.subtle.exportKey("jwk", keys.publicKey);
+    const publicJwk = {
+      kty: exported.kty,
+      crv: exported.crv,
+      x: exported.x,
+    };
+    const holderId = `did:jwk:${base64url(JSON.stringify(publicJwk))}`;
+    header.kid = holderId;
+    payload.sub = holderId;
+    return {
+      holderId,
+      proof: await webSignJwt(header, payload, keys.privateKey),
+    };
+  }
+
+  function randomId() {
+    if (nodeCrypto && nodeCrypto.randomUUID) {
+      return nodeCrypto.randomUUID();
+    }
+    if (globalThis.crypto && globalThis.crypto.randomUUID) {
+      return globalThis.crypto.randomUUID();
+    }
+    const random = new Uint8Array(16);
+    globalThis.crypto.getRandomValues(random);
+    return base64url(random);
+  }
+
+  async function holderDisclosureHash() {
+    if (nodeCrypto) {
+      return nodeCrypto.createHash("sha256").update("value").digest("base64url");
+    }
+    const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes("value"));
+    return base64url(digest);
   }
 
   test("status is 200", function () {
@@ -85,33 +196,10 @@ script:post-response {
 
   const evaluationId = results[0] && results[0].evaluation_id;
   const reconciliationRef = byClaim["dhis2-reconciliation-ref"].value;
-  const keys = crypto.generateKeyPairSync("ed25519");
-  const publicJwk = keys.publicKey.export({ format: "jwk" });
-  const holderId = `did:jwk:${base64url(JSON.stringify(publicJwk))}`;
-  const now = Math.floor(Date.now() / 1000);
-  const disclosureHash = crypto.createHash("sha256").update("value").digest("base64url");
-  const proof = signJwt(
-    {
-      alg: "EdDSA",
-      typ: "kb+jwt",
-      kid: holderId,
-    },
-    {
-      sub: holderId,
-      aud: "dhis2-health-notary",
-      iat: now,
-      exp: now + 60,
-      jti: `dhis2-bruno-holder-proof-${crypto.randomUUID()}`,
-      evaluation_id: evaluationId,
-      credential_profile: "dhis2_programme_participation_sd_jwt",
-      disclosure: disclosureHash,
-      claims: expectedClaims,
-    },
-    keys.privateKey,
-  );
+  const holder = await createHolderProof(evaluationId, expectedClaims);
 
   bru.setVar("dhis2_programme_evaluation_id", evaluationId);
   bru.setVar("dhis2_programme_reconciliation_ref", reconciliationRef);
-  bru.setVar("dhis2_programme_holder_id", holderId);
-  bru.setVar("dhis2_programme_holder_proof", proof);
+  bru.setVar("dhis2_programme_holder_id", holder.holderId);
+  bru.setVar("dhis2_programme_holder_proof", holder.proof);
 }

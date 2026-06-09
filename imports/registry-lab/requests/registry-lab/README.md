@@ -27,8 +27,19 @@ use surfaces outside their intended scope.
 The `31 - DHIS2 Programme VC` folder is ordered and stateful. Run request 01
 first so its Bruno script can evaluate the six DHIS2 programme claims, generate
 a short-lived `did:jwk` holder proof, and store the reconciliation reference for
-requests 02 and 03. The holder proof script uses Node `crypto`; if your Bruno
-sandbox blocks that module, run the collection in Developer Mode.
+requests 02 and 03. Requests 04 and 05 show the same programme evidence rendered
+as CCCEV JSON-LD; run 04 before 05 because render requests are bound to the
+original evaluation format. If request 04 returns `claim.format_not_supported`,
+the running DHIS2 Notary has not loaded a config where all six programme claims
+list `application/ld+json; profile="cccev"` in `/v1/claims`.
+
+Because the profile requires an Ed25519 `did:jwk` holder proof, run this folder
+in Bruno Developer Mode. Bruno Safe Mode does not expose the signing primitives
+needed for this holder-bound issuance step. With the CLI:
+
+```bash
+bru run "31 - DHIS2 Programme VC" --env "Hosted Lab" --sandbox developer
+```
 
 To hand the issued VC to a wallet, run request 02 and copy the response
 `credential` value into a wallet raw SD-JWT import flow. This is a demo
