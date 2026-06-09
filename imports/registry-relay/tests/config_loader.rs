@@ -51,6 +51,12 @@ fn example_oidc_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/example.oidc.yaml")
 }
 
+fn perf_config_path(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("perf/config")
+        .join(name)
+}
+
 /// Path to a fixture under `tests/fixtures/config/<name>`.
 fn fixture_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -266,6 +272,67 @@ fn example_config_loads_and_validates() {
     assert_eq!(config.server.request_body_timeout.as_secs(), 10);
     assert_eq!(config.server.http1_header_read_timeout.as_secs(), 10);
     assert_eq!(config.server.max_connections, 1024);
+}
+
+#[test]
+fn perf_api_key_scopes_are_explicit_lists() {
+    for name in ["small.yaml", "medium.yaml", "large.yaml"] {
+        let path = perf_config_path(name);
+        let yaml = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
+        let value: serde_json::Value = serde_saphyr::from_str(&yaml)
+            .unwrap_or_else(|err| panic!("{} must parse as YAML: {err}", path.display()));
+        let api_keys = value
+            .pointer("/auth/api_keys")
+            .and_then(serde_json::Value::as_array)
+            .unwrap_or_else(|| panic!("{} auth.api_keys must be a list", path.display()));
+        let mut actual_ids = Vec::new();
+        for key in api_keys {
+            let id = key
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_else(|| panic!("{} API key must have an id", path.display()));
+            let scopes = key
+                .get("scopes")
+                .and_then(serde_json::Value::as_array)
+                .unwrap_or_else(|| panic!("{} {id} scopes must be a list", path.display()));
+            let actual_scopes = scopes
+                .iter()
+                .map(|scope| {
+                    scope
+                        .as_str()
+                        .unwrap_or_else(|| panic!("{} {id} scope must be a string", path.display()))
+                })
+                .collect::<Vec<_>>();
+            let expected_scopes = match id {
+                "perf_rows" => vec!["clinic_capacity:rows"],
+                "perf_metadata" => vec!["clinic_capacity:metadata"],
+                "perf_aggregate" => vec!["clinic_capacity:aggregate"],
+                "perf_no_scope" => Vec::new(),
+                "perf_evidence_verification" => vec!["clinic_capacity:evidence_verification"],
+                other => panic!("{} unexpected perf API key {other}", path.display()),
+            };
+            assert_eq!(
+                actual_scopes,
+                expected_scopes,
+                "{} {id} scopes changed",
+                path.display()
+            );
+            actual_ids.push(id);
+        }
+        assert_eq!(
+            actual_ids,
+            [
+                "perf_rows",
+                "perf_metadata",
+                "perf_aggregate",
+                "perf_no_scope",
+                "perf_evidence_verification"
+            ],
+            "{} perf API key order changed",
+            path.display()
+        );
+    }
 }
 
 #[test]
@@ -1635,7 +1702,10 @@ fn example_oidc_config_loads_and_validates() {
             .map(String::as_str),
         Some("social_registry:aggregate"),
     );
-    assert!(oidc.scope_object_required_keys.is_empty());
+    assert_eq!(
+        oidc.scope_object_required_keys,
+        vec!["orgId-123".to_string()]
+    );
     assert!(oidc.allowed_clients.is_empty());
     assert_eq!(
         oidc.token_types,
@@ -1905,9 +1975,25 @@ fn oidc_config_rejects_scope_claim_with_whitespace() {
 }
 
 #[test]
+fn oidc_config_rejects_audience_as_scope_claim() {
+    let tmp = TempDir::new().expect("tempdir");
+    let extra = "    scope_claim: aud\n";
+    let path = write_config(&tmp, &oidc_config_body(extra));
+    assert_config_code(config::load(&path), "config.validation_error");
+}
+
+#[test]
 fn oidc_config_rejects_empty_scope_object_required_key() {
     let tmp = TempDir::new().expect("tempdir");
     let extra = "    scope_object_required_keys:\n      - \"\"\n";
+    let path = write_config(&tmp, &oidc_config_body(extra));
+    assert_config_code(config::load(&path), "config.validation_error");
+}
+
+#[test]
+fn oidc_config_rejects_zitadel_object_claim_without_required_keys() {
+    let tmp = TempDir::new().expect("tempdir");
+    let extra = "    scope_claim: \"urn:zitadel:iam:org:project:roles\"\n";
     let path = write_config(&tmp, &oidc_config_body(extra));
     assert_config_code(config::load(&path), "config.validation_error");
 }

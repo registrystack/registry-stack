@@ -68,7 +68,7 @@ pub fn satisfies_required_filter(required_filters: &[String], filter: &EntityFil
         && is_single_scalar_filter_value(&filter.value)
 }
 
-fn is_single_scalar_filter_value(value: &Value) -> bool {
+pub(super) fn is_single_scalar_filter_value(value: &Value) -> bool {
     match value {
         Value::String(value) => !value.trim().is_empty(),
         Value::Number(_) | Value::Bool(_) => true,

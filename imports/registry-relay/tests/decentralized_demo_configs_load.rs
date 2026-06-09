@@ -27,6 +27,12 @@ fn relay_config(name: &str) -> PathBuf {
         .join(name)
 }
 
+fn decentralized_file(path: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("demo/decentralized")
+        .join(path)
+}
+
 const HASH_ENVS: &[&str] = &[
     "CIVIL_METADATA_CLIENT_HASH",
     "CIVIL_EVIDENCE_SOURCE_HASH",
@@ -181,6 +187,56 @@ fn decentralized_civil_demo_config_enables_dci() {
         crvs.identifiers.get("NATIONAL_ID").map(String::as_str),
         Some("national_id")
     );
+}
+
+#[test]
+fn decentralized_demo_uses_scoped_secret_files() {
+    let compose =
+        std::fs::read_to_string(decentralized_file("compose.yaml")).expect("compose readable");
+    assert!(
+        !compose.contains("- .env"),
+        "compose must not inject one shared .env into demo services"
+    );
+    for scoped_env_file in [
+        "env/civil-registry-relay.env",
+        "env/social-protection-registry-relay.env",
+        "env/health-registry-relay.env",
+        "env/civil-registry-notary.env",
+        "env/social-protection-registry-notary.env",
+        "env/shared-eligibility-registry-notary.env",
+        "env/demo-client.env",
+    ] {
+        assert!(
+            compose.contains(scoped_env_file),
+            "compose should reference scoped env file {scoped_env_file}"
+        );
+    }
+
+    for (path, issuer_env) in [
+        (
+            "config/evidence/civil-registry-notary.yaml",
+            "CIVIL_EVIDENCE_ISSUER_JWK",
+        ),
+        (
+            "config/evidence/social-protection-registry-notary.yaml",
+            "SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK",
+        ),
+        (
+            "config/evidence/shared-eligibility-registry-notary.yaml",
+            "SHARED_ELIGIBILITY_EVIDENCE_ISSUER_JWK",
+        ),
+    ] {
+        let contents =
+            std::fs::read_to_string(decentralized_file(path)).expect("notary config readable");
+        assert!(
+            !contents.contains("REGISTRY_NOTARY_ISSUER_JWK"),
+            "{path} must not use the shared issuer key env"
+        );
+        assert!(
+            contents.contains(issuer_env),
+            "{path} should use scoped issuer key env {issuer_env}"
+        );
+    }
 }
 
 fn assert_split_metadata_matches_runtime(name: &str, path: &Path, entity_count: usize) {

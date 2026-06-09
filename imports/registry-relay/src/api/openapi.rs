@@ -2139,7 +2139,7 @@ fn metadata_relationship_metadata_schema() -> Value {
         "required": ["name", "kind", "target", "foreign_key"],
         "properties": {
             "name": { "type": "string" },
-            "kind": { "type": "string", "enum": ["belongs_to", "has_many"] },
+            "kind": { "type": "string", "enum": ["belongs_to", "has_many", "has_one"] },
             "target": { "type": "string" },
             "foreign_key": { "type": "string" },
             "concept_uri": { "type": ["string", "null"], "format": "uri" },
@@ -4269,7 +4269,7 @@ mod tests {
         assert_eq!(
             dataset["properties"]["entities"]["additionalProperties"]["properties"]
                 ["relationships"]["items"]["properties"]["kind"]["enum"],
-            json!(["belongs_to", "has_many"])
+            json!(["belongs_to", "has_many", "has_one"])
         );
     }
 

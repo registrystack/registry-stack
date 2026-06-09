@@ -6,6 +6,7 @@
 //! routes translate the SP DCI Disability Registry synchronous request
 //! envelope onto one configured entity.
 
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::sync::Arc;
 
@@ -45,6 +46,9 @@ const REQUIRED_HEADER_FIELDS: &[&str] = &[
     "total_count",
 ];
 const DATA_PURPOSE_HEADER: &str = "data-purpose";
+const DEFAULT_DISABILITY_REGISTRY_NAME: &str = "dr";
+const DEFAULT_DISABILITY_REGISTRY_TYPE: &str = "ns:org:RegistryType:DR";
+const DEFAULT_DISABILITY_RECORD_TYPE: &str = "spdci-extensions-dci:DisabledPerson";
 
 struct RouteDeps {
     runtime: RuntimeSnapshot,
@@ -254,14 +258,13 @@ async fn search_response(
     let RouteDeps { runtime, principal } = deps;
     // Look up the named-registry config so its `response_fields` /
     // mapping path drive projection through the same code path as
-    // `sync_search`. `RouteState::resolve` below requires the same
-    // entry, so the lookup is guaranteed to succeed when route
-    // resolution does.
+    // `sync_search`. Disability-only configs synthesize the canonical
+    // `dr` registry binding because metadata advertises that route.
     let named_search_config = runtime.config().and_then(|cfg| {
-        cfg.standards
-            .spdci
-            .as_ref()
-            .and_then(|spdci| spdci.registries.get(&registry_name).cloned())
+        cfg.standards.spdci.as_ref().and_then(|spdci| {
+            resolve_synthetic_disability_search_config(spdci, &registry_name)
+                .or_else(|| spdci.registries.get(&registry_name).cloned())
+        })
     });
     let route = match RouteState::resolve(&runtime, &registry_name) {
         Ok(route) => route,
@@ -269,7 +272,7 @@ async fn search_response(
     };
     let response_mapper = runtime.spdci_response_mapper();
     let search_registry_config = named_search_config
-        .expect("named_search_config must be Some when RouteState::resolve succeeded");
+        .expect("named_search_config must be Some when RouteState::resolve succeeds");
     let result = run_search_response(
         &route,
         &registry_name,
@@ -383,6 +386,13 @@ fn resolve_disability_config(
         }
         return Err(SchemaError::UnknownResource.into());
     }
+    if !spdci
+        .registries
+        .contains_key(DEFAULT_DISABILITY_REGISTRY_NAME)
+        && registry_name == DEFAULT_DISABILITY_REGISTRY_NAME
+    {
+        return Ok(disability);
+    }
     Err(SchemaError::UnknownResource.into())
 }
 
@@ -418,6 +428,9 @@ fn resolve_search_config(
         .as_ref()
         .ok_or(SchemaError::UnknownResource)?;
     if let Some(name) = registry_name {
+        if let Some(search) = resolve_synthetic_disability_search_config(spdci, name) {
+            return Ok((name.to_string(), search));
+        }
         return spdci
             .registries
             .get(name)
@@ -433,7 +446,38 @@ fn resolve_search_config(
             .map(|(name, registry)| (name.clone(), registry.clone()))
             .ok_or_else(|| SchemaError::UnknownResource.into());
     }
+    if let Some(search) =
+        resolve_synthetic_disability_search_config(spdci, DEFAULT_DISABILITY_REGISTRY_NAME)
+    {
+        return Ok((DEFAULT_DISABILITY_REGISTRY_NAME.to_string(), search));
+    }
     Err(SchemaError::UnknownResource.into())
+}
+
+fn resolve_synthetic_disability_search_config(
+    spdci: &crate::config::SpdciStandardsConfig,
+    registry_name: &str,
+) -> Option<SpdciRegistryConfig> {
+    if spdci.registries.contains_key(registry_name)
+        || registry_name != DEFAULT_DISABILITY_REGISTRY_NAME
+    {
+        return None;
+    }
+    let disability = spdci.disability_registry.as_ref()?;
+    let mut identifiers = BTreeMap::new();
+    identifiers.insert(disability.query_key.clone(), disability.query_field.clone());
+    Some(SpdciRegistryConfig {
+        dataset: disability.dataset.clone(),
+        entity: disability.entity.clone(),
+        registry_type: DEFAULT_DISABILITY_REGISTRY_TYPE.to_string(),
+        record_type: DEFAULT_DISABILITY_RECORD_TYPE.to_string(),
+        identifiers,
+        expression_fields: BTreeMap::new(),
+        response_fields: BTreeMap::new(),
+        response_mapping_path: None,
+        response_schema_path: None,
+        default_limit: 100,
+    })
 }
 
 struct SpdciRequest {
@@ -639,11 +683,14 @@ fn filters_from_idtype_query(
         .identifiers
         .get(&id_type)
         .ok_or(FilterError::NotAllowed)?;
-    let value = query.get("value").ok_or(FilterError::InvalidValue)?;
+    let value = query
+        .get("value")
+        .and_then(scalar_query_value)
+        .ok_or(FilterError::InvalidValue)?;
     Ok(vec![EntityFilter {
         field: field.clone(),
         op: EntityFilterOp::Eq,
-        value: value.clone(),
+        value,
     }])
 }
 
@@ -795,9 +842,17 @@ fn filter_from_operator_object(field: &str, value: &Value) -> Result<EntityFilte
 fn query_value(query: &Value, key: &str) -> Option<Value> {
     let direct = query.get(key).or_else(|| dotted_lookup(query, key))?;
     if let Some(eq) = direct.get("eq").or_else(|| direct.get("$eq")) {
-        return Some(eq.clone());
+        return scalar_query_value(eq);
     }
-    Some(direct.clone())
+    scalar_query_value(direct)
+}
+
+fn scalar_query_value(value: &Value) -> Option<Value> {
+    match value {
+        Value::String(text) if !text.trim().is_empty() => Some(value.clone()),
+        Value::Bool(_) | Value::Number(_) => Some(value.clone()),
+        _ => None,
+    }
 }
 
 fn dotted_lookup<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
@@ -974,4 +1029,38 @@ fn with_search_audit_context(
         ..AuditContextExt::default()
     });
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::query_value;
+    use serde_json::{json, Value};
+
+    #[test]
+    fn query_value_accepts_only_nonblank_scalars() {
+        for accepted in [
+            json!("ABC451123"),
+            json!(true),
+            json!(false),
+            json!(123),
+            json!(12.5),
+        ] {
+            let query = json!({ "member.member_identifier": { "eq": accepted.clone() } });
+            assert_eq!(
+                query_value(&query, "member.member_identifier"),
+                Some(accepted)
+            );
+        }
+
+        for rejected in [
+            json!(""),
+            json!("   "),
+            Value::Null,
+            json!(["ABC451123"]),
+            json!({ "id": "ABC451123" }),
+        ] {
+            let query = json!({ "member.member_identifier": { "eq": rejected } });
+            assert_eq!(query_value(&query, "member.member_identifier"), None);
+        }
+    }
 }

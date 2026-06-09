@@ -650,13 +650,11 @@ impl TableProvider for PostgresLiveTableProvider {
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         let started = Instant::now();
-        let remote_projection = if filters.is_empty() {
-            projection
-                .map(Vec::as_slice)
-                .filter(|indices| is_pushdown_safe_projection(indices))
-        } else {
-            None
-        };
+        let (remote_projection, remote_limit) = postgres_live_remote_scan_options(
+            filters.is_empty(),
+            projection.map(Vec::as_slice),
+            limit,
+        );
         let projection_pushdown = remote_projection.is_some();
         let wait_started = Instant::now();
         let _permit = match self.connector.acquire_live_permit().await {
@@ -680,7 +678,7 @@ impl TableProvider for PostgresLiveTableProvider {
         };
         let snapshot = match self
             .connector
-            .timed_copy_decoded_live_projected(&client, remote_projection, limit)
+            .timed_copy_decoded_live_projected(&client, remote_projection, remote_limit)
             .await
         {
             Ok(snapshot) => snapshot,
@@ -704,7 +702,7 @@ impl TableProvider for PostgresLiveTableProvider {
             rows = rows.saturating_add(batch.num_rows() as u64);
             batches.push(batch);
         }
-        if limit.is_none_or(|limit| limit > self.connector.live_max_rows)
+        if remote_limit.is_none_or(|limit| limit > self.connector.live_max_rows)
             && rows > self.connector.live_max_rows as u64
         {
             observe_postgres_live_scan_error(started, wait_seconds, projection_pushdown);
@@ -807,6 +805,20 @@ fn is_pushdown_safe_projection(projection: &[usize]) -> bool {
             .iter()
             .enumerate()
             .all(|(offset, index)| !projection[..offset].contains(index))
+}
+
+fn postgres_live_remote_scan_options(
+    filters_empty: bool,
+    projection: Option<&[usize]>,
+    requested_limit: Option<usize>,
+) -> (Option<&[usize]>, Option<usize>) {
+    if !filters_empty {
+        return (None, None);
+    }
+    (
+        projection.filter(|indices| is_pushdown_safe_projection(indices)),
+        requested_limit,
+    )
 }
 
 fn quote_ident(identifier: &str) -> String {
@@ -971,6 +983,26 @@ mod tests {
         assert!(!is_pushdown_safe_projection(&[]));
         assert!(!is_pushdown_safe_projection(&[0, 0]));
         assert!(is_pushdown_safe_projection(&[2, 0]));
+    }
+
+    #[test]
+    fn postgres_live_remote_scan_options_are_only_safe_without_filters() {
+        let projection = [2, 0];
+        let (remote_projection, remote_limit) =
+            postgres_live_remote_scan_options(true, Some(&projection), Some(1));
+        assert_eq!(remote_projection, Some(projection.as_slice()));
+        assert_eq!(remote_limit, Some(1));
+
+        let duplicate_projection = [0, 0];
+        let (remote_projection, remote_limit) =
+            postgres_live_remote_scan_options(true, Some(&duplicate_projection), Some(1));
+        assert_eq!(remote_projection, None);
+        assert_eq!(remote_limit, Some(1));
+
+        let (remote_projection, remote_limit) =
+            postgres_live_remote_scan_options(false, Some(&projection), Some(1));
+        assert_eq!(remote_projection, None);
+        assert_eq!(remote_limit, None);
     }
 
     #[test]

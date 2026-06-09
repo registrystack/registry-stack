@@ -452,6 +452,8 @@ fn enforce_required_filters(
             .required_filters
             .iter()
             .any(|required| required == &filter.field)
+            && filter.op == AggregateFilterOp::Eq
+            && super::is_single_scalar_filter_value(&filter.value)
     });
     if satisfied {
         Ok(())

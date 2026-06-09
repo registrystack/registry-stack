@@ -605,13 +605,13 @@ def plural(count: int, singular: str, plural_value: str | None = None) -> str:
     return f"{count} {plural_value or singular + 's'}"
 
 
-def find_evidence_server_offering(catalog: dict[str, Any]) -> tuple[dict[str, Any], str]:
+def find_registry_notary_offering(catalog: dict[str, Any]) -> tuple[dict[str, Any], str]:
     for offering in catalog.get("evidence_offerings", []):
         access = offering.get("access", {})
         endpoint_url = access.get("endpoint_url")
-        if access.get("kind") == "evidence-server" and endpoint_url:
+        if access.get("kind") == "registry-notary" and endpoint_url:
             return offering, endpoint_url
-    raise DemoError("source registry catalog did not advertise an evidence-server offering")
+    raise DemoError("source registry catalog did not advertise a registry-notary offering")
 
 
 def print_demo_header(base_url: str, registry_base_url: str, output_dir: Path) -> None:
@@ -672,7 +672,7 @@ def run_demo(base_url: str, registry_base_url: str, token: str, output_dir: Path
         200,
         "source registry BRegDCAT-AP",
     )
-    offering, discovered_base_url = find_evidence_server_offering(source_catalog)
+    offering, discovered_base_url = find_registry_notary_offering(source_catalog)
     artifact = save_json(
         output_dir,
         step,

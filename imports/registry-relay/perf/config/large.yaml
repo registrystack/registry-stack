@@ -46,7 +46,7 @@ auth:
         provider: env
         name: PERF_NO_SCOPE_KEY_HASH
         commitment: sha256:1ec2768cbf1bd1e06c8650bc68f54fa3c78d33e461039862f97e85e711264a2e
-      scopes:
+      scopes: []
 
     - id: perf_evidence_verification
       fingerprint:

@@ -6,14 +6,15 @@ demo_dir="$(cd "${script_dir}/.." && pwd)"
 compose_file="${demo_dir}/compose.yaml"
 output_dir="${demo_dir}/output"
 correlation_id="${DEMO_CORRELATION_ID:-decentralized-demo-correlation-001}"
+client_env="${demo_dir}/env/demo-client.env"
 
-if [[ -f "${demo_dir}/.env" ]]; then
+if [[ -f "${client_env}" ]]; then
   set -a
   # shellcheck disable=SC1091
-  . "${demo_dir}/.env"
+  . "${client_env}"
   set +a
 else
-  echo "missing .env; run ${script_dir}/generate-demo-secrets.py first" >&2
+  echo "missing env/demo-client.env; run ${script_dir}/generate-demo-secrets.py first" >&2
   exit 1
 fi
 

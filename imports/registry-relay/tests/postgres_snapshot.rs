@@ -445,6 +445,20 @@ audit:
         assert_eq!(bounded[0].num_rows(), 1);
 
         let err = ctx
+            .sql(&format!(
+                "select beneficiary_id from {table} where beneficiary_id = 2 limit 1"
+            ))
+            .await?
+            .collect()
+            .await
+            .expect_err("filtered live query over the row cap fails rather than sampling");
+        assert!(
+            err.to_string()
+                .contains("postgres live export exceeds configured row maximum"),
+            "unexpected error: {err}"
+        );
+
+        let err = ctx
             .sql(&format!("select beneficiary_id from {table}"))
             .await?
             .collect()
@@ -533,6 +547,25 @@ audit:
         .expect("projected program array");
     assert_eq!(programs.value(0), "cash");
     assert_eq!(programs.value(1), "food");
+
+    let filtered_limit = ctx
+        .sql(&format!(
+            "select beneficiary_id from {table} where beneficiary_id = 2 limit 1"
+        ))
+        .await?
+        .collect()
+        .await?;
+    assert_eq!(filtered_limit.len(), 1);
+    assert_eq!(filtered_limit[0].num_rows(), 1);
+    assert_eq!(
+        filtered_limit[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("filtered id array")
+            .value(0),
+        2
+    );
 
     let reordered = ctx
         .sql(&format!(

@@ -453,8 +453,8 @@ pub struct OidcConfig {
     pub leeway: Duration,
     /// JWT claim whose value carries scopes. Defaults to `scope`, the
     /// RFC 8693 / RFC 9068 space-separated form. Some IdPs use `scp`
-    /// or `permissions`; the value may be either a string or an array
-    /// of strings.
+    /// or `permissions`; the value may be a string, an array of strings,
+    /// or an object keyed by scope name.
     #[serde(default = "default_oidc_scope_claim")]
     pub scope_claim: String,
     /// Optional rename map: `external_scope -> internal_scope`. Applied
@@ -463,8 +463,9 @@ pub struct OidcConfig {
     /// relay's `<dataset_id>:<level>` shape.
     #[serde(default)]
     pub scope_map: BTreeMap<String, String>,
-    /// Optional keys that must be present inside object-valued role
-    /// claim values before the role key is treated as an active scope.
+    /// Keys that must be present inside object-valued role claim values
+    /// before the role key is treated as an active scope. Object-valued
+    /// claims grant no scopes when this list is empty.
     /// This is useful for IdPs such as Zitadel where role values are
     /// keyed by organization id.
     #[serde(default)]

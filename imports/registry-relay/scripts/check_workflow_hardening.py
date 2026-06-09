@@ -27,6 +27,14 @@ NEXTEST_FORBIDDEN_PATTERNS: list[tuple[str, str]] = [
     ),
 ]
 
+BINARY_RELEASE_PWSH_FORBIDDEN_PATTERNS: list[tuple[str, str]] = [
+    (r"\$\{\{\s*github\.ref_name\s*\}\}", "GitHub tag interpolation in PowerShell"),
+    (r"\$GITHUB_REF_NAME", "shell tag interpolation in PowerShell"),
+    (r"\$version", "tag-derived version interpolation in PowerShell"),
+    (r"\$package(?:_dir)?", "tag-derived package path interpolation in PowerShell"),
+    (r"target/dist", "archive path literal interpolation in PowerShell"),
+]
+
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
@@ -64,6 +72,73 @@ def require_immutable_refs(paths: list[Path]) -> list[str]:
     return failures
 
 
+def powershell_command_blocks(text: str) -> list[str]:
+    blocks: list[str] = []
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        match = re.search(r"\bpwsh\b", line)
+        if match is None:
+            index += 1
+            continue
+
+        block = [line[match.start() :]]
+        here_string_end = None
+        if "@'" in line:
+            here_string_end = "'@"
+        elif '@"' in line:
+            here_string_end = '"@'
+
+        if here_string_end is not None:
+            index += 1
+            while index < len(lines):
+                block.append(lines[index])
+                if lines[index].strip() == here_string_end:
+                    break
+                index += 1
+        else:
+            while block[-1].rstrip().endswith("\\") and index + 1 < len(lines):
+                index += 1
+                block.append(lines[index])
+
+        blocks.append("\n".join(block))
+        index += 1
+    return blocks
+
+
+def require_binary_release_powershell_hardening(text: str, path: Path) -> list[str]:
+    failures: list[str] = []
+    failures.extend(
+        require(
+            text,
+            '[[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]',
+            path,
+            "stable semver tag validation before package-name derivation",
+        )
+    )
+    failures.extend(
+        require(
+            text,
+            'PACKAGE_DIR="$package_dir" PACKAGE_ZIP="target/dist/${package}.zip"',
+            path,
+            "PowerShell archive paths passed through environment variables",
+        )
+    )
+    failures.extend(
+        require(
+            text,
+            r"Compress-Archive -Path (Join-Path \$env:PACKAGE_DIR '*') -DestinationPath \$env:PACKAGE_ZIP -Force",
+            path,
+            "PowerShell archive command using environment variables",
+        )
+    )
+    for block in powershell_command_blocks(text):
+        for pattern, detail in BINARY_RELEASE_PWSH_FORBIDDEN_PATTERNS:
+            failures.extend(forbid(block, pattern, path, detail))
+    return failures
+
+
 def main() -> int:
     ci_workflows = [
         WORKFLOWS / "ci.yml",
@@ -81,6 +156,10 @@ def main() -> int:
 
     container = WORKFLOWS / "container.yml"
     container_text = read(container)
+    binary_release = WORKFLOWS / "binary-release.yml"
+    binary_release_text = read(binary_release)
+    failures.extend(require_binary_release_powershell_hardening(binary_release_text, binary_release))
+
     failures.extend(
         require(
             container_text,

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Focused checks for demo secret generation.
 
+use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -36,6 +37,32 @@ fn assert_mode_0600(path: &Path) {
         .mode()
         & 0o777;
     assert_eq!(mode, 0o600, "{} mode should be 0600", path.display());
+}
+
+fn read_env_file(path: &Path) -> BTreeMap<String, String> {
+    std::fs::read_to_string(path)
+        .unwrap_or_else(|err| panic!("{} should be readable: {err}", path.display()))
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| {
+            let (key, value) = line
+                .split_once('=')
+                .unwrap_or_else(|| panic!("{} contains invalid env line: {line}", path.display()));
+            (key.to_string(), value.to_string())
+        })
+        .collect()
+}
+
+fn assert_exact_env_keys(path: &Path, expected: &[&str]) -> BTreeMap<String, String> {
+    let values = read_env_file(path);
+    let actual_keys: Vec<&str> = values.keys().map(String::as_str).collect();
+    assert_eq!(
+        actual_keys,
+        expected,
+        "{} should contain only the expected scoped variables",
+        path.display()
+    );
+    values
 }
 
 fn openssl_available() -> bool {
@@ -387,7 +414,7 @@ fn demo_key_generator_fails_loudly_when_openssl_is_missing() {
 }
 
 #[test]
-fn decentralized_secret_generator_writes_env_file_0600() {
+fn decentralized_secret_generator_writes_scoped_env_files_0600() {
     if !openssl_available() {
         eprintln!("skipping decentralized secret permission check: openssl is not on PATH");
         return;
@@ -395,13 +422,13 @@ fn decentralized_secret_generator_writes_env_file_0600() {
 
     let root = repo_root();
     let tmp = TempDir::new().expect("tempdir");
-    let env_file = tmp.path().join("decentralized.env");
+    let env_dir = tmp.path().join("env");
 
     let output = Command::new(python())
         .current_dir(&root)
         .arg("demo/decentralized/scripts/generate-demo-secrets.py")
-        .arg("--env-file")
-        .arg(&env_file)
+        .arg("--env-dir")
+        .arg(&env_dir)
         .output()
         .expect("decentralized secret generator runs");
 
@@ -410,8 +437,143 @@ fn decentralized_secret_generator_writes_env_file_0600() {
         "decentralized secret generator failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_mode_0600(&env_file);
-    let contents = std::fs::read_to_string(&env_file).expect("env file readable");
-    assert!(contents.contains("REGISTRY_RELAY_AUDIT_HASH_SECRET="));
-    assert!(!contents.contains("2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw"));
+
+    let civil_relay = env_dir.join("civil-registry-relay.env");
+    let social_relay = env_dir.join("social-protection-registry-relay.env");
+    let health_relay = env_dir.join("health-registry-relay.env");
+    let civil_notary = env_dir.join("civil-registry-notary.env");
+    let social_notary = env_dir.join("social-protection-registry-notary.env");
+    let shared_notary = env_dir.join("shared-eligibility-registry-notary.env");
+    let demo_client = env_dir.join("demo-client.env");
+
+    for path in [
+        &civil_relay,
+        &social_relay,
+        &health_relay,
+        &civil_notary,
+        &social_notary,
+        &shared_notary,
+        &demo_client,
+    ] {
+        assert_mode_0600(path);
+    }
+
+    let civil_relay_values = assert_exact_env_keys(
+        &civil_relay,
+        &[
+            "CIVIL_EVIDENCE_ONLY_HASH",
+            "CIVIL_EVIDENCE_SOURCE_HASH",
+            "CIVIL_METADATA_CLIENT_HASH",
+            "CIVIL_ROW_READER_HASH",
+            "REGISTRY_RELAY_AUDIT_HASH_SECRET",
+            "SHARED_CIVIL_EVIDENCE_SOURCE_HASH",
+        ],
+    );
+    let social_relay_values = assert_exact_env_keys(
+        &social_relay,
+        &[
+            "REGISTRY_RELAY_AUDIT_HASH_SECRET",
+            "SHARED_SOCIAL_EVIDENCE_SOURCE_HASH",
+            "SOCIAL_AGGREGATE_READER_HASH",
+            "SOCIAL_EVIDENCE_ONLY_HASH",
+            "SOCIAL_EVIDENCE_SOURCE_HASH",
+            "SOCIAL_METADATA_CLIENT_HASH",
+            "SOCIAL_ROW_READER_HASH",
+        ],
+    );
+    let health_relay_values = assert_exact_env_keys(
+        &health_relay,
+        &[
+            "HEALTH_EVIDENCE_ONLY_HASH",
+            "HEALTH_EVIDENCE_SOURCE_HASH",
+            "HEALTH_METADATA_CLIENT_HASH",
+            "HEALTH_ROW_READER_HASH",
+            "REGISTRY_RELAY_AUDIT_HASH_SECRET",
+            "SHARED_HEALTH_EVIDENCE_SOURCE_HASH",
+        ],
+    );
+    let civil_notary_values = assert_exact_env_keys(
+        &civil_notary,
+        &[
+            "CIVIL_EVIDENCE_CLIENT_BEARER",
+            "CIVIL_EVIDENCE_CLIENT_TOKEN",
+            "CIVIL_EVIDENCE_ISSUER_JWK",
+            "CIVIL_EVIDENCE_SOURCE_RAW",
+        ],
+    );
+    let social_notary_values = assert_exact_env_keys(
+        &social_notary,
+        &[
+            "SOCIAL_EVIDENCE_CLIENT_BEARER",
+            "SOCIAL_EVIDENCE_CLIENT_TOKEN",
+            "SOCIAL_EVIDENCE_SOURCE_RAW",
+            "SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK",
+        ],
+    );
+    let shared_notary_values = assert_exact_env_keys(
+        &shared_notary,
+        &[
+            "SHARED_CIVIL_EVIDENCE_SOURCE_RAW",
+            "SHARED_ELIGIBILITY_EVIDENCE_ISSUER_JWK",
+            "SHARED_EVIDENCE_CLIENT_BEARER",
+            "SHARED_EVIDENCE_CLIENT_TOKEN",
+            "SHARED_HEALTH_EVIDENCE_SOURCE_RAW",
+            "SHARED_SOCIAL_EVIDENCE_SOURCE_RAW",
+        ],
+    );
+    let demo_client_values = assert_exact_env_keys(
+        &demo_client,
+        &[
+            "CIVIL_EVIDENCE_CLIENT_BEARER",
+            "CIVIL_METADATA_CLIENT_RAW",
+            "HEALTH_METADATA_CLIENT_RAW",
+            "SHARED_EVIDENCE_CLIENT_BEARER",
+            "SOCIAL_AGGREGATE_READER_RAW",
+            "SOCIAL_EVIDENCE_CLIENT_BEARER",
+            "SOCIAL_EVIDENCE_ONLY_RAW",
+            "SOCIAL_METADATA_CLIENT_RAW",
+            "SOCIAL_ROW_READER_RAW",
+        ],
+    );
+
+    for values in [
+        &civil_relay_values,
+        &social_relay_values,
+        &health_relay_values,
+    ] {
+        assert!(
+            values
+                .keys()
+                .all(|key| key.ends_with("_HASH") || key == "REGISTRY_RELAY_AUDIT_HASH_SECRET"),
+            "relay env files must contain only hashes plus audit hash secret"
+        );
+        assert!(
+            values.keys().all(|key| !key.ends_with("_RAW")
+                && !key.ends_with("_TOKEN")
+                && !key.ends_with("_BEARER")
+                && !key.contains("JWK")),
+            "relay env files must not receive raw tokens or issuer keys"
+        );
+    }
+    assert!(
+        demo_client_values
+            .keys()
+            .all(|key| !key.ends_with("_HASH") && !key.contains("JWK")),
+        "demo client env file must not receive hashes or issuer keys"
+    );
+    assert_ne!(
+        civil_notary_values["CIVIL_EVIDENCE_ISSUER_JWK"],
+        social_notary_values["SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK"]
+    );
+    assert_ne!(
+        civil_notary_values["CIVIL_EVIDENCE_ISSUER_JWK"],
+        shared_notary_values["SHARED_ELIGIBILITY_EVIDENCE_ISSUER_JWK"]
+    );
+    assert_ne!(
+        social_notary_values["SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK"],
+        shared_notary_values["SHARED_ELIGIBILITY_EVIDENCE_ISSUER_JWK"]
+    );
+    let combined_contents =
+        std::fs::read_to_string(civil_notary).expect("civil notary env readable");
+    assert!(!combined_contents.contains("2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw"));
 }

@@ -1392,6 +1392,7 @@ fn validate_auth_mode(config: &Config) -> Result<(), ConfigError> {
 const OIDC_MIN_JWKS_CACHE_TTL: Duration = Duration::from_secs(30);
 const OIDC_MAX_JWKS_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const OIDC_MAX_LEEWAY: Duration = Duration::from_secs(5 * 60);
+const ZITADEL_PROJECT_ROLES_CLAIM: &str = "urn:zitadel:iam:org:project:roles";
 
 fn validate_oidc(oidc: &OidcConfig) -> Result<(), ConfigError> {
     if !is_allowed_oidc_url(&oidc.issuer, oidc.allow_dev_insecure_fetch_urls) {
@@ -1479,6 +1480,14 @@ fn validate_oidc(oidc: &OidcConfig) -> Result<(), ConfigError> {
         );
         return Err(ConfigError::ValidationError);
     }
+    if oidc.scope_claim == "aud" {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "auth.oidc.scope_claim",
+            "audience is an OIDC routing claim and must not be used as a Relay scope source"
+        );
+        return Err(ConfigError::ValidationError);
+    }
 
     for (from, to) in &oidc.scope_map {
         if from.trim().is_empty() || to.trim().is_empty() {
@@ -1500,6 +1509,15 @@ fn validate_oidc(oidc: &OidcConfig) -> Result<(), ConfigError> {
             code = "config.validation_error",
             field = "auth.oidc.scope_object_required_keys",
             "scope_object_required_keys entries must be non-empty"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    if oidc.scope_claim == ZITADEL_PROJECT_ROLES_CLAIM && oidc.scope_object_required_keys.is_empty()
+    {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "auth.oidc.scope_object_required_keys",
+            "Zitadel project role object claims must declare required object keys"
         );
         return Err(ConfigError::ValidationError);
     }
