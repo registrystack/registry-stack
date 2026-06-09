@@ -76,6 +76,10 @@ reject_multiline OIDC_SA_CLIENT_SECRET "${OIDC_SA_CLIENT_SECRET}"
 reject_multiline OIDC_SCOPE "${scope}"
 
 curl_config="$(mktemp "${TMPDIR:-/tmp}/mint-zitadel-token.XXXXXX")"
+if [ -z "${curl_config}" ] || [ ! -f "${curl_config}" ]; then
+  echo "mint-zitadel-token: failed to create temporary config file" >&2
+  exit 1
+fi
 chmod 600 "${curl_config}"
 cleanup() {
   rm -f "${curl_config}"
