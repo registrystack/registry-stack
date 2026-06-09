@@ -2537,7 +2537,7 @@ fn validate_required_binding_fields(
     row: &Value,
 ) -> Result<(), EvidenceError> {
     for field in binding.fields.values().filter(|field| field.required) {
-        match crate::standalone::get_json_path(&row, &field.field) {
+        match crate::standalone::get_json_path(row, &field.field) {
             Some(value) if !value.is_null() => {}
             _ => return Err(EvidenceError::SourceNotFound),
         }
