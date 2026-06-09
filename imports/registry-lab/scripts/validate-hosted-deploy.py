@@ -540,8 +540,8 @@ def validate_openfn_sidecar_governance(
     notary = root / "config/coolify/notary/dhis2-health-notary.yaml"
     report = root / "config/coolify/openfn/governed/openfn-dhis2-sidecar-runtime.report.json"
     try:
-        bootstrap_text = bootstrap.read_text(encoding="utf-8")
-        notary_text = notary.read_text(encoding="utf-8")
+        bootstrap_config = load_yaml_mapping(bootstrap)
+        notary_config = load_yaml_mapping(notary)
         report_config = load_json_mapping(report)
     except Exception as exc:
         issues.append(
@@ -554,8 +554,9 @@ def validate_openfn_sidecar_governance(
         )
         return issues
 
-    config_trust = extract_openfn_config_trust_scalars(bootstrap_text)
-    if "config_trust:" not in bootstrap_text or "accepted_roots:" not in bootstrap_text:
+    config_trust = extract_openfn_config_trust_scalars(bootstrap_config)
+    accepted_roots = nested_get(bootstrap_config, ("config_trust", "accepted_roots"))
+    if not config_trust or not isinstance(accepted_roots, list) or not accepted_roots:
         issues.append(
             Issue(
                 "missing-openfn-config-trust",
@@ -565,7 +566,7 @@ def validate_openfn_sidecar_governance(
             )
         )
 
-    expected = extract_openfn_expected_sidecar_scalars(notary_text)
+    expected = extract_openfn_expected_sidecar_scalars(notary_config)
     if not expected:
         issues.append(
             Issue(
@@ -592,7 +593,7 @@ def validate_openfn_sidecar_governance(
         "require_runtime_verified",
         "require_smoke_verified",
     ):
-        if expected.get(key) != "true":
+        if expected.get(key) not in (True, "true"):
             issues.append(
                 Issue(
                     "openfn-sidecar-assurance-not-required",
@@ -614,27 +615,25 @@ def validate_openfn_sidecar_governance(
     return issues
 
 
-def extract_openfn_config_trust_scalars(text: str) -> dict[str, str]:
-    return {
-        key: value
-        for key, value in re.findall(
-            r"(?m)^  (product|instance_id|environment|stream_id):\s*(\S+)\s*$",
-            text,
-        )
-    }
-
-
-def extract_openfn_expected_sidecar_scalars(text: str) -> dict[str, str]:
-    match = re.search(r"(?ms)^      expected_sidecar:\n((?:        .*\n)+)", text)
-    if not match:
+def extract_openfn_config_trust_scalars(config: dict[str, Any]) -> dict[str, Any]:
+    trust = config.get("config_trust")
+    if not isinstance(trust, dict):
         return {}
     return {
-        key: value
-        for key, value in re.findall(
-            r"(?m)^        ([a-z_]+):\s*(\S+)\s*$",
-            match.group(1),
-        )
+        key: trust.get(key)
+        for key in ("product", "instance_id", "environment", "stream_id")
+        if trust.get(key) is not None
     }
+
+
+def extract_openfn_expected_sidecar_scalars(config: dict[str, Any]) -> dict[str, Any]:
+    expected = nested_get(
+        config,
+        ("evidence", "source_connections", "dhis2_openfn", "expected_sidecar"),
+    )
+    if not isinstance(expected, dict):
+        return {}
+    return expected
 
 
 def validate_repo_output_binds(artifact: str, services: dict[str, Any]) -> list[Issue]:
@@ -1379,9 +1378,32 @@ def normalize_environment(env: Any) -> dict[str, str]:
 
 
 def load_yaml_mapping(path: Path) -> dict[str, Any]:
-    import yaml  # type: ignore[import-not-found]
+    try:
+        import yaml  # type: ignore[import-not-found]
+    except ModuleNotFoundError:
+        return load_yaml_mapping_with_ruby(path)
 
     loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def load_yaml_mapping_with_ruby(path: Path) -> dict[str, Any]:
+    script = r'''
+require "json"
+require "yaml"
+
+data = YAML.load_file(ARGV.fetch(0))
+data = {} unless data.is_a?(Hash)
+puts JSON.generate(data)
+'''
+    result = subprocess.run(
+        ["ruby", "-e", script, str(path)],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    loaded = json.loads(result.stdout)
     return loaded if isinstance(loaded, dict) else {}
 
 

@@ -7,6 +7,7 @@ notary_root="${REGISTRY_NOTARY_SOURCE_DIR:-${repo_root}/../registry-notary}"
 jobs_root="${REGISTRY_LAB_OPENFN_JOBS_ROOT:-/tmp/registry-lab-openfn-jobs}"
 manifest="${repo_root}/config/coolify/openfn/openfn-dhis2-sidecar.yaml.template"
 governed_dir="${repo_root}/config/coolify/openfn/governed"
+tuf_fixture_dir="${repo_root}/config/coolify/openfn/tuf-demo-fixtures"
 target="${governed_dir}/openfn-dhis2-sidecar-runtime.json"
 metadata_dir="${governed_dir}/tuf/metadata"
 targets_dir="${governed_dir}/tuf/targets"
@@ -22,13 +23,8 @@ if [[ ! -d "${notary_root}" ]]; then
   exit 1
 fi
 
-tough_data="$(
-  find "${CARGO_HOME:-${HOME}/.cargo}/registry/src" \
-    -path '*/tough-0.22.0/tests/data/simple-rsa/root.json' \
-    -print -quit 2>/dev/null | sed 's#/simple-rsa/root.json$##'
-)"
-if [[ -z "${tough_data}" ]]; then
-  echo "tough 0.22.0 test data not found in Cargo cache; run a Cargo build first" >&2
+if [[ ! -f "${tuf_fixture_dir}/simple-rsa/root.json" || ! -f "${tuf_fixture_dir}/snakeoil.pem" ]]; then
+  echo "OpenFn sidecar demo TUF fixtures not found at ${tuf_fixture_dir}" >&2
   exit 1
 fi
 
@@ -53,8 +49,8 @@ cargo run -q \
   -- config create-local-tuf-repo \
   --target "${target}" \
   --target-name openfn-dhis2-sidecar-runtime.json \
-  --root-path "${tough_data}/simple-rsa/root.json" \
-  --signing-key-path "${tough_data}/snakeoil.pem" \
+  --root-path "${tuf_fixture_dir}/simple-rsa/root.json" \
+  --signing-key-path "${tuf_fixture_dir}/snakeoil.pem" \
   --metadata-dir "${metadata_dir}" \
   --targets-dir "${targets_dir}" \
   --product registry-notary-openfn-sidecar \
@@ -95,53 +91,83 @@ report = json.loads(Path(sys.argv[3]).read_text(encoding="utf-8"))
 config_hash = report["config_hash"]
 root_hash = report["tuf"]["root_sha256"]
 
-bootstrap_text = "\n".join(
-    f"      tuf_root_sha256: {root_hash}"
-    if line.strip().startswith("tuf_root_sha256:")
-    else line
-    for line in bootstrap.read_text(encoding="utf-8").splitlines()
-) + "\n"
-bootstrap.write_text(bootstrap_text, encoding="utf-8")
+def update_yaml(path: Path, updates: dict[str, object]) -> None:
+    import subprocess
 
-notary_text = notary_config.read_text(encoding="utf-8")
-block = [
-    "      expected_sidecar:",
-    "        product: registry-notary-openfn-sidecar",
-    "        instance_id: hosted-dhis2-openfn-sidecar",
-    "        environment: hosted-lab",
-    "        stream_id: dhis2-openfn-sidecar-runtime",
-    f"        config_hash: {config_hash}",
-    "        require_expression_hashes_verified: true",
-    "        require_runtime_verified: true",
-    "        require_smoke_verified: true",
-]
-out = []
-in_connection = False
-skip_expected = False
-inserted = False
-for line in notary_text.splitlines():
-    if line == "    dhis2_openfn:":
-        in_connection = True
-        skip_expected = False
-        out.append(line)
-        continue
-    if in_connection and line.startswith("    ") and not line.startswith("      "):
-        in_connection = False
-        skip_expected = False
-    if in_connection and line == "      expected_sidecar:":
-        skip_expected = True
-        continue
-    if skip_expected:
-        if line.startswith("        "):
-            continue
-        skip_expected = False
-    out.append(line)
-    if in_connection and line == "      token_env: OPENFN_SIDECAR_TOKEN_RAW":
-        out.extend(block)
-        inserted = True
-if not inserted:
-    raise SystemExit("could not update dhis2_openfn expected_sidecar block")
-notary_config.write_text("\n".join(out) + "\n", encoding="utf-8")
+    script = r'''
+require "json"
+require "yaml"
+
+path = ARGV.fetch(0)
+updates = JSON.parse(ARGV.fetch(1))
+data = YAML.load_file(path)
+abort("#{path} did not load as a YAML mapping") unless data.is_a?(Hash)
+
+def fetch_child(node, key, dotted_path)
+  if node.is_a?(Array)
+    index = Integer(key)
+    child = node[index]
+  elsif node.is_a?(Hash)
+    child = node[key]
+  else
+    abort("expected YAML collection before #{dotted_path}")
+  end
+  abort("missing YAML path #{dotted_path}") if child.nil?
+  child
+rescue ArgumentError
+  abort("expected list index in YAML path #{dotted_path}")
+end
+
+updates.each do |dotted_path, value|
+  keys = dotted_path.split(".")
+  leaf = keys.pop
+  parent = data
+  keys.each_with_index do |key, index|
+    parent = fetch_child(parent, key, keys[0..index].join("."))
+  end
+  if parent.is_a?(Array)
+    index = Integer(leaf)
+    next if parent[index] == value
+    parent[index] = value
+  elsif parent.is_a?(Hash)
+    next if parent[leaf] == value
+    parent[leaf] = value
+  else
+    abort("expected YAML collection before #{dotted_path}")
+  end
+  @changed = true
+end
+
+exit 0 unless @changed
+File.write(path, "# SPDX-License-Identifier: Apache-2.0\n\n" + YAML.dump(data).sub(/\A---\n/, ""))
+'''
+    subprocess.run(
+        ["ruby", "-e", script, str(path), json.dumps(updates)],
+        check=True,
+    )
+
+
+update_yaml(
+    bootstrap,
+    {
+        "config_trust.accepted_roots.0.tuf_root_sha256": root_hash,
+    },
+)
+update_yaml(
+    notary_config,
+    {
+        "evidence.source_connections.dhis2_openfn.expected_sidecar": {
+            "product": "registry-notary-openfn-sidecar",
+            "instance_id": "hosted-dhis2-openfn-sidecar",
+            "environment": "hosted-lab",
+            "stream_id": "dhis2-openfn-sidecar-runtime",
+            "config_hash": config_hash,
+            "require_expression_hashes_verified": True,
+            "require_runtime_verified": True,
+            "require_smoke_verified": True,
+        },
+    },
+)
 
 print(config_hash)
 PY
