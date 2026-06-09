@@ -637,7 +637,7 @@ struct ResolvedEvidenceSourceConnection {
 struct ExpectedSidecarRuntime {
     expected: ExpectedSidecarConfig,
     ttl: Duration,
-    cache: Arc<Mutex<Option<CachedSidecarAssurance>>>,
+    cache: Arc<StdMutex<Option<CachedSidecarAssurance>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -942,7 +942,7 @@ impl HttpEvidenceSources {
                         ExpectedSidecarRuntime {
                             ttl: Duration::from_millis(expected.assurance_ttl_ms),
                             expected,
-                            cache: Arc::new(Mutex::new(None)),
+                            cache: Arc::new(StdMutex::new(None)),
                         }
                     }),
                 },
@@ -1042,7 +1042,10 @@ async fn ensure_openfn_sidecar_assurance(
     };
     let now = Instant::now();
     {
-        let cache = runtime.cache.lock().await;
+        let cache = runtime
+            .cache
+            .lock()
+            .map_err(|_| EvidenceError::SourceUnavailable)?;
         if let Some(cached) = cache.as_ref() {
             if now.duration_since(cached.checked_at) <= runtime.ttl {
                 validate_openfn_sidecar_assurance(&runtime.expected, &cached.assurance)?;
@@ -1071,7 +1074,10 @@ async fn ensure_openfn_sidecar_assurance(
     let assurance: ObservedSidecarAssurance =
         serde_json::from_value(body).map_err(|_| EvidenceError::SourceUnavailable)?;
     validate_openfn_sidecar_assurance(&runtime.expected, &assurance)?;
-    let mut cache = runtime.cache.lock().await;
+    let mut cache = runtime
+        .cache
+        .lock()
+        .map_err(|_| EvidenceError::SourceUnavailable)?;
     *cache = Some(CachedSidecarAssurance {
         checked_at: Instant::now(),
         assurance,
@@ -1079,11 +1085,11 @@ async fn ensure_openfn_sidecar_assurance(
     Ok(())
 }
 
-async fn cached_openfn_sidecar_config_hash(
+fn cached_openfn_sidecar_config_hash(
     connection: &ResolvedEvidenceSourceConnection,
 ) -> Option<String> {
     let runtime = connection.expected_sidecar.as_ref()?;
-    let cache = runtime.cache.lock().await;
+    let cache = runtime.cache.lock().ok()?;
     let cached = cache.as_ref()?;
     validate_openfn_sidecar_assurance(&runtime.expected, &cached.assurance).ok()?;
     Some(cached.assurance.config_hash.clone())
@@ -1116,8 +1122,9 @@ fn validate_openfn_sidecar_assurance(
 fn openfn_sidecar_assurance_url(base_url: &str) -> Result<reqwest::Url, EvidenceError> {
     let mut base = reqwest::Url::parse(base_url).map_err(|_| EvidenceError::SourceUnavailable)?;
     if !base.path().ends_with('/') {
-        let path = format!("{}/", base.path());
-        base.set_path(&path);
+        base.path_segments_mut()
+            .map_err(|_| EvidenceError::SourceUnavailable)?
+            .push("");
     }
     base.join("v1/assurance")
         .map_err(|_| EvidenceError::SourceUnavailable)
@@ -1163,7 +1170,7 @@ impl SourceReader for HttpEvidenceSources {
                     let Some(connection) = self.source_connection(binding) else {
                         continue;
                     };
-                    if let Some(config_hash) = cached_openfn_sidecar_config_hash(connection).await {
+                    if let Some(config_hash) = cached_openfn_sidecar_config_hash(connection) {
                         hashes.insert(config_hash);
                     }
                 }
@@ -8140,6 +8147,17 @@ config_trust:
             .find(|path| path.join("tough-0.22.0/tests/data").is_dir())
             .expect("tough-0.22.0 source fixture directory exists");
         registry.join("tough-0.22.0/tests/data").join(name)
+    }
+
+    #[test]
+    fn openfn_sidecar_assurance_url_preserves_base_path_prefix() {
+        let url = openfn_sidecar_assurance_url("https://sidecar.example/api/openfn")
+            .expect("assurance URL builds");
+
+        assert_eq!(
+            url.as_str(),
+            "https://sidecar.example/api/openfn/v1/assurance"
+        );
     }
 
     #[tokio::test]

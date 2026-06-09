@@ -270,7 +270,9 @@ async fn write_or_print(
     if let Some(output) = output {
         tokio::fs::write(output, bytes).await?;
     } else {
-        print!("{}", std::str::from_utf8(bytes)?);
+        use std::io::Write;
+
+        std::io::stdout().write_all(bytes)?;
     }
     Ok(())
 }
