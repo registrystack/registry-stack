@@ -205,6 +205,10 @@ class Dhis2ProgrammeVcConfigTest(unittest.TestCase):
         self.assertIn("child_age_band: \"5_to_17\"", body)
         self.assertIn("reconciliation reference", body)
         self.assertIn("smoke-dhis2-programme-participation-credential-summary.json", body)
+        self.assertIn("Hand the VC to a wallet", body)
+        self.assertIn("copy the `credential` field", body)
+        self.assertIn("offer-to-wallet facade yet", body)
+        self.assertIn("citizen OID4VCI wallet flow", body)
 
     def test_bruno_programme_vc_walkthrough_is_scripted(self) -> None:
         files = sorted(path.name for path in BRUNO_PROGRAMME_VC_DIR.glob("*.bru"))
