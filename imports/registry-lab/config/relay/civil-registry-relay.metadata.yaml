@@ -42,7 +42,7 @@ evidence_types:
 datasets:
   - id: civil_registry
     title: Civil Registry
-    description: Synthetic civil status records for decentralized evidence demo flows.
+    description: Synthetic life stage records for decentralized evidence demo flows.
     owner: Civil Registration Authority
     sensitivity: personal
     access_rights: restricted
@@ -78,7 +78,7 @@ datasets:
     entities:
       - name: civil_person
         title: Civil Person
-        description: Person-level civil status projection for evidence computation.
+        description: Person-level life stage projection for evidence computation.
         concept_uri: spdci:extensions/crvs/v1/Person
         identifiers:
           - name: national_id
@@ -96,7 +96,7 @@ datasets:
           - name: birth_date
             type: date
             required: true
-          - name: civil_status
+          - name: life_stage
             type: string
             required: true
           - name: deceased

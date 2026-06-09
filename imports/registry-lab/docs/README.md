@@ -48,6 +48,8 @@ flowchart TD
   security boundary.
 - [Wallet interop testing](wallet-interop-testing.md): test the citizen OID4VCI
   facade with wallet software after the scripted probe passes.
+- [Guided demo scenarios and data plan](guided-demo-scenarios-and-data-plan.md):
+  plan fixture cleanup and the guided Relay, Notary, DHIS2, and wallet scenarios.
 
 ## Agriculture demo design
 

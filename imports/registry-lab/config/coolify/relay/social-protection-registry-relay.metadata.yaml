@@ -67,8 +67,8 @@ datasets:
         access:
           kind: registry-notary
           conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://social-protection-notary:8080
-          discovery_url: https://social-protection-notary:8080/.well-known/evidence-service
+          endpoint_url: https://metadata.lab.registrystack.org/local-only/social-protection-notary
+          discovery_url: https://metadata.lab.registrystack.org/local-only/social-protection-notary/.well-known/evidence-service
           ruleset: program-enrollment-status-v1
         policy:
           purpose:

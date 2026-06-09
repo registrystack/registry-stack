@@ -307,28 +307,23 @@ services:
 
   openfn-dhis2-sidecar:
     image: ${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE:-ghcr.io/jeremi/registry-notary-openfn-sidecar@sha256:a6015dd3c11644af3f0cf52d44fb2aa895a0d5c955a6cdc46db491ab5334273f}
-    entrypoint: ["/bin/sh", "-eu", "-c"]
     command:
-      - |
-        : "$${OPENFN_DHIS2_HOST_URL:?missing OPENFN_DHIS2_HOST_URL}"
-        escaped="$$(printf '%s' "$${OPENFN_DHIS2_HOST_URL%/}" | sed 's/[\\&|]/\\&/g')"
-        sed "s|__OPENFN_DHIS2_HOST_URL__|$${escaped}|g" \
-          /etc/registry-notary-openfn/openfn-dhis2-sidecar.yaml.template \
-          > /tmp/openfn-dhis2-sidecar.yaml
-        exec registry-notary-openfn-sidecar --config /tmp/openfn-dhis2-sidecar.yaml
+      - --config
+      - /etc/registry-notary-openfn/openfn-dhis2-sidecar.bootstrap.yaml
     environment:
       RUST_LOG: ${RUST_LOG:-info}
       OPENFN_SIDECAR_TOKEN_HASH: ${OPENFN_SIDECAR_TOKEN_HASH:-}
-      OPENFN_DHIS2_HOST_URL: ${OPENFN_DHIS2_HOST_URL:-}
       OPENFN_DHIS2_USERNAME: ${OPENFN_DHIS2_USERNAME:-}
       OPENFN_DHIS2_PASSWORD: ${OPENFN_DHIS2_PASSWORD:-}
-      OPENFN_DHIS2_DEMO_CREDENTIAL_JSON: '{"hostUrl":"${OPENFN_DHIS2_HOST_URL:-}","baseUrl":"${OPENFN_DHIS2_HOST_URL:-}","username":"${OPENFN_DHIS2_USERNAME:-}","password":"${OPENFN_DHIS2_PASSWORD:-}"}'
+      OPENFN_DHIS2_DEMO_CREDENTIAL_JSON: '{"hostUrl":"https://play.im.dhis2.org/stable-2-43-0","baseUrl":"https://play.im.dhis2.org/stable-2-43-0","username":"${OPENFN_DHIS2_USERNAME:-}","password":"${OPENFN_DHIS2_PASSWORD:-}"}'
     depends_on:
       config-loader:
         condition: service_completed_successfully
     volumes:
       - cfg-openfn-tmpl:/etc/registry-notary-openfn:ro
-      - cfg-openfn-jobs:/opt/openfn/jobs:ro
+      - cfg-openfn-jobs:/tmp/registry-lab-openfn-jobs:ro
+      - openfn-sidecar-tuf-state:/var/lib/registry-notary-openfn-sidecar/tuf
+      - openfn-sidecar-config-state:/var/lib/registry-notary-openfn-sidecar/config-trust
     healthcheck:
       test:
         - CMD-SHELL
@@ -410,6 +405,8 @@ volumes:
   cfg-pginit:
   cfg-openfn-tmpl:
   cfg-openfn-jobs:
+  openfn-sidecar-tuf-state:
+  openfn-sidecar-config-state:
   cfg-static-scripts:
   cfg-lab-homepage:
   opencrvs-notary-config:

@@ -263,7 +263,9 @@ services:
       - |
         : "$${OPENFN_SIDECAR_TOKEN_HASH:?missing OPENFN_SIDECAR_TOKEN_HASH; run scripts/generate-demo-secrets.py}"
         : "$${OPENFN_MOCK_REGISTRY_TOKEN_RAW:?missing OPENFN_MOCK_REGISTRY_TOKEN_RAW; run scripts/generate-demo-secrets.py}"
-        exec registry-notary-openfn-sidecar --config /etc/registry-notary-openfn/openfn-civil-sidecar.yaml.template
+        exec registry-notary-openfn-sidecar \
+          --config /etc/registry-notary-openfn/openfn-civil-sidecar.yaml.template \
+          --allow-unsigned-dev-config
     volumes:
       - ./config/openfn/openfn-civil-sidecar.yaml.template:/etc/registry-notary-openfn/openfn-civil-sidecar.yaml.template:ro
     networks:
@@ -327,7 +329,9 @@ services:
     command:
       - |
         : "$${OPENFN_SIDECAR_TOKEN_HASH:?missing OPENFN_SIDECAR_TOKEN_HASH; run scripts/generate-demo-secrets.py}"
-        exec registry-notary-openfn-sidecar --config /etc/registry-notary-openfn/openfn-dhis2-sidecar.yaml.template
+        exec registry-notary-openfn-sidecar \
+          --config /etc/registry-notary-openfn/openfn-dhis2-sidecar.yaml.template \
+          --allow-unsigned-dev-config
     volumes:
       - ./config/openfn/openfn-dhis2-sidecar.yaml.template:/etc/registry-notary-openfn/openfn-dhis2-sidecar.yaml.template:ro
     networks:

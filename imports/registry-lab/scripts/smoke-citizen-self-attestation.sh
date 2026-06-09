@@ -22,8 +22,8 @@ port="${CITIZEN_WITNESS_PORT:-4325}"
 subject_claim="${ESIGNET_SUBJECT_CLAIM:-national_id}"
 subject_claim_source="${ESIGNET_SUBJECT_CLAIM_SOURCE:-access_token}"
 assurance_claim_source="${ESIGNET_ASSURANCE_CLAIM_SOURCE:-access_token}"
-self_subject="${ESIGNET_CITIZEN_SUBJECT:-NID-1001}"
-other_subject="${ESIGNET_OTHER_SUBJECT:-NID-1002}"
+self_subject="${ESIGNET_CITIZEN_SUBJECT:-NID-2001}"
+other_subject="${ESIGNET_OTHER_SUBJECT:-NID-1001}"
 demo_login_id="${ESIGNET_DEMO_LOGIN_ID:-${self_subject}}"
 demo_login_code="${ESIGNET_DEMO_OTP:-111111}"
 demo_login_pin="${ESIGNET_DEMO_PIN:-545411}"
@@ -817,7 +817,7 @@ lines = [
     "",
     "- Notary accepted the citizen token chain and classified the request as `self_attestation`.",
     "- Notary evaluated `person-is-alive` for the token-bound subject.",
-    "- Notary denied the `NID-1002` request as a subject-binding violation before a civil registry read.",
+    f"- Notary denied the `{other_subject}` request as a subject-binding violation before a civil registry read.",
     "- Audit output records hashed identifiers, not raw token subject values.",
     "",
     "## Discovery Summary",

@@ -1,0 +1,38 @@
+{
+  "config_hash": "sha256:0069fbfebf5ad5ffcd7b46b28eccc470302ac4b0e1d62c81bf1e5d22c6adea4f",
+  "expression_hashes": {
+    "dhis2_health.lookup": "sha256:8b35c21a238c84d02b53cc279843cfd55c69a46796944511bc49424e3bf43760"
+  },
+  "jobs_root": "/tmp/registry-lab-openfn-jobs",
+  "metadata": {
+    "apply_policy": "restart_required",
+    "bundle_id": "registry-lab-hosted-dhis2-openfn-sidecar-2026-06-09",
+    "change_classes": [
+      "openfn_sidecar_runtime",
+      "openfn_sidecar_source_binding",
+      "openfn_sidecar_workflow_bundle"
+    ],
+    "config_hash": "sha256:0069fbfebf5ad5ffcd7b46b28eccc470302ac4b0e1d62c81bf1e5d22c6adea4f",
+    "environment": "hosted-lab",
+    "instance_id": "hosted-dhis2-openfn-sidecar",
+    "previous_config_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "product": "registry-notary-openfn-sidecar",
+    "sequence": 1,
+    "signer_kids": [
+      "8ec3a843a0f9328c863cac4046ab1cacbbc67888476ac7acf73d9bcd9a223ada"
+    ],
+    "stream_id": "dhis2-openfn-sidecar-runtime"
+  },
+  "target_name": "openfn-dhis2-sidecar-runtime.json",
+  "tuf": {
+    "root_sha256": "sha256:4fb870c642c7b794638d712c95f2159bf749d2599fcce3ff7dad9014346da07d",
+    "root_version": 1,
+    "signer_kids": [
+      "8ec3a843a0f9328c863cac4046ab1cacbbc67888476ac7acf73d9bcd9a223ada"
+    ],
+    "snapshot_version": 1,
+    "targets_version": 1,
+    "timestamp_version": 1
+  },
+  "verified": true
+}

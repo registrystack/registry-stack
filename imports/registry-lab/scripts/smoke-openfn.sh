@@ -7,6 +7,22 @@ compose_file="${demo_dir}/compose.yaml"
 output_dir="${demo_dir}/output"
 correlation_id="${DEMO_CORRELATION_ID:-decentralized-demo-correlation-001}"
 
+default_source_dir() {
+  local sibling="$1"
+  local vendor="$2"
+  if [[ -f "${demo_dir}/${sibling}/Cargo.toml" ]]; then
+    printf '%s\n' "${demo_dir}/${sibling}"
+  else
+    printf '%s\n' "${demo_dir}/${vendor}"
+  fi
+}
+
+export REGISTRY_NOTARY_SOURCE_DIR="${REGISTRY_NOTARY_SOURCE_DIR:-$(default_source_dir "../registry-notary" "vendor/registry-notary")}"
+export REGISTRY_OPENFN_NOTARY_SOURCE_DIR="${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR}}"
+export REGISTRY_PLATFORM_SOURCE_DIR="${REGISTRY_PLATFORM_SOURCE_DIR:-$(default_source_dir "../registry-platform" "vendor/registry-platform")}"
+export REGISTRY_NOTARY_PLATFORM_SOURCE_DIR="${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR}}"
+export CEL_MAPPING_SOURCE_DIR="${CEL_MAPPING_SOURCE_DIR:-${demo_dir}/vendor/cel-mapping}"
+
 if [[ -f "${demo_dir}/.env" ]]; then
   set -a
   # shellcheck disable=SC1091

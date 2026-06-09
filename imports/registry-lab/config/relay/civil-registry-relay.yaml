@@ -94,13 +94,13 @@ standards:
           NIN: national_id
         expression_fields:
           birth_date: birth_date
-          civil_status: civil_status
+          life_stage: life_stage
           deceased: deceased
           district: district
         response_fields:
           person.national_id: national_id
           person.birth_date: birth_date
-          person.civil_status: civil_status
+          person.life_stage: life_stage
           person.deceased: deceased
           person.district: district
 
@@ -112,7 +112,7 @@ audit:
 datasets:
   - id: civil_registry
     title: Civil Registry
-    description: Synthetic civil status records for decentralized evidence demo flows.
+    description: Synthetic life stage records for decentralized evidence demo flows.
     owner: Civil Registration Authority
     sensitivity: personal
     access_rights: restricted
@@ -150,7 +150,7 @@ datasets:
             - name: birth_date
               type: date
               nullable: false
-            - name: civil_status
+            - name: life_stage
               type: string
               nullable: false
             - name: deceased
@@ -162,7 +162,7 @@ datasets:
     entities:
       - name: civil_person
         title: Civil Person
-        description: Person-level civil status projection for evidence computation.
+        description: Person-level life stage projection for evidence computation.
         table: civil_persons_table
         concept_uri: spdci:extensions/crvs/v1/Person
         fields:
@@ -170,7 +170,7 @@ datasets:
           - name: given_name
           - name: surname
           - name: birth_date
-          - name: civil_status
+          - name: life_stage
           - name: deceased
           - name: district
         access:
@@ -191,7 +191,7 @@ datasets:
               ops: [eq]
             - field: birth_date
               ops: [eq, gte, lte]
-            - field: civil_status
+            - field: life_stage
               ops: [eq, in]
             - field: deceased
               ops: [eq]

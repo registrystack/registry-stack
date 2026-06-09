@@ -17,6 +17,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
+from lab_homepage_scenarios import (
+    run_alive_proof_step,
+    run_scenario_step,
+    scenario_nav_link,
+    scenario_page_html,
+    scenario_payload,
+)
+
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "config/lab-homepage/public-demo-credentials.json"
 DEFAULT_ENV_FILE = Path(__file__).resolve().parents[1] / "config/lab-homepage/public-demo-credentials.env"
@@ -538,6 +546,7 @@ def homepage_html(title: str) -> bytes:
       <span>Registry Lab</span>
     </a>
     <nav class="top-nav" aria-label="Lab navigation">
+      {scenario_nav_link()}
       <a href="#services">Services &amp; credentials</a>
       <a href="#wallet">Wallet test</a>
       <a class="nav-emphasis" href="https://registrystack.org/">Registry Stack</a>
@@ -552,7 +561,8 @@ def homepage_html(title: str) -> bytes:
           <p class="subtitle" id="subtitle"></p>
           <p class="hero-note">Everything here runs on synthetic demo data. The credentials below are public on purpose, and none of them reach a real or production system. Poke around freely.</p>
           <div class="hero-links">
-            <a class="button primary" href="#wallet">Try the wallet test</a>
+            <a class="button primary" href="/scenarios">Try a scenario</a>
+            <a class="button" href="#wallet">Try the wallet test</a>
             <a class="button" href="#services">See what is running</a>
           </div>
           <div class="badge-row">
@@ -692,6 +702,8 @@ def homepage_html(title: str) -> bytes:
 
     function wireCopyButtons() {{
       document.querySelectorAll("[data-copy]").forEach((button) => {{
+        if (button.dataset.copyWired === "true") return;
+        button.dataset.copyWired = "true";
         button.addEventListener("click", () => copyValue(button.getAttribute("data-copy") || "", button));
       }});
     }}
@@ -759,15 +771,49 @@ class LabHomepageHandler(BaseHTTPRequestHandler):
         if path == "/":
             self.send_bytes(homepage_html(self.config.get("title", "Registry Lab")), "text/html; charset=utf-8")
             return
+        if path == "/scenarios":
+            self.send_bytes(scenario_page_html("Registry Lab Scenarios"), "text/html; charset=utf-8")
+            return
+        if path.startswith("/scenarios/"):
+            scenario_id = path.removeprefix("/scenarios/").strip("/")
+            if scenario_id:
+                self.send_bytes(
+                    scenario_page_html("Registry Lab Scenarios", scenario_id),
+                    "text/html; charset=utf-8",
+                )
+                return
         if path == "/healthz":
             self.send_json({"ok": True})
             return
         if path == "/api/lab.json":
             self.send_json(enrich_config(self.config))
             return
+        if path == "/api/scenarios.json":
+            self.send_json(scenario_payload(enrich_config(self.config)))
+            return
+        if path.startswith("/api/scenarios/") and path.endswith(".json"):
+            scenario_id = path.removeprefix("/api/scenarios/").removesuffix(".json")
+            self.send_json(scenario_payload(enrich_config(self.config), scenario_id))
+            return
         if path == "/api/status.json":
             self.send_json(status_checks(self.config, self.status_timeout))
             return
+        self.send_error(HTTPStatus.NOT_FOUND)
+
+    def do_POST(self) -> None:
+        path = self.path.split("?", 1)[0]
+        prefix = "/api/scenarios/alive-proof/"
+        if path.startswith(prefix):
+            step_id = path.removeprefix(prefix)
+            self.send_json(run_alive_proof_step(enrich_config(self.config), step_id))
+            return
+        scenario_prefix = "/api/scenarios/"
+        if path.startswith(scenario_prefix):
+            rest = path.removeprefix(scenario_prefix)
+            scenario_id, sep, step_id = rest.partition("/")
+            if sep and scenario_id and step_id:
+                self.send_json(run_scenario_step(enrich_config(self.config), scenario_id, step_id))
+                return
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def send_json(self, value: Any) -> None:

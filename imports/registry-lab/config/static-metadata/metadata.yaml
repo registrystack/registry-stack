@@ -544,8 +544,8 @@ datasets:
         access:
           kind: registry-notary
           conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://civil-notary:8080
-          discovery_url: https://civil-notary:8080/.well-known/evidence-service
+          endpoint_url: https://metadata.lab.registrystack.org/local-only/civil-notary
+          discovery_url: https://metadata.lab.registrystack.org/local-only/civil-notary/.well-known/evidence-service
           ruleset: civil-child-status-v1
         policy:
           purpose:
@@ -564,7 +564,7 @@ datasets:
           - name: birth_date
             type: date
             required: true
-          - name: civil_status
+          - name: life_stage
             type: string
             required: true
           - name: deceased
@@ -605,8 +605,8 @@ datasets:
         access:
           kind: registry-notary
           conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://social-protection-notary:8080
-          discovery_url: https://social-protection-notary:8080/.well-known/evidence-service
+          endpoint_url: https://metadata.lab.registrystack.org/local-only/social-protection-notary
+          discovery_url: https://metadata.lab.registrystack.org/local-only/social-protection-notary/.well-known/evidence-service
           ruleset: program-enrollment-status-v1
         policy:
           purpose:
@@ -629,7 +629,7 @@ datasets:
             type: string
             required: true
   - id: health_registry
-    title: Health Facility Registry
+    title: Applicant Service Availability Projection
     description: Static description of simulated facility licensing and service availability records.
     owner: Health Services Authority
     sensitivity: personal
@@ -637,12 +637,12 @@ datasets:
     update_frequency: weekly
     public_services:
       - id: https://demo.example.gov/services/health-facility-registry-service
-        title: Health facility registry service
+        title: Applicant service availability evidence service
         description: Service responsible for maintaining health facility availability data.
     evidence_offerings:
       - id: health_service_availability_evidence_service
         iri: https://demo.example.gov/evidence-offerings/health-service-availability
-        title: Health service availability evidence service
+        title: Applicant service availability evidence service
         description: Evidence Server endpoint that computes facility license and service availability.
         evidence_type: health_service_availability_evidence
         issuing_authority:
@@ -661,16 +661,16 @@ datasets:
         access:
           kind: registry-notary
           conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://shared-eligibility-notary:8080
-          discovery_url: https://shared-eligibility-notary:8080/.well-known/evidence-service
+          endpoint_url: https://metadata.lab.registrystack.org/local-only/shared-eligibility-notary
+          discovery_url: https://metadata.lab.registrystack.org/local-only/shared-eligibility-notary/.well-known/evidence-service
           ruleset: health-service-availability-v1
         policy:
           purpose:
             - https://demo.example.gov/purpose/health-linked-support-eligibility
     entities:
       - name: health_facility
-        title: Health Facility
-        description: Facility service and license projection for eligibility evidence.
+        title: Applicant Service Availability
+        description: Applicant-district service availability projection for eligibility evidence.
         identifiers:
           - name: id
             kind: primary
@@ -740,8 +740,8 @@ datasets:
         access:
           kind: registry-notary
           conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://nagdi-agriculture-notary:8080
-          discovery_url: https://nagdi-agriculture-notary:8080/.well-known/evidence-service
+          endpoint_url: https://metadata.lab.registrystack.org/local-only/nagdi-agriculture-notary
+          discovery_url: https://metadata.lab.registrystack.org/local-only/nagdi-agriculture-notary/.well-known/evidence-service
           ruleset: farmer-registered-v1
         policy:
           purpose:
@@ -766,8 +766,8 @@ datasets:
         access:
           kind: registry-notary
           conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://nagdi-agriculture-notary:8080
-          discovery_url: https://nagdi-agriculture-notary:8080/.well-known/evidence-service
+          endpoint_url: https://metadata.lab.registrystack.org/local-only/nagdi-agriculture-notary
+          discovery_url: https://metadata.lab.registrystack.org/local-only/nagdi-agriculture-notary/.well-known/evidence-service
           ruleset: active-farm-parcel-v1
         policy:
           purpose:
@@ -793,8 +793,8 @@ datasets:
         access:
           kind: registry-notary
           conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://nagdi-agriculture-notary:8080
-          discovery_url: https://nagdi-agriculture-notary:8080/.well-known/evidence-service
+          endpoint_url: https://metadata.lab.registrystack.org/local-only/nagdi-agriculture-notary
+          discovery_url: https://metadata.lab.registrystack.org/local-only/nagdi-agriculture-notary/.well-known/evidence-service
           ruleset: climate-risk-district-v1
         policy:
           purpose:
@@ -820,8 +820,8 @@ datasets:
         access:
           kind: registry-notary
           conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://nagdi-agriculture-notary:8080
-          discovery_url: https://nagdi-agriculture-notary:8080/.well-known/evidence-service
+          endpoint_url: https://metadata.lab.registrystack.org/local-only/nagdi-agriculture-notary
+          discovery_url: https://metadata.lab.registrystack.org/local-only/nagdi-agriculture-notary/.well-known/evidence-service
           ruleset: voucher-redemption-status-v1
         policy:
           purpose:
@@ -847,8 +847,8 @@ datasets:
         access:
           kind: registry-notary
           conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://nagdi-agriculture-notary:8080
-          discovery_url: https://nagdi-agriculture-notary:8080/.well-known/evidence-service
+          endpoint_url: https://metadata.lab.registrystack.org/local-only/nagdi-agriculture-notary
+          discovery_url: https://metadata.lab.registrystack.org/local-only/nagdi-agriculture-notary/.well-known/evidence-service
           ruleset: eligible-for-input-voucher-v1
         policy:
           purpose:
@@ -874,8 +874,8 @@ datasets:
         access:
           kind: registry-notary
           conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://nagdi-agriculture-notary:8080
-          discovery_url: https://nagdi-agriculture-notary:8080/.well-known/evidence-service
+          endpoint_url: https://metadata.lab.registrystack.org/local-only/nagdi-agriculture-notary
+          discovery_url: https://metadata.lab.registrystack.org/local-only/nagdi-agriculture-notary/.well-known/evidence-service
           ruleset: eligible-for-livestock-movement-v1
         policy:
           purpose:
@@ -1166,8 +1166,8 @@ datasets:
         access:
           kind: registry-notary
           conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://shared-eligibility-notary:8080
-          discovery_url: https://shared-eligibility-notary:8080/.well-known/evidence-service
+          endpoint_url: https://metadata.lab.registrystack.org/local-only/shared-eligibility-notary
+          discovery_url: https://metadata.lab.registrystack.org/local-only/shared-eligibility-notary/.well-known/evidence-service
           ruleset: eligible-for-combined-support-v1
         policy:
           purpose:

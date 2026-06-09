@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
+# Render input for config/coolify/openfn/governed/openfn-dhis2-sidecar-runtime.json.
+# Hosted runtime starts from openfn-dhis2-sidecar.bootstrap.yaml and verifies the
+# signed TUF target before serving.
+
 server:
   bind: "0.0.0.0:8080"
 
@@ -44,12 +48,12 @@ sources:
       start: lookup
       steps:
         - id: lookup
-          expression: /opt/openfn/jobs/dhis2-health-lookup.js
+          expression: /tmp/registry-lab-openfn-jobs/dhis2-health-lookup.js
           adaptors:
             - "@openfn/language-http@7.3.1"
     credential_env: OPENFN_DHIS2_DEMO_CREDENTIAL_JSON
     allowed_base_urls:
-      - __OPENFN_DHIS2_HOST_URL__
+      - https://play.im.dhis2.org/stable-2-43-0
     smoke_lookup:
       field: tracked_entity
       value: PQfMcpmXeFE

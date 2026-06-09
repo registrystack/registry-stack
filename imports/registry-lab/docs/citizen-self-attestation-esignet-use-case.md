@@ -29,10 +29,10 @@ only the configured registry fact, and returns a bounded attestation result.
 1. The citizen authenticates with eSignet through the supported OIDC
    Authorization Code with PKCE flow.
 2. eSignet issues a JWT access token. In the simple mode the access token
-   includes the bound citizen identifier, for example `national_id=NID-1001`.
+   includes the bound citizen identifier, for example `national_id=NID-2001`.
    In the eSignet default-style mode, the ID token supplies `auth_time`/`acr`
    and the signed UserInfo JWT supplies the subject-binding claim, for example
-   `individual_id=NID-1001`.
+   `individual_id=NID-2001`.
 3. The wallet or portal calls `POST /v1/evaluations` on the optional
    citizen-facing civil Notary.
 4. Registry Notary validates issuer, signature, audience, client, token
@@ -71,7 +71,7 @@ share them without redaction.
 
 - `citizen-notary-discovery.json`: authenticated Notary discovery.
 - `citizen-self-evaluation.json`: successful `person-is-alive` evaluation for
-  `NID-1001`.
+  `NID-2001`.
 - `citizen-other-subject-denied.json`: denied evaluation for `NID-1002`.
 - `citizen-access-token-claims.json`: decoded non-secret JWT header and claims.
 - `citizen-id-token-claims.json`: decoded ID token header and claims when
@@ -107,7 +107,7 @@ The supplied JWT access token must:
 
 - be issued by the configured eSignet issuer;
 - be discoverable through `/.well-known/openid-configuration` and JWKS;
-- include `national_id=NID-1001`, or the claim configured by
+- include `national_id=NID-2001`, or the claim configured by
   `ESIGNET_SUBJECT_CLAIM`, unless `ESIGNET_SUBJECT_CLAIM_SOURCE=userinfo`;
 - include `auth_time`, because Notary enforces bounded authentication
   freshness for citizen self-attestation, unless
@@ -145,20 +145,20 @@ the lab fixtures:
 
 ```json
 {
-  "individual_id": "NID-1001",
-  "name": "Miguel Santos",
-  "given_name": "Miguel",
+  "individual_id": "NID-2001",
+  "name": "Maria Santos",
+  "given_name": "Maria",
   "family_name": "Santos"
 }
 ```
 
-The required binding value is `individual_id=NID-1001` when running with
+The required binding value is `individual_id=NID-2001` when running with
 `ESIGNET_SUBJECT_CLAIM_SOURCE=userinfo` and
 `ESIGNET_SUBJECT_CLAIM=individual_id`. The aligned v1 fixture matrix treats
-`NID-1001` as Miguel Santos with `deceased=false`, so the smoke expects
-`person-is-alive` to evaluate to true for `NID-1001`. `NID-1002` is Maria Dela
-Cruz in the shared matrix and must be denied here because it does not match the
-token-bound UserInfo subject.
+`NID-2001` as Maria Santos with `deceased=false`, so the smoke expects
+`person-is-alive` to evaluate to true for `NID-2001`. `NID-1001` is Miguel
+Santos in the shared matrix and must be denied here because it does not match
+the token-bound adult UserInfo subject.
 
 If a token is not already available, the script can prepare the Authorization
 Code with PKCE request and later exchange the returned code with
@@ -185,7 +185,7 @@ code is saved to `output/citizen-self-attestation/esignet-callback.env`. The
 second command exchanges the saved code and runs the Notary smoke. If the local
 live eSignet setup did not create `/tmp/esignet-live-test/client-private.pem`,
 set `ESIGNET_CLIENT_PRIVATE_KEY_FILE` when running `just citizen-code`.
-The login command prints the local demo values (`NID-1001`, generated code
+The login command prints the local demo values (`NID-2001`, generated code
 `111111`, and PIN `545411` if static-code auth appears). The code command prints
 safe, redacted checkpoints for the access token, ID token assurance, signed
 UserInfo binding, discovery, successful self claim, failed other-person control,
@@ -265,5 +265,5 @@ Do not move the claim binding into an unverified request field.
    client ID, configured scope, and subject-binding claim.
 4. Start the host-side Notary on port `4325` against the existing civil Relay
    on port `4311`.
-5. Prove success for `NID-1001`, denial for `NID-1002`, and auditability through
+5. Prove success for `NID-2001`, denial for `NID-1001`, and auditability through
    saved artifacts.

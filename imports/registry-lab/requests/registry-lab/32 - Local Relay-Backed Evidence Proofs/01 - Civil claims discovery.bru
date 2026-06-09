@@ -1,0 +1,33 @@
+meta {
+  name: 01 - Civil claims discovery
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{civil_notary_url}}/v1/claims
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{CIVIL_EVIDENCE_CLIENT_BEARER}}
+}
+
+script:post-response {
+  const body = res.getBody();
+  const claims = body.data || [];
+  const alive = claims.find((claim) => claim.id === "person-is-alive");
+
+  test("status is 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("civil notary advertises alive claim with CCCEV rendering", function () {
+    expect(alive).to.exist;
+    expect(alive.operations.evaluate).to.equal(true);
+    expect(alive.operations.batch_evaluate).to.equal(false);
+    expect(alive.formats).to.include("application/vnd.registry-notary.claim-result+json");
+    expect(alive.formats).to.include("application/ld+json; profile=\"cccev\"");
+  });
+}

@@ -24,6 +24,7 @@ from openpyxl import load_workbook
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 GENERATOR_PATH = SCRIPT_DIR / "generate-fixtures.py"
+AGRI_GENERATOR_PATH = SCRIPT_DIR / "generate-agri-fixtures.py"
 SCRIPT_MATRIX_PATHS = [
     SCRIPT_DIR / "demo-flow.py",
     SCRIPT_DIR / "demo-live-stories.py",
@@ -80,20 +81,91 @@ class GenerateFixturesTest(unittest.TestCase):
                 "given_name": row[1],
                 "surname": row[2],
                 "birth_date": row[3],
-                "civil_status": row[4],
+                "life_stage": row[4],
                 "deceased": row[5],
             }
             for row in self.generator.data_rows(self.generator.CIVIL_ROWS)
         }
 
         self.assertEqual(set(expected), set(civil_by_id) & set(expected))
-        for national_id, (given_name, surname, birth_date, civil_status, deceased) in expected.items():
+        for national_id, (given_name, surname, birth_date, life_stage, deceased) in expected.items():
             with self.subTest(national_id=national_id):
                 self.assertEqual(civil_by_id[national_id]["given_name"], given_name)
                 self.assertEqual(civil_by_id[national_id]["surname"], surname)
                 self.assertEqual(civil_by_id[national_id]["birth_date"], birth_date)
-                self.assertEqual(civil_by_id[national_id]["civil_status"], civil_status)
+                self.assertEqual(civil_by_id[national_id]["life_stage"], life_stage)
                 self.assertEqual(civil_by_id[national_id]["deceased"], deceased)
+
+    def test_guided_demo_personas_have_credible_source_rows(self) -> None:
+        civil_by_id = {
+            row[0]: {
+                "given_name": row[1],
+                "surname": row[2],
+                "birth_date": row[3],
+                "life_stage": row[4],
+                "deceased": row[5],
+                "district": row[6],
+            }
+            for row in self.generator.data_rows(self.generator.CIVIL_ROWS)
+        }
+        enrollment_by_id = {row[3]: row for row in self.generator.data_rows(self.generator.ENROLLMENTS)}
+        health_by_id = {row["national_id"]: row for row in self.generator.HEALTH_ROWS}
+        agri = load_module(AGRI_GENERATOR_PATH)
+        farmers_by_id = {row["farmer_id"]: row for row in agri.FARMERS}
+
+        self.assertEqual(
+            civil_by_id["NID-1001"],
+            {
+                "given_name": "Miguel",
+                "surname": "Santos",
+                "birth_date": "2016-01-15",
+                "life_stage": "child",
+                "deceased": "false",
+                "district": "north",
+            },
+        )
+        self.assertEqual(civil_by_id["NID-2001"]["life_stage"], "adult")
+        self.assertEqual(civil_by_id["NID-2001"]["deceased"], "false")
+        self.assertEqual(enrollment_by_id["NID-1001"][4:6], ["CHILD_SUPPORT", "active"])
+        self.assertTrue(self._health_available(health_by_id["NID-1001"]))
+        self.assertFalse(self._health_available(health_by_id["NID-1002"]))
+        self.assertEqual(farmers_by_id["FARMER-1001"]["given_name"], "Amina")
+        self.assertEqual(farmers_by_id["FARMER-1001"]["family_name"], "Kone")
+        self.assertEqual(farmers_by_id["FARMER-1002"]["given_name"], "Bako")
+        self.assertEqual(farmers_by_id["FARMER-1003"]["given_name"], "Chipo")
+
+    def test_public_demo_names_do_not_regress_to_misleading_civil_status(self) -> None:
+        self.assertIn("life_stage", self.generator.CIVIL_ROWS[0])
+        self.assertNotIn("civil_status", self.generator.CIVIL_ROWS[0])
+
+        public_files = [
+            self.generator.ROOT / "config" / "lab-homepage" / "public-demo-credentials.json",
+            self.generator.ROOT / "config" / "coolify" / "relay" / "civil-registry-relay.yaml",
+            self.generator.ROOT / "config" / "coolify" / "relay" / "civil-registry-relay.metadata.yaml",
+            self.generator.ROOT / "config" / "static-metadata" / "metadata.yaml",
+        ]
+        for path in public_files:
+            with self.subTest(path=path.relative_to(self.generator.ROOT)):
+                text = path.read_text(encoding="utf-8")
+                self.assertNotIn("civil_status", text)
+                self.assertNotIn("civil-status", text)
+
+    def test_published_metadata_omits_private_notary_hostnames(self) -> None:
+        public_metadata_paths = [
+            self.generator.ROOT / "config" / "static-metadata" / "metadata.yaml",
+            *sorted((self.generator.ROOT / "config" / "coolify" / "relay").glob("*.metadata.yaml")),
+        ]
+        private_hosts = (
+            "civil-notary:8080",
+            "social-protection-notary:8080",
+            "shared-eligibility-notary:8080",
+            "nagdi-agriculture-notary:8080",
+        )
+        for path in public_metadata_paths:
+            with self.subTest(path=path.relative_to(self.generator.ROOT)):
+                text = path.read_text(encoding="utf-8")
+                for host in private_hosts:
+                    self.assertNotIn(host, text)
 
     def test_v1_notary_outcomes_are_encoded_by_fixture_facts(self) -> None:
         civil_by_id = {row[0]: row for row in self.generator.data_rows(self.generator.CIVIL_ROWS)}

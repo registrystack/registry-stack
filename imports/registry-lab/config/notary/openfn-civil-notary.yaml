@@ -77,7 +77,7 @@ evidence:
         type: date
       source_bindings:
         civil:
-          connector: registry_data_api
+          connector: openfn_sidecar
           connection: openfn_civil
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry

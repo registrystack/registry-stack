@@ -470,7 +470,7 @@ Wallet API or Inji/Mimoto, see `docs/wallet-interop-testing.md`.
 
 ## OpenFn sidecar demo
 
-The OpenFn nodes prove the Registry Notary `registry_data_api` connector can
+The OpenFn nodes prove the Registry Notary `openfn_sidecar` connector can
 source one-item civil lookups from an OpenFn HTTP adaptor sidecar and issue a
 date-of-birth SD-JWT VC from that evidence. For the guided path, see
 [`docs/openfn-sidecar-notary-tutorial.md`](docs/openfn-sidecar-notary-tutorial.md).

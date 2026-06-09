@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+"""Focused regression checks for Registry Lab OpenFn sidecar wiring."""
+
+from __future__ import annotations
+
+import json
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+LOCAL_COMPOSE = ROOT / "compose.yaml"
+HOSTED_COMPOSE = ROOT / "compose.coolify.yaml"
+LOCAL_CIVIL_NOTARY = ROOT / "config/notary/openfn-civil-notary.yaml"
+LOCAL_DHIS2_NOTARY = ROOT / "config/notary/dhis2-health-notary.yaml"
+HOSTED_DHIS2_NOTARY = ROOT / "config/coolify/notary/dhis2-health-notary.yaml"
+LOCAL_OPENFN_SMOKE = ROOT / "scripts/smoke-openfn.sh"
+LOCAL_DHIS2_SMOKE = ROOT / "scripts/smoke-dhis2-openfn.sh"
+README = ROOT / "README.md"
+HOSTED_OPENFN_REPORT = ROOT / "config/coolify/openfn/governed/openfn-dhis2-sidecar-runtime.report.json"
+
+
+def read(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+class OpenFnSidecarLabConfigTest(unittest.TestCase):
+    def test_local_openfn_sidecars_use_unsigned_dev_escape_hatch(self) -> None:
+        body = read(LOCAL_COMPOSE)
+        self.assertGreaterEqual(body.count("--allow-unsigned-dev-config"), 2)
+        self.assertIn("--config /etc/registry-notary-openfn/openfn-civil-sidecar.yaml.template", body)
+        self.assertIn("--config /etc/registry-notary-openfn/openfn-dhis2-sidecar.yaml.template", body)
+
+    def test_hosted_openfn_sidecar_uses_governed_bootstrap(self) -> None:
+        body = read(HOSTED_COMPOSE)
+        self.assertIn("/etc/registry-notary-openfn/openfn-dhis2-sidecar.bootstrap.yaml", body)
+        self.assertIn("openfn-sidecar-tuf-state:/var/lib/registry-notary-openfn-sidecar/tuf", body)
+        self.assertIn("openfn-sidecar-config-state:/var/lib/registry-notary-openfn-sidecar/config-trust", body)
+        self.assertIn("cfg-openfn-jobs:/tmp/registry-lab-openfn-jobs:ro", body)
+        hosted_service = body.split("  openfn-dhis2-sidecar:", 1)[1].split("\n  dhis2-health-notary:", 1)[0]
+        self.assertNotIn("--allow-unsigned-dev-config", hosted_service)
+
+    def test_openfn_smoke_scripts_mirror_just_source_defaults(self) -> None:
+        for path in (LOCAL_OPENFN_SMOKE, LOCAL_DHIS2_SMOKE):
+            body = read(path)
+            self.assertIn('default_source_dir "../registry-notary" "vendor/registry-notary"', body)
+            self.assertIn("REGISTRY_OPENFN_NOTARY_SOURCE_DIR", body)
+            self.assertIn('default_source_dir "../registry-platform" "vendor/registry-platform"', body)
+
+    def test_openfn_notary_bindings_use_sidecar_connector(self) -> None:
+        civil = read(LOCAL_CIVIL_NOTARY)
+        self.assertIn("connection: openfn_civil", civil)
+        self.assertIn("connector: openfn_sidecar", civil)
+
+        for path in (LOCAL_DHIS2_NOTARY, HOSTED_DHIS2_NOTARY):
+            body = read(path)
+            self.assertEqual(9, body.count("connection: dhis2_openfn"))
+            self.assertEqual(9, body.count("connector: openfn_sidecar"))
+            self.assertNotIn("connector: registry_data_api", body)
+
+    def test_hosted_notary_pins_generated_sidecar_hash(self) -> None:
+        report = json.loads(read(HOSTED_OPENFN_REPORT))
+        notary = read(HOSTED_DHIS2_NOTARY)
+        config_hash = report["config_hash"]
+        self.assertIn("expected_sidecar:", notary)
+        self.assertIn("instance_id: hosted-dhis2-openfn-sidecar", notary)
+        self.assertIn("stream_id: dhis2-openfn-sidecar-runtime", notary)
+        self.assertIn("require_expression_hashes_verified: true", notary)
+        self.assertIn("require_runtime_verified: true", notary)
+        self.assertIn("require_smoke_verified: true", notary)
+        self.assertIn(f"config_hash: {config_hash}", notary)
+
+    def test_lab_readme_names_sidecar_connector(self) -> None:
+        body = read(README)
+        self.assertIn("Registry Notary `openfn_sidecar` connector", body)
+        self.assertNotIn("Registry Notary `registry_data_api` connector", body)
+
+
+if __name__ == "__main__":
+    unittest.main()

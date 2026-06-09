@@ -41,8 +41,8 @@ evidence_types:
       - health_linked_support_requirement
 datasets:
   - id: health_registry
-    title: Health Facility Registry
-    description: Synthetic facility licensing and service availability records for decentralized evidence demo flows.
+    title: Applicant Service Availability Projection
+    description: Synthetic applicant service-availability records derived from facility licensing data for decentralized evidence demo flows.
     owner: Health Services Authority
     sensitivity: personal
     access_rights: restricted
@@ -50,7 +50,7 @@ datasets:
     evidence_offerings:
       - id: health_service_availability_evidence_service
         iri: https://metadata.lab.registrystack.org/evidence-offerings/health-service-availability
-        title: Health service availability evidence service
+        title: Applicant service availability evidence service
         description: Evidence Server endpoint that computes facility license and service availability.
         evidence_type: health_service_availability_evidence
         issuing_authority:
@@ -67,16 +67,16 @@ datasets:
         access:
           kind: registry-notary
           conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://shared-eligibility-notary:8080
-          discovery_url: https://shared-eligibility-notary:8080/.well-known/evidence-service
+          endpoint_url: https://metadata.lab.registrystack.org/local-only/shared-eligibility-notary
+          discovery_url: https://metadata.lab.registrystack.org/local-only/shared-eligibility-notary/.well-known/evidence-service
           ruleset: health-service-availability-v1
         policy:
           purpose:
             - https://metadata.lab.registrystack.org/purpose/health-linked-support-eligibility
     entities:
       - name: health_facility
-        title: Health Facility
-        description: Facility service and license projection for eligibility evidence.
+        title: Applicant Service Availability
+        description: Applicant-district service availability projection for eligibility evidence.
         identifiers:
           - name: id
             kind: primary

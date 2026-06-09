@@ -1,0 +1,23 @@
+{
+  "signed": {
+    "_type": "timestamp",
+    "spec_version": "1.0.0",
+    "version": 1,
+    "expires": "2026-07-09T16:37:33.299823Z",
+    "meta": {
+      "snapshot.json": {
+        "length": 1257,
+        "hashes": {
+          "sha256": "c238877a3ab3c6be0577d352a7760d86e013687090a269335210b0bc15fcbbd5"
+        },
+        "version": 1
+      }
+    }
+  },
+  "signatures": [
+    {
+      "keyid": "8ec3a843a0f9328c863cac4046ab1cacbbc67888476ac7acf73d9bcd9a223ada",
+      "sig": "573eccc50659deadb0a70819cae4bf717abdd219ab85d9cfc85f0aa7748ac1fdbe1a867b3ddd5247f8f4647d5533dc1ab13cbd9db034b2aa38b4507ea29cc76db5bf4e759bb7f7daed563af3f9890af8b88ea67e5dc8dd27cb92d07b7b725cca43e0d81d1c44602c980aba9fa2c9b7691dfec0000ab41b5958a335def1a0b619b2f1b4456559838af2fa43f65f9d81577c6dd297ca15ec0ea2c3f7b8b6cf09fc02a17362049cbbe7f40f73815ee83d59fc61545ca595b7920aa17330f15925366fbeb835631013307b02d8bc83df829fd0ab8182158c90c243cf129618761e9d37ecfc4ee4f389e8636bca8f4066ebcd003317aaf3a8a548d927344e289b4d50e049eb383750cd3ac964b5494e07ab50317bb858fa6f7dd0559daa96c0fcf39dbcf2292f75632bd4a247c335ea7519bd67eb02602b7af47df9de426a768db77e6a5f5b559c25885de5bead654339a2b3dc35bc8add5d2b652e1a74df79e65964dd639ec7fa1187d92a1882a453b9e3807d83849ccf73df62002d29eecbcb4465"
+    }
+  ]
+}

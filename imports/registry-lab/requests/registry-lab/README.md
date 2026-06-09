@@ -74,6 +74,19 @@ docker compose -f compose.yaml --profile dhis2 up -d openfn-dhis2-sidecar dhis2-
 Token variables intentionally use the same names as the generated `.env` file so
 you can paste values directly from local generated credentials when needed.
 
+The `32 - Local Relay-Backed Evidence Proofs` folder is local-only and uses the
+default relay-backed Evidence Servers, not the hosted lab. It demonstrates a
+civil CCCEV JSON-LD render plus batch evaluation for social protection and
+shared eligibility. Start the default stack, then paste these generated `.env`
+values into the `Local Compose` environment:
+
+- `CIVIL_EVIDENCE_CLIENT_BEARER`
+- `SOCIAL_EVIDENCE_CLIENT_BEARER`
+- `SHARED_EVIDENCE_CLIENT_BEARER`
+
+Run request 02 before request 03 because the render request uses the stored
+evaluation id from request 02.
+
 ## Local Lab 2 governed config
 
 The `40 - Lab 2 Governed Config` folder is a step-by-step API walkthrough for

@@ -416,10 +416,73 @@ oid4vci:
     def test_rejects_missing_openfn_job_mount(self) -> None:
         compose = self._valid_registry_lab()
         compose["services"]["openfn-dhis2-sidecar"]["volumes"] = [
-            "./config/coolify/openfn/openfn-dhis2-sidecar.yaml.template:/etc/registry-notary-openfn/openfn-dhis2-sidecar.yaml.template:ro"
+            "cfg-openfn-tmpl:/etc/registry-notary-openfn:ro",
+            "openfn-sidecar-tuf-state:/var/lib/registry-notary-openfn-sidecar/tuf",
+            "openfn-sidecar-config-state:/var/lib/registry-notary-openfn-sidecar/config-trust",
         ]
         issues = self._validate(compose, self._valid_esignet())
-        self.assertIssue(issues, "missing-openfn-job-mount")
+        self.assertIssue(issues, "missing-openfn-governed-mount")
+
+    def test_rejects_hosted_openfn_unsigned_dev_config(self) -> None:
+        compose = self._valid_registry_lab()
+        compose["services"]["openfn-dhis2-sidecar"]["command"] = [
+            "--config",
+            "/tmp/openfn-dhis2-sidecar.yaml",
+            "--allow-unsigned-dev-config",
+        ]
+        issues = self._validate(compose, self._valid_esignet())
+        self.assertIssue(issues, "hosted-openfn-unsigned-dev-config")
+        self.assertIssue(issues, "missing-openfn-governed-bootstrap")
+
+    def test_rejects_hosted_openfn_expected_sidecar_hash_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            notary_dir = root / "config" / "coolify" / "notary"
+            openfn_dir = root / "config" / "coolify" / "openfn"
+            governed_dir = openfn_dir / "governed"
+            notary_dir.mkdir(parents=True)
+            governed_dir.mkdir(parents=True)
+            (openfn_dir / "openfn-dhis2-sidecar.bootstrap.yaml").write_text(
+                """
+config_trust:
+  product: registry-notary-openfn-sidecar
+  instance_id: hosted-dhis2-openfn-sidecar
+  environment: hosted-lab
+  stream_id: dhis2-openfn-sidecar-runtime
+  accepted_roots:
+    - root_id: demo
+""",
+                encoding="utf-8",
+            )
+            (governed_dir / "openfn-dhis2-sidecar-runtime.report.json").write_text(
+                '{"config_hash":"sha256:1111111111111111111111111111111111111111111111111111111111111111"}',
+                encoding="utf-8",
+            )
+            (notary_dir / "dhis2-health-notary.yaml").write_text(
+                """
+evidence:
+  source_connections:
+    dhis2_openfn:
+      expected_sidecar:
+        product: registry-notary-openfn-sidecar
+        instance_id: hosted-dhis2-openfn-sidecar
+        environment: hosted-lab
+        stream_id: dhis2-openfn-sidecar-runtime
+        config_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222
+        require_expression_hashes_verified: true
+        require_runtime_verified: true
+        require_smoke_verified: true
+""",
+                encoding="utf-8",
+            )
+            issues = self.validator.validate_artifacts(
+                {
+                    "registry-lab": self._valid_registry_lab(),
+                    "esignet": self._valid_esignet(),
+                },
+                {"registry-lab": root, "esignet": root},
+            )
+        self.assertIssue(issues, "openfn-sidecar-hash-mismatch")
 
     def test_valid_walt_artifact_passes(self) -> None:
         issues = self._validate_walt(self._valid_walt())
@@ -500,7 +563,6 @@ oid4vci:
             "OPENCRVS_EVIDENCE_CLIENT_TOKEN": "${OPENCRVS_EVIDENCE_CLIENT_TOKEN:-}",
             "OPENFN_SIDECAR_TOKEN_HASH": "${OPENFN_SIDECAR_TOKEN_HASH:-}",
             "OPENFN_SIDECAR_TOKEN_RAW": "${OPENFN_SIDECAR_TOKEN_RAW:-}",
-            "OPENFN_DHIS2_HOST_URL": "${OPENFN_DHIS2_HOST_URL:-}",
             "OPENFN_DHIS2_USERNAME": "${OPENFN_DHIS2_USERNAME:-}",
             "OPENFN_DHIS2_PASSWORD": "${OPENFN_DHIS2_PASSWORD:-}",
             "DHIS2_EVIDENCE_CLIENT_TOKEN_HASH": "${DHIS2_EVIDENCE_CLIENT_TOKEN_HASH:-}",
@@ -615,12 +677,19 @@ done
                 },
                 "openfn-dhis2-sidecar": {
                     "image": "${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE:-ghcr.io/registrystack/registry-notary-openfn-sidecar@sha256:abc}",
+                    "command": [
+                        "--config",
+                        "/etc/registry-notary-openfn/openfn-dhis2-sidecar.bootstrap.yaml",
+                    ],
                     "environment": {
-                        "OPENFN_DHIS2_HOST_URL": "https://play.im.dhis2.org/stable-2-43-0"
+                        "OPENFN_DHIS2_USERNAME": "${OPENFN_DHIS2_USERNAME:-}",
+                        "OPENFN_DHIS2_PASSWORD": "${OPENFN_DHIS2_PASSWORD:-}",
                     },
                     "volumes": [
-                        "./config/coolify/openfn/openfn-dhis2-sidecar.yaml.template:/etc/registry-notary-openfn/openfn-dhis2-sidecar.yaml.template:ro",
-                        "./config/openfn/jobs:/opt/openfn/jobs:ro",
+                        "cfg-openfn-tmpl:/etc/registry-notary-openfn:ro",
+                        "cfg-openfn-jobs:/tmp/registry-lab-openfn-jobs:ro",
+                        "openfn-sidecar-tuf-state:/var/lib/registry-notary-openfn-sidecar/tuf",
+                        "openfn-sidecar-config-state:/var/lib/registry-notary-openfn-sidecar/config-trust",
                     ],
                 },
                 "dhis2-health-notary": {
