@@ -635,6 +635,10 @@ for d in openfn-tuf-state openfn-config-state; do
   mkdir -p "/out/$d"
   chown -R 1000:1000 "/out/$d"
 done
+openfn_antirollback=/out/openfn-config-state/dhis2-openfn-sidecar-antirollback.json
+if [ ! -s "$openfn_antirollback" ]; then
+  printf '%s\n' '{"key":{"product":"registry-notary-openfn-sidecar","instance_id":"hosted-dhis2-openfn-sidecar","environment":"hosted-lab","stream_id":"dhis2-openfn-sidecar-runtime"},"last_sequence":0,"last_config_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","root_version":1,"break_glass":{"accepted":[]},"local_approvals":{"accepted":[]}}' > "$openfn_antirollback"
+fi
 cp -a /tmp/repo/scripts/lab_homepage_scenarios /out/static-scripts/
 """
                     ],

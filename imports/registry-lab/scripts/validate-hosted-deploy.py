@@ -767,6 +767,9 @@ def validate_config_loader_hosted_outputs(
             "civil-cache social-cache health-cache",
             "chown -R 1000:1000",
             "openfn-tuf-state openfn-config-state",
+            "dhis2-openfn-sidecar-antirollback.json",
+            "last_sequence\":0",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
         )
     ):
         issues.append(
