@@ -150,7 +150,9 @@ if [ -z "${OPENFN_DHIS2_DEMO_CREDENTIAL_JSON:-}" ]; then
   )"
 fi
 
-cargo run -p registry-notary-openfn-sidecar --bin registry-notary-openfn-sidecar -- --config "$manifest" >"$log" 2>&1 &
+cargo run -p registry-notary-openfn-sidecar --bin registry-notary-openfn-sidecar -- \
+  --config "$manifest" \
+  --allow-unsigned-dev-config >"$log" 2>&1 &
 sidecar_pid="$!"
 
 cleanup() {

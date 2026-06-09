@@ -1316,6 +1316,8 @@ pub struct EvidenceAuditEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batch_items: Option<Vec<EvidenceBatchItemAuditEvent>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_sidecar_config_hashes: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<ConfigAuditEvent>,
 }
 
@@ -1700,6 +1702,10 @@ mod tests {
                 matching_outcome: Some("matched".to_string()),
                 matching_error_code: None,
             }]),
+            source_sidecar_config_hashes: Some(vec![
+                "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                    .to_string(),
+            ]),
             config: None,
         };
 
@@ -1718,6 +1724,10 @@ mod tests {
             json!("person_is_alive_sd_jwt")
         );
         assert_eq!(value["principal_id_hash"], json!("hmac-sha256:principal"));
+        assert_eq!(
+            value["source_sidecar_config_hashes"],
+            json!(["sha256:2222222222222222222222222222222222222222222222222222222222222222"])
+        );
         assert!(value.get("principal_id").is_none());
         assert!(value.get("subject_binding_value").is_none());
         assert_eq!(value["target_type"], json!("person"));

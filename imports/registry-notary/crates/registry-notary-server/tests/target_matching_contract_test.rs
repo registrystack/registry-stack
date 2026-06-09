@@ -365,6 +365,7 @@ fn evidence_config_with_openfn_batch_connection(
                 allow_insecure_private_network: false,
                 token_env: "OPENFN_SIDECAR_TOKEN".to_string(),
                 source_auth: None,
+                expected_sidecar: None,
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
                 retry_on_5xx: false,

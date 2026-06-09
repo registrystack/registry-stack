@@ -250,6 +250,22 @@ const MAX_CEL_CLAIM_BINDINGS: usize = 64;
 const MAX_CEL_VAR_BINDINGS: usize = 64;
 
 pub trait SourceReader: Send + Sync {
+    fn has_readiness_check(&self) -> bool {
+        false
+    }
+
+    fn check_ready<'a>(&'a self) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
+        Box::pin(async move { true })
+    }
+
+    fn observed_sidecar_config_hashes<'a>(
+        &'a self,
+        _evidence: &'a EvidenceConfig,
+        _claim_ids: &'a [String],
+    ) -> Pin<Box<dyn Future<Output = Vec<String>> + Send + 'a>> {
+        Box::pin(async move { Vec::new() })
+    }
+
     fn map_target<'a>(
         &'a self,
         _binding: &'a SourceBindingConfig,
@@ -3886,6 +3902,7 @@ mod tests {
             allow_insecure_private_network: false,
             token_env: String::new(),
             source_auth: None,
+            expected_sidecar: None,
             dci: registry_notary_core::DciSourceConnectionConfig::default(),
             max_in_flight: 1,
             retry_on_5xx: false,

@@ -20,7 +20,7 @@ lookup() {
   curl -sS \
     -H "Authorization: Bearer dev-sidecar-token" \
     -H "Data-Purpose: smoke-test" \
-    "http://127.0.0.1:$sidecar_port/datasets/civil_registry/civil_person?national_id=$value&fields=national_id,birth_date&limit=2"
+    "http://127.0.0.1:$sidecar_port/v1/datasets/civil_registry/entities/civil_person/records?national_id=$value&fields=national_id,birth_date&limit=2"
 }
 
 lookup person-123 |
@@ -36,7 +36,7 @@ auth_status="$(
   curl -sS -o /tmp/openfn-http-auth.json -w "%{http_code}" \
     -H "Authorization: Bearer dev-sidecar-token" \
     -H "Data-Purpose: smoke-test" \
-    "http://127.0.0.1:$sidecar_port/datasets/civil_registry/civil_person?national_id=target-auth&fields=national_id,birth_date&limit=2"
+    "http://127.0.0.1:$sidecar_port/v1/datasets/civil_registry/entities/civil_person/records?national_id=target-auth&fields=national_id,birth_date&limit=2"
 )"
 test "$auth_status" = "502"
 jq -e '.code == "target_auth"' /tmp/openfn-http-auth.json >/dev/null
@@ -46,7 +46,7 @@ rate_status="$(
   curl -sS -D "$rate_headers" -o /tmp/openfn-http-rate-limit.json -w "%{http_code}" \
     -H "Authorization: Bearer dev-sidecar-token" \
     -H "Data-Purpose: smoke-test" \
-    "http://127.0.0.1:$sidecar_port/datasets/civil_registry/civil_person?national_id=target-rate-limit&fields=national_id,birth_date&limit=2"
+    "http://127.0.0.1:$sidecar_port/v1/datasets/civil_registry/entities/civil_person/records?national_id=target-rate-limit&fields=national_id,birth_date&limit=2"
 )"
 test "$rate_status" = "503"
 jq -e '.code == "target_rate_limit"' /tmp/openfn-http-rate-limit.json >/dev/null
