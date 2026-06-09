@@ -4,6 +4,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import re
 import unittest
 from pathlib import Path
 
@@ -42,6 +46,27 @@ def claim_block(body: str, claim_id: str) -> str:
     return body[start:next_claim]
 
 
+def credential_commitment(credential_type: str, credential_id: str, fingerprint: str) -> str:
+    payload = {
+        "product": "registry-notary",
+        "credential_type": credential_type,
+        "credential_id": credential_id,
+        "fingerprint": fingerprint,
+    }
+    encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def credential_commitment_for_env(body: str, env_name: str) -> str:
+    pattern = re.compile(
+        rf"name:\s*{re.escape(env_name)}\n\s+commitment:\s*(sha256:[0-9a-f]{{64}})"
+    )
+    match = pattern.search(body)
+    if match is None:
+        raise AssertionError(f"{env_name} commitment was not found")
+    return match.group(1)
+
+
 class Dhis2ProgrammeVcConfigTest(unittest.TestCase):
     def assert_notary_profile(self, path: Path, issuer: str, vct: str) -> None:
         body = read(path)
@@ -78,6 +103,22 @@ class Dhis2ProgrammeVcConfigTest(unittest.TestCase):
             COOLIFY_NOTARY,
             "did:web:dhis2-notary.lab.registrystack.org",
             "https://dhis2-notary.lab.registrystack.org/credentials/dhis2/programme-participation/v1",
+        )
+
+    def test_coolify_dhis2_commitments_match_supplied_hosted_hashes(self) -> None:
+        token_hash = os.environ.get("DHIS2_EVIDENCE_CLIENT_TOKEN_HASH")
+        bearer_hash = os.environ.get("DHIS2_EVIDENCE_CLIENT_BEARER_HASH")
+        if not token_hash or not bearer_hash:
+            self.skipTest("set hosted DHIS2 hash envs to verify hosted commitments")
+
+        body = read(COOLIFY_NOTARY)
+        self.assertEqual(
+            credential_commitment("api_key", "dhis2_evidence_client", token_hash),
+            credential_commitment_for_env(body, "DHIS2_EVIDENCE_CLIENT_TOKEN_HASH"),
+        )
+        self.assertEqual(
+            credential_commitment("bearer_token", "dhis2_evidence_client", bearer_hash),
+            credential_commitment_for_env(body, "DHIS2_EVIDENCE_CLIENT_BEARER_HASH"),
         )
 
     def test_openfn_job_normalizes_programme_fields(self) -> None:
