@@ -20,6 +20,9 @@ on:
       - "scripts/generate-demo-secrets.py"
       - "scripts/publish-static-metadata.sh"
       - "scripts/static-metadata-server.py"
+      - "scripts/lab-homepage-server.py"
+      - "scripts/lab_homepage_scenarios/**"
+      - "scripts/test_lab_homepage_server.py"
       - "scripts/validate-hosted-deploy.py"
       - "scripts/test_validate_hosted_deploy.py"
       - "scripts/validate-public-api-workspace.py"
@@ -47,6 +50,9 @@ on:
       - "scripts/generate-demo-secrets.py"
       - "scripts/publish-static-metadata.sh"
       - "scripts/static-metadata-server.py"
+      - "scripts/lab-homepage-server.py"
+      - "scripts/lab_homepage_scenarios/**"
+      - "scripts/test_lab_homepage_server.py"
       - "scripts/validate-hosted-deploy.py"
       - "scripts/test_validate_hosted_deploy.py"
       - "scripts/validate-public-api-workspace.py"
@@ -92,6 +98,9 @@ jobs:
             scripts/generate-demo-secrets.py \
             scripts/publish-static-metadata.sh \
             scripts/static-metadata-server.py \
+            scripts/lab-homepage-server.py \
+            scripts/lab_homepage_scenarios \
+            scripts/test_lab_homepage_server.py \
             scripts/validate-hosted-deploy.py \
             scripts/test_validate_hosted_deploy.py \
             scripts/validate-public-api-workspace.py \
@@ -123,6 +132,9 @@ jobs:
 
       - name: Run hosted deploy validator tests
         run: python3 scripts/test_validate_hosted_deploy.py
+
+      - name: Run lab homepage server tests
+        run: python3 scripts/test_lab_homepage_server.py
 
       - name: Validate hosted deploy artifacts
         run: python3 scripts/validate-hosted-deploy.py
