@@ -222,7 +222,7 @@ oid4vci:
     max_clock_skew_seconds: 30
   pre_authorized_code:
     enabled: true
-    pre_authorized_code_ttl_seconds: 120
+    pre_authorized_code_ttl_seconds: 300
     tx_code:
       required: false
     esignet:

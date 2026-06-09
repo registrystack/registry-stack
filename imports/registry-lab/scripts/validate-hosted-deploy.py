@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 
 LAB_DOMAIN = "lab.registrystack.org"
-MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS = 120
+MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS = 300
 
 REQUIRED_SERVICES = {
     "registry-lab": {

@@ -349,7 +349,7 @@ oid4vci:
 oid4vci:
   pre_authorized_code:
     enabled: true
-    pre_authorized_code_ttl_seconds: 300
+    pre_authorized_code_ttl_seconds: 301
     tx_code:
       required: false
 """,
@@ -374,7 +374,7 @@ oid4vci:
 oid4vci:
   pre_authorized_code:
     enabled: true
-    pre_authorized_code_ttl_seconds: 120
+    pre_authorized_code_ttl_seconds: 300
     tx_code:
       required: false
 """,
