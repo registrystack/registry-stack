@@ -18,10 +18,17 @@ in order:
 2. `10 - Relay Metadata`
 3. `20 - Relay Access Boundaries`
 4. `30 - Notary Evaluation`
+5. `31 - DHIS2 Programme VC`
 
 The requests are independent unless a request description says otherwise. The
 denial probes are expected to return `403` and prove that public tokens cannot
 use surfaces outside their intended scope.
+
+The `31 - DHIS2 Programme VC` folder is ordered and stateful. Run request 01
+first so its Bruno script can evaluate the six DHIS2 programme claims, generate
+a short-lived `did:jwk` holder proof, and store the reconciliation reference for
+requests 02 and 03. The holder proof script uses Node `crypto`; if your Bruno
+sandbox blocks that module, run the collection in Developer Mode.
 
 ## Local Compose
 
@@ -37,6 +44,13 @@ just up
 The DHIS2 Notary requests in `30 - Notary Evaluation` additionally require the
 DHIS2 profile used by `just dhis2-openfn`. The local homepage request expects
 `just lab-homepage` if you want to exercise the homepage service locally.
+
+For the local `31 - DHIS2 Programme VC` walkthrough, start the DHIS2 services
+before opening Bruno:
+
+```bash
+docker compose -f compose.yaml --profile dhis2 up -d openfn-dhis2-sidecar dhis2-health-notary
+```
 
 Token variables intentionally use the same names as the generated `.env` file so
 you can paste values directly from local generated credentials when needed.

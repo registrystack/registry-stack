@@ -1,0 +1,117 @@
+meta {
+  name: 01 - Evaluate programme participation claims
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{dhis2_notary_url}}/v1/evaluations
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{DHIS2_EVIDENCE_CLIENT_BEARER}}
+  Content-Type: application/json
+  Data-Purpose: {{dhis2_evidence_purpose}}
+}
+
+body:json {
+  {
+    "target": {
+      "type": "TrackedEntity",
+      "identifiers": [
+        {
+          "scheme": "dhis2_tracked_entity",
+          "value": "PQfMcpmXeFE"
+        }
+      ]
+    },
+    "claims": [
+      "dhis2-tracked-entity-first-name",
+      "dhis2-tracked-entity-last-name",
+      "dhis2-child-age-band",
+      "dhis2-programme-code",
+      "dhis2-child-program-active",
+      "dhis2-reconciliation-ref"
+    ],
+    "disclosure": "value",
+    "format": "application/dc+sd-jwt"
+  }
+}
+
+script:post-response {
+  let crypto;
+  try {
+    crypto = require("crypto");
+  } catch (error) {
+    throw new Error("This Bruno request needs access to Node crypto to generate a did:jwk holder proof.");
+  }
+
+  const body = res.getBody();
+  const results = body.results || [];
+  const byClaim = Object.fromEntries(results.map((result) => [result.claim_id, result]));
+  const expectedClaims = [
+    "dhis2-tracked-entity-first-name",
+    "dhis2-tracked-entity-last-name",
+    "dhis2-child-age-band",
+    "dhis2-programme-code",
+    "dhis2-child-program-active",
+    "dhis2-reconciliation-ref",
+  ];
+
+  function base64url(input) {
+    return Buffer.from(input).toString("base64url");
+  }
+
+  function signJwt(header, payload, key) {
+    const signingInput = `${base64url(JSON.stringify(header))}.${base64url(JSON.stringify(payload))}`;
+    const signature = crypto.sign(null, Buffer.from(signingInput), key);
+    return `${signingInput}.${signature.toString("base64url")}`;
+  }
+
+  test("status is 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("programme participation evaluation returns the six VC claims", function () {
+    expect(Object.keys(byClaim).sort()).to.deep.equal(expectedClaims.slice().sort());
+    expect(byClaim["dhis2-child-age-band"].value).to.equal("5_to_17");
+    expect(byClaim["dhis2-programme-code"].value).to.equal("DHIS2_CHILD_PROGRAM");
+    expect(byClaim["dhis2-child-program-active"].value).to.equal(true);
+    expect(byClaim["dhis2-child-program-active"].satisfied).to.equal(true);
+    expect(byClaim["dhis2-reconciliation-ref"].value).to.match(/^dhis2:tracked-entity:/);
+  });
+
+  const evaluationId = results[0] && results[0].evaluation_id;
+  const reconciliationRef = byClaim["dhis2-reconciliation-ref"].value;
+  const keys = crypto.generateKeyPairSync("ed25519");
+  const publicJwk = keys.publicKey.export({ format: "jwk" });
+  const holderId = `did:jwk:${base64url(JSON.stringify(publicJwk))}`;
+  const now = Math.floor(Date.now() / 1000);
+  const disclosureHash = crypto.createHash("sha256").update("value").digest("base64url");
+  const proof = signJwt(
+    {
+      alg: "EdDSA",
+      typ: "kb+jwt",
+      kid: holderId,
+    },
+    {
+      sub: holderId,
+      aud: "dhis2-health-notary",
+      iat: now,
+      exp: now + 60,
+      jti: `dhis2-bruno-holder-proof-${crypto.randomUUID()}`,
+      evaluation_id: evaluationId,
+      credential_profile: "dhis2_programme_participation_sd_jwt",
+      disclosure: disclosureHash,
+      claims: expectedClaims,
+    },
+    keys.privateKey,
+  );
+
+  bru.setVar("dhis2_programme_evaluation_id", evaluationId);
+  bru.setVar("dhis2_programme_reconciliation_ref", reconciliationRef);
+  bru.setVar("dhis2_programme_holder_id", holderId);
+  bru.setVar("dhis2_programme_holder_proof", proof);
+}
