@@ -773,6 +773,15 @@ def validate_config_loader_hosted_outputs(
                 "hosted Relay cache volumes must be writable by distroless UID/GID 65532",
             )
         )
+    if "cp -a /tmp/repo/scripts/lab_homepage_scenarios /out/static-scripts/" not in command_text:
+        issues.append(
+            Issue(
+                "lab-homepage-scenarios-not-copied",
+                artifact,
+                "services.config-loader.command",
+                "hosted config-loader must copy the lab_homepage_scenarios package used by lab-homepage-server.py",
+            )
+        )
     return issues
 
 

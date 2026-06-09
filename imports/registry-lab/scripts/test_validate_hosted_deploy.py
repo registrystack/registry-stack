@@ -151,6 +151,18 @@ class HostedDeployValidationTest(unittest.TestCase):
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "relay-cache-not-chowned")
 
+    def test_rejects_config_loader_that_does_not_copy_lab_homepage_scenarios(self) -> None:
+        compose = self._valid_registry_lab()
+        compose["services"]["config-loader"]["command"] = [
+            command.replace(
+                "cp -a /tmp/repo/scripts/lab_homepage_scenarios /out/static-scripts/",
+                "",
+            )
+            for command in compose["services"]["config-loader"]["command"]
+        ]
+        issues = self._validate(compose, self._valid_esignet())
+        self.assertIssue(issues, "lab-homepage-scenarios-not-copied")
+
     def test_rejects_localhost_public_urls(self) -> None:
         compose = self._valid_registry_lab()
         compose["services"]["citizen-civil-notary"]["environment"][
@@ -601,6 +613,7 @@ for d in civil-cache social-cache health-cache; do
   mkdir -p "/out/$d"
   chown -R 65532:65532 "/out/$d"
 done
+cp -a /tmp/repo/scripts/lab_homepage_scenarios /out/static-scripts/
 """
                     ],
                     "volumes": [

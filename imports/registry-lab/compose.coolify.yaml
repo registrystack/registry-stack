@@ -96,6 +96,7 @@ services:
         cp -a /tmp/repo/config/openfn/jobs/. /out/openfn-jobs/
         cp -a /tmp/repo/scripts/static-metadata-server.py /out/static-scripts/
         cp -a /tmp/repo/scripts/lab-homepage-server.py /out/static-scripts/
+        cp -a /tmp/repo/scripts/lab_homepage_scenarios /out/static-scripts/
         cp -a /tmp/repo/config/lab-homepage/. /out/lab-homepage/
         for d in civil-cache social-cache health-cache; do
           mkdir -p "/out/$$d"
