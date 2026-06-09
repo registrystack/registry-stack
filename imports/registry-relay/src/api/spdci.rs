@@ -386,7 +386,11 @@ fn resolve_disability_config(
         }
         return Err(SchemaError::UnknownResource.into());
     }
-    if spdci.registries.is_empty() && registry_name == DEFAULT_DISABILITY_REGISTRY_NAME {
+    if !spdci
+        .registries
+        .contains_key(DEFAULT_DISABILITY_REGISTRY_NAME)
+        && registry_name == DEFAULT_DISABILITY_REGISTRY_NAME
+    {
         return Ok(disability);
     }
     Err(SchemaError::UnknownResource.into())
@@ -454,7 +458,9 @@ fn resolve_synthetic_disability_search_config(
     spdci: &crate::config::SpdciStandardsConfig,
     registry_name: &str,
 ) -> Option<SpdciRegistryConfig> {
-    if !spdci.registries.is_empty() || registry_name != DEFAULT_DISABILITY_REGISTRY_NAME {
+    if spdci.registries.contains_key(registry_name)
+        || registry_name != DEFAULT_DISABILITY_REGISTRY_NAME
+    {
         return None;
     }
     let disability = spdci.disability_registry.as_ref()?;
@@ -843,7 +849,7 @@ fn query_value(query: &Value, key: &str) -> Option<Value> {
 
 fn scalar_query_value(value: &Value) -> Option<Value> {
     match value {
-        Value::String(value) if !value.trim().is_empty() => Some(Value::String(value.clone())),
+        Value::String(text) if !text.trim().is_empty() => Some(value.clone()),
         Value::Bool(_) | Value::Number(_) => Some(value.clone()),
         _ => None,
     }

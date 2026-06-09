@@ -238,8 +238,16 @@ fn spdci_disability_only_config() -> String {
     config
 }
 
+fn spdci_disability_with_other_registry_config() -> String {
+    spdci_config_with_entity_api_extra("", "").replacen("      dr:\n", "      benefits:\n", 1)
+}
+
 async fn try_disability_only_server() -> Result<TestServer, TestServerBuildError> {
     try_server_with_config(spdci_disability_only_config(), true).await
+}
+
+async fn try_disability_with_other_registry_server() -> Result<TestServer, TestServerBuildError> {
+    try_server_with_config(spdci_disability_with_other_registry_config(), true).await
 }
 
 async fn try_server_with_config(
@@ -577,6 +585,55 @@ async fn disability_only_config_serves_advertised_dr_endpoints() {
         body["message"]["search_response"][0]["data"]["reg_record_type"],
         "spdci-extensions-dci:DisabledPerson"
     );
+    assert_eq!(
+        body["message"]["search_response"][0]["data"]["reg_records"][0]["id"],
+        "ABC451123"
+    );
+}
+
+#[tokio::test]
+async fn synthetic_dr_route_coexists_with_explicit_non_dr_registries() {
+    let server = try_disability_with_other_registry_server()
+        .await
+        .expect("mixed disability config should build");
+
+    let disabled = server
+        .post("/dci/dr/registry/sync/disabled")
+        .json(&disabled_criteria_body(
+            "msg-mixed-disability-disabled",
+            "txn-mixed-disabled",
+        ))
+        .await;
+    disabled.assert_status(StatusCode::OK);
+    let body: Value = disabled.json();
+    assert_eq!(
+        body["message"]["disabled_response"][0]["disabled_status"],
+        "yes"
+    );
+
+    let synthetic_search = server
+        .post("/dci/dr/registry/sync/search")
+        .json(&disability_only_sync_search_body(
+            "msg-mixed-synthetic-search",
+            "txn-mixed-synthetic-search",
+        ))
+        .await;
+    synthetic_search.assert_status(StatusCode::OK);
+    let body: Value = synthetic_search.json();
+    assert_eq!(
+        body["message"]["search_response"][0]["data"]["reg_records"][0]["id"],
+        "ABC451123"
+    );
+
+    let explicit_search = server
+        .post("/dci/benefits/registry/sync/search")
+        .json(&sync_search_body(
+            "msg-mixed-explicit-search",
+            "txn-mixed-explicit-search",
+        ))
+        .await;
+    explicit_search.assert_status(StatusCode::OK);
+    let body: Value = explicit_search.json();
     assert_eq!(
         body["message"]["search_response"][0]["data"]["reg_records"][0]["id"],
         "ABC451123"
