@@ -185,6 +185,11 @@ validation requires `pre_authorized_code_ttl_seconds <= 300`. Use it only for
 controlled demos or compatibility deployments where the wallet cannot send a
 `tx_code`.
 
+This bearer-offer window is separate from the issued VC lifetime. Wallet-held
+credentials use the requested credential profile's `validity_seconds`, so demo
+profiles can issue credentials valid for days while keeping offer codes and
+Notary access tokens short-lived.
+
 The Notary mints its access token with a dedicated signing key separate from the
 SD-JWT VC credential key, with its own issuer, audience, and a distinct header
 `typ`. It is verified by a second, separately-keyed trust anchor; the existing

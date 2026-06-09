@@ -6562,7 +6562,7 @@ fn require_self_attestation_credential_profile_policy(
         .iter()
         .any(|allowed| allowed == profile_id);
     let validity_seconds = u64::try_from(profile.validity_seconds).ok();
-    let validity_ceiling = config.token_policy.max_credential_validity_seconds.min(600);
+    let validity_ceiling = config.token_policy.max_credential_validity_seconds;
     let did_jwk_only = !profile.holder_binding.allowed_did_methods.is_empty()
         && profile
             .holder_binding

@@ -173,7 +173,7 @@ self_attestation:
     max_auth_age_seconds: 600
     max_access_token_lifetime_seconds: 900
     max_evaluation_age_seconds: 300
-    max_credential_validity_seconds: 600
+    max_credential_validity_seconds: 31536000
     max_clock_leeway_seconds: 60
 ```
 
@@ -181,7 +181,9 @@ Guidance:
 
 - Keep access-token lifetime short for public citizen flows.
 - Keep evaluation age short so a credential is issued from fresh evidence.
-- Keep credential validity at or below 600 seconds.
+- Set credential validity to the period the issuing agency wants verifiers to
+  accept the wallet-held VC. Use credential status or another lifecycle surface
+  for long-lived credentials.
 - Keep clock leeway small and ensure `auth.oidc.leeway_seconds` does not exceed
   `max_clock_leeway_seconds`.
 - Use `required_acr_values` when the identity provider can represent assurance

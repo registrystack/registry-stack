@@ -207,13 +207,11 @@ impl StandaloneRegistryNotaryConfig {
         }
         self.evidence.concurrency.validate()?;
         self.cel.validate()?;
-        if self.evidence.max_credential_validity_seconds == 0
-            || self.evidence.max_credential_validity_seconds > 600
-        {
+        if self.evidence.max_credential_validity_seconds == 0 {
             return Err(EvidenceConfigError::InvalidCredentialProfileValidity {
                 profile: "*".to_string(),
                 validity_seconds: self.evidence.max_credential_validity_seconds as i64,
-                max_validity_seconds: 600,
+                max_validity_seconds: self.evidence.max_credential_validity_seconds,
             });
         }
         if self
@@ -2747,9 +2745,9 @@ impl SelfAttestationTokenPolicyConfig {
                 "token_policy.max_evaluation_age_seconds must be between 1 and 600",
             );
         }
-        if self.max_credential_validity_seconds == 0 || self.max_credential_validity_seconds > 600 {
+        if self.max_credential_validity_seconds == 0 {
             return invalid_self_attestation(
-                "token_policy.max_credential_validity_seconds must be between 1 and 600",
+                "token_policy.max_credential_validity_seconds must be greater than zero",
             );
         }
         if self.max_clock_leeway_seconds == 0 || self.max_clock_leeway_seconds > 60 {
@@ -2951,7 +2949,7 @@ fn validate_self_attestation_profile(
             ),
         }
     })?;
-    if validity_seconds > max_credential_validity_seconds || validity_seconds > 600 {
+    if validity_seconds > max_credential_validity_seconds {
         return invalid_self_attestation(format!(
             "credential profile '{profile_id}' validity_seconds must not exceed the self-attestation ceiling"
         ));
@@ -8262,6 +8260,27 @@ self_attestation:
                 max_validity_seconds: 600,
             } if profile == "civil_status_sd_jwt"
         ));
+    }
+
+    #[test]
+    fn self_attestation_accepts_citizen_profile_validity_at_configured_ceiling() {
+        const AGENCY_CREDENTIAL_VALIDITY_SECONDS: u64 = 31_536_000;
+        let mut config = valid_self_attestation_config();
+        config.evidence.max_credential_validity_seconds = AGENCY_CREDENTIAL_VALIDITY_SECONDS;
+        config
+            .self_attestation
+            .token_policy
+            .max_credential_validity_seconds = AGENCY_CREDENTIAL_VALIDITY_SECONDS;
+        config
+            .evidence
+            .credential_profiles
+            .get_mut("civil_status_sd_jwt")
+            .unwrap()
+            .validity_seconds = AGENCY_CREDENTIAL_VALIDITY_SECONDS as i64;
+
+        config
+            .validate()
+            .expect("wallet-held credential validity may reach the configured ceiling");
     }
 
     #[test]

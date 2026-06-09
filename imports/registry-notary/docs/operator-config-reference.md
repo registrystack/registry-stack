@@ -243,7 +243,7 @@ evidence:
       issuer: did:web:notary.example.gov
       signing_key: issuer-2026-05
       vct: https://notary.example.gov/credentials/birth-record/v1
-      validity_seconds: 600
+      validity_seconds: 31536000
       allowed_claims:
         - birth-record-exists
       holder_binding:
@@ -657,9 +657,11 @@ Required fields:
 - `disclosure.allowed`: disclosure modes the profile may carry.
 
 `validity_seconds` defaults to 600 and must be between 1 and
-`evidence.max_credential_validity_seconds`. The top-level maximum is also capped
-at 600 seconds. This is a deliberate beta posture: credentials are short-lived
-by default, and live credential status is optional.
+`evidence.max_credential_validity_seconds`. Keep token, proof, offer, and
+evidence freshness windows short; set credential validity to the period the
+issuing agency wants verifiers to treat the wallet-held VC as fresh. For
+long-lived credentials, enable credential status or another revocation and
+lifecycle surface.
 
 Signing keys are covered in detail in
 [`signing-key-provider.md`](signing-key-provider.md).
