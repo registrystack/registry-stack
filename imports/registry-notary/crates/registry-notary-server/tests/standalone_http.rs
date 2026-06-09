@@ -548,6 +548,13 @@ fn add_config_trust_with_local_approval_path(
     });
 }
 
+fn standalone_config_admin_test_router(
+    config: StandaloneRegistryNotaryConfig,
+) -> Result<Router, StandaloneServerError> {
+    let runtime = compile_notary_runtime(config)?;
+    Ok(registry_notary_server::notary_router_from_runtime(runtime))
+}
+
 fn local_operator_approval(config_yaml: &str, previous_config_hash: &str) -> LocalOperatorApproval {
     local_operator_approval_for_change_class(
         config_yaml,
@@ -1957,7 +1964,8 @@ async fn admin_config_apply_signed_federation_signing_rotation_swaps_without_res
     );
     add_admin_api_key(&mut config);
     add_config_trust(&mut config, antirollback_path.clone());
-    let app = standalone_router(config.clone()).expect("standalone router builds");
+    let app =
+        standalone_config_admin_test_router(config.clone()).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let before = server
@@ -2131,7 +2139,7 @@ async fn admin_config_apply_signed_federation_signing_rotation_rejects_stale_seq
     )
     .await;
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let apply = server
         .post("/admin/v1/config/apply")
@@ -2286,7 +2294,7 @@ async fn admin_config_apply_signed_federation_signing_rotation_rejects_extra_fed
     )
     .await;
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let response = server
         .post("/admin/v1/config/apply")
@@ -2824,7 +2832,7 @@ async fn admin_reload_401_unauth_403_wrong_scope_501_admin() {
     });
     add_admin_api_key(&mut config);
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let unauthenticated = server.post("/admin/v1/reload").await;
@@ -2869,7 +2877,7 @@ async fn admin_config_apply_routes_are_admin_only() {
     add_ops_read_api_key(&mut config);
     let body = config_apply_request(&config, 1);
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     for route in [
@@ -2919,7 +2927,7 @@ async fn admin_config_rejects_malformed_previous_config_hash_before_evaluation()
     let mut body = config_apply_request(&config, 2);
     body["previous_config_hash"] = json!("sha256:not-a-digest");
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
@@ -2955,7 +2963,7 @@ async fn admin_config_verify_validates_candidate_and_reports_restart_required() 
     add_admin_api_key(&mut config);
     let body = config_apply_request(&config, 2);
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
@@ -2993,7 +3001,7 @@ async fn admin_config_dry_run_reports_restart_required_without_mutating_posture(
     candidate.instance.owner = Some("Operations Ministry".to_string());
     let body = config_apply_request(&candidate, 5);
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
@@ -3040,7 +3048,7 @@ async fn admin_config_apply_rejects_inline_candidate_without_mutating_posture() 
     candidate.instance.owner = Some("Operations Ministry".to_string());
     let body = config_apply_request(&candidate, 3);
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
@@ -3089,7 +3097,7 @@ async fn admin_config_apply_break_glass_is_rejected_without_mutating_posture() {
     body["previous_config_hash"] =
         json!("sha256:0000000000000000000000000000000000000000000000000000000000000000");
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
@@ -3149,7 +3157,7 @@ async fn admin_config_verify_signed_tuf_target_reports_restart_required() {
     )
     .await;
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
@@ -3223,7 +3231,7 @@ async fn admin_config_apply_signed_tuf_target_rejects_wrong_instance_without_lea
     )
     .await;
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
@@ -3296,7 +3304,7 @@ async fn admin_config_apply_signed_tuf_target_rejects_restart_required_without_m
     )
     .await;
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
@@ -3393,7 +3401,7 @@ async fn admin_config_apply_signed_client_access_change_swaps_auth_without_resta
         &["client_access_change"],
     )
     .await;
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let mut request = signed_tuf_apply_request(&signed);
     request["local_approval_reference"] = json!("CLIENT-ACCESS-1");
@@ -3472,7 +3480,7 @@ async fn admin_config_apply_signed_openapi_auth_policy_change_updates_runtime_po
         &["openapi_auth_policy_change"],
     )
     .await;
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     server
@@ -3556,7 +3564,7 @@ async fn admin_config_apply_signed_openapi_auth_policy_change_can_relock_runtime
         &["openapi_auth_policy_change"],
     )
     .await;
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     server.get("/openapi.json").await.assert_status_ok();
@@ -3656,7 +3664,7 @@ async fn admin_config_apply_signed_root_transition_swaps_governance_for_future_b
     )
     .await;
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let apply = server
         .post("/admin/v1/config/apply")
@@ -3772,7 +3780,7 @@ async fn admin_config_apply_signed_root_transition_missing_approval_rejects_befo
     )
     .await;
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let response = server
         .post("/admin/v1/config/apply")
@@ -3852,7 +3860,7 @@ async fn admin_config_apply_signed_root_transition_without_change_class_is_resta
     )
     .await;
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let response = server
         .post("/admin/v1/config/apply")
@@ -3944,7 +3952,7 @@ async fn admin_config_apply_signed_credential_issuer_rotation_swaps_without_rest
     )
     .await;
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let first_kid =
         issue_direct_civil_status_credential_kid(&server, &idp, "rotation-before").await;
@@ -4132,7 +4140,7 @@ async fn admin_config_apply_signed_credential_issuer_rotation_rejects_extra_evid
     )
     .await;
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let before_kid =
         issue_direct_civil_status_credential_kid(&server, &idp, "extra-evidence-before").await;
@@ -4278,7 +4286,7 @@ async fn admin_config_apply_signed_credential_issuer_rotation_rejects_backend_ch
     )
     .await;
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let before_kid =
         issue_direct_civil_status_credential_kid(&server, &idp, "backend-change-before").await;
@@ -4422,7 +4430,7 @@ async fn admin_config_apply_signed_credential_issuer_rotation_rejects_stale_sequ
     )
     .await;
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let admin_token = idp.mint_token(json!({
         "sub": "config-admin",
@@ -4612,7 +4620,7 @@ async fn admin_config_apply_remote_signed_credential_issuer_rotation_swaps_witho
     .await;
     let tuf_server = serve_signed_tuf_fixture(&signed).await;
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let admin_token = idp.mint_token(json!({
         "sub": "config-admin",
@@ -4756,7 +4764,7 @@ async fn admin_config_apply_signed_expired_publish_only_key_cleanup_swaps_withou
     )
     .await;
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let before_kid =
         issue_direct_civil_status_credential_kid(&server, &idp, "cleanup-before").await;
@@ -4881,7 +4889,7 @@ async fn admin_config_apply_signed_publish_only_key_cleanup_rejects_unexpired_ke
     )
     .await;
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let admin_token = idp.mint_token(json!({
         "sub": "config-admin",
@@ -5008,7 +5016,7 @@ async fn admin_config_apply_signed_credential_issuer_rotation_rejects_expired_ol
     )
     .await;
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let admin_token = idp.mint_token(json!({
         "sub": "config-admin",
@@ -5141,7 +5149,7 @@ async fn admin_config_apply_signed_credential_issuer_rotation_rejects_changed_ol
     )
     .await;
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let first_kid =
         issue_direct_civil_status_credential_kid(&server, &idp, "rotation-before").await;
@@ -5279,7 +5287,7 @@ async fn admin_config_apply_signed_break_glass_issuer_rotation_swaps_without_res
     )
     .await;
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let first_kid =
         issue_direct_civil_status_credential_kid(&server, &idp, "break-glass-before").await;
@@ -5478,7 +5486,7 @@ async fn admin_config_apply_signed_credential_issuer_rotation_requires_antirollb
     )
     .await;
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let admin_token = idp.mint_token(json!({
         "sub": "config-admin",
@@ -5549,7 +5557,7 @@ async fn admin_config_apply_inline_credential_issuer_rotation_is_rejected_before
     );
     let candidate_yaml = serde_norway::to_string(&candidate).expect("candidate serializes");
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let admin_token = idp.mint_token(json!({
         "sub": "config-admin",
@@ -5627,7 +5635,7 @@ async fn admin_config_signed_tuf_target_rejects_missing_local_quorum() {
     )
     .await;
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
@@ -5700,7 +5708,7 @@ async fn admin_config_signed_tuf_target_rejects_forged_extra_signature_quorum() 
     assert_eq!(real_keyid, TUF_TARGETS_SIGNER_KID);
     reseal_snapshot_and_timestamp(&signed.metadata_dir).await;
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
@@ -5758,7 +5766,7 @@ async fn admin_config_signed_tuf_target_rejects_untrusted_tuf_root_despite_decla
     )
     .await;
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
@@ -5817,7 +5825,7 @@ async fn admin_config_apply_signed_tuf_target_rejects_expired_local_trust_root_w
     )
     .await;
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
@@ -5866,7 +5874,7 @@ async fn admin_config_invalid_candidate_does_not_echo_raw_yaml() {
         "config_yaml": "not: [valid",
     });
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
@@ -11019,7 +11027,8 @@ async fn admin_config_apply_signed_preauth_signing_rotation_preserves_inflight_t
         );
     add_config_trust(&mut config, antirollback_path.clone());
 
-    let app = standalone_router(config.clone()).expect("standalone router builds");
+    let app =
+        standalone_config_admin_test_router(config.clone()).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let old_unredeemed = drive_offer_to_page(&server, &token_upstream, &idp, "person-1").await;
@@ -11359,7 +11368,7 @@ async fn admin_config_apply_signed_preauth_signing_rotation_rejects_extra_esigne
         &["signing_key_rotation"],
     )
     .await;
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let admin_token = idp.mint_token(json!({
         "sub": "config-admin",
