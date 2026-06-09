@@ -338,7 +338,7 @@ if evaluation_status != 200:
 evaluation_id = demo_flow.first_result_id(evaluation)
 holder_id, proof = demo_flow.sign_holder_proof(
     evaluation_id,
-    "civil_status_sd_jwt",
+    "life_stage_sd_jwt",
     ["person-is-alive"],
     "predicate",
     "civil-notary",
@@ -347,7 +347,7 @@ credential_status, credential = post(
     "/v1/credentials",
     {
         "evaluation_id": evaluation_id,
-        "credential_profile": "civil_status_sd_jwt",
+        "credential_profile": "life_stage_sd_jwt",
         "format": sd_jwt,
         "claims": ["person-is-alive"],
         "disclosure": "predicate",

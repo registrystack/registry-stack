@@ -311,6 +311,292 @@ class GroupCredentialsTest(unittest.TestCase):
         self.assertIn("orphan", grouped_ids)
 
 
+class ScenarioPayloadTest(unittest.TestCase):
+    """The scenario runner exposes a multi-story catalogue and dedicated story payloads."""
+
+    def setUp(self) -> None:
+        self._saved = dict(os.environ)
+        os.environ["CIVIL_RAW"] = "civil-token"
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._saved)
+
+    def _payload(self) -> dict:
+        config = {
+            "credentials": [
+                {
+                    "id": "civil-evidence-only",
+                    "label": "Civil Evidence",
+                    "env": "CIVIL_RAW",
+                    "service_url": "https://civil.example",
+                    "scopes": ["civil_registry:evidence_verification"],
+                    "example": {"path": "/metadata/evidence-offerings", "positive_subject": "NID-1001"},
+                },
+            ],
+        }
+        return server.scenario_payload(server.enrich_config(config))
+
+    def test_builds_one_guided_alive_proof_story(self) -> None:
+        story = server.scenario_payload(self._payload_config(), "alive-proof")["story"]
+        self.assertEqual(story["id"], "alive-proof")
+        self.assertIn("Miguel", story["title"])
+        self.assertEqual(story["subject"], {"name": "Miguel Santos", "identifier": "NID-1001"})
+        self.assertEqual([step["id"] for step in story["steps"]], ["discover", "prepare-evidence", "deny-row"])
+        self.assertEqual(story["steps"][1]["button"], "Check if Miguel is alive")
+        self.assertIn("Read Miguel's full civil registry row", story["boundary"]["not_allowed"])
+        self.assertEqual(story["steps"][1]["reuses"][1], {"label": "Lookup key", "value": "national_id"})
+
+    def _payload_config(self) -> dict:
+        return server.enrich_config(
+            {
+                "credentials": [
+                    {
+                        "id": "civil-evidence-only",
+                        "label": "Civil Evidence",
+                        "env": "CIVIL_RAW",
+                        "service_url": "https://civil.example",
+                        "scopes": ["civil_registry:evidence_verification"],
+                        "example": {"path": "/metadata/evidence-offerings", "positive_subject": "NID-1001"},
+                    },
+                    {
+                        "id": "social-metadata",
+                        "env": "CIVIL_RAW",
+                        "service_url": "https://social.example",
+                        "example": {"path": "/v1/datasets"},
+                    },
+                    {
+                        "id": "social-aggregate-reader",
+                        "env": "CIVIL_RAW",
+                        "service_url": "https://social.example",
+                        "example": {"path": "/v1/datasets/social_protection_registry/aggregates/households_by_eligibility_band"},
+                    },
+                    {
+                        "id": "social-row-reader",
+                        "env": "CIVIL_RAW",
+                        "service_url": "https://social.example",
+                        "example": {"path": "/v1/datasets/social_protection_registry/entities/household/records?limit=1"},
+                    },
+                    {
+                        "id": "dhis2-bearer",
+                        "env": "CIVIL_RAW",
+                        "service_url": "https://dhis2.example",
+                        "example": {"path": "/v1/claims"},
+                    },
+                ],
+                "wallet": {
+                    "issuer": "https://issuer.example",
+                    "credential_configuration_id": "person_is_alive_sd_jwt",
+                    "offer_url": "https://issuer.example/offer",
+                },
+            }
+        )
+
+    def test_catalogue_lists_scenarios_with_dedicated_routes(self) -> None:
+        payload = server.scenario_payload(self._payload_config())
+        scenario_ids = [item["id"] for item in payload["scenarios"]]
+        self.assertEqual(
+            scenario_ids,
+            [
+                "alive-proof",
+                "wallet-credential",
+                "dhis2-programme-vc",
+                "social-aggregate",
+                "combined-support",
+                "agriculture-voucher",
+            ],
+        )
+        self.assertEqual(payload["default_scenario_id"], "alive-proof")
+        self.assertEqual(len(payload["scenarios"]), 6)
+        self.assertEqual(payload["scenarios"][2]["availability"], "hosted")
+        self.assertEqual(payload["scenarios"][3]["availability"], "local-only")
+        self.assertEqual(payload["scenarios"][4]["availability"], "local-only")
+
+    def test_wallet_story_uses_adult_persona(self) -> None:
+        story = server.scenario_payload(self._payload_config(), "wallet-credential")["story"]
+        self.assertEqual(story["subject"], {"name": "Maria Santos", "identifier": "NID-2001"})
+        self.assertIn("adult demo citizen", story["intro"])
+        self.assertEqual(story["steps"][-1]["id"], "credential-preview")
+
+    def test_prepare_evidence_step_executes_notary_evaluation(self) -> None:
+        os.environ["CIVIL_EVIDENCE_CLIENT_BEARER"] = "notary-token"
+        os.environ["CIVIL_EVIDENCE_URL"] = "https://notary.example"
+
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b'{"results":[{"claim_id":"person-is-alive","satisfied":true,"provenance":{"source_count":1}}]}'
+
+        captured = {}
+
+        def fake(req, timeout=None):
+            captured["req"] = req
+            return Resp()
+
+        with mock.patch.object(server.urllib.request, "urlopen", fake):
+            result = server.run_scenario_step(server.enrich_config({"credentials": []}), "alive-proof", "prepare-evidence")
+
+        self.assertEqual(result["friendly"]["status"], "done")
+        self.assertEqual(result["friendly"]["facts"][0], {"label": "HTTP status", "value": 200})
+        self.assertEqual(result["friendly"]["facts"][1], {"label": "From Step 1", "value": "Civil evidence service"})
+        self.assertEqual(result["friendly"]["facts"][4], {"label": "Answer", "value": "Yes"})
+        self.assertEqual(result["response_source"]["reused_from_discovery"]["lookup_key"], "national_id")
+        self.assertEqual(captured["req"].full_url, "https://notary.example/v1/evaluations")
+        self.assertEqual(captured["req"].get_header("Authorization"), "Bearer notary-token")
+        self.assertEqual(result["request_source"]["headers"]["Authorization"], "Bearer [runtime demo token hidden]")
+
+    def test_step_runner_displays_public_relay_token_in_request_source(self) -> None:
+        config = {
+            "credentials": [
+                {
+                    "id": "civil-evidence-only",
+                    "env": "CIVIL_RAW",
+                    "service_url": "https://civil.example",
+                    "example": {"path": "/metadata/evidence-offerings"},
+                }
+            ]
+        }
+
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b'{"evidence_offerings":[{"title":"Civil alive check","lookup_keys":["national_id"]}]}'
+
+        with mock.patch.object(server.urllib.request, "urlopen", lambda req, timeout=None: Resp()):
+            result = server.run_alive_proof_step(server.enrich_config(config), "discover")
+        self.assertEqual(result["friendly"]["status"], "done")
+        self.assertEqual(result["friendly"]["facts"][1]["value"], "Civil alive check")
+        self.assertEqual(result["request_source"]["headers"]["Authorization"], "Bearer civil-token")
+
+        with mock.patch.object(server.urllib.request, "urlopen", lambda req, timeout=None: Resp()):
+            row_result = server.run_alive_proof_step(server.enrich_config(config), "deny-row")
+        self.assertEqual(row_result["request_source"]["headers"]["Authorization"], "Bearer civil-token")
+
+    def test_scenario_request_sources_do_not_emit_placeholder_credentials(self) -> None:
+        os.environ["CIVIL_EVIDENCE_CLIENT_BEARER"] = "notary-token"
+        os.environ["CIVIL_EVIDENCE_URL"] = "https://notary.example"
+        config = {
+            "credentials": [
+                {
+                    "id": "civil-evidence-only",
+                    "env": "CIVIL_RAW",
+                    "service_url": "https://civil.example",
+                    "example": {"path": "/metadata/evidence-offerings"},
+                }
+            ]
+        }
+
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b'{"evidence_offerings":[{"title":"Civil alive check","lookup_keys":["national_id"]}],"results":[{"claim_id":"person-is-alive","satisfied":true}]}'
+
+        with mock.patch.object(server.urllib.request, "urlopen", lambda req, timeout=None: Resp()):
+            for step_id in ("discover", "prepare-evidence", "deny-row"):
+                result = server.run_alive_proof_step(server.enrich_config(config), step_id)
+                headers = result["request_source"]["headers"]
+                self.assertNotIn("[public demo token hidden]", str(headers))
+                if step_id == "prepare-evidence":
+                    self.assertNotIn("notary-token", str(headers))
+                    self.assertIn("[runtime demo token hidden]", str(headers))
+
+    def test_local_only_scenarios_report_required_token_before_execution(self) -> None:
+        os.environ.pop("SHARED_EVIDENCE_CLIENT_BEARER", None)
+        result = server.run_scenario_step(server.enrich_config({"credentials": []}), "combined-support", "discover")
+        self.assertEqual(result["friendly"]["status"], "needs_attention")
+        self.assertIn("SHARED_EVIDENCE_CLIENT_BEARER", str(result["friendly"]["facts"]))
+        self.assertIn("[runtime demo token missing]", str(result["request_source"]))
+
+    def test_social_aggregate_uses_local_relay_until_hosted_scope_passes(self) -> None:
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b'{"data":[{"eligibility_band":"priority","household_count":3}]}'
+
+        captured = {}
+
+        def fake(req, timeout=None):
+            captured["req"] = req
+            return Resp()
+
+        with mock.patch.object(server.urllib.request, "urlopen", fake):
+            result = server.run_scenario_step(self._payload_config(), "social-aggregate", "read-aggregate")
+
+        self.assertEqual(result["friendly"]["status"], "done")
+        self.assertEqual(
+            captured["req"].full_url,
+            "http://127.0.0.1:4312/v1/datasets/social_protection_registry/aggregates/households_by_eligibility_band",
+        )
+        self.assertEqual(captured["req"].get_header("Authorization"), "Bearer civil-token")
+        self.assertEqual(result["request_source"]["headers"]["Authorization"], "Bearer civil-token")
+        self.assertEqual(result["request_source"]["headers"]["Data-Purpose"], "https://demo.example.gov/purpose/decentralized-evidence-demo")
+
+    def test_wallet_simulated_step_hides_wallet_secrets(self) -> None:
+        result = server.run_scenario_step(self._payload_config(), "wallet-credential", "credential-preview")
+        self.assertEqual(result["friendly"]["status"], "done")
+        self.assertIn("[wallet proof hidden]", str(result["request_source"]))
+        self.assertIn("[simulated playground credential value hidden]", str(result["response_source"]))
+        self.assertNotIn("private_key", str(result["request_source"]))
+
+    def test_wallet_nonce_step_is_simulated_not_failed_live_probe(self) -> None:
+        result = server.run_scenario_step(self._payload_config(), "wallet-credential", "nonce")
+        self.assertEqual(result["friendly"]["status"], "done")
+        self.assertEqual(result["request_source"]["method"], "SIMULATE")
+        self.assertEqual(result["request_source"]["url"], "wallet://issuer-session/nonce")
+        self.assertEqual(result["response_source"]["status"], "simulated")
+        self.assertIn("wallet-demo-nonce-2026", str(result["response_source"]))
+        self.assertNotIn("invalid_request", str(result))
+
+    def test_dhis2_story_matches_bruno_programme_vc_flow(self) -> None:
+        story = server.scenario_payload(self._payload_config(), "dhis2-programme-vc")["story"]
+        self.assertEqual(story["id"], "dhis2-programme-vc")
+        self.assertEqual(story["subject"]["identifier"], "PQfMcpmXeFE")
+        self.assertEqual(
+            [step["id"] for step in story["steps"]],
+            ["discover", "evaluate-programme", "preview-vc", "reconcile", "negative-control", "render-cccev"],
+        )
+        self.assertIn("Bruno creates an Ed25519 holder proof", story["steps"][2]["prompt"])
+
+    def test_dhis2_preview_vc_hides_holder_proof_and_raw_credential(self) -> None:
+        result = server.run_scenario_step(self._payload_config(), "dhis2-programme-vc", "preview-vc")
+        self.assertEqual(result["friendly"]["status"], "done")
+        self.assertEqual(result["request_source"]["method"], "SIMULATE")
+        self.assertIn("[Ed25519 holder proof generated by Bruno, hidden in this playground]", str(result["request_source"]))
+        self.assertIn("[holder-bound SD-JWT VC hidden]", str(result["response_source"]))
+
+
 class HomepageHtmlTest(unittest.TestCase):
     """The credentials section is merged into services, and Open links are status-gated."""
 
@@ -333,6 +619,42 @@ class HomepageHtmlTest(unittest.TestCase):
         self.assertIn("https://wallet.lab.registrystack.org/signup", self.html)
         self.assertIn("openid-credential-offer://", self.html)
         self.assertIn("no longer requires a separate issuer PIN", self.html)
+
+    def test_homepage_links_to_dedicated_scenario_runner(self) -> None:
+        self.assertIn('href="/scenarios"', self.html)
+        self.assertIn("Try a scenario", self.html)
+        self.assertNotIn('id="scenario-grid"', self.html)
+
+
+class ScenarioPageHtmlTest(unittest.TestCase):
+    """The dedicated scenario page has a chooser plus progressive story pages."""
+
+    def setUp(self) -> None:
+        self.html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+
+    def test_dedicated_page_fetches_scenarios(self) -> None:
+        self.assertIn("Registry Lab Scenarios", self.html)
+        self.assertIn('id="chooser"', self.html)
+        self.assertIn('id="story"', self.html)
+        self.assertIn("/api/scenarios.json", self.html)
+        self.assertIn("Choose a story to run step by step", self.html)
+
+    def test_page_runs_steps_and_hides_sources_by_default(self) -> None:
+        story_html = server.scenario_page_html("Registry Lab Scenarios", "alive-proof").decode("utf-8")
+        self.assertIn("What this request will do", self.html)
+        self.assertIn("Reuses from the previous step", self.html)
+        self.assertIn("data-run-step", self.html)
+        self.assertIn("Show technical request", self.html)
+        self.assertIn("Show technical response", self.html)
+        self.assertIn("function renderRequestSource", self.html)
+        self.assertIn("function curlCommand", self.html)
+        self.assertIn("Copy as curl", self.html)
+        self.assertIn("data-copy-curl", self.html)
+        self.assertIn("HTTP status", self.html)
+        self.assertIn("source-card", self.html)
+        self.assertIn("/api/scenarios/${encodeURIComponent(state.story.id)}/", self.html)
+        self.assertIn('const ACTIVE_SCENARIO = "alive-proof"', story_html)
+        self.assertNotIn("Cell 1", self.html)
 
 
 if __name__ == "__main__":

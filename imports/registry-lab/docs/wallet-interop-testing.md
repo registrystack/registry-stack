@@ -33,7 +33,7 @@ for wallets that require nonce retrieval before the credential request.
 
 The lab intentionally writes raw demo evidence under `output/`, including
 tokens, proof JWTs, issued credentials, and seeded civil identifiers such as
-`NID-1001`. Treat those files as sensitive local replay/debug artifacts. They
+`NID-2001`. Treat those files as sensitive local replay/debug artifacts. They
 are useful for learning and troubleshooting, but they must not be committed,
 shared, or copied into public issue reports.
 
@@ -43,8 +43,8 @@ storage, and display.
 
 ## Preconditions
 
-- Local eSignet is running and can authenticate the seeded citizen `NID-1001`,
-  Miguel Santos.
+- Local eSignet is running and can authenticate the seeded adult citizen
+  `NID-2001`, Maria Santos.
 - Registry Relay civil fixtures are running.
 - Registry Notary is started through the citizen OID4VCI flow.
 - The wallet can reach the Notary issuer URL and eSignet authorization URL.
@@ -158,9 +158,9 @@ Testing path:
    - credential configuration id `person_is_alive_sd_jwt`
    - format `dc+sd-jwt`
 3. Register the Mimoto/Inji client with the eSignet issuer used by the lab.
-4. Ensure eSignet returns `individual_id=NID-1001` through signed UserInfo, or
+4. Ensure eSignet returns `individual_id=NID-2001` through signed UserInfo, or
    another configured subject-binding claim.
-5. Authenticate as the seeded `NID-1001` citizen, Miguel Santos.
+5. Authenticate as the seeded `NID-2001` citizen, Maria Santos.
 6. In Inji, use the configured provider from the add-card flow.
 7. Download and inspect the credential.
 
@@ -206,7 +206,7 @@ The run is considered passed when:
 - The wallet obtains and stores a credential.
 - The credential response uses `format=dc+sd-jwt`.
 - Notary audit shows `access_mode=self_attestation`.
-- `NID-1001` is the token-bound subject.
+- `NID-2001` is the token-bound subject.
 - An attempted other-person flow remains denied by the base citizen smoke.
 
 ## Known boundaries

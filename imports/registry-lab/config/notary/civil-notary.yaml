@@ -103,7 +103,7 @@ evidence:
         field_paths:
           national_id: /person/national_id
           birth_date: /person/birth_date
-          civil_status: /person/civil_status
+          life_stage: /person/life_stage
           deceased: /person/deceased
   signing_keys:
     civil-evidence-demo:
@@ -119,15 +119,15 @@ evidence:
       kid: did:web:civil-notary.demo.example.gov#federation-response-1
       status: active
   credential_profiles:
-    civil_status_sd_jwt:
+    life_stage_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:civil-evidence.demo.example
       signing_key: civil-evidence-demo
-      vct: https://demo.example/credentials/civil-status/v1
+      vct: https://demo.example/credentials/life-stage/v1
       validity_seconds: 600
       allowed_claims:
         - date-of-birth
-        - civil-status
+        - life-stage
         - age-band
         - person-is-alive
       holder_binding:
@@ -177,9 +177,9 @@ evidence:
         - 'application/ld+json; profile="cccev"'
         - application/dc+sd-jwt
       credential_profiles:
-        - civil_status_sd_jwt
-    - id: civil-status
-      title: Civil status
+        - life_stage_sd_jwt
+    - id: life-stage
+      title: Life stage
       version: 2026-05
       subject_type: person
       value:
@@ -197,14 +197,14 @@ evidence:
             op: eq
             cardinality: one
           fields:
-            civil_status:
-              field: civil_status
+            life_stage:
+              field: life_stage
               type: string
               required: true
       rule:
         type: extract
         source: civil
-        field: civil_status
+        field: life_stage
       disclosure:
         default: value
         allowed:
@@ -215,7 +215,7 @@ evidence:
         - 'application/ld+json; profile="cccev"'
         - application/dc+sd-jwt
       credential_profiles:
-        - civil_status_sd_jwt
+        - life_stage_sd_jwt
     - id: age-band
       title: Age band
       version: 2026-05
@@ -255,7 +255,7 @@ evidence:
         - 'application/ld+json; profile="cccev"'
         - application/dc+sd-jwt
       credential_profiles:
-        - civil_status_sd_jwt
+        - life_stage_sd_jwt
     - id: person-is-alive
       title: Person is alive
       version: 2026-05
@@ -296,4 +296,4 @@ evidence:
         evidence_type: civil_child_status_evidence
         evidence_type_iri: https://demo.example.gov/evidence-types/civil-child-status
       credential_profiles:
-        - civil_status_sd_jwt
+        - life_stage_sd_jwt

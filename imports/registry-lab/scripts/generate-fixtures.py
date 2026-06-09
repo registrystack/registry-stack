@@ -43,7 +43,7 @@ FIXED_CORE_CREATED = (
 )
 
 CIVIL_ROWS = [
-    ["national_id", "given_name", "surname", "birth_date", "civil_status", "deceased", "district"],
+    ["national_id", "given_name", "surname", "birth_date", "life_stage", "deceased", "district"],
     ["NID-1001", "Miguel", "Santos", "2016-01-15", "child", "false", "north"],
     ["NID-1002", "Maria", "Dela Cruz", "2018-01-15", "child", "false", "south"],
     ["NID-1003", "Cara", "Okafor", "1957-02-14", "adult", "true", "central"],

@@ -78,8 +78,8 @@ audit:
 
 datasets:
   - id: health_registry
-    title: Health Facility Registry
-    description: Synthetic facility licensing and service availability records for decentralized evidence demo flows.
+    title: Applicant Service Availability Projection
+    description: Synthetic applicant service-availability records derived from facility licensing data for decentralized evidence demo flows.
     owner: Health Services Authority
     sensitivity: personal
     access_rights: restricted
@@ -131,8 +131,8 @@ datasets:
               nullable: false
     entities:
       - name: health_facility
-        title: Health Facility
-        description: Facility service and license projection for eligibility evidence.
+        title: Applicant Service Availability
+        description: Applicant-district service availability projection for eligibility evidence.
         table: facilities_table
         concept_uri: demo:HealthFacility
         fields:

@@ -646,7 +646,7 @@ def main() -> int:
     step += 1
     holder_id, proof = sign_holder_proof(
         first_result_id(credential_eval),
-        "civil_status_sd_jwt",
+        "life_stage_sd_jwt",
         ["person-is-alive"],
         "predicate",
         "civil-notary",
@@ -659,7 +659,7 @@ def main() -> int:
             env(evidence[0].token_env),
             {
                 "evaluation_id": first_result_id(credential_eval),
-                "credential_profile": "civil_status_sd_jwt",
+                "credential_profile": "life_stage_sd_jwt",
                 "format": SD_JWT_FORMAT,
                 "claims": ["person-is-alive"],
                 "disclosure": "predicate",
