@@ -26,6 +26,7 @@ Before editing YAML, decide these items:
 | Credential suspension or revocation | Verifiers need a live status URL | `credential_status.enabled: true` |
 | Audit retention | Operators need traceability without raw personal data | `audit` |
 | OpenFn sidecar reads | A target system needs pinned adaptor execution or normalization outside Notary | `connector: openfn_sidecar`, `retry_on_5xx: false` |
+| OpenFn sidecar assurance | Notary must fail closed unless it is talking to the approved sidecar runtime | `source_connections.<id>.expected_sidecar` |
 | OpenFn batch matching | Batch evaluation should share one OpenFn sidecar read across compatible items | `bulk_mode: openfn_sidecar_batch`, binding `query_fields` |
 
 Start with one narrow claim, one source connection, one signing key, and one
@@ -374,6 +375,12 @@ The source connection must use static sidecar bearer auth through `token_env`.
 Do not configure target-service credentials in Notary; keep them in the sidecar
 environment or secret store.
 
+For high-assurance deployments, pin the sidecar runtime that Notary is allowed
+to use with `expected_sidecar`. Notary reads the private sidecar assurance
+endpoint before source reads and fails closed when the product identity,
+environment, stream, `config_hash`, expression-hash verification, runtime
+verification, or smoke-check state does not match the pin.
+
 Single-read OpenFn sidecar example:
 
 ```yaml
@@ -385,6 +392,15 @@ evidence:
       token_env: OPENFN_SIDECAR_TOKEN
       retry_on_5xx: false
       bulk_mode: none
+      expected_sidecar:
+        product: registry-notary-openfn-sidecar
+        instance_id: civil-registry-sidecar
+        environment: production
+        stream_id: openfn-sidecar-runtime
+        config_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222
+        require_expression_hashes_verified: true
+        require_runtime_verified: true
+        require_smoke_verified: true
   claims:
     - id: date-of-birth
       title: Date of birth
@@ -430,6 +446,15 @@ evidence:
       retry_on_5xx: false
       bulk_mode: openfn_sidecar_batch
       bulk_timeout_max_ms: 30000
+      expected_sidecar:
+        product: registry-notary-openfn-sidecar
+        instance_id: civil-registry-sidecar
+        environment: production
+        stream_id: openfn-sidecar-runtime
+        config_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222
+        require_expression_hashes_verified: true
+        require_runtime_verified: true
+        require_smoke_verified: true
   claims:
     - id: birth-record-exists
       title: Birth record exists
@@ -508,6 +533,9 @@ For OpenFn sidecar connections:
   projection.
 - Keep the sidecar on localhost or a private pod network reachable only from
   Notary. Do not expose the sidecar publicly.
+- In governed environments, set `expected_sidecar` on every OpenFn sidecar
+  connection. Local demos may omit it only when the assurance boundary is not
+  part of the test.
 - Keep policy, minimization, audit, disclosure, and credential issuance in
   Notary. Keep adaptor execution, target credentials, normalization, source
   comparison, and worker isolation in the sidecar.

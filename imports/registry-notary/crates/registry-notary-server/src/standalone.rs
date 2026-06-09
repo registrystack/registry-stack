@@ -27,12 +27,13 @@ use registry_notary_core::sd_jwt::EvidenceIssuer;
 use registry_notary_core::{
     AccessMode, BoundedCorrelationId, BoundedVerifiedClaims, BulkMode, DciSourceConnectionConfig,
     EvidenceAuditEvent, EvidenceConfig, EvidenceCredentialConfig, EvidenceEntity, EvidenceError,
-    EvidencePrincipal, EvidenceRequestContext, Hashed, Oauth2ClientCredentialsSourceAuthConfig,
-    PrincipalIdentifier, RateLimitBucket, RegistryNotaryAdminListenerMode, RequestIdentifier,
-    SelfAttestationAssuranceClaimSource, SelfAttestationClaimSource, SelfAttestationDenialCode,
-    SigningKeyConfig, SigningKeyProviderConfig, SourceAuthConfig, SourceBindingConfig,
-    SourceConnectionConfig, SourceConnectorKind, StandaloneRegistryNotaryConfig, SubjectRequest,
-    VerifiedClaimName, VerifiedClaimValue,
+    EvidencePrincipal, EvidenceRequestContext, ExpectedSidecarConfig, Hashed,
+    Oauth2ClientCredentialsSourceAuthConfig, PrincipalIdentifier, RateLimitBucket,
+    RegistryNotaryAdminListenerMode, RequestIdentifier, SelfAttestationAssuranceClaimSource,
+    SelfAttestationClaimSource, SelfAttestationDenialCode, SigningKeyConfig,
+    SigningKeyProviderConfig, SourceAuthConfig, SourceBindingConfig, SourceConnectionConfig,
+    SourceConnectorKind, StandaloneRegistryNotaryConfig, SubjectRequest, VerifiedClaimName,
+    VerifiedClaimValue,
 };
 use registry_platform_audit::{
     AuditError, AuditKeyHasher, AuditProfile, AuditSink as PlatformAuditSink, ChainState,
@@ -52,6 +53,7 @@ use registry_platform_oidc::{
     fetch_userinfo_jwt_with_policy, Audience, JwksFetcher, JwksFetcherConfig, OidcError,
     TokenVerifier, TokenVerifierConfig, VerifiedToken,
 };
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use subtle::ConstantTimeEq;
 use time::format_description::well_known::Rfc3339;
@@ -628,6 +630,35 @@ struct ResolvedEvidenceSourceConnection {
     bulk_mode: BulkMode,
     /// Upper bound for the per-call timeout used by `read_many`.
     bulk_timeout_max: Duration,
+    expected_sidecar: Option<ExpectedSidecarRuntime>,
+}
+
+#[derive(Clone)]
+struct ExpectedSidecarRuntime {
+    expected: ExpectedSidecarConfig,
+    ttl: Duration,
+    cache: Arc<StdMutex<Option<CachedSidecarAssurance>>>,
+}
+
+#[derive(Clone, Debug)]
+struct CachedSidecarAssurance {
+    checked_at: Instant,
+    assurance: ObservedSidecarAssurance,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ObservedSidecarAssurance {
+    product: String,
+    instance_id: String,
+    environment: String,
+    stream_id: String,
+    config_hash: String,
+    #[serde(default)]
+    expression_hashes_verified: bool,
+    #[serde(default)]
+    runtime_verified: bool,
+    #[serde(default)]
+    smoke_verified: bool,
 }
 
 #[derive(Clone)]
@@ -871,6 +902,10 @@ impl std::fmt::Debug for ResolvedEvidenceSourceConnection {
             .field("retry_on_5xx", &self.retry_on_5xx)
             .field("bulk_mode", &self.bulk_mode)
             .field("bulk_timeout_max", &self.bulk_timeout_max)
+            .field(
+                "expected_sidecar",
+                &self.expected_sidecar.as_ref().map(|_| "<configured>"),
+            )
             .finish()
     }
 }
@@ -903,6 +938,13 @@ impl HttpEvidenceSources {
                     retry_on_5xx: connection.retry_on_5xx,
                     bulk_mode: connection.bulk_mode,
                     bulk_timeout_max: Duration::from_millis(connection.bulk_timeout_max_ms),
+                    expected_sidecar: connection.expected_sidecar.clone().map(|expected| {
+                        ExpectedSidecarRuntime {
+                            ttl: Duration::from_millis(expected.assurance_ttl_ms),
+                            expected,
+                            cache: Arc::new(StdMutex::new(None)),
+                        }
+                    }),
                 },
             );
         }
@@ -991,7 +1033,152 @@ fn source_fetch_url_policy(connection: &SourceConnectionConfig) -> FetchUrlPolic
     }
 }
 
+async fn ensure_openfn_sidecar_assurance(
+    sources: &HttpEvidenceSources,
+    connection: &ResolvedEvidenceSourceConnection,
+) -> Result<(), EvidenceError> {
+    let Some(runtime) = &connection.expected_sidecar else {
+        return Ok(());
+    };
+    let now = Instant::now();
+    {
+        let cache = runtime
+            .cache
+            .lock()
+            .map_err(|_| EvidenceError::SourceUnavailable)?;
+        if let Some(cached) = cache.as_ref() {
+            if now.duration_since(cached.checked_at) <= runtime.ttl {
+                validate_openfn_sidecar_assurance(&runtime.expected, &cached.assurance)?;
+                return Ok(());
+            }
+        }
+    }
+
+    let url = openfn_sidecar_assurance_url(&connection.base_url)?;
+    let body = send_request_with_retry(
+        sources,
+        connection,
+        "openfn_sidecar_assurance",
+        &url,
+        reqwest::Method::GET,
+        sources.request_timeout,
+        |request, token| {
+            add_correlation_header(
+                request
+                    .bearer_auth(token)
+                    .header("accept", "application/json"),
+            )
+        },
+    )
+    .await?;
+    let assurance: ObservedSidecarAssurance =
+        serde_json::from_value(body).map_err(|_| EvidenceError::SourceUnavailable)?;
+    validate_openfn_sidecar_assurance(&runtime.expected, &assurance)?;
+    let mut cache = runtime
+        .cache
+        .lock()
+        .map_err(|_| EvidenceError::SourceUnavailable)?;
+    *cache = Some(CachedSidecarAssurance {
+        checked_at: Instant::now(),
+        assurance,
+    });
+    Ok(())
+}
+
+fn cached_openfn_sidecar_config_hash(
+    connection: &ResolvedEvidenceSourceConnection,
+) -> Option<String> {
+    let runtime = connection.expected_sidecar.as_ref()?;
+    let cache = runtime.cache.lock().ok()?;
+    let cached = cache.as_ref()?;
+    validate_openfn_sidecar_assurance(&runtime.expected, &cached.assurance).ok()?;
+    Some(cached.assurance.config_hash.clone())
+}
+
+fn validate_openfn_sidecar_assurance(
+    expected: &ExpectedSidecarConfig,
+    observed: &ObservedSidecarAssurance,
+) -> Result<(), EvidenceError> {
+    if observed.product != expected.product
+        || observed.instance_id != expected.instance_id
+        || observed.environment != expected.environment
+        || observed.stream_id != expected.stream_id
+        || observed.config_hash != expected.config_hash
+    {
+        return Err(EvidenceError::SourceUnavailable);
+    }
+    if expected.require_expression_hashes_verified && !observed.expression_hashes_verified {
+        return Err(EvidenceError::SourceUnavailable);
+    }
+    if expected.require_runtime_verified && !observed.runtime_verified {
+        return Err(EvidenceError::SourceUnavailable);
+    }
+    if expected.require_smoke_verified && !observed.smoke_verified {
+        return Err(EvidenceError::SourceUnavailable);
+    }
+    Ok(())
+}
+
+fn openfn_sidecar_assurance_url(base_url: &str) -> Result<reqwest::Url, EvidenceError> {
+    let mut base = reqwest::Url::parse(base_url).map_err(|_| EvidenceError::SourceUnavailable)?;
+    if !base.path().ends_with('/') {
+        base.path_segments_mut()
+            .map_err(|_| EvidenceError::SourceUnavailable)?
+            .push("");
+    }
+    base.join("v1/assurance")
+        .map_err(|_| EvidenceError::SourceUnavailable)
+}
+
 impl SourceReader for HttpEvidenceSources {
+    fn has_readiness_check(&self) -> bool {
+        self.source_connections
+            .values()
+            .any(|connection| connection.expected_sidecar.is_some())
+    }
+
+    fn check_ready<'a>(&'a self) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
+        Box::pin(async move {
+            for connection in self.source_connections.values() {
+                if connection.expected_sidecar.is_some()
+                    && ensure_openfn_sidecar_assurance(self, connection)
+                        .await
+                        .is_err()
+                {
+                    return false;
+                }
+            }
+            true
+        })
+    }
+
+    fn observed_sidecar_config_hashes<'a>(
+        &'a self,
+        evidence: &'a EvidenceConfig,
+        claim_ids: &'a [String],
+    ) -> Pin<Box<dyn Future<Output = Vec<String>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut hashes = BTreeSet::new();
+            for claim_id in claim_ids {
+                let Some(claim) = evidence.claims.iter().find(|claim| claim.id == *claim_id) else {
+                    continue;
+                };
+                for binding in claim.source_bindings.values() {
+                    if binding.connector != SourceConnectorKind::OpenFnSidecar {
+                        continue;
+                    }
+                    let Some(connection) = self.source_connection(binding) else {
+                        continue;
+                    };
+                    if let Some(config_hash) = cached_openfn_sidecar_config_hash(connection) {
+                        hashes.insert(config_hash);
+                    }
+                }
+            }
+            hashes.into_iter().collect()
+        })
+    }
+
     fn read_one<'a>(
         &'a self,
         binding: &'a SourceBindingConfig,
@@ -1008,6 +1195,7 @@ impl SourceReader for HttpEvidenceSources {
                         .await
                 }
                 SourceConnectorKind::OpenFnSidecar => {
+                    ensure_openfn_sidecar_assurance(self, connection).await?;
                     read_remote_registry_data_api_one(self, connection, binding, subject, purpose)
                         .await
                 }
@@ -1036,6 +1224,7 @@ impl SourceReader for HttpEvidenceSources {
                     .await
                 }
                 SourceConnectorKind::OpenFnSidecar => {
+                    ensure_openfn_sidecar_assurance(self, connection).await?;
                     read_remote_registry_data_api_one_for_context(
                         self, connection, binding, context, purpose,
                     )
@@ -1119,6 +1308,15 @@ impl SourceReader for HttpEvidenceSources {
                         .iter()
                         .all(|(binding, _)| binding.connector == SourceConnectorKind::OpenFnSidecar)
                     {
+                        if ensure_openfn_sidecar_assurance(self, connection)
+                            .await
+                            .is_err()
+                        {
+                            return bindings
+                                .iter()
+                                .map(|_| Err(EvidenceError::SourceUnavailable))
+                                .collect();
+                        }
                         let context_bindings: Vec<(SourceBindingConfig, EvidenceRequestContext)> =
                             bindings
                                 .iter()
@@ -1172,6 +1370,15 @@ impl SourceReader for HttpEvidenceSources {
                             path = "bulk",
                             "bulk_vs_fallback",
                         );
+                        if ensure_openfn_sidecar_assurance(self, connection)
+                            .await
+                            .is_err()
+                        {
+                            return bindings
+                                .iter()
+                                .map(|_| Err(EvidenceError::SourceUnavailable))
+                                .collect();
+                        }
                         return read_remote_openfn_sidecar_many_context(
                             self, connection, &bindings, purpose,
                         )
@@ -2826,6 +3033,7 @@ pub(crate) fn pre_auth_audit_event(
         matching_outcome: None,
         matching_error_code: None,
         batch_items: None,
+        source_sidecar_config_hashes: None,
         config: None,
     }
 }
@@ -3499,6 +3707,9 @@ impl Authenticator {
                     JwksFetcherConfig::defaults(),
                     fetch_url_policy.clone(),
                 ));
+                let userinfo_requires_exp = !(config.self_attestation.enabled
+                    && config.self_attestation.subject_binding.claim_source
+                        == SelfAttestationClaimSource::Userinfo);
                 let verifier = TokenVerifier::new(
                     TokenVerifierConfig::registry_notary_access_profile(
                         oidc.issuer.clone(),
@@ -3518,7 +3729,8 @@ impl Authenticator {
                         .filter(|scope_map| !scope_map.is_empty()),
                     )
                     .with_allowed_clients(oidc.allowed_clients.clone())
-                    .with_leeway(Duration::from_secs(oidc.leeway_seconds)),
+                    .with_leeway(Duration::from_secs(oidc.leeway_seconds))
+                    .with_userinfo_requires_exp(userinfo_requires_exp),
                     fetcher,
                 );
                 let userinfo_issuers = if oidc.userinfo_issuers.is_empty() {
@@ -4059,6 +4271,8 @@ fn build_audit_event(
     let matching_outcome = audit.and_then(|context| context.matching_outcome.clone());
     let matching_error_code = audit.and_then(|context| context.matching_error_code.clone());
     let batch_items = audit.and_then(|context| context.batch_items.clone());
+    let source_sidecar_config_hashes =
+        audit.and_then(|context| context.source_sidecar_config_hashes.clone());
     let config = audit.and_then(|context| context.config.clone());
     let error_code = error.map(|context| context.0.clone());
     let decision = audit
@@ -4116,6 +4330,7 @@ fn build_audit_event(
         matching_outcome,
         matching_error_code,
         batch_items,
+        source_sidecar_config_hashes,
         config,
     }
 }
@@ -4575,6 +4790,7 @@ fn oidc_auth_error(error: OidcError) -> EvidenceError {
     tracing::debug!(
         target: "registry_notary_server::auth",
         error_code = oidc_internal_error_code(&error),
+        error = ?error,
         "OIDC token verification failed"
     );
     EvidenceError::MissingCredential
@@ -4787,6 +5003,7 @@ async fn read_remote_registry_data_api_one_lookup(
     lookup_value: Value,
     purpose: &str,
 ) -> Result<Value, EvidenceError> {
+    ensure_openfn_sidecar_assurance(sources, connection).await?;
     let lookup_field = binding.lookup.field.clone();
     let fields = projected_source_fields_with_lookup(binding, &lookup_field);
     let url = registry_data_api_url(&connection.base_url, binding)?;
@@ -4834,6 +5051,7 @@ async fn read_remote_registry_data_api_one_query_values(
     query_values: Vec<SourceQueryValue>,
     purpose: &str,
 ) -> Result<Value, EvidenceError> {
+    ensure_openfn_sidecar_assurance(sources, connection).await?;
     let fields = projected_source_fields_with_query_values(binding, &query_values);
     let url = registry_data_api_url(&connection.base_url, binding)?;
     let mut query_pairs = vec![
@@ -5149,6 +5367,15 @@ async fn read_remote_openfn_sidecar_many_context(
 ) -> Vec<Result<Value, EvidenceError>> {
     if bindings.is_empty() {
         return Vec::new();
+    }
+    if ensure_openfn_sidecar_assurance(sources, connection)
+        .await
+        .is_err()
+    {
+        return bindings
+            .iter()
+            .map(|_| Err(EvidenceError::SourceUnavailable))
+            .collect();
     }
     let url = match openfn_sidecar_batch_url(&connection.base_url, &bindings[0].0) {
         Ok(url) => url,
@@ -6241,6 +6468,10 @@ fn projected_source_fields_with_query_values(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::num::NonZeroU64;
+    use std::sync::atomic::AtomicUsize;
+
     use axum::body::Body;
     use axum::response::Redirect;
     use axum::routing::{get, post};
@@ -6249,6 +6480,7 @@ mod tests {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     #[cfg(feature = "pkcs11")]
     use base64::Engine;
+    use chrono::{TimeDelta, Utc};
     use registry_notary_core::{
         tokens::{mint_access_token, AccessTokenClaims, BoundSubject},
         EvaluateRequest, SelfAttestationDenialCode, SelfAttestationRateLimitsConfig,
@@ -6257,7 +6489,21 @@ mod tests {
     };
     #[cfg(feature = "pkcs11")]
     use registry_notary_core::{ClaimProvenance, ClaimResultView, TargetRefView};
-    use registry_notary_openfn_sidecar::{sidecar_router, SidecarConfig};
+    use registry_notary_openfn_sidecar::{
+        load_startup_config as load_openfn_sidecar_startup_config,
+        render_governed_runtime_target_json, sidecar_router, SidecarConfig,
+    };
+    use registry_platform_config::{
+        sha256_uri, LocalTufRepositoryInput, TufConfigVerifier, VerificationContext,
+    };
+    use registry_platform_ops::{
+        AntiRollbackKey, AntiRollbackRecord, BreakGlassState, FileAntiRollbackStore,
+        LocalApprovalState,
+    };
+    use tough::editor::signed::PathExists;
+    use tough::editor::RepositoryEditor;
+    use tough::key_source::{KeySource, LocalKeySource};
+    use tough::schema::Target;
 
     const OPENFN_SIDECAR_TOKEN_ENV: &str = "TEST_OPENFN_SIDECAR_TOKEN";
     const OPENFN_SIDECAR_TOKEN_HASH_ENV: &str = "TEST_OPENFN_SIDECAR_TOKEN_HASH";
@@ -6265,6 +6511,11 @@ mod tests {
     const OPENFN_SIDECAR_TOKEN_HASH: &str =
         "sha256:42f3b7ab760b221b8a166aad9d82b76286e310f878e2d6cbac7583586ca1e225";
     const OPENFN_SPIKE_PURPOSE: &str = "https://purpose.example.test/eligibility";
+    const OPENFN_PRODUCT: &str = "registry-notary-openfn-sidecar";
+    const OPENFN_INSTANCE_ID: &str = "demo";
+    const OPENFN_ENVIRONMENT: &str = "staging";
+    const OPENFN_STREAM_ID: &str = "openfn-sidecar-runtime";
+    const OPENFN_TARGET_NAME: &str = "openfn-sidecar-runtime.json";
     const TEST_AUDIT_HASH_SECRET_ENV: &str = "REGISTRY_NOTARY_TEST_AUDIT_HASH_SECRET";
     const TEST_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
     const TEST_ISSUER_JWK_WITH_KID: &str = r##"{"kty":"OKP","crv":"Ed25519","kid":"did:web:issuer.example#file-watch","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"##;
@@ -6831,6 +7082,7 @@ credential_profiles:
             matching_outcome: None,
             matching_error_code: None,
             batch_items: None,
+            source_sidecar_config_hashes: None,
             config: None,
         }
     }
@@ -7428,6 +7680,7 @@ credential_profiles:
                     allow_insecure_private_network: false,
                     token_env: "TEST_EVIDENCE_SOURCE_POLICY_TOKEN".to_string(),
                     source_auth: None,
+                    expected_sidecar: None,
                     dci: DciSourceConnectionConfig::default(),
                     max_in_flight: 8,
                     retry_on_5xx: true,
@@ -7494,13 +7747,13 @@ claims:
         serde_norway::from_str(&raw).expect("spike config parses")
     }
 
-    fn openfn_sidecar_test_config(attempt_log: std::path::PathBuf) -> SidecarConfig {
+    fn openfn_sidecar_test_manifest(attempt_log: std::path::PathBuf) -> String {
         std::env::set_var(OPENFN_SIDECAR_TOKEN_HASH_ENV, OPENFN_SIDECAR_TOKEN_HASH);
         let sidecar_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../registry-notary-openfn-sidecar");
         let worker = sidecar_root.join("tests/fixtures/contract_worker.sh");
         let job = sidecar_root.join("tests/fixtures/jobs/opencrvs-person-lookup.js");
-        let raw = format!(
+        format!(
             r#"
 server:
   bind: "127.0.0.1:0"
@@ -7544,8 +7797,12 @@ sources:
             worker.display(),
             attempt_log.display(),
             job.display()
-        );
-        serde_norway::from_str(&raw).expect("sidecar test config parses")
+        )
+    }
+
+    fn openfn_sidecar_test_config(attempt_log: std::path::PathBuf) -> SidecarConfig {
+        serde_norway::from_str(&openfn_sidecar_test_manifest(attempt_log))
+            .expect("sidecar test config parses")
     }
 
     async fn fixed_openfn_batch_response_handler(
@@ -7607,6 +7864,490 @@ sources:
             OPENFN_SPIKE_PURPOSE,
         )
         .await
+    }
+
+    #[derive(Clone)]
+    struct OpenFnAssuranceFixture {
+        assurance_count: Arc<AtomicUsize>,
+        records_count: Arc<AtomicUsize>,
+        config_hash: String,
+    }
+
+    async fn fixed_openfn_assurance_handler(
+        State(fixture): State<OpenFnAssuranceFixture>,
+    ) -> Response {
+        fixture.assurance_count.fetch_add(1, Ordering::SeqCst);
+        Json(json!({
+            "status": "ready",
+            "product": "registry-notary-openfn-sidecar",
+            "instance_id": "demo",
+            "environment": "staging",
+            "stream_id": "openfn-sidecar-runtime",
+            "bundle_id": "opencrvs-sidecar-test",
+            "sequence": 12,
+            "config_hash": fixture.config_hash,
+            "tuf_root_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "root_version": 1,
+            "targets_version": 12,
+            "snapshot_version": 12,
+            "timestamp_version": 12,
+            "change_classes": ["openfn_sidecar_workflow_bundle"],
+            "signer_kids": ["kid"],
+            "expression_hashes_verified": true,
+            "runtime_verified": true,
+            "smoke_verified": true,
+            "apply_policy": "restart_required"
+        }))
+        .into_response()
+    }
+
+    async fn fixed_openfn_records_handler(
+        State(fixture): State<OpenFnAssuranceFixture>,
+    ) -> Response {
+        fixture.records_count.fetch_add(1, Ordering::SeqCst);
+        Json(json!({
+            "data": [{
+                "national_id": "person-123",
+                "birth_date": "1990-01-01"
+            }]
+        }))
+        .into_response()
+    }
+
+    fn expected_openfn_sidecar(config_hash: &str) -> ExpectedSidecarConfig {
+        ExpectedSidecarConfig {
+            product: OPENFN_PRODUCT.to_string(),
+            instance_id: OPENFN_INSTANCE_ID.to_string(),
+            environment: OPENFN_ENVIRONMENT.to_string(),
+            stream_id: OPENFN_STREAM_ID.to_string(),
+            config_hash: config_hash.to_string(),
+            require_expression_hashes_verified: true,
+            require_runtime_verified: true,
+            require_smoke_verified: true,
+            assurance_ttl_ms: 60_000,
+        }
+    }
+
+    struct SignedOpenFnRuntimeRepo {
+        root_path: std::path::PathBuf,
+        metadata_dir: std::path::PathBuf,
+        targets_dir: std::path::PathBuf,
+        datastore_dir: std::path::PathBuf,
+        tuf_root_sha256: String,
+        signer_kids: Vec<String>,
+        config_hash: String,
+    }
+
+    async fn signed_openfn_runtime_repo(
+        target_bytes: &[u8],
+        sequence: u64,
+        previous_config_hash: &str,
+    ) -> SignedOpenFnRuntimeRepo {
+        let repo = tempfile::TempDir::new().expect("repo temp dir");
+        let datastore = tempfile::TempDir::new().expect("datastore temp dir");
+        let source_targets = repo.path().join("source-targets");
+        std::fs::create_dir_all(&source_targets).expect("source targets dir");
+        let target_path = source_targets.join(OPENFN_TARGET_NAME);
+        std::fs::write(&target_path, target_bytes).expect("target writes");
+        let config_hash = sha256_uri(target_bytes);
+        let custom = json!({
+            "product": OPENFN_PRODUCT,
+            "instance_id": OPENFN_INSTANCE_ID,
+            "environment": OPENFN_ENVIRONMENT,
+            "stream_id": OPENFN_STREAM_ID,
+            "bundle_id": "openfn-sidecar-e2e",
+            "sequence": sequence,
+            "previous_config_hash": previous_config_hash,
+            "config_hash": config_hash,
+            "change_classes": ["openfn_sidecar_workflow_bundle"],
+            "signer_kids": ["declared-non-authoritative"],
+            "apply_policy": "restart_required"
+        });
+
+        let root_path = tough_fixture_dir("").join("simple-rsa").join("root.json");
+        let key_path = tough_fixture_dir("").join("snakeoil.pem");
+        let metadata_dir = repo.path().join("metadata");
+        let targets_dir = repo.path().join("targets");
+        let expiry = Utc::now()
+            .checked_add_signed(TimeDelta::try_days(30).expect("duration"))
+            .expect("future expiration");
+        let version = NonZeroU64::new(sequence.max(1)).expect("non-zero version");
+        let mut editor = RepositoryEditor::new(&root_path)
+            .await
+            .expect("editor loads root");
+        editor.targets_expires(expiry).expect("targets expiration");
+        editor.targets_version(version).expect("targets version");
+        editor.snapshot_expires(expiry);
+        editor.snapshot_version(version);
+        editor.timestamp_expires(expiry);
+        editor.timestamp_version(version);
+
+        let mut target = Target::from_path(&target_path)
+            .await
+            .expect("target metadata builds");
+        let Value::Object(custom) = custom else {
+            panic!("custom metadata object");
+        };
+        target.custom = custom.into_iter().collect::<HashMap<_, _>>();
+        editor
+            .add_target(OPENFN_TARGET_NAME.to_string(), target)
+            .expect("target metadata added");
+        let keys: Vec<Box<dyn KeySource>> = vec![Box::new(LocalKeySource { path: key_path })];
+        let signed = editor.sign(&keys).await.expect("repository signs");
+        signed.write(&metadata_dir).await.expect("metadata writes");
+        signed
+            .link_targets(&source_targets, &targets_dir, PathExists::Skip)
+            .await
+            .expect("targets link");
+
+        let input = LocalTufRepositoryInput {
+            root_path: root_path.clone(),
+            metadata_dir: metadata_dir.clone(),
+            targets_dir: targets_dir.clone(),
+            datastore_dir: datastore.path().to_path_buf(),
+            target_name: OPENFN_TARGET_NAME.to_string(),
+        };
+        let verified = TufConfigVerifier::verify_config_target(
+            &input,
+            &VerificationContext {
+                product: OPENFN_PRODUCT.to_string(),
+                instance_id: OPENFN_INSTANCE_ID.to_string(),
+                environment: OPENFN_ENVIRONMENT.to_string(),
+            },
+        )
+        .await
+        .expect("generated repo verifies");
+        let repo_path = repo.keep();
+        let datastore_path = datastore.keep();
+        SignedOpenFnRuntimeRepo {
+            root_path,
+            metadata_dir: repo_path.join("metadata"),
+            targets_dir: repo_path.join("targets"),
+            datastore_dir: datastore_path,
+            tuf_root_sha256: verified.tuf.root_sha256,
+            signer_kids: verified.tuf.signer_kids,
+            config_hash,
+        }
+    }
+
+    fn initialize_openfn_antirollback(
+        repo: &SignedOpenFnRuntimeRepo,
+        config_hash: &str,
+        sequence: u64,
+    ) {
+        FileAntiRollbackStore::new(repo.datastore_dir.join("antirollback.json"))
+            .initialize(AntiRollbackRecord {
+                key: AntiRollbackKey {
+                    product: OPENFN_PRODUCT.to_string(),
+                    instance_id: OPENFN_INSTANCE_ID.to_string(),
+                    environment: OPENFN_ENVIRONMENT.to_string(),
+                    stream_id: OPENFN_STREAM_ID.to_string(),
+                },
+                last_sequence: sequence,
+                last_config_hash: config_hash.to_string(),
+                root_version: Some(1),
+                break_glass: BreakGlassState::default(),
+                local_approvals: LocalApprovalState::default(),
+            })
+            .expect("antirollback initializes");
+    }
+
+    fn openfn_governed_bootstrap_yaml(repo: &SignedOpenFnRuntimeRepo) -> String {
+        let signers = repo
+            .signer_kids
+            .iter()
+            .map(|kid| {
+                format!(
+                    r#"        {kid}:
+          kid: {kid}
+          enabled: true"#,
+                    kid = yaml_string(kid)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let role_signers = repo
+            .signer_kids
+            .iter()
+            .map(|kid| format!("          - {}", yaml_string(kid)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            r#"
+server:
+  bind: "127.0.0.1:0"
+auth:
+  bearer_tokens:
+    - id: notary-contract
+      hash_env: {token_hash_env}
+config_trust:
+  product: {product}
+  instance_id: {instance_id}
+  environment: {environment}
+  stream_id: {stream_id}
+  root_path: {root_path}
+  metadata_dir: {metadata_dir}
+  targets_dir: {targets_dir}
+  datastore_dir: {datastore_dir}
+  target_name: {target_name}
+  antirollback_state_path: {antirollback_state_path}
+  accepted_roots:
+    - root_id: "test-root"
+      production: false
+      tuf_root_sha256: {tuf_root_sha256}
+      high_risk_change_classes:
+        - openfn_sidecar_workflow_bundle
+      signers:
+{signers}
+      roles:
+        - name: "workflow"
+          threshold: 1
+          signer_kids:
+{role_signers}
+          allowed_change_classes:
+            - openfn_sidecar_workflow_bundle
+"#,
+            token_hash_env = yaml_string(OPENFN_SIDECAR_TOKEN_HASH_ENV),
+            product = yaml_string(OPENFN_PRODUCT),
+            instance_id = yaml_string(OPENFN_INSTANCE_ID),
+            environment = yaml_string(OPENFN_ENVIRONMENT),
+            stream_id = yaml_string(OPENFN_STREAM_ID),
+            root_path = yaml_path(&repo.root_path),
+            metadata_dir = yaml_path(&repo.metadata_dir),
+            targets_dir = yaml_path(&repo.targets_dir),
+            datastore_dir = yaml_path(&repo.datastore_dir),
+            target_name = yaml_string(OPENFN_TARGET_NAME),
+            antirollback_state_path = yaml_path(&repo.datastore_dir.join("antirollback.json")),
+            tuf_root_sha256 = yaml_string(&repo.tuf_root_sha256),
+            signers = signers,
+            role_signers = role_signers,
+        )
+    }
+
+    fn yaml_path(path: &std::path::Path) -> String {
+        yaml_string(path.to_str().expect("fixture path is UTF-8"))
+    }
+
+    fn yaml_string(value: &str) -> String {
+        serde_json::to_string(value).expect("string serializes")
+    }
+
+    fn tough_fixture_dir(name: &str) -> std::path::PathBuf {
+        let cargo_home = std::env::var_os("CARGO_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".cargo"))
+            })
+            .expect("CARGO_HOME or HOME is set");
+        let src_root = cargo_home.join("registry/src");
+        let registry = std::fs::read_dir(&src_root)
+            .expect("cargo registry src exists")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| path.join("tough-0.22.0/tests/data").is_dir())
+            .expect("tough-0.22.0 source fixture directory exists");
+        registry.join("tough-0.22.0/tests/data").join(name)
+    }
+
+    #[test]
+    fn openfn_sidecar_assurance_url_preserves_base_path_prefix() {
+        let url = openfn_sidecar_assurance_url("https://sidecar.example/api/openfn")
+            .expect("assurance URL builds");
+
+        assert_eq!(
+            url.as_str(),
+            "https://sidecar.example/api/openfn/v1/assurance"
+        );
+    }
+
+    #[tokio::test]
+    async fn openfn_sidecar_expected_assurance_is_cached_across_source_reads() {
+        std::env::set_var(OPENFN_SIDECAR_TOKEN_ENV, OPENFN_SIDECAR_TOKEN);
+        let config_hash =
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222".to_string();
+        let fixture = OpenFnAssuranceFixture {
+            assurance_count: Arc::new(AtomicUsize::new(0)),
+            records_count: Arc::new(AtomicUsize::new(0)),
+            config_hash: config_hash.clone(),
+        };
+        let upstream = TestServer::builder().http_transport().build(
+            Router::new()
+                .route("/v1/assurance", get(fixed_openfn_assurance_handler))
+                .route(
+                    "/v1/datasets/civil_registry/entities/civil_person/records",
+                    get(fixed_openfn_records_handler),
+                )
+                .with_state(fixture.clone()),
+        );
+        let mut evidence = openfn_sidecar_spike_config(
+            upstream
+                .server_address()
+                .expect("HTTP transport exposes upstream address")
+                .as_str(),
+        );
+        evidence
+            .source_connections
+            .get_mut("openfn_crvs")
+            .expect("connection exists")
+            .expected_sidecar = Some(expected_openfn_sidecar(&config_hash));
+        let source = HttpEvidenceSources::from_config(&evidence, Arc::new(AppMetrics::default()))
+            .expect("source config resolves");
+        let binding = evidence.claims[0].source_bindings["crvs"].clone();
+        let connection = source
+            .source_connection(&binding)
+            .expect("source connection exists");
+        let subject = SubjectRequest {
+            id: "person-123".to_string(),
+            id_type: None,
+        };
+
+        assert!(source.has_readiness_check());
+        assert!(source.check_ready().await);
+        assert_eq!(fixture.assurance_count.load(Ordering::SeqCst), 1);
+        read_remote_registry_data_api_one(
+            &source,
+            connection,
+            &binding,
+            &subject,
+            OPENFN_SPIKE_PURPOSE,
+        )
+        .await
+        .expect("first source read succeeds");
+        read_remote_registry_data_api_one(
+            &source,
+            connection,
+            &binding,
+            &subject,
+            OPENFN_SPIKE_PURPOSE,
+        )
+        .await
+        .expect("second source read succeeds");
+
+        assert_eq!(fixture.assurance_count.load(Ordering::SeqCst), 1);
+        assert_eq!(fixture.records_count.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            source
+                .observed_sidecar_config_hashes(&evidence, &["date-of-birth".to_string()])
+                .await,
+            vec![config_hash]
+        );
+    }
+
+    #[tokio::test]
+    async fn openfn_sidecar_expected_assurance_mismatch_fails_before_source_read() {
+        std::env::set_var(OPENFN_SIDECAR_TOKEN_ENV, OPENFN_SIDECAR_TOKEN);
+        let observed_hash =
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222".to_string();
+        let expected_hash =
+            "sha256:3333333333333333333333333333333333333333333333333333333333333333".to_string();
+        let fixture = OpenFnAssuranceFixture {
+            assurance_count: Arc::new(AtomicUsize::new(0)),
+            records_count: Arc::new(AtomicUsize::new(0)),
+            config_hash: observed_hash,
+        };
+        let upstream = TestServer::builder().http_transport().build(
+            Router::new()
+                .route("/v1/assurance", get(fixed_openfn_assurance_handler))
+                .route(
+                    "/v1/datasets/civil_registry/entities/civil_person/records",
+                    get(fixed_openfn_records_handler),
+                )
+                .with_state(fixture.clone()),
+        );
+        let mut evidence = openfn_sidecar_spike_config(
+            upstream
+                .server_address()
+                .expect("HTTP transport exposes upstream address")
+                .as_str(),
+        );
+        evidence
+            .source_connections
+            .get_mut("openfn_crvs")
+            .expect("connection exists")
+            .expected_sidecar = Some(expected_openfn_sidecar(&expected_hash));
+        let source = HttpEvidenceSources::from_config(&evidence, Arc::new(AppMetrics::default()))
+            .expect("source config resolves");
+        let binding = evidence.claims[0].source_bindings["crvs"].clone();
+        let connection = source
+            .source_connection(&binding)
+            .expect("source connection exists");
+        let subject = SubjectRequest {
+            id: "person-123".to_string(),
+            id_type: None,
+        };
+
+        assert!(!source.check_ready().await);
+        assert_eq!(fixture.assurance_count.load(Ordering::SeqCst), 1);
+        assert_eq!(fixture.records_count.load(Ordering::SeqCst), 0);
+        let error = read_remote_registry_data_api_one(
+            &source,
+            connection,
+            &binding,
+            &subject,
+            OPENFN_SPIKE_PURPOSE,
+        )
+        .await
+        .expect_err("mismatched assurance must fail");
+
+        assert!(matches!(error, EvidenceError::SourceUnavailable));
+        assert_eq!(fixture.assurance_count.load(Ordering::SeqCst), 2);
+        assert_eq!(fixture.records_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn openfn_sidecar_missing_assurance_endpoint_fails_before_source_read() {
+        std::env::set_var(OPENFN_SIDECAR_TOKEN_ENV, OPENFN_SIDECAR_TOKEN);
+        let expected_hash =
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222".to_string();
+        let fixture = OpenFnAssuranceFixture {
+            assurance_count: Arc::new(AtomicUsize::new(0)),
+            records_count: Arc::new(AtomicUsize::new(0)),
+            config_hash: expected_hash.clone(),
+        };
+        let upstream = TestServer::builder().http_transport().build(
+            Router::new()
+                .route(
+                    "/v1/datasets/civil_registry/entities/civil_person/records",
+                    get(fixed_openfn_records_handler),
+                )
+                .with_state(fixture.clone()),
+        );
+        let mut evidence = openfn_sidecar_spike_config(
+            upstream
+                .server_address()
+                .expect("HTTP transport exposes upstream address")
+                .as_str(),
+        );
+        evidence
+            .source_connections
+            .get_mut("openfn_crvs")
+            .expect("connection exists")
+            .expected_sidecar = Some(expected_openfn_sidecar(&expected_hash));
+        let source = HttpEvidenceSources::from_config(&evidence, Arc::new(AppMetrics::default()))
+            .expect("source config resolves");
+        let binding = evidence.claims[0].source_bindings["crvs"].clone();
+        let connection = source
+            .source_connection(&binding)
+            .expect("source connection exists");
+        let subject = SubjectRequest {
+            id: "person-123".to_string(),
+            id_type: None,
+        };
+
+        assert!(!source.check_ready().await);
+        let error = read_remote_registry_data_api_one(
+            &source,
+            connection,
+            &binding,
+            &subject,
+            OPENFN_SPIKE_PURPOSE,
+        )
+        .await
+        .expect_err("missing assurance endpoint must fail");
+
+        assert!(matches!(error, EvidenceError::SourceUnavailable));
+        assert_eq!(fixture.assurance_count.load(Ordering::SeqCst), 0);
+        assert_eq!(fixture.records_count.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -7836,6 +8577,102 @@ sources:
         assert_eq!(results[0].claim_id, "date-of-birth");
         assert_eq!(results[0].value, Some(json!("1990-01-01")));
         assert_eq!(results[0].provenance.source_count, 1);
+    }
+
+    #[tokio::test]
+    async fn governed_openfn_sidecar_e2e_notary_pins_assurance_and_evaluates() {
+        std::env::set_var(OPENFN_SIDECAR_TOKEN_ENV, OPENFN_SIDECAR_TOKEN);
+        std::env::set_var(
+            "TEST_OPENCRVS_READER_CREDENTIAL_JSON",
+            r#"{"apiToken":"fixture-token"}"#,
+        );
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let attempt_log = tmp.path().join("attempts.jsonl");
+        let manifest = openfn_sidecar_test_manifest(attempt_log);
+        let sidecar_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../registry-notary-openfn-sidecar");
+        let jobs_root = sidecar_root.join("tests/fixtures/jobs");
+        let target_bytes = render_governed_runtime_target_json(&manifest, &jobs_root)
+            .expect("governed target renders");
+        let previous_config_hash =
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+        let repo = signed_openfn_runtime_repo(&target_bytes, 12, previous_config_hash).await;
+        initialize_openfn_antirollback(&repo, previous_config_hash, 11);
+        let bootstrap = openfn_governed_bootstrap_yaml(&repo);
+        let sidecar_config = load_openfn_sidecar_startup_config(&bootstrap)
+            .await
+            .expect("governed sidecar startup config loads");
+        let sidecar = sidecar_router(sidecar_config)
+            .await
+            .expect("governed sidecar starts");
+        let server = TestServer::builder().http_transport().build(sidecar);
+
+        let ready = server.get("/ready").await;
+        ready.assert_status_ok();
+        let ready_body: Value = ready.json();
+        assert_eq!(ready_body["status"], "ready");
+        assert_eq!(ready_body["config_hash"], repo.config_hash);
+
+        let mut evidence = openfn_sidecar_spike_config(
+            server
+                .server_address()
+                .expect("HTTP transport exposes sidecar address")
+                .as_str(),
+        );
+        evidence
+            .source_connections
+            .get_mut("openfn_crvs")
+            .expect("connection exists")
+            .expected_sidecar = Some(expected_openfn_sidecar(&repo.config_hash));
+        let evidence = Arc::new(evidence);
+        let source = Arc::new(
+            HttpEvidenceSources::from_config(&evidence, Arc::new(AppMetrics::default()))
+                .expect("source config"),
+        );
+        assert!(source.check_ready().await);
+        let principal = EvidencePrincipal {
+            principal_id: "caseworker".to_string(),
+            scopes: vec!["civil_registry:evidence_verification".to_string()],
+            access_mode: AccessMode::MachineClient,
+            verified_claims: None,
+        };
+
+        let results = crate::RegistryNotaryRuntime::new()
+            .evaluate(
+                Arc::clone(&evidence),
+                source.clone(),
+                &EvidenceStore::default(),
+                &principal,
+                EvaluateRequest {
+                    requester: None,
+                    target: Some(registry_notary_core::EvidenceEntity::from_subject_request(
+                        "Person",
+                        SubjectRequest {
+                            id: "person-123".to_string(),
+                            id_type: None,
+                        },
+                    )),
+                    relationship: None,
+                    on_behalf_of: None,
+                    claims: vec![registry_notary_core::ClaimRef::from("date-of-birth")],
+                    disclosure: Some("value".to_string()),
+                    format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+                    purpose: Some(OPENFN_SPIKE_PURPOSE.to_string()),
+                },
+                None,
+            )
+            .await
+            .expect("governed OpenFn sidecar sources the claim");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].claim_id, "date-of-birth");
+        assert_eq!(results[0].value, Some(json!("1990-01-01")));
+        assert_eq!(
+            source
+                .observed_sidecar_config_hashes(&evidence, &["date-of-birth".to_string()])
+                .await,
+            vec![repo.config_hash]
+        );
     }
 
     #[tokio::test]
@@ -8444,6 +9281,7 @@ sources:
             retry_on_5xx: true,
             bulk_mode: BulkMode::None,
             bulk_timeout_max: Duration::from_secs(30),
+            expected_sidecar: None,
         };
 
         let debug = format!("{credential:?} {connection:?}");
@@ -8741,6 +9579,7 @@ sources:
                     allow_insecure_private_network: false,
                     token_env: "TEST_EVIDENCE_SOURCE_REDIRECT_TOKEN".to_string(),
                     source_auth: None,
+                    expected_sidecar: None,
                     dci: DciSourceConnectionConfig::default(),
                     max_in_flight: 8,
                     retry_on_5xx: true,
@@ -8845,6 +9684,7 @@ sources:
                     allow_insecure_private_network: false,
                     token_env: "TEST_EVIDENCE_SOURCE_TIMEOUT_TOKEN".to_string(),
                     source_auth: None,
+                    expected_sidecar: None,
                     dci: DciSourceConnectionConfig::default(),
                     max_in_flight: 8,
                     retry_on_5xx: true,

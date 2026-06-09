@@ -74,6 +74,7 @@ fn build_audit_event() -> EvidenceAuditEvent {
         matching_outcome: Some("matched".to_string()),
         matching_error_code: None,
         batch_items: None,
+        source_sidecar_config_hashes: None,
         config: None,
     }
 }

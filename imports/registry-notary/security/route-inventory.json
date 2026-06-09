@@ -295,6 +295,14 @@
     },
     {
       "listener": "sidecar",
+      "path": "/v1/assurance",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-openfn-sidecar/src/sidecar.rs"
+    },
+    {
+      "listener": "sidecar",
       "path": "/v1/datasets/{dataset}/entities/{entity}/records",
       "methods": [
         "GET"

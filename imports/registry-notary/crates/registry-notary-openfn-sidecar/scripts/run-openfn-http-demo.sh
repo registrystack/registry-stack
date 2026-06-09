@@ -155,7 +155,9 @@ fi
 
 export OPENFN_HTTP_DEMO_CREDENTIAL_JSON="{\"baseUrl\":\"http://127.0.0.1:$registry_port\",\"apiToken\":\"demo-target-token\"}"
 export DEV_SIDECAR_TOKEN_HASH='sha256:a61cb2a28977890d2e95d2eb9f5355b184d48dc2aec23252bdeb08eca7f42544'
-nohup cargo run -p registry-notary-openfn-sidecar --bin registry-notary-openfn-sidecar -- --config "$manifest" >"$sidecar_log" 2>&1 &
+nohup cargo run -p registry-notary-openfn-sidecar --bin registry-notary-openfn-sidecar -- \
+  --config "$manifest" \
+  --allow-unsigned-dev-config >"$sidecar_log" 2>&1 &
 sidecar_pid="$!"
 printf '%s\n' "$sidecar_pid" >"$sidecar_pid_file"
 
@@ -177,10 +179,10 @@ if [ "$ready" -ne 1 ]; then
 fi
 
 printf 'OpenFn HTTP sidecar demo is running\n'
-printf 'RDA endpoint: http://127.0.0.1:%s/datasets/civil_registry/civil_person\n' "$sidecar_port"
+printf 'RDA endpoint: http://127.0.0.1:%s/v1/datasets/civil_registry/entities/civil_person/records\n' "$sidecar_port"
 printf '\nTry:\n'
 printf 'curl -sS -H "Authorization: Bearer dev-sidecar-token" -H "Data-Purpose: demo" "%s" | jq\n' \
-  "http://127.0.0.1:$sidecar_port/datasets/civil_registry/civil_person?national_id=person-123&fields=national_id,birth_date&limit=2"
+  "http://127.0.0.1:$sidecar_port/v1/datasets/civil_registry/entities/civil_person/records?national_id=person-123&fields=national_id,birth_date&limit=2"
 printf '\nStop:\n%s stop\n' "$0"
 
 if [ "$mode" = "foreground" ]; then

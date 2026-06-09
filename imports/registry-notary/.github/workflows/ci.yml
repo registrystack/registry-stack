@@ -118,6 +118,8 @@ jobs:
       - run: cargo test --workspace --all-features
       - run: cargo build --workspace --all-features
       - run: cargo run -p registry-notary-bin -- openapi > target/registry-notary.openapi.json
+      - name: Free Rust build artifacts before Docker smoke tests
+        run: cargo clean
       - name: Build release Docker image
         working-directory: ${{ github.workspace }}
         run: docker build --build-context registry-platform=registry-platform --build-context cel-mapping=cel-mapping --build-arg REGISTRY_NOTARY_FEATURES=registry-notary-cel,pkcs11 --file registry-notary/Dockerfile --tag registry-notary:ci registry-notary

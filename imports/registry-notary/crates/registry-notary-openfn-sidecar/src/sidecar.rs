@@ -7,7 +7,13 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use chrono::{TimeDelta, Utc};
 use registry_platform_authcommon::{parse_bearer_token, parse_fingerprint, verify_api_key};
+use registry_platform_config::{
+    ConfigTargetMetadata, LocalTufRepositoryInput, RegistryAcceptedTrustRoots, RegistryTrustRoot,
+    TufConfigVerifier, TufVerifiedTarget, VerificationContext,
+};
+use registry_platform_ops::{AntiRollbackKey, AntiRollbackProposal, FileAntiRollbackStore};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::{
@@ -15,23 +21,37 @@ use std::{
     ffi::OsString,
     fmt,
     net::SocketAddr,
-    path::{Path as FsPath, PathBuf},
+    num::NonZeroU64,
+    path::{Component, Path as FsPath, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
 };
 use thiserror::Error;
 use tokio::process::Command;
 use tokio::sync::Mutex;
+use tough::{
+    editor::{signed::PathExists, RepositoryEditor},
+    key_source::{KeySource, LocalKeySource},
+    schema::Target,
+};
 use tracing::{info, warn};
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct SidecarConfig {
     pub server: ServerConfig,
     pub auth: AuthConfig,
+    #[serde(default)]
+    pub config_trust: Option<SidecarConfigTrustConfig>,
+    #[serde(default)]
+    pub jobs_root: Option<PathBuf>,
     pub limits: LimitConfig,
     pub openfn: OpenFnConfig,
     pub worker: WorkerProcessConfig,
     pub sources: BTreeMap<String, SourceConfig>,
+    #[serde(skip)]
+    pub assurance: Option<SidecarAssurance>,
+    #[serde(skip)]
+    governed_acceptance: Option<GovernedAcceptance>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -42,6 +62,23 @@ pub struct ServerConfig {
 #[derive(Clone, Debug, Deserialize)]
 pub struct AuthConfig {
     pub bearer_tokens: Vec<BearerTokenConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SidecarConfigTrustConfig {
+    pub product: String,
+    pub instance_id: String,
+    pub environment: String,
+    pub stream_id: String,
+    pub root_path: PathBuf,
+    pub metadata_dir: PathBuf,
+    pub targets_dir: PathBuf,
+    pub datastore_dir: PathBuf,
+    pub target_name: String,
+    pub antirollback_state_path: PathBuf,
+    #[serde(default)]
+    pub accepted_roots: Vec<RegistryTrustRoot>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -63,7 +100,7 @@ impl fmt::Debug for BearerTokenConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct LimitConfig {
     pub max_workers: usize,
     pub worker_timeout_ms: u64,
@@ -79,13 +116,13 @@ pub struct LimitConfig {
     pub max_worker_memory_mb: Option<u64>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct OpenFnConfig {
     pub cli_build_tool: String,
     pub runtime: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct WorkerProcessConfig {
     pub command: PathBuf,
     #[serde(default)]
@@ -94,7 +131,7 @@ pub struct WorkerProcessConfig {
     pub version_args: Option<Vec<String>>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SourceConfig {
     pub dataset: String,
     pub entity: String,
@@ -117,9 +154,52 @@ pub struct SourceWorkflowConfig {
 pub struct SourceWorkflowStepConfig {
     pub id: String,
     pub expression: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expression_sha256: Option<String>,
     pub adaptors: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next: Option<SourceWorkflowNextConfig>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SidecarAssurance {
+    pub status: String,
+    pub product: String,
+    pub instance_id: String,
+    pub environment: String,
+    pub stream_id: String,
+    pub bundle_id: String,
+    pub sequence: u64,
+    pub config_hash: String,
+    pub tuf_root_sha256: String,
+    pub root_version: u64,
+    pub targets_version: u64,
+    pub snapshot_version: u64,
+    pub timestamp_version: u64,
+    pub change_classes: BTreeSet<String>,
+    pub signer_kids: Vec<String>,
+    pub expression_hashes_verified: bool,
+    pub runtime_verified: bool,
+    pub smoke_verified: bool,
+    pub apply_policy: String,
+}
+
+#[derive(Clone, Debug)]
+struct GovernedAcceptance {
+    antirollback_state_path: PathBuf,
+    key: AntiRollbackKey,
+    proposal: AntiRollbackProposal,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct GovernedRuntimeTarget {
+    schema: String,
+    limits: LimitConfig,
+    openfn: OpenFnConfig,
+    jobs_root: PathBuf,
+    worker: WorkerProcessConfig,
+    sources: BTreeMap<String, SourceConfig>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -156,7 +236,7 @@ pub struct SourceWorkflowEdgeObjectConfig {
     pub label: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SmokeLookupConfig {
     pub field: String,
     pub value: String,
@@ -243,6 +323,646 @@ struct MetricValue {
     duration_ms_total: u64,
 }
 
+pub async fn load_startup_config(raw: &str) -> Result<SidecarConfig, SidecarError> {
+    load_startup_config_with_options(raw, false).await
+}
+
+pub async fn load_startup_config_with_options(
+    raw: &str,
+    allow_unsigned_dev_config: bool,
+) -> Result<SidecarConfig, SidecarError> {
+    let probe: SidecarConfigTrustProbe =
+        serde_norway::from_str(raw).map_err(|error| SidecarError::Config(error.to_string()))?;
+    if probe.config_trust.is_none() {
+        if allow_unsigned_dev_config {
+            return serde_norway::from_str(raw)
+                .map_err(|error| SidecarError::Config(error.to_string()));
+        }
+        return Err(SidecarError::Config(
+            "config_trust is required; use --allow-unsigned-dev-config only for local unsigned development manifests".to_string(),
+        ));
+    }
+    let bootstrap: SidecarBootstrapConfig =
+        serde_norway::from_str(raw).map_err(|error| SidecarError::Config(error.to_string()))?;
+    load_governed_startup_config(bootstrap).await
+}
+
+#[derive(Debug, Deserialize)]
+struct SidecarConfigTrustProbe {
+    #[serde(default)]
+    config_trust: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SidecarBootstrapConfig {
+    server: ServerConfig,
+    auth: AuthConfig,
+    config_trust: SidecarConfigTrustConfig,
+}
+
+#[derive(Clone, Debug)]
+pub struct LocalTufBundleVerifyOptions {
+    pub product: String,
+    pub instance_id: String,
+    pub environment: String,
+    pub stream_id: String,
+    pub root_path: PathBuf,
+    pub metadata_dir: PathBuf,
+    pub targets_dir: PathBuf,
+    pub datastore_dir: PathBuf,
+    pub target_name: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct CreateLocalTufRepoOptions {
+    pub target_path: PathBuf,
+    pub target_name: String,
+    pub root_path: PathBuf,
+    pub signing_key_path: PathBuf,
+    pub metadata_dir: PathBuf,
+    pub targets_dir: PathBuf,
+    pub product: String,
+    pub instance_id: String,
+    pub environment: String,
+    pub stream_id: String,
+    pub bundle_id: String,
+    pub sequence: u64,
+    pub previous_config_hash: String,
+    pub change_classes: Vec<String>,
+    pub declared_signer_kids: Vec<String>,
+    pub apply_policy: String,
+    pub targets_expiration_days: i64,
+    pub snapshot_expiration_days: i64,
+    pub timestamp_expiration_days: i64,
+}
+
+pub fn render_governed_runtime_target_json(
+    raw_manifest: &str,
+    jobs_root: &FsPath,
+) -> Result<Vec<u8>, SidecarError> {
+    let config: SidecarConfig = serde_norway::from_str(raw_manifest)
+        .map_err(|error| SidecarError::Config(error.to_string()))?;
+    let canonical_jobs_root = canonical_jobs_root(jobs_root)?;
+    let mut target = GovernedRuntimeTarget {
+        schema: "registry.notary.openfn_sidecar.runtime.v1".to_string(),
+        limits: config.limits,
+        openfn: config.openfn,
+        jobs_root: jobs_root.to_path_buf(),
+        worker: config.worker,
+        sources: config.sources,
+    };
+    populate_expression_hashes(&mut target, &canonical_jobs_root)?;
+    validate_governed_runtime_target(&target)?;
+    let mut bytes = serde_json::to_vec_pretty(&target).map_err(|error| {
+        SidecarError::Config(format!("target JSON could not be rendered: {error}"))
+    })?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+pub fn print_expression_hashes_report_json(target_bytes: &[u8]) -> Result<Value, SidecarError> {
+    let target = governed_target_from_bytes(target_bytes)?;
+    validate_governed_runtime_target(&target)?;
+    let expression_hashes = expression_hashes_for_target(&target)?;
+    Ok(json!({
+        "config_hash": registry_platform_config::sha256_uri(target_bytes),
+        "jobs_root": target.jobs_root,
+        "expression_hashes": expression_hashes,
+    }))
+}
+
+pub async fn create_local_tuf_demo_repo_report_json(
+    options: CreateLocalTufRepoOptions,
+) -> Result<Value, SidecarError> {
+    validate_target_name(&options.target_name)?;
+    if options.sequence == 0 {
+        return Err(SidecarError::Config(
+            "TUF metadata sequence must be greater than zero".to_string(),
+        ));
+    }
+    if options.change_classes.is_empty() {
+        return Err(SidecarError::Config(
+            "at least one change class is required".to_string(),
+        ));
+    }
+    let declared_signer_kids = if options.declared_signer_kids.is_empty() {
+        vec!["local-demo-signer".to_string()]
+    } else {
+        options.declared_signer_kids.clone()
+    };
+    let target_bytes = std::fs::read(&options.target_path).map_err(|error| {
+        SidecarError::Config(format!(
+            "target {} could not be read: {error}",
+            options.target_path.display()
+        ))
+    })?;
+    let target = governed_target_from_bytes(&target_bytes)?;
+    validate_governed_runtime_target(&target)?;
+    let expression_hashes = expression_hashes_for_target(&target)?;
+    let config_hash = registry_platform_config::sha256_uri(&target_bytes);
+
+    let source_targets_dir = options.metadata_dir.join(".source-targets");
+    if source_targets_dir.exists() {
+        std::fs::remove_dir_all(&source_targets_dir).map_err(|error| {
+            SidecarError::Config(format!(
+                "stale TUF source target staging directory {} could not be removed: {error}",
+                source_targets_dir.display()
+            ))
+        })?;
+    }
+    let staged_target_path = source_targets_dir.join(&options.target_name);
+    if let Some(parent) = staged_target_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            SidecarError::Config(format!(
+                "TUF source target staging directory {} could not be created: {error}",
+                parent.display()
+            ))
+        })?;
+    }
+    std::fs::copy(&options.target_path, &staged_target_path).map_err(|error| {
+        SidecarError::Config(format!(
+            "target could not be staged as {}: {error}",
+            staged_target_path.display()
+        ))
+    })?;
+
+    let mut tuf_target = Target::from_path(&staged_target_path)
+        .await
+        .map_err(|error| {
+            SidecarError::Config(format!("target metadata could not be built: {error}"))
+        })?;
+    let custom = json!({
+        "product": options.product,
+        "instance_id": options.instance_id,
+        "environment": options.environment,
+        "stream_id": options.stream_id,
+        "bundle_id": options.bundle_id,
+        "sequence": options.sequence,
+        "previous_config_hash": options.previous_config_hash,
+        "config_hash": config_hash,
+        "change_classes": options.change_classes,
+        "signer_kids": declared_signer_kids.clone(),
+        "apply_policy": options.apply_policy
+    });
+    let Value::Object(custom) = custom else {
+        return Err(SidecarError::Config(
+            "custom target metadata was not an object".to_string(),
+        ));
+    };
+    tuf_target.custom = custom.into_iter().collect::<HashMap<_, _>>();
+
+    let version = NonZeroU64::new(options.sequence).ok_or_else(|| {
+        SidecarError::Config("TUF metadata sequence must be greater than zero".to_string())
+    })?;
+    let mut editor = RepositoryEditor::new(&options.root_path)
+        .await
+        .map_err(|error| SidecarError::Config(format!("TUF root could not be loaded: {error}")))?;
+    editor
+        .targets_expires(expiry_from_days(options.targets_expiration_days)?)
+        .map_err(|error| {
+            SidecarError::Config(format!("TUF targets expiration could not be set: {error}"))
+        })?;
+    editor.targets_version(version).map_err(|error| {
+        SidecarError::Config(format!("TUF targets version could not be set: {error}"))
+    })?;
+    editor.snapshot_expires(expiry_from_days(options.snapshot_expiration_days)?);
+    editor.snapshot_version(version);
+    editor.timestamp_expires(expiry_from_days(options.timestamp_expiration_days)?);
+    editor.timestamp_version(version);
+    editor
+        .add_target(options.target_name.clone(), tuf_target)
+        .map_err(|error| SidecarError::Config(format!("TUF target could not be added: {error}")))?;
+    let keys: Vec<Box<dyn KeySource>> = vec![Box::new(LocalKeySource {
+        path: options.signing_key_path.clone(),
+    })];
+    let signed = editor.sign(&keys).await.map_err(|error| {
+        SidecarError::Config(format!("TUF repository could not be signed: {error}"))
+    })?;
+    signed.write(&options.metadata_dir).await.map_err(|error| {
+        SidecarError::Config(format!("TUF metadata could not be written: {error}"))
+    })?;
+    signed
+        .copy_targets(&source_targets_dir, &options.targets_dir, PathExists::Fail)
+        .await
+        .map_err(|error| {
+            SidecarError::Config(format!("TUF targets could not be written: {error}"))
+        })?;
+    std::fs::remove_dir_all(&source_targets_dir).map_err(|error| {
+        SidecarError::Config(format!(
+            "TUF source target staging directory {} could not be removed: {error}",
+            source_targets_dir.display()
+        ))
+    })?;
+
+    Ok(json!({
+        "created": true,
+        "target_name": options.target_name,
+        "config_hash": config_hash,
+        "metadata_dir": options.metadata_dir,
+        "targets_dir": options.targets_dir,
+        "root_path": options.root_path,
+        "expression_hashes": expression_hashes,
+        "metadata": {
+            "product": options.product,
+            "instance_id": options.instance_id,
+            "environment": options.environment,
+            "stream_id": options.stream_id,
+            "bundle_id": options.bundle_id,
+            "sequence": options.sequence,
+            "previous_config_hash": options.previous_config_hash,
+            "config_hash": config_hash,
+            "change_classes": options.change_classes,
+            "signer_kids": declared_signer_kids,
+            "apply_policy": options.apply_policy,
+        }
+    }))
+}
+
+pub async fn verify_governed_bundle_report_json(
+    target_bytes: Option<&[u8]>,
+    local_tuf: Option<LocalTufBundleVerifyOptions>,
+) -> Result<Value, SidecarError> {
+    let (target_name, target_bytes, tuf_report, metadata_report) = match local_tuf {
+        Some(options) => {
+            let context = VerificationContext {
+                product: options.product,
+                instance_id: options.instance_id,
+                environment: options.environment,
+            };
+            let input = LocalTufRepositoryInput {
+                root_path: options.root_path,
+                metadata_dir: options.metadata_dir,
+                targets_dir: options.targets_dir,
+                datastore_dir: options.datastore_dir,
+                target_name: options.target_name,
+            };
+            let verified = TufConfigVerifier::verify_config_target(&input, &context)
+                .await
+                .map_err(|error| {
+                    SidecarError::StartupCheck(format!("TUF target verification failed: {error}"))
+                })?;
+            if verified.metadata.stream_id != options.stream_id {
+                return Err(SidecarError::StartupCheck(
+                    "signed config target stream_id does not match expected stream_id".to_string(),
+                ));
+            }
+            let target_name = verified.tuf.target_name.clone();
+            let tuf_report = tuf_report(&verified.tuf);
+            let metadata_report = metadata_report(&verified.metadata);
+            (
+                target_name,
+                verified.tuf.target_bytes,
+                Some(tuf_report),
+                Some(metadata_report),
+            )
+        }
+        None => {
+            let bytes = target_bytes
+                .ok_or_else(|| {
+                    SidecarError::Config(
+                        "target bytes are required when local TUF options are absent".to_string(),
+                    )
+                })?
+                .to_vec();
+            ("<local-target-json>".to_string(), bytes, None, None)
+        }
+    };
+    let target = governed_target_from_bytes(&target_bytes)?;
+    validate_governed_runtime_target(&target)?;
+    let expression_hashes = expression_hashes_for_target(&target)?;
+    Ok(json!({
+        "verified": true,
+        "target_name": target_name,
+        "config_hash": registry_platform_config::sha256_uri(&target_bytes),
+        "jobs_root": target.jobs_root,
+        "expression_hashes": expression_hashes,
+        "tuf": tuf_report,
+        "metadata": metadata_report,
+    }))
+}
+
+fn validate_target_name(target_name: &str) -> Result<(), SidecarError> {
+    if target_name.trim().is_empty() {
+        return Err(SidecarError::Config(
+            "TUF target name must not be blank".to_string(),
+        ));
+    }
+    let path = FsPath::new(target_name);
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir | Component::RootDir))
+    {
+        return Err(SidecarError::Config(
+            "TUF target name must be a relative path without traversal".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn expiry_from_days(days: i64) -> Result<chrono::DateTime<Utc>, SidecarError> {
+    let duration = TimeDelta::try_days(days).ok_or_else(|| {
+        SidecarError::Config("TUF expiration days are outside the supported range".to_string())
+    })?;
+    Utc::now().checked_add_signed(duration).ok_or_else(|| {
+        SidecarError::Config("TUF expiration is outside the supported range".to_string())
+    })
+}
+
+async fn load_governed_startup_config(
+    bootstrap: SidecarBootstrapConfig,
+) -> Result<SidecarConfig, SidecarError> {
+    validate_config_trust(&bootstrap.config_trust)?;
+    let context = VerificationContext {
+        product: bootstrap.config_trust.product.clone(),
+        instance_id: bootstrap.config_trust.instance_id.clone(),
+        environment: bootstrap.config_trust.environment.clone(),
+    };
+    let input = LocalTufRepositoryInput {
+        root_path: bootstrap.config_trust.root_path.clone(),
+        metadata_dir: bootstrap.config_trust.metadata_dir.clone(),
+        targets_dir: bootstrap.config_trust.targets_dir.clone(),
+        datastore_dir: bootstrap.config_trust.datastore_dir.clone(),
+        target_name: bootstrap.config_trust.target_name.clone(),
+    };
+    let verified = TufConfigVerifier::verify_config_target(&input, &context)
+        .await
+        .map_err(|error| {
+            SidecarError::StartupCheck(format!("TUF target verification failed: {error}"))
+        })?;
+    if verified.metadata.stream_id != bootstrap.config_trust.stream_id {
+        return Err(SidecarError::StartupCheck(
+            "signed config target stream_id does not match bootstrap config_trust".to_string(),
+        ));
+    }
+    if verified.metadata.apply_policy != "restart_required" {
+        return Err(SidecarError::StartupCheck(
+            "signed config target apply_policy must be restart_required".to_string(),
+        ));
+    }
+    let accepted_roots = RegistryAcceptedTrustRoots {
+        accepted_roots: bootstrap.config_trust.accepted_roots.clone(),
+    };
+    accepted_roots
+        .authorize(
+            &verified.metadata.change_classes,
+            &verified.tuf.signer_kids,
+            &verified.tuf.root_sha256,
+        )
+        .map_err(|error| {
+            SidecarError::StartupCheck(format!(
+                "signed config target was not authorized by local trust roots: {error}"
+            ))
+        })?;
+    let target: GovernedRuntimeTarget = serde_json::from_slice(&verified.tuf.target_bytes)
+        .map_err(|error| {
+            SidecarError::StartupCheck(format!("governed runtime target is invalid JSON: {error}"))
+        })?;
+    materialize_governed_config(bootstrap, verified.tuf, verified.metadata, target)
+}
+
+fn validate_config_trust(config_trust: &SidecarConfigTrustConfig) -> Result<(), SidecarError> {
+    for (field, value) in [
+        ("product", config_trust.product.as_str()),
+        ("instance_id", config_trust.instance_id.as_str()),
+        ("environment", config_trust.environment.as_str()),
+        ("stream_id", config_trust.stream_id.as_str()),
+        ("target_name", config_trust.target_name.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return Err(SidecarError::Config(format!(
+                "config_trust.{field} must be non-empty"
+            )));
+        }
+    }
+    if config_trust.accepted_roots.is_empty() {
+        return Err(SidecarError::Config(
+            "config_trust.accepted_roots must not be empty".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn materialize_governed_config(
+    bootstrap: SidecarBootstrapConfig,
+    tuf: TufVerifiedTarget,
+    metadata: ConfigTargetMetadata,
+    target: GovernedRuntimeTarget,
+) -> Result<SidecarConfig, SidecarError> {
+    if target.schema != "registry.notary.openfn_sidecar.runtime.v1" {
+        return Err(SidecarError::StartupCheck(
+            "governed runtime target schema is unsupported".to_string(),
+        ));
+    }
+    let key = AntiRollbackKey {
+        product: metadata.product.clone(),
+        instance_id: metadata.instance_id.clone(),
+        environment: metadata.environment.clone(),
+        stream_id: metadata.stream_id.clone(),
+    };
+    let proposal = AntiRollbackProposal {
+        sequence: metadata.sequence,
+        previous_config_hash: metadata.previous_config_hash.clone(),
+        config_hash: metadata.config_hash.clone(),
+        root_version: Some(tuf.root_version),
+        break_glass: None,
+        break_glass_rate_limit: None,
+        local_approval: None,
+        local_approval_rate_limit: None,
+    };
+    let assurance = SidecarAssurance {
+        status: "ready".to_string(),
+        product: metadata.product.clone(),
+        instance_id: metadata.instance_id.clone(),
+        environment: metadata.environment.clone(),
+        stream_id: metadata.stream_id.clone(),
+        bundle_id: metadata.bundle_id.clone(),
+        sequence: metadata.sequence,
+        config_hash: metadata.config_hash.clone(),
+        tuf_root_sha256: tuf.root_sha256.clone(),
+        root_version: tuf.root_version,
+        targets_version: tuf.targets_version,
+        snapshot_version: tuf.snapshot_version,
+        timestamp_version: tuf.timestamp_version,
+        change_classes: metadata.change_classes.clone(),
+        signer_kids: tuf.signer_kids.clone(),
+        expression_hashes_verified: true,
+        runtime_verified: true,
+        smoke_verified: true,
+        apply_policy: metadata.apply_policy.clone(),
+    };
+    Ok(SidecarConfig {
+        server: bootstrap.server,
+        auth: bootstrap.auth,
+        config_trust: Some(bootstrap.config_trust.clone()),
+        jobs_root: Some(target.jobs_root),
+        limits: target.limits,
+        openfn: target.openfn,
+        worker: target.worker,
+        sources: target.sources,
+        assurance: Some(assurance),
+        governed_acceptance: Some(GovernedAcceptance {
+            antirollback_state_path: bootstrap.config_trust.antirollback_state_path,
+            key,
+            proposal,
+        }),
+    })
+}
+
+fn governed_target_from_bytes(target_bytes: &[u8]) -> Result<GovernedRuntimeTarget, SidecarError> {
+    serde_json::from_slice(target_bytes).map_err(|error| {
+        SidecarError::StartupCheck(format!("governed runtime target is invalid JSON: {error}"))
+    })
+}
+
+fn validate_governed_runtime_target(target: &GovernedRuntimeTarget) -> Result<(), SidecarError> {
+    if target.schema != "registry.notary.openfn_sidecar.runtime.v1" {
+        return Err(SidecarError::StartupCheck(
+            "governed runtime target schema is unsupported".to_string(),
+        ));
+    }
+    let config = SidecarConfig {
+        server: ServerConfig {
+            bind: SocketAddr::from(([127, 0, 0, 1], 0)),
+        },
+        auth: AuthConfig {
+            bearer_tokens: vec![BearerTokenConfig {
+                id: "release-helper".to_string(),
+                token: None,
+                hash_env: Some(
+                    "REGISTRY_NOTARY_OPENFN_SIDECAR_RELEASE_HELPER_TOKEN_HASH".to_string(),
+                ),
+            }],
+        },
+        config_trust: None,
+        jobs_root: Some(target.jobs_root.clone()),
+        limits: target.limits.clone(),
+        openfn: target.openfn.clone(),
+        worker: target.worker.clone(),
+        sources: target.sources.clone(),
+        assurance: None,
+        governed_acceptance: None,
+    };
+    validate_config(&config)
+}
+
+fn populate_expression_hashes(
+    target: &mut GovernedRuntimeTarget,
+    canonical_jobs_root: &FsPath,
+) -> Result<(), SidecarError> {
+    for (source_id, source) in &mut target.sources {
+        for step in &mut source.workflow.steps {
+            let (relative_expression, expression_hash) = resolve_render_expression(
+                source_id,
+                &format!("workflow step {} expression", step.id),
+                canonical_jobs_root,
+                &step.expression,
+            )?;
+            step.expression = relative_expression;
+            step.expression_sha256 = Some(expression_hash);
+        }
+    }
+    Ok(())
+}
+
+fn expression_hashes_for_target(
+    target: &GovernedRuntimeTarget,
+) -> Result<BTreeMap<String, String>, SidecarError> {
+    let canonical_jobs_root = canonical_jobs_root(&target.jobs_root)?;
+    let mut expression_hashes = BTreeMap::new();
+    for (source_id, source) in &target.sources {
+        for step in &source.workflow.steps {
+            let expression_path = resolve_jobs_root_expression(
+                source_id,
+                &format!("workflow step {} expression", step.id),
+                &canonical_jobs_root,
+                &step.expression,
+            )?;
+            let bytes = std::fs::read(&expression_path).map_err(|error| {
+                SidecarError::Config(format!(
+                    "source {source_id} workflow step {} expression {} could not be read: {error}",
+                    step.id,
+                    expression_path.display()
+                ))
+            })?;
+            expression_hashes.insert(
+                format!("{source_id}.{}", step.id),
+                registry_platform_config::sha256_uri(&bytes),
+            );
+        }
+    }
+    Ok(expression_hashes)
+}
+
+fn resolve_render_expression(
+    source_id: &str,
+    label: &str,
+    jobs_root: &FsPath,
+    expression: &FsPath,
+) -> Result<(PathBuf, String), SidecarError> {
+    let canonical_expression = if expression.is_absolute() {
+        expression.canonicalize().map_err(|error| {
+            SidecarError::Config(format!(
+                "source {source_id} {label} {} could not be canonicalized: {error}",
+                expression.display()
+            ))
+        })?
+    } else {
+        resolve_jobs_root_expression(source_id, label, jobs_root, expression)?
+    };
+    if !canonical_expression.starts_with(jobs_root) {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} {label} must be under jobs_root"
+        )));
+    }
+    let relative_expression = canonical_expression
+        .strip_prefix(jobs_root)
+        .map_err(|_| {
+            SidecarError::Config(format!(
+                "source {source_id} {label} could not be made relative to jobs_root"
+            ))
+        })?
+        .to_path_buf();
+    let bytes = std::fs::read(&canonical_expression).map_err(|error| {
+        SidecarError::Config(format!(
+            "source {source_id} {label} {} could not be read: {error}",
+            canonical_expression.display()
+        ))
+    })?;
+    Ok((
+        relative_expression,
+        registry_platform_config::sha256_uri(&bytes),
+    ))
+}
+
+fn tuf_report(tuf: &TufVerifiedTarget) -> Value {
+    json!({
+        "root_sha256": tuf.root_sha256,
+        "root_version": tuf.root_version,
+        "targets_version": tuf.targets_version,
+        "snapshot_version": tuf.snapshot_version,
+        "timestamp_version": tuf.timestamp_version,
+        "signer_kids": tuf.signer_kids,
+    })
+}
+
+fn metadata_report(metadata: &ConfigTargetMetadata) -> Value {
+    json!({
+        "product": metadata.product,
+        "instance_id": metadata.instance_id,
+        "environment": metadata.environment,
+        "stream_id": metadata.stream_id,
+        "bundle_id": metadata.bundle_id,
+        "sequence": metadata.sequence,
+        "previous_config_hash": metadata.previous_config_hash,
+        "config_hash": metadata.config_hash,
+        "change_classes": metadata.change_classes,
+        "signer_kids": metadata.signer_kids,
+        "apply_policy": metadata.apply_policy,
+    })
+}
+
 pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarError> {
     validate_config(&config)?;
     verify_openfn_runtime(&config).await?;
@@ -280,10 +1000,12 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
         metrics: Arc::new(Mutex::new(BTreeMap::new())),
     });
     run_smoke_lookups(&state).await?;
+    accept_governed_config(&state.config)?;
 
     Ok(Router::new()
         .route("/healthz", get(healthz))
         .route("/ready", get(ready))
+        .route("/v1/assurance", get(assurance))
         .route("/metrics", get(metrics))
         .route(
             "/v1/datasets/{dataset}/entities/{entity}/records",
@@ -294,6 +1016,18 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
             post(batch_match),
         )
         .with_state(state))
+}
+
+fn accept_governed_config(config: &SidecarConfig) -> Result<(), SidecarError> {
+    let Some(governed) = &config.governed_acceptance else {
+        return Ok(());
+    };
+    FileAntiRollbackStore::new(&governed.antirollback_state_path)
+        .accept(&governed.key, governed.proposal.clone())
+        .map_err(|error| {
+            SidecarError::StartupCheck(format!("anti-rollback acceptance failed: {error}"))
+        })?;
+    Ok(())
 }
 
 fn sensitive_worker_env_names(config: &SidecarConfig) -> BTreeSet<OsString> {
@@ -321,6 +1055,10 @@ pub async fn run(config: SidecarConfig) -> Result<(), Box<dyn std::error::Error>
 }
 
 fn validate_config(config: &SidecarConfig) -> Result<(), SidecarError> {
+    let canonical_jobs_root = match &config.jobs_root {
+        Some(jobs_root) => Some(canonical_jobs_root(jobs_root)?),
+        None => None,
+    };
     if config.auth.bearer_tokens.is_empty() {
         return Err(SidecarError::Config(
             "at least one sidecar bearer token is required".to_string(),
@@ -392,7 +1130,7 @@ fn validate_config(config: &SidecarConfig) -> Result<(), SidecarError> {
         ));
     }
     for (source_id, source) in &config.sources {
-        validate_source_execution(source_id, source)?;
+        validate_source_execution(source_id, source, canonical_jobs_root.as_deref())?;
         if source
             .allowed_base_urls
             .iter()
@@ -417,13 +1155,18 @@ fn validate_config(config: &SidecarConfig) -> Result<(), SidecarError> {
     Ok(())
 }
 
-fn validate_source_execution(source_id: &str, source: &SourceConfig) -> Result<(), SidecarError> {
-    validate_source_workflow(source_id, &source.workflow)
+fn validate_source_execution(
+    source_id: &str,
+    source: &SourceConfig,
+    canonical_jobs_root: Option<&FsPath>,
+) -> Result<(), SidecarError> {
+    validate_source_workflow(source_id, &source.workflow, canonical_jobs_root)
 }
 
 fn validate_source_workflow(
     source_id: &str,
     workflow: &SourceWorkflowConfig,
+    canonical_jobs_root: Option<&FsPath>,
 ) -> Result<(), SidecarError> {
     if workflow.steps.is_empty() {
         return Err(SidecarError::Config(format!(
@@ -448,6 +1191,8 @@ fn validate_source_workflow(
             source_id,
             &format!("workflow step {} expression", step.id),
             &step.expression,
+            step.expression_sha256.as_deref(),
+            canonical_jobs_root,
         )?;
         if step.adaptors.is_empty() {
             return Err(SidecarError::Config(format!(
@@ -539,12 +1284,117 @@ fn validate_source_expression(
     source_id: &str,
     label: &str,
     expression: &FsPath,
+    expression_sha256: Option<&str>,
+    canonical_jobs_root: Option<&FsPath>,
 ) -> Result<(), SidecarError> {
-    if !expression.is_file() {
+    let resolved_expression = match canonical_jobs_root {
+        Some(jobs_root) => {
+            let expected_hash = expression_sha256.ok_or_else(|| {
+                SidecarError::Config(format!(
+                    "source {source_id} {label} expression_sha256 is required"
+                ))
+            })?;
+            validate_sha256_uri(expected_hash).map_err(|reason| {
+                SidecarError::Config(format!(
+                    "source {source_id} {label} expression_sha256 is invalid: {reason}"
+                ))
+            })?;
+            resolve_jobs_root_expression(source_id, label, jobs_root, expression)?
+        }
+        None => expression.to_path_buf(),
+    };
+    if !resolved_expression.is_file() {
         return Err(SidecarError::Config(format!(
             "source {source_id} {label} {} is missing",
-            expression.display()
+            resolved_expression.display()
         )));
+    }
+    if let (Some(expected_hash), Some(_jobs_root)) = (expression_sha256, canonical_jobs_root) {
+        let bytes = std::fs::read(&resolved_expression).map_err(|error| {
+            SidecarError::Config(format!(
+                "source {source_id} {label} {} could not be read: {error}",
+                resolved_expression.display()
+            ))
+        })?;
+        let actual_hash = registry_platform_config::sha256_uri(&bytes);
+        if actual_hash != expected_hash {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} {label} hash mismatch: expected {expected_hash}, got {actual_hash}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn canonical_jobs_root(jobs_root: &FsPath) -> Result<PathBuf, SidecarError> {
+    if jobs_root.as_os_str().is_empty() {
+        return Err(SidecarError::Config(
+            "jobs_root must be non-empty in governed mode".to_string(),
+        ));
+    }
+    let canonical = jobs_root.canonicalize().map_err(|error| {
+        SidecarError::Config(format!(
+            "jobs_root {} could not be canonicalized: {error}",
+            jobs_root.display()
+        ))
+    })?;
+    if !canonical.is_dir() {
+        return Err(SidecarError::Config(format!(
+            "jobs_root {} is not a directory",
+            canonical.display()
+        )));
+    }
+    Ok(canonical)
+}
+
+fn resolve_jobs_root_expression(
+    source_id: &str,
+    label: &str,
+    jobs_root: &FsPath,
+    expression: &FsPath,
+) -> Result<PathBuf, SidecarError> {
+    if expression.is_absolute() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} {label} must be relative to jobs_root"
+        )));
+    }
+    if expression.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::Prefix(_) | Component::RootDir
+        )
+    }) {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} {label} must not escape jobs_root"
+        )));
+    }
+    let joined = jobs_root.join(expression);
+    let canonical_expression = joined.canonicalize().map_err(|error| {
+        SidecarError::Config(format!(
+            "source {source_id} {label} {} could not be canonicalized: {error}",
+            expression.display()
+        ))
+    })?;
+    if !canonical_expression.starts_with(jobs_root) {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} {label} symlink escapes jobs_root"
+        )));
+    }
+    Ok(canonical_expression)
+}
+
+fn validate_sha256_uri(value: &str) -> Result<(), &'static str> {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return Err("missing sha256 prefix");
+    };
+    if hex.len() != 64 {
+        return Err("digest must be 64 lowercase hex characters");
+    }
+    if !hex
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("digest must be lowercase hex");
     }
     Ok(())
 }
@@ -679,11 +1529,30 @@ fn source_adaptors(source: &SourceConfig) -> Vec<&str> {
         .collect()
 }
 
-fn add_source_execution(request: &mut Value, source: &SourceConfig) {
+fn add_source_execution(request: &mut Value, config: &SidecarConfig, source: &SourceConfig) {
     let Some(object) = request.as_object_mut() else {
         return;
     };
-    object.insert("workflow".to_string(), json!(source.workflow));
+    object.insert(
+        "workflow".to_string(),
+        json!(workflow_for_worker(config, &source.workflow)),
+    );
+}
+
+fn workflow_for_worker(
+    config: &SidecarConfig,
+    workflow: &SourceWorkflowConfig,
+) -> SourceWorkflowConfig {
+    let Some(jobs_root) = &config.jobs_root else {
+        return workflow.clone();
+    };
+    let mut workflow = workflow.clone();
+    for step in &mut workflow.steps {
+        if step.expression.is_relative() {
+            step.expression = jobs_root.join(&step.expression);
+        }
+    }
+    workflow
 }
 
 fn load_credentials(config: &SidecarConfig) -> Result<BTreeMap<String, Value>, SidecarError> {
@@ -770,7 +1639,7 @@ async fn run_smoke_lookups(state: &Arc<AppState>) -> Result<(), SidecarError> {
                 "correlation_id": "startup-smoke",
                 "configuration": state.credentials.get(source_id).cloned().unwrap_or(Value::Null),
             });
-            add_source_execution(&mut request, source);
+            add_source_execution(&mut request, &state.config, source);
             match state.pool.execute_json(request).await {
                 Ok(response) => {
                     if let Some(records) = response.get("data").and_then(Value::as_array) {
@@ -858,12 +1727,29 @@ async fn healthz(State(state): State<Arc<AppState>>) -> Response {
 
 async fn ready(State(state): State<Arc<AppState>>) -> Response {
     if state.pool.check_ready().await {
-        (StatusCode::OK, Json(json!({ "status": "ready" }))).into_response()
+        let mut body = json!({ "status": "ready" });
+        if let Some(assurance) = &state.config.assurance {
+            body["config_hash"] = json!(assurance.config_hash);
+            body["expression_hashes_verified"] = json!(assurance.expression_hashes_verified);
+            body["runtime_verified"] = json!(assurance.runtime_verified);
+            body["smoke_verified"] = json!(assurance.smoke_verified);
+        }
+        (StatusCode::OK, Json(body)).into_response()
     } else {
         problem(
             StatusCode::SERVICE_UNAVAILABLE,
             "worker pool is not fully available",
         )
+    }
+}
+
+async fn assurance(State(state): State<Arc<AppState>>) -> Response {
+    match &state.config.assurance {
+        Some(assurance) => (StatusCode::OK, Json(assurance)).into_response(),
+        None => problem(
+            StatusCode::NOT_FOUND,
+            "governed sidecar assurance is not configured",
+        ),
     }
 }
 
@@ -968,7 +1854,7 @@ async fn lookup(
         "correlation_id": correlation_id.clone(),
         "configuration": state.credentials.get(source_id).cloned().unwrap_or(Value::Null),
     });
-    add_source_execution(&mut request, source);
+    add_source_execution(&mut request, &state.config, source);
 
     let worker_execution = match state.pool.execute_json_with_metadata(request).await {
         Ok(execution) => execution,
@@ -1059,7 +1945,7 @@ async fn batch_match(
         "correlation_id": correlation_id.clone(),
         "configuration": state.credentials.get(source_id).cloned().unwrap_or(Value::Null),
     });
-    add_source_execution(&mut request, source);
+    add_source_execution(&mut request, &state.config, source);
 
     let worker_execution = match state.pool.execute_json_with_metadata(request).await {
         Ok(execution) => execution,

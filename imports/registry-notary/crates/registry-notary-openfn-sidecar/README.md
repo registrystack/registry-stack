@@ -6,8 +6,8 @@ implementation is a pinned OpenFn adaptor runner, but the Rust sidecar owns the
 HTTP contract, manifest validation, concurrency limits, timeouts, normalization,
 health checks, and credential non-disclosure boundary.
 
-Registry Notary should connect to this sidecar with its existing
-`registry_data_api` connector:
+Registry Notary should connect to this sidecar with the `openfn_sidecar`
+source connector:
 
 ```text
 GET /v1/datasets/{dataset}/entities/{entity}/records?{lookup_field}={lookup_value}&fields=a,b&limit=2
@@ -29,6 +29,144 @@ or:
 
 The sidecar returns at most two records so Registry Notary can preserve its
 existing exact, not found, and ambiguous-source behavior.
+
+## Governed Configuration
+
+Production deployments start the sidecar from a governed TUF target. The
+default startup loader rejects YAML without `config_trust`; legacy unsigned
+manifests require the explicit `--allow-unsigned-dev-config` local-development
+escape hatch. In governed mode the local YAML contains only listener/auth
+bootstrap plus `config_trust`; workflow runtime material lives in the signed
+target.
+
+```yaml
+server:
+  bind: "127.0.0.1:9191"
+auth:
+  bearer_tokens:
+    - id: notary
+      hash_env: OPENFN_SIDECAR_TOKEN_HASH
+config_trust:
+  product: registry-notary-openfn-sidecar
+  instance_id: demo
+  environment: staging
+  stream_id: openfn-sidecar-runtime
+  root_path: /etc/registry-notary-openfn-sidecar/tuf/root.json
+  metadata_dir: /etc/registry-notary-openfn-sidecar/tuf/metadata
+  targets_dir: /etc/registry-notary-openfn-sidecar/tuf/targets
+  datastore_dir: /var/lib/registry-notary-openfn-sidecar/tuf
+  target_name: openfn-sidecar-runtime.json
+  antirollback_state_path: /var/lib/registry-notary-openfn-sidecar/config-trust/antirollback.json
+  accepted_roots: []
+```
+
+`accepted_roots: []` is intentionally incomplete. Real production bootstrap
+must list the trusted TUF root, accepted signer keys, roles, thresholds, and
+allowed change classes. Startup fails closed if the target is not verified,
+authorized, bound to the configured product/instance/environment/stream, marked
+`restart_required`, or accepted by anti-rollback after runtime checks pass.
+
+The signed target uses schema `registry.notary.openfn_sidecar.runtime.v1` and
+contains `limits`, `openfn`, `worker`, `jobs_root`, and `sources`. In governed
+mode every workflow expression path is relative to `jobs_root` and every step
+must include `expression_sha256`. Absolute paths, `..` traversal, symlink
+escapes, missing files, malformed hashes, and hash mismatches fail startup
+before the HTTP listener serves traffic.
+
+The sidecar exposes `GET /v1/assurance` with the verified product identity,
+TUF versions, signer kids, change classes, and `config_hash`. `GET /ready`
+stays compact and includes only readiness status, `config_hash`, and the key
+verification booleans. Neither endpoint includes target credentials, workflow
+contents, raw smoke lookup payloads, or environment details.
+
+Release helpers render, locally sign, and verify governed runtime material:
+
+```bash
+cargo run -p registry-notary-openfn-sidecar -- \
+  config render-target \
+  --manifest /path/to/openfn-sidecar.yaml \
+  --jobs-root /opt/openfn/jobs \
+  --output /tmp/openfn-sidecar-runtime.json
+
+cargo run -p registry-notary-openfn-sidecar -- \
+  config print-expression-hashes \
+  --target /tmp/openfn-sidecar-runtime.json
+
+cargo run -p registry-notary-openfn-sidecar -- \
+  config verify-bundle \
+  --target /tmp/openfn-sidecar-runtime.json
+```
+
+For local demos and release rehearsal, create a signed local TUF repository from
+the rendered target. This helper uses the supplied root and signing key. It is
+not a substitute for production key custody or approval workflow.
+
+```bash
+cargo run -p registry-notary-openfn-sidecar -- \
+  config create-local-tuf-repo \
+  --target /tmp/openfn-sidecar-runtime.json \
+  --target-name openfn-sidecar-runtime.json \
+  --root-path /path/to/tuf/root.json \
+  --signing-key-path /path/to/tuf/targets-signing-key.pem \
+  --metadata-dir /tmp/openfn-sidecar-tuf/metadata \
+  --targets-dir /tmp/openfn-sidecar-tuf/targets \
+  --product registry-notary-openfn-sidecar \
+  --instance-id demo \
+  --environment staging \
+  --stream-id openfn-sidecar-runtime \
+  --bundle-id opencrvs-sidecar-2026-06-09 \
+  --sequence 1 \
+  --previous-config-hash sha256:0000000000000000000000000000000000000000000000000000000000000000 \
+  --change-class openfn_sidecar_workflow_bundle \
+  --declared-signer-kid local-demo-signer
+```
+
+To verify an already signed local TUF repository, omit `--target` and provide
+the local TUF coordinates plus the expected identity:
+
+```bash
+cargo run -p registry-notary-openfn-sidecar -- \
+  config verify-bundle \
+  --product registry-notary-openfn-sidecar \
+  --instance-id demo \
+  --environment staging \
+  --stream-id openfn-sidecar-runtime \
+  --root-path /etc/registry-notary-openfn-sidecar/tuf/root.json \
+  --metadata-dir /etc/registry-notary-openfn-sidecar/tuf/metadata \
+  --targets-dir /etc/registry-notary-openfn-sidecar/tuf/targets \
+  --datastore-dir /var/lib/registry-notary-openfn-sidecar/tuf \
+  --target-name openfn-sidecar-runtime.json
+```
+
+The verification report includes the target `config_hash`, expression hashes,
+and, for local TUF verification, signer kids, change classes, and TUF metadata
+versions.
+
+Registry Notary pins the expected sidecar state in the source connection:
+
+```yaml
+source_connections:
+  openfn_crvs:
+    base_url: http://127.0.0.1:9191
+    token_env: OPENFN_SIDECAR_TOKEN
+    allow_insecure_localhost: true
+    expected_sidecar:
+      product: registry-notary-openfn-sidecar
+      instance_id: demo
+      environment: staging
+      stream_id: openfn-sidecar-runtime
+      config_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222
+      require_expression_hashes_verified: true
+      require_runtime_verified: true
+      require_smoke_verified: true
+```
+
+Notary refreshes expected sidecar assurance through readiness checks and caches
+the observed assurance for a short TTL. Source reads reject mismatched
+assurance and include the observed sidecar config hash in redacted audit
+context. This assurance is self-attested by the trusted private sidecar; it
+does not protect against a sidecar that can forge responses on the private
+listener.
 
 ## Manifest
 
@@ -151,11 +289,17 @@ counts and truncation state, not captured content.
 
 ## Local Run
 
+Unsigned manifests are for local development only. Production startup requires
+`config_trust`; use `--allow-unsigned-dev-config` only for these legacy examples
+and smoke scripts.
+
 ```bash
 export OPENCRVS_READER_CREDENTIAL_JSON='{"baseUrl":"https://example.test","apiToken":"dev"}'
 export DEV_SIDECAR_TOKEN_HASH='sha256:<sha256-hex-of-your-sidecar-token>'
 REGISTRY_NOTARY_OPENFN_SIDECAR_CONFIG=/path/to/sidecar.yaml \
-  cargo run -p registry-notary-openfn-sidecar -- --config /path/to/sidecar.yaml
+  cargo run -p registry-notary-openfn-sidecar -- \
+    --config /path/to/sidecar.yaml \
+    --allow-unsigned-dev-config
 ```
 
 Compute the hash from your sidecar bearer token. The demo uses
@@ -190,8 +334,8 @@ credential targets at startup, but it is not a general JavaScript egress
 sandbox. The sidecar provides:
 
 - `/v1/datasets/{dataset}/entities/{entity}/records` for synchronous RDA lookups.
-- `/ready` for startup readiness after manifest, credential, version, worker,
-  and smoke checks.
+- `/ready` for startup readiness after config, credential, version, worker, and
+  smoke checks.
 - `/healthz` for process liveness while requests are arriving.
 - `/metrics` for Prometheus text metrics without lookup values or credentials.
 

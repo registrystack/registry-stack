@@ -228,6 +228,7 @@ impl StandaloneRegistryNotaryConfig {
                 return Err(EvidenceConfigError::InvalidConcurrency);
             }
             connection.validate_auth(connection_id)?;
+            connection.validate_expected_sidecar(connection_id)?;
             connection.effective_dci()?;
         }
         // bulk_mode preconditions are enforced at config load so the runtime
@@ -3669,6 +3670,8 @@ pub enum EvidenceConfigError {
     InvalidConfigTrustConfig { reason: String },
     #[error("source_connection '{connection}': invalid source_auth config: {reason}")]
     InvalidSourceAuthConfig { connection: String, reason: String },
+    #[error("source_connection '{connection}': invalid expected_sidecar config: {reason}")]
+    InvalidExpectedSidecarConfig { connection: String, reason: String },
     #[error("claim id must not be empty")]
     InvalidClaim,
     #[error("allowed purpose must not be empty")]
@@ -4156,6 +4159,8 @@ pub struct SourceConnectionConfig {
     pub token_env: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_auth: Option<SourceAuthConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_sidecar: Option<ExpectedSidecarConfig>,
     #[serde(default)]
     pub dci: DciSourceConnectionConfig,
     /// Process-global cap on concurrent outbound requests to this connection.
@@ -4208,6 +4213,72 @@ impl SourceConnectionConfig {
     pub fn effective_dci(&self) -> Result<DciSourceConnectionConfig, EvidenceConfigError> {
         Ok(self.dci.clone())
     }
+
+    pub fn validate_expected_sidecar(
+        &self,
+        connection_id: &str,
+    ) -> Result<(), EvidenceConfigError> {
+        let Some(expected) = &self.expected_sidecar else {
+            return Ok(());
+        };
+        for (field, value) in [
+            ("product", expected.product.as_str()),
+            ("instance_id", expected.instance_id.as_str()),
+            ("environment", expected.environment.as_str()),
+            ("stream_id", expected.stream_id.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                return Err(EvidenceConfigError::InvalidExpectedSidecarConfig {
+                    connection: connection_id.to_string(),
+                    reason: format!("{field} must not be empty"),
+                });
+            }
+        }
+        validate_sha256_uri(&expected.config_hash).map_err(|reason| {
+            EvidenceConfigError::InvalidExpectedSidecarConfig {
+                connection: connection_id.to_string(),
+                reason: format!("config_hash {reason}"),
+            }
+        })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExpectedSidecarConfig {
+    pub product: String,
+    pub instance_id: String,
+    pub environment: String,
+    pub stream_id: String,
+    pub config_hash: String,
+    #[serde(default)]
+    pub require_expression_hashes_verified: bool,
+    #[serde(default)]
+    pub require_runtime_verified: bool,
+    #[serde(default)]
+    pub require_smoke_verified: bool,
+    #[serde(default = "default_expected_sidecar_assurance_ttl_ms")]
+    pub assurance_ttl_ms: u64,
+}
+
+const fn default_expected_sidecar_assurance_ttl_ms() -> u64 {
+    30_000
+}
+
+fn validate_sha256_uri(value: &str) -> Result<(), &'static str> {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return Err("must start with sha256:");
+    };
+    if hex.len() != 64 {
+        return Err("must contain 64 lowercase hex characters");
+    }
+    if !hex
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("must contain only lowercase hex characters");
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -6740,6 +6811,7 @@ auth:
                 allow_insecure_private_network: false,
                 token_env: "UPSTREAM_TOKEN".to_string(),
                 source_auth: None,
+                expected_sidecar: None,
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 0,
                 retry_on_5xx: true,
@@ -6825,6 +6897,7 @@ source_auth:
                         refresh_skew_seconds: 60,
                     },
                 )),
+                expected_sidecar: None,
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
                 retry_on_5xx: true,
@@ -6862,6 +6935,7 @@ source_auth:
                         refresh_skew_seconds: 60,
                     },
                 )),
+                expected_sidecar: None,
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
                 retry_on_5xx: true,
@@ -6999,6 +7073,7 @@ bulk_mode: unsupported_mode
                 allow_insecure_private_network: false,
                 token_env: "SRC_TOKEN".to_string(),
                 source_auth: None,
+                expected_sidecar: None,
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
                 retry_on_5xx: true,
@@ -7035,6 +7110,7 @@ bulk_mode: unsupported_mode
                 allow_insecure_private_network: false,
                 token_env: "SRC_TOKEN".to_string(),
                 source_auth: None,
+                expected_sidecar: None,
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
                 retry_on_5xx: true,
@@ -7077,6 +7153,7 @@ bulk_mode: unsupported_mode
                 allow_insecure_private_network: false,
                 token_env: "SRC_TOKEN".to_string(),
                 source_auth: None,
+                expected_sidecar: None,
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
                 retry_on_5xx: true,
@@ -7119,6 +7196,7 @@ bulk_mode: unsupported_mode
                 allow_insecure_private_network: false,
                 token_env: "SRC_TOKEN".to_string(),
                 source_auth: None,
+                expected_sidecar: None,
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
                 retry_on_5xx: true,
@@ -7146,6 +7224,7 @@ bulk_mode: unsupported_mode
                 allow_insecure_private_network: false,
                 token_env: "SRC_TOKEN".to_string(),
                 source_auth: None,
+                expected_sidecar: None,
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
                 retry_on_5xx: true,
@@ -7190,6 +7269,7 @@ bulk_mode: unsupported_mode
                 allow_insecure_private_network: false,
                 token_env: "SRC_TOKEN".to_string(),
                 source_auth: None,
+                expected_sidecar: None,
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
                 retry_on_5xx: true,
@@ -7234,6 +7314,7 @@ bulk_mode: unsupported_mode
                 allow_insecure_private_network: false,
                 token_env: "SRC_TOKEN".to_string(),
                 source_auth: None,
+                expected_sidecar: None,
                 dci: DciSourceConnectionConfig {
                     query_type: "idtype-value".to_string(),
                     ..DciSourceConnectionConfig::default()
@@ -7279,6 +7360,7 @@ bulk_mode: unsupported_mode
                 allow_insecure_private_network: false,
                 token_env: "SRC_TOKEN".to_string(),
                 source_auth: None,
+                expected_sidecar: None,
                 dci: DciSourceConnectionConfig {
                     query_type: "expression".to_string(),
                     ..DciSourceConnectionConfig::default()
@@ -7310,6 +7392,7 @@ bulk_mode: unsupported_mode
                 allow_insecure_private_network: false,
                 token_env: "OPENFN_SIDECAR_TOKEN".to_string(),
                 source_auth: None,
+                expected_sidecar: None,
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
                 retry_on_5xx: false,
@@ -7351,6 +7434,16 @@ evidence:
       token_env: OPENFN_SIDECAR_TOKEN
       retry_on_5xx: false
       bulk_mode: openfn_sidecar_batch
+      expected_sidecar:
+        product: registry-notary-openfn-sidecar
+        instance_id: demo
+        environment: staging
+        stream_id: openfn-sidecar-runtime
+        config_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222
+        require_expression_hashes_verified: true
+        require_runtime_verified: true
+        require_smoke_verified: true
+        assurance_ttl_ms: 60000
   claims:
     - id: date-of-birth
       title: Date of birth
@@ -7397,11 +7490,71 @@ evidence:
             config.evidence.source_connections["openfn_crvs"].bulk_mode,
             BulkMode::OpenFnSidecarBatch
         );
+        let expected_sidecar = config.evidence.source_connections["openfn_crvs"]
+            .expected_sidecar
+            .as_ref()
+            .expect("expected_sidecar parses");
+        assert_eq!(
+            expected_sidecar.config_hash,
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        );
+        assert!(expected_sidecar.require_expression_hashes_verified);
+        assert!(expected_sidecar.require_runtime_verified);
+        assert!(expected_sidecar.require_smoke_verified);
+        assert_eq!(expected_sidecar.assurance_ttl_ms, 60_000);
         assert_eq!(
             config.evidence.claims[0].source_bindings["crvs"].connector,
             SourceConnectorKind::OpenFnSidecar
         );
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn openfn_sidecar_expected_sidecar_rejects_invalid_config_hash() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "openfn_crvs".to_string(),
+            SourceConnectionConfig {
+                base_url: "http://127.0.0.1:9191".to_string(),
+                allow_insecure_localhost: true,
+                allow_insecure_private_network: false,
+                token_env: "OPENFN_SIDECAR_TOKEN".to_string(),
+                source_auth: None,
+                expected_sidecar: Some(ExpectedSidecarConfig {
+                    product: "registry-notary-openfn-sidecar".to_string(),
+                    instance_id: "demo".to_string(),
+                    environment: "staging".to_string(),
+                    stream_id: "openfn-sidecar-runtime".to_string(),
+                    config_hash: "sha256:NOTLOWERHEX".to_string(),
+                    require_expression_hashes_verified: true,
+                    require_runtime_verified: true,
+                    require_smoke_verified: true,
+                    assurance_ttl_ms: 60_000,
+                }),
+                dci: DciSourceConnectionConfig::default(),
+                max_in_flight: 8,
+                retry_on_5xx: false,
+                bulk_mode: BulkMode::OpenFnSidecarBatch,
+                bulk_mode_lookup_unique: false,
+                bulk_timeout_max_ms: 30_000,
+            },
+        );
+        let mut claim = minimal_claim("date-of-birth");
+        claim
+            .source_bindings
+            .insert("crvs".to_string(), openfn_sidecar_binding("openfn_crvs"));
+        config.evidence.claims = vec![claim];
+
+        let err = config
+            .validate()
+            .expect_err("invalid expected_sidecar config_hash must fail");
+        match err {
+            EvidenceConfigError::InvalidExpectedSidecarConfig { connection, reason } => {
+                assert_eq!(connection, "openfn_crvs");
+                assert!(reason.contains("config_hash"));
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
     }
 
     #[test]
@@ -7424,6 +7577,7 @@ evidence:
                         refresh_skew_seconds: 60,
                     },
                 )),
+                expected_sidecar: None,
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
                 retry_on_5xx: false,
@@ -7462,6 +7616,7 @@ evidence:
                 allow_insecure_private_network: false,
                 token_env: "OPENFN_SIDECAR_TOKEN".to_string(),
                 source_auth: None,
+                expected_sidecar: None,
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
                 retry_on_5xx: true,
@@ -7498,6 +7653,7 @@ evidence:
                 allow_insecure_private_network: false,
                 token_env: "OPENFN_SIDECAR_TOKEN".to_string(),
                 source_auth: None,
+                expected_sidecar: None,
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
                 retry_on_5xx: false,
@@ -7536,6 +7692,7 @@ evidence:
                 allow_insecure_private_network: false,
                 token_env: "OPENFN_SIDECAR_TOKEN".to_string(),
                 source_auth: None,
+                expected_sidecar: None,
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
                 retry_on_5xx: false,
@@ -7575,6 +7732,7 @@ evidence:
                 allow_insecure_private_network: false,
                 token_env: "SRC_TOKEN".to_string(),
                 source_auth: None,
+                expected_sidecar: None,
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
                 retry_on_5xx: true,

@@ -363,7 +363,9 @@ It packages the Rust sidecar binary, the pinned OpenFn worker, and its locked
 Node dependencies. The sidecar healthcheck uses Node's built-in `fetch` against
 `http://127.0.0.1:9191/healthz` by default; override
 `REGISTRY_NOTARY_OPENFN_SIDECAR_HEALTHCHECK_URL` when the sidecar binds a
-different port.
+different port. The sidecar now requires governed `config_trust` by default;
+unsigned manifests are local-development only and require the explicit
+`--allow-unsigned-dev-config` startup flag.
 
 ## OpenAPI
 

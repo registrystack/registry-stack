@@ -2165,6 +2165,14 @@ async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Respons
         let mut ok = usize::from(base_ready) + signer_ok;
         let mut failed = usize::from(!base_ready && !base_degraded) + signer_failed;
         if let Some(Extension(state)) = state.as_ref() {
+            if state.source.has_readiness_check() {
+                total += 1;
+                if state.source.check_ready().await {
+                    ok += 1;
+                } else {
+                    failed += 1;
+                }
+            }
             if let Some(cel_worker) = &state.cel_worker {
                 total += 1;
                 if cel_worker.check_ready().await {
@@ -2177,11 +2185,22 @@ async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Respons
         (total, ok, failed)
     };
     #[cfg(not(feature = "registry-notary-cel"))]
-    let (total, ok, failed) = (
-        1 + signer_total,
-        usize::from(base_ready) + signer_ok,
-        usize::from(!base_ready && !base_degraded) + signer_failed,
-    );
+    let (total, ok, failed) = {
+        let mut total = 1 + signer_total;
+        let mut ok = usize::from(base_ready) + signer_ok;
+        let mut failed = usize::from(!base_ready && !base_degraded) + signer_failed;
+        if let Some(Extension(state)) = state.as_ref() {
+            if state.source.has_readiness_check() {
+                total += 1;
+                if state.source.check_ready().await {
+                    ok += 1;
+                } else {
+                    failed += 1;
+                }
+            }
+        }
+        (total, ok, failed)
+    };
 
     let ready = ok == total;
     let is_degraded = !ready && failed == 0 && degraded > 0;
@@ -3087,6 +3106,7 @@ pub struct EvidenceAuditContext {
     pub matching_outcome: Option<String>,
     pub matching_error_code: Option<String>,
     pub batch_items: Option<Vec<EvidenceBatchItemAuditEvent>>,
+    pub source_sidecar_config_hashes: Option<Vec<String>>,
     pub config: Option<ConfigAuditEvent>,
 }
 
@@ -4904,6 +4924,11 @@ async fn evaluate(
                     Some(1),
                 );
             }
+            let sidecar_config_hashes = state
+                .source
+                .observed_sidecar_config_hashes(evidence, &requested_claims)
+                .await;
+            attach_source_sidecar_config_hashes(&mut response, sidecar_config_hashes);
             if let Err(error) = attach_evaluate_request_audit(
                 &mut response,
                 &state.self_attestation_rate_keys,
@@ -5040,6 +5065,11 @@ async fn batch_evaluate(
             ) {
                 return evidence_error_response(error);
             }
+            let sidecar_config_hashes = state
+                .source
+                .observed_sidecar_config_hashes(evidence, &requested_claims)
+                .await;
+            attach_source_sidecar_config_hashes(&mut response, sidecar_config_hashes);
             response
         }
         Err(error) => evidence_error_response(error),
@@ -6797,6 +6827,15 @@ fn attach_evidence_audit_with_purposes(
         batch_items: None,
         ..EvidenceAuditContext::default()
     });
+}
+
+fn attach_source_sidecar_config_hashes(response: &mut Response, config_hashes: Vec<String>) {
+    if config_hashes.is_empty() {
+        return;
+    }
+    if let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() {
+        audit.source_sidecar_config_hashes = Some(config_hashes);
+    }
 }
 
 fn attach_evaluate_request_audit(
@@ -8858,6 +8897,32 @@ mod tests {
         assert_eq!(value["checks"]["signing_providers"]["failed"], json!(1));
     }
 
+    #[tokio::test]
+    async fn readiness_fails_when_source_readiness_check_fails() {
+        let source = ReadinessSource {
+            ready: Arc::new(AtomicBool::new(false)),
+        };
+        let state = Arc::new(RegistryNotaryApiState::new(
+            Arc::new(evidence_config()),
+            AuditKeyHasher::unkeyed_dev_only(),
+            Arc::new(source),
+            Arc::new(EvidenceStore::default()),
+            Arc::new(NoopIssuerResolver),
+        ));
+
+        let response = ready(Some(Extension(state))).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("ready body reads");
+        let value: Value = serde_json::from_slice(&body).expect("ready body is JSON");
+
+        assert_eq!(value["status"], "not_ready");
+        assert_eq!(value["checks"]["total"], json!(2));
+        assert_eq!(value["checks"]["ok"], json!(0));
+        assert_eq!(value["checks"]["failed"], json!(1));
+    }
+
     #[test]
     fn self_attestation_token_policy_fails_closed_without_auth_time() {
         let config = self_attestation_config();
@@ -9126,6 +9191,37 @@ mod tests {
                 self.reads.fetch_add(1, Ordering::SeqCst);
                 Err(EvidenceError::SourceUnavailable)
             })
+        }
+
+        fn required_scopes(
+            &self,
+            _evidence: &EvidenceConfig,
+            _claim_id: &str,
+        ) -> Result<Vec<String>, EvidenceError> {
+            Ok(vec!["civil_registry:evidence_verification".to_string()])
+        }
+    }
+
+    struct ReadinessSource {
+        ready: Arc<AtomicBool>,
+    }
+
+    impl SourceReader for ReadinessSource {
+        fn has_readiness_check(&self) -> bool {
+            true
+        }
+
+        fn check_ready<'a>(&'a self) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
+            Box::pin(async move { self.ready.load(Ordering::SeqCst) })
+        }
+
+        fn read_one<'a>(
+            &'a self,
+            _binding: &'a SourceBindingConfig,
+            _subject: &'a SubjectRequest,
+            _purpose: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+            Box::pin(async { Err(EvidenceError::SourceUnavailable) })
         }
 
         fn required_scopes(

@@ -787,6 +787,29 @@
       "service": "registry-notary",
       "listener": "sidecar",
       "method": "GET",
+      "path": "/v1/assurance",
+      "feature": "openfn_sidecar.config_trust.enabled",
+      "audience": "internal",
+      "auth": "bearer",
+      "scopes": [
+        "sidecar:read"
+      ],
+      "rate_limit": null,
+      "audit": "not_applicable",
+      "openapi": false,
+      "stability": "beta",
+      "data_classification": "operational",
+      "notes": "OpenFn sidecar assurance route. Bearer auth protects verified runtime and config hash state used by Notary expected-sidecar checks.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-openfn-sidecar/tests/governed_runtime_validation.rs::governed_startup_loads_signed_tuf_target_reports_assurance_and_accepts_antirollback"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "sidecar",
+      "method": "GET",
       "path": "/v1/datasets/{dataset}/entities/{entity}/records",
       "feature": null,
       "audience": "internal",

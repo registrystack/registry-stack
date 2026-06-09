@@ -91,7 +91,9 @@ YAML
 export DEV_SIDECAR_TOKEN_HASH='sha256:a61cb2a28977890d2e95d2eb9f5355b184d48dc2aec23252bdeb08eca7f42544'
 export EXAMPLE_PERSON_LOOKUP_CREDENTIAL_JSON='{"fixture_records":[{"national_id":"person-123","birth_date":"1990-01-01","extra":"sidecar-must-trim"},{"national_id":"person-456","birth_date":"1985-05-05"}],"apiToken":"redacted-placeholder"}'
 
-cargo run -p registry-notary-openfn-sidecar --bin registry-notary-openfn-sidecar -- --config "$manifest" >"$log" 2>&1 &
+cargo run -p registry-notary-openfn-sidecar --bin registry-notary-openfn-sidecar -- \
+  --config "$manifest" \
+  --allow-unsigned-dev-config >"$log" 2>&1 &
 sidecar_pid="$!"
 
 cleanup() {
@@ -123,7 +125,7 @@ response="$(
     -H "Authorization: Bearer dev-sidecar-token" \
     -H "Data-Purpose: smoke-test" \
     -H "X-Correlation-Id: openfn-sidecar-smoke" \
-    "http://127.0.0.1:$port/datasets/civil_registry/civil_person?national_id=person-123&fields=national_id,birth_date&limit=2"
+    "http://127.0.0.1:$port/v1/datasets/civil_registry/entities/civil_person/records?national_id=person-123&fields=national_id,birth_date&limit=2"
 )"
 
 printf '%s\n' "$response" |
@@ -136,7 +138,7 @@ auth_status="$(
     -H "Authorization: Bearer dev-sidecar-token" \
     -H "Data-Purpose: smoke-test" \
     -H "X-Correlation-Id: openfn-sidecar-smoke" \
-    "http://127.0.0.1:$port/datasets/civil_registry/civil_person?national_id=target-auth&fields=national_id,birth_date&limit=2" \
+    "http://127.0.0.1:$port/v1/datasets/civil_registry/entities/civil_person/records?national_id=target-auth&fields=national_id,birth_date&limit=2" \
     -w "%{http_code}"
 )"
 if [ "$auth_status" != "502" ]; then
@@ -155,7 +157,7 @@ rate_limit_status="$(
     -H "Authorization: Bearer dev-sidecar-token" \
     -H "Data-Purpose: smoke-test" \
     -H "X-Correlation-Id: openfn-sidecar-smoke" \
-    "http://127.0.0.1:$port/datasets/civil_registry/civil_person?national_id=target-rate-limit&fields=national_id,birth_date&limit=2" \
+    "http://127.0.0.1:$port/v1/datasets/civil_registry/entities/civil_person/records?national_id=target-rate-limit&fields=national_id,birth_date&limit=2" \
     -w "%{http_code}"
 )"
 if [ "$rate_limit_status" != "503" ]; then

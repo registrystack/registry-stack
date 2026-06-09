@@ -10,14 +10,18 @@ publish = false
 
 [dependencies]
 axum.workspace = true
+chrono = { version = "0.4" }
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_norway.workspace = true
 registry-notary-worker-harness.workspace = true
 registry-platform-authcommon.workspace = true
+registry-platform-config.workspace = true
+registry-platform-ops.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "process"] }
+tough = { version = "0.22.0" }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
