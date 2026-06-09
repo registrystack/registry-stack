@@ -421,11 +421,10 @@ def check_workflow_external_refs() -> None:
     for path in sorted(workflow_dir.glob("*.yml")):
         rel = path.relative_to(ROOT)
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            stripped = line.strip()
-            if not stripped.startswith("REGISTRY_PLATFORM_REF:"):
+            match = re.match(r"^REGISTRY_PLATFORM_REF\s*:\s*(.*)$", line.strip())
+            if not match:
                 continue
-            _, value = stripped.split(":", 1)
-            ref = value.strip().strip("'\"")
+            ref = match.group(1).strip().strip("'\"")
             if not IMMUTABLE_GIT_SHA_RE.fullmatch(ref):
                 fail(f"{rel}:{lineno} must pin REGISTRY_PLATFORM_REF to a full commit SHA")
 
