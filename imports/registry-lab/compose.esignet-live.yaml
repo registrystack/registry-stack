@@ -138,6 +138,8 @@ services:
       PGUSER: postgres
       PGPASSWORD: postgres
       ESIGNET_CLIENT_PRIVATE_KEY_FILE: /output/client-private.pem
+      ESIGNET_REDIS_HOST: redis-server
+      ESIGNET_REDIS_PORT: "6379"
     volumes:
       - ./scripts/seed-esignet-live.py:/seed/seed-esignet-live.py:ro
       - ./output/esignet-live:/output

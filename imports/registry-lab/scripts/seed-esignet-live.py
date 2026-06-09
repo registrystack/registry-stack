@@ -7,6 +7,7 @@ import base64
 import hashlib
 import json
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -16,6 +17,7 @@ from pathlib import Path
 CLIENT_ID = "registry-lab-live-client"
 CLIENT_KEY_ID = "registry-lab-live-client-key-1"
 RELYING_PARTY_ID = "registry-lab"
+CLIENT_DETAIL_CACHE_KEY = f"esignet:clientdetails::{CLIENT_ID}"
 DEMO_PIN = "545411"
 DEMO_USERS = [
     ("NID-1001", "Miguel", "Santos", "2016/01/15", "Male", "north"),
@@ -27,6 +29,7 @@ DEMO_USERS = [
     ("NID-1007", "Lola", "Santos", "1958/01/15", "Female", "north"),
     ("NID-1008", "Rosa", "Garcia", "1954/01/15", "Female", "west"),
     ("NID-1009", "Ana", "Mendoza", "1998/01/15", "Female", "east"),
+    ("NID-2001", "Maria", "Santos", "1984/01/15", "Female", "north"),
 ]
 
 
@@ -159,7 +162,15 @@ insert into esignet.client_detail (
   {sql_literal(client_name)},
   {sql_literal(RELYING_PARTY_ID)},
   'https://example.invalid/logo.png',
-  {sql_literal(["http://127.0.0.1:4325/callback", "http://localhost:5000/callback", "http://localhost:5000/**"])},
+  {sql_literal([
+      "http://127.0.0.1:4325/callback",
+      "http://localhost:5000/callback",
+      "http://localhost:5000/**",
+      "http://localhost:8765/callback",
+      "http://localhost:8765/**",
+      "http://localhost:8766/callback",
+      "http://localhost:8766/**",
+  ])},
   {sql_literal(["individual_id", "name", "email", "gender", "phone_number", "picture", "birthdate"])},
   {sql_literal(["mosip:idp:acr:generated-code", "mosip:idp:acr:password", "mosip:idp:acr:linked-wallet"])},
   {sql_literal(jwk)},
@@ -184,6 +195,29 @@ on conflict (id) do update set
   upd_dtimes = now();
 """
     psql("mosip_esignet", sql)
+
+
+def clear_esignet_client_cache() -> None:
+    redis_host = os.environ.get("ESIGNET_REDIS_HOST")
+    if not redis_host:
+        return
+    redis_port = int(os.environ.get("ESIGNET_REDIS_PORT", "6379"))
+    command = redis_command("DEL", CLIENT_DETAIL_CACHE_KEY)
+    with socket.create_connection((redis_host, redis_port), timeout=10) as connection:
+        connection.sendall(command)
+        response = connection.recv(128)
+    if not response.startswith((b":0", b":1")):
+        raise RuntimeError(f"failed to clear eSignet client cache: {response!r}")
+
+
+def redis_command(*parts: str) -> bytes:
+    encoded = [part.encode("utf-8") for part in parts]
+    payload = [f"*{len(encoded)}\r\n".encode("ascii")]
+    for part in encoded:
+        payload.append(f"${len(part)}\r\n".encode("ascii"))
+        payload.append(part)
+        payload.append(b"\r\n")
+    return b"".join(payload)
 
 
 def demo_identity(user: tuple[str, str, str, str, str, str]) -> dict[str, object]:
@@ -227,8 +261,10 @@ def main() -> int:
     wait_for_table("mosip_esignet", "esignet.client_detail")
     wait_for_table("mosip_mockidentitysystem", "mockidentitysystem.mock_identity")
     seed_esignet(jwk, key_hash)
+    clear_esignet_client_cache()
     seed_mock_identities()
     print(f"Seeded eSignet lab client {CLIENT_ID}.")
+    print(f"Cleared eSignet client cache key {CLIENT_DETAIL_CACHE_KEY}.")
     print(f"Seeded {len(DEMO_USERS)} mock identities: {', '.join(user[0] for user in DEMO_USERS)}.")
     print(f"Client private key: {key_file}")
     return 0
