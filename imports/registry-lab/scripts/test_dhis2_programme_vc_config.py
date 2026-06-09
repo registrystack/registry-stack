@@ -22,6 +22,7 @@ SMOKE = ROOT / "scripts/smoke-dhis2-openfn.sh"
 HOLDER_PROOF = ROOT / "scripts/generate-holder-proof.js"
 SUMMARY = ROOT / "scripts/summarize-dhis2-programme-vc.py"
 TUTORIAL = ROOT / "docs/dhis2-openfn-notary-tutorial.md"
+BRUNO_PROGRAMME_VC_DIR = ROOT / "requests/registry-lab/31 - DHIS2 Programme VC"
 
 EXPECTED_CLAIMS = [
     "dhis2-tracked-entity-first-name",
@@ -65,6 +66,10 @@ def credential_commitment_for_env(body: str, env_name: str) -> str:
     if match is None:
         raise AssertionError(f"{env_name} commitment was not found")
     return match.group(1)
+
+
+def fingerprint(raw: str) -> str:
+    return f"sha256:{hashlib.sha256(raw.encode('ascii')).hexdigest()}"
 
 
 class Dhis2ProgrammeVcConfigTest(unittest.TestCase):
@@ -119,6 +124,25 @@ class Dhis2ProgrammeVcConfigTest(unittest.TestCase):
         self.assertEqual(
             credential_commitment("bearer_token", "dhis2_evidence_client", bearer_hash),
             credential_commitment_for_env(body, "DHIS2_EVIDENCE_CLIENT_BEARER_HASH"),
+        )
+
+    def test_coolify_dhis2_raw_credentials_match_supplied_hosted_hashes(self) -> None:
+        values = {
+            "DHIS2_EVIDENCE_CLIENT_TOKEN": os.environ.get("DHIS2_EVIDENCE_CLIENT_TOKEN"),
+            "DHIS2_EVIDENCE_CLIENT_TOKEN_HASH": os.environ.get("DHIS2_EVIDENCE_CLIENT_TOKEN_HASH"),
+            "DHIS2_EVIDENCE_CLIENT_BEARER": os.environ.get("DHIS2_EVIDENCE_CLIENT_BEARER"),
+            "DHIS2_EVIDENCE_CLIENT_BEARER_HASH": os.environ.get("DHIS2_EVIDENCE_CLIENT_BEARER_HASH"),
+        }
+        if not all(values.values()):
+            self.skipTest("set hosted DHIS2 raw and hash envs to verify credential pairs")
+
+        self.assertEqual(
+            fingerprint(values["DHIS2_EVIDENCE_CLIENT_TOKEN"]),
+            values["DHIS2_EVIDENCE_CLIENT_TOKEN_HASH"],
+        )
+        self.assertEqual(
+            fingerprint(values["DHIS2_EVIDENCE_CLIENT_BEARER"]),
+            values["DHIS2_EVIDENCE_CLIENT_BEARER_HASH"],
         )
 
     def test_openfn_job_normalizes_programme_fields(self) -> None:
@@ -181,6 +205,33 @@ class Dhis2ProgrammeVcConfigTest(unittest.TestCase):
         self.assertIn("child_age_band: \"5_to_17\"", body)
         self.assertIn("reconciliation reference", body)
         self.assertIn("smoke-dhis2-programme-participation-credential-summary.json", body)
+
+    def test_bruno_programme_vc_walkthrough_is_scripted(self) -> None:
+        files = sorted(path.name for path in BRUNO_PROGRAMME_VC_DIR.glob("*.bru"))
+        self.assertEqual(
+            [
+                "01 - Evaluate programme participation claims.bru",
+                "02 - Issue holder-bound programme participation VC.bru",
+                "03 - Reconcile with fresh online evidence.bru",
+            ],
+            files,
+        )
+
+        evaluate = read(BRUNO_PROGRAMME_VC_DIR / files[0])
+        self.assertIn('crypto.generateKeyPairSync("ed25519")', evaluate)
+        self.assertIn('bru.setVar("dhis2_programme_evaluation_id"', evaluate)
+        self.assertIn('bru.setVar("dhis2_programme_reconciliation_ref"', evaluate)
+        self.assertIn("dhis2-reconciliation-ref", evaluate)
+
+        issue = read(BRUNO_PROGRAMME_VC_DIR / files[1])
+        self.assertIn("dhis2_programme_participation_sd_jwt", issue)
+        self.assertIn("{{dhis2_programme_holder_proof}}", issue)
+        self.assertIn("31535940", issue)
+        self.assertIn("dhis2_programme_vc_issuer", issue)
+
+        followup = read(BRUNO_PROGRAMME_VC_DIR / files[2])
+        self.assertIn("{{dhis2_programme_reconciliation_ref}}", followup)
+        self.assertIn('claims": [\n      "dhis2-child-program-active"', followup)
 
 
 if __name__ == "__main__":
