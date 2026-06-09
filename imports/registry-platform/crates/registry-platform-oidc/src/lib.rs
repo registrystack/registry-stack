@@ -520,8 +520,8 @@ pub struct TokenVerifierConfig {
     pub issuer: String,
     pub audiences: Vec<String>,
     pub allowed_algorithms: Vec<Algorithm>,
-    /// Allowed access-token `typ` header values. Empty means deny all access
-    /// tokens because the token type policy is not configured.
+    /// Allowed access-token `typ` header values. Empty accepts access tokens
+    /// that omit `typ`, but rejects a present `typ`.
     pub allowed_typ: Vec<String>,
     /// Allowed ID-token `typ` header values. Empty means deny all ID tokens.
     pub allowed_id_typ: Vec<String>,
@@ -538,8 +538,9 @@ pub struct TokenVerifierConfig {
 impl TokenVerifierConfig {
     /// Build the standard resource-server access-token profile.
     ///
-    /// Access tokens must carry one of `allowed_typ`. Related ID tokens and
-    /// UserInfo JWTs use the project defaults accepted by Relay and Notary:
+    /// Access tokens must either carry one of `allowed_typ`, or omit `typ` when
+    /// `allowed_typ` is empty. Related ID tokens and UserInfo JWTs use the
+    /// project defaults accepted by Relay and Notary:
     /// ID token `typ` values `JWT` and `id_token`, UserInfo JWT `typ` value
     /// `JWT`, and required UserInfo expiration by default.
     pub fn access_token_profile(
@@ -1043,7 +1044,11 @@ fn typ_in_allow_list(typ: &str, allowed: &HashSet<String>) -> bool {
 
 fn enforce_typ(typ: Option<&str>, allowed: &HashSet<String>) -> Result<(), OidcError> {
     if allowed.is_empty() {
-        return Err(OidcError::TokenTypeNotAllowed);
+        return if typ.is_none() {
+            Ok(())
+        } else {
+            Err(OidcError::TokenTypeNotAllowed)
+        };
     }
     let typ = typ.ok_or(OidcError::TokenTypeNotAllowed)?;
     if typ_in_allow_list(typ, allowed) {
@@ -1698,6 +1703,48 @@ mod tests {
 
         assert!(matches!(
             verifier.verify(&token).await,
+            Err(OidcError::TokenTypeNotAllowed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn oidc_empty_access_typ_allow_list_accepts_missing_typ_only() {
+        let fetcher = Arc::new(JwksFetcher::new(
+            "http://127.0.0.1/jwks".to_string(),
+            JwksFetcherConfig::defaults(),
+        ));
+        let verifier = TokenVerifier::new(
+            TokenVerifierConfig {
+                issuer: "https://issuer.example".to_string(),
+                audiences: vec!["registry-api".to_string()],
+                allowed_algorithms: vec![Algorithm::EdDSA],
+                allowed_typ: Vec::new(),
+                allowed_id_typ: vec!["JWT".to_string(), "id_token".to_string()],
+                allowed_userinfo_typ: vec!["JWT".to_string()],
+                userinfo_requires_exp: true,
+                scope_claim: "scope".to_string(),
+                scope_separator: ' ',
+                scope_map: None,
+                allowed_clients: Vec::new(),
+                leeway: Duration::from_secs(60),
+            },
+            fetcher,
+        );
+        let missing_typ = unsigned_token(
+            json!({ "alg": "EdDSA" }),
+            json!({ "iss": "https://issuer.example", "aud": "registry-api", "exp": 4_102_444_800_i64 }),
+        );
+        let present_typ = unsigned_token(
+            json!({ "alg": "EdDSA", "typ": "JWT", "kid": "kid" }),
+            json!({ "iss": "https://issuer.example", "aud": "registry-api", "exp": 4_102_444_800_i64 }),
+        );
+
+        assert!(matches!(
+            verifier.verify(&missing_typ).await,
+            Err(OidcError::MissingKid)
+        ));
+        assert!(matches!(
+            verifier.verify(&present_typ).await,
             Err(OidcError::TokenTypeNotAllowed)
         ));
     }
