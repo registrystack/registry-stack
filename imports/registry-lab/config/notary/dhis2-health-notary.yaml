@@ -123,7 +123,7 @@ evidence:
         type: string
       source_bindings:
         dhis2:
-          connector: registry_data_api
+          connector: openfn_sidecar
           connection: dhis2_openfn
           required_scope: dhis2_health:evidence_verification
           dataset: dhis2_tracker
@@ -162,7 +162,7 @@ evidence:
         type: string
       source_bindings:
         dhis2:
-          connector: registry_data_api
+          connector: openfn_sidecar
           connection: dhis2_openfn
           required_scope: dhis2_health:evidence_verification
           dataset: dhis2_tracker
@@ -201,7 +201,7 @@ evidence:
         type: boolean
       source_bindings:
         dhis2:
-          connector: registry_data_api
+          connector: openfn_sidecar
           connection: dhis2_openfn
           required_scope: dhis2_health:evidence_verification
           dataset: dhis2_tracker
@@ -241,7 +241,7 @@ evidence:
         type: string
       source_bindings:
         dhis2:
-          connector: registry_data_api
+          connector: openfn_sidecar
           connection: dhis2_openfn
           required_scope: dhis2_health:evidence_verification
           dataset: dhis2_tracker
@@ -279,7 +279,7 @@ evidence:
         type: string
       source_bindings:
         dhis2:
-          connector: registry_data_api
+          connector: openfn_sidecar
           connection: dhis2_openfn
           required_scope: dhis2_health:evidence_verification
           dataset: dhis2_tracker
@@ -317,7 +317,7 @@ evidence:
         type: string
       source_bindings:
         dhis2:
-          connector: registry_data_api
+          connector: openfn_sidecar
           connection: dhis2_openfn
           required_scope: dhis2_health:evidence_verification
           dataset: dhis2_tracker
@@ -355,7 +355,7 @@ evidence:
         type: boolean
       source_bindings:
         dhis2:
-          connector: registry_data_api
+          connector: openfn_sidecar
           connection: dhis2_openfn
           required_scope: dhis2_health:evidence_verification
           dataset: dhis2_tracker
@@ -391,7 +391,7 @@ evidence:
         type: boolean
       source_bindings:
         dhis2:
-          connector: registry_data_api
+          connector: openfn_sidecar
           connection: dhis2_openfn
           required_scope: dhis2_health:evidence_verification
           dataset: dhis2_tracker
@@ -427,7 +427,7 @@ evidence:
         type: boolean
       source_bindings:
         dhis2:
-          connector: registry_data_api
+          connector: openfn_sidecar
           connection: dhis2_openfn
           required_scope: dhis2_health:evidence_verification
           dataset: dhis2_tracker

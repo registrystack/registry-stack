@@ -94,7 +94,6 @@ REQUIRED_HOSTED_VARIABLES = {
         "OPENCRVS_EVIDENCE_CLIENT_TOKEN",
         "OPENFN_SIDECAR_TOKEN_HASH",
         "OPENFN_SIDECAR_TOKEN_RAW",
-        "OPENFN_DHIS2_HOST_URL",
         "OPENFN_DHIS2_USERNAME",
         "OPENFN_DHIS2_PASSWORD",
         "DHIS2_EVIDENCE_CLIENT_TOKEN_HASH",
@@ -254,6 +253,7 @@ def validate_artifacts(
             validate_image_refs(artifact, services, artifact_texts.get(artifact, ""))
         )
         issues.extend(validate_runtime_commands(artifact, services))
+        issues.extend(validate_openfn_sidecar_governance(artifact, services, root))
         issues.extend(validate_repo_output_binds(artifact, services))
         issues.extend(validate_public_urls(artifact, compose, root))
         issues.extend(validate_hosted_openapi_policy(artifact, services, root))
@@ -485,17 +485,156 @@ def validate_runtime_commands(artifact: str, services: dict[str, Any]) -> list[I
                         "distroless notary images must not require a shell entrypoint",
                     )
                 )
+    return issues
+
+
+def validate_openfn_sidecar_governance(
+    artifact: str,
+    services: dict[str, Any],
+    root: Path,
+) -> list[Issue]:
+    if artifact != "registry-lab":
+        return []
     openfn = services.get("openfn-dhis2-sidecar")
-    if isinstance(openfn, dict) and not service_mounts_target(openfn, "/opt/openfn/jobs"):
+    if not isinstance(openfn, dict):
+        return []
+
+    issues: list[Issue] = []
+    command_text = shell_command_text(openfn.get("command"))
+    if "--allow-unsigned-dev-config" in command_text:
         issues.append(
             Issue(
-                "missing-openfn-job-mount",
+                "hosted-openfn-unsigned-dev-config",
                 artifact,
-                "services.openfn-dhis2-sidecar.volumes",
-                "OpenFn sidecar must mount the lab job directory used by its hosted config",
+                "services.openfn-dhis2-sidecar.command",
+                "hosted OpenFn sidecar must start from governed config_trust, not unsigned dev config",
             )
         )
+    if "openfn-dhis2-sidecar.bootstrap.yaml" not in command_text:
+        issues.append(
+            Issue(
+                "missing-openfn-governed-bootstrap",
+                artifact,
+                "services.openfn-dhis2-sidecar.command",
+                "hosted OpenFn sidecar must use the governed bootstrap config",
+            )
+        )
+    required_mounts = {
+        "/etc/registry-notary-openfn",
+        "/tmp/registry-lab-openfn-jobs",
+        "/var/lib/registry-notary-openfn-sidecar/tuf",
+        "/var/lib/registry-notary-openfn-sidecar/config-trust",
+    }
+    for target in sorted(required_mounts):
+        if not service_mounts_target(openfn, target):
+            issues.append(
+                Issue(
+                    "missing-openfn-governed-mount",
+                    artifact,
+                    "services.openfn-dhis2-sidecar.volumes",
+                    f"hosted OpenFn sidecar must mount {target}",
+                )
+            )
+
+    bootstrap = root / "config/coolify/openfn/openfn-dhis2-sidecar.bootstrap.yaml"
+    notary = root / "config/coolify/notary/dhis2-health-notary.yaml"
+    report = root / "config/coolify/openfn/governed/openfn-dhis2-sidecar-runtime.report.json"
+    try:
+        bootstrap_text = bootstrap.read_text(encoding="utf-8")
+        notary_text = notary.read_text(encoding="utf-8")
+        report_config = load_json_mapping(report)
+    except Exception as exc:
+        issues.append(
+            Issue(
+                "unreadable-openfn-governed-artifact",
+                artifact,
+                "config/coolify/openfn/governed",
+                f"could not read governed OpenFn sidecar artifacts: {exc}",
+            )
+        )
+        return issues
+
+    config_trust = extract_openfn_config_trust_scalars(bootstrap_text)
+    if "config_trust:" not in bootstrap_text or "accepted_roots:" not in bootstrap_text:
+        issues.append(
+            Issue(
+                "missing-openfn-config-trust",
+                artifact,
+                "config/coolify/openfn/openfn-dhis2-sidecar.bootstrap.yaml",
+                "hosted OpenFn sidecar bootstrap must include config_trust.accepted_roots",
+            )
+        )
+
+    expected = extract_openfn_expected_sidecar_scalars(notary_text)
+    if not expected:
+        issues.append(
+            Issue(
+                "missing-openfn-expected-sidecar",
+                artifact,
+                "config/coolify/notary/dhis2-health-notary.yaml",
+                "hosted DHIS2 Notary must pin expected_sidecar for the OpenFn sidecar",
+            )
+        )
+        return issues
+
+    expected_hash = report_config.get("config_hash")
+    if expected.get("config_hash") != expected_hash:
+        issues.append(
+            Issue(
+                "openfn-sidecar-hash-mismatch",
+                artifact,
+                "config/coolify/notary/dhis2-health-notary.yaml",
+                "hosted DHIS2 Notary expected_sidecar.config_hash must match the generated sidecar report",
+            )
+        )
+    for key in (
+        "require_expression_hashes_verified",
+        "require_runtime_verified",
+        "require_smoke_verified",
+    ):
+        if expected.get(key) != "true":
+            issues.append(
+                Issue(
+                    "openfn-sidecar-assurance-not-required",
+                    artifact,
+                    f"config/coolify/notary/dhis2-health-notary.yaml:{key}",
+                    "hosted DHIS2 Notary must require expression, runtime, and smoke assurance",
+                )
+            )
+    for key in ("product", "instance_id", "environment", "stream_id"):
+        if expected.get(key) != config_trust.get(key):
+            issues.append(
+                Issue(
+                    "openfn-sidecar-identity-mismatch",
+                    artifact,
+                    f"config/coolify/notary/dhis2-health-notary.yaml:{key}",
+                    "hosted DHIS2 Notary expected_sidecar identity must match sidecar config_trust",
+                )
+            )
     return issues
+
+
+def extract_openfn_config_trust_scalars(text: str) -> dict[str, str]:
+    return {
+        key: value
+        for key, value in re.findall(
+            r"(?m)^  (product|instance_id|environment|stream_id):\s*(\S+)\s*$",
+            text,
+        )
+    }
+
+
+def extract_openfn_expected_sidecar_scalars(text: str) -> dict[str, str]:
+    match = re.search(r"(?ms)^      expected_sidecar:\n((?:        .*\n)+)", text)
+    if not match:
+        return {}
+    return {
+        key: value
+        for key, value in re.findall(
+            r"(?m)^        ([a-z_]+):\s*(\S+)\s*$",
+            match.group(1),
+        )
+    }
 
 
 def validate_repo_output_binds(artifact: str, services: dict[str, Any]) -> list[Issue]:
@@ -1243,6 +1382,11 @@ def load_yaml_mapping(path: Path) -> dict[str, Any]:
     import yaml  # type: ignore[import-not-found]
 
     loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def load_json_mapping(path: Path) -> dict[str, Any]:
+    loaded = json.loads(path.read_text(encoding="utf-8"))
     return loaded if isinstance(loaded, dict) else {}
 
 
