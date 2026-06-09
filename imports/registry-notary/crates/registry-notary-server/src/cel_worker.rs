@@ -25,7 +25,9 @@ use tokio::sync::OnceCell;
 use crate::metrics::AppMetrics;
 
 pub const CEL_WORKER_PROTOCOL_V1: &str = "registry-notary-cel-worker/v1";
-pub const CEL_WORKER_MAX_STDIN_BYTES: usize = 64 * 1024;
+pub const CEL_WORKER_REQUEST_ENVELOPE_BYTES: usize = 4096;
+pub const CEL_WORKER_MAX_STDIN_BYTES: usize =
+    1024 * 1024 + 256 * 1024 + CEL_WORKER_REQUEST_ENVELOPE_BYTES;
 
 #[derive(Clone, Debug)]
 pub struct CelWorkerConfig {
@@ -87,7 +89,7 @@ impl CelWorkerConfig {
         worker.max_request_bytes = config
             .max_binding_json_bytes
             .saturating_add(config.max_expression_bytes)
-            .saturating_add(4096);
+            .saturating_add(CEL_WORKER_REQUEST_ENVELOPE_BYTES);
         worker.max_response_bytes = config
             .max_result_json_bytes
             .saturating_add(2048)

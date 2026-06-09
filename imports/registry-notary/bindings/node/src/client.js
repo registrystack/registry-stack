@@ -6,6 +6,9 @@ const APPLICATION_JWT = "application/jwt";
 const PROBLEM_JSON = "application/problem+json";
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const JWKS_TTL_MS = 10 * 60 * 1000;
+const MAX_REDIRECTS = 10;
+/** @type {RequestRedirect} */
+const MANUAL_REDIRECT = "manual";
 
 const DEFAULT_RETRY_POLICY = Object.freeze({
   maxAttempts: 1,
@@ -493,7 +496,30 @@ export class RegistryNotaryClient {
     if (typeof fetchImpl !== "function") {
       throw new NotaryTransportError({ code: "fetch_unavailable", retryable: false });
     }
-    return await fetchImpl(new URL(path.replace(/^\//, ""), this.#baseUrl), init);
+    let url = new URL(path.replace(/^\//, ""), this.#baseUrl);
+    /** @type {RequestInit & { headers: Headers }} */
+    let requestInit = { ...init, headers: new Headers(init.headers), redirect: MANUAL_REDIRECT };
+    for (let redirectCount = 0; ; redirectCount += 1) {
+      const response = await fetchImpl(url, requestInit);
+      if (!isRedirectResponse(response)) {
+        return response;
+      }
+      const location = response.headers.get("location");
+      if (location === null) {
+        return response;
+      }
+      if (redirectCount >= MAX_REDIRECTS) {
+        throw new NotaryTransportError({ code: "redirect_loop", retryable: false });
+      }
+      const nextUrl = new URL(location, url);
+      const headers = new Headers(requestInit.headers);
+      if (nextUrl.origin !== url.origin) {
+        headers.delete("authorization");
+        headers.delete("x-api-key");
+      }
+      requestInit = redirectInitForNextRequest(requestInit, headers, response.status);
+      url = nextUrl;
+    }
   }
 
   /**
@@ -527,6 +553,31 @@ export class RegistryNotaryClient {
     }
     return headers;
   }
+}
+
+/**
+ * @param {Response} response
+ */
+function isRedirectResponse(response) {
+  return [301, 302, 303, 307, 308].includes(response.status);
+}
+
+/**
+ * @param {RequestInit & { headers: Headers }} init
+ * @param {Headers} headers
+ * @param {number} status
+ * @returns {RequestInit & { headers: Headers }}
+ */
+function redirectInitForNextRequest(init, headers, status) {
+  const method = (init.method ?? "GET").toUpperCase();
+  if (status === 303 || ((status === 301 || status === 302) && method === "POST")) {
+    headers.delete("content-type");
+    headers.delete("content-length");
+    const next = { ...init, method: "GET", headers, redirect: MANUAL_REDIRECT };
+    delete next.body;
+    return next;
+  }
+  return { ...init, headers, redirect: MANUAL_REDIRECT };
 }
 
 /**

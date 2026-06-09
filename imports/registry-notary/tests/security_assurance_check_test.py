@@ -208,6 +208,14 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.module.check_dockerfile_secret_patterns()
 
+    def test_workflow_external_ref_check_rejects_spaced_mutable_platform_ref(self):
+        workflow_dir = self.root / ".github" / "workflows"
+        workflow_dir.mkdir(parents=True)
+        (workflow_dir / "release.yml").write_text("env:\n  REGISTRY_PLATFORM_REF : main\n")
+
+        with self.assertRaises(SystemExit):
+            self.module.check_workflow_external_refs()
+
     def test_extracts_literal_const_format_and_chained_methods(self):
         source = '''
 use axum::{routing::{get, post}, Router};

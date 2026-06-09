@@ -284,6 +284,35 @@ class RegistryNotaryClientTests(unittest.TestCase):
         self.assertEqual(claim["id"], "claim one")
         self.assertEqual(recorder.requests[0]["path"], "/v1/claims/claim%20one")
 
+    def test_cross_origin_redirect_strips_sdk_auth_headers(self) -> None:
+        redirector = _Recorder()
+        target = _Recorder(body={"data": []})
+        with Server(target) as target_url:
+            with Server(redirector) as base_url:
+                redirector.responses = [
+                    (302, b"", {"Location": f"{target_url}/v1/claims"}),
+                ]
+                client = RegistryNotaryClient(base_url=base_url, api_key="secret-api-key")
+                client.list_claims()
+
+        self.assertEqual(redirector.requests[0]["headers"]["X-Api-Key"], "secret-api-key")
+        self.assertEqual(target.requests[0]["path"], "/v1/claims")
+        self.assertNotIn("X-Api-Key", target.requests[0]["headers"])
+        self.assertNotIn("Authorization", target.requests[0]["headers"])
+
+    def test_same_origin_redirect_preserves_sdk_auth_headers(self) -> None:
+        recorder = _Recorder(body={"data": []})
+        with Server(recorder) as base_url:
+            recorder.responses = [
+                (302, b"", {"Location": f"{base_url}/v1/claims?redirected=true"}),
+            ]
+            client = RegistryNotaryClient(base_url=base_url, bearer_token="secret-bearer")
+            client.list_claims()
+
+        self.assertEqual(recorder.requests[0]["headers"]["Authorization"], "Bearer secret-bearer")
+        self.assertEqual(recorder.requests[1]["path"], "/v1/claims?redirected=true")
+        self.assertEqual(recorder.requests[1]["headers"]["Authorization"], "Bearer secret-bearer")
+
     def test_render_request_rejects_invalid_request_type(self) -> None:
         client = RegistryNotaryClient(base_url="https://notary.example")
 

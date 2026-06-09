@@ -2,15 +2,6 @@ name: OpenFn DHIS2 Canary
 
 on:
   workflow_dispatch:
-    inputs:
-      dhis2_host_url:
-        description: DHIS2 base URL
-        required: false
-        default: https://play.im.dhis2.org/stable-2-43-0
-      dhis2_username:
-        description: DHIS2 username
-        required: false
-        default: admin
 
 permissions:
   contents: read
@@ -24,8 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CARGO_NET_GIT_FETCH_WITH_CLI: true
-      OPENFN_DHIS2_HOST_URL: ${{ inputs.dhis2_host_url }}
-      OPENFN_DHIS2_USERNAME: ${{ inputs.dhis2_username }}
+      OPENFN_DHIS2_HOST_URL: https://play.im.dhis2.org/stable-2-43-0
+      OPENFN_DHIS2_USERNAME: admin
       OPENFN_DHIS2_PASSWORD: ${{ secrets.OPENFN_DHIS2_PASSWORD }}
     steps:
       - name: Checkout registry-notary

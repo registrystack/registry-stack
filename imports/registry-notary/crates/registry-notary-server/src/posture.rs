@@ -6,7 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use registry_notary_core::{
     BulkMode, CredentialStatusConfig, EvidenceAuditConfig, SelfAttestationConfig,
     SelfAttestationRateLimitMode, SigningKeyStatus, StandaloneRegistryNotaryConfig,
-    CREDENTIAL_STATUS_STORAGE_REDIS, REPLAY_STORAGE_IN_MEMORY, REPLAY_STORAGE_REDIS,
+    CREDENTIAL_STATUS_STORAGE_REDIS, MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS,
+    REPLAY_STORAGE_IN_MEMORY, REPLAY_STORAGE_REDIS,
 };
 use registry_platform_ops::{
     filter_posture_for_tier, posture_safe_runtime_config_hash, PostureFilterError, PostureTier,
@@ -29,6 +30,7 @@ pub(crate) struct PostureContext {
     audit: AuditPosture,
     source_connections: SourceConnectionPosture,
     signing_keys: SigningKeyPosture,
+    oid4vci: Oid4vciPosture,
     self_attestation: SelfAttestationPosture,
 }
 
@@ -57,6 +59,14 @@ struct SigningKeyPosture {
     active: Vec<String>,
     publish_only: Vec<String>,
     disabled: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct Oid4vciPosture {
+    pre_authorized_code_enabled: bool,
+    pre_authorized_code_ttl_seconds: u64,
+    tx_code_required: bool,
+    offer_security_mode: String,
 }
 
 #[derive(Clone, Debug)]
@@ -94,6 +104,7 @@ impl PostureContext {
                 by_kind: source_connection_counts_by_kind(config),
             },
             signing_keys: signing_key_posture(config),
+            oid4vci: oid4vci_posture(config),
             self_attestation: self_attestation_posture(&config.self_attestation),
         }
     }
@@ -154,6 +165,32 @@ pub(crate) async fn posture_document(
     }
     if !context.audit.configured {
         warnings.push("notary.audit.not_configured".to_string());
+    }
+    if context.oid4vci.pre_authorized_code_enabled && !context.oid4vci.tx_code_required {
+        let finding = json!({
+            "id": "notary.oid4vci.bearer_offer",
+            "severity": "medium",
+            "title": "OID4VCI pre-authorized-code offers run without tx_code",
+            "detail": "A copied offer URI can be redeemed until the pre-authorized code expires.",
+            "evidence": [
+                {
+                    "field": "notary.oid4vci.offer_security_mode",
+                    "value": context.oid4vci.offer_security_mode.as_str()
+                },
+                {
+                    "field": "notary.oid4vci.pre_authorized_code_ttl_seconds",
+                    "value": context.oid4vci.pre_authorized_code_ttl_seconds
+                },
+                {
+                    "field": "notary.oid4vci.max_bearer_pre_authorized_code_ttl_seconds",
+                    "value": MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS
+                }
+            ],
+            "standards_refs": [],
+            "recommended_action": "Require tx_code where wallets support it; otherwise keep bearer-offer mode limited to controlled demos."
+        });
+        warnings.push("notary.oid4vci.bearer_offer".to_string());
+        findings.push(finding);
     }
 
     let mut instance = Map::new();
@@ -287,6 +324,12 @@ fn default_posture_context() -> PostureContext {
             publish_only: Vec::new(),
             disabled: Vec::new(),
         },
+        oid4vci: Oid4vciPosture {
+            pre_authorized_code_enabled: false,
+            pre_authorized_code_ttl_seconds: 0,
+            tx_code_required: true,
+            offer_security_mode: "disabled".to_string(),
+        },
         self_attestation: SelfAttestationPosture {
             enabled: false,
             allowed_claim_count: 0,
@@ -401,6 +444,23 @@ fn signing_key_posture(config: &StandaloneRegistryNotaryConfig) -> SigningKeyPos
         active,
         publish_only,
         disabled,
+    }
+}
+
+fn oid4vci_posture(config: &StandaloneRegistryNotaryConfig) -> Oid4vciPosture {
+    let preauth = &config.oid4vci.pre_authorized_code;
+    let offer_security_mode = if !config.oid4vci.enabled || !preauth.enabled {
+        "disabled"
+    } else if preauth.tx_code.required {
+        "tx_code"
+    } else {
+        "bearer_offer"
+    };
+    Oid4vciPosture {
+        pre_authorized_code_enabled: config.oid4vci.enabled && preauth.enabled,
+        pre_authorized_code_ttl_seconds: preauth.pre_authorized_code_ttl_seconds,
+        tx_code_required: preauth.tx_code.required,
+        offer_security_mode: offer_security_mode.to_string(),
     }
 }
 

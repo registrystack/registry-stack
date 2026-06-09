@@ -239,8 +239,9 @@ For a live target canary against the DHIS2 play server, run:
 crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-dhis2-sidecar.sh
 ```
 
-The DHIS2 canary defaults to the public play instance URL and username. Provide
-`OPENFN_DHIS2_PASSWORD`, and override `OPENFN_DHIS2_HOST_URL` or
-`OPENFN_DHIS2_USERNAME` when needed. It is also available as the manual
-`OpenFn DHIS2 Canary` GitHub Actions workflow, where the password is read from
-the `OPENFN_DHIS2_PASSWORD` repository secret.
+The DHIS2 canary defaults to the public play instance URL and username. For
+local runs, provide `OPENFN_DHIS2_PASSWORD`, and override
+`OPENFN_DHIS2_HOST_URL` or `OPENFN_DHIS2_USERNAME` when needed. It is also
+available as the manual `OpenFn DHIS2 Canary` GitHub Actions workflow, where
+the password is read from the `OPENFN_DHIS2_PASSWORD` repository secret and the
+target host and username are fixed by the workflow.

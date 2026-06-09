@@ -17,7 +17,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_NET_GIT_FETCH_WITH_CLI: true
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: ${{ (github.head_ref || github.ref_name) == 'commons-release-cleanup' && 'commons-release-cleanup' || 'main' }}
+  REGISTRY_PLATFORM_REF: ee298e00e76ad6b1e56373fe85d6c1e3a95ea238
   CROSSWALK_REPOSITORY: PublicSchema/crosswalk
   CROSSWALK_REF: 54e0f537830837fcd0c9efa87990987b1846931c
   REGISTRY_NOTARY_FEATURES: registry-notary-cel,pkcs11
@@ -107,8 +107,17 @@ jobs:
           ARCHIVE_EXT: ${{ matrix.archive_ext }}
           BIN_EXT: ${{ matrix.bin_ext }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          if [ "${GITHUB_REF_TYPE:-}" != "tag" ]; then
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            if [[ ! "${GITHUB_REF_NAME:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Release tags must be stable semver tags like v0.1.2." >&2
+              exit 1
+            fi
+            version="${GITHUB_REF_NAME#v}"
+          else
+            if [[ ! "${GITHUB_RUN_NUMBER:-}" =~ ^[0-9]+$ ]]; then
+              echo "Manual release run number must be numeric." >&2
+              exit 1
+            fi
             version="manual-${GITHUB_RUN_NUMBER}"
           fi
           package="registry-notary-${version}-${TARGET}"
@@ -118,7 +127,8 @@ jobs:
           cp "target/release/registry-notary-cel-worker${BIN_EXT}" "$package_dir/"
           cp README.md LICENSE "$package_dir/"
           if [ "$ARCHIVE_EXT" = "zip" ]; then
-            pwsh -NoProfile -Command "Compress-Archive -Path '${package_dir}/*' -DestinationPath 'target/dist/${package}.zip' -Force"
+            PACKAGE_DIR="$package_dir" PACKAGE_ARCHIVE="target/dist/${package}.zip" \
+              pwsh -NoProfile -Command "Compress-Archive -Path (Join-Path \$env:PACKAGE_DIR '*') -DestinationPath \$env:PACKAGE_ARCHIVE -Force"
           else
             tar -C target/dist -cJf "target/dist/${package}.tar.xz" "$package"
           fi

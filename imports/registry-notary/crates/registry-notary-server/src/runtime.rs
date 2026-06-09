@@ -395,6 +395,14 @@ pub trait SourceReader: Send + Sync {
         evidence: &EvidenceConfig,
         claim_id: &str,
     ) -> Result<Vec<String>, EvidenceError>;
+
+    fn required_scopes_for_claim(
+        &self,
+        evidence: &EvidenceConfig,
+        claim: &ClaimDefinition,
+    ) -> Result<Vec<String>, EvidenceError> {
+        self.required_scopes(evidence, &claim.id)
+    }
 }
 
 /// Group bindings across (subject, claim, binding) by their bulk-eligible
@@ -524,9 +532,12 @@ async fn prefetch_bulk_bindings(
             .await;
         let observed_at = OffsetDateTime::now_utc();
         for (entry, result) in entries.into_iter().zip(results) {
-            let (_, _, cache_key) = entry;
+            let (binding, _, cache_key) = entry;
             match result {
                 Ok(value) => {
+                    if validate_required_binding_fields(&binding, &value).is_err() {
+                        continue;
+                    }
                     let mut guard = fetch_memo.lock();
                     // Insert Ready directly. No Pending phase is needed: the
                     // memo is empty at this point and subject tasks have not
@@ -1097,8 +1108,9 @@ impl RegistryNotaryRuntime {
         for claim_id in &request.claims {
             require_source_read_capability(&source_capability, claim_id)?;
         }
-        for claim_id in &request.claims {
-            require_claim_access(&evidence, source.as_ref(), principal, claim_id)?;
+        for claim_ref in &request.claims {
+            let claim = find_claim_for_selection(&evidence, claim_ref, &claim_versions)?;
+            require_claim_access(&evidence, source.as_ref(), principal, claim)?;
         }
         let purpose = resolve_purpose(header_purpose, request.purpose.as_deref())?;
         require_purpose_allowed(
@@ -1169,6 +1181,7 @@ impl RegistryNotaryRuntime {
             client_id,
             purpose,
             claim_ids: request_claim_ids,
+            claim_refs: request.claims.clone(),
             disclosure: stored_disclosure(&views),
             format,
             results: views.clone(),
@@ -1357,6 +1370,7 @@ impl RegistryNotaryRuntime {
                             client_id: principal.principal_id.clone(),
                             purpose: subject_purposes[input_index].clone(),
                             claim_ids: request_claim_ids.clone(),
+                            claim_refs: request.claims.clone(),
                             disclosure: stored_disclosure(&results),
                             format: results
                                 .first()
@@ -1466,8 +1480,9 @@ impl RegistryNotaryRuntime {
         for claim_id in &request.claims {
             require_source_read_capability(&source_capability, claim_id)?;
         }
-        for claim_id in &request.claims {
-            require_claim_access(&evidence, source.as_ref(), principal, claim_id)?;
+        for claim_ref in &request.claims {
+            let claim = find_claim_for_selection(&evidence, claim_ref, &claim_versions)?;
+            require_claim_access(&evidence, source.as_ref(), principal, claim)?;
         }
         let format = request
             .format
@@ -1865,7 +1880,7 @@ fn principal_can_see_claim<R: SourceReader + ?Sized>(
     claim: &ClaimDefinition,
 ) -> bool {
     source
-        .required_scopes(evidence, &claim.id)
+        .required_scopes_for_claim(evidence, claim)
         .is_ok_and(|scopes| scopes.iter().all(|scope| principal.has_scope(scope)))
 }
 
@@ -1873,12 +1888,12 @@ fn require_claim_access<R: SourceReader + ?Sized>(
     evidence: &EvidenceConfig,
     source: &R,
     principal: &EvidencePrincipal,
-    claim_id: &str,
+    claim: &ClaimDefinition,
 ) -> Result<(), EvidenceError> {
     if principal.is_self_attestation() {
         return Ok(());
     }
-    for scope in source.required_scopes(evidence, claim_id)? {
+    for scope in source.required_scopes_for_claim(evidence, claim)? {
         if !principal.has_scope(&scope) {
             return Err(EvidenceError::ScopeDenied { required: scope });
         }
@@ -2513,13 +2528,21 @@ async fn fetch_binding_direct(
             purpose,
         )
         .await?;
+    validate_required_binding_fields(binding, &row)?;
+    Ok((row, None))
+}
+
+fn validate_required_binding_fields(
+    binding: &registry_notary_core::SourceBindingConfig,
+    row: &Value,
+) -> Result<(), EvidenceError> {
     for field in binding.fields.values().filter(|field| field.required) {
-        match crate::standalone::get_json_path(&row, &field.field) {
+        match crate::standalone::get_json_path(row, &field.field) {
             Some(value) if !value.is_null() => {}
             _ => return Err(EvidenceError::SourceNotFound),
         }
     }
-    Ok((row, None))
+    Ok(())
 }
 
 /// Derive the lookup value for a binding from the request context.
@@ -2800,9 +2823,10 @@ fn present_entity_paths(prefix: &str, entity: &EvidenceEntity) -> Vec<String> {
 fn path_allowed(path: &str, allowed: &[String]) -> bool {
     allowed.iter().any(|candidate| {
         candidate == path
-            || candidate
-                .strip_suffix(".*")
-                .is_some_and(|prefix| path.starts_with(prefix))
+            || candidate.strip_suffix(".*").is_some_and(|prefix| {
+                path.strip_prefix(prefix)
+                    .is_some_and(|rest| rest.starts_with('.'))
+            })
     })
 }
 
@@ -3428,7 +3452,7 @@ fn render_cccev_evidence_node(config: &EvidenceConfig, result: &ClaimResultView)
     let requirement_iri = config
         .claims
         .iter()
-        .find(|c| c.id == result.claim_id)
+        .find(|claim| claim.id == result.claim_id && claim.version == result.claim_version)
         .and_then(|c| c.oots.as_ref())
         .and_then(|o| o.requirement.as_deref())
         .map(|iri| json!({ "@id": iri }))
@@ -3480,6 +3504,8 @@ pub fn credential_profile_for<'a>(
     evaluation: &registry_notary_core::StoredEvaluation,
     requested_profile: Option<&'a str>,
 ) -> Result<(&'a str, &'a CredentialProfileConfig), EvidenceError> {
+    let claim_refs = evaluation.selected_claim_refs();
+    let claim_versions = requested_claim_versions(&claim_refs)?;
     if let Some(profile_id) = requested_profile {
         let profile = config
             .credential_profiles
@@ -3489,10 +3515,11 @@ pub fn credential_profile_for<'a>(
         // least one claim in the evaluation. Without this check a client
         // could mint a credential against a profile the claim never opted
         // in to, bypassing per-claim policy.
-        let allowed = evaluation
-            .claim_ids
+        let allowed = claim_refs
             .iter()
-            .filter_map(|claim_id| find_claim(config, claim_id).ok())
+            .filter_map(|claim_ref| {
+                find_claim_for_selection(config, claim_ref, &claim_versions).ok()
+            })
             .any(|claim| {
                 claim
                     .credential_profiles
@@ -3504,8 +3531,8 @@ pub fn credential_profile_for<'a>(
         }
         return Ok((profile_id, profile));
     }
-    for claim_id in &evaluation.claim_ids {
-        let claim = find_claim(config, claim_id)?;
+    for claim_ref in &claim_refs {
+        let claim = find_claim_for_selection(config, claim_ref, &claim_versions)?;
         for profile_id in &claim.credential_profiles {
             if let Some(profile) = config.credential_profiles.get(profile_id) {
                 return Ok((profile_id, profile));
@@ -3670,6 +3697,109 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Default)]
+    struct VersionScopedSource {
+        read_count: AtomicU64,
+    }
+
+    impl SourceReader for VersionScopedSource {
+        fn read_one<'a>(
+            &'a self,
+            _binding: &'a SourceBindingConfig,
+            subject: &'a SubjectRequest,
+            _purpose: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+            Box::pin(async move {
+                self.read_count.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({
+                    "id": subject.id.clone(),
+                    "value": true,
+                }))
+            })
+        }
+
+        fn required_scopes(
+            &self,
+            _evidence: &EvidenceConfig,
+            claim_id: &str,
+        ) -> Result<Vec<String>, EvidenceError> {
+            Ok(vec![format!("{claim_id}:1.0")])
+        }
+
+        fn required_scopes_for_claim(
+            &self,
+            _evidence: &EvidenceConfig,
+            claim: &ClaimDefinition,
+        ) -> Result<Vec<String>, EvidenceError> {
+            Ok(vec![format!("{}:{}", claim.id, claim.version)])
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct BulkInvalidThenDirectSource {
+        bulk_count: AtomicU64,
+        direct_count: AtomicU64,
+    }
+
+    impl SourceReader for BulkInvalidThenDirectSource {
+        fn read_one<'a>(
+            &'a self,
+            _binding: &'a SourceBindingConfig,
+            subject: &'a SubjectRequest,
+            _purpose: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+            Box::pin(async move {
+                self.direct_count.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({
+                    "id": subject.id.clone(),
+                    "value": true,
+                }))
+            })
+        }
+
+        fn read_one_for_context<'a>(
+            &'a self,
+            binding: &'a SourceBindingConfig,
+            context: &'a EvidenceRequestContext,
+            purpose: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+            Box::pin(async move {
+                let subject = context
+                    .target_subject()
+                    .ok_or(EvidenceError::TargetAttributesInsufficient)?;
+                self.read_one(binding, &subject, purpose).await
+            })
+        }
+
+        fn read_many_context<'a>(
+            &'a self,
+            bindings: Vec<(SourceBindingConfig, EvidenceRequestContext)>,
+            _purpose: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Vec<Result<Value, EvidenceError>>> + Send + 'a>> {
+            Box::pin(async move {
+                self.bulk_count.fetch_add(1, Ordering::SeqCst);
+                bindings
+                    .into_iter()
+                    .map(|(_, context)| {
+                        let id = context
+                            .target_subject()
+                            .map(|subject| subject.id)
+                            .unwrap_or_default();
+                        Ok(json!({ "id": id }))
+                    })
+                    .collect()
+            })
+        }
+
+        fn required_scopes(
+            &self,
+            _evidence: &EvidenceConfig,
+            _claim_id: &str,
+        ) -> Result<Vec<String>, EvidenceError> {
+            Ok(Vec::new())
+        }
+    }
+
     fn test_source_binding() -> SourceBindingConfig {
         SourceBindingConfig {
             connector: registry_notary_core::SourceConnectorKind::RegistryDataApi,
@@ -3747,6 +3877,22 @@ mod tests {
             claims,
             ..EvidenceConfig::default()
         })
+    }
+
+    fn bulk_source_connection() -> registry_notary_core::SourceConnectionConfig {
+        registry_notary_core::SourceConnectionConfig {
+            base_url: "https://source.test".to_string(),
+            allow_insecure_localhost: false,
+            allow_insecure_private_network: false,
+            token_env: String::new(),
+            source_auth: None,
+            dci: registry_notary_core::DciSourceConnectionConfig::default(),
+            max_in_flight: 1,
+            retry_on_5xx: false,
+            bulk_mode: BulkMode::OpenFnSidecarBatch,
+            bulk_mode_lookup_unique: true,
+            bulk_timeout_max_ms: 1_000,
+        }
     }
 
     fn test_request(claim: &str) -> EvaluateRequest {
@@ -4202,6 +4348,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bulk_prefetch_does_not_cache_rows_missing_required_fields() {
+        let source = Arc::new(BulkInvalidThenDirectSource::default());
+        let mut claim = test_claim("selected", Vec::new(), true);
+        claim.operations.batch_evaluate.enabled = true;
+        claim.operations.batch_evaluate.max_subjects = 1;
+        claim
+            .source_bindings
+            .get_mut("src")
+            .expect("test claim has source binding")
+            .connection = Some("bulk-source".to_string());
+        let mut evidence_config = (*test_evidence(vec![claim])).clone();
+        evidence_config.inline_batch_limit = 1;
+        evidence_config.source_connections =
+            BTreeMap::from([("bulk-source".to_string(), bulk_source_connection())]);
+        let evidence = Arc::new(evidence_config);
+        let store = EvidenceStore::default();
+        let memo = Arc::new(MemoState::new());
+        let request = BatchEvaluateRequest {
+            items: vec![registry_notary_core::BatchEvaluateItemRequest::from(
+                registry_notary_core::BatchSubjectRequest {
+                    id: "person-1".to_string(),
+                    id_type: None,
+                    purpose: None,
+                },
+            )],
+            claims: vec![ClaimRef::from("selected")],
+            disclosure: Some("value".to_string()),
+            format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+            purpose: Some("test".to_string()),
+        };
+
+        let response = RegistryNotaryRuntime::new()
+            .batch_evaluate(
+                evidence,
+                source.clone() as Arc<dyn SourceReader>,
+                &store,
+                &machine_principal(),
+                request,
+                BatchEvaluateOptions {
+                    memo_observer: Some(&memo),
+                    ..BatchEvaluateOptions::default()
+                },
+            )
+            .await
+            .expect("batch evaluate succeeds after direct retry");
+
+        assert_eq!(response.summary.succeeded, 1);
+        assert_eq!(response.summary.failed, 0);
+        assert!(matches!(
+            response.items[0].status,
+            BatchItemStatus::Succeeded
+        ));
+        assert_eq!(response.items[0].claim_results[0].value, Some(json!(true)));
+        assert_eq!(source.bulk_count.load(Ordering::SeqCst), 1);
+        assert_eq!(source.direct_count.load(Ordering::SeqCst), 1);
+        assert_eq!(memo.hits(), 0);
+        assert_eq!(memo.misses(), 1);
+    }
+
+    #[tokio::test]
     async fn evaluate_uses_requested_claim_version() {
         let source = Arc::new(CountingSource::default());
         let older_claim = test_claim("selected", Vec::new(), false);
@@ -4227,6 +4433,112 @@ mod tests {
         assert_eq!(results[0].claim_version, "2.0");
         assert_eq!(results[0].value, Some(json!(true)));
         assert_eq!(source.read_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn evaluate_authorizes_required_scope_from_requested_claim_version() {
+        let source = Arc::new(VersionScopedSource::default());
+        let older_claim = test_claim("selected", Vec::new(), true);
+        let mut newer_claim = test_claim("selected", Vec::new(), true);
+        newer_claim.version = "2.0".to_string();
+        let evidence = test_evidence(vec![older_claim, newer_claim]);
+        let store = EvidenceStore::default();
+        let mut request = test_request("selected");
+        request.claims = vec![ClaimRef::with_version("selected", "2.0")];
+        let principal = EvidencePrincipal {
+            principal_id: "machine".to_string(),
+            scopes: vec!["selected:1.0".to_string()],
+            access_mode: AccessMode::MachineClient,
+            verified_claims: None,
+        };
+
+        let err = RegistryNotaryRuntime::new()
+            .evaluate(
+                Arc::clone(&evidence),
+                source.clone() as Arc<dyn SourceReader>,
+                &store,
+                &principal,
+                request.clone(),
+                None,
+            )
+            .await
+            .expect_err("version 1 scope must not authorize version 2");
+
+        assert!(matches!(
+            err,
+            EvidenceError::ScopeDenied { required } if required == "selected:2.0"
+        ));
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+
+        let principal = EvidencePrincipal {
+            scopes: vec!["selected:2.0".to_string()],
+            ..principal
+        };
+        let results = RegistryNotaryRuntime::new()
+            .evaluate(
+                evidence,
+                source.clone() as Arc<dyn SourceReader>,
+                &store,
+                &principal,
+                request,
+                None,
+            )
+            .await
+            .expect("version 2 scope authorizes version 2");
+
+        assert_eq!(results[0].claim_version, "2.0");
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn render_cccev_uses_result_claim_version_for_requirement() {
+        let mut older_claim = test_claim("selected", Vec::new(), true);
+        older_claim.oots = Some(registry_notary_core::OotsConfig {
+            enabled: true,
+            requirement: Some("https://requirements.example/v1".to_string()),
+            ..registry_notary_core::OotsConfig::default()
+        });
+        let mut newer_claim = test_claim("selected", Vec::new(), true);
+        newer_claim.version = "2.0".to_string();
+        newer_claim.oots = Some(registry_notary_core::OotsConfig {
+            enabled: true,
+            requirement: Some("https://requirements.example/v2".to_string()),
+            ..registry_notary_core::OotsConfig::default()
+        });
+        let evidence = test_evidence(vec![older_claim, newer_claim]);
+        let result = ClaimResultView {
+            evaluation_id: "evaluation".to_string(),
+            claim_id: "selected".to_string(),
+            claim_version: "2.0".to_string(),
+            subject_type: "person".to_string(),
+            requester_ref: None,
+            target_ref: TargetRefView {
+                entity_type: "Person".to_string(),
+                handle: "rnref:v1:target".to_string(),
+                identifier_schemes: Vec::new(),
+                profile: None,
+            },
+            matching: None,
+            value: Some(json!(true)),
+            satisfied: Some(true),
+            disclosure: "value".to_string(),
+            format: FORMAT_CCCEV_JSONLD.to_string(),
+            issued_at: "2026-06-08T00:00:00Z".to_string(),
+            expires_at: None,
+            provenance: ClaimProvenance {
+                source_count: 0,
+                source_versions: BTreeMap::new(),
+                computed_by: "runtime.test".to_string(),
+            },
+        };
+
+        let rendered =
+            render_results(&evidence, &[result], FORMAT_CCCEV_JSONLD).expect("CCCEV renders");
+
+        assert_eq!(
+            rendered["@graph"][0]["cccev:supportsRequirement"]["@id"],
+            json!("https://requirements.example/v2")
+        );
     }
 
     #[tokio::test]
@@ -4811,6 +5123,7 @@ credential_profiles:
             client_id: "client".to_string(),
             purpose: "test".to_string(),
             claim_ids: vec!["claim-a".to_string()],
+            claim_refs: Vec::new(),
             disclosure: "redacted".to_string(),
             format: FORMAT_SD_JWT_VC.to_string(),
             results: Vec::new(),
@@ -4827,5 +5140,56 @@ credential_profiles:
         let (profile_id, _) = credential_profile_for(&evidence, &evaluation, Some("profile_a"))
             .expect("profile_a is listed on claim-a");
         assert_eq!(profile_id, "profile_a");
+    }
+
+    #[test]
+    fn credential_profile_for_uses_stored_claim_version() {
+        let mut older_claim = test_claim("claim-a", Vec::new(), true);
+        older_claim.credential_profiles = vec!["profile_a".to_string()];
+        let mut newer_claim = test_claim("claim-a", Vec::new(), true);
+        newer_claim.version = "2.0".to_string();
+        newer_claim.credential_profiles = vec!["profile_b".to_string()];
+        let mut evidence = (*test_evidence(vec![older_claim, newer_claim])).clone();
+        evidence.credential_profiles = serde_norway::from_str(
+            r#"
+profile_a:
+  format: application/dc+sd-jwt
+  issuer: https://issuer.example
+  signing_key: issuer-key
+  vct: https://vct.example/a
+  allowed_claims: [claim-a]
+profile_b:
+  format: application/dc+sd-jwt
+  issuer: https://issuer.example
+  signing_key: issuer-key
+  vct: https://vct.example/b
+  allowed_claims: [claim-a]
+"#,
+        )
+        .expect("credential profiles parse");
+        let evaluation = registry_notary_core::StoredEvaluation {
+            client_id: "client".to_string(),
+            purpose: "test".to_string(),
+            claim_ids: vec!["claim-a".to_string()],
+            claim_refs: vec![ClaimRef::with_version("claim-a", "2.0")],
+            disclosure: "redacted".to_string(),
+            format: FORMAT_SD_JWT_VC.to_string(),
+            results: Vec::new(),
+            created_at: "1970-01-01T00:00:00Z".to_string(),
+            expires_at: "1970-01-01T00:00:00Z".to_string(),
+            request_hash: "h".to_string(),
+            self_attestation: None,
+        };
+
+        let err = credential_profile_for(&evidence, &evaluation, Some("profile_a"))
+            .expect_err("profile_a is not listed on claim-a version 2.0");
+        assert!(matches!(err, EvidenceError::CredentialIssuerNotConfigured));
+
+        let (profile_id, _) = credential_profile_for(&evidence, &evaluation, Some("profile_b"))
+            .expect("profile_b is listed on claim-a version 2.0");
+        assert_eq!(profile_id, "profile_b");
+        let (profile_id, _) =
+            credential_profile_for(&evidence, &evaluation, None).expect("default profile resolves");
+        assert_eq!(profile_id, "profile_b");
     }
 }

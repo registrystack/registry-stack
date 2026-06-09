@@ -14,7 +14,7 @@ from http.client import HTTPResponse
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .errors import NotaryError, NotaryProblemError, NotaryTransportError
 
@@ -693,7 +693,7 @@ def _stdlib_post(
 ) -> _Response:
     request = Request(url, data=body, headers=dict(headers), method="POST")
     try:
-        with urlopen(request, timeout=timeout) as response:
+        with _REDIRECT_OPENER.open(request, timeout=timeout) as response:
             return _response_from_stdlib(response)
     except HTTPError as exc:
         try:
@@ -713,7 +713,7 @@ def _stdlib_get(
 ) -> _Response:
     request = Request(url, headers=dict(headers), method="GET")
     try:
-        with urlopen(request, timeout=timeout) as response:
+        with _REDIRECT_OPENER.open(request, timeout=timeout) as response:
             return _response_from_stdlib(response)
     except HTTPError as exc:
         try:
@@ -724,6 +724,41 @@ def _stdlib_get(
             )
         finally:
             exc.close()
+
+
+class _AuthStrippingRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req: Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> Request | None:
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is not None and _url_origin(req.full_url) != _url_origin(
+            redirected.full_url
+        ):
+            _remove_request_header(redirected, "authorization")
+            _remove_request_header(redirected, "x-api-key")
+        return redirected
+
+
+def _url_origin(url: str) -> tuple[str, str]:
+    parsed = urlsplit(url)
+    return (parsed.scheme.lower(), parsed.netloc.lower())
+
+
+def _remove_request_header(request: Request, name: str) -> None:
+    normalized = name.lower()
+    for header_map in (request.headers, request.unredirected_hdrs):
+        for key in list(header_map):
+            if key.lower() == normalized:
+                del header_map[key]
+
+
+_REDIRECT_OPENER = build_opener(_AuthStrippingRedirectHandler)
 
 
 def _response_from_stdlib(response: HTTPResponse) -> _Response:

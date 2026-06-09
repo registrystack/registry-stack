@@ -77,6 +77,7 @@ struct StoredEntry<V> {
 /// pattern. `Debug` renders only metadata so stored secrets never leak.
 pub(crate) struct SingleUseStore<V> {
     entries: Mutex<HashMap<String, StoredEntry<V>>>,
+    max_entries: Option<usize>,
 }
 
 impl<V> std::fmt::Debug for SingleUseStore<V> {
@@ -91,8 +92,16 @@ impl<V> Default for SingleUseStore<V> {
     fn default() -> Self {
         Self {
             entries: Mutex::new(HashMap::new()),
+            max_entries: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SingleUseReserveError {
+    Duplicate,
+    Capacity,
+    Unavailable,
 }
 
 impl<V: Clone> SingleUseStore<V> {
@@ -100,10 +109,27 @@ impl<V: Clone> SingleUseStore<V> {
         Self::default()
     }
 
+    pub(crate) fn new_with_max_entries(max_entries: usize) -> Self {
+        Self {
+            entries: Mutex::new(HashMap::new()),
+            max_entries: Some(max_entries),
+        }
+    }
+
     /// Reserve `value` under `key` for `ttl`. Returns `false` if the key already
     /// exists (a collision is rejected rather than silently overwritten).
     pub(crate) fn reserve(&self, key: &str, value: V, ttl_seconds: u64) -> bool {
-        self.reserve_at(key, value, ttl_seconds, OffsetDateTime::now_utc())
+        self.try_reserve_at(key, value, ttl_seconds, OffsetDateTime::now_utc())
+            .is_ok()
+    }
+
+    pub(crate) fn try_reserve(
+        &self,
+        key: &str,
+        value: V,
+        ttl_seconds: u64,
+    ) -> Result<(), SingleUseReserveError> {
+        self.try_reserve_at(key, value, ttl_seconds, OffsetDateTime::now_utc())
     }
 
     /// Consume the value under `key` exactly once. Returns `None` for unknown,
@@ -127,14 +153,31 @@ impl<V: Clone> SingleUseStore<V> {
         }
     }
 
+    #[cfg(test)]
     fn reserve_at(&self, key: &str, value: V, ttl_seconds: u64, now: OffsetDateTime) -> bool {
+        self.try_reserve_at(key, value, ttl_seconds, now).is_ok()
+    }
+
+    fn try_reserve_at(
+        &self,
+        key: &str,
+        value: V,
+        ttl_seconds: u64,
+        now: OffsetDateTime,
+    ) -> Result<(), SingleUseReserveError> {
         let mut entries = match self.entries.lock() {
             Ok(entries) => entries,
-            Err(_) => return false,
+            Err(_) => return Err(SingleUseReserveError::Unavailable),
         };
         prune_expired(&mut entries, now);
         if entries.contains_key(key) {
-            return false;
+            return Err(SingleUseReserveError::Duplicate);
+        }
+        if self
+            .max_entries
+            .is_some_and(|max_entries| entries.len() >= max_entries)
+        {
+            return Err(SingleUseReserveError::Capacity);
         }
         entries.insert(
             key.to_string(),
@@ -143,7 +186,7 @@ impl<V: Clone> SingleUseStore<V> {
                 expires_at: now + Duration::seconds(ttl_seconds as i64),
             },
         );
-        true
+        Ok(())
     }
 
     fn consume_at(&self, key: &str, now: OffsetDateTime) -> Option<V> {
@@ -230,6 +273,25 @@ mod tests {
         assert!(
             !store.reserve_at("state-1", login_state(), 300, now()),
             "a colliding state key must not overwrite an existing reservation"
+        );
+    }
+
+    #[test]
+    fn capped_reservations_reject_unexpired_entries_over_capacity() {
+        let store = SingleUseStore::new_with_max_entries(1);
+        assert!(store.reserve_at("state-1", login_state(), 300, now()));
+        assert_eq!(
+            store.try_reserve_at("state-2", login_state(), 300, now()),
+            Err(SingleUseReserveError::Capacity)
+        );
+        assert!(
+            store.reserve_at(
+                "state-3",
+                login_state(),
+                300,
+                now() + Duration::seconds(301)
+            ),
+            "expired entries are pruned before capacity is enforced"
         );
     }
 

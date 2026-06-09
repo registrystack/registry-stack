@@ -2,9 +2,9 @@
 
 > **Page type:** How-to · **Product:** Registry Notary · **Layer:** credential · **Audience:** operator
 
-Registry Notary issues short-lived SD-JWT VC credentials. Live credential status
-is optional. This guide explains the default lifecycle, when to enable status,
-what status means, and how operators should run it.
+Registry Notary issues SD-JWT VC credentials with explicit expiry. Live
+credential status is optional. This guide explains the default lifecycle, when
+to enable status, what status means, and how operators should run it.
 
 ## Default Lifecycle
 
@@ -14,15 +14,18 @@ By default, issued credentials are status-free:
 - No revocation list or status-list profile is published.
 - Verifiers rely on issuer trust, holder binding, and credential expiry.
 - Credential profiles default to 600 seconds of validity when
-  `validity_seconds` is omitted.
+  `validity_seconds` is omitted; wallet-facing profiles should set an explicit
+  validity period that matches the use case.
 
-The top-level `evidence.max_credential_validity_seconds` is capped at 600
-seconds, and profile validity must be between 1 second and that maximum.
-Self-attestation profiles are also bounded by
+The top-level `evidence.max_credential_validity_seconds` sets the issuing
+agency's local ceiling, and profile validity must be between 1 second and that
+maximum. Self-attestation profiles are also bounded by
 `self_attestation.token_policy.max_credential_validity_seconds`.
 
-This default suits deployments that prefer short expiry as the primary lifecycle
-control, avoiding the operational cost of a long-lived revocation surface.
+This lets operators keep offer codes, access tokens, proofs, and evidence
+freshness short while issuing wallet-held credentials with a practical validity
+window. Deployments that need longer-lived credentials should enable live status
+or another revocation/lifecycle surface.
 
 ## When To Enable Status
 
