@@ -185,7 +185,7 @@ impl OidcAuth {
             );
             AuthError::MalformedCredential
         })?;
-        if kid.chars().any(char::is_control) {
+        if kid.len() > 1024 || kid.chars().any(char::is_control) {
             tracing::warn!(
                 auth_error = "auth.malformed_credential",
                 "oidc: token header kid rejected",
@@ -1141,8 +1141,8 @@ mod tests {
         let rendered = String::from_utf8(logs.0.lock().expect("log buffer lock").clone())
             .expect("logs are utf-8");
         assert!(
-            rendered.contains("provider_error=\"kid_too_long\""),
-            "expected stable provider code in logs: {rendered}"
+            rendered.contains("oidc: token header kid rejected"),
+            "expected validation diagnostic in logs: {rendered}"
         );
         assert!(!rendered.contains(&raw_kid), "raw kid reached text logs");
     }
