@@ -1,0 +1,64 @@
+name: coolify-image-pin
+
+on:
+  workflow_dispatch:
+    inputs:
+      registry_relay_image:
+        description: "Digest-pinned REGISTRY_RELAY_IMAGE value"
+        required: true
+      registry_notary_image:
+        description: "Digest-pinned REGISTRY_NOTARY_IMAGE value"
+        required: true
+      registry_notary_openfn_sidecar_image:
+        description: "Digest-pinned REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE value"
+        required: true
+
+permissions: {}
+
+jobs:
+  patch-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Patch Coolify image env vars
+        env:
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          COOLIFY_API_BASE_URL: https://cool.pitgenius.com/api/v1
+          REGISTRY_LAB_APP_UUID: klhnsuoye8lwuamp0bko387t
+          REGISTRY_RELAY_IMAGE: ${{ inputs.registry_relay_image }}
+          REGISTRY_NOTARY_IMAGE: ${{ inputs.registry_notary_image }}
+          REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE: ${{ inputs.registry_notary_openfn_sidecar_image }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${COOLIFY_API_TOKEN}" ]; then
+            echo "::error::COOLIFY_API_TOKEN is not configured."
+            exit 1
+          fi
+
+          patch_env() {
+            key="$1"
+            value="$2"
+            curl -fsS \
+              -X PATCH \
+              -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              "${COOLIFY_API_BASE_URL}/applications/${REGISTRY_LAB_APP_UUID}/envs" \
+              -d "$(jq -nc --arg key "$key" --arg value "$value" '{key: $key, value: $value, is_preview: false}')"
+            echo
+          }
+
+          patch_env REGISTRY_RELAY_IMAGE "${REGISTRY_RELAY_IMAGE}"
+          patch_env REGISTRY_NOTARY_IMAGE "${REGISTRY_NOTARY_IMAGE}"
+          patch_env REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE "${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE}"
+
+      - name: Trigger Registry Lab deploy
+        env:
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          COOLIFY_API_BASE_URL: https://cool.pitgenius.com/api/v1
+          REGISTRY_LAB_APP_UUID: klhnsuoye8lwuamp0bko387t
+        run: |
+          set -euo pipefail
+          curl -fsS \
+            -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+            "${COOLIFY_API_BASE_URL}/deploy?uuid=${REGISTRY_LAB_APP_UUID}&force=false"
+          echo
