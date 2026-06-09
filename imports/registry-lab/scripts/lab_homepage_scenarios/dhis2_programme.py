@@ -174,7 +174,9 @@ def _discover(config: dict[str, Any], step_id: str) -> dict[str, Any]:
     url = _url(config, "/v1/claims")
     real_headers, display_headers = _headers(config)
     result = http_json("GET", url, real_headers)
-    claims = result.body.get("claims", []) if isinstance(result.body, dict) else []
+    claims = []
+    if isinstance(result.body, dict):
+        claims = result.body.get("claims") or result.body.get("data") or []
     claim_ids = {item.get("id") for item in claims if isinstance(item, dict)}
     programme_claims_present = all(claim in claim_ids for claim in PROGRAMME_CLAIMS)
     return {

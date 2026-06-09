@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import unittest
 import urllib.error
@@ -588,6 +589,45 @@ class ScenarioPayloadTest(unittest.TestCase):
             ["discover", "evaluate-programme", "preview-vc", "reconcile", "negative-control", "render-cccev"],
         )
         self.assertIn("Bruno creates an Ed25519 holder proof", story["steps"][2]["prompt"])
+
+    def test_dhis2_discovery_accepts_notary_data_envelope(self) -> None:
+        captured = {}
+
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps(
+                    {
+                        "data": [
+                            {"id": "dhis2-tracked-entity-first-name"},
+                            {"id": "dhis2-tracked-entity-last-name"},
+                            {"id": "dhis2-child-age-band"},
+                            {"id": "dhis2-programme-code"},
+                            {"id": "dhis2-child-program-active"},
+                            {"id": "dhis2-reconciliation-ref"},
+                        ]
+                    }
+                ).encode("utf-8")
+
+        def fake_urlopen(req, timeout=0):
+            captured["req"] = req
+            return Resp()
+
+        with unittest.mock.patch("urllib.request.urlopen", fake_urlopen):
+            result = server.run_scenario_step(self._payload_config(), "dhis2-programme-vc", "discover")
+
+        facts = {item["label"]: item["value"] for item in result["friendly"]["facts"]}
+        self.assertEqual(facts["Claims advertised"], 6)
+        self.assertEqual(facts["Programme claims present"], "Yes")
+        self.assertEqual(captured["req"].get_header("Authorization"), "Bearer civil-token")
 
     def test_dhis2_preview_vc_hides_holder_proof_and_raw_credential(self) -> None:
         result = server.run_scenario_step(self._payload_config(), "dhis2-programme-vc", "preview-vc")
