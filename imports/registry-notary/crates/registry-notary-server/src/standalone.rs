@@ -6476,6 +6476,14 @@ mod tests {
         tokio::time::sleep(FILE_WATCH_METADATA_CHECK_INTERVAL + Duration::from_millis(25)).await;
     }
 
+    fn mark_file_watch_checked_now(provider: &FileWatchSigningProvider) {
+        provider
+            .file_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .last_checked = Instant::now();
+    }
+
     #[tokio::test]
     async fn file_watch_signing_key_reloads_valid_same_key_replacement_without_restart() {
         let tmp = tempfile::TempDir::new().expect("tempdir");
@@ -6519,6 +6527,7 @@ mod tests {
 
         wait_for_file_watch_metadata_check().await;
         assert_eq!(provider.readiness(), KeyReadiness::Ready);
+        mark_file_watch_checked_now(&provider);
 
         std::fs::write(&key_path, "{ not valid jwk").expect("malformed replacement writes");
         bump_test_file_modified(&key_path, initial_modified);
