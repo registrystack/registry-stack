@@ -813,7 +813,7 @@ checking that freshness.
 `pre_authorized_code.tx_code.required` defaults to `true`. Set it to `false`
 only for wallets that cannot send a transaction code. That compatibility mode
 is reported as `bearer_offer` in admin posture and validates only when
-`pre_authorized_code_ttl_seconds` is at most `120`, because the offer URI is
+`pre_authorized_code_ttl_seconds` is at most `300`, because the offer URI is
 then sufficient to redeem the code.
 
 Each `credential_configurations` entry must be consistent with both the claim

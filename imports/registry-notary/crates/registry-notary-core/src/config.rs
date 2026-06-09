@@ -1771,14 +1771,14 @@ impl Oid4vciPreAuthorizedCodeConfig {
             && self.pre_authorized_code_ttl_seconds > MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS
         {
             return invalid_oid4vci(
-                "pre_authorized_code.pre_authorized_code_ttl_seconds must be between 1 and 120 when pre_authorized_code.tx_code.required = false",
+                "pre_authorized_code.pre_authorized_code_ttl_seconds must be between 1 and 300 when pre_authorized_code.tx_code.required = false",
             );
         }
         Ok(())
     }
 }
 
-pub const MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS: u64 = 120;
+pub const MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS: u64 = 300;
 
 const fn default_pre_authorized_code_ttl_seconds() -> u64 {
     300

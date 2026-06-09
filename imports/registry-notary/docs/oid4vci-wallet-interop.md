@@ -181,7 +181,7 @@ Operators may set `oid4vci.pre_authorized_code.tx_code.required: false` for
 wallets that cannot present a transaction code. Registry Notary reports this as
 `bearer_offer` mode in the admin posture document. In this mode, the
 pre-authorized code is bearer credential material until it is redeemed, so
-validation requires `pre_authorized_code_ttl_seconds <= 120`. Use it only for
+validation requires `pre_authorized_code_ttl_seconds <= 300`. Use it only for
 controlled demos or compatibility deployments where the wallet cannot send a
 `tx_code`.
 
