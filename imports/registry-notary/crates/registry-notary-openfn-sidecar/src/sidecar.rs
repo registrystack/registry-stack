@@ -201,7 +201,17 @@ impl SourceRuntimeLimitConfig {
 pub struct SourceWorkflowConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start: Option<String>,
+    #[serde(default)]
+    pub batch_mode: SourceWorkflowBatchMode,
     pub steps: Vec<SourceWorkflowStepConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceWorkflowBatchMode {
+    #[default]
+    PerItem,
+    Native,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -2932,6 +2942,7 @@ mod tests {
                     entity: "person".to_string(),
                     workflow: SourceWorkflowConfig {
                         start: Some("lookup".to_string()),
+                        batch_mode: SourceWorkflowBatchMode::PerItem,
                         steps: vec![SourceWorkflowStepConfig {
                             id: "lookup".to_string(),
                             expression: PathBuf::from("lookup.js"),

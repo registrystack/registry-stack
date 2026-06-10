@@ -38,6 +38,7 @@ For operators deploying, configuring, and running a Registry Notary.
 - [Self-attestation](self-attestation-operator-guide.md): citizen OIDC subject binding, token policy, allow-lists, and rollout.
 - [Federated evaluation](federated-evaluation-operator-guide.md): static-peer setup, environment variables, and the replay limitation.
 - [Credential lifecycle and status](credential-lifecycle-status.md): short-lived credentials, optional live status, retention, and verifier caveats.
+- [Sidecar trust and secret handling](sidecar-trust-and-secrets.md): how the OpenFn sidecar verifies its configuration, how Notary pins the sidecar it trusts, how secrets are handled, and what that path does and does not protect against. Builds on the platform [governed configuration](../../registry-platform/docs/governed-configuration.md) model.
 - [Deployment hardening runbook](deployment-hardening-runbook.md): production-readiness checklist for network boundaries, secrets, Redis, audit, and rollback.
 
 ## Build and maintain

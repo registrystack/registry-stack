@@ -78,7 +78,7 @@ async function executeLookup(
     configuration: request.configuration ?? {},
   };
 
-  const result = await runWorkflow(workflow, state);
+  const result = await runOpenFnWorkflow(workflow, state);
 
   return normalizeLookupResult(result, request);
 }
@@ -93,8 +93,10 @@ async function executeBatchMatch(request) {
     };
   }
   const workflow = await compiledWorkflow(request);
-  const mode = request?.batch?.mode ?? 'sequential_lookup';
-  if (mode === 'workflow_batch') {
+  const mode =
+    request?.batch?.mode ??
+    (workflow.batchMode === 'native' ? 'workflow_batch' : 'sequential_lookup');
+  if (mode === 'workflow_batch' || mode === 'native') {
     return executeBatchWorkflow(request, workflow);
   }
   if (mode !== 'sequential_lookup') {
@@ -130,6 +132,7 @@ async function executeSequentialBatchMatch(request, workflow) {
 async function executeBatchWorkflow(request, workflow) {
   const state = {
     data: {
+      mode: 'batch_match',
       source_id: request.source_id,
       dataset: request.dataset,
       entity: request.entity,
@@ -143,11 +146,11 @@ async function executeBatchWorkflow(request, workflow) {
     },
     configuration: request.configuration ?? {},
   };
-  const result = await runWorkflow(workflow, state);
+  const result = await runOpenFnWorkflow(workflow, state);
   return normalizeBatchResult(result, request);
 }
 
-async function runWorkflow(workflow, state) {
+async function runOpenFnWorkflow(workflow, state) {
   const result = await run(
     {
       workflow: {
@@ -253,6 +256,7 @@ async function compiledWorkflow(request) {
     return {
       steps,
       start: request.workflow.start ?? steps[0]?.id,
+      batchMode: request.workflow.batch_mode ?? 'per_item',
       modules,
       cacheKey: `workflow-${cacheKeys.join('-')}`,
     };

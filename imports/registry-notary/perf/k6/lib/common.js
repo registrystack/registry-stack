@@ -186,6 +186,9 @@ const GLOBAL_THRESHOLDS = {
 };
 
 export function thresholdsFor(key) {
+  if (__ENV.REGISTRY_NOTARY_NO_THRESHOLD === '1') {
+    return GLOBAL_THRESHOLDS;
+  }
   const specific = THRESHOLDS[key] || {};
   return Object.assign({}, specific, GLOBAL_THRESHOLDS);
 }

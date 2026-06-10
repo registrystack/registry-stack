@@ -5,6 +5,7 @@
     "@openfn/compiler": "1.2.5",
     "@openfn/runtime": "1.9.3",
     "@openfn/language-common": "3.2.3",
-    "@openfn/language-http": "7.3.1"
+    "@openfn/language-http": "7.3.1",
+    "@registry/notary-openfn": "file:./adaptors/registry-notary"
   }
 }
