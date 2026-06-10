@@ -183,6 +183,11 @@
         },
         "requires_admin_scope": {
           "type": "boolean"
+        },
+        "required_scope": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
         }
       }
     },

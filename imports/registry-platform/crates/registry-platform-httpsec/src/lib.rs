@@ -206,6 +206,18 @@ where
                 HeaderName::from_static("x-frame-options"),
                 HeaderValue::from_static("DENY"),
             );
+            insert_if_missing(
+                &mut response,
+                HeaderName::from_static("permissions-policy"),
+                HeaderValue::from_static(
+                    "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
+                ),
+            );
+            insert_if_missing(
+                &mut response,
+                HeaderName::from_static("cross-origin-opener-policy"),
+                HeaderValue::from_static("same-origin"),
+            );
             Ok(response)
         })
     }
@@ -576,6 +588,55 @@ mod tests {
     fn request_body_limit_default_is_one_mebibyte() {
         assert_eq!(DEFAULT_REQUEST_BODY_LIMIT_BYTES, 1024 * 1024);
         let _layer = request_body_limit_default();
+    }
+
+    #[tokio::test]
+    async fn security_headers_install_shared_baseline_without_overwriting_csp() {
+        use tower::service_fn;
+        use tower::ServiceExt;
+
+        let service = security_headers(CspBuilder::restrictive()).layer(service_fn(
+            |_request: Request<Body>| async {
+                let mut response = Response::new(Body::empty());
+                response.headers_mut().insert(
+                    HeaderName::from_static("content-security-policy"),
+                    HeaderValue::from_static("default-src 'none'"),
+                );
+                Ok::<_, std::convert::Infallible>(response)
+            },
+        ));
+
+        let response = service
+            .oneshot(Request::new(Body::empty()))
+            .await
+            .expect("security header service responds");
+        let headers = response.headers();
+        assert_eq!(
+            headers.get("content-security-policy"),
+            Some(&HeaderValue::from_static("default-src 'none'"))
+        );
+        assert_eq!(
+            headers.get("x-content-type-options"),
+            Some(&HeaderValue::from_static("nosniff"))
+        );
+        assert_eq!(
+            headers.get("referrer-policy"),
+            Some(&HeaderValue::from_static("no-referrer"))
+        );
+        assert_eq!(
+            headers.get("x-frame-options"),
+            Some(&HeaderValue::from_static("DENY"))
+        );
+        assert_eq!(
+            headers.get("permissions-policy"),
+            Some(&HeaderValue::from_static(
+                "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()"
+            ))
+        );
+        assert_eq!(
+            headers.get("cross-origin-opener-policy"),
+            Some(&HeaderValue::from_static("same-origin"))
+        );
     }
 
     #[test]
