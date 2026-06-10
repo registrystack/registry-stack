@@ -452,6 +452,25 @@ async fn governed_startup_loads_signed_tuf_target_reports_assurance_and_accepts_
             .expect("antirollback state parses");
     assert_eq!(accepted.last_sequence, 12);
     assert_eq!(accepted.last_config_hash, repo.config_hash);
+
+    let restarted_config = load_startup_config(&raw)
+        .await
+        .expect("signed startup config reloads");
+    let restarted_app = sidecar_router(restarted_config)
+        .await
+        .expect("same signed governed sidecar restarts");
+    let restarted_server = TestServer::builder().http_transport().build(restarted_app);
+
+    let restarted_ready = restarted_server.get("/ready").await;
+    restarted_ready.assert_status_ok();
+    let restarted_ready_body: Value = restarted_ready.json();
+    assert_eq!(restarted_ready_body["status"], "ready");
+    assert_eq!(restarted_ready_body["config_hash"], repo.config_hash);
+
+    let replayed: AntiRollbackRecord =
+        serde_json::from_slice(&fs::read(repo.datastore_dir.join("antirollback.json")).unwrap())
+            .expect("antirollback state parses after restart");
+    assert_eq!(replayed, accepted);
 }
 
 #[tokio::test]
@@ -553,7 +572,7 @@ async fn governed_startup_rejects_unauthorized_change_class() {
 }
 
 #[tokio::test]
-async fn governed_startup_rejects_stale_antirollback_sequence() {
+async fn governed_startup_rejects_lower_antirollback_sequence() {
     let harness = Harness::new();
     let expression_hash =
         sha256_uri(&fs::read(harness.jobs_root.join("lookup.js")).expect("job reads"));
@@ -567,7 +586,7 @@ async fn governed_startup_rejects_stale_antirollback_sequence() {
         &previous_config_hash,
     )
     .await;
-    initialize_antirollback(&repo, &repo.config_hash, 12);
+    initialize_antirollback(&repo, &repo.config_hash, 13);
     let raw = bootstrap_yaml(&repo);
     let config = load_startup_config(&raw)
         .await
@@ -575,7 +594,7 @@ async fn governed_startup_rejects_stale_antirollback_sequence() {
 
     let error = sidecar_router(config)
         .await
-        .expect_err("stale antirollback sequence must fail");
+        .expect_err("lower antirollback sequence must fail");
 
     assert!(error
         .to_string()
