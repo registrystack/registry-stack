@@ -2758,9 +2758,9 @@ impl SelfAttestationTokenPolicyConfig {
                 "token_policy.max_clock_leeway_seconds must be between 1 and 60",
             );
         }
-        if oidc.leeway_seconds > self.max_clock_leeway_seconds {
+        if oidc.leeway > Duration::from_secs(self.max_clock_leeway_seconds) {
             return invalid_self_attestation(
-                "auth.oidc.leeway_seconds must not exceed token_policy.max_clock_leeway_seconds",
+                "auth.oidc.leeway must not exceed token_policy.max_clock_leeway_seconds",
             );
         }
         Ok(())
@@ -3332,8 +3332,6 @@ fn admin_listener_mode_is_default(mode: &RegistryNotaryAdminListenerMode) -> boo
 pub struct RegistryNotaryCorsConfig {
     #[serde(default)]
     pub allowed_origins: Vec<String>,
-    #[serde(default)]
-    pub allow_credentials: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -3448,7 +3446,7 @@ pub struct EvidenceCredentialConfig {
 #[serde(deny_unknown_fields)]
 pub struct EvidenceOidcAuthConfig {
     pub issuer: String,
-    pub jwks_uri: String,
+    pub jwks_url: String,
     #[serde(default)]
     pub userinfo_endpoint: Option<String>,
     #[serde(default)]
@@ -3459,8 +3457,8 @@ pub struct EvidenceOidcAuthConfig {
     pub allowed_clients: Vec<String>,
     #[serde(default = "default_oidc_allowed_algorithms")]
     pub allowed_algorithms: Vec<String>,
-    #[serde(default = "default_oidc_allowed_typ")]
-    pub allowed_typ: Vec<String>,
+    #[serde(default = "default_oidc_allowed_token_types")]
+    pub allowed_token_types: Vec<String>,
     #[serde(default = "default_oidc_scope_claim")]
     pub scope_claim: String,
     #[serde(default = "default_oidc_scope_separator")]
@@ -3469,8 +3467,8 @@ pub struct EvidenceOidcAuthConfig {
     pub scope_map: BTreeMap<String, Vec<String>>,
     #[serde(default = "default_oidc_principal_claim")]
     pub principal_claim: String,
-    #[serde(default = "default_oidc_leeway_seconds")]
-    pub leeway_seconds: u64,
+    #[serde(default = "default_oidc_leeway", with = "humantime_serde")]
+    pub leeway: Duration,
     #[serde(default)]
     pub allow_insecure_localhost: bool,
 }
@@ -3479,7 +3477,7 @@ fn default_oidc_allowed_algorithms() -> Vec<String> {
     vec![SD_JWT_VC_SIGNING_ALG.to_string()]
 }
 
-fn default_oidc_allowed_typ() -> Vec<String> {
+fn default_oidc_allowed_token_types() -> Vec<String> {
     vec!["JWT".to_string()]
 }
 
@@ -3495,8 +3493,8 @@ fn default_oidc_principal_claim() -> String {
     "sub".to_string()
 }
 
-fn default_oidc_leeway_seconds() -> u64 {
-    60
+fn default_oidc_leeway() -> Duration {
+    Duration::from_secs(60)
 }
 
 impl EvidenceOidcAuthConfig {
@@ -3506,19 +3504,19 @@ impl EvidenceOidcAuthConfig {
                 reason: "issuer must not be empty".to_string(),
             });
         }
-        if self.jwks_uri.trim().is_empty() {
+        if self.jwks_url.trim().is_empty() {
             return Err(EvidenceConfigError::InvalidOidcConfig {
-                reason: "jwks_uri must not be empty".to_string(),
+                reason: "jwks_url must not be empty".to_string(),
             });
         }
-        validate_jwks_uri_transport(&self.jwks_uri, self.allow_insecure_localhost)?;
+        validate_jwks_url_transport(&self.jwks_url, self.allow_insecure_localhost)?;
         if let Some(userinfo_endpoint) = self.userinfo_endpoint.as_deref() {
             if userinfo_endpoint.trim().is_empty() {
                 return Err(EvidenceConfigError::InvalidOidcConfig {
                     reason: "userinfo_endpoint must not be empty when configured".to_string(),
                 });
             }
-            validate_jwks_uri_transport(userinfo_endpoint, self.allow_insecure_localhost)?;
+            validate_jwks_url_transport(userinfo_endpoint, self.allow_insecure_localhost)?;
         }
         validate_entries("auth.oidc.userinfo_issuers", &self.userinfo_issuers)?;
         if self.audiences.is_empty() {
@@ -3540,19 +3538,19 @@ impl EvidenceOidcAuthConfig {
     }
 }
 
-fn validate_jwks_uri_transport(
-    jwks_uri: &str,
+fn validate_jwks_url_transport(
+    jwks_url: &str,
     allow_insecure_localhost: bool,
 ) -> Result<(), EvidenceConfigError> {
-    let jwks_uri = jwks_uri.trim();
-    if jwks_uri.starts_with("https://")
-        || (allow_insecure_localhost && is_insecure_localhost_url(jwks_uri))
+    let jwks_url = jwks_url.trim();
+    if jwks_url.starts_with("https://")
+        || (allow_insecure_localhost && is_insecure_localhost_url(jwks_url))
     {
         return Ok(());
     }
     Err(EvidenceConfigError::InvalidOidcConfig {
         reason:
-            "jwks_uri must use https unless allow_insecure_localhost permits an http localhost URL"
+            "jwks_url must use https unless allow_insecure_localhost permits an http localhost URL"
                 .to_string(),
     })
 }
@@ -5345,7 +5343,7 @@ auth:
   mode: oidc
   oidc:
     issuer: https://id.example.gov
-    jwks_uri: https://id.example.gov/oauth/v2/keys
+    jwks_url: https://id.example.gov/oauth/v2/keys
     audiences:
       - registry-notary-citizen
     allowed_clients:
@@ -5354,7 +5352,7 @@ auth:
     scope_map:
       citizen_self_attestation:
         - self_attestation
-    leeway_seconds: 30
+    leeway: 30s
 self_attestation:
   enabled: true
   requires_auth_mode: oidc
@@ -6713,18 +6711,18 @@ vct: https://vct.example/test
         config.auth.api_keys.clear();
         config.auth.oidc = Some(EvidenceOidcAuthConfig {
             issuer: "https://issuer.example".to_string(),
-            jwks_uri: "https://issuer.example/jwks.json".to_string(),
+            jwks_url: "https://issuer.example/jwks.json".to_string(),
             userinfo_endpoint: None,
             userinfo_issuers: Vec::new(),
             audiences: vec!["registry-notary".to_string()],
             allowed_clients: vec!["registry-client".to_string()],
             allowed_algorithms: vec!["EdDSA".to_string()],
-            allowed_typ: vec!["JWT".to_string()],
+            allowed_token_types: vec!["JWT".to_string()],
             scope_claim: "scope".to_string(),
             scope_separator: " ".to_string(),
             scope_map: BTreeMap::new(),
             principal_claim: "sub".to_string(),
-            leeway_seconds: 60,
+            leeway: Duration::from_secs(60),
             allow_insecure_localhost: false,
         });
 
@@ -6732,34 +6730,34 @@ vct: https://vct.example/test
     }
 
     #[test]
-    fn oidc_jwks_uri_must_use_https() {
+    fn oidc_jwks_url_must_use_https() {
         let mut config = minimal_config();
         config.auth.mode = "oidc".to_string();
         config.auth.api_keys.clear();
         config.auth.oidc = Some(EvidenceOidcAuthConfig {
             issuer: "https://issuer.example".to_string(),
-            jwks_uri: "http://issuer.example/jwks.json".to_string(),
+            jwks_url: "http://issuer.example/jwks.json".to_string(),
             userinfo_endpoint: None,
             userinfo_issuers: Vec::new(),
             audiences: vec!["registry-notary".to_string()],
             allowed_clients: vec!["registry-client".to_string()],
             allowed_algorithms: vec!["EdDSA".to_string()],
-            allowed_typ: vec!["JWT".to_string()],
+            allowed_token_types: vec!["JWT".to_string()],
             scope_claim: "scope".to_string(),
             scope_separator: " ".to_string(),
             scope_map: BTreeMap::new(),
             principal_claim: "sub".to_string(),
-            leeway_seconds: 60,
+            leeway: Duration::from_secs(60),
             allow_insecure_localhost: false,
         });
 
         let err = config
             .validate()
-            .expect_err("remote http jwks_uri must fail validation");
+            .expect_err("remote http jwks_url must fail validation");
         match err {
             EvidenceConfigError::InvalidOidcConfig { reason } => {
                 assert!(
-                    reason.contains("jwks_uri must use https"),
+                    reason.contains("jwks_url must use https"),
                     "unexpected: {reason}"
                 );
             }
@@ -6779,30 +6777,30 @@ vct: https://vct.example/test
     }
 
     #[test]
-    fn oidc_jwks_uri_allows_insecure_localhost_only_when_enabled() {
+    fn oidc_jwks_url_allows_insecure_localhost_only_when_enabled() {
         let mut config = minimal_config();
         config.auth.mode = "oidc".to_string();
         config.auth.api_keys.clear();
         config.auth.oidc = Some(EvidenceOidcAuthConfig {
             issuer: "https://issuer.example".to_string(),
-            jwks_uri: "http://127.0.0.1:8080/jwks.json".to_string(),
+            jwks_url: "http://127.0.0.1:8080/jwks.json".to_string(),
             userinfo_endpoint: None,
             userinfo_issuers: Vec::new(),
             audiences: vec!["registry-notary".to_string()],
             allowed_clients: vec!["registry-client".to_string()],
             allowed_algorithms: vec!["EdDSA".to_string()],
-            allowed_typ: vec!["JWT".to_string()],
+            allowed_token_types: vec!["JWT".to_string()],
             scope_claim: "scope".to_string(),
             scope_separator: " ".to_string(),
             scope_map: BTreeMap::new(),
             principal_claim: "sub".to_string(),
-            leeway_seconds: 60,
+            leeway: Duration::from_secs(60),
             allow_insecure_localhost: false,
         });
 
         let err = config
             .validate()
-            .expect_err("localhost http jwks_uri needs explicit opt-in");
+            .expect_err("localhost http jwks_url needs explicit opt-in");
         assert!(matches!(err, EvidenceConfigError::InvalidOidcConfig { .. }));
 
         config
@@ -6813,7 +6811,7 @@ vct: https://vct.example/test
             .allow_insecure_localhost = true;
         config
             .validate()
-            .expect("localhost http jwks_uri is allowed only with the opt-in");
+            .expect("localhost http jwks_url is allowed only with the opt-in");
     }
 
     #[test]
@@ -8223,7 +8221,7 @@ auth:
   mode: oidc
   oidc:
     issuer: https://id.example.gov
-    jwks_uri: https://id.example.gov/keys
+    jwks_url: https://id.example.gov/keys
     audiences:
       - registry-notary-citizen
 self_attestation:
@@ -8252,7 +8250,7 @@ auth:
   mode: oidc
   oidc:
     issuer: https://id.example.gov
-    jwks_uri: https://id.example.gov/keys
+    jwks_url: https://id.example.gov/keys
     audiences:
       - registry-notary-citizen
 self_attestation:
@@ -8428,10 +8426,10 @@ self_attestation:
     #[test]
     fn self_attestation_rejects_leeway_above_token_policy() {
         let mut config = valid_self_attestation_config();
-        config.auth.oidc.as_mut().unwrap().leeway_seconds = 61;
+        config.auth.oidc.as_mut().unwrap().leeway = Duration::from_secs(61);
 
         let reason = expect_self_attestation_error(&config);
-        assert!(reason.contains("leeway_seconds"), "unexpected: {reason}");
+        assert!(reason.contains("leeway"), "unexpected: {reason}");
     }
 
     #[test]

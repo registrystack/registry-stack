@@ -304,7 +304,7 @@ and credential status mutation, require `registry_notary:admin`.
 `auth.api_keys` and `auth.bearer_tokens` must be empty. Configure:
 
 - `issuer`: expected token issuer.
-- `jwks_uri`: HTTPS JWKS URL, or HTTP loopback only with
+- `jwks_url`: HTTPS JWKS URL, or HTTP loopback only with
   `allow_insecure_localhost: true`.
 - `audiences`: accepted access-token audiences.
 - `allowed_clients`: optional client allow-list.

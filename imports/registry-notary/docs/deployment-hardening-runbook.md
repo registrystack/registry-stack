@@ -78,12 +78,12 @@ Hardening checklist:
 - Reserve `registry_notary:admin` for operators, status mutation, metrics
   scraping, and governed apply actions. Use `registry_notary:ops_read` for
   posture and admin capability discovery.
-- For OIDC, use HTTPS `jwks_uri`, explicit `audiences`, and a small
+- For OIDC, use HTTPS `jwks_url`, explicit `audiences`, and a small
   `allowed_clients` list when your identity provider supports it.
 - Map external scopes with `auth.oidc.scope_map` instead of accepting broad
   identity-provider scopes directly.
 - Keep clock leeway small. Self-attestation requires
-  `auth.oidc.leeway_seconds` to stay within the self-attestation clock-leeway
+  `auth.oidc.leeway` to stay within the self-attestation clock-leeway
   ceiling.
 
 ## Secret Inventory

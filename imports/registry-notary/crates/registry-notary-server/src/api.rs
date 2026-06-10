@@ -7894,7 +7894,7 @@ mod tests {
         current.auth.oidc = Some(
             serde_json::from_value(json!({
                 "issuer": "https://issuer.example",
-                "jwks_uri": "https://issuer.example/jwks",
+                "jwks_url": "https://issuer.example/jwks",
                 "audiences": ["registry-notary"],
                 "allowed_clients": ["client-a"]
             }))

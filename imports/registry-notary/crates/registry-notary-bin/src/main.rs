@@ -31,6 +31,9 @@ use registry_notary_server::{
     compile_notary_runtime, notary_router_from_runtime, notary_routers_from_runtime,
     openapi_document, EvidenceIssuerRegistry,
 };
+use registry_platform_config::{
+    expand_config_env_vars, reject_deprecated_config_fields, DeprecatedConfigField,
+};
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk};
 use registry_platform_httputil::{url as httputil_url, FetchUrlPolicy};
 use serde_json::{json, Value};
@@ -871,8 +874,10 @@ fn load_expanded_config(
 ) -> Result<StandaloneRegistryNotaryConfig, Box<dyn std::error::Error>> {
     let raw = fs::read_to_string(config_path)?;
     let expanded = expand_config_env_vars(&raw)?;
-    validate_admin_listener_shape(&expanded)?;
-    let admin_listener_present = server_admin_listener_block_present(&expanded)?;
+    let parsed_value = parse_config_value(&expanded)?;
+    validate_admin_listener_shape(&parsed_value)?;
+    reject_deprecated_config_fields(&parsed_value, &deprecated_config_fields())?;
+    let admin_listener_present = server_admin_listener_block_present(&parsed_value);
     let config: StandaloneRegistryNotaryConfig = serde_norway::from_str(&expanded)?;
     config.validate()?;
     if admin_listener_default_warning_needed(&config, admin_listener_present) {
@@ -899,8 +904,7 @@ fn parse_config_value(raw: &str) -> Result<Value, serde_norway::Error> {
     serde_norway::from_str(raw)
 }
 
-fn validate_admin_listener_shape(raw: &str) -> Result<(), ConfigShapeError> {
-    let value = parse_config_value(raw).map_err(|error| ConfigShapeError(format!("{error}")))?;
+fn validate_admin_listener_shape(value: &Value) -> Result<(), ConfigShapeError> {
     let Some(admin_listener) = value
         .get("server")
         .and_then(Value::as_object)
@@ -916,12 +920,11 @@ fn validate_admin_listener_shape(raw: &str) -> Result<(), ConfigShapeError> {
     ))
 }
 
-fn server_admin_listener_block_present(raw: &str) -> Result<bool, serde_norway::Error> {
-    let value = parse_config_value(raw)?;
-    Ok(value
+fn server_admin_listener_block_present(value: &Value) -> bool {
+    value
         .get("server")
         .and_then(Value::as_object)
-        .is_some_and(|server| server.contains_key("admin_listener")))
+        .is_some_and(|server| server.contains_key("admin_listener"))
 }
 
 fn admin_listener_default_warning_needed(
@@ -932,65 +935,16 @@ fn admin_listener_default_warning_needed(
         && config.server.admin_listener.mode == RegistryNotaryAdminListenerMode::Disabled
 }
 
-#[derive(Debug)]
-struct ConfigEnvExpansionError(String);
-
-impl fmt::Display for ConfigEnvExpansionError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for ConfigEnvExpansionError {}
-
-fn expand_config_env_vars(raw: &str) -> Result<String, ConfigEnvExpansionError> {
-    let mut expanded = String::with_capacity(raw.len());
-    let mut rest = raw;
-    while let Some(start) = rest.find("${") {
-        expanded.push_str(&rest[..start]);
-        let after_start = &rest[start + 2..];
-        let Some(end) = after_start.find('}') else {
-            return Err(ConfigEnvExpansionError(
-                "unterminated ${...} expression in config".to_string(),
-            ));
-        };
-        let expression = &after_start[..end];
-        expanded.push_str(&resolve_config_env_expression(expression)?);
-        rest = &after_start[end + 1..];
-    }
-    expanded.push_str(rest);
-    Ok(expanded)
-}
-
-fn resolve_config_env_expression(expression: &str) -> Result<String, ConfigEnvExpansionError> {
-    let (name, operator, fallback) = if let Some((name, fallback)) = expression.split_once(":-") {
-        (name, ":-", fallback)
-    } else if let Some((name, fallback)) = expression.split_once(":?") {
-        (name, ":?", fallback)
-    } else {
-        (expression, "", "")
-    };
-    if !valid_env_key(name) {
-        return Err(ConfigEnvExpansionError(format!(
-            "invalid env var name in config expression: {name}"
-        )));
-    }
-
-    match std::env::var(name) {
-        Ok(value) if !value.is_empty() => Ok(value),
-        _ if operator == ":-" => Ok(fallback.to_string()),
-        _ if operator == ":?" => {
-            let message = if fallback.trim().is_empty() {
-                format!("missing required env var {name}")
-            } else {
-                fallback.to_string()
-            };
-            Err(ConfigEnvExpansionError(message))
-        }
-        _ => Err(ConfigEnvExpansionError(format!(
-            "missing required env var {name}"
-        ))),
-    }
+fn deprecated_config_fields() -> Vec<DeprecatedConfigField> {
+    vec![
+        DeprecatedConfigField::renamed("auth.oidc.jwks_uri", "auth.oidc.jwks_url"),
+        DeprecatedConfigField::renamed("auth.oidc.leeway_seconds", "auth.oidc.leeway"),
+        DeprecatedConfigField::renamed("auth.oidc.allowed_typ", "auth.oidc.allowed_token_types"),
+        DeprecatedConfigField::removed(
+            "server.cors.allow_credentials",
+            "Notary now always disables credentialed CORS; remove the field",
+        ),
+    ]
 }
 
 fn load_env_file_arg(
@@ -2564,19 +2518,49 @@ CLIENT_SECRET='secret value'
 
     #[test]
     fn scalar_admin_listener_shape_names_accepted_modes() {
-        let err = validate_admin_listener_shape(
+        let value = parse_config_value(
             r#"
 server:
   admin_listener: shared_with_public
 "#,
         )
-        .expect_err("legacy scalar admin listener shape is rejected");
+        .expect("config shape parses");
+        let err = validate_admin_listener_shape(&value)
+            .expect_err("legacy scalar admin listener shape is rejected");
 
         let message = err.to_string();
         assert!(message.contains("server.admin_listener.mode"));
         assert!(message.contains("disabled"));
         assert!(message.contains("dedicated"));
         assert!(message.contains("shared_with_public"));
+    }
+
+    #[test]
+    fn deprecated_config_fields_name_replacements_and_removed_cors_credentials() {
+        for (raw, expected) in [
+            (
+                "auth:\n  oidc:\n    jwks_uri: https://id.example.gov/keys\n",
+                "auth.oidc.jwks_url",
+            ),
+            (
+                "auth:\n  oidc:\n    leeway_seconds: 60\n",
+                "auth.oidc.leeway",
+            ),
+            (
+                "auth:\n  oidc:\n    allowed_typ:\n      - JWT\n",
+                "auth.oidc.allowed_token_types",
+            ),
+            (
+                "server:\n  cors:\n    allow_credentials: true\n",
+                "always disables credentialed CORS",
+            ),
+        ] {
+            let value = parse_config_value(raw).expect("deprecated-field fixture parses");
+            let err = reject_deprecated_config_fields(&value, &deprecated_config_fields())
+                .expect_err("deprecated field is rejected before deserialization");
+
+            assert!(err.to_string().contains(expected), "unexpected: {err}");
+        }
     }
 
     #[test]

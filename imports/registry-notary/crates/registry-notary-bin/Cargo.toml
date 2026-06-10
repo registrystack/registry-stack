@@ -27,6 +27,7 @@ hyper.workspace = true
 hyper-util.workspace = true
 registry-notary-core.workspace = true
 registry-notary-server = { workspace = true, default-features = false }
+registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-httputil.workspace = true
 reqwest.workspace = true
@@ -44,7 +45,6 @@ ulid.workspace = true
 [dev-dependencies]
 axum-test = { version = "20" }
 chrono = { version = "0.4" }
-registry-platform-config.workspace = true
 registry-platform-ops.workspace = true
 tempfile = { version = "3" }
 tough = { version = "0.22.0" }

@@ -249,7 +249,7 @@ pub fn compile_notary_runtime(
         allowed_origins: config.server.cors.allowed_origins.clone(),
         allowed_methods: Vec::new(),
         allowed_headers: Vec::new(),
-        allow_credentials: config.server.cors.allow_credentials,
+        allow_credentials: false,
     };
     cors_policy.validate()?;
     let wallet_cors_policy = SelfAttestationWalletCorsPolicy::from_config(&config);
@@ -436,7 +436,7 @@ impl SelfAttestationWalletCorsPolicy {
         Self {
             enabled: config.self_attestation.enabled,
             allowed_origins: config.self_attestation.allowed_wallet_origins.clone(),
-            allow_credentials: config.server.cors.allow_credentials,
+            allow_credentials: false,
         }
     }
 
@@ -3731,7 +3731,7 @@ impl Authenticator {
                     FetchUrlPolicy::strict()
                 };
                 let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
-                    oidc.jwks_uri.clone(),
+                    oidc.jwks_url.clone(),
                     JwksFetcherConfig::defaults(),
                     fetch_url_policy.clone(),
                 ));
@@ -3743,7 +3743,7 @@ impl Authenticator {
                         oidc.issuer.clone(),
                         oidc.audiences.clone(),
                         allowed_algorithms,
-                        oidc.allowed_typ.clone(),
+                        oidc.allowed_token_types.clone(),
                     )
                     .with_scope_claim(oidc.scope_claim.clone())
                     .with_scope_separator(scope_separator)
@@ -3757,7 +3757,7 @@ impl Authenticator {
                         .filter(|scope_map| !scope_map.is_empty()),
                     )
                     .with_allowed_clients(oidc.allowed_clients.clone())
-                    .with_leeway(Duration::from_secs(oidc.leeway_seconds))
+                    .with_leeway(oidc.leeway)
                     .with_userinfo_requires_exp(userinfo_requires_exp),
                     fetcher,
                 );

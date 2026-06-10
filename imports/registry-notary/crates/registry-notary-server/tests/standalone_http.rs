@@ -62,6 +62,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 #[cfg(feature = "registry-notary-cel")]
 use std::sync::Mutex;
+use std::time::Duration;
 use tempfile::TempDir;
 use time::OffsetDateTime;
 use tough::editor::signed::{PathExists, SignedRole};
@@ -1469,19 +1470,19 @@ auth:
   mode: oidc
   oidc:
     issuer: "{issuer}"
-    jwks_uri: "{jwks_uri}"
+    jwks_url: "{jwks_uri}"
     audiences:
       - registry-notary-citizen
     allowed_clients:
       - citizen-portal
     allowed_algorithms:
       - EdDSA
-    allowed_typ:
+    allowed_token_types:
       - JWT
     scope_claim: scope
     scope_separator: " "
     principal_claim: sub
-    leeway_seconds: 60
+    leeway: 60s
     allow_insecure_localhost: true
     scope_map:
       self_attestation:
@@ -6933,18 +6934,18 @@ async fn oidc_mode_verifies_token_from_fixture_idp() {
     config.auth.bearer_tokens.clear();
     config.auth.oidc = Some(EvidenceOidcAuthConfig {
         issuer: idp.issuer(),
-        jwks_uri: idp.jwks_uri(),
+        jwks_url: idp.jwks_uri(),
         userinfo_endpoint: None,
         userinfo_issuers: Vec::new(),
         audiences: vec!["registry-notary".to_string()],
         allowed_clients: vec!["registry-client".to_string()],
         allowed_algorithms: vec!["EdDSA".to_string()],
-        allowed_typ: vec!["JWT".to_string()],
+        allowed_token_types: vec!["JWT".to_string()],
         scope_claim: "scope".to_string(),
         scope_separator: " ".to_string(),
         scope_map: BTreeMap::new(),
         principal_claim: "sub".to_string(),
-        leeway_seconds: 60,
+        leeway: Duration::from_secs(60),
         allow_insecure_localhost: true,
     });
     let token = idp.mint_token(json!({
@@ -7020,13 +7021,13 @@ async fn oidc_admin_can_scrape_metrics_but_non_admin_cannot() {
     config.auth.bearer_tokens.clear();
     config.auth.oidc = Some(EvidenceOidcAuthConfig {
         issuer: idp.issuer(),
-        jwks_uri: idp.jwks_uri(),
+        jwks_url: idp.jwks_uri(),
         userinfo_endpoint: None,
         userinfo_issuers: Vec::new(),
         audiences: vec!["registry-notary".to_string()],
         allowed_clients: vec!["registry-client".to_string()],
         allowed_algorithms: vec!["EdDSA".to_string()],
-        allowed_typ: vec!["JWT".to_string()],
+        allowed_token_types: vec!["JWT".to_string()],
         scope_claim: "scope".to_string(),
         scope_separator: " ".to_string(),
         scope_map: [(
@@ -7036,7 +7037,7 @@ async fn oidc_admin_can_scrape_metrics_but_non_admin_cannot() {
         .into_iter()
         .collect(),
         principal_claim: "sub".to_string(),
-        leeway_seconds: 60,
+        leeway: Duration::from_secs(60),
         allow_insecure_localhost: true,
     });
     let non_admin_token = idp.mint_token(json!({

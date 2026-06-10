@@ -91,14 +91,14 @@ auth:
   mode: oidc
   oidc:
     issuer: https://idp.example.gov
-    jwks_uri: https://idp.example.gov/.well-known/jwks.json
+    jwks_url: https://idp.example.gov/.well-known/jwks.json
     audiences:
       - registry-notary-citizen
     allowed_clients:
       - citizen-portal
     allowed_algorithms:
       - EdDSA
-    allowed_typ:
+    allowed_token_types:
       - JWT
     scope_claim: scope
     scope_separator: " "
@@ -106,7 +106,7 @@ auth:
       citizen.attest:
         - registry_notary:self_attest
     principal_claim: sub
-    leeway_seconds: 60
+    leeway: 60s
 ```
 
 When OIDC mode is active, static `api_keys` and `bearer_tokens` must be empty.
@@ -184,7 +184,7 @@ Guidance:
 - Set credential validity to the period the issuing agency wants verifiers to
   accept the wallet-held VC. Use credential status or another lifecycle surface
   for long-lived credentials.
-- Keep clock leeway small and ensure `auth.oidc.leeway_seconds` does not exceed
+- Keep clock leeway small and ensure `auth.oidc.leeway` does not exceed
   `max_clock_leeway_seconds`.
 - Use `required_acr_values` when the identity provider can represent assurance
   level reliably.
