@@ -3238,6 +3238,79 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
         drop(held_listener);
     }
 
+    #[tokio::test]
+    async fn run_server_fails_fast_when_active_signing_key_env_is_missing() {
+        let _guard = ENV_LOCK.lock().expect("env lock is not poisoned");
+        std::env::set_var(
+            "TEST_STARTUP_API_HASH",
+            "sha256:31f2999a69fa6301763a9f61eea44388a13318ce8b80a16a115a9efdb62b883b",
+        );
+        std::env::set_var(
+            "TEST_STARTUP_AUDIT_HASH_SECRET",
+            "registry-notary-startup-audit-secret-32-bytes",
+        );
+        std::env::remove_var("TEST_STARTUP_ISSUER_JWK");
+
+        let held_listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("test listener binds");
+        let held_addr = held_listener
+            .local_addr()
+            .expect("test listener exposes local addr");
+        let config_path = std::env::temp_dir().join(format!(
+            "registry-notary-missing-signing-env-{}.yaml",
+            Ulid::new()
+        ));
+        fs::write(
+            &config_path,
+            r#"
+server:
+  bind: 127.0.0.1:0
+auth:
+  mode: api_key
+  api_keys:
+    - id: local
+      fingerprint:
+        provider: env
+        name: TEST_STARTUP_API_HASH
+        commitment: sha256:31f2999a69fa6301763a9f61eea44388a13318ce8b80a16a115a9efdb62b883b
+      scopes: [registry_notary:credential_issue]
+audit:
+  sink: stdout
+  hash_secret_env: TEST_STARTUP_AUDIT_HASH_SECRET
+evidence:
+  enabled: true
+  signing_keys:
+    issuer:
+      provider: local_jwk_env
+      private_jwk_env: TEST_STARTUP_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:issuer.example#key-1
+      status: active
+"#,
+        )
+        .expect("startup config writes");
+
+        let error = run_server(&config_path, Some(held_addr))
+            .await
+            .expect_err("missing signing key env fails before serving");
+        let message = error.to_string();
+
+        assert!(
+            message.contains("signing key 'issuer' is invalid")
+                && message.contains("private_jwk_env is missing or empty"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            !message.contains("Address already in use"),
+            "server bound before signing key validation failed: {message}"
+        );
+
+        let _ = fs::remove_file(config_path);
+        drop(held_listener);
+        std::env::remove_var("TEST_STARTUP_API_HASH");
+        std::env::remove_var("TEST_STARTUP_AUDIT_HASH_SECRET");
+    }
+
     #[test]
     fn bind_cli_override_wins_over_env() {
         let _guard = ENV_LOCK.lock().expect("env lock is not poisoned");
