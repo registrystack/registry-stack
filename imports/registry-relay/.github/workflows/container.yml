@@ -188,6 +188,9 @@ jobs:
           ${{ steps.channel.outputs.tags }}
           EOF
           )"
+          docker run --rm "$image_ref" healthcheck \
+            --url https://example.com \
+            --timeout-ms 10000
           run_config() {
             config="$1"
             shift
