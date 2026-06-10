@@ -69,6 +69,7 @@ use tough::editor::signed::{PathExists, SignedRole};
 use tough::editor::RepositoryEditor;
 use tough::key_source::LocalKeySource;
 use tough::schema::{KeyHolder, Root, Signed, Snapshot, Target, Timestamp};
+use ulid::Ulid;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -8876,13 +8877,6 @@ async fn error_responses_match_rfc_9457_problem_details_shape() {
         .await;
 
     response.assert_status(StatusCode::UNAUTHORIZED);
-    assert_eq!(
-        response
-            .headers()
-            .get("x-request-id")
-            .and_then(|value| value.to_str().ok()),
-        Some("req-auth-1")
-    );
     let content_type = response
         .headers()
         .get("content-type")
@@ -8891,7 +8885,7 @@ async fn error_responses_match_rfc_9457_problem_details_shape() {
         .expect("content-type is valid");
     assert!(content_type.starts_with("application/problem+json"));
     let body: Value = response.json();
-    assert_eq!(body["request_id"], json!("req-auth-1"));
+    assert_server_owned_request_id(&response, &body, "req-auth-1");
     assert_eq!(body["status"], json!(401));
     assert_eq!(body["title"], json!("Missing credential"));
     assert_eq!(body["code"], json!("auth.missing_credential"));
@@ -8928,15 +8922,8 @@ async fn evaluation_json_rejections_and_unsupported_idempotency_are_problem_deta
             br#"{"subject":{"id":"person-1","id_type":"national_id"},"claims":["farmed-land-size"]}"#,
         ))
         .await;
-    assert_eq!(
-        old_shape
-            .headers()
-            .get("x-request-id")
-            .and_then(|value| value.to_str().ok()),
-        Some("req-problem-1")
-    );
     let old_shape_body: Value = old_shape.json();
-    assert_eq!(old_shape_body["request_id"], json!("req-problem-1"));
+    assert_server_owned_request_id(&old_shape, &old_shape_body, "req-problem-1");
     assert_eq!(old_shape_body["code"], json!("request.invalid"));
 
     let old_shape = server
@@ -8979,6 +8966,25 @@ async fn evaluation_json_rejections_and_unsupported_idempotency_are_problem_deta
             .await;
         assert_request_invalid_problem(response);
     }
+}
+
+fn assert_server_owned_request_id(
+    response: &axum_test::TestResponse,
+    body: &Value,
+    inbound_request_id: &str,
+) {
+    let header_request_id = response
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .expect("x-request-id response header is present");
+    let body_request_id = body["request_id"]
+        .as_str()
+        .expect("ProblemDetails request_id is present");
+
+    assert_eq!(header_request_id, body_request_id);
+    assert_ne!(body_request_id, inbound_request_id);
+    Ulid::from_string(body_request_id).expect("request_id is a server-minted ULID");
 }
 
 fn assert_request_invalid_problem(response: axum_test::TestResponse) {

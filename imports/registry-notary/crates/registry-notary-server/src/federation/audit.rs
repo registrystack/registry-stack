@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use axum::http::HeaderMap;
 use axum::response::Response;
 use registry_notary_core::{AccessMode, ConfigMetadata, FEDERATION_PROTOCOL_V0_1};
 use time::format_description::well_known::Rfc3339;
@@ -43,7 +42,6 @@ impl FederationAuditOutcome {
 }
 
 pub(super) fn federation_audit_event(
-    headers: &HeaderMap,
     response: &Response,
     audit: FederationAuditOutcome,
     audit_pipeline: Option<&crate::standalone::AuditPipeline>,
@@ -78,12 +76,11 @@ pub(super) fn federation_audit_event(
         federation_subject_ref_hash: audit.subject_ref_hash,
         denial_code: None,
         token_claim_name: None,
-        correlation_id_hash: headers
-            .get("x-request-id")
-            .or_else(|| headers.get("x-correlation-id"))
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| {
-                audit_pipeline.map(|pipeline| pipeline.hash_request_identifier(value))
+        correlation_id_hash: crate::standalone::current_request_correlation_id()
+            .as_ref()
+            .and_then(|correlation_id| {
+                audit_pipeline
+                    .map(|pipeline| pipeline.hash_request_identifier(correlation_id.as_str()))
             }),
         credential_profile: None,
         protocol: ConfigMetadata::new(FEDERATION_PROTOCOL_V0_1).ok(),

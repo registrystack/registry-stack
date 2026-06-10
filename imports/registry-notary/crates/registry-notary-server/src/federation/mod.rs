@@ -70,7 +70,7 @@ async fn federated_evaluate(
         }
     };
     if let Some(audit_pipeline) = runtime.audit.as_ref() {
-        let event = federation_audit_event(&headers, &response, audit, Some(audit_pipeline));
+        let event = federation_audit_event(&response, audit, Some(audit_pipeline));
         if let Err(error) = audit_pipeline.emit(&event).await {
             response = crate::standalone::audit_error_response(error);
         }

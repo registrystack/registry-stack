@@ -4016,9 +4016,10 @@ async fn auth_audit_middleware(
 ) -> Response {
     let method = request.method().to_string();
     let path = audit_path(&request);
-    let correlation_id = correlation_id_from_headers(request.headers());
+    let correlation_id = new_request_correlation_id();
     if is_auth_exempt_path(&path, state.auth_exemption_policy()) {
-        return next.run(request).await;
+        request.extensions_mut().insert(correlation_id.clone());
+        return with_request_correlation_id(correlation_id, next.run(request)).await;
     }
     let credentials = request_credentials(&request);
     let client_address = client_address_identifier(&request);
@@ -4362,26 +4363,8 @@ fn build_audit_event(
     }
 }
 
-fn correlation_id_from_headers(headers: &HeaderMap) -> BoundedCorrelationId {
-    headers
-        .get("x-request-id")
-        .or_else(|| headers.get("x-correlation-id"))
-        .and_then(header_str)
-        .and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty()
-                || !trimmed
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-            {
-                return None;
-            }
-            BoundedCorrelationId::new(trimmed).ok()
-        })
-        .unwrap_or_else(|| {
-            BoundedCorrelationId::new(Ulid::new().to_string())
-                .expect("generated correlation id is bounded")
-        })
+fn new_request_correlation_id() -> BoundedCorrelationId {
+    BoundedCorrelationId::new(Ulid::new().to_string()).expect("generated correlation id is bounded")
 }
 
 fn resolve_credentials(
