@@ -871,9 +871,65 @@ fn load_expanded_config(
 ) -> Result<StandaloneRegistryNotaryConfig, Box<dyn std::error::Error>> {
     let raw = fs::read_to_string(config_path)?;
     let expanded = expand_config_env_vars(&raw)?;
+    validate_admin_listener_shape(&expanded)?;
+    let admin_listener_present = server_admin_listener_block_present(&expanded)?;
     let config: StandaloneRegistryNotaryConfig = serde_norway::from_str(&expanded)?;
     config.validate()?;
+    if admin_listener_default_warning_needed(&config, admin_listener_present) {
+        tracing::warn!(
+            restore_key = "server.admin_listener.mode",
+            "server.admin_listener is absent; admin listener defaults to disabled; set server.admin_listener.mode to shared_with_public or dedicated to enable the admin surface"
+        );
+    }
     Ok(config)
+}
+
+#[derive(Debug)]
+struct ConfigShapeError(String);
+
+impl fmt::Display for ConfigShapeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ConfigShapeError {}
+
+fn parse_config_value(raw: &str) -> Result<Value, serde_norway::Error> {
+    serde_norway::from_str(raw)
+}
+
+fn validate_admin_listener_shape(raw: &str) -> Result<(), ConfigShapeError> {
+    let value = parse_config_value(raw).map_err(|error| ConfigShapeError(format!("{error}")))?;
+    let Some(admin_listener) = value
+        .get("server")
+        .and_then(Value::as_object)
+        .and_then(|server| server.get("admin_listener"))
+    else {
+        return Ok(());
+    };
+    if admin_listener.is_object() {
+        return Ok(());
+    }
+    Err(ConfigShapeError(
+        "server.admin_listener must be a mapping with accepted mode values: disabled, dedicated, shared_with_public; use server.admin_listener.mode to restore the admin surface".to_string(),
+    ))
+}
+
+fn server_admin_listener_block_present(raw: &str) -> Result<bool, serde_norway::Error> {
+    let value = parse_config_value(raw)?;
+    Ok(value
+        .get("server")
+        .and_then(Value::as_object)
+        .is_some_and(|server| server.contains_key("admin_listener")))
+}
+
+fn admin_listener_default_warning_needed(
+    config: &StandaloneRegistryNotaryConfig,
+    admin_listener_present: bool,
+) -> bool {
+    !admin_listener_present
+        && config.server.admin_listener.mode == RegistryNotaryAdminListenerMode::Disabled
 }
 
 #[derive(Debug)]
@@ -2504,6 +2560,63 @@ CLIENT_SECRET='secret value'
             expand_config_env_vars("${NOT-A-VALID-NAME:-fallback}").expect_err("invalid var fails");
 
         assert!(err.to_string().contains("invalid env var name"));
+    }
+
+    #[test]
+    fn scalar_admin_listener_shape_names_accepted_modes() {
+        let err = validate_admin_listener_shape(
+            r#"
+server:
+  admin_listener: shared_with_public
+"#,
+        )
+        .expect_err("legacy scalar admin listener shape is rejected");
+
+        let message = err.to_string();
+        assert!(message.contains("server.admin_listener.mode"));
+        assert!(message.contains("disabled"));
+        assert!(message.contains("dedicated"));
+        assert!(message.contains("shared_with_public"));
+    }
+
+    #[test]
+    fn absent_admin_listener_block_requests_restore_key_warning() {
+        let config: StandaloneRegistryNotaryConfig = serde_norway::from_str(
+            r#"
+server:
+  bind: 127.0.0.1:0
+auth:
+  mode: api_key
+  api_keys:
+    - id: local
+      fingerprint:
+        provider: env
+        name: TEST_ADMIN_WARNING_API_HASH
+        commitment: sha256:31f2999a69fa6301763a9f61eea44388a13318ce8b80a16a115a9efdb62b883b
+      scopes: [registry_notary:credential_issue]
+audit:
+  sink: stdout
+evidence:
+  enabled: true
+  signing_keys:
+    issuer:
+      provider: local_jwk_env
+      private_jwk_env: TEST_ADMIN_WARNING_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:issuer.example#key-1
+      status: active
+  credential_profiles:
+    civil-status:
+      format: application/dc+sd-jwt
+      issuer: did:web:issuer.example
+      signing_key: issuer
+      vct: https://issuer.example/credentials/civil-status
+"#,
+        )
+        .expect("config parses");
+
+        assert!(admin_listener_default_warning_needed(&config, false));
+        assert!(!admin_listener_default_warning_needed(&config, true));
     }
 
     #[test]
