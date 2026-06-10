@@ -584,7 +584,7 @@ fn init_tracing() -> Result<(), Box<dyn std::error::Error>> {
         if message.contains("global default trace dispatcher has already been set") {
             return Ok(());
         }
-        return Err(io::Error::other(format!("failed to initialize tracing: {error}")).into());
+        return Err(std::io::Error::other(format!("failed to initialize tracing: {error}")).into());
     };
     Ok(())
 }

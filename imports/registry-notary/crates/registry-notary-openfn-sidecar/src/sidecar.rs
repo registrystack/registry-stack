@@ -1128,21 +1128,29 @@ pub async fn run(config: SidecarConfig) -> Result<(), Box<dyn std::error::Error>
                 break;
             }
             accepted = listener.accept() => {
-                let (stream, remote_addr) = accepted?;
-                let app = app.clone();
-                let close_rx = shutdown_rx.clone();
-                tasks.spawn(async move {
-                    let _permit = permit;
-                    serve_sidecar_connection(
-                        stream,
-                        remote_addr,
-                        app,
-                        http1_header_read_timeout,
-                        http2_keep_alive_interval,
-                        close_rx,
-                    )
-                    .await;
-                });
+                match accepted {
+                    Ok((stream, remote_addr)) => {
+                        let app = app.clone();
+                        let close_rx = shutdown_rx.clone();
+                        tasks.spawn(async move {
+                            let _permit = permit;
+                            serve_sidecar_connection(
+                                stream,
+                                remote_addr,
+                                app,
+                                http1_header_read_timeout,
+                                http2_keep_alive_interval,
+                                close_rx,
+                            )
+                            .await;
+                        });
+                    }
+                    Err(error) => {
+                        warn!(error = %error, bind = %local_addr, "failed to accept sidecar connection");
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        continue;
+                    }
+                }
             }
         }
     }
