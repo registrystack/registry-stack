@@ -47,6 +47,7 @@ mod tests {
     use axum::http::StatusCode;
     use axum::routing::get;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::sync::Notify;
 
     #[tokio::test]
     async fn serve_listener_closes_slow_http1_headers() {
@@ -77,6 +78,119 @@ mod tests {
         assert_eq!(read, 0, "slow header connection should be closed");
 
         let _ = shutdown_tx.send(());
+        handle
+            .await
+            .expect("serve task joins")
+            .expect("serve exits");
+    }
+
+    #[tokio::test]
+    async fn serve_listener_max_connections_holds_excess_request_work() {
+        let app = Router::new().route("/healthz", get(|| async { StatusCode::NO_CONTENT }));
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener binds");
+        let addr = listener.local_addr().expect("listener has local address");
+        let limits = ServeLimits {
+            http1_header_read_timeout: Duration::from_secs(5),
+            http2_keep_alive_interval: Duration::from_secs(5),
+            max_connections: 1,
+        };
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let handle = tokio::spawn(serve_listener(listener, app, limits, async move {
+            let _ = shutdown_rx.await;
+        }));
+
+        let mut held = TcpStream::connect(addr).await.expect("connect held");
+        held.write_all(format!("GET /healthz HTTP/1.1\r\nHost: {addr}\r\n").as_bytes())
+            .await
+            .expect("partial header writes");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut queued = TcpStream::connect(addr).await.expect("connect queued");
+        queued
+            .write_all(
+                format!("GET /healthz HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n")
+                    .as_bytes(),
+            )
+            .await
+            .expect("queued request writes");
+
+        let mut first_byte = [0_u8; 1];
+        let early =
+            tokio::time::timeout(Duration::from_millis(200), queued.read(&mut first_byte)).await;
+        assert!(
+            early.is_err(),
+            "queued request received response bytes while connection cap was exhausted"
+        );
+
+        drop(held);
+        let mut rest = Vec::new();
+        let read = tokio::time::timeout(Duration::from_secs(2), queued.read_to_end(&mut rest))
+            .await
+            .expect("queued request finishes after capacity frees")
+            .expect("queued response reads");
+        assert!(read > 0, "queued request received a response");
+        let response = String::from_utf8_lossy(&rest);
+        assert!(
+            response.starts_with("HTTP/1.1 204"),
+            "queued request should succeed after capacity frees, got: {response}"
+        );
+
+        let _ = shutdown_tx.send(());
+        handle
+            .await
+            .expect("serve task joins")
+            .expect("serve exits");
+    }
+
+    #[tokio::test]
+    async fn serve_listener_graceful_shutdown_allows_inflight_request_to_finish() {
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let app = Router::new().route(
+            "/slow",
+            get({
+                let started = Arc::clone(&started);
+                let release = Arc::clone(&release);
+                move || {
+                    let started = Arc::clone(&started);
+                    let release = Arc::clone(&release);
+                    async move {
+                        started.notify_one();
+                        release.notified().await;
+                        StatusCode::NO_CONTENT
+                    }
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener binds");
+        let addr = listener.local_addr().expect("listener has local address");
+        let limits = ServeLimits {
+            http1_header_read_timeout: Duration::from_secs(5),
+            http2_keep_alive_interval: Duration::from_secs(5),
+            max_connections: 8,
+        };
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let handle = tokio::spawn(serve_listener(listener, app, limits, async move {
+            let _ = shutdown_rx.await;
+        }));
+        let request = tokio::spawn(async move {
+            reqwest::get(format!("http://{addr}/slow"))
+                .await
+                .expect("request completes")
+        });
+
+        tokio::time::timeout(Duration::from_secs(2), started.notified())
+            .await
+            .expect("handler starts");
+        let _ = shutdown_tx.send(());
+        release.notify_one();
+
+        let response = request.await.expect("request task joins");
+        assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
         handle
             .await
             .expect("serve task joins")
