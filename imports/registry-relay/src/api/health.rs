@@ -37,7 +37,7 @@ where
 /// Liveness probe. Always 200 with a small JSON body once the process
 /// is up enough to accept connections.
 async fn health() -> Json<Value> {
-    Json(json!({ "status": "ok" }))
+    Json(ok_health_body(1, 1, 0))
 }
 
 /// Readiness probe. With a runtime readiness receiver installed,
@@ -45,18 +45,13 @@ async fn health() -> Json<Value> {
 /// no runtime is installed, it returns a trivial ready response.
 async fn ready(runtime: RuntimeSnapshot) -> Response {
     let Some(readiness) = runtime.readiness_rx() else {
-        return Json(json!({ "status": "ok" })).into_response();
+        return Json(ok_health_body(1, 1, 0)).into_response();
     };
 
     let snapshot = readiness.borrow().clone();
     if snapshot.fully_ready() {
-        return Json(json!({
-            "status": "ok",
-            "counts": {
-                "ready": snapshot.ready.len(),
-            },
-        }))
-        .into_response();
+        let ready_count = snapshot.ready.len();
+        return Json(ok_health_body(ready_count, ready_count, 0)).into_response();
     }
 
     let failed_count = snapshot.failed.len();
@@ -81,4 +76,15 @@ async fn ready(runtime: RuntimeSnapshot) -> Response {
             .expect("static content type is valid"),
     );
     response
+}
+
+fn ok_health_body(total: usize, ok: usize, failed: usize) -> Value {
+    json!({
+        "status": "ok",
+        "checks": {
+            "total": total,
+            "ok": ok,
+            "failed": failed,
+        },
+    })
 }

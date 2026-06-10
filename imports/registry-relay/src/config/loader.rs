@@ -13,6 +13,9 @@ use std::path::{Path, PathBuf};
 use registry_manifest_core::{
     self as metadata_core, CompiledMetadata, MetadataError as CoreMetadataError, MetadataManifest,
 };
+use registry_platform_config::{
+    expand_config_env_vars, reject_deprecated_config_fields, DeprecatedConfigField,
+};
 use registry_platform_ops::{
     internal_config_hash, is_sha256_config_hash, posture_safe_runtime_config_hash, ConfigProvenance,
 };
@@ -59,7 +62,20 @@ fn load_config_document(path: &Path) -> Result<LoadedConfigDocument, Error> {
         }
     };
 
-    let config_value: Value = match serde_saphyr::from_str(&raw) {
+    let expanded = match expand_config_env_vars(&raw) {
+        Ok(expanded) => expanded,
+        Err(err) => {
+            tracing::error!(
+                code = "config.parse_error",
+                path = %path.display(),
+                error = %err,
+                "failed to expand config environment expressions"
+            );
+            return Err(Error::from(ConfigError::ParseError));
+        }
+    };
+
+    let config_value: Value = match serde_saphyr::from_str(&expanded) {
         Ok(value) => value,
         Err(err) => {
             tracing::error!(
@@ -71,7 +87,16 @@ fn load_config_document(path: &Path) -> Result<LoadedConfigDocument, Error> {
             return Err(Error::from(ConfigError::ParseError));
         }
     };
-    let config: Config = match serde_saphyr::from_str(&raw) {
+    if let Err(err) = reject_deprecated_config_fields(&config_value, &deprecated_config_fields()) {
+        tracing::error!(
+            code = "config.parse_error",
+            path = %path.display(),
+            error = %err,
+            "config uses a removed or renamed field"
+        );
+        return Err(Error::from(ConfigError::ParseError));
+    }
+    let config: Config = match serde_saphyr::from_str(&expanded) {
         Ok(c) => c,
         Err(err) => {
             tracing::error!(
@@ -86,7 +111,7 @@ fn load_config_document(path: &Path) -> Result<LoadedConfigDocument, Error> {
 
     validate::run(&config)?;
     let provenance = ConfigProvenance::local_file(
-        internal_config_hash(raw.as_bytes()),
+        internal_config_hash(expanded.as_bytes()),
         posture_safe_runtime_config_hash(&config_value),
         false,
     );
@@ -94,6 +119,14 @@ fn load_config_document(path: &Path) -> Result<LoadedConfigDocument, Error> {
         runtime: config,
         provenance,
     })
+}
+
+fn deprecated_config_fields() -> Vec<DeprecatedConfigField> {
+    vec![
+        DeprecatedConfigField::renamed("auth.oidc.audience", "auth.oidc.audiences"),
+        DeprecatedConfigField::renamed("auth.oidc.algorithms", "auth.oidc.allowed_algorithms"),
+        DeprecatedConfigField::renamed("auth.oidc.token_types", "auth.oidc.allowed_token_types"),
+    ]
 }
 
 /// Load runtime config and, when configured, the split metadata manifest.

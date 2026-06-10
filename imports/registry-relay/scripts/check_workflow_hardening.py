@@ -61,7 +61,7 @@ def require_immutable_refs(paths: list[Path]) -> list[str]:
     failures: list[str] = []
     for path in paths:
         text = read(path)
-        for name in ("REGISTRY_PLATFORM_REF", "REGISTRY_MANIFEST_REF", "CEL_MAPPING_REF"):
+        for name in ("REGISTRY_PLATFORM_REF", "REGISTRY_MANIFEST_REF", "CROSSWALK_REF"):
             value = env_value(text, name)
             if value is None:
                 failures.append(f"{path.relative_to(ROOT)}: missing {name}")

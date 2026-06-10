@@ -117,7 +117,7 @@ async fn build_oidc_auth(oidc: &OidcConfig) -> Result<AuthProviderRef, Error> {
     tracing::info!(
         issuer = %oidc.issuer,
         jwks_url = %jwks_url,
-        algorithms = ?oidc.algorithms,
+        algorithms = ?oidc.allowed_algorithms,
         "oidc auth provider wired"
     );
     Ok(Arc::new(provider))

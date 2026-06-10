@@ -1000,7 +1000,11 @@ async fn health_remains_unauthenticated_on_admin_app() {
     let resp = fixture.server.get("/healthz").await;
 
     resp.assert_status(StatusCode::OK);
-    assert_eq!(resp.json::<Value>(), serde_json::json!({"status": "ok"}));
+    let body: Value = resp.json();
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["checks"]["total"], 1);
+    assert_eq!(body["checks"]["ok"], 1);
+    assert_eq!(body["checks"]["failed"], 0);
 }
 
 #[tokio::test]
@@ -1170,7 +1174,8 @@ async fn capabilities_requires_ops_read_and_reports_relay_admin_surface() {
             },
             "metrics": {
                 "mode": "admin",
-                "requires_admin_scope": false
+                "requires_admin_scope": false,
+                "required_scope": "registry_relay:metrics_read"
             }
         })
     );
@@ -1213,7 +1218,8 @@ async fn capabilities_reports_disabled_listener_topology_without_admin_bind() {
             },
             "metrics": {
                 "mode": "disabled",
-                "requires_admin_scope": false
+                "requires_admin_scope": false,
+                "required_scope": "registry_relay:metrics_read"
             }
         })
     );
@@ -4519,7 +4525,10 @@ async fn reload_all_publishes_ready_snapshot() {
     resp.assert_status(StatusCode::OK);
     let body: Value = resp.json();
     assert_eq!(body["status"], "ok");
-    assert_eq!(body["counts"]["ready"], 2);
+    assert_eq!(body["checks"]["total"], 2);
+    assert_eq!(body["checks"]["ok"], 2);
+    assert_eq!(body["checks"]["failed"], 0);
+    assert!(body.get("counts").is_none());
     assert!(body.get("resources").is_none());
 }
 

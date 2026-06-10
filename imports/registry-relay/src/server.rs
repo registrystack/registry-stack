@@ -56,14 +56,15 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::MatchedPath;
-use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
+use axum::http::{header, HeaderName, Method, Request, StatusCode};
 use axum::middleware::{from_fn, Next};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use axum::Router;
 use registry_manifest_core::CompiledMetadata;
 use registry_platform_audit::AuditKeyHasher;
-use registry_platform_httpsec::{apply_conditional_corp, request_body_limit, CorsPolicy};
+use registry_platform_httpsec::{request_body_limit, CorsPolicy, CspBuilder};
+use serde_json::Value;
 use tower_http::cors::CorsLayer;
 use tower_http::request_id::{
     MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
@@ -95,10 +96,17 @@ const REQUEST_BODY_LIMIT_BYTES: usize = 1024 * 1024;
 /// rejected with `414 URI Too Long` before any handler runs.
 const MAX_URI_BYTES: usize = 8192;
 
+#[cfg(test)]
+const CONTENT_SECURITY_POLICY: HeaderName = HeaderName::from_static("content-security-policy");
+#[cfg(test)]
 const X_CONTENT_TYPE_OPTIONS: HeaderName = HeaderName::from_static("x-content-type-options");
+#[cfg(test)]
 const REFERRER_POLICY: HeaderName = HeaderName::from_static("referrer-policy");
+#[cfg(test)]
 const X_FRAME_OPTIONS: HeaderName = HeaderName::from_static("x-frame-options");
+#[cfg(test)]
 const PERMISSIONS_POLICY: HeaderName = HeaderName::from_static("permissions-policy");
+#[cfg(test)]
 const CROSS_ORIGIN_OPENER_POLICY: HeaderName =
     HeaderName::from_static("cross-origin-opener-policy");
 #[cfg(test)]
@@ -427,12 +435,17 @@ pub fn build_admin_app_with_metadata_and_metrics(
     metadata: Option<Arc<CompiledMetadata>>,
     metrics: Arc<RequestMetrics>,
 ) -> Result<Router, ConfigError> {
-    let public = api::health_router()
-        .merge(crate::observability::router())
-        .layer(Extension(metrics.clone()));
+    let public = api::health_router().layer(Extension(metrics.clone()));
+    let metrics_router = auth_layer(
+        crate::observability::router().layer(Extension(metrics.clone())),
+        Arc::clone(&auth),
+    );
     let protected = api::admin_router().layer(Extension(ingest));
     let protected = auth_layer(protected, auth);
-    let merged: Router<()> = Router::new().merge(public).merge(protected);
+    let merged: Router<()> = Router::new()
+        .merge(public)
+        .merge(metrics_router)
+        .merge(protected);
     let mut router = apply_cross_cutting_layers_with_metrics(merged, &config, audit_sink, metrics)?
         .layer(Extension(readiness))
         .layer(Extension(readiness_tx))
@@ -476,6 +489,7 @@ fn apply_cross_cutting_layers_with_metrics(
         ))
         .layer(from_fn(reject_overlong_uri))
         .layer(from_fn(normalize_internal_error_response))
+        .layer(from_fn(attach_request_id_to_problem_response))
         .layer(cors)
         .layer(
             TraceLayer::new_for_http()
@@ -503,7 +517,10 @@ fn apply_cross_cutting_layers_with_metrics(
         .layer(PropagateRequestIdLayer::new(x_request_id.clone()))
         .layer(SetRequestIdLayer::new(x_request_id, UlidMakeRequestId))
         .layer(from_fn(strip_untrusted_request_id))
-        .layer(from_fn(add_security_headers)))
+        .layer(registry_platform_httpsec::corp_conditional())
+        .layer(registry_platform_httpsec::security_headers(
+            CspBuilder::restrictive(),
+        )))
 }
 
 fn operational_route(request: &Request<Body>) -> &str {
@@ -526,32 +543,6 @@ async fn strip_untrusted_request_id(mut request: Request<Body>, next: Next) -> R
     request.headers_mut().remove("x-request-id");
     request.extensions_mut().remove::<RequestId>();
     next.run(request).await
-}
-
-async fn add_security_headers(request: Request<Body>, next: Next) -> Response {
-    let mut response = next.run(request).await;
-    let headers = response.headers_mut();
-    headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-    headers.insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
-    headers.insert(X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
-    headers.insert(
-        PERMISSIONS_POLICY,
-        HeaderValue::from_static(
-            "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
-        ),
-    );
-    headers.insert(
-        CROSS_ORIGIN_OPENER_POLICY,
-        HeaderValue::from_static("same-origin"),
-    );
-    apply_conditional_corp(&mut response);
-    // HSTS is intentionally omitted at the application layer. Production
-    // deployments terminate TLS upstream (load balancer / ingress) and
-    // own the HSTS policy there; local development runs plain HTTP on
-    // loopback. Emitting HSTS from the relay would either be no-op text
-    // on dev or duplicate (and potentially conflict with) the edge
-    // value. If the relay ever serves TLS directly, set it here.
-    response
 }
 
 /// Resolve the audit hash secret from the env var named by config.
@@ -638,6 +629,52 @@ async fn normalize_internal_error_response(request: Request<Body>, next: Next) -
         }
         _ => response,
     }
+}
+
+async fn attach_request_id_to_problem_response(request: Request<Body>, next: Next) -> Response {
+    let request_id = request
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            request
+                .extensions()
+                .get::<audit::RequestIdExt>()
+                .map(|ext| ext.0.clone())
+        });
+
+    let response = next.run(request).await;
+    let Some(request_id) = request_id else {
+        return response;
+    };
+    if !is_problem_json(response.headers()) {
+        return response;
+    }
+
+    let (mut parts, body) = response.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, 64 * 1024).await else {
+        return Error::from(InternalError::Unhandled).into_response();
+    };
+    let Ok(Value::Object(mut problem)) = serde_json::from_slice::<Value>(&bytes) else {
+        return Response::from_parts(parts, Body::from(bytes));
+    };
+    problem
+        .entry("request_id")
+        .or_insert_with(|| Value::String(request_id));
+    let Ok(body) = serde_json::to_vec(&Value::Object(problem)) else {
+        return Error::from(InternalError::Unhandled).into_response();
+    };
+    parts.headers.remove(header::CONTENT_LENGTH);
+    Response::from_parts(parts, Body::from(body))
+}
+
+fn is_problem_json(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("application/problem+json"))
 }
 
 /// Build a `CorsLayer` from configuration.
@@ -868,6 +905,12 @@ mod tests {
                 .get(X_CONTENT_TYPE_OPTIONS)
                 .expect("x-content-type-options"),
             "nosniff"
+        );
+        assert_eq!(
+            headers
+                .get(CONTENT_SECURITY_POLICY)
+                .expect("content-security-policy"),
+            CspBuilder::restrictive().header_value()
         );
         assert_eq!(
             headers.get(REFERRER_POLICY).expect("referrer-policy"),

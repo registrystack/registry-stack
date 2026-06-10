@@ -31,6 +31,7 @@ use super::{
 
 /// Product-scoped admin capability required by private admin mutations.
 const ADMIN_SCOPE: &str = "registry_relay:admin";
+const METRICS_SCOPE: &str = crate::observability::METRICS_SCOPE;
 const OPS_READ_SCOPE: &str = "registry_relay:ops_read";
 const RESERVED_SCOPE_DATASET_IDS: &[&str] = &["registry_relay"];
 
@@ -1404,10 +1405,10 @@ fn validate_oidc(oidc: &OidcConfig) -> Result<(), ConfigError> {
         return Err(ConfigError::ValidationError);
     }
 
-    if oidc.audience.is_empty() || oidc.audience.iter().any(|aud| aud.trim().is_empty()) {
+    if oidc.audiences.is_empty() || oidc.audiences.iter().any(|aud| aud.trim().is_empty()) {
         tracing::error!(
             code = "config.validation_error",
-            field = "auth.oidc.audience",
+            field = "auth.oidc.audiences",
             "audience must list one or more non-empty values"
         );
         return Err(ConfigError::ValidationError);
@@ -1440,10 +1441,10 @@ fn validate_oidc(oidc: &OidcConfig) -> Result<(), ConfigError> {
         }
     }
 
-    if oidc.algorithms.is_empty() {
+    if oidc.allowed_algorithms.is_empty() {
         tracing::error!(
             code = "config.validation_error",
-            field = "auth.oidc.algorithms",
+            field = "auth.oidc.allowed_algorithms",
             "algorithms must list at least one entry"
         );
         return Err(ConfigError::ValidationError);
@@ -1535,10 +1536,12 @@ fn validate_oidc(oidc: &OidcConfig) -> Result<(), ConfigError> {
         return Err(ConfigError::ValidationError);
     }
 
-    if oidc.token_types.is_empty() || oidc.token_types.iter().any(|t| t.trim().is_empty()) {
+    if oidc.allowed_token_types.is_empty()
+        || oidc.allowed_token_types.iter().any(|t| t.trim().is_empty())
+    {
         tracing::error!(
             code = "config.validation_error",
-            field = "auth.oidc.token_types",
+            field = "auth.oidc.allowed_token_types",
             "token_types must list one or more non-empty JOSE `typ` values"
         );
         return Err(ConfigError::ValidationError);
@@ -1719,12 +1722,15 @@ fn validate_scope(
     if scope == OPS_READ_SCOPE {
         return Ok(());
     }
+    if scope == METRICS_SCOPE {
+        return Ok(());
+    }
     let (dataset, level) = scope.split_once(':').ok_or_else(|| {
         tracing::error!(
             code = "config.validation_error",
             api_key_id = %api_key_id,
             scope = %scope,
-            "scope must be 'registry_relay:admin', 'registry_relay:ops_read', or '<dataset_id>:<metadata|aggregate|rows|verify|evidence_verification>'"
+            "scope must be 'registry_relay:admin', 'registry_relay:ops_read', 'registry_relay:metrics_read', or '<dataset_id>:<metadata|aggregate|rows|verify|evidence_verification>'"
         );
         ConfigError::ValidationError
     })?;

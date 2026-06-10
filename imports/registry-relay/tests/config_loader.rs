@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use registry_relay::config::vocabularies;
 use registry_relay::config::{
@@ -1547,7 +1548,7 @@ auth:
   mode: oidc
   oidc:
     issuer: https://idp.example.test/realms/relay
-    audience:
+    audiences:
       - registry-relay
     jwks_url: https://idp.example.test/realms/relay/protocol/openid-connect/certs
 {extra_oidc}
@@ -1560,6 +1561,93 @@ audit:
 }
 
 #[test]
+fn shared_canonical_oidc_fixture_parses() {
+    let tmp = TempDir::new().expect("tempdir");
+    let body = r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {}
+auth:
+  mode: oidc
+  oidc:
+    issuer: https://id.example.gov
+    audiences:
+      - registry-notary
+    jwks_url: https://id.example.gov/oauth/v2/keys
+    allowed_algorithms:
+      - EdDSA
+    allowed_token_types:
+      - JWT
+    leeway: 30s
+datasets: []
+audit:
+  sink: stdout
+  format: jsonl
+"#;
+    let path = write_config(&tmp, body);
+
+    let config = config::load(&path).expect("shared canonical OIDC fixture loads");
+    let oidc = config.auth.oidc.as_ref().expect("oidc config");
+
+    assert_eq!(oidc.issuer, "https://id.example.gov");
+    assert_eq!(oidc.audiences, vec!["registry-notary"]);
+    assert_eq!(
+        oidc.jwks_url.as_deref(),
+        Some("https://id.example.gov/oauth/v2/keys")
+    );
+    assert_eq!(oidc.allowed_algorithms, vec![OidcAlgorithm::EdDsa]);
+    assert_eq!(oidc.allowed_token_types, vec!["JWT"]);
+    assert_eq!(oidc.leeway, Duration::from_secs(30));
+}
+
+#[test]
+fn config_loader_expands_env_expressions_before_deserialization() {
+    let tmp = TempDir::new().expect("tempdir");
+    let env_name = "REGISTRY_RELAY_TEST_OIDC_ISSUER_URL";
+    env::set_var(env_name, "https://idp.example.test/realms/relay");
+    let body = oidc_config_body("").replace(
+        "issuer: https://idp.example.test/realms/relay",
+        "issuer: ${REGISTRY_RELAY_TEST_OIDC_ISSUER_URL:?issuer required}",
+    );
+    let path = write_config(&tmp, &body);
+
+    let config = config::load(&path).expect("expanded config loads");
+    assert_eq!(
+        config.auth.oidc.as_ref().expect("oidc config").issuer,
+        "https://idp.example.test/realms/relay"
+    );
+    env::remove_var(env_name);
+}
+
+#[test]
+fn config_loader_rejects_deprecated_oidc_field_names() {
+    for (old, replacement) in [
+        (
+            "audiences:\n      - registry-relay",
+            "audience:\n      - registry-relay",
+        ),
+        (
+            "allowed_algorithms:\n      - RS256",
+            "algorithms:\n      - RS256",
+        ),
+        (
+            "allowed_token_types:\n      - at+jwt",
+            "token_types:\n      - at+jwt",
+        ),
+    ] {
+        let tmp = TempDir::new().expect("tempdir");
+        let body = oidc_config_body(&format!("    {old}\n")).replace(old, replacement);
+        let path = write_config(&tmp, &body);
+
+        assert_config_code(config::load(&path), "config.parse_error");
+    }
+}
+
+#[test]
 fn oidc_config_loads_with_defaults() {
     let tmp = TempDir::new().expect("tempdir");
     let path = write_config(&tmp, &oidc_config_body(""));
@@ -1569,14 +1657,14 @@ fn oidc_config_loads_with_defaults() {
     assert!(config.auth.api_keys.is_empty());
     let oidc = config.auth.oidc.as_ref().expect("oidc config present");
     assert_eq!(oidc.issuer, "https://idp.example.test/realms/relay");
-    assert_eq!(oidc.audience, vec!["registry-relay".to_string()]);
+    assert_eq!(oidc.audiences, vec!["registry-relay".to_string()]);
     assert_eq!(
         oidc.jwks_url.as_deref(),
         Some("https://idp.example.test/realms/relay/protocol/openid-connect/certs")
     );
     assert!(oidc.discovery_url.is_none());
     assert_eq!(
-        oidc.algorithms,
+        oidc.allowed_algorithms,
         vec![
             OidcAlgorithm::Rs256,
             OidcAlgorithm::Es256,
@@ -1590,7 +1678,7 @@ fn oidc_config_loads_with_defaults() {
     assert!(oidc.scope_object_required_keys.is_empty());
     assert!(oidc.allowed_clients.is_empty());
     assert_eq!(
-        oidc.token_types,
+        oidc.allowed_token_types,
         vec!["JWT".to_string(), "at+jwt".to_string()]
     );
 }
@@ -1598,7 +1686,7 @@ fn oidc_config_loads_with_defaults() {
 #[test]
 fn oidc_config_accepts_overrides() {
     let tmp = TempDir::new().expect("tempdir");
-    let extra = r#"    algorithms:
+    let extra = r#"    allowed_algorithms:
       - RS256
       - EdDSA
     jwks_cache_ttl: 5m
@@ -1610,7 +1698,7 @@ fn oidc_config_accepts_overrides() {
       - orgId-123
     allowed_clients:
       - openspp-client
-    token_types:
+    allowed_token_types:
       - at+jwt
 "#;
     let path = write_config(&tmp, &oidc_config_body(extra));
@@ -1618,7 +1706,7 @@ fn oidc_config_accepts_overrides() {
 
     let oidc = config.auth.oidc.as_ref().expect("oidc present");
     assert_eq!(
-        oidc.algorithms,
+        oidc.allowed_algorithms,
         vec![OidcAlgorithm::Rs256, OidcAlgorithm::EdDsa]
     );
     assert_eq!(oidc.jwks_cache_ttl.as_secs(), 300);
@@ -1635,7 +1723,7 @@ fn oidc_config_accepts_overrides() {
         vec!["orgId-123".to_string()]
     );
     assert_eq!(oidc.allowed_clients, vec!["openspp-client".to_string()]);
-    assert_eq!(oidc.token_types, vec!["at+jwt".to_string()]);
+    assert_eq!(oidc.allowed_token_types, vec!["at+jwt".to_string()]);
 }
 
 #[test]
@@ -1653,7 +1741,7 @@ auth:
   mode: oidc
   oidc:
     issuer: https://idp.example.test
-    audience:
+    audiences:
       - registry-relay
     discovery_url: https://idp.example.test/.well-known/openid-configuration
 datasets: []
@@ -1680,13 +1768,13 @@ fn example_oidc_config_loads_and_validates() {
 
     let oidc = config.auth.oidc.as_ref().expect("oidc block present");
     assert_eq!(oidc.issuer, "http://localhost:8080");
-    assert_eq!(oidc.audience, vec!["registry-relay".to_string()]);
+    assert_eq!(oidc.audiences, vec!["registry-relay".to_string()]);
     assert!(oidc.jwks_url.is_none());
     assert_eq!(
         oidc.discovery_url.as_deref(),
         Some("http://localhost:8080/.well-known/openid-configuration")
     );
-    assert_eq!(oidc.algorithms, vec![OidcAlgorithm::Rs256]);
+    assert_eq!(oidc.allowed_algorithms, vec![OidcAlgorithm::Rs256]);
     assert_eq!(oidc.jwks_cache_ttl.as_secs(), 600);
     assert_eq!(oidc.leeway.as_secs(), 60);
     assert_eq!(oidc.scope_claim, "urn:zitadel:iam:org:project:roles");
@@ -1708,7 +1796,7 @@ fn example_oidc_config_loads_and_validates() {
     );
     assert!(oidc.allowed_clients.is_empty());
     assert_eq!(
-        oidc.token_types,
+        oidc.allowed_token_types,
         vec!["JWT".to_string(), "at+jwt".to_string()]
     );
 }
@@ -1716,7 +1804,7 @@ fn example_oidc_config_loads_and_validates() {
 #[test]
 fn oidc_config_rejects_unknown_algorithm() {
     let tmp = TempDir::new().expect("tempdir");
-    let extra = "    algorithms:\n      - HS256\n";
+    let extra = "    allowed_algorithms:\n      - HS256\n";
     let path = write_config(&tmp, &oidc_config_body(extra));
     // Unknown enum variant fails at deserialize time, not validation.
     assert_config_code(config::load(&path), "config.parse_error");
@@ -1744,7 +1832,7 @@ auth:
       scopes: []
   oidc:
     issuer: https://idp.example.test
-    audience: [registry-relay]
+    audiences: [registry-relay]
     jwks_url: https://idp.example.test/jwks
 datasets: []
 audit:
@@ -1793,7 +1881,7 @@ auth:
   api_keys: []
   oidc:
     issuer: https://idp.example.test
-    audience: [registry-relay]
+    audiences: [registry-relay]
     jwks_url: https://idp.example.test/jwks
 datasets: []
 audit:
@@ -1819,7 +1907,7 @@ auth:
   mode: oidc
   oidc:
     issuer: https://idp.example.test
-    audience: [registry-relay]
+    audiences: [registry-relay]
     jwks_url: https://idp.example.test/jwks
     discovery_url: https://idp.example.test/.well-known/openid-configuration
 datasets: []
@@ -1846,7 +1934,7 @@ auth:
   mode: oidc
   oidc:
     issuer: https://idp.example.test
-    audience: [registry-relay]
+    audiences: [registry-relay]
 datasets: []
 audit:
   sink: stdout
@@ -1871,7 +1959,7 @@ auth:
   mode: oidc
   oidc:
     issuer: http://idp.example.test
-    audience: [registry-relay]
+    audiences: [registry-relay]
     jwks_url: https://idp.example.test/jwks
 datasets: []
 audit:
@@ -1897,7 +1985,7 @@ auth:
   mode: oidc
   oidc:
     issuer: http://localhost:8080/realms/relay
-    audience: [registry-relay]
+    audiences: [registry-relay]
     jwks_url: http://localhost:8080/realms/relay/protocol/openid-connect/certs
 datasets: []
 audit:
@@ -1923,7 +2011,7 @@ auth:
   mode: oidc
   oidc:
     issuer: http://localhost:8080/realms/relay
-    audience: [registry-relay]
+    audiences: [registry-relay]
     jwks_url: http://localhost:8080/realms/relay/protocol/openid-connect/certs
     allow_dev_insecure_fetch_urls: true
 datasets: []
@@ -1942,7 +2030,8 @@ audit:
 fn oidc_config_rejects_empty_audience() {
     let tmp = TempDir::new().expect("tempdir");
     let extra = "    # override audience\n";
-    let body = oidc_config_body(extra).replace("audience:\n      - registry-relay", "audience: []");
+    let body =
+        oidc_config_body(extra).replace("audiences:\n      - registry-relay", "audiences: []");
     let path = write_config(&tmp, &body);
     assert_config_code(config::load(&path), "config.validation_error");
 }

@@ -1664,7 +1664,7 @@
       "notes": "Unauthenticated admin-listener probe or metrics route.",
       "source": "manual",
       "enforcement_tests": [
-        "tests/observability_metrics.rs::metrics_is_admin_only",
+        "tests/observability_metrics.rs::metrics_requires_metrics_scope_on_admin_listener",
         "tests/admin_reload.rs::reload_all_without_credential_is_rejected"
       ],
       "waiver": null
@@ -1686,7 +1686,7 @@
       "notes": "Unauthenticated admin-listener probe or metrics route.",
       "source": "manual",
       "enforcement_tests": [
-        "tests/observability_metrics.rs::metrics_is_admin_only",
+        "tests/observability_metrics.rs::metrics_requires_metrics_scope_on_admin_listener",
         "tests/admin_reload.rs::reload_all_without_credential_is_rejected"
       ],
       "waiver": null
@@ -1708,7 +1708,7 @@
       "notes": "Unauthenticated admin-listener probe or metrics route.",
       "source": "manual",
       "enforcement_tests": [
-        "tests/observability_metrics.rs::metrics_is_admin_only",
+        "tests/observability_metrics.rs::metrics_requires_metrics_scope_on_admin_listener",
         "tests/admin_reload.rs::reload_all_without_credential_is_rejected"
       ],
       "waiver": null
@@ -1854,7 +1854,7 @@
       "source": "manual",
       "enforcement_tests": [
         "tests/admin_reload.rs::reload_all_without_credential_is_rejected",
-        "tests/observability_metrics.rs::metrics_is_admin_only",
+        "tests/observability_metrics.rs::metrics_requires_metrics_scope_on_admin_listener",
         "tests/auth_flow.rs::missing_header_returns_missing_credential",
         "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
       ],
@@ -1880,7 +1880,7 @@
       "source": "manual",
       "enforcement_tests": [
         "tests/admin_reload.rs::reload_all_without_credential_is_rejected",
-        "tests/observability_metrics.rs::metrics_is_admin_only",
+        "tests/observability_metrics.rs::metrics_requires_metrics_scope_on_admin_listener",
         "tests/auth_flow.rs::missing_header_returns_missing_credential",
         "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
       ],

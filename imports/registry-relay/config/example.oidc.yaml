@@ -40,7 +40,7 @@ auth:
     # Accepted `aud` values. Tokens whose `aud` does not intersect this
     # list are rejected. Zitadel typically includes the project resource
     # id and the client id; list whichever the relay is meant to serve.
-    audience:
+    audiences:
       - registry-relay
     # Resolve the JWKS URL via OIDC discovery. Either `discovery_url`
     # or `jwks_url` is required; the validator rejects both at once.
@@ -51,7 +51,7 @@ auth:
     # Signature algorithms accepted by the verifier. RS256 is Zitadel's
     # default; ES256 and EdDSA are accepted for other IdPs. HS* and
     # `none` are intentionally absent from the algorithm enum.
-    algorithms:
+    allowed_algorithms:
       - RS256
     # JWKS cache TTL. The cache also refreshes on unknown `kid`
     # (rate-limited), so this is the steady-state rotation pickup
@@ -84,7 +84,7 @@ auth:
     # Accepted JOSE `typ` header values. Defaults to JWT and at+jwt
     # (RFC 9068). ID tokens (`id+jwt`) are intentionally rejected by
     # default; the relay verifies access tokens.
-    token_types:
+    allowed_token_types:
       - JWT
       - at+jwt
 

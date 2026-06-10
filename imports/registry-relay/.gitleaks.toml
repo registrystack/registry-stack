@@ -4,6 +4,9 @@ title = "registry-relay gitleaks config"
 description = "Generated and local build output are not source review surfaces."
 paths = [
   '''^target/''',
+  # Relay can materialize DataFusion/cache artifacts during local runs. Keep
+  # those generated files out of secret-scan review; committed source, fixtures,
+  # demos, and scanner baselines remain in scope.
   '''^cache/''',
   '''^demo/var/''',
 ]

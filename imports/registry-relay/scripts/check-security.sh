@@ -38,6 +38,8 @@ run_optional actionlint actionlint
 run_zizmor_ratchet
 
 if command -v hadolint >/dev/null 2>&1; then
+  # DL3008 is ignored only for the relay image's reviewed apt usage in its
+  # builder stages; the release runtime remains distroless and non-root.
   hadolint --ignore DL3022 --ignore DL3008 Dockerfile Dockerfile.demo
 else
   echo "security check advisory: hadolint is not installed; skipped" >&2

@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- BREAKING: `/metrics` on the admin listener now requires authentication with
+  the `registry_relay:metrics_read` scope. Previously the route was served
+  unauthenticated on the admin socket. Existing Prometheus scrapers must
+  present a credential carrying that scope.
+- BREAKING: Health and readiness response bodies changed shape.
+  `/healthz` (and the liveness route) previously returned `{"status":"ok"}`;
+  it now returns `{"status":"ok","checks":{"total":...,"ok":...,"failed":...}}`.
+  `/ready` previously included `"counts":{"ready":N}` in the 200 body; that
+  field is replaced by the same `checks` structure.
+- ProblemDetails error bodies now always include a `request_id` field
+  (a server-minted ULID; client-supplied `x-request-id` headers are stripped
+  before processing). The OpenAPI `ProblemDetails` schema marks `request_id`
+  required.
+- Renamed OIDC config fields to the shared Registry service convention:
+  `auth.oidc.audience` -> `auth.oidc.audiences`,
+  `auth.oidc.algorithms` -> `auth.oidc.allowed_algorithms`, and
+  `auth.oidc.token_types` -> `auth.oidc.allowed_token_types`. Old names fail
+  config load with an error naming the replacement.
+- Added `${VAR}` / `${VAR:-default}` / `${VAR:?message}` expansion,
+  `--env-file` / `REGISTRY_RELAY_ENV_FILE`, and `--bind` /
+  `REGISTRY_RELAY_BIND` support. The bind override applies after YAML
+  validation; `server.bind` remains required in config.
+
 ## 0.1.0 - 2026-05-16
 
 Initial V1 release of `registry-relay`, a controlled, read-only registry relay for publishing protected, entity-shaped APIs over local CSV, XLSX, and Parquet sources.

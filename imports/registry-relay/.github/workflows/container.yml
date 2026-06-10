@@ -24,11 +24,11 @@ concurrency:
 
 env:
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: ee298e00e76ad6b1e56373fe85d6c1e3a95ea238
+  REGISTRY_PLATFORM_REF: 05a03973c3048b4d98d22cb29a55837f62594c12
   REGISTRY_MANIFEST_REPOSITORY: jeremi/registry-manifest
   REGISTRY_MANIFEST_REF: a2e648aaac864563a3311b9d95b8143afa1b7334
   CEL_MAPPING_REPOSITORY: PublicSchema/crosswalk
-  CEL_MAPPING_REF: ca7411d735f1507b9db0db637f79aff7e4ae4611
+  CROSSWALK_REF: 54e0f537830837fcd0c9efa87990987b1846931c
   REGISTRY_RELAY_IMAGE: ghcr.io/jeremi/registry-relay
   REGISTRY_RELAY_RELEASE_FEATURES: spdci-api-standards,standards-cel-mapping,ogcapi-features,ogcapi-edr,ogcapi-records
 
@@ -155,7 +155,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ env.CEL_MAPPING_REPOSITORY }}
-          ref: ${{ env.CEL_MAPPING_REF }}
+          ref: ${{ env.CROSSWALK_REF }}
           path: cel-mapping
           persist-credentials: false
 
@@ -188,6 +188,9 @@ jobs:
           ${{ steps.channel.outputs.tags }}
           EOF
           )"
+          docker run --rm "$image_ref" healthcheck \
+            --url https://example.com \
+            --timeout-ms 10000
           run_config() {
             config="$1"
             shift

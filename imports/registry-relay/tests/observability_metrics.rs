@@ -21,6 +21,7 @@ use tokio::sync::watch;
 use ulid::Ulid;
 
 const ADMIN_TOKEN: &str = "metrics-admin-token-0123456789";
+const METRICS_TOKEN: &str = "metrics-read-token-0123456789";
 const SENSITIVE_QUERY_VALUE: &str = "secret-query-value-7788";
 const SENSITIVE_REQUEST_ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const SENSITIVE_KEY_ID: &str = "metrics_sensitive_key_id";
@@ -140,13 +141,19 @@ audit:
 }
 
 fn build_auth() -> Arc<ApiKeyAuth> {
-    let entry = ApiKeyEntry::new(
+    let admin_entry = ApiKeyEntry::new(
         SENSITIVE_KEY_ID.to_string(),
         ScopeSet::from_iter(["registry_relay:admin"]),
         make_fingerprint(ADMIN_TOKEN),
     )
     .expect("admin fingerprint parses");
-    Arc::new(ApiKeyAuth::new(vec![entry]))
+    let metrics_entry = ApiKeyEntry::new(
+        "metrics_reader".to_string(),
+        ScopeSet::from_iter(["registry_relay:metrics_read"]),
+        make_fingerprint(METRICS_TOKEN),
+    )
+    .expect("metrics fingerprint parses");
+    Arc::new(ApiKeyAuth::new(vec![admin_entry, metrics_entry]))
 }
 
 fn ready_snapshot() -> ReadinessSnapshot {
@@ -257,7 +264,7 @@ fn assert_contains_live_datasource_metrics(body: &str) {
 }
 
 #[tokio::test]
-async fn metrics_is_admin_only() {
+async fn metrics_requires_metrics_scope_on_admin_listener() {
     let fixture = build_fixture();
 
     let public_resp = fixture.public.get("/metrics").await;
@@ -269,6 +276,18 @@ async fn metrics_is_admin_only() {
     fixture
         .admin
         .get("/metrics")
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    fixture
+        .admin
+        .get("/metrics")
+        .add_header("x-api-key", ADMIN_TOKEN)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    fixture
+        .admin
+        .get("/metrics")
+        .add_header("x-api-key", METRICS_TOKEN)
         .await
         .assert_status(StatusCode::OK);
 }
@@ -302,7 +321,11 @@ async fn metrics_response_is_plain_prometheus_text_with_request_and_readiness_me
         .await
         .assert_status(StatusCode::OK);
 
-    let resp = fixture.admin.get("/metrics").await;
+    let resp = fixture
+        .admin
+        .get("/metrics")
+        .add_header("x-api-key", METRICS_TOKEN)
+        .await;
     resp.assert_status(StatusCode::OK);
     let content_type = resp
         .headers()
@@ -342,7 +365,11 @@ async fn metrics_do_not_expose_sensitive_or_high_cardinality_values() {
         .await
         .assert_status(StatusCode::OK);
 
-    let resp = fixture.admin.get("/metrics").await;
+    let resp = fixture
+        .admin
+        .get("/metrics")
+        .add_header("x-api-key", METRICS_TOKEN)
+        .await;
     resp.assert_status(StatusCode::OK);
     let body = resp.text();
     for forbidden in [

@@ -421,7 +421,7 @@ pub struct OidcConfig {
     pub issuer: String,
     /// One or more accepted `aud` values. Tokens with no `aud`, or
     /// whose `aud` does not intersect this list, are rejected.
-    pub audience: Vec<String>,
+    pub audiences: Vec<String>,
     /// JWKS endpoint. Either this or `discovery_url` must be set.
     /// `discovery_url` takes precedence: when both are configured the
     /// validator rejects the document.
@@ -441,7 +441,7 @@ pub struct OidcConfig {
     /// RS256, ES256, EdDSA. HS\* and `none` are intentionally absent
     /// from [`OidcAlgorithm`].
     #[serde(default = "default_oidc_algorithms")]
-    pub algorithms: Vec<OidcAlgorithm>,
+    pub allowed_algorithms: Vec<OidcAlgorithm>,
     /// JWKS cache TTL. Default 10 minutes. The provider also refreshes
     /// on unknown `kid` (rate-limited) so this controls the steady-state
     /// rotation pickup latency, not the upper bound.
@@ -480,7 +480,7 @@ pub struct OidcConfig {
     /// and are rejected by default. Tokens without `typ` are rejected by
     /// the shared verifier.
     #[serde(default = "default_oidc_token_types")]
-    pub token_types: Vec<String>,
+    pub allowed_token_types: Vec<String>,
 }
 
 /// JWS signature algorithms accepted by the OIDC verifier. Symmetric

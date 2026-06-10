@@ -18,11 +18,11 @@ env:
   CARGO_NET_GIT_FETCH_WITH_CLI: true
   RUST_BACKTRACE: 1
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: ee298e00e76ad6b1e56373fe85d6c1e3a95ea238
+  REGISTRY_PLATFORM_REF: 05a03973c3048b4d98d22cb29a55837f62594c12
   REGISTRY_MANIFEST_REPOSITORY: jeremi/registry-manifest
   REGISTRY_MANIFEST_REF: a2e648aaac864563a3311b9d95b8143afa1b7334
   CEL_MAPPING_REPOSITORY: PublicSchema/crosswalk
-  CEL_MAPPING_REF: ca7411d735f1507b9db0db637f79aff7e4ae4611
+  CROSSWALK_REF: 54e0f537830837fcd0c9efa87990987b1846931c
 
 # Default the GITHUB_TOKEN granted to each job to read-only on contents.
 # Individual jobs can widen this when they truly need write access.
@@ -65,7 +65,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ env.CEL_MAPPING_REPOSITORY }}
-          ref: ${{ env.CEL_MAPPING_REF }}
+          ref: ${{ env.CROSSWALK_REF }}
           path: cel-mapping
 
       - name: Link cel-mapping path dependency
@@ -91,7 +91,7 @@ jobs:
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Install uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Check Docker build contract
         run: python3 scripts/check_docker_build_contract.py
@@ -162,7 +162,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ env.CEL_MAPPING_REPOSITORY }}
-          ref: ${{ env.CEL_MAPPING_REF }}
+          ref: ${{ env.CROSSWALK_REF }}
           path: cel-mapping
 
       - name: Link cel-mapping path dependency
@@ -182,7 +182,7 @@ jobs:
       - name: Install cargo-deny
         uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
         with:
-          tool: cargo-deny@0.19.7
+          tool: cargo-deny@0.19.8
 
       - name: Run cargo-deny
         run: cargo deny check licenses advisories bans sources
@@ -222,7 +222,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ env.CEL_MAPPING_REPOSITORY }}
-          ref: ${{ env.CEL_MAPPING_REF }}
+          ref: ${{ env.CROSSWALK_REF }}
           path: cel-mapping
 
       - name: Link cel-mapping path dependency
@@ -330,7 +330,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ env.CEL_MAPPING_REPOSITORY }}
-          ref: ${{ env.CEL_MAPPING_REF }}
+          ref: ${{ env.CROSSWALK_REF }}
           path: cel-mapping
 
       - name: Checkout registry-manifest

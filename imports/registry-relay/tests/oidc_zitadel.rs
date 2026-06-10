@@ -170,11 +170,11 @@ fn audience_from_payload(payload: &Value) -> Vec<String> {
 fn oidc_config(env: &ZitadelEnv, audience: Vec<String>) -> OidcConfig {
     OidcConfig {
         issuer: env.issuer.clone(),
-        audience,
+        audiences: audience,
         jwks_url: None,
         discovery_url: Some(env.discovery_url()),
         allow_dev_insecure_fetch_urls: true,
-        algorithms: vec![
+        allowed_algorithms: vec![
             OidcAlgorithm::Rs256,
             OidcAlgorithm::Es256,
             OidcAlgorithm::EdDsa,
@@ -185,7 +185,7 @@ fn oidc_config(env: &ZitadelEnv, audience: Vec<String>) -> OidcConfig {
         scope_map: BTreeMap::new(),
         scope_object_required_keys: Vec::new(),
         allowed_clients: Vec::new(),
-        token_types: vec!["JWT".to_string(), "at+jwt".to_string()],
+        allowed_token_types: vec!["JWT".to_string(), "at+jwt".to_string()],
     }
 }
 

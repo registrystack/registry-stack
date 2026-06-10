@@ -93,7 +93,7 @@ impl OidcAuth {
     #[must_use]
     pub fn with_cache(config: &OidcConfig, cache: Arc<JwksCache>) -> Self {
         let algorithms: Vec<Algorithm> = config
-            .algorithms
+            .allowed_algorithms
             .iter()
             .map(|alg| match alg {
                 OidcAlgorithm::Rs256 => Algorithm::RS256,
@@ -102,19 +102,22 @@ impl OidcAuth {
             })
             .collect();
         let token_types: HashSet<String> = config
-            .token_types
+            .allowed_token_types
             .iter()
             .map(|t| t.to_ascii_lowercase())
             .collect();
-        let audiences = config.audience.iter().cloned().collect();
+        let audiences = config.audiences.iter().cloned().collect();
         let verifier = TokenVerifier::new(
             TokenVerifierConfig::registry_relay_access_profile(
                 config.issuer.clone(),
-                config.audience.clone(),
+                config.audiences.clone(),
                 algorithms.clone(),
-                config.token_types.clone(),
+                config.allowed_token_types.clone(),
             )
-            .with_related_token_typ(config.token_types.clone(), config.token_types.clone())
+            .with_related_token_typ(
+                config.allowed_token_types.clone(),
+                config.allowed_token_types.clone(),
+            )
             .with_scope_claim(config.scope_claim.clone())
             .with_allowed_clients(config.allowed_clients.clone())
             .with_leeway(config.leeway),
@@ -534,18 +537,18 @@ mod tests {
     fn base_config() -> OidcConfig {
         OidcConfig {
             issuer: TEST_ISSUER.to_string(),
-            audience: vec![TEST_AUDIENCE.to_string()],
+            audiences: vec![TEST_AUDIENCE.to_string()],
             jwks_url: None,
             discovery_url: None,
             allow_dev_insecure_fetch_urls: false,
-            algorithms: vec![OidcAlgorithm::EdDsa],
+            allowed_algorithms: vec![OidcAlgorithm::EdDsa],
             jwks_cache_ttl: Duration::from_secs(600),
             leeway: Duration::from_secs(60),
             scope_claim: "scope".to_string(),
             scope_map: BTreeMap::new(),
             scope_object_required_keys: Vec::new(),
             allowed_clients: Vec::new(),
-            token_types: vec!["JWT".to_string(), "at+jwt".to_string()],
+            allowed_token_types: vec!["JWT".to_string(), "at+jwt".to_string()],
         }
     }
 
@@ -956,7 +959,7 @@ mod tests {
             },
         );
         let mut config = base_config();
-        config.audience.push("registry-lab-api".to_string());
+        config.audiences.push("registry-lab-api".to_string());
         config.scope_claim = "aud".to_string();
         config.scope_map.insert(
             "registry-lab-api".to_string(),
