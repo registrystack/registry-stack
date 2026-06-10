@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use registry_relay::config::vocabularies;
 use registry_relay::config::{
@@ -1557,6 +1558,50 @@ audit:
   format: jsonl
 "#
     )
+}
+
+#[test]
+fn shared_canonical_oidc_fixture_parses() {
+    let tmp = TempDir::new().expect("tempdir");
+    let body = r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {}
+auth:
+  mode: oidc
+  oidc:
+    issuer: https://id.example.gov
+    audiences:
+      - registry-notary
+    jwks_url: https://id.example.gov/oauth/v2/keys
+    allowed_algorithms:
+      - EdDSA
+    allowed_token_types:
+      - JWT
+    leeway: 30s
+datasets: []
+audit:
+  sink: stdout
+  format: jsonl
+"#;
+    let path = write_config(&tmp, body);
+
+    let config = config::load(&path).expect("shared canonical OIDC fixture loads");
+    let oidc = config.auth.oidc.as_ref().expect("oidc config");
+
+    assert_eq!(oidc.issuer, "https://id.example.gov");
+    assert_eq!(oidc.audiences, vec!["registry-notary"]);
+    assert_eq!(
+        oidc.jwks_url.as_deref(),
+        Some("https://id.example.gov/oauth/v2/keys")
+    );
+    assert_eq!(oidc.allowed_algorithms, vec![OidcAlgorithm::EdDsa]);
+    assert_eq!(oidc.allowed_token_types, vec!["JWT"]);
+    assert_eq!(oidc.leeway, Duration::from_secs(30));
 }
 
 #[test]

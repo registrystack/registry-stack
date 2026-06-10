@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Renamed OIDC config fields to the shared Registry service convention:
+  `auth.oidc.audience` -> `auth.oidc.audiences`,
+  `auth.oidc.algorithms` -> `auth.oidc.allowed_algorithms`, and
+  `auth.oidc.token_types` -> `auth.oidc.allowed_token_types`. Old names fail
+  config load with an error naming the replacement.
+- Added `${VAR}` / `${VAR:-default}` / `${VAR:?message}` expansion,
+  `--env-file` / `REGISTRY_RELAY_ENV_FILE`, and `--bind` /
+  `REGISTRY_RELAY_BIND` support. The bind override applies after YAML
+  validation; `server.bind` remains required in config.
+
 ## 0.1.0 - 2026-05-16
 
 Initial V1 release of `registry-relay`, a controlled, read-only registry relay for publishing protected, entity-shaped APIs over local CSV, XLSX, and Parquet sources.

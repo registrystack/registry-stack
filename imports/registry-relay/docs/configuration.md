@@ -308,6 +308,11 @@ Store the fingerprint in the platform secret store under the configured `fingerp
 
 Set `auth.mode: oidc` to verify bearer JWTs against an external OpenID Connect / OAuth2 IdP. Registry Relay is a resource server: it validates inbound tokens against the IdP's JWKS but never mints, refreshes, or stores tokens. A given deployment runs in exactly one auth mode at a time; mixed-mode operation is not supported.
 
+OIDC field names follow the shared Registry service runtime configuration
+conventions maintained in `registry-internal/principles/configuration-and-artifact-design-principles.md`.
+Removed pre-convention names are rejected before deserialization with an error
+naming the replacement field.
+
 ```yaml
 auth:
   mode: oidc
