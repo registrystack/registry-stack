@@ -7030,7 +7030,7 @@ async fn oidc_mode_verifies_token_from_fixture_idp() {
 }
 
 #[tokio::test]
-async fn oidc_admin_can_scrape_metrics_but_non_admin_cannot() {
+async fn oidc_metrics_scope_can_scrape_metrics_but_non_metrics_cannot() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
@@ -7041,6 +7041,7 @@ async fn oidc_admin_can_scrape_metrics_but_non_admin_cannot() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
+    config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
     config.auth.mode = EvidenceAuthMode::Oidc;
     config.auth.api_keys.clear();
     config.auth.bearer_tokens.clear();
@@ -7056,8 +7057,8 @@ async fn oidc_admin_can_scrape_metrics_but_non_admin_cannot() {
         scope_claim: "scope".to_string(),
         scope_separator: " ".to_string(),
         scope_map: [(
-            "metrics_admin".to_string(),
-            vec!["registry_notary:admin".to_string()],
+            "metrics_read".to_string(),
+            vec!["registry_notary:metrics_read".to_string()],
         )]
         .into_iter()
         .collect(),
@@ -7071,31 +7072,33 @@ async fn oidc_admin_can_scrape_metrics_but_non_admin_cannot() {
         "azp": "registry-client",
         "scope": "farmer_registry:evidence_verification",
     }));
-    let admin_token = idp.mint_token(json!({
-        "sub": "metrics-admin",
+    let metrics_token = idp.mint_token(json!({
+        "sub": "metrics-reader",
         "aud": "registry-notary",
         "azp": "registry-client",
-        "scope": "metrics_admin",
+        "scope": "metrics_read",
     }));
 
     let app = standalone_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
-    let non_admin = server
+    let non_metrics = server
         .get("/metrics")
         .add_header("authorization", format!("Bearer {non_admin_token}"))
         .await;
-    non_admin.assert_status(StatusCode::FORBIDDEN);
-    assert!(!non_admin
+    non_metrics.assert_status(StatusCode::FORBIDDEN);
+    assert!(!non_metrics
         .text()
         .contains("registry_notary_http_requests_total"));
 
-    let admin = server
+    let metrics = server
         .get("/metrics")
-        .add_header("authorization", format!("Bearer {admin_token}"))
+        .add_header("authorization", format!("Bearer {metrics_token}"))
         .await;
-    admin.assert_status_ok();
-    assert!(admin.text().contains("registry_notary_http_requests_total"));
+    metrics.assert_status_ok();
+    assert!(metrics
+        .text()
+        .contains("registry_notary_http_requests_total"));
 
     idp.stop().await;
 }

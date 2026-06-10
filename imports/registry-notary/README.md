@@ -156,16 +156,17 @@ ids, holder keys, claim values, SD-JWT disclosures, or source rows.
 ## Metrics
 
 The Prometheus metrics surface is `/metrics`. Metrics are intended to be safe to
-scrape and must use low-cardinality labels only, such as route, method, outcome,
-status class, profile, and source id. Labels must not contain subject ids,
-principal ids, holder material, tokens, source rows, request ids, correlation
-ids, SD-JWT disclosures, or raw error details. The endpoint requires an
-authenticated principal with the `registry_notary:admin` scope; configure
-Prometheus scrape jobs to send an admin credential. Static-auth deployments can
-use an admin bearer token or an admin API key in `x-api-key`; OIDC deployments
-can use a token whose mapped scopes include `registry_notary:admin`. An
+scrape and must use low-cardinality labels only, such as endpoint kind, method,
+status code, status class, error code, outcome, profile, and source id. Labels
+must not contain subject ids, principal ids, holder material, tokens, source
+rows, request ids, correlation ids, SD-JWT disclosures, or raw error details.
+The endpoint requires an authenticated principal with the
+`registry_notary:metrics_read` scope; configure Prometheus scrape jobs to send a
+dedicated metrics credential. Static-auth deployments can use a metrics bearer
+token or a metrics API key in `x-api-key`; OIDC deployments can use a token
+whose mapped scopes include `registry_notary:metrics_read`. An
 internal-only listener/proxy is defense in depth only and must still forward or
-inject a valid admin credential. Keep the endpoint behind the deployment's
+inject a valid metrics credential. Keep the endpoint behind the deployment's
 normal network and scrape controls even though the metric content is designed
 to avoid secrets and personal data.
 

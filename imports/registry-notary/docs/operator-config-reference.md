@@ -908,5 +908,6 @@ registry-notary doctor \
   and a shared store.
 - Audit has a stable high-entropy `hash_secret_env` value and off-host
   retention.
-- `/metrics` is scraped with an admin credential and normal network controls.
+- `/metrics` is scraped with a `registry_notary:metrics_read` credential and
+  normal network controls.
 - `doctor` passes without `--live`, then passes with a controlled live subject.
