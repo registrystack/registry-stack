@@ -106,7 +106,7 @@ export function batchItems(state) {
 
 export function requestedFields(state) {
   const fields = dataObject(state).fields;
-  if (!Array.isArray(fields) || fields.some((field) => typeof field !== 'string' || field === '')) {
+  if (!Array.isArray(fields) || fields.length === 0 || fields.some((field) => typeof field !== 'string' || field === '')) {
     throw new NotaryRequestError('state.data.fields must be a non-empty string array');
   }
   return fields;
@@ -138,7 +138,7 @@ export function returnTargetAuthError(state) {
 
 export function returnTargetRateLimit(state, options = {}) {
   const error = { code: 'target_rate_limit' };
-  const retryAfter = Number(options.retryAfterSeconds ?? options.retry_after_seconds);
+  const retryAfter = Number(options?.retryAfterSeconds ?? options?.retry_after_seconds);
   if (Number.isSafeInteger(retryAfter) && retryAfter > 0) {
     error.retry_after_seconds = retryAfter;
   }
@@ -160,6 +160,9 @@ export function returnError(state, error) {
 
 export function returnBatchItems(state, items) {
   assertBatchRequest(state);
+  if (!Array.isArray(items)) {
+    throw new NotaryRequestError('items must be an array');
+  }
   const requestedIds = new Set(batchItems(state).map((item) => item.id));
   const seen = new Set();
   const normalized = items.map((item) => {
