@@ -2183,13 +2183,14 @@ fn problem_details_schema() -> Value {
     json!({
         "type": "object",
         "description": "RFC 9457 Problem Details, returned for every non-2xx response.",
-        "required": ["type", "title", "status", "detail", "code"],
+        "required": ["type", "title", "status", "detail", "code", "request_id"],
         "properties": {
             "type": { "type": "string", "format": "uri" },
             "title": { "type": "string" },
             "status": { "type": "integer", "format": "int32" },
             "detail": { "type": "string" },
             "code": { "type": "string" },
+            "request_id": { "type": "string" },
         },
         "additionalProperties": true,
         "examples": [{
@@ -2198,6 +2199,7 @@ fn problem_details_schema() -> Value {
             "status": 401,
             "detail": "no credential provided in Authorization or X-Api-Key header",
             "code": "auth.missing_credential",
+            "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
         }],
     })
 }

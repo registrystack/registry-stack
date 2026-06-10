@@ -56,7 +56,7 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::MatchedPath;
-use axum::http::{HeaderName, Method, Request, StatusCode};
+use axum::http::{header, HeaderName, Method, Request, StatusCode};
 use axum::middleware::{from_fn, Next};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
@@ -64,6 +64,7 @@ use axum::Router;
 use registry_manifest_core::CompiledMetadata;
 use registry_platform_audit::AuditKeyHasher;
 use registry_platform_httpsec::{request_body_limit, CorsPolicy, CspBuilder};
+use serde_json::Value;
 use tower_http::cors::CorsLayer;
 use tower_http::request_id::{
     MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
@@ -488,6 +489,7 @@ fn apply_cross_cutting_layers_with_metrics(
         ))
         .layer(from_fn(reject_overlong_uri))
         .layer(from_fn(normalize_internal_error_response))
+        .layer(from_fn(attach_request_id_to_problem_response))
         .layer(cors)
         .layer(
             TraceLayer::new_for_http()
@@ -627,6 +629,52 @@ async fn normalize_internal_error_response(request: Request<Body>, next: Next) -
         }
         _ => response,
     }
+}
+
+async fn attach_request_id_to_problem_response(request: Request<Body>, next: Next) -> Response {
+    let request_id = request
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            request
+                .extensions()
+                .get::<audit::RequestIdExt>()
+                .map(|ext| ext.0.clone())
+        });
+
+    let response = next.run(request).await;
+    let Some(request_id) = request_id else {
+        return response;
+    };
+    if !is_problem_json(response.headers()) {
+        return response;
+    }
+
+    let (mut parts, body) = response.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, 64 * 1024).await else {
+        return Error::from(InternalError::Unhandled).into_response();
+    };
+    let Ok(Value::Object(mut problem)) = serde_json::from_slice::<Value>(&bytes) else {
+        return Response::from_parts(parts, Body::from(bytes));
+    };
+    problem
+        .entry("request_id")
+        .or_insert_with(|| Value::String(request_id));
+    let Ok(body) = serde_json::to_vec(&Value::Object(problem)) else {
+        return Error::from(InternalError::Unhandled).into_response();
+    };
+    parts.headers.remove(header::CONTENT_LENGTH);
+    Response::from_parts(parts, Body::from(body))
+}
+
+fn is_problem_json(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("application/problem+json"))
 }
 
 /// Build a `CorsLayer` from configuration.

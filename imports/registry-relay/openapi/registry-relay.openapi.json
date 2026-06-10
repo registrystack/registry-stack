@@ -2837,7 +2837,8 @@
                   "title": "Missing credential",
                   "status": 401,
                   "code": "auth.missing_credential",
-                  "detail": "no credential provided in Authorization or X-Api-Key header"
+                  "detail": "no credential provided in Authorization or X-Api-Key header",
+                  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV"
                 }
               }
             }
@@ -2985,13 +2986,15 @@
       },
       "ProblemDetails": {
         "type": "object",
-        "description": "RFC 9457 Problem Details. The `code` field is the stable machine-readable error name; `detail` is operator-facing and not part of the contract.",
+        "description": "RFC 9457 Problem Details. The `code` field is the stable machine-readable error name; `request_id` is the server-minted correlation identifier.",
         "additionalProperties": true,
         "required": [
           "type",
           "title",
           "status",
-          "code"
+          "detail",
+          "code",
+          "request_id"
         ],
         "properties": {
           "type": {
@@ -3009,6 +3012,9 @@
             "type": "string"
           },
           "detail": {
+            "type": "string"
+          },
+          "request_id": {
             "type": "string"
           }
         }

@@ -207,9 +207,16 @@ async fn ready_503_reports_failed_count_without_names() {
     let resp = server.get("/ready").await;
     resp.assert_status(StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(resp.header("content-type"), "application/problem+json");
+    let request_id = resp
+        .header("x-request-id")
+        .to_str()
+        .expect("x-request-id is ASCII")
+        .to_string();
+    Ulid::from_string(&request_id).expect("x-request-id is a ULID");
 
     let body: Value = resp.json();
     assert_eq!(body["code"], "schema.resource_unavailable");
+    assert_eq!(body["request_id"], request_id);
     // Count-only: no dataset or resource names exposed.
     assert_eq!(body["failed_count"], 1);
     assert!(
@@ -375,12 +382,21 @@ async fn overlong_uri_returns_414_uri_too_long() {
     // route; the cap is enforced before route matching.
     let big_param = "a".repeat(9_000);
     let url = format!("/healthz?x={big_param}");
-    let resp = server.get(&url).await;
+    let spoofed = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    let resp = server.get(&url).add_header("x-request-id", spoofed).await;
 
     resp.assert_status(StatusCode::URI_TOO_LONG);
     assert_eq!(resp.header("content-type"), "application/problem+json");
+    let request_id = resp
+        .header("x-request-id")
+        .to_str()
+        .expect("x-request-id is ASCII")
+        .to_string();
+    assert_ne!(request_id, spoofed);
+    Ulid::from_string(&request_id).expect("x-request-id is a ULID");
     let body: Value = resp.json();
     assert_eq!(body["code"], "internal.uri_too_long");
+    assert_eq!(body["request_id"], request_id);
 }
 
 #[tokio::test]
