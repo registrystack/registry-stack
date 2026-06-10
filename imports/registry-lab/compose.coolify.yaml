@@ -14,6 +14,8 @@ x-hosted-domains:
 x-coolify-required-env:
   - CIVIL_EVIDENCE_ONLY_HASH
   - CIVIL_EVIDENCE_ONLY_RAW
+  - CIVIL_EVIDENCE_CLIENT_BEARER
+  - CIVIL_EVIDENCE_CLIENT_BEARER_HASH
   - CIVIL_EVIDENCE_SOURCE_HASH
   - CIVIL_EVIDENCE_SOURCE_RAW
   - CIVIL_METADATA_CLIENT_HASH
@@ -297,9 +299,14 @@ services:
     restart: unless-stopped
     expose:
       - "8080"
+    environment:
+      CIVIL_EVIDENCE_URL: http://civil-notary:8080
+      CIVIL_EVIDENCE_CLIENT_BEARER: ${CIVIL_EVIDENCE_CLIENT_BEARER:-}
     depends_on:
       config-loader:
         condition: service_completed_successfully
+      civil-notary:
+        condition: service_healthy
     volumes:
       - cfg-static-scripts:/opt/lab-scripts:ro
       - cfg-lab-homepage:/etc/registry-lab-homepage:ro
@@ -311,6 +318,24 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  civil-notary:
+    <<: *notary-common
+    command: ["--config", "/etc/registry-notary/civil-notary.yaml"]
+    environment:
+      <<: *notary-env
+      CIVIL_EVIDENCE_CLIENT_BEARER_HASH: ${CIVIL_EVIDENCE_CLIENT_BEARER_HASH:-}
+      CIVIL_EVIDENCE_SOURCE_RAW: ${CIVIL_EVIDENCE_SOURCE_RAW:-}
+    volumes:
+      - cfg-notary:/etc/registry-notary:ro
+      - notary-config-state:/var/lib/registry-notary/config-state
+    depends_on:
+      config-loader:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      civil-registry-relay:
+        condition: service_healthy
 
   citizen-civil-notary:
     <<: *notary-common

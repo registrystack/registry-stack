@@ -1,0 +1,82 @@
+# SPDX-License-Identifier: Apache-2.0
+
+server:
+  bind: 0.0.0.0:8080
+  openapi_requires_auth: false
+  admin_listener:
+    mode: dedicated
+    bind: 0.0.0.0:8081
+
+auth:
+  mode: api_key
+  bearer_tokens:
+    - id: hosted_civil_evidence_client
+      fingerprint:
+        provider: env
+        name: CIVIL_EVIDENCE_CLIENT_BEARER_HASH
+        commitment: sha256:f6091e63acf60468a49a94982b1143f5c88802ab35747bb5cd22839fc21620a5
+      scopes:
+        - civil_registry:evidence_verification
+
+audit:
+  sink: stdout
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+
+config_trust:
+  antirollback_state_path: /var/lib/registry-notary/config-state/civil-notary-config-antirollback.json
+  local_approval_state_path: /var/lib/registry-notary/config-state/civil-notary-config-local-approvals.json
+  break_glass_rate_limit:
+    max_accepted: 1
+    window_seconds: 3600
+
+evidence:
+  enabled: true
+  service_id: civil-notary
+  api_base_url: http://civil-notary:8080
+  inline_batch_limit: 20
+  source_connections:
+    civil:
+      base_url: http://civil-registry-relay:8080
+      allow_insecure_private_network: true
+      token_env: CIVIL_EVIDENCE_SOURCE_RAW
+      dci:
+        search_path: /dci/crvs/registry/sync/search
+        query_type: idtype-value
+        records_path: /message/search_response/0/data/reg_records
+        field_paths:
+          national_id: /person/national_id
+          deceased: /person/deceased
+  claims:
+    - id: person-is-alive
+      title: Person is alive
+      version: 2026-05
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        civil:
+          connector: dci
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person
+          lookup:
+            input: target.identifiers.national_id
+            field: NATIONAL_ID
+            op: eq
+            cardinality: one
+          fields:
+            deceased:
+              field: deceased
+              type: boolean
+              required: true
+      rule:
+        type: cel
+        expression: "source.civil.deceased == false"
+      disclosure:
+        default: predicate
+        allowed:
+          - predicate
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json

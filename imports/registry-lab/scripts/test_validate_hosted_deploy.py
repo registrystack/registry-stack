@@ -234,6 +234,29 @@ class HostedDeployValidationTest(unittest.TestCase):
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "missing-service")
 
+    def test_rejects_missing_civil_alive_notary_wiring(self) -> None:
+        compose = self._valid_registry_lab()
+        del compose["services"]["lab-homepage"]["environment"]["CIVIL_EVIDENCE_URL"]
+        del compose["services"]["lab-homepage"]["environment"]["CIVIL_EVIDENCE_CLIENT_BEARER"]
+        del compose["services"]["civil-notary"]["environment"]["CIVIL_EVIDENCE_CLIENT_BEARER_HASH"]
+
+        issues = self._validate(compose, self._valid_esignet())
+
+        self.assertIssue(issues, "missing-civil-alive-notary-url")
+        self.assertIssue(issues, "missing-civil-alive-notary-bearer")
+        self.assertIssue(issues, "missing-civil-notary-bearer-hash")
+
+    def test_rejects_missing_civil_notary_config(self) -> None:
+        compose = self._valid_registry_lab()
+        compose["services"]["civil-notary"]["command"] = [
+            "--config",
+            "/etc/registry-notary/citizen-civil-notary.yaml",
+        ]
+
+        issues = self._validate(compose, self._valid_esignet())
+
+        self.assertIssue(issues, "missing-civil-notary-config")
+
     def test_rejects_localhost_urls_in_mounted_hosted_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -577,6 +600,8 @@ evidence:
             "REGISTRY_NOTARY_ISSUER_JWK": "${REGISTRY_NOTARY_ISSUER_JWK:-}",
             "REGISTRY_NOTARY_ACCESS_TOKEN_JWK": "${REGISTRY_NOTARY_ACCESS_TOKEN_JWK:-}",
             "REGISTRY_NOTARY_ESIGNET_RP_JWK": "${REGISTRY_NOTARY_ESIGNET_RP_JWK:-}",
+            "CIVIL_EVIDENCE_CLIENT_BEARER": "${CIVIL_EVIDENCE_CLIENT_BEARER:-}",
+            "CIVIL_EVIDENCE_CLIENT_BEARER_HASH": "${CIVIL_EVIDENCE_CLIENT_BEARER_HASH:-}",
             "CIVIL_EVIDENCE_SOURCE_RAW": "${CIVIL_EVIDENCE_SOURCE_RAW:-}",
             "CIVIL_METADATA_CLIENT_RAW": "${CIVIL_METADATA_CLIENT_RAW:-}",
             "CIVIL_EVIDENCE_ONLY_RAW": "${CIVIL_EVIDENCE_ONLY_RAW:-}",
@@ -652,6 +677,21 @@ cp -a /tmp/repo/scripts/lab_homepage_scenarios /out/static-scripts/
                 },
                 "postgres": {"image": "postgres:16-alpine", "environment": required_env},
                 "redis": {"image": "redis:7.4-alpine"},
+                "civil-notary": {
+                    "image": "${REGISTRY_NOTARY_IMAGE:-ghcr.io/registrystack/registry-notary@sha256:abc}",
+                    "command": [
+                        "--config",
+                        "/etc/registry-notary/civil-notary.yaml",
+                    ],
+                    "expose": ["8080"],
+                    "environment": {
+                        "CIVIL_EVIDENCE_CLIENT_BEARER_HASH": "${CIVIL_EVIDENCE_CLIENT_BEARER_HASH:-}",
+                    },
+                    "volumes": ["cfg-notary:/etc/registry-notary:ro"],
+                    "healthcheck": {
+                        "test": ["CMD", "registry-notary", "healthcheck"]
+                    },
+                },
                 "citizen-civil-notary": {
                     "image": "${REGISTRY_NOTARY_IMAGE:-ghcr.io/registrystack/registry-notary@sha256:abc}",
                     "expose": ["8080"],
@@ -705,7 +745,10 @@ cp -a /tmp/repo/scripts/lab_homepage_scenarios /out/static-scripts/
                 "lab-homepage": {
                     "image": "python:3.12.3-slim-bookworm",
                     "expose": ["8080"],
-                    "environment": required_env,
+                    "environment": {
+                        "CIVIL_EVIDENCE_URL": "http://civil-notary:8080",
+                        "CIVIL_EVIDENCE_CLIENT_BEARER": "${CIVIL_EVIDENCE_CLIENT_BEARER:-}",
+                    },
                 },
                 "zitadel": {
                     "image": "ghcr.io/zitadel/zitadel:v2.66.4",

@@ -23,6 +23,7 @@ REQUIRED_SERVICES = {
         "config-loader",
         "postgres",
         "redis",
+        "civil-notary",
         "citizen-civil-notary",
         "civil-registry-relay",
         "social-protection-registry-relay",
@@ -78,6 +79,8 @@ REQUIRED_HOSTED_VARIABLES = {
         "REGISTRY_NOTARY_ISSUER_JWK",
         "REGISTRY_NOTARY_ACCESS_TOKEN_JWK",
         "REGISTRY_NOTARY_ESIGNET_RP_JWK",
+        "CIVIL_EVIDENCE_CLIENT_BEARER",
+        "CIVIL_EVIDENCE_CLIENT_BEARER_HASH",
         "CIVIL_EVIDENCE_SOURCE_RAW",
         "CIVIL_METADATA_CLIENT_RAW",
         "CIVIL_EVIDENCE_ONLY_RAW",
@@ -257,6 +260,15 @@ def validate_artifacts(
         issues.extend(validate_repo_output_binds(artifact, services))
         issues.extend(validate_public_urls(artifact, compose, root))
         issues.extend(validate_hosted_openapi_policy(artifact, services, root))
+        issues.extend(
+            validate_civil_alive_scenario_contract(
+                artifact,
+                compose,
+                services,
+                root,
+                artifact_texts.get(artifact, ""),
+            )
+        )
         issues.extend(validate_config_loader_ref(artifact, services))
         issues.extend(validate_config_loader_hosted_outputs(artifact, services))
         issues.extend(
@@ -716,6 +728,104 @@ def validate_hosted_openapi_policy(
                 )
             )
     return issues
+
+
+def validate_civil_alive_scenario_contract(
+    artifact: str,
+    compose: dict[str, Any],
+    services: dict[str, Any],
+    root: Path,
+    raw_text: str = "",
+) -> list[Issue]:
+    if artifact != "registry-lab":
+        return []
+
+    issues: list[Issue] = []
+    lab_homepage = services.get("lab-homepage")
+    civil_notary = services.get("civil-notary")
+
+    if isinstance(lab_homepage, dict):
+        env = normalize_environment(lab_homepage.get("environment"))
+        if env.get("CIVIL_EVIDENCE_URL") != "http://civil-notary:8080":
+            issues.append(
+                Issue(
+                    "missing-civil-alive-notary-url",
+                    artifact,
+                    "services.lab-homepage.environment.CIVIL_EVIDENCE_URL",
+                    "alive-proof Step 2 must call the internal civil-notary evidence API",
+                )
+            )
+        if not environment_uses_rendered_or_referenced_secret(
+            raw_text,
+            "lab-homepage",
+            env,
+            "CIVIL_EVIDENCE_CLIENT_BEARER",
+        ):
+            issues.append(
+                Issue(
+                    "missing-civil-alive-notary-bearer",
+                    artifact,
+                    "services.lab-homepage.environment.CIVIL_EVIDENCE_CLIENT_BEARER",
+                    "alive-proof Step 2 must receive the hosted civil Notary bearer token",
+                )
+            )
+    if isinstance(civil_notary, dict):
+        env = normalize_environment(civil_notary.get("environment"))
+        if not environment_uses_rendered_or_referenced_secret(
+            raw_text,
+            "civil-notary",
+            env,
+            "CIVIL_EVIDENCE_CLIENT_BEARER_HASH",
+            required_prefix="sha256:",
+        ):
+            issues.append(
+                Issue(
+                    "missing-civil-notary-bearer-hash",
+                    artifact,
+                    "services.civil-notary.environment.CIVIL_EVIDENCE_CLIENT_BEARER_HASH",
+                    "hosted civil-notary must verify the bearer token used by alive-proof Step 2",
+                )
+            )
+        if hosted_notary_config_path(root, civil_notary) != root / "config/coolify/notary/civil-notary.yaml":
+            issues.append(
+                Issue(
+                    "missing-civil-notary-config",
+                    artifact,
+                    "services.civil-notary.command",
+                    "hosted civil-notary must start with config/coolify/notary/civil-notary.yaml",
+                )
+            )
+    return issues
+
+
+def environment_uses_rendered_or_referenced_secret(
+    raw_text: str,
+    service: str,
+    env: dict[str, str],
+    variable: str,
+    *,
+    required_prefix: str | None = None,
+) -> bool:
+    value = env.get(variable)
+    if value == "${" + variable + ":-}":
+        return True
+    if value and usable_secret_value(value):
+        if required_prefix is None or value.startswith(required_prefix):
+            return True
+    return service_block_references_variable(raw_text, service, variable)
+
+
+def service_block_references_variable(raw_text: str, service: str, variable: str) -> bool:
+    if not raw_text:
+        return False
+    service_re = re.compile(
+        rf"(?ms)^  {re.escape(service)}:\n(?P<body>.*?)(?=^  [A-Za-z0-9_.-]+:|\Z)"
+    )
+    match = service_re.search(raw_text)
+    if not match:
+        return False
+    variable_ref_re = r"\$\{" + re.escape(variable) + r"(?::[-?][^}]*)?\}"
+    return re.search(variable_ref_re, match.group("body")) is not None
 
 
 def validate_config_loader_ref(artifact: str, services: dict[str, Any]) -> list[Issue]:
