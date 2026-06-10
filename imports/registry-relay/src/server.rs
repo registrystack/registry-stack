@@ -56,14 +56,14 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::MatchedPath;
-use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
+use axum::http::{HeaderName, Method, Request, StatusCode};
 use axum::middleware::{from_fn, Next};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use axum::Router;
 use registry_manifest_core::CompiledMetadata;
 use registry_platform_audit::AuditKeyHasher;
-use registry_platform_httpsec::{apply_conditional_corp, request_body_limit, CorsPolicy};
+use registry_platform_httpsec::{request_body_limit, CorsPolicy, CspBuilder};
 use tower_http::cors::CorsLayer;
 use tower_http::request_id::{
     MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
@@ -95,10 +95,17 @@ const REQUEST_BODY_LIMIT_BYTES: usize = 1024 * 1024;
 /// rejected with `414 URI Too Long` before any handler runs.
 const MAX_URI_BYTES: usize = 8192;
 
+#[cfg(test)]
+const CONTENT_SECURITY_POLICY: HeaderName = HeaderName::from_static("content-security-policy");
+#[cfg(test)]
 const X_CONTENT_TYPE_OPTIONS: HeaderName = HeaderName::from_static("x-content-type-options");
+#[cfg(test)]
 const REFERRER_POLICY: HeaderName = HeaderName::from_static("referrer-policy");
+#[cfg(test)]
 const X_FRAME_OPTIONS: HeaderName = HeaderName::from_static("x-frame-options");
+#[cfg(test)]
 const PERMISSIONS_POLICY: HeaderName = HeaderName::from_static("permissions-policy");
+#[cfg(test)]
 const CROSS_ORIGIN_OPENER_POLICY: HeaderName =
     HeaderName::from_static("cross-origin-opener-policy");
 #[cfg(test)]
@@ -503,7 +510,10 @@ fn apply_cross_cutting_layers_with_metrics(
         .layer(PropagateRequestIdLayer::new(x_request_id.clone()))
         .layer(SetRequestIdLayer::new(x_request_id, UlidMakeRequestId))
         .layer(from_fn(strip_untrusted_request_id))
-        .layer(from_fn(add_security_headers)))
+        .layer(registry_platform_httpsec::corp_conditional())
+        .layer(registry_platform_httpsec::security_headers(
+            CspBuilder::restrictive(),
+        )))
 }
 
 fn operational_route(request: &Request<Body>) -> &str {
@@ -526,32 +536,6 @@ async fn strip_untrusted_request_id(mut request: Request<Body>, next: Next) -> R
     request.headers_mut().remove("x-request-id");
     request.extensions_mut().remove::<RequestId>();
     next.run(request).await
-}
-
-async fn add_security_headers(request: Request<Body>, next: Next) -> Response {
-    let mut response = next.run(request).await;
-    let headers = response.headers_mut();
-    headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-    headers.insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
-    headers.insert(X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
-    headers.insert(
-        PERMISSIONS_POLICY,
-        HeaderValue::from_static(
-            "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
-        ),
-    );
-    headers.insert(
-        CROSS_ORIGIN_OPENER_POLICY,
-        HeaderValue::from_static("same-origin"),
-    );
-    apply_conditional_corp(&mut response);
-    // HSTS is intentionally omitted at the application layer. Production
-    // deployments terminate TLS upstream (load balancer / ingress) and
-    // own the HSTS policy there; local development runs plain HTTP on
-    // loopback. Emitting HSTS from the relay would either be no-op text
-    // on dev or duplicate (and potentially conflict with) the edge
-    // value. If the relay ever serves TLS directly, set it here.
-    response
 }
 
 /// Resolve the audit hash secret from the env var named by config.
@@ -868,6 +852,12 @@ mod tests {
                 .get(X_CONTENT_TYPE_OPTIONS)
                 .expect("x-content-type-options"),
             "nosniff"
+        );
+        assert_eq!(
+            headers
+                .get(CONTENT_SECURITY_POLICY)
+                .expect("content-security-policy"),
+            CspBuilder::restrictive().header_value()
         );
         assert_eq!(
             headers.get(REFERRER_POLICY).expect("referrer-policy"),
