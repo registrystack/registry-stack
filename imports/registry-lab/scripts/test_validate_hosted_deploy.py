@@ -181,6 +181,18 @@ class HostedDeployValidationTest(unittest.TestCase):
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "lab-homepage-scenarios-not-copied")
 
+    def test_rejects_config_loader_that_does_not_copy_civil_notary_config(self) -> None:
+        compose = self._valid_registry_lab()
+        compose["services"]["config-loader"]["command"] = [
+            command.replace(
+                "cp -a /tmp/repo/config/coolify/notary/civil-notary.yaml /out/notary/",
+                "",
+            )
+            for command in compose["services"]["config-loader"]["command"]
+        ]
+        issues = self._validate(compose, self._valid_esignet())
+        self.assertIssue(issues, "civil-notary-config-not-copied")
+
     def test_rejects_localhost_public_urls(self) -> None:
         compose = self._valid_registry_lab()
         compose["services"]["citizen-civil-notary"]["environment"][
@@ -664,6 +676,7 @@ openfn_antirollback=/out/openfn-config-state/dhis2-openfn-sidecar-antirollback.j
 if [ ! -s "$openfn_antirollback" ]; then
   printf '%s\n' '{"key":{"product":"registry-notary-openfn-sidecar","instance_id":"hosted-dhis2-openfn-sidecar","environment":"hosted-lab","stream_id":"dhis2-openfn-sidecar-runtime"},"last_sequence":0,"last_config_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","root_version":1,"break_glass":{"accepted":[]},"local_approvals":{"accepted":[]}}' > "$openfn_antirollback"
 fi
+cp -a /tmp/repo/config/coolify/notary/civil-notary.yaml /out/notary/
 cp -a /tmp/repo/scripts/lab_homepage_scenarios /out/static-scripts/
 """
                     ],

@@ -899,6 +899,15 @@ def validate_config_loader_hosted_outputs(
                 "hosted config-loader must copy the lab_homepage_scenarios package used by lab-homepage-server.py",
             )
         )
+    if "cp -a /tmp/repo/config/coolify/notary/civil-notary.yaml /out/notary/" not in command_text:
+        issues.append(
+            Issue(
+                "civil-notary-config-not-copied",
+                artifact,
+                "services.config-loader.command",
+                "hosted config-loader must copy the internal civil Notary config",
+            )
+        )
     return issues
 
 

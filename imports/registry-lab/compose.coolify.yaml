@@ -112,6 +112,7 @@ services:
           find "/out/$$d" -mindepth 1 -delete 2>/dev/null || true
         done
         cp -a /tmp/repo/config/coolify/relay/. /out/relay/
+        cp -a /tmp/repo/config/coolify/notary/civil-notary.yaml /out/notary/
         cp -a /tmp/repo/config/coolify/notary/citizen-civil-notary.yaml /out/notary/
         cp -a /tmp/repo/config/coolify/notary/dhis2-health-notary.yaml /out/notary/
         cp -a /tmp/repo/config/coolify/notary/opencrvs-dci-notary.yaml /out/notary/opencrvs-dci-notary.yaml.template
