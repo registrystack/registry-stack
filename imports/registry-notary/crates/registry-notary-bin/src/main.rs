@@ -570,17 +570,22 @@ fn log_env_filter() -> EnvFilter {
 }
 
 fn init_tracing() -> Result<(), Box<dyn std::error::Error>> {
-    match log_format_from_env()? {
+    let result = match log_format_from_env()? {
         LogFormat::Text => tracing_subscriber::fmt()
             .with_env_filter(log_env_filter())
-            .try_init()
-            .map_err(|error| io::Error::other(format!("failed to initialize tracing: {error}")))?,
+            .try_init(),
         LogFormat::Json => tracing_subscriber::fmt()
             .json()
             .with_env_filter(log_env_filter())
-            .try_init()
-            .map_err(|error| io::Error::other(format!("failed to initialize tracing: {error}")))?,
-    }
+            .try_init(),
+    };
+    if let Err(error) = result {
+        let message = error.to_string();
+        if message.contains("global default trace dispatcher has already been set") {
+            return Ok(());
+        }
+        return Err(io::Error::other(format!("failed to initialize tracing: {error}")).into());
+    };
     Ok(())
 }
 
@@ -3239,6 +3244,7 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn run_server_fails_fast_when_active_signing_key_env_is_missing() {
         let _guard = ENV_LOCK.lock().expect("env lock is not poisoned");
         std::env::set_var(

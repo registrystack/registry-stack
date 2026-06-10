@@ -3397,7 +3397,6 @@ mod tests {
         for (path, method, status) in [
             ("/healthz", "get", "200"),
             ("/ready", "get", "200"),
-            ("/ready", "get", "503"),
             ("/admin/v1/capabilities", "get", "200"),
             ("/admin/v1/config/verify", "post", "200"),
             ("/admin/v1/config/dry-run", "post", "200"),
@@ -3553,6 +3552,7 @@ mod tests {
             ("/v1/credentials", "post", "413"),
             ("/v1/credentials", "post", "429"),
             ("/v1/credentials", "post", "503"),
+            ("/ready", "get", "503"),
             ("/v1/credentials/{credential_id}/status", "get", "404"),
             ("/v1/credentials/{credential_id}/status", "get", "503"),
             (

@@ -2797,7 +2797,8 @@ mod tests {
 
     #[test]
     fn server_limits_must_be_nonzero() {
-        let cases: [(&str, fn(&mut SidecarConfig)); 4] = [
+        type MutateConfig = fn(&mut SidecarConfig);
+        let cases: [(&str, MutateConfig); 4] = [
             ("server.request_timeout_ms", |config: &mut SidecarConfig| {
                 config.server.request_timeout_ms = 0
             }),

@@ -8916,7 +8916,9 @@ mod tests {
             .expect("ready body reads");
         let value: Value = serde_json::from_slice(&body).expect("ready body is JSON");
 
-        assert_eq!(value["status"], "not_ready");
+        assert_eq!(value["status"], json!(503));
+        assert_eq!(value["code"], "readiness.not_ready");
+        assert_eq!(value["readiness_status"], "not_ready");
         assert_eq!(value["checks"]["signing_providers"]["total"], json!(1));
         assert_eq!(value["checks"]["signing_providers"]["ok"], json!(0));
         assert_eq!(value["checks"]["signing_providers"]["failed"], json!(1));
@@ -8942,7 +8944,9 @@ mod tests {
             .expect("ready body reads");
         let value: Value = serde_json::from_slice(&body).expect("ready body is JSON");
 
-        assert_eq!(value["status"], "not_ready");
+        assert_eq!(value["status"], json!(503));
+        assert_eq!(value["code"], "readiness.not_ready");
+        assert_eq!(value["readiness_status"], "not_ready");
         assert_eq!(value["checks"]["total"], json!(2));
         assert_eq!(value["checks"]["ok"], json!(0));
         assert_eq!(value["checks"]["failed"], json!(1));

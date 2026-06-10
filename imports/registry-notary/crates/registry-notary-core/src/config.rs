@@ -3329,7 +3329,7 @@ pub struct RegistryNotaryCorsConfig {
     pub allowed_origins: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceAuthConfig {
     #[serde(default)]
@@ -3345,18 +3345,6 @@ pub struct EvidenceAuthConfig {
     /// unchanged.
     #[serde(default)]
     pub access_token_signing: AccessTokenSigningConfig,
-}
-
-impl Default for EvidenceAuthConfig {
-    fn default() -> Self {
-        Self {
-            mode: EvidenceAuthMode::default(),
-            api_keys: Vec::new(),
-            bearer_tokens: Vec::new(),
-            oidc: None,
-            access_token_signing: AccessTokenSigningConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]

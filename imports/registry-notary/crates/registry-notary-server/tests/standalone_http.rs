@@ -259,6 +259,10 @@ fn add_metrics_read_api_key(config: &mut StandaloneRegistryNotaryConfig) {
     });
 }
 
+fn enable_shared_admin_listener(config: &mut StandaloneRegistryNotaryConfig) {
+    config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
+}
+
 fn config_apply_request(config: &StandaloneRegistryNotaryConfig, sequence: u64) -> Value {
     let config_yaml = serde_norway::to_string(config).expect("candidate config serializes");
     json!({
@@ -1856,6 +1860,7 @@ async fn federation_evaluation_returns_signed_response_and_rejects_replay() {
     );
     add_admin_api_key(&mut config);
     add_metrics_read_api_key(&mut config);
+    enable_shared_admin_listener(&mut config);
     let app = standalone_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let token = federation_request_jwt(
@@ -2934,6 +2939,7 @@ async fn admin_config_apply_routes_are_admin_only() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut config);
     add_admin_api_key(&mut config);
     add_ops_read_api_key(&mut config);
     let body = config_apply_request(&config, 1);
@@ -3056,6 +3062,7 @@ async fn admin_config_dry_run_reports_restart_required_without_mutating_posture(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut config);
     add_admin_api_key(&mut config);
     add_ops_read_api_key(&mut config);
     let mut candidate = config.clone();
@@ -5998,6 +6005,7 @@ async fn admin_posture_requires_ops_read_not_admin_and_ops_cannot_reload() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut config);
     add_admin_api_key(&mut config);
     add_ops_read_api_key(&mut config);
 
@@ -6289,6 +6297,7 @@ async fn admin_posture_rejects_unknown_tier_with_shared_error_code() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut config);
     add_ops_read_api_key(&mut config);
 
     let app = standalone_router(config).expect("standalone router builds");
@@ -6323,6 +6332,7 @@ async fn admin_posture_reports_configured_instance_override() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut config);
     config.instance.id = "notary-prod-a".to_string();
     config.instance.environment = "production".to_string();
     config.instance.owner = Some("trust-ops".to_string());
@@ -6362,6 +6372,7 @@ async fn admin_posture_reports_self_attestation_summary_and_redacts_signing_key_
         &issuer_url,
         &jwks_uri,
     );
+    enable_shared_admin_listener(&mut config);
     config
         .auth
         .oidc
@@ -6431,6 +6442,7 @@ async fn admin_posture_reports_oid4vci_bearer_offer_mode() {
         &format!("{}/authorize", issuer.issuer()),
         &format!("{}/token", token_upstream.url()),
     );
+    enable_shared_admin_listener(&mut config);
     config.oid4vci.pre_authorized_code.tx_code.required = false;
     config
         .oid4vci
@@ -6499,6 +6511,7 @@ async fn admin_posture_redacts_runtime_config_secrets_and_private_topology() {
         "http://127.0.0.1:1/private-source?token=source-url-secret",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut config);
     let mut unused_connection = config.evidence.source_connections["farmer_registry"].clone();
     unused_connection.base_url =
         "http://10.24.0.9/internal/openfn?token=unused-url-secret".to_string();
@@ -6594,6 +6607,8 @@ async fn admin_posture_hash_ignores_secret_only_config_changes() {
         "http://127.0.0.1:1",
         second_audit_path.to_str().expect("audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut first);
+    enable_shared_admin_listener(&mut second);
     first
         .evidence
         .source_connections
@@ -6672,6 +6687,8 @@ async fn admin_posture_hash_tracks_public_instance_config_changes() {
         "http://127.0.0.1:1",
         second_audit_path.to_str().expect("audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut first);
+    enable_shared_admin_listener(&mut second);
     first.instance.owner = Some("operations".to_string());
     second.instance.owner = Some("data-office".to_string());
     first
@@ -6735,6 +6752,7 @@ async fn admin_posture_counts_configured_but_unused_source_connections_by_safe_k
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut config);
     let mut unused_dci = config.evidence.source_connections["farmer_registry"].clone();
     unused_dci.base_url = "http://127.0.0.1:2/private-dci".to_string();
     unused_dci.token_env = "TEST_UNUSED_DCI_SOURCE_TOKEN".to_string();
@@ -6788,6 +6806,7 @@ async fn admin_posture_classifies_replay_storage() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut config);
     config.replay.storage = "redis".to_string();
     config.replay.redis.url_env = "TEST_REPLAY_REDIS_URL".to_string();
     add_ops_read_api_key(&mut config);
@@ -6819,6 +6838,7 @@ async fn admin_posture_warns_for_production_like_in_memory_replay() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut config);
     config.instance.environment = "production".to_string();
     add_ops_read_api_key(&mut config);
 
@@ -6853,6 +6873,7 @@ async fn admin_posture_federation_summary_omits_peer_private_data() {
         audit_path.to_str().expect("audit path is UTF-8"),
         &format!("{}/jwks/private", peer_jwks.url()),
     );
+    enable_shared_admin_listener(&mut config);
     add_ops_read_api_key(&mut config);
 
     let app = standalone_router(config).expect("standalone router builds");
@@ -7859,7 +7880,9 @@ async fn public_probe_routes_remain_public_except_metrics() {
     let ready = server.get("/ready").await;
     ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
     let ready_body: Value = ready.json();
-    assert_eq!(ready_body["status"], json!("degraded"));
+    assert_eq!(ready_body["status"], json!(503));
+    assert_eq!(ready_body["code"], json!("readiness.not_ready"));
+    assert_eq!(ready_body["readiness_status"], json!("degraded"));
     assert_eq!(ready_body["checks"]["degraded"], json!(1));
     server
         .get("/.well-known/openid-credential-issuer")
@@ -8020,6 +8043,7 @@ async fn credential_status_admin_edges_return_expected_http_statuses() {
             .to_str()
             .expect("enabled audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut enabled_config);
     enable_credential_status(&mut enabled_config);
     enabled_config.auth.api_keys.push(EvidenceCredentialConfig {
         id: "admin".to_string(),
@@ -8060,6 +8084,7 @@ async fn credential_status_admin_edges_return_expected_http_statuses() {
             .to_str()
             .expect("disabled audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut disabled_config);
     disabled_config
         .auth
         .api_keys
@@ -8144,6 +8169,7 @@ async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
         &idp.issuer(),
         &idp.jwks_uri(),
     );
+    enable_shared_admin_listener(&mut config);
     enable_credential_status(&mut config);
     config
         .auth
