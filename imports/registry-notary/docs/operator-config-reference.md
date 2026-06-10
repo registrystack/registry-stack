@@ -303,6 +303,11 @@ and credential status mutation, require `registry_notary:admin`.
 `auth.mode: oidc` is for citizen and wallet flows. When OIDC is selected,
 `auth.api_keys` and `auth.bearer_tokens` must be empty. Configure:
 
+OIDC field names follow the shared Registry service runtime configuration
+conventions maintained in `registry-internal/principles/configuration-and-artifact-design-principles.md`.
+Removed pre-convention names are rejected before deserialization with an error
+naming the replacement field.
+
 - `issuer`: expected token issuer.
 - `jwks_url`: HTTPS JWKS URL, or HTTP loopback only with
   `allow_insecure_localhost: true`.

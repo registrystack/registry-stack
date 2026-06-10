@@ -8264,6 +8264,37 @@ self_attestation:
     }
 
     #[test]
+    fn shared_canonical_oidc_fixture_parses() {
+        let config = serde_norway::from_str::<StandaloneRegistryNotaryConfig>(
+            r#"
+evidence:
+  enabled: true
+auth:
+  mode: oidc
+  oidc:
+    issuer: https://id.example.gov
+    audiences:
+      - registry-notary
+    jwks_url: https://id.example.gov/oauth/v2/keys
+    allowed_algorithms:
+      - EdDSA
+    allowed_token_types:
+      - JWT
+    leeway: 30s
+"#,
+        )
+        .expect("shared canonical OIDC fixture parses");
+        let oidc = config.auth.oidc.expect("oidc config");
+
+        assert_eq!(oidc.issuer, "https://id.example.gov");
+        assert_eq!(oidc.audiences, vec!["registry-notary"]);
+        assert_eq!(oidc.jwks_url, "https://id.example.gov/oauth/v2/keys");
+        assert_eq!(oidc.allowed_algorithms, vec!["EdDSA"]);
+        assert_eq!(oidc.allowed_token_types, vec!["JWT"]);
+        assert_eq!(oidc.leeway, Duration::from_secs(30));
+    }
+
+    #[test]
     fn self_attestation_rejects_non_exact_normalization() {
         let err = serde_norway::from_str::<StandaloneRegistryNotaryConfig>(
             r#"

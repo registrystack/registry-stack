@@ -36,6 +36,20 @@
 - Changed `auth.api_keys[]` and `auth.bearer_tokens[]` to a committed
   `fingerprint` reference (`provider`, `name`, `commitment`) in place of
   `hash_env`, so signed config apply can govern caller-credential rotation.
+- Renamed OIDC config fields to the shared Registry service convention:
+  `auth.oidc.jwks_uri` -> `auth.oidc.jwks_url`,
+  `auth.oidc.leeway_seconds` -> `auth.oidc.leeway`, and
+  `auth.oidc.allowed_typ` -> `auth.oidc.allowed_token_types`. Old names fail
+  config load with an error naming the replacement. `auth.oidc.leeway` now uses
+  humantime strings such as `30s`; self-attestation
+  `token_policy.max_clock_leeway_seconds` still bounds the resolved duration.
+- Removed `server.cors.allow_credentials`; Registry Notary now always disables
+  credentialed CORS on the operator-configured server CORS layer. Remove the
+  field from config rather than setting it to `false`.
+- Renamed `audit.max_size_bytes` to `audit.max_size_mb` and aligned the default
+  active-file rotation to 100 MB with 14 retained files.
+- Added `REGISTRY_NOTARY_LOG_FORMAT=text|json`; the default log filter is plain
+  `info`.
 - Product binaries and container images now compile the PKCS#11 provider by
   default, while vendor modules, token state, labels, and PIN handling remain
   operator-supplied runtime configuration.
