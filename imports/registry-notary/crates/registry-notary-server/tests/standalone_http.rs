@@ -249,6 +249,16 @@ fn add_ops_read_api_key(config: &mut StandaloneRegistryNotaryConfig) {
     });
 }
 
+fn add_metrics_read_api_key(config: &mut StandaloneRegistryNotaryConfig) {
+    let fingerprint = "sha256:eb5a63e42b6b498364b3f10d5c3bb71cd8c7a7a9ad16524875557fa2e52f5d41";
+    std::env::set_var("TEST_EVIDENCE_METRICS_KEY_HASH", fingerprint);
+    config.auth.api_keys.push(EvidenceCredentialConfig {
+        id: "metrics".to_string(),
+        fingerprint: env_fingerprint_ref("metrics", "TEST_EVIDENCE_METRICS_KEY_HASH", fingerprint),
+        scopes: vec!["registry_notary:metrics_read".to_string()],
+    });
+}
+
 fn config_apply_request(config: &StandaloneRegistryNotaryConfig, sequence: u64) -> Value {
     let config_yaml = serde_norway::to_string(config).expect("candidate config serializes");
     json!({
@@ -1845,6 +1855,7 @@ async fn federation_evaluation_returns_signed_response_and_rejects_replay() {
         &format!("{}/jwks", peer_jwks.url()),
     );
     add_admin_api_key(&mut config);
+    add_metrics_read_api_key(&mut config);
     let app = standalone_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let token = federation_request_jwt(
@@ -1923,7 +1934,7 @@ async fn federation_evaluation_returns_signed_response_and_rejects_replay() {
 
     let metrics = server
         .get("/metrics")
-        .add_header("x-api-key", "admin-token")
+        .add_header("x-api-key", "metrics-token")
         .await;
     metrics.assert_status_ok();
     let metrics_body = metrics.text();
@@ -6046,6 +6057,7 @@ async fn admin_capabilities_requires_ops_read_and_reports_notary_surface() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
+    config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
     add_admin_api_key(&mut config);
     add_ops_read_api_key(&mut config);
 
@@ -6115,7 +6127,8 @@ async fn admin_capabilities_requires_ops_read_and_reports_notary_surface() {
             },
             "metrics": {
                 "mode": "shared_with_public",
-                "requires_admin_scope": true
+                "requires_admin_scope": false,
+                "required_scope": "registry_notary:metrics_read"
             }
         })
     );
@@ -6189,7 +6202,8 @@ async fn dedicated_topology_splits_admin_routes_and_reports_capabilities() {
             },
             "metrics": {
                 "mode": "admin",
-                "requires_admin_scope": true
+                "requires_admin_scope": false,
+                "required_scope": "registry_notary:metrics_read"
             }
         })
     );
@@ -6861,7 +6875,7 @@ async fn admin_posture_federation_summary_omits_peer_private_data() {
 }
 
 #[tokio::test]
-async fn metrics_requires_admin_scope_and_keeps_health_public() {
+async fn metrics_requires_metrics_scope_and_keeps_health_public() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -6879,15 +6893,9 @@ async fn metrics_requires_admin_scope_and_keeps_health_public() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
-    config.auth.api_keys.push(EvidenceCredentialConfig {
-        id: "admin".to_string(),
-        fingerprint: env_fingerprint_ref(
-            "admin",
-            "TEST_EVIDENCE_ADMIN_KEY_HASH",
-            "sha256:10a4c7c9fc5206d6f36dc6944a81bb6f4a3cb0e25014ae3b12e6c3e52712292a",
-        ),
-        scopes: vec!["registry_notary:admin".to_string()],
-    });
+    config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
+    add_admin_api_key(&mut config);
+    add_metrics_read_api_key(&mut config);
 
     let app = standalone_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
@@ -6901,12 +6909,12 @@ async fn metrics_requires_admin_scope_and_keeps_health_public() {
         .text()
         .contains("registry_notary_http_requests_total"));
 
-    let non_admin = server
+    let non_metrics = server
         .get("/metrics")
         .add_header("x-api-key", "api-token")
         .await;
-    non_admin.assert_status(StatusCode::FORBIDDEN);
-    assert!(!non_admin
+    non_metrics.assert_status(StatusCode::FORBIDDEN);
+    assert!(!non_metrics
         .text()
         .contains("registry_notary_http_requests_total"));
 
@@ -6914,15 +6922,24 @@ async fn metrics_requires_admin_scope_and_keeps_health_public() {
         .get("/metrics")
         .add_header("x-api-key", "admin-token")
         .await;
-    admin.assert_status_ok();
-    let content_type = admin
+    admin.assert_status(StatusCode::FORBIDDEN);
+    assert!(!admin.text().contains("registry_notary_http_requests_total"));
+
+    let metrics = server
+        .get("/metrics")
+        .add_header("x-api-key", "metrics-token")
+        .await;
+    metrics.assert_status_ok();
+    let content_type = metrics
         .headers()
         .get("content-type")
         .expect("content-type header")
         .to_str()
         .expect("content-type is valid");
     assert!(content_type.starts_with("text/plain; version=0.0.4"));
-    assert!(admin.text().contains("registry_notary_http_requests_total"));
+    assert!(metrics
+        .text()
+        .contains("registry_notary_http_requests_total"));
 }
 
 #[tokio::test]
@@ -9264,6 +9281,7 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
         audit_path.to_str().expect("audit path is UTF-8"),
     );
     add_admin_api_key(&mut config);
+    add_metrics_read_api_key(&mut config);
     config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
     let app = standalone_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
@@ -9349,7 +9367,7 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
 
     let metrics = server
         .get("/metrics")
-        .add_header("x-api-key", "admin-token")
+        .add_header("x-api-key", "metrics-token")
         .await;
     metrics.assert_status_ok();
     let metrics_body = metrics.text();

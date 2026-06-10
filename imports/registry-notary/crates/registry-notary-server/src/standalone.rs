@@ -67,7 +67,7 @@ use crate::cel_worker::{CelWorker, CelWorkerConfig};
 #[cfg(feature = "registry-notary-cel")]
 use crate::runtime::validate_cel_claims_for_startup;
 use crate::{
-    api::ADMIN_SCOPE,
+    api::METRICS_SCOPE,
     config_governed::ConfigGovernanceContext,
     credential_status::{CredentialStatusBuildError, CredentialStatusStore},
     metrics::{metrics_handler, metrics_middleware, AppMetrics},
@@ -4256,9 +4256,9 @@ async fn admin_metrics_handler(
     let Some(axum::Extension(principal)) = principal else {
         return crate::api::evidence_error_response(EvidenceError::MissingCredential);
     };
-    if !principal.has_scope(ADMIN_SCOPE) {
+    if !principal.has_scope(METRICS_SCOPE) {
         return crate::api::evidence_error_response(EvidenceError::ScopeDenied {
-            required: ADMIN_SCOPE.to_string(),
+            required: METRICS_SCOPE.to_string(),
         });
     }
     metrics_handler(State(metrics)).await

@@ -1042,7 +1042,8 @@ fn add_response_examples(document: &mut Value) {
                 },
                 "metrics": {
                     "mode": "shared_with_public",
-                    "requires_admin_scope": true
+                    "requires_admin_scope": false,
+                    "required_scope": "registry_notary:metrics_read"
                 }
             },
             "root_transition": {

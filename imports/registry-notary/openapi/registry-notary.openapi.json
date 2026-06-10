@@ -1687,7 +1687,8 @@
                     },
                     "metrics": {
                       "mode": "shared_with_public",
-                      "requires_admin_scope": true
+                      "required_scope": "registry_notary:metrics_read",
+                      "requires_admin_scope": false
                     }
                   },
                   "product": "registry-notary",

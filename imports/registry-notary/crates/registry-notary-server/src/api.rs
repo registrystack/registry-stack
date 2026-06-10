@@ -93,6 +93,7 @@ use crate::{
 const DATA_PURPOSE_HEADER: &str = "data-purpose";
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 pub(crate) const ADMIN_SCOPE: &str = "registry_notary:admin";
+pub(crate) const METRICS_SCOPE: &str = "registry_notary:metrics_read";
 pub(crate) const OPS_READ_SCOPE: &str = "registry_notary:ops_read";
 const OID4VCI_CREDENTIAL_PATH: &str = "/oid4vci/credential";
 // SD-JWT VC Type Metadata well-known prefix inserted between host and vct path.
@@ -2361,7 +2362,8 @@ fn admin_capabilities_listeners(config: Option<&StandaloneRegistryNotaryConfig>)
             },
             "metrics": {
                 "mode": "admin",
-                "requires_admin_scope": true
+                "requires_admin_scope": false,
+                "required_scope": METRICS_SCOPE
             }
         }),
         RegistryNotaryAdminListenerMode::SharedWithPublic => json!({
@@ -2371,7 +2373,8 @@ fn admin_capabilities_listeners(config: Option<&StandaloneRegistryNotaryConfig>)
             },
             "metrics": {
                 "mode": "shared_with_public",
-                "requires_admin_scope": true
+                "requires_admin_scope": false,
+                "required_scope": METRICS_SCOPE
             }
         }),
         RegistryNotaryAdminListenerMode::Disabled => json!({
@@ -2381,7 +2384,8 @@ fn admin_capabilities_listeners(config: Option<&StandaloneRegistryNotaryConfig>)
             },
             "metrics": {
                 "mode": "disabled",
-                "requires_admin_scope": true
+                "requires_admin_scope": false,
+                "required_scope": METRICS_SCOPE
             }
         }),
     }
