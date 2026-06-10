@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Registry Notary process entrypoint.
 
+mod serve;
+
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs::{self, OpenOptions};
@@ -32,6 +34,7 @@ use registry_notary_server::{
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk};
 use registry_platform_httputil::{url as httputil_url, FetchUrlPolicy};
 use serde_json::{json, Value};
+use serve::{serve_listener, ServeLimits};
 use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -466,6 +469,7 @@ async fn run_server(
     let bind = config.server.bind;
     let admin_mode = config.server.admin_listener.mode;
     let admin_bind = config.server.admin_listener.bind;
+    let serve_limits = ServeLimits::from_config(&config.server);
     let runtime = compile_notary_runtime(config)?;
     match admin_mode {
         RegistryNotaryAdminListenerMode::Dedicated => {
@@ -488,22 +492,22 @@ async fn run_server(
             });
             let public_shutdown = shutdown_when_signaled(shutdown_rx.clone());
             let admin_shutdown = shutdown_when_signaled(shutdown_rx);
-            let public = axum::serve(
+            let public = serve_listener(
                 public_listener,
                 routers
                     .public
-                    .layer(TraceLayer::new_for_http().make_span_with(http_trace_span))
-                    .into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .with_graceful_shutdown(public_shutdown);
-            let admin = axum::serve(
+                    .layer(TraceLayer::new_for_http().make_span_with(http_trace_span)),
+                serve_limits,
+                public_shutdown,
+            );
+            let admin = serve_listener(
                 admin_listener,
                 routers
                     .admin
-                    .layer(TraceLayer::new_for_http().make_span_with(http_trace_span))
-                    .into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .with_graceful_shutdown(admin_shutdown);
+                    .layer(TraceLayer::new_for_http().make_span_with(http_trace_span)),
+                serve_limits,
+                admin_shutdown,
+            );
             tokio::try_join!(public, admin)?;
         }
         RegistryNotaryAdminListenerMode::SharedWithPublic => {
@@ -517,12 +521,7 @@ async fn run_server(
                 "registry notary listening"
             );
 
-            axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .with_graceful_shutdown(shutdown_signal())
-            .await?;
+            serve_listener(listener, app, serve_limits, shutdown_signal()).await?;
         }
         RegistryNotaryAdminListenerMode::Disabled => {
             let app = notary_routers_from_runtime(runtime)
@@ -536,12 +535,7 @@ async fn run_server(
                 "registry notary listening without admin listener"
             );
 
-            axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .with_graceful_shutdown(shutdown_signal())
-            .await?;
+            serve_listener(listener, app, serve_limits, shutdown_signal()).await?;
         }
     }
     Ok(())

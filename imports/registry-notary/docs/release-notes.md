@@ -29,6 +29,10 @@
 - Changed the default `server.admin_listener.mode` from `shared_with_public` to
   `disabled`; local deployments that intentionally need the old shared topology
   must set `server.admin_listener.mode: shared_with_public` explicitly.
+- Added bounded HTTP serve defaults: `server.request_timeout: 30s`,
+  `server.request_body_timeout: 10s`, `server.http1_header_read_timeout: 10s`,
+  and `server.max_connections: 1024`. The OpenFn sidecar mirrors the same
+  limits with millisecond-suffixed config keys.
 - Changed `auth.api_keys[]` and `auth.bearer_tokens[]` to a committed
   `fingerprint` reference (`provider`, `name`, `commitment`) in place of
   `hash_env`, so signed config apply can govern caller-credential rotation.

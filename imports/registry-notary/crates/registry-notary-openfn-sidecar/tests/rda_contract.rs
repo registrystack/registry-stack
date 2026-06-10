@@ -128,6 +128,21 @@ sources:
     )
 }
 
+#[test]
+fn manifest_defaults_server_boundary_limits() {
+    let tmp = TempDir::new().expect("temp dir");
+    let manifest = manifest_yaml(
+        &HarnessOptions::default(),
+        &tmp.path().join("worker-attempts.jsonl"),
+    );
+    let config: SidecarConfig = serde_norway::from_str(&manifest).expect("manifest parses");
+
+    assert_eq!(config.server.request_timeout_ms, 30_000);
+    assert_eq!(config.server.request_body_timeout_ms, 10_000);
+    assert_eq!(config.server.http1_header_read_timeout_ms, 10_000);
+    assert_eq!(config.server.max_connections, 1024);
+}
+
 fn set_sidecar_token_hash() {
     std::env::set_var(TOKEN_HASH_ENV, TOKEN_HASH);
 }
@@ -1321,6 +1336,24 @@ async fn invalid_query_size_and_parameter_limits_are_rejected_before_dispatch() 
         .add_header("data-purpose", PURPOSE)
         .await;
     assert_problem_details(&too_large_param, StatusCode::BAD_REQUEST);
+    assert_eq!(attempt_count(&harness), 0);
+}
+
+#[tokio::test]
+async fn request_uri_limit_returns_414_problem_details_before_dispatch() {
+    let harness = contract_harness(HarnessOptions::default()).await;
+    let oversized_dataset = "x".repeat(9 * 1024);
+
+    let response = harness
+        .server
+        .get(&format!(
+            "/v1/datasets/{oversized_dataset}/entities/{ENTITY}/records"
+        ))
+        .add_header("authorization", format!("Bearer {TOKEN}"))
+        .add_header("data-purpose", PURPOSE)
+        .await;
+
+    assert_problem_details(&response, StatusCode::URI_TOO_LONG);
     assert_eq!(attempt_count(&harness), 0);
 }
 

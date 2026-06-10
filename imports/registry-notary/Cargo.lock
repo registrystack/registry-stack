@@ -1421,6 +1421,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
+name = "humantime"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "135b12329e5e3ce057a9f972339ea52bc954fe1e9358ef27f95e89716fbc5424"
+
+[[package]]
+name = "humantime-serde"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57a3db5ea5923d99402c94e9feb261dc5ee9b4efa158b0315f788cf549cc200c"
+dependencies = [
+ "humantime",
+ "serde",
+]
+
+[[package]]
 name = "hybrid-array"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2522,6 +2538,8 @@ dependencies = [
  "clap",
  "ed25519-dalek",
  "getrandom 0.4.2",
+ "hyper",
+ "hyper-util",
  "registry-notary-core",
  "registry-notary-server",
  "registry-platform-config",
@@ -2536,6 +2554,7 @@ dependencies = [
  "time",
  "tokio",
  "tough",
+ "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",
@@ -2571,6 +2590,7 @@ name = "registry-notary-core"
 version = "0.3.0"
 dependencies = [
  "base64",
+ "humantime-serde",
  "registry-platform-authcommon",
  "registry-platform-config",
  "registry-platform-crypto",
@@ -2595,6 +2615,8 @@ dependencies = [
  "axum-test",
  "chrono",
  "clap",
+ "hyper",
+ "hyper-util",
  "libc",
  "registry-notary-worker-harness",
  "registry-platform-authcommon",
@@ -2607,6 +2629,8 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tough",
+ "tower",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
 ]
@@ -2655,6 +2679,7 @@ dependencies = [
  "time",
  "tokio",
  "tough",
+ "tower-http",
  "tracing",
  "ulid",
  "utoipa",
@@ -3594,6 +3619,7 @@ dependencies = [
  "http-body",
  "http-body-util",
  "pin-project-lite",
+ "tokio",
  "tower",
  "tower-layer",
  "tower-service",

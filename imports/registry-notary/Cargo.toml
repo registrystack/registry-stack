@@ -35,6 +35,9 @@ crosswalk-core = { version = "0.1.1", path = "../cel-mapping/crates/crosswalk-co
 cryptoki = { version = "0.12" }
 getrandom = { version = "0.4" }
 hex = { version = "0.4" }
+humantime-serde = { version = "1" }
+hyper = { version = "1", features = ["http1", "http2", "server"] }
+hyper-util = { version = "0.1", features = ["server-auto", "tokio"] }
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 registry-platform-audit = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-audit" }
 registry-platform-authcommon = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-authcommon" }
@@ -61,7 +64,7 @@ thiserror = { version = "2" }
 time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
 tokio = { version = "1", features = ["rt-multi-thread", "signal", "macros", "net", "fs", "time", "sync"] }
 tower = { version = "0.5" }
-tower-http = { version = "0.6", features = ["trace", "request-id", "cors"] }
+tower-http = { version = "0.6", features = ["trace", "request-id", "cors", "timeout"] }
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"] }
 ulid = { version = "1" }

@@ -194,6 +194,10 @@ from one DCI source and can later issue a credential from that claim.
 server:
   bind: 127.0.0.1:8081
   openapi_requires_auth: true
+  request_timeout: 30s
+  request_body_timeout: 10s
+  http1_header_read_timeout: 10s
+  max_connections: 1024
 
 auth:
   mode: api_key

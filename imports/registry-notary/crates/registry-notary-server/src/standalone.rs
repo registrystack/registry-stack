@@ -58,6 +58,7 @@ use serde_json::{json, Map, Value};
 use subtle::ConstantTimeEq;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use tower_http::timeout::{RequestBodyTimeoutLayer, TimeoutLayer};
 use ulid::Ulid;
 use zeroize::Zeroizing;
 
@@ -180,7 +181,14 @@ pub struct NotaryRuntimeSnapshot {
     api_state: Arc<RegistryNotaryApiState>,
     cors_policy: registry_platform_httpsec::CorsPolicy,
     wallet_cors_policy: SelfAttestationWalletCorsPolicy,
+    http_limits: NotaryHttpLimits,
     federation_enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NotaryHttpLimits {
+    request_timeout: Duration,
+    request_body_timeout: Duration,
 }
 
 pub struct NotaryRouters {
@@ -193,6 +201,10 @@ pub fn compile_notary_runtime(
 ) -> Result<NotaryRuntimeSnapshot, StandaloneServerError> {
     config.validate()?;
     let federation_enabled = config.federation.enabled;
+    let http_limits = NotaryHttpLimits {
+        request_timeout: config.server.request_timeout,
+        request_body_timeout: config.server.request_body_timeout,
+    };
     let evidence = Arc::new(config.evidence.clone());
     let self_attestation = Arc::new(config.self_attestation.clone());
     let oid4vci = Arc::new(config.oid4vci.clone());
@@ -280,6 +292,7 @@ pub fn compile_notary_runtime(
         api_state,
         cors_policy,
         wallet_cors_policy,
+        http_limits,
         federation_enabled,
     })
 }
@@ -295,6 +308,7 @@ pub fn notary_shared_router_from_runtime(snapshot: NotaryRuntimeSnapshot) -> Rou
         api_state,
         cors_policy,
         wallet_cors_policy,
+        http_limits,
         federation_enabled,
     } = snapshot;
     let mut routes = router();
@@ -313,6 +327,7 @@ pub fn notary_shared_router_from_runtime(snapshot: NotaryRuntimeSnapshot) -> Rou
         api_state,
         cors_policy,
         wallet_cors_policy,
+        http_limits,
     )
 }
 
@@ -323,6 +338,7 @@ pub fn notary_routers_from_runtime(snapshot: NotaryRuntimeSnapshot) -> NotaryRou
         api_state,
         cors_policy,
         wallet_cors_policy,
+        http_limits,
         federation_enabled,
     } = snapshot;
     let mut public_routes = crate::api::public_router();
@@ -342,6 +358,7 @@ pub fn notary_routers_from_runtime(snapshot: NotaryRuntimeSnapshot) -> NotaryRou
             Arc::clone(&api_state),
             cors_policy.clone(),
             wallet_cors_policy.clone(),
+            http_limits,
         ),
         admin: layer_notary_routes(
             admin_routes,
@@ -350,6 +367,7 @@ pub fn notary_routers_from_runtime(snapshot: NotaryRuntimeSnapshot) -> NotaryRou
             api_state,
             cors_policy,
             wallet_cors_policy,
+            http_limits,
         ),
     }
 }
@@ -373,8 +391,13 @@ fn layer_notary_routes(
     api_state: Arc<RegistryNotaryApiState>,
     cors_policy: registry_platform_httpsec::CorsPolicy,
     wallet_cors_policy: SelfAttestationWalletCorsPolicy,
+    http_limits: NotaryHttpLimits,
 ) -> Router {
     routes
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            http_limits.request_timeout,
+        ))
         .layer(from_fn_with_state(Arc::clone(&metrics), metrics_middleware))
         .layer(axum::Extension(Arc::clone(&api_state)))
         .layer(from_fn_with_state(auth_state, auth_audit_middleware))
@@ -393,6 +416,9 @@ fn layer_notary_routes(
         .layer(registry_platform_httpsec::corp_conditional())
         .layer(registry_platform_httpsec::request_body_limit(
             MAX_INBOUND_REQUEST_BODY_BYTES,
+        ))
+        .layer(RequestBodyTimeoutLayer::new(
+            http_limits.request_body_timeout,
         ))
         .layer(axum::middleware::from_fn(rewrite_payload_too_large_problem))
         .layer(axum::middleware::from_fn(reject_oversized_request_uri))

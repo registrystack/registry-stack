@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use registry_platform_authcommon::CredentialFingerprintRef;
 use registry_platform_config::RegistryTrustRoot;
@@ -138,6 +139,7 @@ impl StandaloneRegistryNotaryConfig {
         if !self.evidence.enabled {
             return Err(EvidenceConfigError::EvidenceDisabled);
         }
+        self.server.validate()?;
         self.server
             .admin_listener
             .validate(self.server.bind, self.config_trust.is_some())?;
@@ -3176,6 +3178,17 @@ pub struct RegistryNotaryHttpConfig {
     pub admin_listener: RegistryNotaryAdminListenerConfig,
     #[serde(default)]
     pub cors: RegistryNotaryCorsConfig,
+    #[serde(default = "default_request_timeout", with = "humantime_serde")]
+    pub request_timeout: Duration,
+    #[serde(default = "default_request_body_timeout", with = "humantime_serde")]
+    pub request_body_timeout: Duration,
+    #[serde(
+        default = "default_http1_header_read_timeout",
+        with = "humantime_serde"
+    )]
+    pub http1_header_read_timeout: Duration,
+    #[serde(default = "default_max_connections")]
+    pub max_connections: usize,
 }
 
 impl Default for RegistryNotaryHttpConfig {
@@ -3185,7 +3198,28 @@ impl Default for RegistryNotaryHttpConfig {
             openapi_requires_auth: default_openapi_requires_auth(),
             admin_listener: RegistryNotaryAdminListenerConfig::default(),
             cors: RegistryNotaryCorsConfig::default(),
+            request_timeout: default_request_timeout(),
+            request_body_timeout: default_request_body_timeout(),
+            http1_header_read_timeout: default_http1_header_read_timeout(),
+            max_connections: default_max_connections(),
         }
+    }
+}
+
+impl RegistryNotaryHttpConfig {
+    fn validate(&self) -> Result<(), EvidenceConfigError> {
+        if self.request_timeout.is_zero()
+            || self.request_body_timeout.is_zero()
+            || self.http1_header_read_timeout.is_zero()
+            || self.max_connections == 0
+        {
+            return Err(EvidenceConfigError::InvalidServerConfig {
+                reason:
+                    "server timeouts must be non-zero and max_connections must be greater than zero"
+                        .to_string(),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -3202,6 +3236,22 @@ fn default_openapi_requires_auth() -> bool {
 
 fn openapi_requires_auth_is_default(value: &bool) -> bool {
     *value == default_openapi_requires_auth()
+}
+
+fn default_request_timeout() -> Duration {
+    Duration::from_secs(30)
+}
+
+fn default_request_body_timeout() -> Duration {
+    Duration::from_secs(10)
+}
+
+fn default_http1_header_read_timeout() -> Duration {
+    Duration::from_secs(10)
+}
+
+fn default_max_connections() -> usize {
+    1024
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -5465,6 +5515,38 @@ credential_configurations:
         config
             .validate()
             .expect("simple local config may disable admin listener by default");
+    }
+
+    #[test]
+    fn server_limits_default_to_relay_parity_values() {
+        let config = minimal_config();
+        assert_eq!(config.server.request_timeout, Duration::from_secs(30));
+        assert_eq!(config.server.request_body_timeout, Duration::from_secs(10));
+        assert_eq!(
+            config.server.http1_header_read_timeout,
+            Duration::from_secs(10)
+        );
+        assert_eq!(config.server.max_connections, 1024);
+    }
+
+    #[test]
+    fn server_limits_must_be_nonzero() {
+        let mut config = minimal_config();
+        config.server.request_timeout = Duration::ZERO;
+        config.server.request_body_timeout = Duration::ZERO;
+        config.server.http1_header_read_timeout = Duration::ZERO;
+        config.server.max_connections = 0;
+
+        let err = config
+            .validate()
+            .expect_err("zero server limits must fail validation");
+        match err {
+            EvidenceConfigError::InvalidServerConfig { reason } => {
+                assert!(reason.contains("server timeouts must be non-zero"));
+                assert!(reason.contains("max_connections"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]
