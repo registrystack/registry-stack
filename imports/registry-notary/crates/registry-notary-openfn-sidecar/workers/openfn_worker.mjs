@@ -78,6 +78,76 @@ async function executeLookup(
     configuration: request.configuration ?? {},
   };
 
+  const result = await runWorkflow(workflow, state);
+
+  return normalizeLookupResult(result, request);
+}
+
+async function executeBatchMatch(request) {
+  if (!Array.isArray(request.query_signature) || !Array.isArray(request.items)) {
+    return {
+      error: {
+        code: 'invalid_batch_request',
+        message: 'batch_match requires query_signature and items arrays',
+      },
+    };
+  }
+  const workflow = await compiledWorkflow(request);
+  const mode = request?.batch?.mode ?? 'sequential_lookup';
+  if (mode === 'workflow_batch') {
+    return executeBatchWorkflow(request, workflow);
+  }
+  if (mode !== 'sequential_lookup') {
+    return {
+      error: {
+        code: 'invalid_batch_request',
+        message: `unsupported batch mode: ${mode}`,
+      },
+    };
+  }
+  return executeSequentialBatchMatch(request, workflow);
+}
+
+async function executeSequentialBatchMatch(request, workflow) {
+  const items = [];
+  for (const item of request.items) {
+    const id = String(item?.id ?? '');
+    try {
+      const lookup = lookupForBatchItem(request.query_signature, item);
+      const response = await executeLookup(request, workflow, lookup, item);
+      if (response?.error) {
+        items.push({ id, error: response.error });
+      } else {
+        items.push({ id, data: response.data ?? [] });
+      }
+    } catch (error) {
+      items.push({ id, error: classifyExecutionError(error) });
+    }
+  }
+  return { items };
+}
+
+async function executeBatchWorkflow(request, workflow) {
+  const state = {
+    data: {
+      source_id: request.source_id,
+      dataset: request.dataset,
+      entity: request.entity,
+      query_signature: request.query_signature,
+      items: request.items,
+      fields: request.fields ?? [],
+      limit: request.limit ?? 2,
+      purpose: request.purpose,
+      correlation_id: request.correlation_id,
+      batch: request.batch ?? {},
+    },
+    configuration: request.configuration ?? {},
+  };
+  const result = await runWorkflow(workflow, state);
+  return normalizeBatchResult(result, request);
+}
+
+async function runWorkflow(workflow, state) {
   const result = await run(
     {
       workflow: {
@@ -98,37 +168,7 @@ async function executeLookup(
     },
   );
   delete result?.configuration;
-
-  return normalizeLookupResult(result, request);
-}
-
-async function executeBatchMatch(request) {
-  const workflow = await compiledWorkflow(request);
-  if (!Array.isArray(request.query_signature) || !Array.isArray(request.items)) {
-    return {
-      error: {
-        code: 'invalid_batch_request',
-        message: 'batch_match requires query_signature and items arrays',
-      },
-    };
-  }
-
-  const items = [];
-  for (const item of request.items) {
-    const id = String(item?.id ?? '');
-    try {
-      const lookup = lookupForBatchItem(request.query_signature, item);
-      const response = await executeLookup(request, workflow, lookup, item);
-      if (response?.error) {
-        items.push({ id, error: response.error });
-      } else {
-        items.push({ id, data: response.data ?? [] });
-      }
-    } catch (error) {
-      items.push({ id, error: classifyExecutionError(error) });
-    }
-  }
-  return { items };
+  return result;
 }
 
 function lookupForBatchItem(querySignature, item) {
@@ -162,6 +202,23 @@ function normalizeLookupResult(result, request) {
     };
   }
   return { data: records };
+}
+
+function normalizeBatchResult(result, request) {
+  const targetError = extractTargetError(result);
+  if (targetError) {
+    return { error: targetError };
+  }
+  const items = extractBatchItems(result);
+  if (!Array.isArray(items)) {
+    return {
+      error: {
+        code: 'invalid_batch_job_result',
+        message: describeBatchResultShape(result, request),
+      },
+    };
+  }
+  return { items };
 }
 
 async function compiledWorkflow(request) {
@@ -330,6 +387,19 @@ function extractRecords(state) {
   return undefined;
 }
 
+function extractBatchItems(state) {
+  if (Array.isArray(state?.items)) {
+    return state.items;
+  }
+  if (Array.isArray(state?.data?.items)) {
+    return state.data.items;
+  }
+  if (Array.isArray(state?.response?.body?.items)) {
+    return state.response.body.items;
+  }
+  return undefined;
+}
+
 function describeResultShape(state, request) {
   const data = state?.data;
   const responseBody = state?.response?.body;
@@ -347,6 +417,30 @@ function describeResultShape(state, request) {
     workflow_step_adaptors: Array.isArray(request?.workflow?.steps)
       ? request.workflow.steps.map(step => step?.adaptors)
       : [],
+    has_configuration: Boolean(request?.configuration),
+    configuration_keys: objectKeys(request?.configuration),
+    data_type: Array.isArray(data) ? 'array' : typeof data,
+    data_keys: objectKeys(data),
+    response_keys: objectKeys(state?.response),
+    response_body_type: Array.isArray(responseBody) ? 'array' : typeof responseBody,
+    response_body_keys: objectKeys(responseBody),
+    has_error: Boolean(state?.error ?? state?.data?.error),
+  });
+}
+
+function describeBatchResultShape(state, request) {
+  const data = state?.data;
+  const responseBody = state?.response?.body;
+  return JSON.stringify({
+    workflow_start: request?.workflow?.start,
+    workflow_step_count: Array.isArray(request?.workflow?.steps)
+      ? request.workflow.steps.length
+      : null,
+    workflow_step_ids: Array.isArray(request?.workflow?.steps)
+      ? request.workflow.steps.map(step => step?.id)
+      : [],
+    batch_mode: request?.batch?.mode ?? 'sequential_lookup',
+    request_item_count: Array.isArray(request?.items) ? request.items.length : null,
     has_configuration: Boolean(request?.configuration),
     configuration_keys: objectKeys(request?.configuration),
     data_type: Array.isArray(data) ? 'array' : typeof data,
