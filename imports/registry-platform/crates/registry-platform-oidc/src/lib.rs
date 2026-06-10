@@ -520,8 +520,8 @@ pub struct TokenVerifierConfig {
     pub issuer: String,
     pub audiences: Vec<String>,
     pub allowed_algorithms: Vec<Algorithm>,
-    /// Allowed access-token `typ` header values. Empty accepts access tokens
-    /// that omit `typ`, but rejects a present `typ`.
+    /// Allowed access-token `typ` header values. Empty denies all access-token
+    /// types.
     pub allowed_typ: Vec<String>,
     /// Allowed ID-token `typ` header values. Empty means deny all ID tokens.
     pub allowed_id_typ: Vec<String>,
@@ -538,9 +538,9 @@ pub struct TokenVerifierConfig {
 impl TokenVerifierConfig {
     /// Build the standard resource-server access-token profile.
     ///
-    /// Access tokens must either carry one of `allowed_typ`, or omit `typ` when
-    /// `allowed_typ` is empty. Related ID tokens and UserInfo JWTs use the
-    /// project defaults accepted by Relay and Notary:
+    /// Access tokens must carry one of `allowed_typ`; an empty `allowed_typ`
+    /// list fails closed. Related ID tokens and UserInfo JWTs use the project
+    /// defaults accepted by Relay and Notary:
     /// ID token `typ` values `JWT` and `id_token`, UserInfo JWT `typ` value
     /// `JWT`, and required UserInfo expiration by default.
     pub fn access_token_profile(
@@ -1043,13 +1043,6 @@ fn typ_in_allow_list(typ: &str, allowed: &HashSet<String>) -> bool {
 }
 
 fn enforce_typ(typ: Option<&str>, allowed: &HashSet<String>) -> Result<(), OidcError> {
-    if allowed.is_empty() {
-        return if typ.is_none() {
-            Ok(())
-        } else {
-            Err(OidcError::TokenTypeNotAllowed)
-        };
-    }
     let typ = typ.ok_or(OidcError::TokenTypeNotAllowed)?;
     if typ_in_allow_list(typ, allowed) {
         Ok(())
@@ -1708,7 +1701,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn oidc_empty_access_typ_allow_list_accepts_missing_typ_only() {
+    async fn oidc_empty_access_typ_allow_list_rejects_missing_and_present_typ() {
         let fetcher = Arc::new(JwksFetcher::new(
             "http://127.0.0.1/jwks".to_string(),
             JwksFetcherConfig::defaults(),
@@ -1741,7 +1734,7 @@ mod tests {
 
         assert!(matches!(
             verifier.verify(&missing_typ).await,
-            Err(OidcError::MissingKid)
+            Err(OidcError::TokenTypeNotAllowed)
         ));
         assert!(matches!(
             verifier.verify(&present_typ).await,
