@@ -1923,11 +1923,11 @@ fn claim_result_view_schema() -> Value {
                 "type": "object",
                 "description": "Claim value. The runtime may return any JSON value."
             },
-            "satisfied": { "type": "boolean", "nullable": true },
+            "satisfied": { "type": ["boolean", "null"] },
             "disclosure": { "type": "string" },
             "format": { "type": "string" },
             "issued_at": { "type": "string", "format": "date-time" },
-            "expires_at": { "type": "string", "format": "date-time", "nullable": true },
+            "expires_at": { "type": ["string", "null"], "format": "date-time" },
             "provenance": { "$ref": "#/components/schemas/ClaimProvenance" }
         },
         "additionalProperties": false
@@ -2000,7 +2000,7 @@ fn batch_claim_result_view_schema() -> Value {
                 "type": "object",
                 "description": "Claim value. The runtime may return any JSON value."
             },
-            "satisfied": { "type": "boolean", "nullable": true },
+            "satisfied": { "type": ["boolean", "null"] },
             "disclosure": { "type": "string" },
             "provenance": { "$ref": "#/components/schemas/ClaimProvenance" }
         },
@@ -2090,7 +2090,7 @@ fn matching_metadata_schema() -> Value {
             "policy_id": { "type": "string" },
             "method": { "type": "string" },
             "confidence": { "type": "string" },
-            "score": { "type": "number", "nullable": true }
+            "score": { "type": ["number", "null"] }
         },
         "required": ["policy_id", "method", "confidence"],
         "additionalProperties": false
