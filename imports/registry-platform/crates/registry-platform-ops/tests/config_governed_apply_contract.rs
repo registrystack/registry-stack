@@ -405,7 +405,71 @@ fn antirollback_atomic_write_preserves_symlink_target() {
 }
 
 #[test]
-fn antirollback_rejects_non_monotonic_sequence() {
+fn antirollback_accepts_idempotent_replay_without_advancing_sequence() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = FileAntiRollbackStore::new(dir.path().join("config-antirollback.json"));
+    store
+        .initialize(record(42, &hash("current")))
+        .expect("initial state writes");
+
+    let accepted = store
+        .accept(
+            &key(),
+            AntiRollbackProposal {
+                sequence: 42,
+                previous_config_hash: Some(hash("previous")),
+                config_hash: hash("current"),
+                root_version: Some(3),
+                break_glass: None,
+                break_glass_rate_limit: None,
+                local_approval: None,
+                local_approval_rate_limit: None,
+            },
+        )
+        .expect("exact replay is accepted");
+
+    assert_eq!(accepted, record(42, &hash("current")));
+    assert_eq!(
+        store.load(&key()).expect("state remains unchanged"),
+        record(42, &hash("current"))
+    );
+}
+
+#[test]
+fn antirollback_records_newer_root_version_for_idempotent_replay() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = FileAntiRollbackStore::new(dir.path().join("config-antirollback.json"));
+    store
+        .initialize(record(42, &hash("current")))
+        .expect("initial state writes");
+
+    let accepted = store
+        .accept(
+            &key(),
+            AntiRollbackProposal {
+                sequence: 42,
+                previous_config_hash: Some(hash("previous")),
+                config_hash: hash("current"),
+                root_version: Some(4),
+                break_glass: None,
+                break_glass_rate_limit: None,
+                local_approval: None,
+                local_approval_rate_limit: None,
+            },
+        )
+        .expect("same config under newer root is accepted");
+
+    let mut expected = record(42, &hash("current"));
+    expected.root_version = Some(4);
+    assert_eq!(accepted, expected);
+    assert_eq!(
+        store.load(&key()).expect("new root version persists"),
+        expected
+    );
+}
+
+#[test]
+fn antirollback_rejects_same_sequence_with_different_config_hash() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = FileAntiRollbackStore::new(dir.path().join("config-antirollback.json"));
     store
@@ -426,7 +490,7 @@ fn antirollback_rejects_non_monotonic_sequence() {
                 local_approval_rate_limit: None,
             },
         )
-        .expect_err("same sequence is rollback");
+        .expect_err("same sequence cannot carry different config");
 
     assert_eq!(err, AntiRollbackStoreError::NonMonotonicSequence);
 }
