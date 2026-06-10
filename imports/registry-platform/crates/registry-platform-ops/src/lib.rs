@@ -389,15 +389,38 @@ impl FileAntiRollbackStore {
     ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
         let _lock = self.acquire_lock()?;
         let current = self.load(key)?;
-        if proposal.sequence <= current.last_sequence {
-            return Err(AntiRollbackStoreError::NonMonotonicSequence);
-        }
         if let (Some(current_root_version), Some(proposed_root_version)) =
             (current.root_version, proposal.root_version)
         {
             if proposed_root_version < current_root_version {
                 return Err(AntiRollbackStoreError::RootVersionRollback);
             }
+        }
+        if proposal.sequence < current.last_sequence {
+            return Err(AntiRollbackStoreError::NonMonotonicSequence);
+        }
+        if proposal.sequence == current.last_sequence {
+            if proposal.config_hash != current.last_config_hash
+                || proposal.break_glass.is_some()
+                || proposal.local_approval.is_some()
+            {
+                return Err(AntiRollbackStoreError::NonMonotonicSequence);
+            }
+            let accepted_root_version = match (current.root_version, proposal.root_version) {
+                (Some(current), Some(proposed)) => Some(current.max(proposed)),
+                (None, Some(proposed)) => Some(proposed),
+                _ => current.root_version,
+            };
+            if accepted_root_version == current.root_version {
+                return Ok(current);
+            }
+            let accepted = AntiRollbackRecord {
+                root_version: accepted_root_version,
+                ..current
+            };
+            accepted.validate()?;
+            self.write_record(&accepted)?;
+            return Ok(accepted);
         }
         let mut break_glass = current.break_glass.clone();
         let mut local_approvals = current.local_approvals.clone();
