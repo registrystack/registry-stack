@@ -766,17 +766,17 @@ auth:
   oidc:
     issuer: {issuer}
     allow_dev_insecure_fetch_urls: true
-    audience:
+    audiences:
 {audience_yaml}
     discovery_url: {issuer.rstrip("/")}/.well-known/openid-configuration
-    algorithms: [RS256, ES256, EdDSA]
+    allowed_algorithms: [RS256, ES256, EdDSA]
     jwks_cache_ttl: 10m
     leeway: 60s
     scope_claim: {json.dumps(scope_claim)}
     scope_map:
 {scope_map_yaml}
     allowed_clients: []
-    token_types: [JWT, at+jwt]
+    allowed_token_types: [JWT, at+jwt]
 
 audit:
   sink: stdout

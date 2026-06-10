@@ -92,10 +92,10 @@ auth:
   oidc:
     issuer: ${OIDC_ISSUER}
     allow_dev_insecure_fetch_urls: true
-    audience:
+    audiences:
 ${audience_block}
     discovery_url: ${OIDC_ISSUER%/}/.well-known/openid-configuration
-    algorithms: [RS256, ES256, EdDSA]
+    allowed_algorithms: [RS256, ES256, EdDSA]
     jwks_cache_ttl: 10m
     leeway: 60s
     scope_claim: "urn:zitadel:iam:org:project:roles"
@@ -103,7 +103,7 @@ ${audience_block}
       "social-registry-reader": "social_protection_registry:rows"
       "social-registry-aggregate": "social_protection_registry:aggregate"
     allowed_clients: []
-    token_types: [JWT, at+jwt]
+    allowed_token_types: [JWT, at+jwt]
 
 audit:
   sink: stdout

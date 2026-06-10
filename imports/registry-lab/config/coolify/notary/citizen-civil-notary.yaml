@@ -11,7 +11,7 @@ auth:
   mode: oidc
   oidc:
     issuer: https://esignet.lab.registrystack.org
-    jwks_uri: https://esignet.lab.registrystack.org/v1/esignet/oauth/.well-known/jwks.json
+    jwks_url: https://esignet.lab.registrystack.org/v1/esignet/oauth/.well-known/jwks.json
     userinfo_endpoint: https://esignet.lab.registrystack.org/v1/esignet/oidc/userinfo
     audiences:
       - registry-lab-live-client
@@ -19,11 +19,11 @@ auth:
       - registry-lab-live-client
     allowed_algorithms:
       - RS256
-    allowed_typ: []
+    allowed_token_types: []
     scope_claim: scope
     scope_separator: " "
     principal_claim: sub
-    leeway_seconds: 60
+    leeway: 60s
     scope_map:
       self_attestation:
         - self_attestation
