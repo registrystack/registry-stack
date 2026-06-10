@@ -18,7 +18,7 @@ use crate::error::{ConfigError, Error};
 
 #[cfg(feature = "standards-cel-mapping")]
 use crosswalk_core::{
-    CompiledMapping, EvaluationInput, MappingIssue, MappingRuntime, RuntimeOptions,
+    CompiledMapping, EvaluationInput, MappingError, MappingRuntime, RuntimeOptions,
 };
 use jsonschema::error::{ValidationError, ValidationErrorKind};
 
@@ -351,7 +351,7 @@ fn schema_validation_kind(kind: &ValidationErrorKind) -> &'static str {
 }
 
 #[cfg(feature = "standards-cel-mapping")]
-fn mapping_issue_diagnostics(issues: &[MappingIssue], kind: &str) -> Vec<String> {
+fn mapping_issue_diagnostics(issues: &[MappingError], kind: &str) -> Vec<String> {
     issues
         .iter()
         .map(|issue| format!("path={} kind={kind}", issue.path.as_deref().unwrap_or("$")))
@@ -480,10 +480,12 @@ mod tests {
     #[cfg(feature = "standards-cel-mapping")]
     #[test]
     fn cel_issue_diagnostics_omit_instance_values() {
-        let issues = vec![crosswalk_core::MappingIssue {
-            path: Some("records.disabled_person.fields.member_identifier".to_string()),
-            message: "failed while reading SECRET-ROW-VALUE-451123".to_string(),
-        }];
+        let issues = vec![crosswalk_core::MappingError::error(
+            crosswalk_core::ErrorCode::ValidationError,
+            "failed while reading SECRET-ROW-VALUE-451123",
+            Some("records.disabled_person.fields.member_identifier".to_string()),
+            None,
+        )];
         let formatted = mapping_issue_diagnostics(&issues, "error").join("\n");
 
         assert!(formatted.contains("path=records.disabled_person.fields.member_identifier"));
