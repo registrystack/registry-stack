@@ -726,7 +726,7 @@ Key fields: `storage` is `in_memory` or `redis`. `redis.url_env` names the
 environment variable containing the Redis connection URL. `redis.key_prefix`
 scopes keys for shared clusters. `connect_timeout_ms` and
 `operation_timeout_ms` must both be greater than zero when Redis is
-configured. The router fails to build when the named Redis URL environment
+configured. Notary fails to start when the named Redis URL environment
 variable is missing. `/ready` fails closed when the Redis replay backend is
 unavailable.
 
