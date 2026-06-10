@@ -195,6 +195,15 @@ That path creates a standalone Notary project and points it at an API you operat
 
 ## Local Run
 
+Use the task runner for the normal local path:
+
+```bash
+just setup
+just run
+```
+
+If `just` is not available, use the raw Cargo fallback:
+
 ```bash
 export REGISTRY_NOTARY_API_KEY_HASH='sha256:<sha256-hex-of-your-api-key>'
 export REGISTRY_NOTARY_BEARER_TOKEN_HASH='sha256:<sha256-hex-of-your-bearer-token>'
@@ -216,6 +225,34 @@ cargo run -p registry-notary-bin -- \
 The demo config uses HTTP source connections, so claim evaluation requires a
 source service at the configured `base_url`. The binary still starts fail-closed:
 no Registry Notary route is served without a configured API key or bearer token.
+
+## Operating Relay And Notary Together
+
+Registry Relay is the protected registry consultation API. Registry Notary is
+the claim evaluation, credential issuance, and attestation service. Relay can
+publish metadata evidence offerings that point callers to Notary, but Relay
+does not execute Notary claims. Notary calls Relay as an HTTP source when a
+claim profile needs registry data.
+
+Configure credentials on both sides:
+
+- Relay must register a token hash for the Notary source caller, with only the
+  dataset scopes needed by Notary claim profiles.
+- Notary must register the caller token used by programs or wallets against
+  Notary routes, and its source connector must reference the raw Relay token
+  through an environment-backed `token_env`.
+- Operators should keep raw tokens and signing material out of YAML. Use
+  service environment variables such as `REGISTRY_NOTARY_CONFIG`,
+  `REGISTRY_NOTARY_BIND`, `REGISTRY_NOTARY_LOG_FORMAT`, and
+  `REGISTRY_NOTARY_ENV_FILE`; use secret indirection fields ending in `_env` for
+  token hashes, audit secrets, signing keys, Redis URLs, and source tokens.
+
+For side-by-side local compose stacks, keep the public host ports distinct while
+letting each container use its internal default listener. A common convention is
+Relay on host `18080` mapped to container `8080`, and Notary on host `18081`
+mapped to its container listener. Native local runs usually use Relay
+`127.0.0.1:8080` and Notary `127.0.0.1:8081`; align source `base_url` values
+with the network where Notary runs.
 
 ## Audit Sink Configuration
 
