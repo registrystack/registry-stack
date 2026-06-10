@@ -17,7 +17,7 @@ The scenarios use five status labels:
 | Supported | Works in Registry Notary runtime and has focused tests or existing product coverage |
 | Lab-supported | Can be shown with demo scripts or config, but is not a complete runtime feature |
 | Partial | Important pieces exist, but named product gaps remain |
-| Planned | Captured in specs or roadmap, not implemented yet |
+| Planned | Captured in design records, not yet implemented |
 | Out of scope | Not a Registry Notary responsibility |
 
 ## Personas

@@ -74,32 +74,3 @@ OpenAPI baseline, workflow syntax/security tooling when installed, the reviewed
 `zizmor` high-severity ratchet, gitleaks current-tree scanning, and Semgrep
 rules when installed.
 
-## Implementation review log
-
-- Endpoint exposure is checked in three directions: route inventory to
-  manifest, manifest to route inventory, and Rust Axum route declarations to
-  route inventory.
-- Manifest entries marked `openapi: true` are compared against the committed
-  generated OpenAPI baseline with path-parameter normalization, including Axum
-  catch-all paths such as `/credentials/{*vct_path}`.
-- Enforcement evidence must reference concrete test functions using
-  `path::test_name`; file-only references are rejected.
-- The standalone auth bypass uses exact matched route templates for public
-  probe paths. Prefix-based bypass for `/v1/credentials/...` was removed so a
-  future route under that prefix will not silently become public.
-- Some Notary endpoints require an authenticated principal without a fixed
-  route-level scope. The manifest records those as `scopes: []` rather than
-  overstating an `evidence:metadata` scope requirement.
-- `zizmor` still runs with `--no-exit-codes` so the tool can emit a complete
-  JSON report, but `scripts/check_advisory_baselines.py` blocks unreviewed
-  high-severity findings and expired reviewed entries.
-- Container image SBOM generation is enforced in CI. Grype image vulnerability
-  reports are emitted as JSON and `scripts/check_advisory_baselines.py` blocks
-  unreviewed critical image findings. High-severity image findings remain the
-  next ratchet target once critical baselines are stable.
-- Local gitleaks enforcement scans the current tree with `--no-git`. A full
-  history scan found pre-existing historical sample-token findings unrelated to
-  this change, so history cleanup should be handled as a separate coordinated
-  remediation.
-- Hadolint ignores `DL3022` because the Dockerfiles intentionally copy from
-  named external build contexts used by the sibling build workflow.

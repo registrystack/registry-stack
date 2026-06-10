@@ -416,20 +416,20 @@ The same binding-level `query_fields` shape is available for
 Registry Relay endpoint instead of a DCI endpoint. Relay must allow filters on
 `given_name`, `surname`, and `birth_date`.
 
-## Current OpenCRVS boundaries
+## Known limitations
 
-- The tested DCI query shape is `idtype-value` with `query.type = UIN`.
-- The birth-attributes credential also uses UIN lookup. Its tested OpenCRVS
+- The supported DCI query shape is `idtype-value` with `query.type = UIN`.
+- The birth-attributes credential uses UIN lookup. The supported OpenCRVS
   record paths are `/name/given_name`, `/name/surname`, `/birth_date`, and
   `/birth_place`.
 - The demographic demo config uses DCI `expression` query fields for OpenCRVS
   deployments that expose first-name, last-name, and date-of-birth search. The
-  Farajaland integration endpoint used for the UIN walkthrough does not yet
-  narrow expression searches, so the UIN path is the live-tested credential
+  Farajaland integration endpoint does not narrow expression searches (this is
+  an external endpoint limitation), so the UIN path is the supported credential
   path for that environment.
-- The tested event filter is `registry_event_type: birth`.
-- The OpenCRVS DCI middleware currently accepts unsigned requests.
-- Death record checks should use a separate source connection or claim with
+- The supported event filter is `registry_event_type: birth`.
+- The OpenCRVS DCI middleware accepts unsigned requests.
+- Death record checks require a separate source connection or claim with
   `registry_event_type: death`.
 
 ## Troubleshooting

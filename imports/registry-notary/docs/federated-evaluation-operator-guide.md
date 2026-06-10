@@ -1,9 +1,12 @@
-# Federated Evaluation MVP Operator Guide
+# Federated Evaluation Operator Guide
 
 > **Page type:** How-to · **Product:** Registry Notary · **Layer:** federation · **Audience:** operator
 
-This guide shows the minimum static-peer setup for the delegated evaluation MVP.
-It is intentionally narrower than the broader federation roadmap.
+This guide shows the minimum static-peer setup for delegated evaluation.
+It covers static peer configuration, inbound request verification, and the
+documented limits of the current implementation: no outbound Notary connector,
+no dynamic trust registration, and in-memory replay suitable for single-process
+pilots only.
 
 ## What This Enables
 

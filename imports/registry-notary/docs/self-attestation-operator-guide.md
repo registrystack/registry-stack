@@ -61,7 +61,7 @@ Do not use it when:
 - The token has no trustworthy subject identifier.
 - The same endpoint needs to evaluate arbitrary subjects on behalf of a case
   worker or service. Use machine auth for that.
-- Claims require batch evaluation. Self-attestation v1 rejects batch.
+- Claims require batch evaluation. Batch evaluation is not supported for self-attestation.
 - The source owner has not approved citizen-token driven access.
 
 ## Identity Provider Requirements
@@ -216,7 +216,7 @@ self_attestation:
 Rules:
 
 - Enable only operations the citizen flow actually needs.
-- `batch_evaluate` must remain false in v1.
+- `batch_evaluate` must remain false; batch evaluation is not supported.
 - `allowed_claims` must reference existing claims.
 - `credential_profiles` must reference existing profiles.
 - Credential profiles must use DID holder binding, proof of possession, and
@@ -315,5 +315,5 @@ claim boundaries and source bindings.
 | Subject mismatch | Token claim is missing or caller-supplied identity context conflicts with the derived subject | `subject_binding.token_claim`, token claims, request body identity fields |
 | Userinfo subject not found | `claim_source: userinfo` without a usable endpoint or issuer | `auth.oidc.userinfo_endpoint`, `userinfo_issuers` |
 | Credential issuance denied | Profile or claim missing from allow-lists | `allowed_claims`, `credential_profiles`, claim/profile cross references |
-| Batch request denied | Self-attestation v1 does not allow batch | Keep `batch_evaluate: false` |
+| Batch request denied | Batch evaluation is not supported for self-attestation | Keep `batch_evaluate: false` |
 | Works locally but fails active-active | In-process rate limits or replay state are not shared | Add gateway limits and Redis replay storage |

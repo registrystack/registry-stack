@@ -4,8 +4,7 @@
 
 This runbook is for teams moving Registry Notary from a demo into a shared test,
 pilot, or production-like environment. It focuses on implemented operational
-controls and deployment choices. Route names may still evolve while the REST API
-design is being finalized.
+controls and deployment choices.
 
 ## Baseline Assumptions
 
@@ -112,17 +111,14 @@ Replay protection applies to:
 - OID4VCI nonces.
 - Holder proof JWT ids.
 
-For full `replay` config options (`in_memory` vs. `redis`, URL env, key prefix,
+For `replay` config options (`in_memory` vs. `redis`, URL env, key prefix,
 and timeout fields), see the
 [Replay Store section of the configuration reference](operator-config-reference.md#replay-store).
-Use `in_memory` only when one process handles all relevant traffic and losing
-replay state on restart is acceptable. Use Redis for active-active, rolling
-deploys that overlap traffic, public wallet flows, or federation.
 
-Operational expectations:
+Operational gates:
 
 - In-memory replay makes `/ready` return HTTP 503 with `status: degraded`.
-- The service should fail readiness when Redis is unavailable.
+- The service fails readiness when Redis is unavailable.
 - Redis keys are scoped and hashed, but the Redis database is still operational
   security material.
 - Use a deployment-specific `key_prefix` when multiple environments share a
@@ -132,14 +128,14 @@ Operational expectations:
 ## Credential Status Store
 
 If status is disabled, verifiers rely on credential expiry and issuer trust.
-That is the default beta posture.
+That is the default posture.
 
 If status is enabled, prefer Redis outside lab deployments. For the full
 `credential_status` config block (storage options, `base_url`, `retention_seconds`,
 and Redis fields), see the
 [Credential Status section of the configuration reference](operator-config-reference.md#credential-status).
 
-Hardening expectations:
+Operational gates:
 
 - `base_url` must be the public HTTPS issuer origin verifiers can reach.
 - Keep retention at least as long as the longest credential validity plus
@@ -150,7 +146,7 @@ Hardening expectations:
   rows, and SD-JWT disclosures.
 
 See [`credential-lifecycle-status.md`](credential-lifecycle-status.md) for
-semantics.
+status semantics, the privacy boundary, and the rollout checklist.
 
 ## Audit
 
@@ -229,51 +225,41 @@ Notary over localhost or a private pod network. Do not expose it publicly, put
 it behind an internet-facing ingress, or allow callers to invoke OpenFn worker
 execution directly.
 
-For OpenFn sidecar source connections:
+Runbook gates for OpenFn sidecar source connections:
 
-- Use `connector: openfn_sidecar` on the binding.
-- Use `token_env` for the Notary-to-sidecar bearer token and keep
-  target-service credentials in the sidecar environment or secret store.
-- Set `retry_on_5xx: false`; Notary does not retry OpenFn worker execution
-  failures unless a future explicit retry policy is added.
-- Use `bulk_mode: openfn_sidecar_batch` only when the sidecar supports
-  `POST /v1/datasets/{dataset}/entities/{entity}/records:batchMatch` and tests
-  cover per-item not found, exact match, ambiguity, worker failure, timeout, and
-  output projection.
-- Keep Notary responsible for policy, minimization, audit, disclosure, and
-  credential issuance. Keep the sidecar responsible for adaptor execution,
-  target credentials, normalization, source comparison, and worker isolation.
+- Set `retry_on_5xx: false`. Notary does not retry OpenFn worker execution
+  failures.
+- In governed deployments, set `expected_sidecar` on the source connection to
+  fail closed on runtime identity or config-hash mismatch.
+
+For full sidecar config fields and examples, see the
+[OpenFn Sidecar Source Connections section of the configuration reference](operator-config-reference.md#openfn-sidecar-source-connections).
 
 ## Signing Keys
 
 Use local JWK environment keys for development, tests, and simple mounted-secret
 deployments. Use PKCS#11 where the deployment requires HSM-backed signing.
 
-Operational rules:
+Operational gates:
 
-- `status: active` keys may sign and publish.
-- `status: publish_only` keys publish public material but cannot sign. If
-  `publish_until_unix_seconds` is set, JWKS and restricted posture omit the key
-  after that time.
-- `status: disabled` keys do neither.
-- Keep `kid` stable for a key version and unique among published keys.
-- Do not configure a private JWK for `publish_only`.
-- For PKCS#11, keep `module_path` absolute and store the PIN through `pin_env`.
 - Before rollout, run `registry-notary build-info` and confirm
-  `capabilities.signing_providers.pkcs11` is `true`.
+  `capabilities.signing_providers.pkcs11` is `true` when using PKCS#11.
 - Before routing production traffic, run `registry-notary doctor --config <path>`
   with the same PKCS#11 module, token label, key lookup, public JWK, and PIN
   environment used by the service.
 
-Use [`signing-key-provider.md`](signing-key-provider.md) for key generation,
-PKCS#11 setup, and rotation examples.
+See [`signing-key-provider.md`](signing-key-provider.md) for key status values,
+rotation procedure, PKCS#11 setup, and worked examples.
 
 ## Self-Attestation And Wallet Flows
 
 Public citizen and wallet flows need identity-provider, gateway, and Notary
-controls to line up.
+controls to line up. See [`self-attestation-operator-guide.md`](self-attestation-operator-guide.md)
+for the full configuration reference, subject-binding rules, and rollout
+checklist for self-attestation. See [`oid4vci-wallet-interop.md`](oid4vci-wallet-interop.md)
+for wallet-facing behavior.
 
-Checklist:
+Deployment hardening checklist:
 
 - Use `auth.mode: oidc`.
 - Require exact subject binding from a reviewed token claim.
@@ -287,9 +273,6 @@ Checklist:
   in-process rate limits.
 - Use Redis replay storage when multiple processes can serve OID4VCI traffic.
 - Enable OID4VCI nonces for wallets that support them.
-
-See [`oid4vci-wallet-interop.md`](oid4vci-wallet-interop.md) for wallet-facing
-behavior.
 
 ## Readiness And Rollout
 

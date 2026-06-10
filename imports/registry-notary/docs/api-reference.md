@@ -130,6 +130,9 @@ Contract rules:
 - A missing response item maps to `source.unavailable` for that item.
 - `data: []` maps to source not found, `data: [record]` maps to a successful
   source match, and `data` with two records maps to source ambiguous.
+- If the worker returns more than two records for an item, the sidecar
+  normalizes the result to two records before returning it to Notary, preserving
+  the same cardinality rule used for single reads.
 - Returned records are projected to the requested `fields`; extra worker output
   fields are not returned to Notary.
 - Documented per-item sidecar error codes are `target_auth` and

@@ -1,6 +1,6 @@
 # OID4VCI Wallet Interop Guide
 
-> **Page type:** How-to · **Product:** Registry Notary · **Layer:** credential · **Audience:** integrator
+> **Page type:** How-to · **Product:** Registry Notary · **Layer:** credential · **Audience:** operator, integrator
 
 This guide describes the implemented OpenID4VCI wallet facade for Registry
 Notary adopters. It focuses on what wallet and platform teams need to configure
@@ -351,14 +351,12 @@ configuration overrides in your deployment notes.
 - Notary validates token and policy before source reads.
 - Subject binding is exact; do not use normalization that could join different
   civil identifiers.
-- `allowed_wallet_origins` must be exact HTTPS origins and must not include
-  wildcards.
-- Access tokens, proof JWTs, holder keys, SD-JWT disclosures, source rows, and
-  raw subject ids must not be logged.
-- In-process rate limits are a guardrail, not the only public-edge protection.
-  Use gateway and identity-provider controls as well.
 - A holder DID can become a correlation handle if reused widely. Wallets should
   follow their privacy model for pairwise or purpose-specific keys.
+
+For wallet-origin restrictions, secret handling, rate-limit layering, and
+logging boundaries, see the
+[deployment hardening runbook](deployment-hardening-runbook.md).
 
 ## Troubleshooting
 

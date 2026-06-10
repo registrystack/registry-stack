@@ -99,7 +99,6 @@ sequenceDiagram
 
 Pattern: Local evaluation  
 Status: Supported  
-Priority: High
 
 Story: Bob is reviewing Alice's application and only needs to know whether the
 civil registry still records her as alive. The Civil Notary checks the source
@@ -131,7 +130,6 @@ Supported today:
 
 Pattern: Local evaluation  
 Status: Supported  
-Priority: High
 
 Story: Alice needs to prove that she meets an age requirement, but she should
 not have to expose more civil data than necessary. Bob asks the Civil Notary
@@ -163,7 +161,6 @@ Supported today:
 
 Pattern: Local evaluation  
 Status: Supported  
-Priority: High
 
 Story: Bob wants to confirm that Alice is actively enrolled in a social
 program before approving a linked benefit. The Social Protection Notary checks
@@ -194,7 +191,6 @@ Supported today:
 
 Pattern: Local evaluation  
 Status: Supported  
-Priority: Medium
 
 Story: Bob is processing a service request that depends on whether a nearby
 facility is licensed and ready to provide care. The Health Notary evaluates
@@ -225,7 +221,6 @@ Supported today:
 
 Pattern: Local evaluation  
 Status: Supported  
-Priority: High
 
 Story: Alice is a farmer applying for a climate-smart input voucher. The
 Agriculture Notary checks the farmer, parcel, and redemption facts needed for
@@ -257,7 +252,6 @@ Supported today:
 
 Pattern: Local evaluation  
 Status: Supported  
-Priority: Medium
 
 Story: Alice needs permission to move livestock between districts. The
 Agriculture Notary evaluates herd, vaccination, and quarantine facts and gives
@@ -287,7 +281,6 @@ Supported today:
 
 Pattern: Delegated evaluation  
 Status: Partial  
-Priority: High
 
 Story: Bob works for the benefits agency, while Carol's civil registry owns the
 source facts. Instead of giving Bob direct read access to the civil registry,
@@ -319,7 +312,6 @@ Supported today:
 
 Pattern: Delegated evaluation  
 Status: Partial  
-Priority: High
 
 Story: Bob needs to know whether Alice is an active beneficiary in another
 agency's program. The benefits actor asks the Social Protection Notary for a
@@ -351,7 +343,6 @@ Supported today:
 
 Pattern: Outbound composition  
 Status: Planned  
-Priority: High
 
 Story: Alice applies for health-linked child support, and no single agency owns
 all the facts. A Shared Eligibility Notary would ask Civil, Social, and Health
@@ -386,7 +377,6 @@ Supported today:
 
 Pattern: Delegated evaluation  
 Status: Partial  
-Priority: Medium
 
 Story: Bob works at a municipality and needs to confirm Alice's residency
 without receiving a national population record. The municipal service asks the
@@ -415,7 +405,6 @@ Supported today:
 
 Pattern: User-presented proof  
 Status: Planned  
-Priority: High
 
 Story: Alice already has a civil-status credential in her wallet and wants to
 share it with a benefits service. Bob's Benefits Notary verifies the
@@ -448,7 +437,6 @@ Supported today:
 
 Pattern: User-presented proof  
 Status: Planned  
-Priority: Medium
 
 Story: Alice has a farmer-registration or landholding credential from a
 trusted authority. Rather than asking a service portal to read the underlying
@@ -479,7 +467,6 @@ Supported today:
 
 Pattern: User-presented proof  
 Status: Planned  
-Priority: Medium
 
 Story: Alice is a health worker whose professional status affects whether a
 facility can satisfy a service rule. She presents her professional credential,
@@ -511,7 +498,6 @@ Supported today:
 
 Pattern: Representation plus proof  
 Status: Planned  
-Priority: High
 
 Story: Alice is applying for a child benefit on behalf of Charlie. Bob needs
 evidence about Charlie, but Alice is the person interacting with the portal, so
@@ -549,7 +535,6 @@ Supported today:
 
 Pattern: Representation plus proof  
 Status: Planned  
-Priority: High
 
 Story: Alice is the registered representative for the Rivera household, a farm
 group, or a cooperative. Bob needs to evaluate a service for that collective
@@ -587,7 +572,6 @@ Supported today:
 
 Pattern: Credential issuance  
 Status: Supported  
-Priority: High
 
 Story: Alice wants a reusable civil credential so she does not need a fresh
 registry lookup for every service. The Civil Notary evaluates the configured
@@ -618,7 +602,6 @@ Supported today:
 
 Pattern: Credential issuance  
 Status: Supported  
-Priority: High
 
 Story: Alice qualifies for an agriculture voucher and wants portable proof of
 that result. After the Agriculture Notary evaluates the voucher rules, it can
@@ -649,7 +632,6 @@ Supported today:
 
 Pattern: Credential issuance plus composition  
 Status: Partial  
-Priority: High
 
 Story: Alice's combined-support eligibility depends on facts held by multiple
 authorities. The future Shared Eligibility Notary would verify peer-signed
@@ -683,7 +665,6 @@ Supported today:
 
 Pattern: Federated credential issuance  
 Status: Planned  
-Priority: Medium
 
 Story: Alice needs a credential from Carol's issuing Notary while starting
 from Bob's service journey. Bob can help Alice discover the issuer or relay
@@ -715,7 +696,6 @@ Supported today:
 
 Pattern: Governance  
 Status: Supported  
-Priority: High
 
 Story: Dave sees suspicious activity from a peer key and needs the serving
 Notary to fail closed immediately. Replay protection blocks reused requests,
@@ -752,7 +732,6 @@ Supported today:
 
 Pattern: Governance  
 Status: Partial  
-Priority: High
 
 Story: Dave reviews Alice's benefit decision months later and wants confidence
 that Bob used minimized evidence. The signed predicate result and redacted
@@ -786,7 +765,6 @@ Supported today:
 
 Pattern: Governance  
 Status: Planned  
-Priority: Medium
 
 Story: Dave monitors whether Carol's Notary audit trail is continuous over
 time. Signed checkpoints let Dave detect root or sequence regressions without

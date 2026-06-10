@@ -20,8 +20,10 @@
             "type": "string"
           },
           "satisfied": {
-            "nullable": true,
-            "type": "boolean"
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "value": {
             "description": "Claim value. The runtime may return any JSON value.",
@@ -337,8 +339,10 @@
           },
           "expires_at": {
             "format": "date-time",
-            "nullable": true,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "format": {
             "type": "string"
@@ -357,8 +361,10 @@
             "$ref": "#/components/schemas/EvidenceEntityRef"
           },
           "satisfied": {
-            "nullable": true,
-            "type": "boolean"
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "subject_type": {
             "type": "string"
@@ -962,8 +968,10 @@
             "type": "string"
           },
           "score": {
-            "nullable": true,
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           }
         },
         "required": [

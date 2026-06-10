@@ -104,7 +104,5 @@
 
 Known non-goals for this cut:
 
-- Registry Relay cleanup and removal of embedded Evidence Server routes are
-  owned by the Relay cleanup worker.
-- OIDC/JWKS discovery is follow-up; the standalone binary supports API keys and
+- 0.1.0 does not include OIDC/JWKS discovery; the standalone binary supports API keys and
   static bearer tokens.
