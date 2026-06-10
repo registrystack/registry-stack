@@ -1404,10 +1404,10 @@ fn validate_oidc(oidc: &OidcConfig) -> Result<(), ConfigError> {
         return Err(ConfigError::ValidationError);
     }
 
-    if oidc.audience.is_empty() || oidc.audience.iter().any(|aud| aud.trim().is_empty()) {
+    if oidc.audiences.is_empty() || oidc.audiences.iter().any(|aud| aud.trim().is_empty()) {
         tracing::error!(
             code = "config.validation_error",
-            field = "auth.oidc.audience",
+            field = "auth.oidc.audiences",
             "audience must list one or more non-empty values"
         );
         return Err(ConfigError::ValidationError);
@@ -1440,10 +1440,10 @@ fn validate_oidc(oidc: &OidcConfig) -> Result<(), ConfigError> {
         }
     }
 
-    if oidc.algorithms.is_empty() {
+    if oidc.allowed_algorithms.is_empty() {
         tracing::error!(
             code = "config.validation_error",
-            field = "auth.oidc.algorithms",
+            field = "auth.oidc.allowed_algorithms",
             "algorithms must list at least one entry"
         );
         return Err(ConfigError::ValidationError);
@@ -1535,10 +1535,12 @@ fn validate_oidc(oidc: &OidcConfig) -> Result<(), ConfigError> {
         return Err(ConfigError::ValidationError);
     }
 
-    if oidc.token_types.is_empty() || oidc.token_types.iter().any(|t| t.trim().is_empty()) {
+    if oidc.allowed_token_types.is_empty()
+        || oidc.allowed_token_types.iter().any(|t| t.trim().is_empty())
+    {
         tracing::error!(
             code = "config.validation_error",
-            field = "auth.oidc.token_types",
+            field = "auth.oidc.allowed_token_types",
             "token_types must list one or more non-empty JOSE `typ` values"
         );
         return Err(ConfigError::ValidationError);

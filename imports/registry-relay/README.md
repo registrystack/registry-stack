@@ -142,10 +142,10 @@ auth:
   mode: oidc
   oidc:
     issuer: https://idp.example.gov
-    audience:
+    audiences:
       - registry-relay
     discovery_url: https://idp.example.gov/.well-known/openid-configuration
-    algorithms:
+    allowed_algorithms:
       - RS256
     # scope_map renames IdP roles/claims to the relay's
     # `<dataset_id>:<level>` scopes; required when IdP role names
@@ -157,7 +157,7 @@ auth:
 
 See [config/example.oidc.yaml](config/example.oidc.yaml) for a complete drop-in alternative targeting a local Zitadel and [docs/configuration.md](docs/configuration.md#oidc-oauth2) for the full field reference plus the granular `auth.*` failure-code taxonomy. The publicschema.com dev compose stack provisions a Zitadel instance you can point at directly; `scripts/mint-zitadel-token.sh` and `tests/oidc_zitadel.rs` exercise the path end-to-end.
 
-Relay validates the access-token JOSE `typ` header against `auth.oidc.token_types`, which defaults to `JWT` and `at+jwt`. The shared verifier currently rejects tokens that omit `typ`; configure the IdP to emit an access-token type header rather than bypassing that check in Relay.
+Relay validates the access-token JOSE `typ` header against `auth.oidc.allowed_token_types`, which defaults to `JWT` and `at+jwt`. The shared verifier currently rejects tokens that omit `typ`; configure the IdP to emit an access-token type header rather than bypassing that check in Relay.
 
 ## Run Locally
 

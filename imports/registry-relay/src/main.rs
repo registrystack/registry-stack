@@ -27,6 +27,7 @@
 use std::env;
 use std::error::Error as StdError;
 use std::fmt as std_fmt;
+use std::fs;
 use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -69,6 +70,8 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 /// CLI flag for the config path. Kept minimal: a single `--config
 /// <path>` positional plus the `REGISTRY_RELAY_CONFIG` env var fallback.
 const CONFIG_FLAG: &str = "--config";
+const ENV_FILE_FLAG: &str = "--env-file";
+const BIND_FLAG: &str = "--bind";
 
 /// Top-level command for shell-free container liveness probing.
 const HEALTHCHECK_COMMAND: &str = "healthcheck";
@@ -109,8 +112,15 @@ const LOCAL_APPROVAL_REFERENCE_FLAG: &str = "--local-approval-reference";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CliCommand {
-    Serve { config_path: PathBuf },
-    Healthcheck { url: String, timeout: Duration },
+    Serve {
+        config_path: PathBuf,
+        env_file: Option<PathBuf>,
+        bind_override: Option<SocketAddr>,
+    },
+    Healthcheck {
+        url: String,
+        timeout: Duration,
+    },
     ConfigVerifyBundle(ConfigVerifyBundleCommand),
     ConfigApplyBundle(ConfigApplyBundleCommand),
 }
@@ -198,7 +208,11 @@ async fn main() -> ExitCode {
 
 async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match parse_cli_command_from(env::args().collect())? {
-        CliCommand::Serve { config_path } => run_server(config_path).await,
+        CliCommand::Serve {
+            config_path,
+            env_file,
+            bind_override,
+        } => run_server(config_path, env_file, bind_override).await,
         CliCommand::Healthcheck { url, timeout } => {
             run_healthcheck(&url, timeout).await?;
             println!("registry-relay healthcheck ok");
@@ -209,9 +223,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 }
 
-async fn run_server(config_path: PathBuf) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn run_server(
+    config_path: PathBuf,
+    env_file: Option<PathBuf>,
+    bind_override: Option<SocketAddr>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    load_env_file_arg(env_file.as_deref())?;
     let handle = Arc::new(RelayRuntimeHandle::new(
-        compile_relay_runtime(config_path).await?,
+        compile_relay_runtime(config_path, bind_override).await?,
     ));
     let runtime = handle.load_full();
     let app = build_relay_app_from_runtime(Arc::clone(&handle))?;
@@ -477,6 +496,7 @@ struct VerifyBundleReport {
 
 async fn compile_relay_runtime(
     config_path: PathBuf,
+    bind_override: Option<SocketAddr>,
 ) -> Result<RelayRuntimeSnapshot, Box<dyn std::error::Error + Send + Sync>> {
     info!(path = %config_path.display(), "loading registry-relay config");
 
@@ -488,7 +508,7 @@ async fn compile_relay_runtime(
 
     let auth = build_auth(&config).await?;
     let audit_sink = build_audit_sink(&config)?;
-    let bind: SocketAddr = config.server.bind;
+    let bind: SocketAddr = bind_override.unwrap_or(config.server.bind);
     let admin_bind: Option<SocketAddr> = config.server.admin_bind;
     let audit_kind = audit_sink_kind(&config);
     let df_ctx = Arc::new(SessionContext::new());
@@ -593,10 +613,50 @@ fn parse_cli_command_from(args: Vec<String>) -> Result<CliCommand, CliError> {
     } else if rest.first().is_some_and(|arg| arg == CONFIG_COMMAND) {
         parse_config_command(&rest[1..])
     } else {
-        Ok(CliCommand::Serve {
-            config_path: resolve_config_path_from(rest),
-        })
+        parse_serve_command(&rest)
     }
+}
+
+fn parse_serve_command(args: &[String]) -> Result<CliCommand, CliError> {
+    let mut config_path: Option<PathBuf> = None;
+    let mut env_file: Option<PathBuf> = None;
+    let mut bind_override: Option<SocketAddr> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if let Some(value) = flag_value(arg, CONFIG_FLAG) {
+            config_path = Some(required_path_value(CONFIG_FLAG, value)?);
+        } else if arg == CONFIG_FLAG {
+            index += 1;
+            config_path = Some(required_path_arg(args, index, CONFIG_FLAG)?);
+        } else if let Some(value) = flag_value(arg, ENV_FILE_FLAG) {
+            env_file = Some(required_path_value(ENV_FILE_FLAG, value)?);
+        } else if arg == ENV_FILE_FLAG {
+            index += 1;
+            env_file = Some(required_path_arg(args, index, ENV_FILE_FLAG)?);
+        } else if let Some(value) = flag_value(arg, BIND_FLAG) {
+            bind_override = Some(parse_bind_value(value)?);
+        } else if arg == BIND_FLAG {
+            index += 1;
+            bind_override = Some(parse_bind_value(required_string_arg(
+                args, index, BIND_FLAG,
+            )?)?);
+        } else {
+            return Err(CliError(format!("unknown serve argument: {arg}")));
+        }
+        index += 1;
+    }
+    if env_file.is_none() {
+        env_file = default_env_file_from_env();
+    }
+    if bind_override.is_none() {
+        bind_override = default_bind_from_env()?;
+    }
+    Ok(CliCommand::Serve {
+        config_path: config_path.unwrap_or_else(default_config_path_from_env),
+        env_file,
+        bind_override,
+    })
 }
 
 fn parse_config_command(args: &[String]) -> Result<CliCommand, CliError> {
@@ -916,21 +976,7 @@ fn parse_timeout_ms(value: &str) -> Result<u64, CliError> {
     Ok(timeout_ms)
 }
 
-/// Resolve the config path from (in order):
-/// * the first non-flag positional after `--config`
-/// * the `REGISTRY_RELAY_CONFIG` env var
-/// * the project-relative default `./config/example.yaml`
-fn resolve_config_path_from(args: Vec<String>) -> PathBuf {
-    let mut args = args.into_iter();
-    while let Some(arg) = args.next() {
-        if arg == CONFIG_FLAG {
-            if let Some(p) = args.next() {
-                return PathBuf::from(p);
-            }
-        } else if let Some(rest) = arg.strip_prefix(&format!("{CONFIG_FLAG}=")) {
-            return PathBuf::from(rest);
-        }
-    }
+fn default_config_path_from_env() -> PathBuf {
     if let Ok(p) = env::var("REGISTRY_RELAY_CONFIG") {
         if !p.is_empty() {
             return PathBuf::from(p);
@@ -939,13 +985,80 @@ fn resolve_config_path_from(args: Vec<String>) -> PathBuf {
     PathBuf::from(DEFAULT_CONFIG_PATH)
 }
 
-fn default_config_path_from_env() -> PathBuf {
-    if let Ok(p) = env::var("REGISTRY_RELAY_CONFIG") {
-        if !p.is_empty() {
-            return PathBuf::from(p);
+fn default_env_file_from_env() -> Option<PathBuf> {
+    env::var("REGISTRY_RELAY_ENV_FILE")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+fn default_bind_from_env() -> Result<Option<SocketAddr>, CliError> {
+    let Ok(value) = env::var("REGISTRY_RELAY_BIND") else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Ok(None);
+    }
+    parse_bind_value(value).map(Some)
+}
+
+fn parse_bind_value(value: impl AsRef<str>) -> Result<SocketAddr, CliError> {
+    let value = value.as_ref();
+    value
+        .parse::<SocketAddr>()
+        .map_err(|_| CliError(format!("{BIND_FLAG} requires a socket address")))
+}
+
+fn load_env_file_arg(path: Option<&std::path::Path>) -> io::Result<()> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    let raw = fs::read_to_string(path)?;
+    for (line_no, line) in raw.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
+        let Some((key, value)) = line.split_once('=') else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("env file line {} must be KEY=VALUE", line_no + 1),
+            ));
+        };
+        let key = key.trim();
+        if !valid_env_key(key) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("env file line {} has an invalid variable name", line_no + 1),
+            ));
+        }
+        if env::var_os(key).is_none() {
+            env::set_var(key, parse_env_file_value(value.trim()));
         }
     }
-    PathBuf::from(DEFAULT_CONFIG_PATH)
+    Ok(())
+}
+
+fn parse_env_file_value(value: &str) -> String {
+    if (value.starts_with('"') && value.ends_with('"'))
+        || (value.starts_with('\'') && value.ends_with('\''))
+    {
+        value[1..value.len() - 1].to_string()
+    } else {
+        value
+            .split_once(" #")
+            .map(|(before, _)| before)
+            .unwrap_or(value)
+            .trim()
+            .to_string()
+    }
+}
+
+fn valid_env_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    matches!(chars.next(), Some('_') | Some('A'..='Z') | Some('a'..='z'))
+        && chars.all(|ch| matches!(ch, '_' | 'A'..='Z' | 'a'..='z' | '0'..='9'))
 }
 
 async fn run_healthcheck(
@@ -1065,8 +1178,8 @@ async fn shutdown_signal() {
 mod tests {
     use super::{
         build_audit_sink, compile_relay_runtime, config_apply_bundle_request_body,
-        parse_cli_command_from, run_config_apply_bundle, run_healthcheck, CliCommand,
-        ConfigApplyBundleCommand, ConfigVerifyBundleSource, OperationalLogFormat,
+        load_env_file_arg, parse_cli_command_from, run_config_apply_bundle, run_healthcheck,
+        CliCommand, ConfigApplyBundleCommand, ConfigVerifyBundleSource, OperationalLogFormat,
         DEFAULT_HEALTHCHECK_TIMEOUT_MS, DEFAULT_HEALTHCHECK_URL,
     };
     use axum::extract::State;
@@ -1079,11 +1192,19 @@ mod tests {
     use registry_relay::audit::{AuditRecord, EndpointKind};
     use registry_relay::config::Config;
     use serde_json::{json, Value};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex as StdMutex, OnceLock};
     use std::time::Duration;
     use tempfile::tempdir;
     use tokio::net::TcpListener;
     use tokio::sync::Mutex;
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static ENV_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+        ENV_LOCK
+            .get_or_init(|| StdMutex::new(()))
+            .lock()
+            .expect("env lock")
+    }
 
     fn sample_audit_record() -> AuditRecord {
         AuditRecord {
@@ -1294,13 +1415,111 @@ audit:
         ]))
         .expect("serve command parses");
 
-        let CliCommand::Serve { config_path } = command else {
+        let CliCommand::Serve {
+            config_path,
+            env_file,
+            bind_override,
+        } = command
+        else {
             panic!("expected serve command");
         };
         assert_eq!(
             config_path,
             std::path::PathBuf::from("/etc/registry-relay/config.yaml")
         );
+        assert!(env_file.is_none());
+        assert!(bind_override.is_none());
+    }
+
+    #[test]
+    fn serve_cli_accepts_env_file_and_bind_override() {
+        let command = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "--config=/etc/registry-relay/config.yaml",
+            "--env-file",
+            "/etc/registry-relay/relay.env",
+            "--bind=127.0.0.1:9090",
+        ]))
+        .expect("serve command parses");
+
+        let CliCommand::Serve {
+            config_path,
+            env_file,
+            bind_override,
+        } = command
+        else {
+            panic!("expected serve command");
+        };
+        assert_eq!(
+            config_path,
+            std::path::PathBuf::from("/etc/registry-relay/config.yaml")
+        );
+        assert_eq!(
+            env_file,
+            Some(std::path::PathBuf::from("/etc/registry-relay/relay.env"))
+        );
+        assert_eq!(
+            bind_override,
+            Some("127.0.0.1:9090".parse().expect("socket address parses"))
+        );
+    }
+
+    #[test]
+    fn serve_cli_reads_bind_and_env_file_from_env() {
+        let _guard = env_lock();
+        std::env::set_var("REGISTRY_RELAY_BIND", "127.0.0.1:9191");
+        std::env::set_var("REGISTRY_RELAY_ENV_FILE", "/etc/registry-relay/relay.env");
+
+        let command = parse_cli_command_from(command_args(&["registry-relay"]))
+            .expect("serve command parses");
+
+        let CliCommand::Serve {
+            env_file,
+            bind_override,
+            ..
+        } = command
+        else {
+            panic!("expected serve command");
+        };
+        assert_eq!(
+            env_file,
+            Some(std::path::PathBuf::from("/etc/registry-relay/relay.env"))
+        );
+        assert_eq!(
+            bind_override,
+            Some("127.0.0.1:9191".parse().expect("socket address parses"))
+        );
+
+        std::env::remove_var("REGISTRY_RELAY_BIND");
+        std::env::remove_var("REGISTRY_RELAY_ENV_FILE");
+    }
+
+    #[test]
+    fn env_file_loads_values_without_overwriting_process_env() {
+        let _guard = env_lock();
+        let dir = tempdir().expect("tempdir");
+        let env_file = dir.path().join("relay.env");
+        std::fs::write(
+            &env_file,
+            "REGISTRY_RELAY_TEST_ENV_FILE_TOKEN=file-token\nREGISTRY_RELAY_TEST_ENV_FILE_KEEP=file-value\n",
+        )
+        .expect("env file writes");
+        std::env::set_var("REGISTRY_RELAY_TEST_ENV_FILE_KEEP", "process-value");
+        std::env::remove_var("REGISTRY_RELAY_TEST_ENV_FILE_TOKEN");
+
+        load_env_file_arg(Some(&env_file)).expect("env file loads");
+
+        assert_eq!(
+            std::env::var("REGISTRY_RELAY_TEST_ENV_FILE_TOKEN").expect("token set"),
+            "file-token"
+        );
+        assert_eq!(
+            std::env::var("REGISTRY_RELAY_TEST_ENV_FILE_KEEP").expect("existing value kept"),
+            "process-value"
+        );
+
+        std::env::remove_var("REGISTRY_RELAY_TEST_ENV_FILE_TOKEN");
+        std::env::remove_var("REGISTRY_RELAY_TEST_ENV_FILE_KEEP");
     }
 
     #[test]
@@ -1713,7 +1932,7 @@ audit:
         std::env::remove_var(env_name);
         std::fs::write(&config_path, runtime_config_yaml(env_name)).expect("config writes");
 
-        let err = match compile_relay_runtime(config_path).await {
+        let err = match compile_relay_runtime(config_path, None).await {
             Ok(_) => panic!("missing audit secret should fail compile"),
             Err(err) => err,
         };

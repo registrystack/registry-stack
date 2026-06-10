@@ -313,10 +313,10 @@ auth:
   mode: oidc
   oidc:
     issuer: https://idp.example.gov
-    audience:
+    audiences:
       - registry-relay
     discovery_url: https://idp.example.gov/.well-known/openid-configuration
-    algorithms:
+    allowed_algorithms:
       - RS256
     jwks_cache_ttl: 10m
     leeway: 60s
@@ -325,7 +325,7 @@ auth:
       "role:social-registry-reader": "social_registry:rows"
     scope_object_required_keys: []
     allowed_clients: []
-    token_types:
+    allowed_token_types:
       - JWT
       - at+jwt
 ```
@@ -335,18 +335,18 @@ A full drop-in alternative to `config/example.yaml` lives at `config/example.oid
 | Field             | Purpose                                                                                                                                                       |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `issuer`          | Compared verbatim against the JWT `iss` claim. Must match the IdP's published issuer URL.                                                                     |
-| `audience`        | One or more accepted `aud` values. Tokens whose `aud` does not intersect this list are rejected.                                                              |
+| `audiences`       | One or more accepted `aud` values. Tokens whose `aud` does not intersect this list are rejected.                                                              |
 | `jwks_url`        | Explicit JWKS endpoint. Exactly one of `jwks_url` and `discovery_url` must be set; the validator rejects configs that supply both or neither.                 |
 | `discovery_url`   | OIDC discovery document (`.well-known/openid-configuration`). The JWKS URL is resolved from `jwks_uri` at startup.                                            |
 | `allow_dev_insecure_fetch_urls` | Development-only opt-in for loopback HTTP issuer, discovery, and JWKS URLs. Defaults to `false`; non-loopback private and metadata IPs remain denied by the platform fetch policy. |
-| `algorithms`      | Signature algorithms accepted by the verifier. RS256, ES256, EdDSA. HS\* and `none` are intentionally absent.                                                 |
+| `allowed_algorithms`      | Signature algorithms accepted by the verifier. RS256, ES256, EdDSA. HS\* and `none` are intentionally absent.                                                 |
 | `jwks_cache_ttl`  | Steady-state JWKS cache TTL. The cache also refreshes on unknown `kid` (rate-limited), so this is the rotation pickup latency, not the upper bound.           |
 | `leeway`          | Clock skew tolerance on `exp` and `nbf`. Bounded at 5 minutes by validation.                                                                                  |
 | `scope_claim`     | Name of the JWT claim to read scopes from (the config field itself is always a single string; defaults to `scope`). The claim's *value* in the token may be a space-separated string (RFC 8693 / RFC 9068), a JSON array of strings, or a JSON object whose keys are the scope names. The `aud` claim is rejected as a scope source because it is used only for token audience validation. Object-valued role keys grant scopes only when `scope_object_required_keys` names a key present in the role value and that nested value is active: `true`, a non-empty string, or a non-empty object/array containing an active value. |
 | `scope_map`       | Optional rename map applied before scope-based access checks. Adapt IdP role names to Registry Relay's `<dataset_id>:<level>` shape.                               |
 | `scope_object_required_keys` | Allowlist of keys that must appear inside object-valued role claim values before the role key is accepted. For Zitadel organization-scoped role objects, set this to the expected organization id key or keys. Defaults to empty, which means object-valued claims grant no scopes. String and array scope claims do not require this setting. |
 | `allowed_clients` | Optional allowlist matched against the token's `azp` (preferred) or `client_id`. Empty list means any client is accepted.                                     |
-| `token_types`     | Accepted JOSE `typ` header values. Defaults to `JWT` and `at+jwt` (RFC 9068). ID tokens (`id+jwt`) are intentionally rejected by default, and tokens without `typ` are rejected by the shared verifier. |
+| `allowed_token_types`     | Accepted JOSE `typ` header values. Defaults to `JWT` and `at+jwt` (RFC 9068). ID tokens (`id+jwt`) are intentionally rejected by default, and tokens without `typ` are rejected by the shared verifier. |
 
 ### Discovery vs explicit JWKS
 
@@ -368,7 +368,7 @@ Token verification failures map to specific `auth.*` codes so audit pipelines ca
 | `auth.token_not_yet_valid`      | 401  | `nbf` claim is in the future (after `leeway`)                 |
 | `auth.token_signature_invalid`  | 401  | JWKS key found but signature did not verify                   |
 | `auth.issuer_mismatch`          | 401  | `iss` claim does not match `oidc.issuer`                      |
-| `auth.audience_mismatch`        | 401  | `aud` claim does not intersect `oidc.audience`                |
+| `auth.audience_mismatch`        | 401  | `aud` claim does not intersect `oidc.audiences`                |
 | `auth.kid_unknown`              | 401  | Header `kid` is absent from the JWKS even after one refresh   |
 | `auth.algorithm_not_allowed`    | 401  | Header `alg` is not in the configured allowlist               |
 | `auth.client_not_allowed`       | 403  | `azp` / `client_id` is not in the configured `allowed_clients`|
