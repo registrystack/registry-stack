@@ -28,7 +28,7 @@ env:
   REGISTRY_MANIFEST_REPOSITORY: jeremi/registry-manifest
   REGISTRY_MANIFEST_REF: a2e648aaac864563a3311b9d95b8143afa1b7334
   CEL_MAPPING_REPOSITORY: PublicSchema/crosswalk
-  CEL_MAPPING_REF: ca7411d735f1507b9db0db637f79aff7e4ae4611
+  CROSSWALK_REF: 54e0f537830837fcd0c9efa87990987b1846931c
   REGISTRY_RELAY_IMAGE: ghcr.io/jeremi/registry-relay
   REGISTRY_RELAY_RELEASE_FEATURES: spdci-api-standards,standards-cel-mapping,ogcapi-features,ogcapi-edr,ogcapi-records
 
@@ -155,7 +155,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ env.CEL_MAPPING_REPOSITORY }}
-          ref: ${{ env.CEL_MAPPING_REF }}
+          ref: ${{ env.CROSSWALK_REF }}
           path: cel-mapping
           persist-credentials: false
 

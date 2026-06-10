@@ -38,7 +38,7 @@ env:
   REGISTRY_MANIFEST_REPOSITORY: jeremi/registry-manifest
   REGISTRY_MANIFEST_REF: a2e648aaac864563a3311b9d95b8143afa1b7334
   CEL_MAPPING_REPOSITORY: PublicSchema/crosswalk
-  CEL_MAPPING_REF: ca7411d735f1507b9db0db637f79aff7e4ae4611
+  CROSSWALK_REF: 54e0f537830837fcd0c9efa87990987b1846931c
 
 jobs:
   semic-dcat-ap:
@@ -64,7 +64,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ env.CEL_MAPPING_REPOSITORY }}
-          ref: ${{ env.CEL_MAPPING_REF }}
+          ref: ${{ env.CROSSWALK_REF }}
           path: cel-mapping
 
       - name: Link cel-mapping path dependency
@@ -94,7 +94,7 @@ jobs:
           save-if: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           # No cache write: closes the cache-poisoning vector in this workflow.
           enable-cache: false
@@ -141,7 +141,7 @@ jobs:
 
       - name: Upload validation artifacts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dcat-ap-validation
           path: |
