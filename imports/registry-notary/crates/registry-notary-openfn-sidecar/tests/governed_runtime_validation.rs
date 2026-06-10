@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use axum::http::StatusCode;
 use axum_test::TestServer;
 use chrono::{TimeDelta, Utc};
 use registry_notary_openfn_sidecar::{
@@ -26,6 +27,7 @@ use tough::key_source::{KeySource, LocalKeySource};
 use tough::schema::Target;
 
 const TOKEN_HASH_ENV: &str = "OPENFN_GOVERNED_VALIDATION_TOKEN_HASH";
+const TOKEN: &str = "contract-sidecar-token";
 const TOKEN_HASH: &str = "sha256:98808b694f3b431dcc2459db07bbfb61b8e3287ad0ab7364a2ff510d35e21418";
 const CREDENTIAL_ENV: &str = "OPENFN_GOVERNED_VALIDATION_CREDENTIAL_JSON";
 const PRODUCT: &str = "registry-notary-openfn-sidecar";
@@ -433,7 +435,14 @@ async fn governed_startup_loads_signed_tuf_target_reports_assurance_and_accepts_
     assert_eq!(ready_body["runtime_verified"], true);
     assert_eq!(ready_body["smoke_verified"], true);
 
-    let assurance = server.get("/v1/assurance").await;
+    server
+        .get("/v1/assurance")
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    let assurance = server
+        .get("/v1/assurance")
+        .add_header("authorization", format!("Bearer {TOKEN}"))
+        .await;
     assurance.assert_status_ok();
     let assurance_body: Value = assurance.json();
     assert_eq!(assurance_body["product"], PRODUCT);

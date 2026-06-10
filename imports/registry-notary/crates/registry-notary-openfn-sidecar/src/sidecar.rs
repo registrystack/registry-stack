@@ -1917,7 +1917,10 @@ async fn ready(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-async fn assurance(State(state): State<Arc<AppState>>) -> Response {
+async fn assurance(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if let Err(response) = authorize(&state, &headers) {
+        return *response;
+    }
     match &state.config.assurance {
         Some(assurance) => (StatusCode::OK, Json(assurance)).into_response(),
         None => problem(
