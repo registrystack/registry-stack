@@ -977,21 +977,18 @@ fn add_response_examples(document: &mut Value) {
             "the evidence request is invalid",
         ),
     );
-    set_json_response(
+    set_problem_response(
         document,
         "/ready",
         "get",
         "503",
         "Evidence runtime is not ready or is degraded",
-        json!({
-            "status": "degraded",
-            "checks": {
-                "total": 1,
-                "ok": 0,
-                "degraded": 1,
-                "failed": 0
-            }
-        }),
+        problem_example(
+            503,
+            "readiness.not_ready",
+            "Evidence runtime is not ready",
+            "one or more readiness checks are not ready",
+        ),
     );
     set_problem_response(
         document,

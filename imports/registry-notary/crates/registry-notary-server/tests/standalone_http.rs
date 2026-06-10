@@ -1779,8 +1779,15 @@ async fn healthz_ready_opaque_counters_in_503_body() {
 
     let ready = server.get("/ready").await;
     ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let ready_content_type = ready
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .expect("ready content-type is present");
+    assert!(ready_content_type.starts_with("application/problem+json"));
     let ready_body: Value = ready.json();
-    assert_eq!(ready_body["status"], json!("not_ready"));
+    assert_eq!(ready_body["code"], json!("readiness.not_ready"));
+    assert_eq!(ready_body["readiness_status"], json!("not_ready"));
     assert_eq!(ready_body["checks"]["total"], json!(1));
     assert_eq!(ready_body["checks"]["ok"], json!(0));
     assert_eq!(ready_body["checks"]["failed"], json!(1));

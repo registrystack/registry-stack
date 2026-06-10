@@ -213,14 +213,20 @@ async fn evaluate_sends_safe_headers_and_parses_metadata() {
 }
 
 #[tokio::test]
-async fn ready_accepts_not_ready_health_body() {
+async fn ready_503_returns_problem_details() {
     let app = Router::new().route(
         "/ready",
         get(|| async {
             (
                 StatusCode::SERVICE_UNAVAILABLE,
+                [("content-type", "application/problem+json")],
                 Json(json!({
-                    "status": "not_ready",
+                    "type": "https://docs.registry-notary.dev/problems/readiness/not-ready",
+                    "title": "Evidence runtime is not ready",
+                    "status": 503,
+                    "detail": "one or more readiness checks are not ready",
+                    "code": "readiness.not_ready",
+                    "readiness_status": "not_ready",
                     "checks": { "total": 1, "ok": 0, "failed": 1 }
                 })),
             )
@@ -231,9 +237,17 @@ async fn ready_accepts_not_ready_health_body() {
         .build()
         .expect("client builds");
 
-    let response = client.ready().await.expect("ready body parses on 503");
+    let error = client.ready().await.expect_err("ready 503 is a problem");
 
-    assert_eq!(response.body.status, "not_ready");
+    match error {
+        NotaryClientError::Problem {
+            status, problem, ..
+        } => {
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(problem.code, "readiness.not_ready");
+        }
+        other => panic!("expected readiness problem, got {other:?}"),
+    }
 }
 
 #[tokio::test]

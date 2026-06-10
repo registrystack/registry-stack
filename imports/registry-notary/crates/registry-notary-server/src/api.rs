@@ -2216,24 +2216,43 @@ async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Respons
         (false, true) => KeyReadiness::Degraded,
         (false, false) => KeyReadiness::NotReady,
     };
-    (
+    let checks = json!({
+        "total": total,
+        "ok": ok,
+        "degraded": degraded,
+        "failed": failed,
+        "signing_providers": {
+            "total": signer_total,
+            "ok": signer_ok,
+            "failed": signer_failed,
+        },
+    });
+    if ready {
+        return Json(json!({
+            "status": status_text.as_str(),
+            "checks": checks,
+        }))
+        .into_response();
+    }
+
+    let mut response = (
         status,
         Json(json!({
-            "status": status_text.as_str(),
-            "checks": {
-                "total": total,
-                "ok": ok,
-                "degraded": degraded,
-                "failed": failed,
-                "signing_providers": {
-                    "total": signer_total,
-                    "ok": signer_ok,
-                    "failed": signer_failed,
-                },
-            },
+            "type": format!("{}/readiness/not-ready", crate::PROBLEM_TYPE_BASE_URL),
+            "title": "Evidence runtime is not ready",
+            "status": status.as_u16(),
+            "detail": "one or more readiness checks are not ready",
+            "code": "readiness.not_ready",
+            "readiness_status": status_text.as_str(),
+            "checks": checks,
         })),
     )
-        .into_response()
+        .into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        "application/problem+json".parse().unwrap(),
+    );
+    response
 }
 
 async fn admin_reload(principal: Option<Extension<EvidencePrincipal>>) -> Response {

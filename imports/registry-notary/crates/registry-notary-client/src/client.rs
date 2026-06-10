@@ -133,16 +133,12 @@ impl RegistryNotaryClient {
     }
 
     /// Fetch `GET /ready`.
-    ///
-    /// A `503 Service Unavailable` body is decoded as [`HealthResponse`] rather
-    /// than surfaced as an error so callers can inspect readiness checks.
     pub async fn ready(&self) -> Result<NotaryResponse<HealthResponse>, NotaryClientError> {
-        self.get_json_accepting_status(
+        self.get_json(
             "/ready",
             RequestOptions::default(),
             LIMIT_SMALL,
             ErrorKind::Problem,
-            Some(StatusCode::SERVICE_UNAVAILABLE),
         )
         .await
     }
