@@ -139,7 +139,7 @@ explain_notary_status() {
     401)
       echo "Hint: Notary rejected the OIDC token while checking ${url}."
       if grep -q 'TokenTypeNotAllowed' "${log_path}"; then
-        echo "Hint: token type mismatch. For eSignet access tokens without typ, leave ESIGNET_TOKEN_TYPE unset so allowed_typ is []."
+        echo "Hint: token type mismatch. For eSignet access tokens without typ, leave ESIGNET_TOKEN_TYPE unset so allowed_token_types is []."
       elif grep -q 'AlgorithmNotAllowed' "${log_path}"; then
         echo "Hint: algorithm mismatch. Check ESIGNET_TOKEN_ALGORITHM and ESIGNET_USERINFO_ALGORITHM."
       elif grep -q 'IssuerMismatch' "${log_path}"; then
@@ -993,7 +993,7 @@ auth:
   mode: oidc
   oidc:
     issuer: {json.dumps(issuer)}
-    jwks_uri: {json.dumps(jwks_uri)}
+    jwks_url: {json.dumps(jwks_uri)}
 {userinfo_line.rstrip()}
 {userinfo_issuers_line.rstrip()}
     audiences:
@@ -1002,11 +1002,11 @@ auth:
 {allowed_client_lines}
     allowed_algorithms:
 {algorithm_lines}
-    allowed_typ:{typ_lines}
+    allowed_token_types:{typ_lines}
     scope_claim: scope
     scope_separator: " "
     principal_claim: sub
-    leeway_seconds: 60
+    leeway: 60s
     allow_insecure_localhost: true
     scope_map:
       {json.dumps(scope)}:

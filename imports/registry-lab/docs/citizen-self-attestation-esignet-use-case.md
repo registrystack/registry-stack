@@ -244,7 +244,7 @@ access token, use the implemented companion-token path:
   from the access-token issuer, for example `http://localhost:8088/v1/esignet`
 - `auth.oidc.allowed_algorithms` includes both the access-token algorithm and
   the signed UserInfo algorithm when eSignet uses different algorithms
-- `auth.oidc.allowed_typ: []` only for eSignet deployments whose access token
+- `auth.oidc.allowed_token_types: []` only for eSignet deployments whose access token
   omits `typ`; keep the stricter default when the header is present
 - `self_attestation.scope_policy: disabled` when the eSignet access token does
   not carry a useful `scope` claim
