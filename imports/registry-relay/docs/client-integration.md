@@ -61,20 +61,12 @@ Relay deployments use one auth mode at startup:
 Do not try both headers in the same client profile. Choose the mode advertised
 by the deployment operator.
 
-Scopes are dataset-local and independent, written as `<dataset_id>:<level>` (for
-example `social_registry:rows`):
-
-| Scope Level | Use |
-| --- | --- |
-| `metadata` | Discover visible datasets, entities, schemas, policies, and scoped OpenAPI |
-| `rows` | Read entity records and relationships |
-| `aggregate` | Discover and execute configured aggregates |
-| `evidence_verification` | Evidence-oriented standards adapter access, not Relay-local verification |
-| `admin` | Admin-listener operations; uses the fixed scopes `registry_relay:admin` and `registry_relay:ops_read`, not a per-dataset suffix |
-
-A `metadata` scope never implies row access. A row scope never implies
-aggregate access. Evidence-verification scope does not expose a verification
-execution endpoint in Relay.
+Scopes are dataset-local and written as `<dataset_id>:<level>` (for example
+`social_registry:rows`). Request only the scopes your workflow needs: a
+`metadata` scope never implies row access, a row scope never implies aggregate
+access, and the `evidence_verification` scope grants standards-adapter access
+only, not a Relay-local verification execution endpoint. For the full scope
+semantics see the [Registry Relay API reference](api.md#authentication).
 
 ## Purpose Header
 
@@ -86,7 +78,9 @@ Data-Purpose: https://data.example.gov/purposes/service-intake-check
 ```
 
 The value is written into audit records. Do not put subject identifiers,
-free-text case notes, bearer tokens, or other secrets in this header.
+free-text case notes, bearer tokens, or other secrets in this header. For the
+full list of entities that enforce this header and the resulting error code, see
+the [Registry Relay API reference](api.md#purpose-headers).
 
 ## Discovery
 
@@ -186,10 +180,53 @@ verification semantics behind evidence offerings.
 
 ## Registry Notary Handoff
 
-Relay evidence-offering metadata may advertise `access.kind: registry-notary`.
+Relay publishes evidence offering metadata for discovery and delegates all claim
+and evidence verification to Registry Notary. The only evidence offering routes
+in Relay are:
+
+```http
+GET /metadata/evidence-offerings
+GET /metadata/evidence-offerings/{offering_id}
+```
+
+These routes require the caller's `metadata` scope for the owning dataset. They
+return discovery records; they do not execute a check, compute claim hashes,
+issue verification receipts, or disclose row data. There is no
+`POST /evidence-offerings/{offering_id}/verifications` route in Relay.
+
+```mermaid
+sequenceDiagram
+  participant Client as Service client
+  participant Relay as Registry Relay
+  participant Notary as Registry Notary
+
+  Client->>Relay: GET /metadata/evidence-offerings
+  Relay-->>Client: Offering metadata with access.kind registry-notary
+  Client->>Notary: Submit claim or evidence to the advertised endpoint
+  Notary-->>Client: Verification result or credential
+```
+
+*The discovery and verification boundary. Relay publishes evidence offering
+metadata that points to a Notary; the client submits the claim or evidence to
+that Notary, which performs verification. Relay makes no verification decision.*
+
 When a client needs to verify claims or evidence:
 
-1. Discover the offering through Relay metadata.
-2. Read the advertised Registry Notary endpoint or discovery URL.
+1. Fetch `GET /metadata/evidence-offerings` (or the single-offering route by id)
+   to discover available offerings.
+2. Read the `access.kind: registry-notary` field and the advertised Notary
+   endpoint or discovery URL.
 3. Follow Registry Notary's client documentation for request shape, claim
    semantics, presentation, result verification, and credential issuance.
+
+The `evidence_verification` scope is available as a distinct label for
+standards adapters and integrations that need evidence-oriented access separate
+from row reads. It does not grant metadata, rows, aggregates, admin reload, or a
+Relay-local verification endpoint.
+
+Use Registry Notary's documentation as the source of truth for verification
+semantics, claim request bodies, result interpretation, credential issuance,
+client retries, and verifier behavior:
+
+- [Registry Notary client SDK guide](https://docs.registrystack.org/products/registry-notary/client-sdk-guide/)
+- [Registry Notary documentation](https://docs.registrystack.org/products/registry-notary/)

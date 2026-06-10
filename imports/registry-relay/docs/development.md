@@ -1,6 +1,6 @@
 # registry-relay Development Guide
 
-This guide is for contributors working on the gateway codebase. Operator docs live in [ops.md](ops.md), [configuration.md](configuration.md), [api.md](api.md), [metadata.md](metadata.md), [evidence-verification.md](evidence-verification.md), and [provenance.md](provenance.md).
+This guide is for contributors working on the gateway codebase. Operator docs live in [ops.md](ops.md), [configuration.md](configuration.md), [api.md](api.md), [metadata.md](metadata.md), [client-integration.md](client-integration.md), and [provenance.md](provenance.md).
 
 ## Local Setup
 
@@ -29,6 +29,41 @@ just run
 ```
 
 For richer local flows, use the demo pack in [../demo/README.md](../demo/README.md).
+
+## Running against a local IdP
+
+The steps below are a worked example for contributors, using the project's own local development stack (a Zitadel instance provisioned by the sibling `publicschema.com` compose stack). For a real deployment, adapt them to your own IdP.
+
+The publicschema.com dev compose stack provisions a Zitadel organisation, project, OIDC application, test user, machine service account, and the relay-facing project roles on first boot. See `apps/publicschema.com/compose/seed/zitadel-bootstrap.md` for the resources created, the env-file shape, and the claim that carries roles in minted access tokens.
+
+**Prerequisites.** The bootstrap must have completed against a current Zitadel volume so the `publicschema-api` machine user has `accessTokenType: JWT` and a generated client secret (Section 7b of `compose/seed/zitadel-init.sh`). Token minting uses the SA's `client_credentials` grant rather than the `workbench-dev` OIDC app's, because Zitadel WEB-typed OIDC applications silently drop the `client_credentials` grant at write time. If you are pointing at an older snapshot of the stack that predates the SA hardening, re-run `docker compose -f compose/dev.compose.yaml up zitadel-init` against the publicschema.com stack to regenerate the SA credentials and refresh `compose/seed/zitadel.env`; otherwise the token mint will fail with `invalid_grant` or produce an opaque bearer that the relay cannot verify.
+
+To exercise the relay end-to-end:
+
+```sh
+# 1. Bring up Zitadel from the sibling stack.
+cd ../publicschema.com
+docker compose -f compose/dev.compose.yaml up -d zitadel zitadel-init
+
+# 2. Mint a test access token.
+cd ../registry-relay
+TOKEN="$(./scripts/mint-zitadel-token.sh)"
+
+# 3. Run the relay against the OIDC example.
+cargo run -- --config config/example.oidc.yaml
+
+# 4. Hit a protected endpoint with the minted bearer.
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/metadata/catalog
+```
+
+The `tests/oidc_zitadel.rs` integration test exercises the same path and asserts the granular failure modes above. The test reads `OIDC_ISSUER`, `OIDC_SA_CLIENT_ID`, and `OIDC_SA_CLIENT_SECRET` from the environment, so source the bootstrap env file first:
+
+```sh
+source ../publicschema.com/compose/seed/zitadel.env
+cargo test --test oidc_zitadel -- --ignored --nocapture
+```
+
+The integration test verifies the auth wiring (signature, issuer, audience, principal extraction, granular `auth.*` codes) using a token minted by the bootstrap. Asserting RBAC against specific resource scopes requires either roles in the token that match `oidc.scope_map`'s keys, or aligning `oidc.scope_claim` with the IdP's role-bearing claim; the example `config/example.oidc.yaml` ships with the values the bootstrap emits.
 
 ## Verification Commands
 
@@ -74,15 +109,7 @@ runtime bindings against those manifests. Keep [metadata.md](metadata.md)
 current when changing the manifest model, renderer outputs, publication layout,
 or `/metadata/*` routes.
 
-Render static artifacts during metadata work:
-
-```sh
-just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml catalog target/metadata/catalog.json
-just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml dcat target/metadata/dcat.jsonld
-just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml shacl target/metadata/shacl.jsonld
-just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml json-schema target/metadata/person.schema.json "--dataset vital-events --entity person"
-just metadata-publish profiles/example-civil-registration/fixtures/metadata.yaml target/metadata/public
-```
+For rendering individual artifacts and publishing static bundles, see [metadata.md](metadata.md#cli-reference).
 
 DCAT-AP catalog validation runs at two levels:
 
@@ -195,8 +222,94 @@ Storage tables are private. Public routes must go through entity config, scope c
 4. Add positive and negative loader tests under `tests/config_loader.rs` or a focused test file.
 5. Update [configuration.md](configuration.md) and [ops.md](ops.md) when operators must set or rotate it.
 
+## Pull Requests
+
+Keep pull requests focused. Include tests for any code change, or explain why the change is documentation, configuration, or tooling only. Do not commit secrets, production data, private operator notes, or internal planning documents.
+
 ## Documentation Style
 
-Docs should describe the current supported behavior first, then any reserved or deferred surfaces. Keep `README.md`, `docs/api.md`, `docs/configuration.md`, `docs/evidence-verification.md`, and `docs/ops.md` operationally current.
+Docs should describe the current supported behavior first, then any reserved or deferred surfaces. Keep `README.md`, `docs/api.md`, `docs/configuration.md`, `docs/client-integration.md`, and `docs/ops.md` operationally current.
 
 Inline Rust docs should explain invariants and boundaries that are easy to break while editing. Avoid comments that repeat obvious field names or preserve obsolete implementation scaffolding after the code has matured.
+
+## OpenAPI Release Policy
+
+Registry Relay has two OpenAPI surfaces:
+
+- Runtime OpenAPI: auth-gated by default, generated from the running configuration, and filtered to the caller's metadata scopes. Demo and controlled tooling configs can expose the full OpenAPI surface without auth.
+- Static OpenAPI: the checked-in abstract artifact under [`../openapi/`](../openapi/), used for release review and contract discussion.
+
+The runtime document is the source of truth for a deployed instance. The static artifact is a release artifact, not a replacement for deployment discovery. Fetch runtime `/openapi.json` from a deployment for concrete dataset and entity operations.
+
+### When to Refresh the Static Artifact
+
+Refresh the static OpenAPI artifact when any of these change:
+
+- public route family;
+- auth or scope requirement;
+- query parameter or request body;
+- response body or media type;
+- Problem Details schema or stable error code;
+- provenance media type or schema;
+- standards adapter surface;
+- metadata visibility rule that changes generated operations.
+
+Do not refresh it for implementation-only refactors that leave the public contract unchanged.
+
+### Refresh Procedure
+
+1. Update [api.md](api.md) for any public contract change.
+2. Start Relay with a representative release config.
+3. Fetch the runtime OpenAPI document with a principal that can see the intended release surface, or with `server.openapi_requires_auth: false` in a controlled local release-artifact config.
+4. Reduce instance-specific dataset/entity names to abstract placeholders if the release artifact is meant to stay deployment-neutral.
+5. Validate JSON formatting.
+6. Run the API documentation tests.
+7. Diff the static artifact and check that every meaningful change is explained in release notes.
+
+Suggested checks:
+
+```sh
+python -m json.tool openapi/registry-relay.openapi.json >/dev/null
+cargo test --test api_docs
+```
+
+### Review Rules
+
+Review the static artifact for:
+
+- no secret examples;
+- no private source paths;
+- no deployment-only hostnames except example domains;
+- no accidental broadening of scopes;
+- Problem Details responses on non-2xx operations;
+- correct media types for JSON, CSV, and VC-JWT responses;
+- tags and summaries that match the docs;
+- route families that match the API guide.
+
+### Release Note Requirement
+
+Every static OpenAPI refresh should mention one of:
+
+- no public contract change, artifact refreshed for documentation parity;
+- additive contract change;
+- breaking contract change;
+- route-design cleanup before the API is declared stable.
+
+Release notes should call the artifact abstract when it uses placeholder dataset/entity names and should direct deployments to fetch the runtime `/openapi.json` document for concrete route and dataset shape.
+
+## Platform Compatibility Gate
+
+Relay consumes `registry-platform` from a sibling checkout during local commons
+release work. Run the compatibility gate before merging Platform-facing
+changes:
+
+```sh
+REGISTRY_PLATFORM_SOURCE_DIR=../registry-platform scripts/check-platform-compat.sh
+```
+
+The command checks the all-feature build plus the focused OIDC and audit tests
+that exercise the shared Platform security APIs. When
+`REGISTRY_PLATFORM_SOURCE_DIR` is not the sibling path encoded in Cargo, the
+script builds in a temporary sibling-layout copy so Cargo resolves the same
+Platform checkout the script validated. Set `CEL_MAPPING_SOURCE_DIR` as well
+when the Crosswalk checkout is not available at `../cel-mapping`.

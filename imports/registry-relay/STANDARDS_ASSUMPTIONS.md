@@ -115,8 +115,8 @@ means "this dataset has a discoverable policy node." It is not sufficient legal
 basis, and it should not remove policy review gaps in downstream tools unless
 more specific configured policy evidence is present.
 
-See [ODRL Policy Metadata Spec](docs/odrl-policy-spec.md) for the proposed
-implementation shape.
+See the [ODRL policy metadata contract](docs/metadata.md#odrl-policy-metadata-contract)
+for the implemented shape.
 
 ## DSP Alignment
 

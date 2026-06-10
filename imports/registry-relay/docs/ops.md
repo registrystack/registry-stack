@@ -51,6 +51,134 @@ reload operations and is reachable only from the private admin and monitoring
 networks. Source files are read-only; the cache is writable; the public
 data-plane listener does not mount `/metrics`.*
 
+## Production Hardening Checklist
+
+Run this gate before promoting any deployment beyond local demo use. Items that
+are fully covered by an existing section link to it; items unique to this
+checklist carry a one-line note.
+
+### Network Boundaries
+
+- [ ] Public data-plane listener is behind TLS at the ingress or service mesh
+  layer. See [Deployment Model](#deployment-model).
+- [ ] `server.admin_bind` is bound only to a private interface or loopback; it
+  is not reachable through the public ingress. See [Deployment
+  Model](#deployment-model) and [Metrics](#metrics).
+- [ ] `/metrics`, `/admin/v1/posture`, and reload routes are not accessible from
+  `server.bind`. See [Admin Posture And Config Apply](#admin-posture-and-config-apply).
+- [ ] Rate-limiting is configured at the ingress for broad metadata discovery
+  and aggregate endpoints.
+- [ ] `server.trust_proxy` is disabled unless the gateway sits behind documented
+  trusted proxy CIDRs. See [Configure](#configure).
+
+### Auth And Key Rotation
+
+- [ ] OIDC is preferred for multi-service deployments; API keys are acceptable
+  only when a rotation and storage workflow is in place. See [API-Key
+  Provisioning And Rotation](#api-key-provisioning-and-rotation).
+- [ ] Dataset scopes are granted narrowly: metadata, aggregate, rows,
+  evidence-verification, and admin scopes are separate and not implied by one
+  another. Verified in `config/example.yaml` (`scopes` entries).
+- [ ] `scope_map` is reviewed whenever IdP role names change (OIDC deployments).
+- [ ] Denied callers are tested for every exposed dataset and adapter before
+  go-live.
+
+### Secrets Handling
+
+- [ ] API-key hashes, `audit.hash_secret_env` material, OIDC client secrets,
+  database passwords, and provenance signing JWKs are stored in the platform
+  secret manager, not in YAML, image layers, shell history, crash reports, or
+  issue trackers. See [API-Key Provisioning And Rotation](#api-key-provisioning-and-rotation)
+  and [Provenance Signer Rotation](#provenance-signer-rotation).
+- [ ] Full environment dumps are disabled in diagnostic tooling.
+- [ ] Provenance signing-key rotation includes a DID document overlap window
+  long enough for existing credentials to expire. See [Provenance Signer
+  Rotation](#provenance-signer-rotation).
+
+### Source Data Mounts
+
+- [ ] File sources are mounted read-only. See [Deployment Model](#deployment-model).
+- [ ] Database credentials have read-only privileges.
+- [ ] PostgreSQL sources are bounded by configured projections, filters, and
+  limits; table ids, column names, source paths, and query text are not exposed
+  through metadata unless explicitly published.
+- [ ] `server.cache_dir` is writable only by the Relay service account (UID/GID
+  `65532:65532` in the production container). See [Deployment Model](#deployment-model).
+
+### Audit Sink
+
+- [ ] An audit sink is configured before production use. See [Audit Sink And
+  Rotation](#audit-sink-and-rotation).
+- [ ] `audit.hash_secret_env` is set to at least 32 bytes of deployment-specific
+  random secret material; the relay fails closed if it is missing or weak.
+  Field confirmed present in `src/config/mod.rs` and `config/example.yaml`.
+- [ ] Append-only external log storage (or independent tail-hash anchoring) is
+  used where stronger integrity is required; the beta sinks do not protect
+  against a writer that can rewrite the sink. See [Audit Sink And
+  Rotation](#audit-sink-and-rotation).
+- [ ] Identifier fields that need audit redaction carry `sensitive: true` in
+  table or entity field config. Field confirmed in `src/config/mod.rs`. Note:
+  `sensitive: true` is audit-only; it does not hide fields from authorized
+  responses.
+- [ ] Bearer tokens, raw API keys, raw query values, row bodies, VC-JWTs, and
+  unreviewed `detail` text are not logged.
+
+### Metadata And Provenance Posture
+
+- [ ] Portable metadata is validated before deployment (`just
+  metadata-validate-profiles`). See [Build And Release](#build-and-release).
+- [ ] Runtime backend URLs, source paths, scope names, and table ids are absent
+  from portable metadata manifests.
+- [ ] Scoped runtime metadata is not placed in shared public caches.
+- [ ] Provenance is enabled only when verifiers can resolve the configured
+  schemas, contexts, and DID documents. See [Provenance Signer
+  Rotation](#provenance-signer-rotation).
+- [ ] Registry Notary evidence verification is kept separate from Relay response
+  provenance.
+
+### Container Runtime Policy
+
+- [ ] Production images use the `Dockerfile` (distroless `cc-debian12:nonroot`,
+  UID/GID `65532:65532`). `Dockerfile.demo` is not used as production runtime
+  evidence.
+- [ ] No shell, package manager, `curl`, or `wget` dependencies are present in
+  the production runtime stage; healthcheck uses `registry-relay healthcheck`.
+- [ ] Writable mounts (`server.cache_dir`, `audit.sink: file` path) are owned
+  by UID/GID `65532:65532`. See [Deployment Model](#deployment-model).
+- [ ] TLS client behavior is verified after any base-image change by exercising
+  an HTTPS OIDC JWKS/discovery path or a PostgreSQL TLS connection.
+
+### Readiness Gates
+
+- [ ] Liveness (`/healthz`) and readiness (`/ready`) probes are configured in
+  the orchestrator. See [Readiness And Probes](#readiness-and-probes).
+- [ ] Startup time allows for the largest XLSX/Parquet ingest before readiness
+  is declared. See [Readiness And Probes](#readiness-and-probes).
+- [ ] Alerts are set on startup validation failures, source ingest failures,
+  audit sink failures, auth provider failures, and provenance signer failures.
+  See [Metrics](#metrics).
+- [ ] Degraded-source behavior and readiness expectations are tested in staging
+  with production-shaped data sizes.
+- [ ] The exact config, binary version, feature flags, and metadata manifest are
+  recorded for each deployment.
+
+### Pre-Promotion Test Gate
+
+Run the closest practical checks for the enabled feature set before promoting
+any image:
+
+```sh
+just fmt-check
+just lint
+just test-default
+just test
+just build
+just metadata-validate-profiles
+```
+
+When optional adapters are enabled, run focused all-feature integration tests
+for those adapters before exposing them to consumers.
+
 ## Build And Release
 
 Build a local release binary:
@@ -137,6 +265,34 @@ Important configuration blocks:
 - `audit`: audit sink and JSONL options.
 
 Local-file startup config changes remain a rolling restart operation. Governed signed config apply is available on the private admin listener when the runtime handle and `config_trust` are installed. It can live-apply compatible public metadata changes, compatible provenance signing-key rotations, and locally approved root transitions that only change `config_trust.accepted_roots`; route-affecting, listener, auth, audit, dataset, standards, and most provenance shape changes still report `restart_required` and must be rolled through deployment. Dataset reload does not reload startup `config.yaml`.
+
+## Operating With Registry Notary
+
+Registry Relay is the protected registry consultation API. Registry Notary is
+the claim evaluation, credential issuance, and attestation service. Relay can
+publish metadata evidence offerings that point callers to Notary, but Relay
+does not execute Notary claims. Notary calls Relay as an HTTP source when a
+claim profile needs registry data.
+
+Configure credentials on both sides:
+
+- Relay must register a token hash for the Notary source caller, with only the
+  dataset scopes needed by Notary claim profiles.
+- Notary must register the caller token used by programs or wallets against
+  Notary routes, and its source connector must reference the raw Relay token
+  through an environment-backed `token_env`.
+- Keep raw tokens and signing material out of YAML. Use service environment
+  variables such as `REGISTRY_RELAY_CONFIG`, `REGISTRY_RELAY_BIND`,
+  `REGISTRY_RELAY_LOG_FORMAT`, and `REGISTRY_RELAY_ENV_FILE`; use secret
+  indirection fields ending in `_env` for token hashes, audit secrets, signing
+  keys, database URLs, and source tokens.
+
+For side-by-side local compose stacks, keep the public host ports distinct
+while letting each container use its internal default listener. A common
+convention is Relay on host `18080` mapped to container `8080`, and Notary on
+host `18081` mapped to its container listener. Native local runs usually use
+Relay `127.0.0.1:8080` and Notary `127.0.0.1:8081`; align source `base_url`
+values with the network where Notary runs.
 
 ## API-Key Provisioning And Rotation
 
