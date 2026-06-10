@@ -4,6 +4,19 @@
 
 ### Changed
 
+- BREAKING: `/metrics` on the admin listener now requires authentication with
+  the `registry_relay:metrics_read` scope. Previously the route was served
+  unauthenticated on the admin socket. Existing Prometheus scrapers must
+  present a credential carrying that scope.
+- BREAKING: Health and readiness response bodies changed shape.
+  `/healthz` (and the liveness route) previously returned `{"status":"ok"}`;
+  it now returns `{"status":"ok","checks":{"total":...,"ok":...,"failed":...}}`.
+  `/ready` previously included `"counts":{"ready":N}` in the 200 body; that
+  field is replaced by the same `checks` structure.
+- ProblemDetails error bodies now always include a `request_id` field
+  (a server-minted ULID; client-supplied `x-request-id` headers are stripped
+  before processing). The OpenAPI `ProblemDetails` schema marks `request_id`
+  required.
 - Renamed OIDC config fields to the shared Registry service convention:
   `auth.oidc.audience` -> `auth.oidc.audiences`,
   `auth.oidc.algorithms` -> `auth.oidc.allowed_algorithms`, and
