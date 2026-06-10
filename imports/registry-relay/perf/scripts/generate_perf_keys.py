@@ -12,7 +12,7 @@ where the hex is SHA-256(raw_token_bytes). This is stdlib hashlib.
 The `cryptography` dep is used solely to derive the Ed25519 public half from
 the freshly generated private seed when assembling the provenance JWK.
 
-Generates 5 tokens, writes an env file, and prints only the variable names and
+Generates 6 tokens, writes an env file, and prints only the variable names and
 the output path. Raw tokens and hashes are never printed to stdout.
 
 Also emits:
@@ -53,6 +53,7 @@ KEY_DEFS = [
     ("perf_aggregate",          "PERF_AGGREGATE_KEY_HASH",          ["clinic_capacity:aggregate"]),
     ("perf_no_scope",           "PERF_NO_SCOPE_KEY_HASH",           ["other:metadata"]),
     ("perf_evidence_verification", "PERF_EVIDENCE_VERIFICATION_KEY_HASH", ["clinic_capacity:evidence_verification"]),
+    ("perf_admin",              "PERF_ADMIN_KEY_HASH",              ["admin"]),
 ]
 
 INVALID_TOKEN_VALUE = "not-a-real-token-xxxx"
@@ -152,6 +153,7 @@ def build_env_lines(
         f"REGISTRY_RELAY_TOKEN_AGGREGATE={tokens['perf_aggregate']}",
         f"REGISTRY_RELAY_TOKEN_NO_SCOPE={tokens['perf_no_scope']}",
         f"REGISTRY_RELAY_TOKEN_EVIDENCE_VERIFICATION={tokens['perf_evidence_verification']}",
+        f"REGISTRY_RELAY_TOKEN_ADMIN={tokens['perf_admin']}",
         f"REGISTRY_RELAY_TOKEN_INVALID={INVALID_TOKEN_VALUE}",
         "#",
         "# Routing defaults",
@@ -319,6 +321,7 @@ def main() -> None:
         "REGISTRY_RELAY_TOKEN_AGGREGATE",
         "REGISTRY_RELAY_TOKEN_NO_SCOPE",
         "REGISTRY_RELAY_TOKEN_EVIDENCE_VERIFICATION",
+        "REGISTRY_RELAY_TOKEN_ADMIN",
         "REGISTRY_RELAY_TOKEN_INVALID",
         "REGISTRY_RELAY_BASE_URL",
         "REGISTRY_RELAY_DATASET_ID",

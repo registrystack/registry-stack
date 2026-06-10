@@ -109,6 +109,9 @@ set -a; . target/perf/perf.env; set +a
 k6 run perf/k6/cached_304.js
 ```
 
+Set `REGISTRY_RELAY_NO_THRESHOLD=1` only for CI smoke or wiring checks where
+the goal is to verify that the scenario runs, not to enforce capacity targets.
+
 ---
 
 ## Profiles
@@ -120,11 +123,11 @@ k6 run perf/k6/cached_304.js
 | large   | clinic_capacity_1m       | 1M    | Regression, capacity, latency budgets |
 
 Config files in `perf/config/` mirror these profiles. Each config uses
-`auth.mode: api_key` with the five key ids from `generate_perf_keys.py`
+`auth.mode: api_key` with the six key ids from `generate_perf_keys.py`
 (`perf_rows`, `perf_metadata`, `perf_aggregate`, `perf_no_scope`,
-`perf_evidence_verification`). The evidence-verification key carries
+`perf_evidence_verification`, `perf_admin`). The evidence-verification key carries
 `clinic_capacity:evidence_verification` for scope-bound discovery and standards
-adapter checks.
+adapter checks. The admin key carries `admin` for reload-under-load scenarios.
 
 The `large` profile requires roughly 2 GB of memory for the server process.
 The optional 5M tier (`--include-5m`) requires ~8 GB and should only be used on
@@ -196,6 +199,7 @@ correct choice only when freshness is worth the upstream database round trip.
 | `REGISTRY_RELAY_TOKEN_AGGREGATE`          | (generated)              | Token with `clinic_capacity:aggregate` scope           |
 | `REGISTRY_RELAY_TOKEN_NO_SCOPE`           | (generated)              | Valid token with no `clinic_capacity:*` scope          |
 | `REGISTRY_RELAY_TOKEN_EVIDENCE_VERIFICATION` | (generated)              | Token with `clinic_capacity:evidence_verification` scope  |
+| `REGISTRY_RELAY_TOKEN_ADMIN`              | (generated)              | Token with `admin` scope for admin reload scenarios    |
 | `REGISTRY_RELAY_TOKEN_INVALID`            | `not-a-real-token-xxxx`  | Deliberately invalid token for 401 tests               |
 | `REGISTRY_RELAY_DATASET_ID`               | `clinic_capacity`        | Dataset id used in k6 URL construction                 |
 | `REGISTRY_RELAY_ENTITY`                   | `facility`               | Entity name used in k6 URL construction                |
@@ -204,6 +208,7 @@ correct choice only when freshness is worth the upstream database round trip.
 | `PERF_AGGREGATE_KEY_HASH`                 | (generated sha256 hash)  | Fingerprint for `perf_aggregate`                       |
 | `PERF_NO_SCOPE_KEY_HASH`                  | (generated sha256 hash)  | Fingerprint for `perf_no_scope`                        |
 | `PERF_EVIDENCE_VERIFICATION_KEY_HASH`        | (generated sha256 hash)  | Fingerprint for `perf_evidence_verification`              |
+| `PERF_ADMIN_KEY_HASH`                     | (generated sha256 hash)  | Fingerprint for `perf_admin`                           |
 | `REGISTRY_RELAY_AUDIT_HASH_SECRET`        | (generated)              | HMAC secret for sensitive audit identifiers; must stay stable across restarts |
 | `REGISTRY_RELAY_PROVENANCE_JWK`           | (generated Ed25519 JWK)  | Private signing key for VC-JWT provenance responses |
 

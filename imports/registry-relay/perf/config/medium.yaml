@@ -55,6 +55,14 @@ auth:
       scopes:
         - clinic_capacity:evidence_verification
 
+    - id: perf_admin
+      fingerprint:
+        provider: env
+        name: PERF_ADMIN_KEY_HASH
+        commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
+      scopes:
+        - admin
+
 
 # Provenance signer for VC-JWT response checks.
 #

@@ -31,11 +31,14 @@ import {
   trackExpectedDenyResponse,
   tagExpected,
   logScenarioStart,
+  profile,
 } from './lib/common.js';
+
+const thresholdKey = profile() === 'large' ? 'mixed_read_large' : 'mixed_read';
 
 export const options = commonOptions({
   scenario: 'mixed_read',
-  thresholdKey: 'mixed_read',
+  thresholdKey,
   defaultVus: 20,
   defaultDuration: '30s',
 });

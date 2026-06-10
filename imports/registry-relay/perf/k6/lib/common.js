@@ -7,7 +7,6 @@
 //     If the server later adds compression, run compressed and identity profiles separately.
 //   Auth: Authorization: Bearer <token> by default. X-Api-Key is tested in auth_deny.js.
 
-import { textSummary } from 'https://jslib.k6.io/k6-summary/0.0.2/index.js';
 import { Counter, Rate } from 'k6/metrics';
 import { fail } from 'k6';
 
@@ -183,6 +182,9 @@ const GLOBAL_THRESHOLDS = {
 };
 
 export function thresholdsFor(key) {
+  if (__ENV.REGISTRY_RELAY_NO_THRESHOLD === '1') {
+    return GLOBAL_THRESHOLDS;
+  }
   const specific = THRESHOLDS[key] || {};
   return Object.assign({}, specific, GLOBAL_THRESHOLDS);
 }
@@ -293,8 +295,37 @@ export function handleSummaryFor(scenarioName, data) {
   const base = `target/perf/reports/${scenarioName}-${ts}`;
   return {
     [`${base}.json`]: JSON.stringify(data, null, 2),
-    [`${base}.txt`]: textSummary(data, { indent: ' ', enableColors: false }),
+    [`${base}.txt`]: summaryTextFor(scenarioName, data),
   };
+}
+
+function metricValue(data, metricName, valueName) {
+  const metric = data.metrics && data.metrics[metricName];
+  const values = metric && metric.values;
+  return values && values[valueName] !== undefined ? values[valueName] : null;
+}
+
+function formatMetricValue(value, suffix) {
+  if (value === null || value === undefined) {
+    return 'n/a';
+  }
+  if (typeof value === 'number') {
+    return `${value.toFixed(3)}${suffix || ''}`;
+  }
+  return `${value}${suffix || ''}`;
+}
+
+function summaryTextFor(scenarioName, data) {
+  const lines = [`registry-relay k6 summary: ${scenarioName}`];
+  lines.push(`checks_rate=${formatMetricValue(metricValue(data, 'checks', 'rate'))}`);
+  lines.push(`http_reqs=${formatMetricValue(metricValue(data, 'http_reqs', 'count'))}`);
+  lines.push(`http_req_failed_rate=${formatMetricValue(metricValue(data, 'http_req_failed', 'rate'))}`);
+  lines.push(`http_req_duration_med=${formatMetricValue(metricValue(data, 'http_req_duration', 'med'), 'ms')}`);
+  lines.push(`http_req_duration_p95=${formatMetricValue(metricValue(data, 'http_req_duration', 'p(95)'), 'ms')}`);
+  lines.push(`http_req_duration_p99=${formatMetricValue(metricValue(data, 'http_req_duration', 'p(99)'), 'ms')}`);
+  lines.push(`data_received=${formatMetricValue(metricValue(data, 'data_received', 'count'), ' bytes')}`);
+  lines.push(`data_sent=${formatMetricValue(metricValue(data, 'data_sent', 'count'), ' bytes')}`);
+  return `${lines.join('\n')}\n`;
 }
 
 // ---------------------------------------------------------------------------
