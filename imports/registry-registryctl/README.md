@@ -37,6 +37,44 @@ REGISTRYCTL_VERSION=vX.Y.Z curl -fsSL https://raw.githubusercontent.com/jeremi/r
 Snapshot binaries are currently published for Linux x86_64, Linux aarch64, and
 macOS aarch64.
 
+## OpenFn sidecar import
+
+`registryctl openfn import` converts an OpenFn workflow URL or exported YAML
+into Registry Notary OpenFn sidecar runtime files:
+
+```sh
+registryctl openfn import ./openfn.yaml \
+  --workflow person-lookup \
+  --source person_lookup \
+  --dataset civil_registry \
+  --entity civil_person \
+  --credential-env REGISTRY_SOURCE_CREDENTIAL_JSON \
+  --smoke national_id=smoke-person
+```
+
+The command writes a sidecar manifest, OpenFn job expression files, and a
+starter Notary config snippet. It checks the workflow topology, adaptor pins,
+credentials, smoke lookup inputs, and sidecar limits before writing output.
+
+For OpenFn-authored native batch workflows, use the
+`@registry/notary-openfn` adaptor in the workflow and import with:
+
+```sh
+registryctl openfn import ./openfn.yaml \
+  --workflow native-batch-person-lookup \
+  --source person_lookup \
+  --dataset civil_registry \
+  --entity civil_person \
+  --credential-env REGISTRY_SOURCE_CREDENTIAL_JSON \
+  --smoke national_id=smoke-person \
+  --batch-mode native
+```
+
+`--batch-mode per-item` remains the default. It compiles the workflow once and
+runs the lookup workflow for each batch item. `--batch-mode native` runs the
+workflow once with `state.data.items` and requires the Registry Notary adaptor
+so authors can return validated per-item results from OpenFn.
+
 ## Development
 
 ```sh

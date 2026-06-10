@@ -1,7 +1,7 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
@@ -60,6 +60,96 @@ pub struct NotaryInitOptions {
     pub source_claim_title: String,
 }
 
+#[derive(Debug)]
+pub struct OpenFnConvertOptions {
+    pub input: PathBuf,
+    pub workflow: Option<String>,
+    pub output: PathBuf,
+    pub jobs_dir: PathBuf,
+    pub expression_prefix: Option<PathBuf>,
+    pub source_id: String,
+    pub dataset: String,
+    pub entity: String,
+    pub credential_env: String,
+    pub allowed_base_urls: Vec<String>,
+    pub smoke_field: String,
+    pub smoke_value: String,
+    pub smoke_fields: Option<String>,
+    pub smoke_purpose: String,
+    pub auth_hash_env: String,
+    pub server_bind: String,
+    pub cli_build_tool: String,
+    pub runtime: String,
+    pub worker_command: PathBuf,
+    pub worker_script: PathBuf,
+    pub max_workers: usize,
+    pub worker_timeout_ms: u64,
+    pub max_worker_memory_mb: u64,
+    pub max_output_bytes: usize,
+    pub max_request_bytes: usize,
+    pub max_query_parameter_bytes: usize,
+    pub max_batch_items: usize,
+    pub batch_mode: OpenFnBatchMode,
+    pub notary_snippet_output: Option<PathBuf>,
+    pub sidecar_base_url: Option<String>,
+    pub sidecar_token_env: String,
+    pub allow_latest_adaptors: bool,
+    pub allow_empty_job_bodies: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenFnBatchMode {
+    PerItem,
+    Native,
+}
+
+impl OpenFnBatchMode {
+    fn as_yaml_str(self) -> &'static str {
+        match self {
+            Self::PerItem => "per_item",
+            Self::Native => "native",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct OpenFnImportOptions {
+    pub input: String,
+    pub openfn_token_env: String,
+    pub workflow: Option<String>,
+    pub output: PathBuf,
+    pub jobs_dir: PathBuf,
+    pub expression_prefix: PathBuf,
+    pub source_id: String,
+    pub dataset: String,
+    pub entity: String,
+    pub credential_env: String,
+    pub allowed_base_urls: Vec<String>,
+    pub smoke: String,
+    pub smoke_fields: Option<String>,
+    pub smoke_purpose: String,
+    pub auth_hash_env: String,
+    pub server_bind: String,
+    pub cli_build_tool: String,
+    pub runtime: String,
+    pub worker_command: PathBuf,
+    pub worker_script: PathBuf,
+    pub max_workers: usize,
+    pub worker_timeout_ms: u64,
+    pub max_worker_memory_mb: u64,
+    pub max_output_bytes: usize,
+    pub max_request_bytes: usize,
+    pub max_query_parameter_bytes: usize,
+    pub max_batch_items: usize,
+    pub batch_mode: OpenFnBatchMode,
+    pub notary_snippet_output: Option<PathBuf>,
+    pub sidecar_base_url: Option<String>,
+    pub sidecar_token_env: String,
+    pub allow_latest_adaptors: bool,
+    pub allow_empty_job_bodies: bool,
+}
+
 pub fn init_spreadsheet_api(dir: &Path, sample: Sample) -> Result<()> {
     match sample {
         Sample::Benefits => init_benefits_project(dir),
@@ -73,6 +163,131 @@ pub fn init_notary_project(dir: &Path, options: NotaryInitOptions) -> Result<()>
 pub fn add_notary(project_dir: &Path, from: NotarySource, force: bool) -> Result<()> {
     match from {
         NotarySource::LocalRelay => add_notary_from_local_relay(project_dir, force),
+    }
+}
+
+pub fn convert_openfn_project(options: OpenFnConvertOptions) -> Result<()> {
+    let input = fs::read_to_string(&options.input)
+        .with_context(|| format!("failed to read {}", options.input.display()))?;
+    let conversion = build_openfn_sidecar_conversion(&input, &options)?;
+    write_openfn_sidecar_conversion(&conversion, &options.output, &options.jobs_dir)?;
+    write_openfn_notary_snippet(&conversion, &options)?;
+
+    print_openfn_conversion_result(&conversion, &options.output, &options.jobs_dir, &options);
+    Ok(())
+}
+
+pub fn import_openfn_project(options: OpenFnImportOptions) -> Result<()> {
+    let (smoke_field, smoke_value) = parse_openfn_smoke(&options.smoke)?;
+    let loaded = load_openfn_import_input(&options)?;
+    let workflow = options.workflow.or(loaded.workflow_key);
+    let convert_options = OpenFnConvertOptions {
+        input: PathBuf::from(&options.input),
+        workflow,
+        output: options.output,
+        jobs_dir: options.jobs_dir,
+        expression_prefix: Some(options.expression_prefix),
+        source_id: options.source_id,
+        dataset: options.dataset,
+        entity: options.entity,
+        credential_env: options.credential_env,
+        allowed_base_urls: options.allowed_base_urls,
+        smoke_field,
+        smoke_value,
+        smoke_fields: options.smoke_fields,
+        smoke_purpose: options.smoke_purpose,
+        auth_hash_env: options.auth_hash_env,
+        server_bind: options.server_bind,
+        cli_build_tool: options.cli_build_tool,
+        runtime: options.runtime,
+        worker_command: options.worker_command,
+        worker_script: options.worker_script,
+        max_workers: options.max_workers,
+        worker_timeout_ms: options.worker_timeout_ms,
+        max_worker_memory_mb: options.max_worker_memory_mb,
+        max_output_bytes: options.max_output_bytes,
+        max_request_bytes: options.max_request_bytes,
+        max_query_parameter_bytes: options.max_query_parameter_bytes,
+        max_batch_items: options.max_batch_items,
+        batch_mode: options.batch_mode,
+        notary_snippet_output: options.notary_snippet_output,
+        sidecar_base_url: options.sidecar_base_url,
+        sidecar_token_env: options.sidecar_token_env,
+        allow_latest_adaptors: options.allow_latest_adaptors,
+        allow_empty_job_bodies: options.allow_empty_job_bodies,
+    };
+    let conversion = build_openfn_sidecar_conversion(&loaded.yaml, &convert_options)?;
+    write_openfn_sidecar_conversion(
+        &conversion,
+        &convert_options.output,
+        &convert_options.jobs_dir,
+    )?;
+    write_openfn_notary_snippet(&conversion, &convert_options)?;
+    print_openfn_conversion_result(
+        &conversion,
+        &convert_options.output,
+        &convert_options.jobs_dir,
+        &convert_options,
+    );
+    Ok(())
+}
+
+fn write_openfn_sidecar_conversion(
+    conversion: &OpenFnSidecarConversion,
+    output: &Path,
+    jobs_dir: &Path,
+) -> Result<()> {
+    fs::create_dir_all(jobs_dir)
+        .with_context(|| format!("failed to create {}", jobs_dir.display()))?;
+    for job_file in &conversion.job_files {
+        if let Some(parent) = job_file.path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        write_text(job_file.path.clone(), &job_file.contents)?;
+    }
+
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+    }
+    write_text(output.to_path_buf(), &conversion.manifest_yaml)?;
+    Ok(())
+}
+
+fn write_openfn_notary_snippet(
+    conversion: &OpenFnSidecarConversion,
+    options: &OpenFnConvertOptions,
+) -> Result<()> {
+    let Some(output) = &options.notary_snippet_output else {
+        return Ok(());
+    };
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+    }
+    write_text(output.to_path_buf(), &conversion.notary_snippet_yaml)
+}
+
+fn print_openfn_conversion_result(
+    conversion: &OpenFnSidecarConversion,
+    output: &Path,
+    jobs_dir: &Path,
+    options: &OpenFnConvertOptions,
+) {
+    for warning in &conversion.warnings {
+        eprintln!("WARN {warning}");
+    }
+    println!("OpenFn workflow: {}", conversion.workflow_key);
+    println!("Sidecar manifest: {}", output.display());
+    println!("Job expressions: {}", jobs_dir.display());
+    println!("Batch mode: {}", options.batch_mode.as_yaml_str());
+    if let Some(path) = &options.notary_snippet_output {
+        println!("Notary config snippet: {}", path.display());
     }
 }
 
@@ -408,6 +623,984 @@ fn add_notary_from_local_relay(project_dir: &Path, force: bool) -> Result<()> {
 
 fn write_text(path: PathBuf, contents: &str) -> Result<()> {
     fs::write(&path, contents).with_context(|| format!("failed to write {}", path.display()))
+}
+
+#[derive(Debug)]
+struct OpenFnSidecarConversion {
+    workflow_key: String,
+    manifest_yaml: String,
+    notary_snippet_yaml: String,
+    job_files: Vec<OpenFnJobFile>,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug)]
+struct OpenFnJobFile {
+    path: PathBuf,
+    contents: String,
+}
+
+#[derive(Debug)]
+struct LoadedOpenFnImport {
+    yaml: String,
+    workflow_key: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct OpenFnWorkflowUrl {
+    project_id: String,
+    workflow_id: Option<String>,
+    project_yaml_url: String,
+    workflow_json_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenFnProjectExport {
+    #[serde(default)]
+    workflows: BTreeMap<String, OpenFnWorkflowExport>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenFnWorkflowExport {
+    #[serde(default)]
+    jobs: BTreeMap<String, OpenFnJobExport>,
+    #[serde(default)]
+    triggers: BTreeMap<String, OpenFnTriggerExport>,
+    #[serde(default)]
+    edges: BTreeMap<String, OpenFnEdgeExport>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenFnJobExport {
+    #[serde(default)]
+    adaptor: String,
+    #[serde(default)]
+    credential: Option<serde_yaml::Value>,
+    #[serde(default)]
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenFnTriggerExport {
+    #[serde(default)]
+    enabled: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenFnEdgeExport {
+    #[serde(default)]
+    source_trigger: Option<String>,
+    #[serde(default)]
+    source_job: Option<String>,
+    target_job: String,
+    #[serde(default)]
+    condition_type: Option<String>,
+    #[serde(default)]
+    condition_expression: Option<String>,
+    #[serde(default)]
+    condition_label: Option<String>,
+    #[serde(default = "default_openfn_edge_enabled")]
+    enabled: bool,
+}
+
+fn default_openfn_edge_enabled() -> bool {
+    true
+}
+
+fn load_openfn_import_input(options: &OpenFnImportOptions) -> Result<LoadedOpenFnImport> {
+    if let Some(openfn_url) = parse_openfn_workflow_url(&options.input)? {
+        let token = std::env::var(&options.openfn_token_env).with_context(|| {
+            format!(
+                "failed to read OpenFn API token from ${}",
+                options.openfn_token_env
+            )
+        })?;
+        let yaml = fetch_openfn_text(&openfn_url.project_yaml_url, &token, "text/yaml")
+            .with_context(|| format!("failed to fetch {}", openfn_url.project_yaml_url))?;
+        let workflow_key = if options.workflow.is_some() {
+            None
+        } else {
+            match openfn_url.workflow_json_url.as_deref() {
+                Some(workflow_url) => Some(
+                    fetch_openfn_workflow_key(workflow_url, &token).with_context(|| {
+                        "failed to infer OpenFn workflow key from URL; pass --workflow <yaml-workflow-key> to skip workflow metadata lookup"
+                    })?,
+                ),
+                None => None,
+            }
+        };
+        return Ok(LoadedOpenFnImport { yaml, workflow_key });
+    }
+
+    let input = PathBuf::from(&options.input);
+    let yaml = fs::read_to_string(&input)
+        .with_context(|| format!("failed to read {}", input.display()))?;
+    Ok(LoadedOpenFnImport {
+        yaml,
+        workflow_key: None,
+    })
+}
+
+fn parse_openfn_workflow_url(input: &str) -> Result<Option<OpenFnWorkflowUrl>> {
+    let Ok(url) = url::Url::parse(input) else {
+        return Ok(None);
+    };
+    let Some(host) = url.host_str() else {
+        return Ok(None);
+    };
+    if !host.ends_with("openfn.org") {
+        return Ok(None);
+    }
+    let segments = url
+        .path_segments()
+        .map(|segments| segments.collect::<Vec<_>>())
+        .unwrap_or_default();
+    let Some(project_index) = segments.iter().position(|segment| *segment == "projects") else {
+        return Ok(None);
+    };
+    let Some(project_id) = segments.get(project_index + 1) else {
+        bail!("OpenFn URL is missing the project id after /projects/");
+    };
+    let workflow_id = segments
+        .iter()
+        .position(|segment| *segment == "w")
+        .and_then(|index| segments.get(index + 1))
+        .map(|value| (*value).to_string());
+
+    let origin = url
+        .origin()
+        .ascii_serialization()
+        .trim_end_matches('/')
+        .to_string();
+    let project_yaml_url = format!("{origin}/api/provision/{project_id}.yaml");
+    let workflow_json_url = workflow_id
+        .as_ref()
+        .map(|workflow_id| format!("{origin}/api/workflows/{workflow_id}?project_id={project_id}"));
+
+    Ok(Some(OpenFnWorkflowUrl {
+        project_id: (*project_id).to_string(),
+        workflow_id,
+        project_yaml_url,
+        workflow_json_url,
+    }))
+}
+
+fn fetch_openfn_text(url: &str, token: &str, accept: &str) -> Result<String> {
+    let response = ureq::get(url)
+        .set("Authorization", &format!("Bearer {token}"))
+        .set("Accept", accept)
+        .call()
+        .map_err(openfn_http_error)?;
+    response
+        .into_string()
+        .context("failed to read OpenFn response body")
+}
+
+fn fetch_openfn_workflow_key(url: &str, token: &str) -> Result<String> {
+    let body = fetch_openfn_text(url, token, "application/json")
+        .with_context(|| format!("failed to fetch workflow metadata from {url}"))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&body).context("failed to parse OpenFn workflow metadata JSON")?;
+    let name = value
+        .get("workflow")
+        .and_then(|workflow| workflow.get("name"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow!("OpenFn workflow metadata did not include workflow.name"))?;
+    Ok(openfn_yaml_key(name))
+}
+
+fn openfn_http_error(error: ureq::Error) -> anyhow::Error {
+    match error {
+        ureq::Error::Status(status, response) => {
+            let body = response.into_string().unwrap_or_default();
+            anyhow!("OpenFn returned HTTP {status}: {}", body.trim())
+        }
+        ureq::Error::Transport(error) => anyhow!("OpenFn request failed: {error}"),
+    }
+}
+
+fn parse_openfn_smoke(value: &str) -> Result<(String, String)> {
+    let Some((field, lookup_value)) = value.split_once('=') else {
+        bail!("--smoke must use field=value syntax");
+    };
+    let field = field.trim();
+    let lookup_value = lookup_value.trim();
+    if field.is_empty() || lookup_value.is_empty() {
+        bail!("--smoke must include a non-empty field and value");
+    }
+    Ok((field.to_string(), lookup_value.to_string()))
+}
+
+fn openfn_yaml_key(name: &str) -> String {
+    name.replace(' ', "-")
+}
+
+#[derive(Debug, Serialize)]
+struct SidecarManifest {
+    server: SidecarServerConfig,
+    auth: SidecarAuthConfig,
+    limits: SidecarLimitConfig,
+    openfn: SidecarOpenFnConfig,
+    worker: SidecarWorkerConfig,
+    sources: BTreeMap<String, SidecarSourceConfig>,
+}
+
+#[derive(Debug, Serialize)]
+struct SidecarServerConfig {
+    bind: SocketAddr,
+    request_timeout_ms: u64,
+    request_body_timeout_ms: u64,
+    http1_header_read_timeout_ms: u64,
+    max_connections: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct SidecarAuthConfig {
+    bearer_tokens: Vec<SidecarBearerTokenConfig>,
+}
+
+#[derive(Debug, Serialize)]
+struct SidecarBearerTokenConfig {
+    id: String,
+    hash_env: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SidecarLimitConfig {
+    max_workers: usize,
+    worker_timeout_ms: u64,
+    max_worker_memory_mb: u64,
+    max_output_bytes: usize,
+    max_request_bytes: usize,
+    max_query_parameter_bytes: usize,
+    max_batch_items: usize,
+    liveness_window_ms: u64,
+    retry_after_seconds: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct SidecarOpenFnConfig {
+    cli_build_tool: String,
+    runtime: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SidecarWorkerConfig {
+    command: PathBuf,
+    args: Vec<String>,
+    version_args: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SidecarSourceConfig {
+    dataset: String,
+    entity: String,
+    workflow: SidecarWorkflowConfig,
+    credential_env: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    allowed_base_urls: Vec<String>,
+    smoke_lookup: SidecarSmokeLookupConfig,
+}
+
+#[derive(Debug, Serialize)]
+struct SidecarWorkflowConfig {
+    start: String,
+    batch_mode: OpenFnBatchMode,
+    steps: Vec<SidecarWorkflowStepConfig>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct SidecarWorkflowStepConfig {
+    id: String,
+    expression: PathBuf,
+    adaptors: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next: Option<BTreeMap<String, SidecarWorkflowEdgeConfig>>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+enum SidecarWorkflowEdgeConfig {
+    Enabled(bool),
+    Edge(SidecarWorkflowEdgeObjectConfig),
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct SidecarWorkflowEdgeObjectConfig {
+    condition: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SidecarSmokeLookupConfig {
+    field: String,
+    value: String,
+    fields: Vec<String>,
+    purpose: String,
+}
+
+type SidecarNextByJob = BTreeMap<String, BTreeMap<String, SidecarWorkflowEdgeConfig>>;
+
+fn build_openfn_sidecar_conversion(
+    input: &str,
+    options: &OpenFnConvertOptions,
+) -> Result<OpenFnSidecarConversion> {
+    let (workflow_key, workflow) = select_openfn_workflow(input, options.workflow.as_deref())?;
+    validate_openfn_options(options)?;
+
+    if workflow.jobs.is_empty() {
+        bail!("OpenFn workflow {workflow_key} has no jobs");
+    }
+
+    let mut warnings = Vec::new();
+    let mut credential_names = BTreeSet::new();
+    let mut has_registry_notary_adaptor = false;
+    for (job_key, job) in &workflow.jobs {
+        validate_openfn_job(&workflow_key, job_key, job, options)?;
+        if adaptor_package_name(&job.adaptor) == Some("@registry/notary-openfn") {
+            has_registry_notary_adaptor = true;
+        }
+        if let Some(credential_name) = yaml_scalar_string(job.credential.as_ref()) {
+            if !credential_name.trim().is_empty() {
+                credential_names.insert(credential_name.to_string());
+            }
+        }
+    }
+    if options.batch_mode == OpenFnBatchMode::Native && !has_registry_notary_adaptor {
+        bail!(
+            "OpenFn workflow {workflow_key} uses --batch-mode native but does not use @registry/notary-openfn; add the Registry Notary adaptor so OpenFn authoring validates the native batch response shape"
+        );
+    }
+    if has_registry_notary_adaptor {
+        warnings.push(
+            "Registry Notary OpenFn adaptor detected; lookup and batch response helpers are available in workflow jobs"
+                .to_string(),
+        );
+    }
+    if credential_names.len() > 1 {
+        bail!(
+            "OpenFn workflow {workflow_key} uses multiple job credentials ({:?}); the sidecar source accepts one credential_env JSON for the workflow",
+            credential_names
+        );
+    }
+    if let Some(credential_name) = credential_names.first() {
+        warnings.push(format!(
+            "OpenFn job credential {credential_name} is not copied; sidecar will read {} instead",
+            options.credential_env
+        ));
+    }
+
+    let (start, next_by_job) = convert_openfn_edges(&workflow_key, &workflow)?;
+    validate_sidecar_topology(&workflow_key, &workflow.jobs, &start, &next_by_job)?;
+
+    let expression_prefix = options
+        .expression_prefix
+        .clone()
+        .unwrap_or_else(|| options.jobs_dir.clone());
+    let mut filenames = BTreeMap::<String, usize>::new();
+    let mut job_files = Vec::new();
+    let mut steps = Vec::new();
+    for (job_key, job) in &workflow.jobs {
+        let filename = unique_openfn_job_filename(job_key, &mut filenames);
+        let local_expression_path = options.jobs_dir.join(&filename);
+        let manifest_expression_path = expression_prefix.join(&filename);
+        job_files.push(OpenFnJobFile {
+            path: local_expression_path,
+            contents: ensure_trailing_newline(&job.body),
+        });
+        steps.push(SidecarWorkflowStepConfig {
+            id: job_key.clone(),
+            expression: manifest_expression_path,
+            adaptors: vec![job.adaptor.clone()],
+            next: next_by_job.get(job_key).cloned(),
+        });
+    }
+
+    let mut sources = BTreeMap::new();
+    sources.insert(
+        options.source_id.clone(),
+        SidecarSourceConfig {
+            dataset: options.dataset.clone(),
+            entity: options.entity.clone(),
+            workflow: SidecarWorkflowConfig {
+                start,
+                batch_mode: options.batch_mode,
+                steps,
+            },
+            credential_env: options.credential_env.clone(),
+            allowed_base_urls: options.allowed_base_urls.clone(),
+            smoke_lookup: SidecarSmokeLookupConfig {
+                field: options.smoke_field.clone(),
+                value: options.smoke_value.clone(),
+                fields: smoke_fields(options),
+                purpose: options.smoke_purpose.clone(),
+            },
+        },
+    );
+
+    let worker_script = options.worker_script.to_string_lossy().to_string();
+    let adaptor_args = workflow
+        .jobs
+        .values()
+        .map(|job| job.adaptor.as_str())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .flat_map(|adaptor| ["--require-adaptor".to_string(), adaptor.to_string()])
+        .collect::<Vec<_>>();
+    let mut version_args = vec![
+        "--experimental-vm-modules".to_string(),
+        worker_script.clone(),
+        "--version".to_string(),
+    ];
+    version_args.extend(adaptor_args);
+
+    let manifest = SidecarManifest {
+        server: SidecarServerConfig {
+            bind: options
+                .server_bind
+                .parse()
+                .with_context(|| format!("invalid --server-bind {}", options.server_bind))?,
+            request_timeout_ms: 30000,
+            request_body_timeout_ms: 10000,
+            http1_header_read_timeout_ms: 10000,
+            max_connections: 1024,
+        },
+        auth: SidecarAuthConfig {
+            bearer_tokens: vec![SidecarBearerTokenConfig {
+                id: "notary".to_string(),
+                hash_env: options.auth_hash_env.clone(),
+            }],
+        },
+        limits: SidecarLimitConfig {
+            max_workers: options.max_workers,
+            worker_timeout_ms: options.worker_timeout_ms,
+            max_worker_memory_mb: options.max_worker_memory_mb,
+            max_output_bytes: options.max_output_bytes,
+            max_request_bytes: options.max_request_bytes,
+            max_query_parameter_bytes: options.max_query_parameter_bytes,
+            max_batch_items: options.max_batch_items,
+            liveness_window_ms: 30000,
+            retry_after_seconds: 1,
+        },
+        openfn: SidecarOpenFnConfig {
+            cli_build_tool: options.cli_build_tool.clone(),
+            runtime: options.runtime.clone(),
+        },
+        worker: SidecarWorkerConfig {
+            command: options.worker_command.clone(),
+            args: vec!["--experimental-vm-modules".to_string(), worker_script],
+            version_args,
+        },
+        sources,
+    };
+
+    let mut manifest_yaml =
+        serde_yaml::to_string(&manifest).context("failed to render sidecar manifest")?;
+    manifest_yaml.insert_str(
+        0,
+        "# Generated by registryctl from an OpenFn project export.\n# Production startup should render and sign a governed runtime target before deployment.\n",
+    );
+
+    let notary_snippet_yaml = openfn_notary_snippet_yaml(options)?;
+
+    Ok(OpenFnSidecarConversion {
+        workflow_key,
+        manifest_yaml,
+        notary_snippet_yaml,
+        job_files,
+        warnings,
+    })
+}
+
+fn select_openfn_workflow(
+    input: &str,
+    requested_workflow: Option<&str>,
+) -> Result<(String, OpenFnWorkflowExport)> {
+    let value: serde_yaml::Value =
+        serde_yaml::from_str(input).context("failed to parse OpenFn YAML")?;
+    if value.get("workflows").is_some() {
+        let project: OpenFnProjectExport =
+            serde_yaml::from_value(value).context("failed to parse OpenFn project YAML")?;
+        if let Some(workflow_key) = requested_workflow {
+            let workflow = project
+                .workflows
+                .into_iter()
+                .find_map(|(key, workflow)| (key == workflow_key).then_some(workflow));
+            return workflow
+                .map(|workflow| (workflow_key.to_string(), workflow))
+                .ok_or_else(|| anyhow!("OpenFn workflow {workflow_key} was not found"));
+        }
+        if project.workflows.len() == 1 {
+            return project
+                .workflows
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow!("OpenFn project has no workflows"));
+        }
+        let names = project
+            .workflows
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        bail!("OpenFn project has multiple workflows; pass --workflow. Available: {names}");
+    }
+
+    if requested_workflow.is_some() {
+        bail!("--workflow can only be used with an OpenFn project export that has workflows");
+    }
+    let workflow: OpenFnWorkflowExport =
+        serde_yaml::from_value(value).context("failed to parse OpenFn workflow YAML")?;
+    Ok(("workflow".to_string(), workflow))
+}
+
+fn validate_openfn_options(options: &OpenFnConvertOptions) -> Result<()> {
+    if options.source_id.trim().is_empty() {
+        bail!("--source-id must not be empty");
+    }
+    if options.dataset.trim().is_empty() {
+        bail!("--dataset must not be empty");
+    }
+    if options.entity.trim().is_empty() {
+        bail!("--entity must not be empty");
+    }
+    if options.credential_env.trim().is_empty() {
+        bail!("--credential-env must not be empty");
+    }
+    if options.smoke_field.trim().is_empty() {
+        bail!("--smoke-field must not be empty");
+    }
+    if options.smoke_value.trim().is_empty() {
+        bail!("--smoke-value must not be empty");
+    }
+    if options.max_workers == 0
+        || options.worker_timeout_ms == 0
+        || options.max_worker_memory_mb == 0
+        || options.max_output_bytes == 0
+        || options.max_request_bytes == 0
+        || options.max_query_parameter_bytes == 0
+    {
+        bail!("sidecar limits must be greater than zero");
+    }
+    Ok(())
+}
+
+fn validate_openfn_job(
+    workflow_key: &str,
+    job_key: &str,
+    job: &OpenFnJobExport,
+    options: &OpenFnConvertOptions,
+) -> Result<()> {
+    if job_key.trim().is_empty() {
+        bail!("OpenFn workflow {workflow_key} has a job with an empty key");
+    }
+    if job.adaptor.trim().is_empty() {
+        bail!("OpenFn workflow {workflow_key} job {job_key} is missing adaptor");
+    }
+    if !adaptor_has_version_pin(&job.adaptor) {
+        bail!(
+            "OpenFn workflow {workflow_key} job {job_key} adaptor {} must include a version pin",
+            job.adaptor
+        );
+    }
+    if !options.allow_latest_adaptors && adaptor_uses_latest(&job.adaptor) {
+        bail!("OpenFn workflow {workflow_key} job {job_key} adaptor {} uses @latest; pin an exact adaptor version or rerun with --allow-latest-adaptors", job.adaptor);
+    }
+    if !options.allow_empty_job_bodies && job.body.trim().is_empty() {
+        bail!("OpenFn workflow {workflow_key} job {job_key} has an empty body");
+    }
+    Ok(())
+}
+
+fn convert_openfn_edges(
+    workflow_key: &str,
+    workflow: &OpenFnWorkflowExport,
+) -> Result<(String, SidecarNextByJob)> {
+    let mut start_jobs = Vec::new();
+    let mut next_by_job = BTreeMap::<String, BTreeMap<String, SidecarWorkflowEdgeConfig>>::new();
+
+    for (edge_key, edge) in &workflow.edges {
+        if !edge.enabled {
+            continue;
+        }
+        if !workflow.jobs.contains_key(&edge.target_job) {
+            bail!(
+                "OpenFn workflow {workflow_key} edge {edge_key} targets missing job {}",
+                edge.target_job
+            );
+        }
+        let has_source_trigger = edge
+            .source_trigger
+            .as_deref()
+            .is_some_and(|s| !s.is_empty());
+        let has_source_job = edge.source_job.as_deref().is_some_and(|s| !s.is_empty());
+        match (has_source_trigger, has_source_job) {
+            (true, false) => {
+                let trigger_key = edge.source_trigger.as_deref().unwrap_or_default();
+                let trigger_enabled = workflow
+                    .triggers
+                    .get(trigger_key)
+                    .and_then(|trigger| trigger.enabled)
+                    .unwrap_or(true);
+                if trigger_enabled {
+                    ensure_openfn_trigger_edge_is_start(workflow_key, edge_key, edge)?;
+                    start_jobs.push(edge.target_job.clone());
+                }
+            }
+            (false, true) => {
+                let source_job = edge.source_job.as_deref().unwrap_or_default();
+                if !workflow.jobs.contains_key(source_job) {
+                    bail!(
+                        "OpenFn workflow {workflow_key} edge {edge_key} sources missing job {source_job}"
+                    );
+                }
+                let sidecar_edge = convert_openfn_job_edge(workflow_key, edge_key, edge)?;
+                next_by_job
+                    .entry(source_job.to_string())
+                    .or_default()
+                    .insert(edge.target_job.clone(), sidecar_edge);
+            }
+            (true, true) => {
+                bail!("OpenFn workflow {workflow_key} edge {edge_key} has both source_trigger and source_job");
+            }
+            (false, false) => {
+                bail!("OpenFn workflow {workflow_key} edge {edge_key} is missing a source");
+            }
+        }
+    }
+
+    let start = match start_jobs.len() {
+        1 => start_jobs.remove(0),
+        0 => infer_openfn_start_job(workflow_key, workflow, &next_by_job)?,
+        _ => bail!(
+            "OpenFn workflow {workflow_key} has multiple enabled trigger start edges ({:?}); sidecar supports one start step",
+            start_jobs
+        ),
+    };
+
+    Ok((start, next_by_job))
+}
+
+fn ensure_openfn_trigger_edge_is_start(
+    workflow_key: &str,
+    edge_key: &str,
+    edge: &OpenFnEdgeExport,
+) -> Result<()> {
+    let condition_type = edge.condition_type.as_deref().unwrap_or("always");
+    if condition_type != "always" {
+        bail!("OpenFn workflow {workflow_key} trigger edge {edge_key} uses condition_type {condition_type}; sidecar start edges must be always");
+    }
+    Ok(())
+}
+
+fn convert_openfn_job_edge(
+    workflow_key: &str,
+    edge_key: &str,
+    edge: &OpenFnEdgeExport,
+) -> Result<SidecarWorkflowEdgeConfig> {
+    let condition_type = edge.condition_type.as_deref().unwrap_or("always");
+    match condition_type {
+        "always" | "on_job_success" => Ok(SidecarWorkflowEdgeConfig::Enabled(true)),
+        "js_expression" => {
+            let condition = edge
+                .condition_expression
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    anyhow!(
+                        "OpenFn workflow {workflow_key} edge {edge_key} uses js_expression without condition_expression"
+                    )
+                })?;
+            Ok(SidecarWorkflowEdgeConfig::Edge(
+                SidecarWorkflowEdgeObjectConfig {
+                    condition: condition.to_string(),
+                    label: edge.condition_label.clone(),
+                },
+            ))
+        }
+        "on_job_failure" => {
+            bail!("OpenFn workflow {workflow_key} edge {edge_key} uses on_job_failure; sidecar lookup workflows must return a single successful final Registry Data API state")
+        }
+        other => bail!(
+            "OpenFn workflow {workflow_key} edge {edge_key} uses unsupported condition_type {other}"
+        ),
+    }
+}
+
+fn infer_openfn_start_job(
+    workflow_key: &str,
+    workflow: &OpenFnWorkflowExport,
+    next_by_job: &SidecarNextByJob,
+) -> Result<String> {
+    let incoming = incoming_counts(next_by_job);
+    let roots = workflow
+        .jobs
+        .keys()
+        .filter(|job_key| !incoming.contains_key(job_key.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    match roots.len() {
+        1 => Ok(roots[0].clone()),
+        0 => bail!("OpenFn workflow {workflow_key} has no trigger start edge and no root job"),
+        _ => bail!(
+            "OpenFn workflow {workflow_key} has no trigger start edge and multiple root jobs ({:?}); sidecar supports one start step",
+            roots
+        ),
+    }
+}
+
+fn validate_sidecar_topology(
+    workflow_key: &str,
+    jobs: &BTreeMap<String, OpenFnJobExport>,
+    start: &str,
+    next_by_job: &SidecarNextByJob,
+) -> Result<()> {
+    if !jobs.contains_key(start) {
+        bail!("OpenFn workflow {workflow_key} start job {start} is not defined");
+    }
+    let incoming = incoming_counts(next_by_job);
+    if let Some((job_key, count)) = incoming.iter().find(|(_, count)| **count > 1) {
+        bail!(
+            "OpenFn workflow {workflow_key} job {job_key} has {count} incoming edges; sidecar does not support Lightning-style joins"
+        );
+    }
+    let mut visited = BTreeSet::new();
+    let mut path = BTreeSet::new();
+    detect_openfn_cycle(workflow_key, start, next_by_job, &mut visited, &mut path)?;
+    let unreachable = jobs
+        .keys()
+        .filter(|job_key| !visited.contains(job_key.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unreachable.is_empty() {
+        bail!(
+            "OpenFn workflow {workflow_key} has jobs unreachable from start {start}: {:?}",
+            unreachable
+        );
+    }
+    Ok(())
+}
+
+fn incoming_counts(next_by_job: &SidecarNextByJob) -> BTreeMap<&str, usize> {
+    let mut incoming = BTreeMap::new();
+    for targets in next_by_job.values() {
+        for target in targets.keys() {
+            *incoming.entry(target.as_str()).or_default() += 1;
+        }
+    }
+    incoming
+}
+
+fn detect_openfn_cycle<'a>(
+    workflow_key: &str,
+    current: &'a str,
+    next_by_job: &'a SidecarNextByJob,
+    visited: &mut BTreeSet<&'a str>,
+    path: &mut BTreeSet<&'a str>,
+) -> Result<()> {
+    if path.contains(current) {
+        bail!("OpenFn workflow {workflow_key} contains a cycle at job {current}");
+    }
+    if !visited.insert(current) {
+        return Ok(());
+    }
+    path.insert(current);
+    if let Some(targets) = next_by_job.get(current) {
+        for target in targets.keys() {
+            detect_openfn_cycle(workflow_key, target, next_by_job, visited, path)?;
+        }
+    }
+    path.remove(current);
+    Ok(())
+}
+
+fn adaptor_has_version_pin(adaptor: &str) -> bool {
+    adaptor_pin(adaptor)
+        .map(|version| !version.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn adaptor_uses_latest(adaptor: &str) -> bool {
+    adaptor_pin(adaptor).is_some_and(|version| version == "latest")
+}
+
+fn adaptor_pin(adaptor: &str) -> Option<&str> {
+    let module = adaptor
+        .split_once('=')
+        .map_or(adaptor, |(module, _)| module);
+    let (name, version) = module.rsplit_once('@')?;
+    (!name.is_empty()).then_some(version)
+}
+
+fn adaptor_package_name(adaptor: &str) -> Option<&str> {
+    let module = adaptor
+        .split_once('=')
+        .map_or(adaptor, |(module, _)| module);
+    let (name, _) = module.rsplit_once('@')?;
+    (!name.is_empty()).then_some(name)
+}
+
+fn smoke_fields(options: &OpenFnConvertOptions) -> Vec<String> {
+    let fields = options
+        .smoke_fields
+        .as_deref()
+        .map(|fields| {
+            fields
+                .split(',')
+                .map(str::trim)
+                .filter(|field| !field.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .filter(|fields| !fields.is_empty())
+        .unwrap_or_else(|| vec![options.smoke_field.clone()]);
+    if fields.iter().any(|field| field == &options.smoke_field) {
+        fields
+    } else {
+        let mut with_lookup = vec![options.smoke_field.clone()];
+        with_lookup.extend(fields);
+        with_lookup
+    }
+}
+
+fn openfn_notary_snippet_yaml(options: &OpenFnConvertOptions) -> Result<String> {
+    let sidecar_base_url = options
+        .sidecar_base_url
+        .clone()
+        .unwrap_or_else(|| default_sidecar_base_url(&options.server_bind));
+    let fields = smoke_fields(options);
+    let query_fields = fields
+        .iter()
+        .map(|field| {
+            serde_json::json!({
+                "input": format!("target.identifiers.{field}"),
+                "field": field,
+                "op": "eq",
+            })
+        })
+        .collect::<Vec<_>>();
+    let projected_fields = fields
+        .iter()
+        .map(|field| {
+            (
+                field.clone(),
+                serde_json::json!({
+                    "field": field,
+                    "type": "string",
+                    "required": false,
+                }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    let snippet = serde_json::json!({
+        "evidence": {
+            "source_connections": {
+                options.source_id.clone(): {
+                    "base_url": sidecar_base_url,
+                    "allow_insecure_localhost": true,
+                    "token_env": options.sidecar_token_env,
+                    "retry_on_5xx": false,
+                    "bulk_mode": "openfn_sidecar_batch",
+                    "bulk_timeout_max_ms": 30000,
+                }
+            },
+            "claims": [
+                {
+                    "id": format!("{}-lookup", options.source_id.replace('_', "-")),
+                    "title": format!("{} lookup", options.source_id),
+                    "version": "2026-06",
+                    "subject_type": options.entity,
+                    "value": { "type": "boolean" },
+                    "operations": {
+                        "batch_evaluate": {
+                            "enabled": true,
+                            "max_subjects": options.max_batch_items,
+                        }
+                    },
+                    "source_bindings": {
+                        options.source_id.clone(): {
+                            "connector": "openfn_sidecar",
+                            "connection": options.source_id,
+                            "required_scope": "REVIEW_REQUIRED:evidence_verification",
+                            "dataset": options.dataset,
+                            "entity": options.entity,
+                            "lookup": {
+                                "input": format!("target.identifiers.{}", options.smoke_field),
+                                "field": options.smoke_field,
+                                "op": "eq",
+                                "cardinality": "one",
+                            },
+                            "query_fields": query_fields,
+                            "fields": projected_fields,
+                        }
+                    },
+                    "rule": {
+                        "type": "exists",
+                        "source": options.source_id,
+                    }
+                }
+            ],
+        }
+    });
+    let mut yaml =
+        serde_yaml::to_string(&snippet).context("failed to render OpenFn Notary snippet")?;
+    yaml.insert_str(
+        0,
+        "# Generated by registryctl from an OpenFn workflow import.\n# Review claim id, scopes, matching policy, expected_sidecar, and field types before production use.\n",
+    );
+    Ok(yaml)
+}
+
+fn default_sidecar_base_url(server_bind: &str) -> String {
+    match server_bind.parse::<SocketAddr>() {
+        Ok(addr) if addr.ip().is_unspecified() => format!("http://127.0.0.1:{}", addr.port()),
+        Ok(addr) => format!("http://{addr}"),
+        Err(_) => "http://127.0.0.1:9191".to_string(),
+    }
+}
+
+fn yaml_scalar_string(value: Option<&serde_yaml::Value>) -> Option<&str> {
+    match value {
+        Some(serde_yaml::Value::String(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn unique_openfn_job_filename(job_key: &str, seen: &mut BTreeMap<String, usize>) -> String {
+    let base = sanitize_filename_stem(job_key);
+    let count = seen.entry(base.clone()).or_default();
+    *count += 1;
+    if *count == 1 {
+        format!("{base}.js")
+    } else {
+        format!("{base}-{}.js", *count)
+    }
+}
+
+fn sanitize_filename_stem(value: &str) -> String {
+    let mut output = String::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_' {
+            output.push(byte as char);
+        } else {
+            output.push('_');
+        }
+    }
+    let trimmed = output.trim_matches('_');
+    if trimmed.is_empty() {
+        "job".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn ensure_trailing_newline(value: &str) -> String {
+    if value.ends_with('\n') {
+        value.to_string()
+    } else {
+        format!("{value}\n")
+    }
 }
 
 #[derive(Debug)]
@@ -1884,6 +3077,400 @@ mod tests {
         assert!(image.starts_with(&format!("{repository}@sha256:")));
         assert!(!image.contains(":snapshot"));
         assert!(!image.contains(":latest"));
+    }
+
+    fn openfn_options(temp: &TempDir) -> OpenFnConvertOptions {
+        OpenFnConvertOptions {
+            input: temp.path().join("openfn.yaml"),
+            workflow: Some("lookup".to_string()),
+            output: temp.path().join("openfn-sidecar.yaml"),
+            jobs_dir: temp.path().join("jobs"),
+            expression_prefix: Some(PathBuf::from("/opt/openfn/jobs")),
+            source_id: "openfn_crvs".to_string(),
+            dataset: "civil_registry".to_string(),
+            entity: "civil_person".to_string(),
+            credential_env: "OPENCRVS_READER_CREDENTIAL_JSON".to_string(),
+            allowed_base_urls: vec!["https://opencrvs.example.test".to_string()],
+            smoke_field: "national_id".to_string(),
+            smoke_value: "smoke-person".to_string(),
+            smoke_fields: Some("national_id,birth_date".to_string()),
+            smoke_purpose: "startup-readiness-smoke".to_string(),
+            auth_hash_env: "DEV_SIDECAR_TOKEN_HASH".to_string(),
+            server_bind: "127.0.0.1:9191".to_string(),
+            cli_build_tool: "1.2.5".to_string(),
+            runtime: "1.9.3".to_string(),
+            worker_command: PathBuf::from("node"),
+            worker_script: PathBuf::from("/opt/openfn/openfn_worker.mjs"),
+            max_workers: 2,
+            worker_timeout_ms: 10000,
+            max_worker_memory_mb: 512,
+            max_output_bytes: 1048576,
+            max_request_bytes: 16384,
+            max_query_parameter_bytes: 1024,
+            max_batch_items: 100,
+            batch_mode: OpenFnBatchMode::PerItem,
+            notary_snippet_output: Some(temp.path().join("notary-openfn-snippet.yaml")),
+            sidecar_base_url: Some("http://127.0.0.1:9191".to_string()),
+            sidecar_token_env: "OPENFN_SIDECAR_TOKEN".to_string(),
+            allow_latest_adaptors: false,
+            allow_empty_job_bodies: false,
+        }
+    }
+
+    fn openfn_import_options(temp: &TempDir) -> OpenFnImportOptions {
+        OpenFnImportOptions {
+            input: temp.path().join("openfn.yaml").display().to_string(),
+            openfn_token_env: "OPENFN_TOKEN".to_string(),
+            workflow: Some("lookup".to_string()),
+            output: temp.path().join("openfn/openfn-sidecar.yaml"),
+            jobs_dir: temp.path().join("openfn/jobs"),
+            expression_prefix: PathBuf::from("/opt/openfn/jobs"),
+            source_id: "openfn_crvs".to_string(),
+            dataset: "civil_registry".to_string(),
+            entity: "civil_person".to_string(),
+            credential_env: "OPENCRVS_READER_CREDENTIAL_JSON".to_string(),
+            allowed_base_urls: vec!["https://opencrvs.example.test".to_string()],
+            smoke: "national_id=smoke-person".to_string(),
+            smoke_fields: Some("national_id,birth_date".to_string()),
+            smoke_purpose: "startup-readiness-smoke".to_string(),
+            auth_hash_env: "DEV_SIDECAR_TOKEN_HASH".to_string(),
+            server_bind: "127.0.0.1:9191".to_string(),
+            cli_build_tool: "1.2.5".to_string(),
+            runtime: "1.9.3".to_string(),
+            worker_command: PathBuf::from("node"),
+            worker_script: PathBuf::from("/opt/openfn/openfn_worker.mjs"),
+            max_workers: 2,
+            worker_timeout_ms: 10000,
+            max_worker_memory_mb: 512,
+            max_output_bytes: 1048576,
+            max_request_bytes: 16384,
+            max_query_parameter_bytes: 1024,
+            max_batch_items: 100,
+            batch_mode: OpenFnBatchMode::PerItem,
+            notary_snippet_output: Some(temp.path().join("openfn/notary-source-snippet.yaml")),
+            sidecar_base_url: Some("http://127.0.0.1:9191".to_string()),
+            sidecar_token_env: "OPENFN_SIDECAR_TOKEN".to_string(),
+            allow_latest_adaptors: false,
+            allow_empty_job_bodies: false,
+        }
+    }
+
+    #[test]
+    fn openfn_url_parser_derives_api_export_urls() {
+        let parsed = parse_openfn_workflow_url(
+            "https://app.openfn.org/projects/604b650e-a33a-41d2-b30b-5e7a5b773f30/w/7c90b5e8-ff4f-46a5-958a-a7150035410b",
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(parsed.project_id, "604b650e-a33a-41d2-b30b-5e7a5b773f30");
+        assert_eq!(
+            parsed.workflow_id.as_deref(),
+            Some("7c90b5e8-ff4f-46a5-958a-a7150035410b")
+        );
+        assert_eq!(
+            parsed.project_yaml_url,
+            "https://app.openfn.org/api/provision/604b650e-a33a-41d2-b30b-5e7a5b773f30.yaml"
+        );
+        assert_eq!(
+            parsed.workflow_json_url.as_deref(),
+            Some("https://app.openfn.org/api/workflows/7c90b5e8-ff4f-46a5-958a-a7150035410b?project_id=604b650e-a33a-41d2-b30b-5e7a5b773f30")
+        );
+    }
+
+    #[test]
+    fn openfn_import_from_file_uses_compact_smoke_option_and_writes_outputs() {
+        let temp = TempDir::new().unwrap();
+        let yaml = r#"
+workflows:
+  lookup:
+    jobs:
+      prepare_lookup:
+        adaptor: "@openfn/language-common@3.2.3"
+        body: |
+          fn(state => state)
+    triggers:
+      webhook:
+        type: webhook
+        enabled: true
+    edges:
+      webhook->prepare_lookup:
+        source_trigger: webhook
+        target_job: prepare_lookup
+        condition_type: always
+        enabled: true
+"#;
+        fs::write(temp.path().join("openfn.yaml"), yaml).unwrap();
+        let options = openfn_import_options(&temp);
+
+        import_openfn_project(options).unwrap();
+
+        assert!(temp.path().join("openfn/openfn-sidecar.yaml").exists());
+        assert!(temp.path().join("openfn/jobs/prepare_lookup.js").exists());
+        assert!(temp
+            .path()
+            .join("openfn/notary-source-snippet.yaml")
+            .exists());
+        let manifest: Value = serde_yaml::from_str(
+            &fs::read_to_string(temp.path().join("openfn/openfn-sidecar.yaml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            manifest["sources"]["openfn_crvs"]["smoke_lookup"]["field"],
+            "national_id"
+        );
+        assert_eq!(
+            manifest["sources"]["openfn_crvs"]["smoke_lookup"]["value"],
+            "smoke-person"
+        );
+        assert_eq!(
+            manifest["sources"]["openfn_crvs"]["workflow"]["batch_mode"],
+            "per_item"
+        );
+        assert_eq!(manifest["limits"]["max_batch_items"], 100);
+    }
+
+    #[test]
+    fn openfn_conversion_writes_sidecar_manifest_and_job_files() {
+        let temp = TempDir::new().unwrap();
+        let yaml = r#"
+workflows:
+  lookup:
+    jobs:
+      prepare_lookup:
+        adaptor: "@openfn/language-common@3.2.3"
+        credential: opencrvs-reader
+        body: |
+          fn(state => state)
+      fetch_person:
+        adaptor: "@openfn/language-http@7.2.0"
+        credential: opencrvs-reader
+        body: |
+          get('/people')
+    triggers:
+      webhook:
+        type: webhook
+        enabled: true
+    edges:
+      webhook->prepare_lookup:
+        source_trigger: webhook
+        target_job: prepare_lookup
+        condition_type: always
+        enabled: true
+      prepare_lookup->fetch_person:
+        source_job: prepare_lookup
+        target_job: fetch_person
+        condition_type: on_job_success
+        enabled: true
+"#;
+        let options = openfn_options(&temp);
+
+        let conversion = build_openfn_sidecar_conversion(yaml, &options).unwrap();
+
+        assert_eq!(conversion.workflow_key, "lookup");
+        assert_eq!(conversion.job_files.len(), 2);
+        assert_eq!(
+            conversion.job_files[0].path,
+            temp.path().join("jobs/fetch_person.js")
+        );
+        assert_eq!(
+            conversion.job_files[1].path,
+            temp.path().join("jobs/prepare_lookup.js")
+        );
+        let manifest: Value = serde_yaml::from_str(&conversion.manifest_yaml).unwrap();
+        assert_eq!(
+            manifest["sources"]["openfn_crvs"]["workflow"]["start"],
+            "prepare_lookup"
+        );
+        assert_eq!(
+            manifest["sources"]["openfn_crvs"]["workflow"]["batch_mode"],
+            "per_item"
+        );
+        assert_eq!(manifest["limits"]["max_batch_items"], 100);
+        assert_eq!(
+            manifest["sources"]["openfn_crvs"]["workflow"]["steps"][0]["expression"],
+            "/opt/openfn/jobs/fetch_person.js"
+        );
+        assert_eq!(
+            manifest["sources"]["openfn_crvs"]["workflow"]["steps"][1]["next"]["fetch_person"],
+            true
+        );
+        assert_eq!(
+            manifest["sources"]["openfn_crvs"]["smoke_lookup"]["fields"][1],
+            "birth_date"
+        );
+        assert!(
+            conversion.warnings[0].contains("sidecar will read OPENCRVS_READER_CREDENTIAL_JSON")
+        );
+        let snippet: Value = serde_yaml::from_str(&conversion.notary_snippet_yaml).unwrap();
+        assert_eq!(
+            snippet["evidence"]["source_connections"]["openfn_crvs"]["bulk_mode"],
+            "openfn_sidecar_batch"
+        );
+        assert_eq!(
+            snippet["evidence"]["claims"][0]["operations"]["batch_evaluate"]["max_subjects"],
+            100
+        );
+    }
+
+    #[test]
+    fn openfn_native_batch_requires_registry_notary_adaptor_and_renders_mode() {
+        let temp = TempDir::new().unwrap();
+        let yaml = r#"
+workflows:
+  lookup:
+    jobs:
+      batch_lookup:
+        adaptor: "@registry/notary-openfn@0.1.0"
+        body: |
+          fn(state => returnBatchItems(state, []))
+    triggers:
+      webhook:
+        type: webhook
+        enabled: true
+    edges:
+      webhook->batch_lookup:
+        source_trigger: webhook
+        target_job: batch_lookup
+        condition_type: always
+        enabled: true
+"#;
+        let mut options = openfn_options(&temp);
+        options.batch_mode = OpenFnBatchMode::Native;
+
+        let conversion = build_openfn_sidecar_conversion(yaml, &options).unwrap();
+
+        let manifest: Value = serde_yaml::from_str(&conversion.manifest_yaml).unwrap();
+        assert_eq!(
+            manifest["sources"]["openfn_crvs"]["workflow"]["batch_mode"],
+            "native"
+        );
+        assert!(conversion
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Registry Notary OpenFn adaptor detected")));
+    }
+
+    #[test]
+    fn openfn_native_batch_rejects_workflows_without_registry_notary_adaptor() {
+        let temp = TempDir::new().unwrap();
+        let yaml = r#"
+workflows:
+  lookup:
+    jobs:
+      batch_lookup:
+        adaptor: "@openfn/language-common@3.2.3"
+        body: |
+          fn(state => state)
+    triggers:
+      webhook:
+        type: webhook
+        enabled: true
+    edges:
+      webhook->batch_lookup:
+        source_trigger: webhook
+        target_job: batch_lookup
+        condition_type: always
+        enabled: true
+"#;
+        let mut options = openfn_options(&temp);
+        options.batch_mode = OpenFnBatchMode::Native;
+
+        let err = build_openfn_sidecar_conversion(yaml, &options).unwrap_err();
+
+        assert!(err.to_string().contains("@registry/notary-openfn"));
+    }
+
+    #[test]
+    fn openfn_conversion_rejects_latest_adaptors_by_default() {
+        let temp = TempDir::new().unwrap();
+        let yaml = r#"
+name: lookup
+jobs:
+  prepare:
+    adaptor: "@openfn/language-common@latest"
+    body: |
+      fn(state => state)
+triggers:
+  webhook:
+    type: webhook
+    enabled: true
+edges:
+  webhook->prepare:
+    source_trigger: webhook
+    target_job: prepare
+    condition_type: always
+    enabled: true
+"#;
+        let mut options = openfn_options(&temp);
+        options.workflow = None;
+
+        let err = build_openfn_sidecar_conversion(yaml, &options).unwrap_err();
+
+        assert!(err.to_string().contains("uses @latest"));
+    }
+
+    #[test]
+    fn openfn_conversion_rejects_lightning_joins() {
+        let temp = TempDir::new().unwrap();
+        let yaml = r#"
+workflows:
+  lookup:
+    jobs:
+      start:
+        adaptor: "@openfn/language-common@3.2.3"
+        body: |
+          fn(state => state)
+      branch_a:
+        adaptor: "@openfn/language-common@3.2.3"
+        body: |
+          fn(state => state)
+      branch_b:
+        adaptor: "@openfn/language-common@3.2.3"
+        body: |
+          fn(state => state)
+      join:
+        adaptor: "@openfn/language-common@3.2.3"
+        body: |
+          fn(state => state)
+    triggers:
+      webhook:
+        type: webhook
+        enabled: true
+    edges:
+      webhook->start:
+        source_trigger: webhook
+        target_job: start
+        condition_type: always
+        enabled: true
+      start->branch_a:
+        source_job: start
+        target_job: branch_a
+        condition_type: on_job_success
+        enabled: true
+      start->branch_b:
+        source_job: start
+        target_job: branch_b
+        condition_type: on_job_success
+        enabled: true
+      branch_a->join:
+        source_job: branch_a
+        target_job: join
+        condition_type: on_job_success
+        enabled: true
+      branch_b->join:
+        source_job: branch_b
+        target_job: join
+        condition_type: on_job_success
+        enabled: true
+"#;
+        let options = openfn_options(&temp);
+
+        let err = build_openfn_sidecar_conversion(yaml, &options).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("does not support Lightning-style joins"));
     }
 
     #[test]
