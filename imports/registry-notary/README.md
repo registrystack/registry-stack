@@ -334,6 +334,9 @@ as `vX.Y.Z`, or immutable digests for rollback.
 Native runs default to `127.0.0.1:8081`. The Docker image sets
 `REGISTRY_NOTARY_BIND=0.0.0.0:8080` and exposes port `8080`; override it with
 `--bind` or `REGISTRY_NOTARY_BIND` when deploying behind a different listener.
+The image runs from `/var/lib/registry-notary` and defaults to
+`--config /etc/registry-notary/config.yaml`; pass replacement arguments to
+`docker run` when mounting a config somewhere else.
 Set `server.admin_listener.mode: dedicated` and
 `server.admin_listener.bind` to serve `/admin/v1/*` and `/metrics` on a
 separate admin listener. Simple local deployments without `config_trust` may
