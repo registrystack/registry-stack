@@ -19,7 +19,10 @@ services:
       - |
         apk add --no-cache git >/dev/null
         rm -rf /tmp/repo
-        git clone --depth 1 --branch "$$CONFIG_REPO_REF" "$$CONFIG_REPO_URL" /tmp/repo
+        git init /tmp/repo
+        git -C /tmp/repo remote add origin "$$CONFIG_REPO_URL"
+        git -C /tmp/repo fetch --depth 1 origin "$$CONFIG_REPO_REF"
+        git -C /tmp/repo -c advice.detachedHead=false checkout FETCH_HEAD
         for d in pginit uiconf seed; do
           mkdir -p "/out/$$d"
           find "/out/$$d" -mindepth 1 -delete 2>/dev/null || true
