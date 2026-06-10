@@ -434,12 +434,17 @@ pub fn build_admin_app_with_metadata_and_metrics(
     metadata: Option<Arc<CompiledMetadata>>,
     metrics: Arc<RequestMetrics>,
 ) -> Result<Router, ConfigError> {
-    let public = api::health_router()
-        .merge(crate::observability::router())
-        .layer(Extension(metrics.clone()));
+    let public = api::health_router().layer(Extension(metrics.clone()));
+    let metrics_router = auth_layer(
+        crate::observability::router().layer(Extension(metrics.clone())),
+        Arc::clone(&auth),
+    );
     let protected = api::admin_router().layer(Extension(ingest));
     let protected = auth_layer(protected, auth);
-    let merged: Router<()> = Router::new().merge(public).merge(protected);
+    let merged: Router<()> = Router::new()
+        .merge(public)
+        .merge(metrics_router)
+        .merge(protected);
     let mut router = apply_cross_cutting_layers_with_metrics(merged, &config, audit_sink, metrics)?
         .layer(Extension(readiness))
         .layer(Extension(readiness_tx))

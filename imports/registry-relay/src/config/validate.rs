@@ -31,6 +31,7 @@ use super::{
 
 /// Product-scoped admin capability required by private admin mutations.
 const ADMIN_SCOPE: &str = "registry_relay:admin";
+const METRICS_SCOPE: &str = crate::observability::METRICS_SCOPE;
 const OPS_READ_SCOPE: &str = "registry_relay:ops_read";
 const RESERVED_SCOPE_DATASET_IDS: &[&str] = &["registry_relay"];
 
@@ -1721,12 +1722,15 @@ fn validate_scope(
     if scope == OPS_READ_SCOPE {
         return Ok(());
     }
+    if scope == METRICS_SCOPE {
+        return Ok(());
+    }
     let (dataset, level) = scope.split_once(':').ok_or_else(|| {
         tracing::error!(
             code = "config.validation_error",
             api_key_id = %api_key_id,
             scope = %scope,
-            "scope must be 'registry_relay:admin', 'registry_relay:ops_read', or '<dataset_id>:<metadata|aggregate|rows|verify|evidence_verification>'"
+            "scope must be 'registry_relay:admin', 'registry_relay:ops_read', 'registry_relay:metrics_read', or '<dataset_id>:<metadata|aggregate|rows|verify|evidence_verification>'"
         );
         ConfigError::ValidationError
     })?;

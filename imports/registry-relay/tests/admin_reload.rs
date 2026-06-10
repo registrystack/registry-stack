@@ -1170,7 +1170,8 @@ async fn capabilities_requires_ops_read_and_reports_relay_admin_surface() {
             },
             "metrics": {
                 "mode": "admin",
-                "requires_admin_scope": false
+                "requires_admin_scope": false,
+                "required_scope": "registry_relay:metrics_read"
             }
         })
     );
@@ -1213,7 +1214,8 @@ async fn capabilities_reports_disabled_listener_topology_without_admin_bind() {
             },
             "metrics": {
                 "mode": "disabled",
-                "requires_admin_scope": false
+                "requires_admin_scope": false,
+                "required_scope": "registry_relay:metrics_read"
             }
         })
     );

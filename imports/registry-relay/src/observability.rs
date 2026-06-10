@@ -11,10 +11,12 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Instant;
 
 use crate::audit::{EndpointKind, ErrorCodeExt};
+use crate::auth::{scopes::require_scope, Principal};
+use crate::error::{AuthError, Error};
 use crate::ingest::ReadinessSnapshot;
 use crate::runtime_config::RuntimeSnapshot;
 use axum::body::Body;
-use axum::extract::MatchedPath;
+use axum::extract::{Extension, MatchedPath};
 use axum::http::{header, HeaderValue, Request, StatusCode};
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
@@ -24,6 +26,7 @@ use axum::Router;
 const TEXT_PLAIN_004: HeaderValue =
     HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8");
 const NO_ERROR_CODE: &str = "none";
+pub const METRICS_SCOPE: &str = "registry_relay:metrics_read";
 const HISTOGRAM_BUCKETS: [f64; 12] = [
     0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, 1.000, 2.500, 5.000, 10.000, 30.000,
 ];
@@ -317,7 +320,13 @@ where
     Router::new().route("/metrics", get(metrics))
 }
 
-async fn metrics(runtime: RuntimeSnapshot) -> Response {
+async fn metrics(runtime: RuntimeSnapshot, principal: Option<Extension<Principal>>) -> Response {
+    let Some(Extension(principal)) = principal else {
+        return Error::from(AuthError::MissingCredential).into_response();
+    };
+    if let Err(error) = require_scope(&principal, METRICS_SCOPE) {
+        return error.into_response();
+    }
     let Some(metrics) = runtime.metrics() else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };

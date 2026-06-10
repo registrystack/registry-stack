@@ -62,6 +62,7 @@ const POSTURE_FILTER_FAILED_CODE: &str = "admin.posture_filter_failed";
 const POSTURE_TIER_INVALID_CODE: &str = "registry.admin.posture.invalid_tier";
 const RUNTIME_UNAVAILABLE_CODE: &str = "registry.admin.runtime_unavailable";
 const ADMIN_SCOPE: &str = "registry_relay:admin";
+const METRICS_SCOPE: &str = crate::observability::METRICS_SCOPE;
 const OPS_READ_SCOPE: &str = "registry_relay:ops_read";
 
 #[doc(hidden)]
@@ -156,7 +157,8 @@ async fn capabilities(
             },
             "metrics": {
                 "mode": metrics_mode,
-                "requires_admin_scope": false
+                "requires_admin_scope": false,
+                "required_scope": METRICS_SCOPE
             }
         },
         "root_transition": {
