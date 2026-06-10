@@ -24,6 +24,158 @@ use tough::{
 use url::Url;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
+pub struct DeprecatedConfigField {
+    path: Vec<String>,
+    replacement: Option<String>,
+    message: Option<String>,
+}
+
+impl DeprecatedConfigField {
+    pub fn renamed(path: impl Into<String>, replacement: impl Into<String>) -> Self {
+        Self {
+            path: split_config_path(path),
+            replacement: Some(replacement.into()),
+            message: None,
+        }
+    }
+
+    pub fn removed(path: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            path: split_config_path(path),
+            replacement: None,
+            message: Some(message.into()),
+        }
+    }
+
+    pub fn path(&self) -> String {
+        self.path.join(".")
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, thiserror::Error)]
+#[error("{message}")]
+pub struct DeprecatedConfigFieldError {
+    field: String,
+    message: String,
+}
+
+impl DeprecatedConfigFieldError {
+    pub fn field(&self) -> &str {
+        &self.field
+    }
+}
+
+pub fn reject_deprecated_config_fields(
+    root: &Value,
+    fields: &[DeprecatedConfigField],
+) -> Result<(), DeprecatedConfigFieldError> {
+    for field in fields {
+        if config_value_at_path(root, &field.path).is_some() {
+            let field_path = field.path();
+            let message = if let Some(replacement) = &field.replacement {
+                format!("{field_path} has been renamed; use {replacement}")
+            } else if let Some(message) = &field.message {
+                format!("{field_path} has been removed; {message}")
+            } else {
+                format!("{field_path} has been removed")
+            };
+            return Err(DeprecatedConfigFieldError {
+                field: field_path,
+                message,
+            });
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, thiserror::Error)]
+#[error("{0}")]
+pub struct ConfigEnvExpansionError(String);
+
+pub fn expand_config_env_vars(raw: &str) -> Result<String, ConfigEnvExpansionError> {
+    expand_config_env_vars_with(raw, |name| std::env::var(name).ok())
+}
+
+pub fn expand_config_env_vars_with(
+    raw: &str,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<String, ConfigEnvExpansionError> {
+    let mut expanded = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(start) = rest.find("${") {
+        expanded.push_str(&rest[..start]);
+        let after_start = &rest[start + 2..];
+        let Some(end) = after_start.find('}') else {
+            return Err(ConfigEnvExpansionError(
+                "unterminated ${...} expression in config".to_string(),
+            ));
+        };
+        let expression = &after_start[..end];
+        expanded.push_str(&resolve_config_env_expression(expression, &lookup)?);
+        rest = &after_start[end + 1..];
+    }
+    expanded.push_str(rest);
+    Ok(expanded)
+}
+
+fn split_config_path(path: impl Into<String>) -> Vec<String> {
+    path.into()
+        .split('.')
+        .filter(|segment| !segment.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn config_value_at_path<'a>(root: &'a Value, path: &[String]) -> Option<&'a Value> {
+    let mut current = root;
+    for segment in path {
+        current = current.get(segment)?;
+    }
+    Some(current)
+}
+
+fn resolve_config_env_expression(
+    expression: &str,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<String, ConfigEnvExpansionError> {
+    let (name, operator, fallback) = if let Some((name, fallback)) = expression.split_once(":-") {
+        (name, ":-", fallback)
+    } else if let Some((name, fallback)) = expression.split_once(":?") {
+        (name, ":?", fallback)
+    } else {
+        (expression, "", "")
+    };
+    if !valid_env_key(name) {
+        return Err(ConfigEnvExpansionError(format!(
+            "invalid env var name in config expression: {name}"
+        )));
+    }
+
+    match lookup(name) {
+        Some(value) if !value.is_empty() => Ok(value),
+        _ if operator == ":-" => Ok(fallback.to_string()),
+        _ if operator == ":?" => {
+            if fallback.trim().is_empty() {
+                Err(ConfigEnvExpansionError(format!(
+                    "missing required env var {name}"
+                )))
+            } else {
+                Err(ConfigEnvExpansionError(fallback.to_string()))
+            }
+        }
+        _ => Err(ConfigEnvExpansionError(format!(
+            "missing required env var {name}"
+        ))),
+    }
+}
+
+fn valid_env_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    matches!(chars.next(), Some(c) if c == '_' || c.is_ascii_alphabetic())
+        && chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct VerificationContext {
     pub product: String,
     pub instance_id: String,
@@ -1087,6 +1239,7 @@ fn hex_lower(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn tough_fixture_dir(name: &str) -> PathBuf {
         let cargo_home = std::env::var_os("CARGO_HOME")
@@ -1101,6 +1254,75 @@ mod tests {
             .find(|path| path.join("tough-0.22.0/tests/data").is_dir())
             .expect("tough-0.22.0 source fixture directory exists");
         registry.join("tough-0.22.0/tests/data").join(name)
+    }
+
+    #[test]
+    fn deprecated_config_field_detector_names_replacement() {
+        let root = json!({
+            "auth": {
+                "oidc": {
+                    "audience": ["registry-relay"]
+                }
+            }
+        });
+
+        let err = reject_deprecated_config_fields(
+            &root,
+            &[DeprecatedConfigField::renamed(
+                "auth.oidc.audience",
+                "auth.oidc.audiences",
+            )],
+        )
+        .expect_err("deprecated field is rejected");
+
+        assert_eq!(err.field(), "auth.oidc.audience");
+        assert!(err.to_string().contains("auth.oidc.audiences"));
+    }
+
+    #[test]
+    fn deprecated_config_field_detector_names_removal_rationale() {
+        let root = json!({
+            "server": {
+                "cors": {
+                    "allow_credentials": true
+                }
+            }
+        });
+
+        let err = reject_deprecated_config_fields(
+            &root,
+            &[DeprecatedConfigField::removed(
+                "server.cors.allow_credentials",
+                "credentials are always disabled",
+            )],
+        )
+        .expect_err("removed field is rejected");
+
+        assert_eq!(err.field(), "server.cors.allow_credentials");
+        assert!(err.to_string().contains("credentials are always disabled"));
+    }
+
+    #[test]
+    fn config_env_expansion_supports_required_and_default_values() {
+        let expanded = expand_config_env_vars_with(
+            "base: ${BASE_URL:?missing base}\noptional: ${OPTIONAL_URL:-https://fallback.example}\n",
+            |name| match name {
+                "BASE_URL" => Some("https://registry.example".to_string()),
+                _ => None,
+            },
+        )
+        .expect("config expands");
+
+        assert!(expanded.contains("base: https://registry.example"));
+        assert!(expanded.contains("optional: https://fallback.example"));
+    }
+
+    #[test]
+    fn config_env_expansion_rejects_missing_required_value() {
+        let err = expand_config_env_vars_with("${BASE_URL:?missing base}", |_| None)
+            .expect_err("missing required env var is rejected");
+
+        assert_eq!(err.to_string(), "missing base");
     }
 
     #[test]
