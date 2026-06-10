@@ -4,10 +4,10 @@
 # from each product repo (sibling checkout in dev, shallow clone at `ref` in
 # CI), and renders Starlight pages under src/content/docs/products/<repo>/.
 #
-# Allowlist, not pull-all. Each repo carries internal/historical docs
-# (history/, release-notes, user-stories, spikes, deep forward-looking specs)
-# that must not surface publicly. Only the genuinely public how-to / reference
-# / explanation / tutorial set is listed here.
+# Allowlist, not pull-all. Each repo carries repo-owned docs (release notes,
+# contributor guides, deep operator references) that are better read in the
+# repository. Only the genuinely public how-to / reference / explanation /
+# tutorial set is listed here.
 #
 # Fields per repo:
 #   remote  GitHub repository the page links and clones from.
@@ -27,7 +27,7 @@
 repos:
   registry-relay:
     remote: https://github.com/jeremi/registry-relay
-    ref: be897c321376e9a755c959065556fa29c07cd20e
+    ref: 61b96624ed1118704e61d2e7f95c7e67798ce423
     local: ../registry-relay
     docs:
       - src: docs/README.md
@@ -46,32 +46,20 @@ repos:
         label: Configuration
         nav_order: 30
         doc_type: reference
-      - src: docs/evidence-verification.md
-        dest: products/registry-relay/evidence-verification
-        label: Evidence verification
-        nav_order: 70
-        doc_type: explanation
     # Excluded (intentionally not public via the docs site):
-    #   docs/history/*                      historical design specs
     #   docs/release-notes.md               release notes (repo-owned)
-    #   docs/openapi-release-policy.md       internal release policy
-    #   docs/odrl-policy-spec.md             forward-looking standards spec
-    #   docs/ogc-api-features-spec.md        forward-looking standards spec
-    #   docs/performance-load-testing-spec.md  internal test program spec
-    #   docs/provenance.md                  deep reference, repo-owned for now
+    #   docs/provenance.md                  deep reference, repo-owned
     #   docs/security-assurance.md          release/supply-chain detail, repo-owned
     #   docs/relay-scenario-catalog.md      product/demo guide (marketing-adjacent)
     #   docs/xlsx-readiness-contract.md     deep source contract, repo-owned
-    #   docs/api.md                         deferred from MVP docs cut (duplicates Redoc reference at /api/registry-relay.html)
-    #   docs/ops.md                         deferred from MVP docs cut
-    #   docs/deployment-hardening.md        deferred from MVP docs cut
-    #   docs/metadata.md                    deferred from MVP docs cut
-    #   docs/standards-adapter-operator-guide.md  deferred from MVP docs cut
-    #   docs/development.md                 deferred from MVP docs cut
-    #   docs/use-cases.md                   deferred from MVP docs cut
+    #   docs/api.md                         repo-owned; the site serves the Redoc route reference at /api/registry-relay.html
+    #   docs/ops.md                         operator runbook, repo-owned
+    #   docs/metadata.md                    deep metadata reference, repo-owned
+    #   docs/standards-adapter-operator-guide.md  operator rollout guide, repo-owned
+    #   docs/development.md                 contributor guide, repo-owned
   registry-notary:
     remote: https://github.com/jeremi/registry-notary
-    ref: 3eb55478c32afa1c74bd6a5031849a3b77a358f2
+    ref: 84d6840b3807e15d5a61c0d7f6b1cd9c23a852a7
     local: ../registry-notary
     docs:
       - src: docs/README.md
@@ -85,11 +73,6 @@ repos:
         label: Architecture overview
         nav_order: 10
         doc_type: explanation
-      - src: docs/api-reference.md
-        dest: products/registry-notary/api-reference
-        label: API reference
-        nav_order: 30
-        doc_type: reference
       - src: docs/client-sdk-guide.md
         dest: products/registry-notary/client-sdk-guide
         label: Client SDK guide
@@ -127,17 +110,15 @@ repos:
         doc_type: reference
     # Excluded (intentionally not public via the docs site):
     #   docs/release-notes.md               release notes (repo-owned)
-    #   docs/user-stories.md                internal user stories
-    #   docs/openfn-sidecar-source-spike.md  spike notes
     #   docs/security-assurance.md          release/supply-chain detail, repo-owned
-    #   docs/notary-capability-matrix.md    deferred from MVP docs cut
-    #   docs/self-attestation-operator-guide.md  deferred from MVP docs cut
-    #   docs/federated-evaluation-operator-guide.md  deferred from MVP docs cut
-    #   docs/oid4vci-wallet-interop.md      deferred from MVP docs cut
-    #   docs/notary-scenario-patterns.md    deferred from MVP docs cut
-    #   docs/opencrvs-dci-standalone-tutorial.md  deferred from MVP docs cut
-    #   docs/openspp-disability-dci.md      deferred from MVP docs cut
-    #   docs/deployment-hardening-runbook.md  deferred from MVP docs cut
+    #   docs/api-reference.md               repo-owned; the site serves the Redoc reference at /api/registry-notary.html
+    #   docs/notary-capability-matrix.md    capability inventory, repo-owned
+    #   docs/self-attestation-operator-guide.md  operator guide, repo-owned
+    #   docs/federated-evaluation-operator-guide.md  operator guide, repo-owned
+    #   docs/oid4vci-wallet-interop.md      operator/integrator guide, repo-owned
+    #   docs/notary-scenario-patterns.md    scenario catalog, repo-owned
+    #   docs/opencrvs-dci-standalone-tutorial.md  tutorial against an external system, repo-owned
+    #   docs/deployment-hardening-runbook.md  operator runbook, repo-owned
 # Deferred from the MVP docs cut (2026-06-08): re-enable when reviewed and ready.
 #   registry-manifest:
 #     remote: https://github.com/jeremi/registry-manifest

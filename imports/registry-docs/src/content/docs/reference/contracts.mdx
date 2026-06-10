@@ -2,7 +2,7 @@
 title: Contracts
 description: Machine-readable surfaces owned by the registry stack, with status and source-of-truth links.
 wide: true
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - registry-relay
@@ -11,7 +11,7 @@ source_repos:
   - registry-notary
   - registry-atlas
   - registry-lab
-last_reviewed: "2026-05-23"
+last_reviewed: "2026-06-10"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -20,7 +20,6 @@ standards_referenced:
   - shacl
   - dcat
   - sd-jwt-vc
-draft: true
 ---
 
 import ContractsTable from '../../../components/ContractsTable.astro';
@@ -71,8 +70,5 @@ The table is generated from `src/data/contracts.yaml`.
 
 ## Known gaps
 
-- The [Registry Relay](../../products/registry-relay/) OpenAPI artifact is a hand-authored abstract contract (`hand-authored-abstract-contract`).
-  It documents the full surface using templated paths and capability tags, with feature-gate notes in each tag description.
-  Registry Relay also exposes a per-instance OpenAPI dump through `GET /openapi.json`, which callers can fetch from a configured gateway to discover the concrete `{dataset_id}` and `{entity}` shape for that deployment. Runtime deployments gate that route by default unless `openapi_requires_auth` is disabled for demos or controlled tooling.
-  A release-grade automated export of the abstract contract from the owning repo does not yet exist; the artifact is kept in sync by hand.
+- The Registry Relay OpenAPI artifact is a `hand-authored-abstract-contract`; see [API references provenance and freshness](/reference/apis/) for detail on what that means and how to get an instance-specific shape.
 - Contract freshness checks are data-backed in v0 but are not yet generated from owning-repo release metadata.

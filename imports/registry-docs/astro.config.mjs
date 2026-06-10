@@ -130,10 +130,9 @@ export default defineConfig({
       // shared "Registry" prefix (Relay, Notary, ...) since the site title and
       // the Products group already supply that context.
       //
-      // "Get started" is the newcomer funnel: orient (Overview, Where to
-      // start, When to use), then act. The registryctl tutorials are the
-      // first local adoption path. The Registry Lab pages remain the deeper
-      // stack tour once a reader wants the full multi-service topology.
+      // "Get started" is the newcomer funnel: Overview, the zero-install demo
+      // (See it live), orientation (When to use, Where to start), then the
+      // registryctl tutorials as the first local adoption path.
       sidebar: [
         {
           label: 'Get started',
@@ -159,7 +158,11 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Architecture', slug: 'explanation/architecture' },
+            { label: 'Boundaries and map', slug: 'map/boundaries-and-map' },
+            { label: 'Consultation flow', slug: 'explanation/consultation-flow' },
             { label: 'Evidence issuance', slug: 'explanation/evidence-issuance' },
+            { label: 'Integration patterns', slug: 'explanation/integration-patterns' },
+            { label: 'DPI safeguards', slug: 'explanation/dpi-safeguards-alignment' },
           ],
         },
         {
@@ -175,6 +178,8 @@ export default defineConfig({
                 { label: 'Notary', slug: 'reference/apis/registry-notary' },
               ],
             },
+            { label: 'Contracts', slug: 'reference/contracts' },
+            { label: 'Standards', slug: 'reference/standards' },
             { label: 'Glossary', slug: 'reference/glossary' },
           ],
         },

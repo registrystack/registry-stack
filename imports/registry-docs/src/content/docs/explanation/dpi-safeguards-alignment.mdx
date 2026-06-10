@@ -1,25 +1,24 @@
 ---
 title: DPI safeguards alignment
 description: How the registry stack relates to the Universal DPI Safeguards Framework at the technical implementation layer.
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - registry-relay
   - registry-manifest
   - registry-notary
   - registry-atlas
-last_reviewed: "2026-05-26"
+last_reviewed: "2026-06-10"
 doc_type: explanation
 locale: en
 standards_referenced:
-  - Universal DPI Safeguards Framework
-  - OpenAPI
-  - DCAT
-  - SHACL
-  - JSON Schema
-  - ODRL
-  - SD-JWT VC
-draft: true
+  - universal-dpi-safeguards
+  - openapi
+  - dcat
+  - shacl
+  - json-schema
+  - odrl
+  - sd-jwt-vc
 ---
 
 If you are a DPI implementer or reviewer trying to place the registry stack inside a safeguards program,
@@ -83,7 +82,7 @@ Registry Relay enforces authorized access via API key or OIDC, keeps admin route
 listener, runs read-only against its sources, and applies body limits and timeouts at the gateway.
 
 **Transparency and accountability.**
-[Registry Manifest](../../products/registry-manifest/) and Registry Relay publish what a registry
+[Registry Manifest](https://registrystack.org/) and Registry Relay publish what a registry
 exposes (OpenAPI, metadata routes, schemas, evidence offerings, policies, stable error codes, and
 provenance artifacts) so reviewers can inspect it before integration.
 

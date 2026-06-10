@@ -14,10 +14,6 @@
       {
         "label": "Configuration",
         "slug": "products/registry-relay/configuration"
-      },
-      {
-        "label": "Evidence verification",
-        "slug": "products/registry-relay/evidence-verification"
       }
     ]
   },
@@ -53,10 +49,6 @@
       {
         "label": "Reference",
         "items": [
-          {
-            "label": "API reference",
-            "slug": "products/registry-notary/api-reference"
-          },
           {
             "label": "Operator configuration reference",
             "slug": "products/registry-notary/operator-config-reference"

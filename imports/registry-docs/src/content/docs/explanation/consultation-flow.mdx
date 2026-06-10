@@ -2,17 +2,16 @@
 title: Consultation flow
 description: How Registry Relay binds a source, applies auth and scopes, serves
   entity-shaped routes, and audits every request at runtime.
-status: draft
+status: current
 owner: registry-relay
 source_repos:
   - registry-relay
   - registry-platform
-last_reviewed: "2026-05-25"
+last_reviewed: "2026-06-10"
 doc_type: explanation
 locale: en
 standards_referenced:
   - openapi
-draft: true
 ---
 
 Registry Relay is a read-only HTTP consultation gateway that fronts sensitive tabular
@@ -69,7 +68,7 @@ The record carries the `principal_id`, `request_id` (a ULID also returned in the
 `x-request-id` response header), `dataset_id`, `entity_name`, `scopes_used`, `query_params`
 (names and operators, never values), `status_code`, and `duration_ms`.
 Registry Platform wraps the record with `prev_hash` and `record_hash` for tamper evidence.
-For the full field list, see the [Relay operations runbook](../../products/registry-relay/ops/).
+For the full field list, see the [Relay operations runbook](https://github.com/jeremi/registry-relay/blob/main/docs/ops.md).
 
 **4. Respond.** Relay returns the entity-shaped response.
 The response body contains only projected fields for the authenticated caller's visible
@@ -91,55 +90,16 @@ The four primary route shapes for row access are:
 
 Metadata routes under `/metadata/*` follow the same auth path but require a `metadata`
 scope, not a `rows` or `aggregate` scope.
-The full route inventory is in the [Registry Relay API guide](../../products/registry-relay/api/).
+The full route inventory is in the [Registry Relay API reference](../../reference/apis/registry-relay/).
 
 ## Scope model
 
-Scopes are independent.
-A principal can hold any combination of the following suffixes for any dataset:
-
-- `metadata`: read catalog, DCAT, SHACL, policies, and evidence-offering metadata.
-- `rows`: read entity records, single records, and relationship traversals.
-- `aggregate`: run pre-configured aggregates over entity records.
-- `verify`: call the per-entity `verify` route.
-- `evidence_verification`: call evidence-offering verification endpoints.
-- `admin`: trigger data reloads on the admin listener.
-
-A scope is always bound to a specific dataset: `social_registry:metadata` grants metadata
-access to the `social_registry` dataset only.
-A key or token holding `social_registry:metadata` cannot access `vital_events:metadata`
-unless that scope is also assigned.
-
-The following excerpt from `config/example.yaml` shows three principals with different
-scope sets:
-
-```yaml
-auth:
-  mode: api_key
-  api_keys:
-    - id: statistics_office
-      hash_env: STATS_OFFICE_API_KEY_HASH
-      scopes:
-        - social_registry:metadata
-        - social_registry:aggregate
-    - id: program_system
-      hash_env: PROGRAM_SYSTEM_API_KEY_HASH
-      scopes:
-        - social_registry:metadata
-        - social_registry:aggregate
-        - social_registry:rows
-    - id: identity_verification_service
-      hash_env: VERIFICATION_SERVICE_API_KEY_HASH
-      scopes:
-        - social_registry:metadata
-        - social_registry:evidence_verification
-```
-
-The statistics office can fetch aggregates and catalog metadata but cannot read individual
-records.
-The program system can read records and aggregates.
-The identity verification service can run evidence verification but cannot read rows.
-Full scope configuration and API-key provisioning are in
+Scopes follow the pattern `<dataset_id>:<suffix>`, where the six suffix values are
+`metadata`, `rows`, `aggregate`, `verify`, `evidence_verification`, and `admin`.
+A scope is always bound to a specific dataset; a principal holding
+`social_registry:metadata` cannot access `vital_events:metadata` unless that scope is
+also assigned.
+Full scope configuration, API-key provisioning, and example principal assignments are in
 [Client integration](../../products/registry-relay/client-integration/).
 
 ## Closed surfaces

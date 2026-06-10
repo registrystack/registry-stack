@@ -41,18 +41,9 @@ configuration.
 
 ## Authentication
 
-A Relay instance runs exactly one auth mode, configured under `auth`:
-
-- **API key.** The client presents a bearer token in `Authorization: Bearer <key>` or
-  `X-Api-Key: <key>`. Relay validates it against a SHA-256 fingerprint held in an environment
-  variable; the raw key never appears in config.
-- **OIDC / OAuth2.** The client presents a bearer JWT, which Relay validates against an external
-  identity provider's JWKS. Relay mints no tokens.
-
-Access is scope-based per dataset, and liveness and readiness probes are unauthenticated. Credential
-parsing, API-key fingerprinting, and OIDC verification primitives come from Registry Platform; Relay
-owns scope naming and route enforcement. For the exact scope strings and configuration, see
-[Configuration](/products/registry-relay/configuration/) and
+A Relay instance runs exactly one auth mode (API key or OIDC/OAuth2), configured under `auth`.
+Access is scope-based per dataset; liveness and readiness probes are unauthenticated.
+For setup steps, scope strings, and credential configuration, see
 [Client integration](/products/registry-relay/client-integration/).
 
 ## What the specification does not cover

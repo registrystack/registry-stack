@@ -1,14 +1,14 @@
 ---
 title: Integration patterns
 description: How Registry Stack wires in behind exchange layers, workflow engines, wallets, and domain registry platforms, and the standards each surface speaks.
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - registry-manifest
   - registry-relay
   - registry-notary
   - registry-platform
-last_reviewed: "2026-06-05"
+last_reviewed: "2026-06-10"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -27,7 +27,6 @@ standards_referenced:
   - ogc-api-records
   - ogc-api-features
   - govstack-digital-registries
-draft: true
 ---
 
 Registry Stack is the registry-facing surface that sits behind systems already in a delivery
@@ -115,21 +114,8 @@ Wire Registry Stack in alongside a service platform when:
 
 ## Standards each surface speaks
 
-Registry Stack adopts established standards rather than inventing new ones.
-See the [standards register](../../reference/standards/) for the full table with claim levels (emit,
-map to, align with, compare against).
-
-Short map:
-
-- Metadata: DCAT, BRegDCAT-AP, CPSV-AP, ODRL.
-- Shape: SHACL, JSON Schema, OpenAPI.
-- Evidence: CCCEV (JSON-LD), SD-JWT VC, OID4VCI.
-- Sector: SP DCI (mapped), OGC API Records (emitted), OGC API Features (aligned), GovStack Digital
-  Registries Building Block (compared).
-- Identity: W3C Decentralized Identifiers, restricted to the narrow DID surfaces the runtime
-  services document.
-
-No universal registry ontology is claimed.
+For the full list of standards, claim levels, and per-project evidence, see the
+[standards register](../../reference/standards/).
 
 ## Next
 

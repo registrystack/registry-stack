@@ -4,35 +4,23 @@ description: Choose the Registry Stack page that matches the question you are tr
 status: current
 owner: registry-docs
 source_repos:
-  - registry-manifest
   - registry-relay
   - registry-notary
-  - registry-atlas
-  - registry-lab
-  - registry-platform
-last_reviewed: "2026-06-05"
+last_reviewed: "2026-06-10"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
 Use this page when you are new to Registry Stack and need the shortest route to a useful answer.
-These docs are organized around tasks and the Diataxis types (tutorials, how-to, explanation,
-reference), not around repository names.
 
-## The short model
-
-Two products are documented on this site.
-Registry Relay makes existing registry-like data available through protected, read-only APIs.
-Registry Notary answers configured evidence questions without exposing a full source record, and can
-issue signed credentials.
-Other surfaces (such as Registry Manifest) exist as part of the wider stack; see
-[registrystack.org](https://registrystack.org/) for that picture.
-
-Stay in these docs for the cross-project architecture, product boundaries, API reference, and the
-product docs pulled from each repository.
-Go to the marketing site at [registrystack.org](https://registrystack.org/) for the pitch: why
-registry surfaces matter, who benefits, the sell-form use cases, and ecosystem positioning.
+Two products are documented on this site: Registry Relay makes existing registry-like data
+available through protected, read-only APIs, and Registry Notary answers configured evidence
+questions without exposing a full source record, and can issue signed credentials.
+Stay in these docs for the architecture, product boundaries, API reference, and the product docs
+pulled from each repository. Go to [registrystack.org](https://registrystack.org/) for the pitch:
+why registry surfaces matter, who benefits, the use cases, and the wider stack beyond these two
+products.
 
 ## Choose by question
 
@@ -47,11 +35,3 @@ registry surfaces matter, who benefits, the sell-form use cases, and ecosystem p
 | How do existing files, extracts, databases, or legacy systems become usable? | [Registry Relay](../../products/registry-relay/) | [Relay API reference](../../reference/apis/registry-relay/) |
 | How can a service verify a status or claim without receiving the full record? | [Registry Notary](../../products/registry-notary/) | [Evidence issuance](../../explanation/evidence-issuance/) |
 | How do the pieces fit together? | [Architecture overview](../../explanation/architecture/) | The relevant product docs |
-
-## Next
-
-- [See it live](../see-it-live/)
-- [When to use Registry Stack](../when-to-use/)
-- [Publish a spreadsheet as a secured registry API](../../tutorials/publish-spreadsheet-secured-registry-api/)
-- [Verify a claim from your registry API](../../tutorials/verify-claim-registry-api/)
-- [Architecture overview](../../explanation/architecture/)

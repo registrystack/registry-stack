@@ -2,7 +2,7 @@
 title: Boundaries and map
 description: The six registry stack projects, their responsibilities, flow across them, and what each project does not own.
 wide: true
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - registry-relay
@@ -11,7 +11,7 @@ source_repos:
   - registry-notary
   - registry-atlas
   - registry-lab
-last_reviewed: "2026-05-25"
+last_reviewed: "2026-06-10"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -22,7 +22,6 @@ standards_referenced:
   - shacl
   - json-schema
   - sd-jwt-vc
-draft: true
 ---
 
 import ProjectMap from '../../../components/ProjectMap.astro';
@@ -47,33 +46,18 @@ and to understand how the six repositories connect at runtime.
 
 ## Flow across the stack
 
-[Registry Platform](../../products/registry-platform/) provides shared Rust primitives that Relay and
-Notary compose for auth, audit, OIDC, HTTP security, crypto, SD-JWT VC handling, outbound HTTP policy,
-and testing.
-[Registry Manifest](../../products/registry-manifest/) defines portable metadata and compiles it into
-standards-facing service, registry, schema, form, policy, evidence, and public Notary federation
-artifacts.
-[Registry Relay](../../products/registry-relay/) binds logical datasets and entities to protected runtime
-sources and exposes them as authorized read-only APIs.
-[Registry Notary](../../products/registry-notary/) evaluates configured claims against registry sources,
-serves static-peer delegated evaluation, and issues SD-JWT VC credentials.
-[Registry Atlas](../../products/registry-atlas/) inspects published discovery artifacts, parses service
-catalogues and registry metadata, and navigates service-first requirements, evidence options, providers,
-forms, and access routes.
-[Registry Lab](../../products/registry-lab/) runs the smallest local ecosystem demo, composing three Relay
-authorities, four Notary services, live Postgres and Zitadel services, a private OpenFn sidecar path,
-a static metadata publisher, and narrated clients.
+For how the six projects connect at runtime, see the [architecture overview](../../explanation/architecture/).
 
 ## Ownership quick reference
 
 | Question | Owning project |
 | --- | --- |
-| Which shared Rust crate owns auth helpers, OIDC verification, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC helpers, or test fixtures? | [Registry Platform](../../products/registry-platform/) |
+| Which shared Rust crate owns auth helpers, OIDC verification, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC helpers, or test fixtures? | [Registry Platform](https://github.com/jeremi/registry-platform) |
 | How is a CSV, XLSX, Parquet, or PostgreSQL source exposed as authorized entity routes? | [Registry Relay](../../products/registry-relay/) |
-| How is `metadata.yaml` validated or rendered into standards-facing artifacts? | [Registry Manifest](../../products/registry-manifest/) |
+| How is `metadata.yaml` validated or rendered into standards-facing artifacts? | [Registry Manifest](https://github.com/jeremi/registry-manifest) |
 | How is a claim evaluated, delegated to a trusted Notary, or turned into an attestation or credential? | [Registry Notary](../../products/registry-notary/) |
-| How are discovery artifacts inspected or matched against capability needs? | [Registry Atlas](../../products/registry-atlas/) |
-| How do the services run together in a local demo? | [Registry Lab](../../products/registry-lab/) |
+| How are discovery artifacts inspected or matched against capability needs? | [Registry Atlas](https://github.com/jeremi/registry-atlas) |
+| How do the services run together in a local demo? | [Registry Lab](https://github.com/jeremi/registry-lab/blob/main/README.md) |
 
 Cross-project explanation, standards evidence, and contract indexes live in these docs (not in any one project repo).
 
@@ -162,6 +146,3 @@ When a page needs both, these docs summarize the decision and link to the owning
 ---
 
 **Next:** [Architecture overview](../../explanation/architecture/): how the six projects connect at runtime.
-
-Looking for the legacy-to-current name mapping or per-repo rename state? See the
-[2026-05-23 rename decision](../../decisions/rename-2026-05-23/).

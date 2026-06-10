@@ -54,16 +54,8 @@ For the exact configuration, see the
 
 ## Disclosure profiles
 
-Notary controls what a caller receives through three disclosure levels:
-
-- **Value** discloses the full claim value.
-- **Predicate** discloses only the satisfaction result (true or false).
-- **Redacted** hides the value from the caller.
-
-Each claim definition sets a `default` level and an `allowed` list. When a caller requests a level
-outside the allowed list, a downgrade strategy applies: `Deny` returns an error, `Default` falls
-back to the configured default, and `Redacted` downgrades to the redacted profile. The evaluation
-and credential-issuance routes expose this surface directly.
+Notary controls what a caller receives through three disclosure levels (`value`, `predicate`, `redacted`), each governed by `default` and `allowed` settings in the claim definition.
+For a full explanation of how the levels interact and the downgrade strategies, see [Evidence issuance, end to end](/explanation/evidence-issuance/).
 
 ## Credential issuance
 
