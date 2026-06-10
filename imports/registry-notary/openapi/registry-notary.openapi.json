@@ -1041,7 +1041,8 @@
           "title",
           "status",
           "detail",
-          "code"
+          "code",
+          "request_id"
         ],
         "type": "object"
       },

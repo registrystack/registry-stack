@@ -422,6 +422,9 @@ fn layer_notary_routes(
         ))
         .layer(axum::middleware::from_fn(rewrite_payload_too_large_problem))
         .layer(axum::middleware::from_fn(reject_oversized_request_uri))
+        .layer(axum::middleware::from_fn(
+            attach_request_id_to_problem_response,
+        ))
 }
 
 #[derive(Debug, Clone)]
@@ -4866,6 +4869,70 @@ fn principal_from_credential(credential: &ResolvedCredential) -> EvidencePrincip
 
 fn header_str(value: &axum::http::HeaderValue) -> Option<&str> {
     value.to_str().ok()
+}
+
+/// Outermost response middleware: injects `request_id` into any
+/// `application/problem+json` body and sets the `x-request-id` response header.
+///
+/// Mints a server-owned ULID before running the inner stack so that
+/// early-boundary rejections (414, 413) receive a correlation identifier even
+/// when the inner auth/audit layer has not yet run.  For responses produced
+/// by inner handlers that already carry `x-request-id`, the existing header
+/// value is used and the body field is inserted only when absent (idempotent
+/// when the inner response already has both).
+async fn attach_request_id_to_problem_response(request: Request, next: Next) -> Response {
+    // Mint a server-owned ULID for this request.  Early-boundary middlewares
+    // (reject_oversized_request_uri, rewrite_payload_too_large_problem) run
+    // inside this layer; they do not have access to auth_audit_middleware's
+    // task-local, so this is the only opportunity to assign them an id.
+    let minted = Ulid::new().to_string();
+
+    let response = next.run(request).await;
+
+    let is_problem = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("application/problem+json"));
+    if !is_problem {
+        return response;
+    }
+
+    // Prefer a request_id already set by an inner layer (auth_audit_middleware
+    // sets x-request-id on authenticated-path responses); fall back to the
+    // minted value for early-boundary responses.
+    let request_id = response
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or(minted);
+
+    let (mut parts, body) = response.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, 64 * 1024).await else {
+        // Body too large or read error; the body is consumed and cannot be
+        // restored, so return an empty body with corrected framing.
+        parts.headers.remove(header::CONTENT_LENGTH);
+        return Response::from_parts(parts, Body::empty());
+    };
+    let Ok(Value::Object(mut problem)) = serde_json::from_slice::<Value>(&bytes) else {
+        // Non-object or non-JSON body; pass through unchanged.
+        return Response::from_parts(parts, Body::from(bytes));
+    };
+    // Insert only when absent so existing per-handler injection is idempotent.
+    problem
+        .entry("request_id")
+        .or_insert_with(|| Value::String(request_id.clone()));
+    let Ok(body) = serde_json::to_vec(&Value::Object(problem)) else {
+        // Serialization failed (should not happen); pass through original bytes.
+        return Response::from_parts(parts, Body::from(bytes));
+    };
+    parts.headers.remove(header::CONTENT_LENGTH);
+    if let Ok(value) = HeaderValue::from_str(&request_id) {
+        parts.headers.insert("x-request-id", value);
+    }
+    Response::from_parts(parts, Body::from(body))
 }
 
 async fn reject_oversized_request_uri(request: Request, next: Next) -> Response {

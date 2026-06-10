@@ -2298,7 +2298,7 @@ fn set_response_example(
 fn problem_details_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["type", "title", "status", "detail", "code"],
+        "required": ["type", "title", "status", "detail", "code", "request_id"],
         "properties": {
             "type": { "type": "string", "format": "uri" },
             "title": { "type": "string" },

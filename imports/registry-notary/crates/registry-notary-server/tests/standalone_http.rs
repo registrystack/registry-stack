@@ -12674,3 +12674,64 @@ async fn preauth_callback_and_token_audit_events_carry_only_hashes() {
     assert_eq!(token_event["status"], json!(200));
     idp.stop().await;
 }
+
+#[tokio::test]
+async fn request_uri_limit_414_carries_server_owned_request_id() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let long_path = format!("/{}", "a".repeat(8 * 1024 + 1));
+
+    let response = server
+        .get(&long_path)
+        .add_header("x-request-id", "client-supplied-id")
+        .await;
+
+    response.assert_status(StatusCode::URI_TOO_LONG);
+    let body: Value = response.json();
+    assert_server_owned_request_id(&response, &body, "client-supplied-id");
+}
+
+#[tokio::test]
+async fn request_body_limit_413_carries_server_owned_request_id() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let too_large = Bytes::from(vec![b' '; 1024 * 1024 + 1]);
+
+    let response = server
+        .post("/v1/evaluations")
+        .add_header("x-api-key", "api-token")
+        .add_header("content-type", "application/json")
+        .add_header("x-request-id", "client-supplied-id")
+        .bytes(too_large)
+        .await;
+
+    response.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+    let body: Value = response.json();
+    assert_server_owned_request_id(&response, &body, "client-supplied-id");
+}
