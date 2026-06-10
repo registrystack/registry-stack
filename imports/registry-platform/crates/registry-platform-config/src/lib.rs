@@ -153,6 +153,7 @@ fn resolve_config_env_expression(
 
     match lookup(name) {
         Some(value) if !value.is_empty() => Ok(value),
+        Some(value) if operator.is_empty() => Ok(value),
         _ if operator == ":-" => Ok(fallback.to_string()),
         _ if operator == ":?" => {
             if fallback.trim().is_empty() {
@@ -1323,6 +1324,14 @@ mod tests {
             .expect_err("missing required env var is rejected");
 
         assert_eq!(err.to_string(), "missing base");
+    }
+
+    #[test]
+    fn config_env_expansion_allows_empty_plain_value() {
+        let expanded = expand_config_env_vars_with("${BASE_URL}", |_| Some(String::new()))
+            .expect("empty env var is allowed for plain expressions");
+
+        assert_eq!(expanded, "");
     }
 
     #[test]
