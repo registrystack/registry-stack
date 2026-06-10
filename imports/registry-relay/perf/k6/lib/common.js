@@ -183,7 +183,7 @@ const GLOBAL_THRESHOLDS = {
 
 export function thresholdsFor(key) {
   if (__ENV.REGISTRY_RELAY_NO_THRESHOLD === '1') {
-    return GLOBAL_THRESHOLDS;
+    return Object.assign({}, GLOBAL_THRESHOLDS);
   }
   const specific = THRESHOLDS[key] || {};
   return Object.assign({}, specific, GLOBAL_THRESHOLDS);
@@ -300,7 +300,7 @@ export function handleSummaryFor(scenarioName, data) {
 }
 
 function metricValue(data, metricName, valueName) {
-  const metric = data.metrics && data.metrics[metricName];
+  const metric = data && data.metrics && data.metrics[metricName];
   const values = metric && metric.values;
   return values && values[valueName] !== undefined ? values[valueName] : null;
 }
@@ -310,7 +310,8 @@ function formatMetricValue(value, suffix) {
     return 'n/a';
   }
   if (typeof value === 'number') {
-    return `${value.toFixed(3)}${suffix || ''}`;
+    const formatted = Number.isInteger(value) ? value.toString() : value.toFixed(3);
+    return `${formatted}${suffix || ''}`;
   }
   return `${value}${suffix || ''}`;
 }
