@@ -9355,19 +9355,20 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
     let metrics_body = metrics.text();
     assert!(metrics_body.contains("registry_notary_http_requests_total"));
     assert!(metrics_body.contains(
-        "registry_notary_http_requests_total{method=\"POST\",route=\"/v1/evaluations\",status_class=\"2xx\"}"
+        "registry_notary_http_requests_total{method=\"POST\",endpoint_kind=\"evaluation\",status_code=\"200\",status_class=\"2xx\",error_code=\"none\"}"
     ));
     assert!(metrics_body.contains("# TYPE registry_notary_http_request_duration_seconds histogram"));
     assert!(metrics_body.contains(
-        "registry_notary_http_request_duration_seconds_bucket{method=\"POST\",route=\"/v1/evaluations\",status_class=\"2xx\",le=\"+Inf\"}"
+        "registry_notary_http_request_duration_seconds_bucket{method=\"POST\",endpoint_kind=\"evaluation\",status_code=\"200\",status_class=\"2xx\",error_code=\"none\",le=\"+Inf\"}"
     ));
     assert!(metrics_body.contains(
-        "registry_notary_http_request_duration_seconds_sum{method=\"POST\",route=\"/v1/evaluations\",status_class=\"2xx\"}"
+        "registry_notary_http_request_duration_seconds_sum{method=\"POST\",endpoint_kind=\"evaluation\",status_code=\"200\",status_class=\"2xx\",error_code=\"none\"}"
     ));
     assert!(metrics_body.contains(
-        "registry_notary_http_request_duration_seconds_count{method=\"POST\",route=\"/v1/evaluations\",status_class=\"2xx\"}"
+        "registry_notary_http_request_duration_seconds_count{method=\"POST\",endpoint_kind=\"evaluation\",status_code=\"200\",status_class=\"2xx\",error_code=\"none\"}"
     ));
     assert!(!metrics_body.contains("registry_notary_http_request_duration_ms_total"));
+    assert!(!metrics_body.contains("route="));
     assert!(metrics_body
         .contains("registry_notary_source_requests_total{connector=\"rda\",outcome=\"success\"}"));
     assert!(metrics_body.contains("registry_notary_audit_events_total{outcome=\"success\"}"));
