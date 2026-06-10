@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-registryctl
   - registry-relay
-last_reviewed: "2026-06-07"
+last_reviewed: "2026-06-10"
 doc_type: tutorial
 locale: en
 standards_referenced:
@@ -36,6 +36,8 @@ curl -fsSL https://raw.githubusercontent.com/jeremi/registry-registryctl/main/in
 
 The installer downloads the current `snapshot` release binary.
 Snapshot binaries are currently published for Linux x86_64, Linux aarch64, and macOS aarch64.
+The container images are published for linux/amd64; on Apple Silicon your Docker provider runs
+them under emulation and prints a platform warning, which is harmless here.
 
 Confirm the CLI is available:
 
@@ -137,6 +139,10 @@ set -a
 . secrets/local.env
 set +a
 ```
+
+`set -a` exports every variable the sourced file defines, so later commands such as `curl` can read
+them; `set +a` turns automatic export back off.
+Run the three lines in the same shell session you use for the rest of the tutorial.
 
 The generated principals are labels wired to Relay scope strings in the generated config.
 
@@ -271,6 +277,7 @@ It does not delete your workbook, generated config, local keys, or smoke results
 | `registryctl` is not found | The install directory is not on `PATH`. | Add the directory printed by the installer, usually `~/.local/bin`, to `PATH`. |
 | The installer reports an unsupported platform | No binary is published for that OS or CPU yet. | Use a supported Linux or macOS aarch64 machine, or install from source with Cargo. |
 | `registryctl start` cannot find Docker | Docker or another Compose provider is not installed or running. | Start Docker Desktop, OrbStack, Colima, Podman, or your supported provider, then run `registryctl start` again. |
+| `registryctl start` fails and the container log shows `failed to parse config YAML ... unknown field` | A locally cached `snapshot` container image is older or newer than the config `registryctl` generates. | Run `docker pull ghcr.io/jeremi/registry-relay:snapshot` (and `docker pull ghcr.io/jeremi/registry-notary:snapshot` if Notary is in the project), then `registryctl start` again. |
 | A row read returns `403 Forbidden` | The key is valid but lacks the row-read scope. | Use `ROW_READER_RAW` for row reads. |
 | A row read returns `400 auth.purpose_required` | The entity requires a `Data-Purpose` header. | Send `Data-Purpose: https://example.local/purpose/tutorial` or another purpose URI. |
 | A collection row read returns a filter error | The entity requires at least one configured filter. | Add a filter such as `household_id=hh-1001`. |

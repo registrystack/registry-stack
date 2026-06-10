@@ -7,6 +7,12 @@
 # "## Verify" sections and executing them, in order, against a sibling
 # registry-lab checkout.
 #
+# Also drift-checks the three registryctl tutorials (publish-spreadsheet,
+# verify-claim-registry-api, verify-claim-own-api) by extracting every `sh`
+# fence and asserting the command-line count. Those tutorials are
+# execution-verified manually (they need registryctl and a workstation); the
+# count assertion makes silent command additions or removals fail CI.
+#
 # Usage:
 #   scripts/check-tutorial.sh              extract + execute (needs Docker)
 #   scripts/check-tutorial.sh --dry-run    extract + print only (no Docker)
@@ -138,6 +144,47 @@ done
 printf 'extracted %d Verify commands from tutorial:\n' "${#VERIFY[@]}"
 for i in "${!VERIFY[@]}"; do
 	printf '  verify %d: %s\n' "$((i + 1))" "${VERIFY[$i]}"
+done
+
+# Drift check for the registryctl tutorials: count non-empty command lines
+# inside `sh` fences. Bump the expected count when you intentionally add or
+# remove a documented command.
+REGISTRYCTL_TUTORIALS=(
+	"publish-spreadsheet-secured-registry-api:29"
+	"verify-claim-registry-api:60"
+	"verify-claim-own-api:44"
+)
+
+count_sh_command_lines() {
+	awk '
+        /^[[:space:]]*```sh[[:space:]]*$/ { in_fence = 1; next }
+        /^[[:space:]]*```[[:space:]]*$/ && in_fence { in_fence = 0; next }
+        in_fence {
+            sub(/^[[:space:]]+/, "")
+            if ($0 != "") count++
+        }
+        END { print count + 0 }
+    ' "$1"
+}
+
+for entry in "${REGISTRYCTL_TUTORIALS[@]}"; do
+	name="${entry%:*}"
+	expected="${entry##*:}"
+	page="$REPO_ROOT/src/content/docs/tutorials/$name.mdx"
+	if [[ ! -f "$page" ]]; then
+		printf 'tutorial not found: %s\n' "$page" >&2
+		exit 1
+	fi
+	actual="$(count_sh_command_lines "$page")"
+	if [[ "$actual" != "$expected" ]]; then
+		printf 'tutorial drift: %s.mdx has %s sh command lines, expected %s\n' \
+			"$name" "$actual" "$expected" >&2
+		printf 'if this change was intentional, update REGISTRYCTL_TUTORIALS in %s\n' \
+			"${BASH_SOURCE[0]}" >&2
+		exit 1
+	fi
+	printf 'registryctl tutorial %s: %s sh command lines (expected %s)\n' \
+		"$name" "$actual" "$expected"
 done
 
 if ((DRY_RUN)); then

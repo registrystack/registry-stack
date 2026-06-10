@@ -7,7 +7,7 @@ source_repos:
   - registry-registryctl
   - registry-notary
   - registry-relay
-last_reviewed: "2026-06-07"
+last_reviewed: "2026-06-10"
 doc_type: tutorial
 locale: en
 standards_referenced: []
@@ -48,6 +48,10 @@ set -a
 set +a
 ```
 
+`set -a` exports every variable the sourced file defines, so commands you run later in the same
+shell session can read them; `set +a` turns automatic export back off.
+The project-creation step below reads `ROW_READER_RAW` from your shell, so stay in this session.
+
 Keep that Relay project running.
 The standalone Notary project joins the Relay project's Docker Compose network and calls the Relay
 service by name.
@@ -67,6 +71,12 @@ registryctl init notary my-standalone-notary \
   --source-token-from-env ROW_READER_RAW
 cd my-standalone-notary
 ```
+
+`--source-token-from-env ROW_READER_RAW` reads the token from your current shell.
+If the command fails with `environment variable not found`, load the Relay keys again in this shell
+session (the `set -a` block above) and rerun it.
+`my-first-api_default` is the Compose network name Docker derives from the Relay project directory
+name; if you named that directory differently, use that name with the `_default` suffix.
 
 `registryctl` creates:
 
@@ -148,6 +158,8 @@ The smoke test passes with these checks:
 PASS notary healthz is public
 PASS notary ready is public
 PASS anonymous claims request is denied
+PASS anonymous caller can open Notary API docs
+PASS anonymous caller can fetch Notary OpenAPI
 PASS notary evaluator can list claims
 PASS notary evaluator can verify benefits person exists
 ```
@@ -191,6 +203,39 @@ curl -sS -X POST \
 ```
 
 Notary returns a successful claim result for `benefits-person-exists`.
+It has this shape (identifiers, timestamps, and the target handle vary per run):
+
+```json
+{
+  "results": [
+    {
+      "claim_id": "benefits-person-exists",
+      "claim_version": "2026-06",
+      "disclosure": "predicate",
+      "evaluation_id": "01KTS38C3AE98KHK5GCE8QWE67",
+      "expires_at": null,
+      "format": "application/vnd.registry-notary.claim-result+json",
+      "issued_at": "2026-06-10T15:43:45Z",
+      "provenance": {
+        "computed_by": "registryctl.standalone.notary",
+        "source_count": 1,
+        "source_versions": {}
+      },
+      "satisfied": true,
+      "subject_type": "person",
+      "target_ref": {
+        "handle": "rnref:v1:hmac-sha256:...",
+        "type": "person"
+      },
+      "value": true
+    }
+  ]
+}
+```
+
+An id that the source API does not know returns a `409 Evidence not available` problem document
+instead of `satisfied: false`; see
+[Evaluate a claim for an unknown person](../verify-claim-registry-api/#evaluate-a-claim-for-an-unknown-person).
 
 ## Explore requests in Bruno
 
@@ -237,3 +282,13 @@ registryctl stop
 - [Registry Notary overview](../../products/registry-notary/): explore all Notary capabilities.
 - [See it live](../../start/see-it-live/): explore the hosted demo to see Relay, Notary, and
   cross-authority flows in action.
+
+## Troubleshooting
+
+| Symptom | Cause | Resolution |
+| --- | --- | --- |
+| `registryctl init notary` fails with `failed to read source token from $ROW_READER_RAW: environment variable not found` | The Relay keys were loaded in a different shell session, or not at all. | Run the `set -a; . secrets/local.env; set +a` block from the Relay project directory in this shell, then rerun the command. |
+| `registryctl start` fails and the Notary log shows `network ... not found` | The Relay project is not running, or the `--source-network` name does not match the Relay project directory. | Start the Relay project, and pass the Compose network named after that directory with the `_default` suffix. |
+| The Notary container log shows `failed to parse config YAML ... unknown field` | A locally cached `snapshot` image is older or newer than the config `registryctl` generates. | Run `docker pull ghcr.io/jeremi/registry-notary:snapshot`, then `registryctl start` again. |
+| `registryctl notary smoke` returns `401` for authorized calls | The shell still holds the Relay project's keys, not the standalone Notary keys. | Run `set -a; . secrets/local.env; set +a` from the `my-standalone-notary` directory, then retry. |
+| Claim evaluation returns `409 Evidence not available` | The target id is not known to the source API. | Use `per-2001` for the tutorial target, or an id your source API can return. |

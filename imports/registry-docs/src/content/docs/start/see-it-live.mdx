@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-lab
-last_reviewed: "2026-06-08"
+last_reviewed: "2026-06-10"
 doc_type: tutorial
 locale: en
 standards_referenced:
@@ -38,9 +38,10 @@ credentials, identities, and ready-made requests, open the lab homepage at
 [lab.registrystack.org](https://lab.registrystack.org).
 
 :::note
-Tokens in this lab are public demo-only tokens and can rotate. Do not copy them from this page.
-Get the current tokens and identities from the lab homepage, which shows every demo credential with a
-copy button and a prebuilt curl example. The same data is available unauthenticated as JSON at
+Lab tokens are public demo-only values that rotate, so this page shows placeholders, never live
+tokens. Get the current tokens and identities from the lab homepage, which shows every demo
+credential with a copy button and a prebuilt curl example. The same data is available
+unauthenticated as JSON at
 [lab.registrystack.org/api/lab.json](https://lab.registrystack.org/api/lab.json).
 :::
 
@@ -97,7 +98,7 @@ The Relay returns `200 OK` with one record and pagination metadata (synthetic de
       "given_name": "Miguel",
       "surname": "Santos",
       "birth_date": "2016-01-15",
-      "civil_status": "child",
+      "life_stage": "child",
       "deceased": false,
       "district": "north"
     }
@@ -135,7 +136,9 @@ you can still follow the flow on the lab homepage and watch the sign-in and issu
 installing anything.
 
 Start at [lab.registrystack.org](https://lab.registrystack.org), which links the credential flow end
-to end. The Notary requires you to sign in (via eSignet) before it issues. Use the demo identity:
+to end. The Notary requires you to sign in before it issues. The sign-in runs through eSignet, the
+lab's hosted demo identity provider; you do not need an account, and the values below are synthetic
+demo identities:
 
 - National ID: `NID-1001`
 - Name: Miguel Santos

@@ -7,7 +7,7 @@ source_repos:
   - registry-registryctl
   - registry-relay
   - registry-notary
-last_reviewed: "2026-06-07"
+last_reviewed: "2026-06-10"
 doc_type: tutorial
 locale: en
 standards_referenced: []
@@ -120,6 +120,8 @@ The smoke test passes with these checks:
 PASS notary healthz is public
 PASS notary ready is public
 PASS anonymous claims request is denied
+PASS anonymous caller can open Notary API docs
+PASS anonymous caller can fetch Notary OpenAPI
 PASS notary evaluator can list claims
 PASS notary evaluator can verify benefits person exists
 ```
@@ -176,11 +178,8 @@ curl -sS \
   http://127.0.0.1:4255/v1/claims
 ```
 
-The response includes the starter claim:
-
-```text
-benefits-person-exists
-```
+The response is a JSON list of the configured claim definitions.
+The starter claim appears in it with `"id": "benefits-person-exists"`.
 
 ## Evaluate a claim from registry data
 
@@ -205,6 +204,35 @@ curl -sS -X POST \
 
 Notary returns a successful claim result for `benefits-person-exists`.
 The response shows the claim outcome, not the Relay source row.
+It has this shape (identifiers, timestamps, and the target handle vary per run):
+
+```json
+{
+  "results": [
+    {
+      "claim_id": "benefits-person-exists",
+      "claim_version": "2026-06",
+      "disclosure": "predicate",
+      "evaluation_id": "01KTS319VPVAJWKT8SZF4R8ZVN",
+      "expires_at": null,
+      "format": "application/vnd.registry-notary.claim-result+json",
+      "issued_at": "2026-06-10T15:39:53Z",
+      "provenance": {
+        "computed_by": "registryctl.benefits.notary",
+        "source_count": 1,
+        "source_versions": {}
+      },
+      "satisfied": true,
+      "subject_type": "person",
+      "target_ref": {
+        "handle": "rnref:v1:hmac-sha256:...",
+        "type": "person"
+      },
+      "value": true
+    }
+  ]
+}
+```
 
 What happened:
 
@@ -213,6 +241,41 @@ What happened:
 - Notary used its internal Relay source token to query Relay.
 - Relay enforced its row-read scope and purpose-header rules.
 - Notary returned the configured claim result without exposing the spreadsheet row.
+
+## Evaluate a claim for an unknown person
+
+Run the same evaluation for an id that is not in the sample workbook:
+
+```sh
+curl -sS -X POST \
+  -H "x-api-key: $REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/vnd.registry-notary.claim-result+json" \
+  -d '{
+    "target": { "type": "person", "id": "per-9999" },
+    "claims": ["benefits-person-exists"],
+    "disclosure": "predicate",
+    "purpose": "https://example.local/purpose/tutorial"
+  }' \
+  http://127.0.0.1:4255/v1/evaluations
+```
+
+Notary does not return `satisfied: false` for a missing person.
+It returns a `409` problem document, because there is no evidence to evaluate:
+
+```json
+{
+  "code": "evidence.not_available",
+  "detail": "the evidence is not available",
+  "request_id": "01KTS31QC7184F5487VW0P7XM3",
+  "status": 409,
+  "title": "Evidence not available",
+  "type": "https://docs.registry-notary.dev/problems/evidence/not_available"
+}
+```
+
+This distinction matters to integrators: a claim result answers the configured question about a
+known subject, while a missing subject is an evidence error, not a negative answer.
 
 ## Compare a row read and a claim result
 
@@ -312,7 +375,8 @@ It does not delete your workbook, generated configs, local keys, or smoke result
 | `registryctl add notary --from local-relay` cannot find a Relay project | The current directory does not contain a generated `registryctl.yaml` with a Relay section. | Run the command from the Relay tutorial project directory. |
 | `registryctl add notary --from local-relay` cannot find a source token | `secrets/local.env` is missing or does not contain the Relay row-reader key. | Recreate the Relay project or restore the generated local env file. |
 | `registryctl start` starts Relay but Notary is not ready | Notary config, source token, or Compose service wiring is invalid. | Run `registryctl status`, then `registryctl logs` and check the Notary service errors. |
+| The Notary container log shows `failed to parse config YAML ... unknown field` | A locally cached `snapshot` image is older or newer than the config `registryctl` generates. | Run `docker pull ghcr.io/jeremi/registry-notary:snapshot`, then `registryctl start` again. |
 | Notary `/ready` is degraded while `/healthz` is healthy | The local replay store or demo issuer key is not available to Notary. | Run `registryctl stop`, then `registryctl start`; if it persists, inspect `registryctl logs`. |
 | `registryctl notary smoke` returns `401` for authorized calls | The Notary evaluator key was not loaded or does not match the generated Notary fingerprint. | Run `. secrets/local.env`, then retry. |
 | Claim evaluation returns a source auth error | Notary cannot authenticate to Relay with `EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN`. | Confirm `secrets/local.env` has the source token and Relay is running. |
-| Claim evaluation returns target not found | The target id is not in the sample workbook or the Relay entity lookup changed. | Use `per-2001` for the tutorial target, or inspect the Relay `person` entity. |
+| Claim evaluation returns `409 Evidence not available` | The target id is not in the sample workbook or the Relay entity lookup changed. | Use `per-2001` for the tutorial target, or inspect the Relay `person` entity. |
