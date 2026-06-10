@@ -214,6 +214,10 @@ sources:
   openfn_crvs:
     dataset: civil_registry
     entity: civil_person
+    batch:
+      mode: sequential_lookup
+    limits:
+      max_in_flight: 2
     workflow:
       start: prepare_request
       steps:
@@ -282,6 +286,46 @@ The worker compiles the configured OpenFn workflow steps, injects
 `state.configuration` from the Rust sidecar request, runs the plan with
 `@openfn/runtime`, and returns only an RDA-shaped `{ "data": [...] }` envelope
 to the Rust HTTP boundary.
+
+### Batch And Backpressure
+
+The sidecar exposes the RDA batch shape at:
+
+```text
+POST /v1/datasets/{dataset}/entities/{entity}/records:batchMatch
+```
+
+Source batch behavior is explicit:
+
+- `batch.mode: sequential_lookup` is the default compatibility mode. The sidecar
+  sends one batch worker request, but the worker runs the configured lookup
+  workflow once per item. This reduces HTTP chatter between Notary and the
+  sidecar, but it does not reduce calls to the upstream registry.
+- `batch.mode: workflow_batch` runs the configured OpenFn workflow once with the
+  full batch in `state.data.items` and the query signature in
+  `state.data.query_signature`. Use this only for source jobs that intentionally
+  translate a batch into a backend-supported bulk API, for example a target
+  search endpoint or bulk read endpoint. A workflow that still loops and calls
+  the target once per item is not a real upstream batch optimization.
+
+Each source can also set `limits.max_in_flight`. When all permits for that source
+are in use, the sidecar returns `503` with `Retry-After` before dispatching a
+worker request. This is separate from the global worker pool size and is intended
+to protect slower upstreams such as DHIS2, CRVS, or facility registries from one
+Notary batch consuming all local worker capacity or exceeding the target system's
+safe rate.
+
+The `/metrics` endpoint reports worker capacity plus per-source outcomes,
+duration totals, and item totals:
+
+```text
+registry_notary_openfn_sidecar_lookup_total{source_id="openfn_crvs",outcome="batch_success"} 1
+registry_notary_openfn_sidecar_lookup_items_total{source_id="openfn_crvs",outcome="batch_success"} 3
+registry_notary_openfn_sidecar_source_permits{source_id="openfn_crvs",state="in_flight"} 0
+```
+
+Metrics labels intentionally include only `source_id` and outcome. They must not
+include credentials, lookup values, correlation IDs, or target URLs.
 
 ## Worker Protocol
 

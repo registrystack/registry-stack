@@ -35,7 +35,7 @@ use std::{
 };
 use thiserror::Error;
 use tokio::process::Command;
-use tokio::sync::{watch, Mutex, Semaphore};
+use tokio::sync::{watch, Mutex, OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 use tough::{
     editor::{signed::PathExists, RepositoryEditor},
@@ -155,10 +155,46 @@ pub struct SourceConfig {
     pub entity: String,
     pub workflow: SourceWorkflowConfig,
     pub credential_env: String,
+    #[serde(default, skip_serializing_if = "SourceBatchConfig::is_default")]
+    pub batch: SourceBatchConfig,
+    #[serde(default, skip_serializing_if = "SourceRuntimeLimitConfig::is_default")]
+    pub limits: SourceRuntimeLimitConfig,
     #[serde(default)]
     pub allowed_base_urls: Vec<String>,
     #[serde(default)]
     pub smoke_lookup: Option<SmokeLookupConfig>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SourceBatchConfig {
+    #[serde(default)]
+    pub mode: SourceBatchMode,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceBatchMode {
+    #[default]
+    SequentialLookup,
+    WorkflowBatch,
+}
+
+impl SourceBatchConfig {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SourceRuntimeLimitConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_in_flight: Option<usize>,
+}
+
+impl SourceRuntimeLimitConfig {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -321,6 +357,7 @@ struct AppState {
     auth_tokens: Arc<Vec<ResolvedBearerToken>>,
     pool: Arc<WorkerPool>,
     credentials: Arc<BTreeMap<String, Value>>,
+    source_limiters: Arc<BTreeMap<String, Arc<Semaphore>>>,
     metrics: Arc<Mutex<BTreeMap<MetricKey, MetricValue>>>,
 }
 
@@ -339,6 +376,7 @@ struct MetricKey {
 struct MetricValue {
     count: u64,
     duration_ms_total: u64,
+    items_total: u64,
 }
 
 pub async fn load_startup_config(raw: &str) -> Result<SidecarConfig, SidecarError> {
@@ -1016,11 +1054,23 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
     .await?;
 
     let credentials = load_credentials(&config)?;
+    let source_limiters = config
+        .sources
+        .iter()
+        .map(|(source_id, source)| {
+            let max_in_flight = source
+                .limits
+                .max_in_flight
+                .unwrap_or(config.limits.max_workers);
+            (source_id.clone(), Arc::new(Semaphore::new(max_in_flight)))
+        })
+        .collect();
     let state = Arc::new(AppState {
         config,
         auth_tokens: Arc::new(auth_tokens),
         pool: Arc::new(pool),
         credentials: Arc::new(credentials),
+        source_limiters: Arc::new(source_limiters),
         metrics: Arc::new(Mutex::new(BTreeMap::new())),
     });
     run_smoke_lookups(&state).await?;
@@ -1312,6 +1362,11 @@ fn validate_config(config: &SidecarConfig) -> Result<(), SidecarError> {
         ));
     }
     for (source_id, source) in &config.sources {
+        if source.limits.max_in_flight == Some(0) {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} limits.max_in_flight must be greater than zero"
+            )));
+        }
         validate_source_execution(source_id, source, canonical_jobs_root.as_deref())?;
         if source
             .allowed_base_urls
@@ -1960,10 +2015,36 @@ async fn metrics(State(state): State<Arc<AppState>>) -> Response {
         snapshot.replacements_total,
         u8::from(snapshot.circuit_open)
     );
+    body.push_str("# TYPE registry_notary_openfn_sidecar_source_permits gauge\n");
+    for (source_id, source) in &state.config.sources {
+        let max_permits = source
+            .limits
+            .max_in_flight
+            .unwrap_or(state.config.limits.max_workers);
+        let available = state
+            .source_limiters
+            .get(source_id)
+            .map(|limiter| limiter.available_permits())
+            .unwrap_or(0);
+        let in_flight = max_permits.saturating_sub(available);
+        for (label, value) in [
+            ("max", max_permits),
+            ("available", available),
+            ("in_flight", in_flight),
+        ] {
+            body.push_str(&format!(
+                "registry_notary_openfn_sidecar_source_permits{{source_id=\"{}\",state=\"{}\"}} {}\n",
+                escape_metric_label(source_id),
+                label,
+                value
+            ));
+        }
+    }
     let metrics = state.metrics.lock().await;
     if !metrics.is_empty() {
         body.push_str("# TYPE registry_notary_openfn_sidecar_lookup_total counter\n");
         body.push_str("# TYPE registry_notary_openfn_sidecar_lookup_duration_ms_total counter\n");
+        body.push_str("# TYPE registry_notary_openfn_sidecar_lookup_items_total counter\n");
     }
     for (key, value) in metrics.iter() {
         body.push_str(&format!(
@@ -1977,6 +2058,12 @@ async fn metrics(State(state): State<Arc<AppState>>) -> Response {
             escape_metric_label(&key.source_id),
             escape_metric_label(&key.outcome),
             value.duration_ms_total
+        ));
+        body.push_str(&format!(
+            "registry_notary_openfn_sidecar_lookup_items_total{{source_id=\"{}\",outcome=\"{}\"}} {}\n",
+            escape_metric_label(&key.source_id),
+            escape_metric_label(&key.outcome),
+            value.items_total
         ));
     }
     (
@@ -2041,11 +2128,17 @@ async fn lookup(
     });
     add_source_execution(&mut request, &state.config, source);
 
+    let _source_permit = match acquire_source_permit(&state, source_id, "source_saturated", 1).await
+    {
+        Ok(permit) => permit,
+        Err(response) => return *response,
+    };
     let worker_execution = match state.pool.execute_json_with_metadata(request).await {
         Ok(execution) => execution,
         Err(error) => {
             let worker_id = error.worker_id();
-            record_metric(&state, source_id, "worker_error", started_at.elapsed()).await;
+            record_metric_with_items(&state, source_id, "worker_error", started_at.elapsed(), 1)
+                .await;
             warn!(
                 correlation_id = correlation_id.as_deref().unwrap_or(""),
                 source_id = source_id.as_str(),
@@ -2064,7 +2157,7 @@ async fn lookup(
     } else {
         "source_error"
     };
-    record_metric(&state, source_id, outcome, started_at.elapsed()).await;
+    record_metric_with_items(&state, source_id, outcome, started_at.elapsed(), 1).await;
     info!(
         correlation_id = correlation_id.as_deref().unwrap_or(""),
         source_id = source_id.as_str(),
@@ -2125,6 +2218,7 @@ async fn batch_match(
         "entity": entity,
         "query_signature": body.query_signature,
         "items": body.items,
+        "batch": &source.batch,
         "fields": body.fields,
         "purpose": purpose,
         "correlation_id": correlation_id.clone(),
@@ -2132,15 +2226,28 @@ async fn batch_match(
     });
     add_source_execution(&mut request, &state.config, source);
 
+    let batch_item_count = body.items.len();
+    let _source_permit = match acquire_source_permit(
+        &state,
+        source_id,
+        "batch_source_saturated",
+        batch_item_count,
+    )
+    .await
+    {
+        Ok(permit) => permit,
+        Err(response) => return *response,
+    };
     let worker_execution = match state.pool.execute_json_with_metadata(request).await {
         Ok(execution) => execution,
         Err(error) => {
             let worker_id = error.worker_id();
-            record_metric(
+            record_metric_with_items(
                 &state,
                 source_id,
                 "batch_worker_error",
                 started_at.elapsed(),
+                batch_item_count,
             )
             .await;
             warn!(
@@ -2169,7 +2276,14 @@ async fn batch_match(
     } else {
         "batch_source_error"
     };
-    record_metric(&state, source_id, outcome, started_at.elapsed()).await;
+    record_metric_with_items(
+        &state,
+        source_id,
+        outcome,
+        started_at.elapsed(),
+        batch_item_count,
+    )
+    .await;
     info!(
         correlation_id = correlation_id.as_deref().unwrap_or(""),
         source_id = source_id.as_str(),
@@ -2216,7 +2330,13 @@ async fn parse_batch_match_body(
     })
 }
 
-async fn record_metric(state: &AppState, source_id: &str, outcome: &str, duration: Duration) {
+async fn record_metric_with_items(
+    state: &AppState,
+    source_id: &str,
+    outcome: &str,
+    duration: Duration,
+    items: usize,
+) {
     let key = MetricKey {
         source_id: source_id.to_string(),
         outcome: outcome.to_string(),
@@ -2227,6 +2347,38 @@ async fn record_metric(state: &AppState, source_id: &str, outcome: &str, duratio
     value.duration_ms_total = value
         .duration_ms_total
         .saturating_add(duration.as_millis() as u64);
+    value.items_total = value.items_total.saturating_add(items as u64);
+}
+
+async fn acquire_source_permit(
+    state: &Arc<AppState>,
+    source_id: &str,
+    saturated_outcome: &'static str,
+    items: usize,
+) -> Result<OwnedSemaphorePermit, Box<Response>> {
+    let Some(limiter) = state.source_limiters.get(source_id) else {
+        return Err(Box::new(problem(
+            StatusCode::BAD_GATEWAY,
+            "source limiter unavailable",
+        )));
+    };
+    match limiter.clone().try_acquire_owned() {
+        Ok(permit) => Ok(permit),
+        Err(_) => {
+            record_metric_with_items(state, source_id, saturated_outcome, Duration::ZERO, items)
+                .await;
+            let mut response = problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "source concurrency limit reached",
+            );
+            if let Ok(value) =
+                HeaderValue::from_str(&state.config.limits.retry_after_seconds.to_string())
+            {
+                response.headers_mut().insert(header::RETRY_AFTER, value);
+            }
+            Err(Box::new(response))
+        }
+    }
 }
 
 fn escape_metric_label(value: &str) -> String {
@@ -2789,6 +2941,8 @@ mod tests {
                         }],
                     },
                     credential_env: "TEST_OPENFN_SOURCE_CREDENTIAL".to_string(),
+                    batch: SourceBatchConfig::default(),
+                    limits: SourceRuntimeLimitConfig::default(),
                     allowed_base_urls: Vec::new(),
                     smoke_lookup: Some(SmokeLookupConfig {
                         field: "national_id".to_string(),
@@ -2832,5 +2986,24 @@ mod tests {
                 "expected {label} in {error}"
             );
         }
+    }
+
+    #[test]
+    fn source_concurrency_limit_must_be_nonzero() {
+        let mut config = minimal_config();
+        config
+            .sources
+            .get_mut("people")
+            .expect("source exists")
+            .limits
+            .max_in_flight = Some(0);
+
+        let error =
+            validate_config(&config).expect_err("zero source concurrency limit is rejected");
+
+        assert!(
+            error.to_string().contains("limits.max_in_flight"),
+            "expected source limit in {error}"
+        );
     }
 }

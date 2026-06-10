@@ -30,6 +30,8 @@ struct HarnessOptions {
     max_output_bytes: usize,
     liveness_window_ms: u64,
     max_batch_items: usize,
+    batch_mode: Option<&'static str>,
+    source_max_in_flight: Option<usize>,
 }
 
 impl Default for HarnessOptions {
@@ -40,6 +42,8 @@ impl Default for HarnessOptions {
             max_output_bytes: 4096,
             liveness_window_ms: 30_000,
             max_batch_items: 100,
+            batch_mode: None,
+            source_max_in_flight: None,
         }
     }
 }
@@ -71,6 +75,14 @@ fn manifest_yaml(options: &HarnessOptions, attempt_log: &Path) -> String {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let worker = fixtures.join("contract_worker.sh");
     let job = fixtures.join("jobs/opencrvs-person-lookup.js");
+    let batch_config = options
+        .batch_mode
+        .map(|mode| format!("    batch:\n      mode: {mode}\n"))
+        .unwrap_or_default();
+    let source_limits_config = options
+        .source_max_in_flight
+        .map(|limit| format!("    limits:\n      max_in_flight: {limit}\n"))
+        .unwrap_or_default();
 
     format!(
         r#"
@@ -101,6 +113,7 @@ sources:
   openfn_crvs:
     dataset: civil_registry
     entity: civil_person
+{batch_config}{source_limits_config}
     workflow:
       steps:
         - id: lookup
@@ -121,6 +134,8 @@ sources:
         max_output_bytes = options.max_output_bytes,
         liveness_window_ms = options.liveness_window_ms,
         max_batch_items = options.max_batch_items,
+        batch_config = batch_config,
+        source_limits_config = source_limits_config,
         worker = yaml_path(&worker),
         attempt_log = yaml_path(attempt_log),
         job = yaml_path(&job),
@@ -141,6 +156,15 @@ fn manifest_defaults_server_boundary_limits() {
     assert_eq!(config.server.request_body_timeout_ms, 10_000);
     assert_eq!(config.server.http1_header_read_timeout_ms, 10_000);
     assert_eq!(config.server.max_connections, 1024);
+    let source = config
+        .sources
+        .get("openfn_crvs")
+        .expect("source config parses");
+    assert_eq!(
+        serde_json::to_value(&source.batch).expect("batch config serializes"),
+        json!({ "mode": "sequential_lookup" })
+    );
+    assert_eq!(source.limits.max_in_flight, None);
 }
 
 fn set_sidecar_token_hash() {
@@ -318,6 +342,7 @@ async fn batch_match_returns_per_item_projected_rda_data_and_sends_minimized_wor
         .expect("batch worker request is logged");
     let request: Value = serde_json::from_str(batch_request).expect("worker request is JSON");
     assert_eq!(request["mode"], json!("batch_match"));
+    assert_eq!(request["batch"], json!({ "mode": "sequential_lookup" }));
     assert_eq!(
         request["query_signature"],
         json!([{ "field": "national_id", "op": "eq" }])
@@ -333,6 +358,32 @@ async fn batch_match_returns_per_item_projected_rda_data_and_sends_minimized_wor
         attempt_count(&harness),
         1,
         "batch dispatches exactly one non-smoke worker execution"
+    );
+}
+
+#[tokio::test]
+async fn batch_match_forwards_workflow_batch_mode_to_worker() {
+    let harness = contract_harness(HarnessOptions {
+        batch_mode: Some("workflow_batch"),
+        ..HarnessOptions::default()
+    })
+    .await;
+
+    let response = authorized_batch_match(&harness.server).await;
+
+    response.assert_status_ok();
+    let attempts = fs::read_to_string(&harness.attempt_log).expect("attempt log is written");
+    let batch_request = attempts
+        .lines()
+        .find(|line| line.contains(r#""mode":"batch_match""#))
+        .expect("batch worker request is logged");
+    let request: Value = serde_json::from_str(batch_request).expect("worker request is JSON");
+    assert_eq!(request["batch"], json!({ "mode": "workflow_batch" }));
+    assert_eq!(request["items"].as_array().map(Vec::len), Some(3));
+    assert_eq!(
+        attempt_count(&harness),
+        1,
+        "true batch mode still dispatches a single worker execution"
     );
 }
 
@@ -627,6 +678,7 @@ async fn saturated_worker_pool_returns_503_with_retry_after() {
         max_workers: 1,
         worker_timeout_ms: 1_000,
         max_output_bytes: 4096,
+        source_max_in_flight: Some(2),
         ..HarnessOptions::default()
     })
     .await;
@@ -653,6 +705,48 @@ async fn saturated_worker_pool_returns_503_with_retry_after() {
     assert!(
         saturated.headers().contains_key("retry-after"),
         "saturation responses include Retry-After"
+    );
+}
+
+#[tokio::test]
+async fn source_concurrency_limit_returns_503_before_worker_dispatch() {
+    let harness = contract_harness(HarnessOptions {
+        max_workers: 2,
+        worker_timeout_ms: 1_000,
+        max_output_bytes: 4096,
+        source_max_in_flight: Some(1),
+        ..HarnessOptions::default()
+    })
+    .await;
+
+    let first = authorized_lookup(&harness.server, "slow-person");
+    let second = authorized_lookup(&harness.server, "person-123");
+    let (first, second) = tokio::join!(first, second);
+    let statuses = [first.status_code(), second.status_code()];
+
+    assert!(
+        statuses.contains(&StatusCode::OK),
+        "one request should acquire the source permit"
+    );
+    assert!(
+        statuses.contains(&StatusCode::SERVICE_UNAVAILABLE),
+        "overflow request should fail fast at the source limiter"
+    );
+    let saturated = if first.status_code() == StatusCode::SERVICE_UNAVAILABLE {
+        first
+    } else {
+        second
+    };
+    let body = assert_problem_details(&saturated, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["title"], json!("source concurrency limit reached"));
+    assert!(
+        saturated.headers().contains_key("retry-after"),
+        "source saturation responses include Retry-After"
+    );
+    assert_eq!(
+        attempt_count(&harness),
+        1,
+        "source saturation is rejected before a second worker request is dispatched"
     );
 }
 
@@ -772,8 +866,16 @@ async fn health_ready_and_metrics_are_available_without_secret_disclosure() {
     let metrics_body = metrics.text();
 
     assert!(metrics_body.contains("registry_notary_openfn_sidecar_workers"));
+    assert!(metrics_body.contains("registry_notary_openfn_sidecar_source_permits"));
+    assert!(metrics_body.contains(
+        "registry_notary_openfn_sidecar_source_permits{source_id=\"openfn_crvs\",state=\"max\"} 2"
+    ));
     assert!(metrics_body.contains("source_id=\"openfn_crvs\",outcome=\"success\""));
     assert!(metrics_body.contains("source_id=\"openfn_crvs\",outcome=\"batch_success\""));
+    assert!(metrics_body.contains("registry_notary_openfn_sidecar_lookup_items_total"));
+    assert!(metrics_body.contains(
+        "registry_notary_openfn_sidecar_lookup_items_total{source_id=\"openfn_crvs\",outcome=\"batch_success\"} 3"
+    ));
     assert!(!metrics_body.contains("fixture-token"));
     assert!(!metrics_body.contains("opencrvs.example.test"));
     assert!(!metrics_body.contains("person-123"));
