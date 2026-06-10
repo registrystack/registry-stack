@@ -1041,8 +1041,9 @@ fn load_env_file_arg(path: Option<&std::path::Path>) -> io::Result<()> {
 }
 
 fn parse_env_file_value(value: &str) -> String {
-    if (value.starts_with('"') && value.ends_with('"'))
-        || (value.starts_with('\'') && value.ends_with('\''))
+    if value.len() >= 2
+        && ((value.starts_with('"') && value.ends_with('"'))
+            || (value.starts_with('\'') && value.ends_with('\'')))
     {
         value[1..value.len() - 1].to_string()
     } else {
@@ -1178,9 +1179,9 @@ async fn shutdown_signal() {
 mod tests {
     use super::{
         build_audit_sink, compile_relay_runtime, config_apply_bundle_request_body,
-        load_env_file_arg, parse_cli_command_from, run_config_apply_bundle, run_healthcheck,
-        CliCommand, ConfigApplyBundleCommand, ConfigVerifyBundleSource, OperationalLogFormat,
-        DEFAULT_HEALTHCHECK_TIMEOUT_MS, DEFAULT_HEALTHCHECK_URL,
+        load_env_file_arg, parse_cli_command_from, parse_env_file_value, run_config_apply_bundle,
+        run_healthcheck, CliCommand, ConfigApplyBundleCommand, ConfigVerifyBundleSource,
+        OperationalLogFormat, DEFAULT_HEALTHCHECK_TIMEOUT_MS, DEFAULT_HEALTHCHECK_URL,
     };
     use axum::extract::State;
     use axum::http::{HeaderMap, StatusCode};
@@ -1520,6 +1521,12 @@ audit:
 
         std::env::remove_var("REGISTRY_RELAY_TEST_ENV_FILE_TOKEN");
         std::env::remove_var("REGISTRY_RELAY_TEST_ENV_FILE_KEEP");
+    }
+
+    #[test]
+    fn env_file_value_parser_handles_single_quote_values() {
+        assert_eq!(parse_env_file_value("\""), "\"");
+        assert_eq!(parse_env_file_value("'"), "'");
     }
 
     #[test]
