@@ -919,7 +919,7 @@ impl RegistryNotaryRuntime {
             "auth": {
                 "methods": ["api_key", "bearer"],
                 "api_key": {
-                    "header": "x-api-key",
+                    "header": "X-Api-Key",
                 },
                 "bearer": {
                     "header": "Authorization",
@@ -4024,7 +4024,7 @@ mod tests {
         let document = RegistryNotaryRuntime::service_document(&evidence);
 
         assert_eq!(document["auth"]["methods"], json!(["api_key", "bearer"]));
-        assert_eq!(document["auth"]["api_key"]["header"], json!("x-api-key"));
+        assert_eq!(document["auth"]["api_key"]["header"], json!("X-Api-Key"));
         assert_eq!(document["auth"]["bearer"]["header"], json!("Authorization"));
         assert_eq!(document["auth"]["bearer"]["scheme"], json!("bearer"));
         assert_eq!(
