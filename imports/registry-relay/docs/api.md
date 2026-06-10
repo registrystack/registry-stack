@@ -12,77 +12,20 @@ The data-plane listener is `server.bind`. It serves health probes, docs, catalog
 
 The admin listener is optional and only exists when `server.admin_bind` is configured. Admin routes must stay on a private network. They are never mounted on the public data-plane listener.
 
-Public unauthenticated routes:
+The public URL space is structured as follows:
 
-```text
-GET /healthz
-GET /ready
-GET /docs
-GET /docs/scalar.js
-```
+- `/v1/datasets/{dataset_id}/entities/{entity}/...` and related aggregate, indicator, and dimension routes are the entity-oriented data-plane surface.
+- `/metadata/*` is the standards-facing metadata surface: catalog, DCAT, SHACL, policies, evidence offerings, and dataset/entity descriptors.
+- `/.well-known/api-catalog` is the public well-known discovery entry point.
+- `/ogc/v1/*` (feature: `ogcapi-features`) exposes spatial entities as OGC API Features collections.
+- `/ogc/v1/records/*` (feature: `ogcapi-records`) exposes a metadata-only catalog view.
+- `/ogc/edr/v1/*` (feature: `ogcapi-edr`) exposes spatial aggregates as OGC EDR area collections.
+- `/dci/{registry}/registry/sync/*` (feature: `spdci-api-standards`) provides SP DCI standards adapter routes.
+- `/.well-known/did.json`, `/schemas/{claim_type}/{version}`, and `/contexts/{vocab}/{version}` are provenance verifier-support routes, mounted only when `provenance.enabled: true`.
+- `/healthz`, `/ready`, `/docs`, and `/docs/scalar.js` are unauthenticated.
+- `/openapi.json` and `/docs` serve the machine-readable and human-readable API surface respectively.
 
-Auth-gated data-plane routes:
-
-```text
-GET /openapi.json
-GET /metadata
-GET /metadata/catalog
-GET /metadata/dcat
-GET /metadata/dcat/{profile}
-GET /metadata/shacl
-GET /metadata/policies
-GET /metadata/profiles
-GET /metadata/profiles/{profile}
-GET /metadata/datasets
-GET /metadata/datasets/{dataset_id}
-GET /metadata/datasets/{dataset_id}/policy
-GET /metadata/datasets/{dataset_id}/entities
-GET /metadata/datasets/{dataset_id}/entities/{entity}
-GET /metadata/datasets/{dataset_id}/entities/{entity}/schema
-GET /metadata/datasets/{dataset_id}/entities/{entity}/shacl
-GET /metadata/schema/{dataset_id}/{entity}/schema.json
-GET /metadata/ogc/records
-GET /metadata/ogc/records/{record_id}
-GET /metadata/evidence-offerings
-GET /metadata/evidence-offerings/{offering_id}
-GET /.well-known/api-catalog
-GET /v1/datasets
-GET /v1/datasets/{dataset_id}
-GET /v1/datasets/{dataset_id}/entities/{entity}/schema
-GET /v1/datasets/{dataset_id}/entities/{entity}/records
-GET /v1/datasets/{dataset_id}/entities/{entity}/records/{id}
-GET /v1/datasets/{dataset_id}/entities/{entity}/records/{id}/relationships/{relationship}
-GET /v1/datasets/{dataset_id}/aggregates
-GET /v1/datasets/{dataset_id}/aggregates/{aggregate_id}
-POST /v1/datasets/{dataset_id}/aggregates/{aggregate_id}/query
-GET /v1/datasets/{dataset_id}/aggregates/{aggregate_id}/metadata
-GET /v1/datasets/{dataset_id}/indicators
-GET /v1/datasets/{dataset_id}/indicators/{indicator_id}
-GET /v1/datasets/{dataset_id}/dimensions
-GET /v1/datasets/{dataset_id}/dimensions/{dimension_id}
-GET /ogc/v1                                 (feature: ogcapi-features)
-GET /ogc/v1/conformance                     (feature: ogcapi-features)
-GET /ogc/v1/collections                     (feature: ogcapi-features)
-GET /ogc/v1/datasets/{dataset_id}/collections  (feature: ogcapi-features)
-GET /ogc/v1/datasets/{dataset_id}/collections/{collection_id}  (feature: ogcapi-features)
-GET /ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items  (feature: ogcapi-features)
-GET /ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items/{feature_id}  (feature: ogcapi-features)
-GET /ogc/v1/records                         (feature: ogcapi-records)
-GET /ogc/v1/records/conformance             (feature: ogcapi-records)
-GET /ogc/v1/records/collections             (feature: ogcapi-records)
-GET /ogc/v1/records/collections/{collection_id}  (feature: ogcapi-records)
-GET /ogc/v1/records/collections/{collection_id}/items  (feature: ogcapi-records)
-GET /ogc/v1/records/collections/{collection_id}/items/{record_id}  (feature: ogcapi-records)
-GET /ogc/edr/v1                             (feature: ogcapi-edr)
-GET /ogc/edr/v1/conformance                 (feature: ogcapi-edr)
-GET /ogc/edr/v1/collections                 (feature: ogcapi-edr)
-GET /ogc/edr/v1/collections/{collection_id} (feature: ogcapi-edr)
-GET|POST /ogc/edr/v1/collections/{collection_id}/area  (feature: ogcapi-edr)
-POST /dci/{registry}/registry/sync/search   (feature: spdci-api-standards)
-POST /dci/{registry}/registry/sync/disabled (feature: spdci-api-standards)
-POST /dci/{registry}/registry/sync/get-disability-details  (feature: spdci-api-standards)
-POST /dci/{registry}/registry/sync/get-disability-support  (feature: spdci-api-standards)
-```
+The complete route list with request methods, path parameters, and security requirements is in [`openapi/registry-relay.openapi.json`](../openapi/registry-relay.openapi.json) and is served at runtime from `/openapi.json` and browsable at `/docs`.
 
 For SP DCI, `sync/search` is the generic path for any configured
 `standards.spdci.registries` entry. The disability-status, details, and support
@@ -91,6 +34,8 @@ the named `{registry}` points at the same dataset/entity as
 `standards.spdci.disability_registry`.
 
 When `provenance.enabled: true`, public verifier-support routes are mounted for `/.well-known/did.json` in gateway issuer mode and for `/schemas/{claim_type}/{version}` plus `/contexts/{vocab}/{version}`.
+
+Admin routes are not present in the OpenAPI artifact because they are served on the separate `server.admin_bind` listener, not the public data-plane. Their canonical reference is this document.
 
 Admin routes on `server.admin_bind`:
 
@@ -265,7 +210,7 @@ Collection reads accept at most 20 filter parameters. The cap applies before que
 
 ## Pagination And Conditional Requests
 
-Collection routes support `limit` up to the entity's configured `max_limit`. Responses may include an opaque cursor for the next page. Treat cursors as server-owned tokens and pass them back unchanged. A cursor is bound to the query shape and the current snapshot generation; malformed, tampered, or stale cursors fail with `pagination.cursor_invalidated`.
+Collection routes support `limit` up to the entity's configured `max_limit`. Responses may include an opaque cursor for the next page. Treat cursors as server-owned tokens and pass them back unchanged. A cursor is bound to the query shape and the current snapshot generation; malformed, tampered, or stale cursors fail with `query.cursor_invalid`.
 
 Entity collection and record responses include validators where supported. Clients can use `If-None-Match` to avoid re-downloading unchanged content. A matching validator returns `304 Not Modified`.
 
@@ -297,17 +242,7 @@ Metadata responses include private validators for the authenticated view. Client
 
 `GET /openapi.json` is auth-gated and metadata-filtered by default. The generated document includes only the operations and dataset/entity tags visible to the caller. Local demos and controlled tooling can set `server.openapi_requires_auth: false`; in that mode, unauthenticated callers receive the full configured OpenAPI surface. `GET /docs` serves the local Scalar viewer and can load the document with or without a bearer token depending on that setting.
 
-Static publication uses the same portable metadata model without starting Relay. For local validation and artifact generation:
-
-```sh
-just metadata-validate profiles/example-civil-registration/fixtures/metadata.yaml
-just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml dcat target/metadata/dcat.jsonld
-just metadata-publish profiles/example-civil-registration/fixtures/metadata.yaml target/metadata/public
-```
-
-The published bundle includes `index.json`, `metadata.yaml`, `catalog.json`, `evidence-offerings.json`, per-offering evidence documents, policy JSON-LD, `dcat.jsonld`, profile DCAT JSON-LD, `shacl.jsonld`, and per-entity JSON Schemas. Static artifacts are broad metadata publication surfaces; caller-scoped discovery still belongs to authenticated Relay routes.
-
-See [metadata.md](metadata.md) for the manifest model, publication layout, and split metadata startup errors.
+Static publication uses the same portable metadata model without starting Relay. See [metadata.md](metadata.md) for the manifest model, CLI commands, publication layout, and split metadata startup errors.
 
 When built with `ogcapi-features`, OGC API Features exposes spatial entities as read-only GeoJSON Features:
 
@@ -321,7 +256,43 @@ GET /ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items
 GET /ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items/{feature_id}
 ```
 
-Spatial collections are configured per entity with `spatial`. Discovery routes require metadata scope; item routes require the entity's row-read scope and preserve required filters, purpose headers, projection, audit, and opaque cursor pagination. Phase 1 supports point fields and existing GeoJSON geometry fields. `bbox` works for point geometry and for entities with precomputed bbox fields; `bbox-crs` accepts CRS84 only; `datetime` requires `spatial.datetime_field`.
+Spatial collections are configured per entity with `spatial`. An entity is only exposed as an OGC collection when that block is present.
+
+Auth and scope requirements for OGC API Features routes:
+
+| Route | Required scope |
+| --- | --- |
+| `GET /ogc/v1` | metadata scope on at least one spatial entity |
+| `GET /ogc/v1/conformance` | metadata scope on at least one spatial entity |
+| `GET /ogc/v1/collections` | metadata scope for each listed dataset |
+| `GET /ogc/v1/datasets/{dataset_id}/collections` | metadata scope for the dataset |
+| `GET /ogc/v1/datasets/{dataset_id}/collections/{collection_id}` | metadata scope for the collection's dataset |
+| `GET /ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items` | read scope for the collection's entity |
+| `GET /ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items/{feature_id}` | read scope for the collection's entity |
+
+Required filters, purpose headers, and field projection all apply on item routes. `bbox` alone does not satisfy a non-spatial `required_filters` constraint; item-by-id reads also enforce required filters to prevent filter-bypass via direct feature links. Item links in FeatureCollections preserve active required filters so they remain valid when followed.
+
+OGC item routes return `application/geo+json`; landing, conformance, and collection routes return `application/json`. Errors return `application/problem+json` with a stable `code` extension member.
+
+Error codes for OGC and spatial failures:
+
+| Code | Condition |
+| --- | --- |
+| `ogc.collection_not_found` | Dataset or collection not registered, not spatially exposed, or not visible |
+| `ogc.feature_not_found` | Feature not registered, not visible, or outside required filter context |
+| `ogc.record_not_found` | OGC Records item not registered or not visible |
+| `spatial.geometry_invalid` | Geometry field is malformed at runtime |
+| `spatial.geometry_too_large` | Geometry exceeds the configured vertex limit |
+| `spatial.bbox_invalid` | `bbox` parameter is malformed, uses an unsupported shape, or crosses the antimeridian |
+| `spatial.filter_unsupported` | A named parameter cannot be evaluated for this collection (carries `parameter` field) |
+| `spatial.crs_unsupported` | Requested `bbox-crs` is not CRS84 |
+| `query.cursor_invalid` | OGC `after` cursor is malformed, expired, or bound to a different query context |
+
+Pagination on item routes uses `limit` (capped by the entity's `max_limit`) and the opaque signed `after` cursor. The cursor binds dataset id, collection id, normalized filters, `bbox`, `bbox-crs`, `datetime`, limit, and caller identity; any change invalidates it. `numberMatched` is omitted; `numberReturned` and `links` (`self`, `first`, `next`) are always present on FeatureCollections.
+
+Spatial query parameter behavior: `bbox` is parsed as `minx,miny,maxx,maxy` in CRS84 longitude-latitude order; six-value 3D bbox values are rejected. `bbox-crs` accepts `http://www.opengis.net/def/crs/OGC/1.3/CRS84` only. `datetime` requires a configured `datetime_field`; open-open intervals (`../..`) are rejected. Broad `bbox` queries that exceed `max_bbox_degrees` are rejected before data access.
+
+Conformance boundaries for Phase 1: the OGC Features surface claims `http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core`, `http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/geojson`, and `http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/oas30`. Phase 1 supports point fields and existing GeoJSON geometry fields; WKT and WKB are deferred. Antimeridian bboxes, reprojection, and formal Queryables are deferred. For operator rollout details and configuration of the `spatial` entity block, see [standards-adapter-operator-guide.md](standards-adapter-operator-guide.md).
 
 When built with `ogcapi-records`, OGC API Records exposes a metadata-only catalog view:
 
@@ -353,7 +324,7 @@ GET /metadata/evidence-offerings
 GET /metadata/evidence-offerings/individual_name_evidence
 ```
 
-Metadata reads require the caller's `metadata` scope for the owning dataset. They do not execute a check or disclose row data. Evidence offerings are discovery records for Registry Notary. Relay publishes `access.kind: registry-notary` metadata with the advertised Notary endpoint or discovery URL; clients submit claims and evidence to Registry Notary, not Relay.
+Metadata reads require the caller's `metadata` scope for the owning dataset. They do not execute a check or disclose row data. Relay publishes discovery records only; Registry Notary executes verification. Evidence offerings carry `access.kind: registry-notary` metadata with the advertised Notary endpoint or discovery URL; clients submit claims and evidence to Registry Notary, not Relay. For the complete client handoff sequence, see [client-integration.md](client-integration.md).
 
 The list endpoint accepts metadata-only filters:
 
@@ -393,27 +364,8 @@ Errors use RFC 9457 Problem Details with a stable `code` field:
 
 The exact text in `detail` is operator-facing but intentionally scrubbed. Do not depend on it programmatically. Use the HTTP status and `code`.
 
-Startup-only split metadata failures use stable codes in logs:
-
-| Code | Meaning |
-| --- | --- |
-| `metadata.manifest.file_not_found` | Configured metadata manifest cannot be read |
-| `metadata.manifest.parse_failed` | Metadata YAML did not deserialize |
-| `metadata.manifest.version_unsupported` | Metadata manifest schema version is not supported |
-| `metadata.manifest.validation_failed` | Manifest failed semantic validation |
-| `runtime.binding.dataset_missing` | Runtime dataset is absent from compiled metadata |
-| `runtime.binding.entity_missing` | Runtime entity is absent from compiled metadata |
-| `runtime.binding.table_missing` | Runtime entity points at an unknown runtime table |
-| `runtime.binding.field_missing` | Runtime field or claim binding is absent from compiled metadata |
-| `runtime.binding.filter_missing` | Runtime filter binding is absent from compiled metadata |
-| `runtime.binding.relationship_missing` | Runtime relationship binding is absent from compiled metadata |
+Startup-only split metadata failures use stable `metadata.manifest.*` and `runtime.binding.*` codes logged to stderr; see [metadata.md](metadata.md) for the full table.
 
 ## Provenance Opt-In
 
-When `provenance.enabled: true`, callers can request signed Verifiable Credentials for supported response families:
-
-```http
-Accept: application/vc+jwt
-```
-
-Plain JSON remains the default when the caller does not opt in. See [provenance.md](provenance.md) for signer config, DID Web behavior, VC-JWT shape, and verification steps.
+When `provenance.enabled: true`, callers can request signed Verifiable Credentials for entity record and aggregate result responses by sending `Accept: application/vc+jwt`; plain JSON remains the default when the caller does not opt in. See [provenance.md](provenance.md) for signer config, DID Web behavior, VC-JWT shape, and verification steps.

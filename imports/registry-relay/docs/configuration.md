@@ -380,40 +380,7 @@ Token verification failures map to specific `auth.*` codes so audit pipelines ca
 | `auth.invalid_credential`       | 401  | JWT decode failure not covered by a more specific variant      |
 | `auth.jwks_unavailable`         | 503  | JWKS fetch failed; Registry Relay cannot verify any token     |
 
-### Running against a local IdP
-
-The steps below are a worked example for contributors, using the project's own local development stack (a Zitadel instance provisioned by the sibling `publicschema.com` compose stack). For a real deployment, adapt them to your own IdP.
-
-The publicschema.com dev compose stack provisions a Zitadel organisation, project, OIDC application, test user, machine service account, and the relay-facing project roles on first boot. See `apps/publicschema.com/compose/seed/zitadel-bootstrap.md` for the resources created, the env-file shape, and the claim that carries roles in minted access tokens.
-
-**Prerequisites.** The bootstrap must have completed against a current Zitadel volume so the `publicschema-api` machine user has `accessTokenType: JWT` and a generated client secret (Section 7b of `compose/seed/zitadel-init.sh`). Token minting uses the SA's `client_credentials` grant rather than the `workbench-dev` OIDC app's, because Zitadel WEB-typed OIDC applications silently drop the `client_credentials` grant at write time. If you are pointing at an older snapshot of the stack that predates the SA hardening, re-run `docker compose -f compose/dev.compose.yaml up zitadel-init` against the publicschema.com stack to regenerate the SA credentials and refresh `compose/seed/zitadel.env`; otherwise the token mint will fail with `invalid_grant` or produce an opaque bearer that the relay cannot verify.
-
-To exercise the relay end-to-end:
-
-```sh
-# 1. Bring up Zitadel from the sibling stack.
-cd ../publicschema.com
-docker compose -f compose/dev.compose.yaml up -d zitadel zitadel-init
-
-# 2. Mint a test access token.
-cd ../registry-relay
-TOKEN="$(./scripts/mint-zitadel-token.sh)"
-
-# 3. Run the relay against the OIDC example.
-cargo run -- --config config/example.oidc.yaml
-
-# 4. Hit a protected endpoint with the minted bearer.
-curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/metadata/catalog
-```
-
-The `tests/oidc_zitadel.rs` integration test exercises the same path and asserts the granular failure modes above. The test reads `OIDC_ISSUER`, `OIDC_SA_CLIENT_ID`, and `OIDC_SA_CLIENT_SECRET` from the environment, so source the bootstrap env file first:
-
-```sh
-source ../publicschema.com/compose/seed/zitadel.env
-cargo test --test oidc_zitadel -- --ignored --nocapture
-```
-
-The integration test verifies the auth wiring (signature, issuer, audience, principal extraction, granular `auth.*` codes) using a token minted by the bootstrap. Asserting RBAC against specific resource scopes requires either roles in the token that match `oidc.scope_map`'s keys, or aligning `oidc.scope_claim` with the IdP's role-bearing claim; the example `config/example.oidc.yaml` ships with the values the bootstrap emits.
+For a worked example of running Registry Relay against a local OIDC provider (using the project's dev Zitadel stack), see [development.md](development.md).
 
 ## Audit
 
@@ -762,18 +729,28 @@ access:
 
 ### PublicSchema VC Mapping
 
-`example-person-schema` is optional and requires a binary built with
-`--features publicschema-cel`. When present, entity-record VC issuance
-uses the mapping file to transform the public entity JSON into a
-PublicSchema.org subject. The plain JSON route is unchanged. Defaults
-are `context_url: https://publicschema.org/ctx/draft.jsonld`,
-`schema_url: https://publicschema.org/schemas/{target}.schema.json`,
-and `credential_type: {target}`. `schema_validation_path` is optional
-but recommended; when set, every mapped VC subject is validated before
-signing. Mapping CEL expressions receive `ctx.subject_uri`, `ctx.dataset`,
-and `ctx.entity`; use `ctx.subject_uri` for the PublicSchema subject
-`/id` so the mapped credential stays bound to the canonical gateway
-entity URI.
+Requires `--features publicschema-cel`. When present, entity-record VC issuance uses the mapping file to produce a PublicSchema.org credential subject instead of the default entity JSON shape.
+
+```yaml
+publicschema:
+  target: Person                                          # required; PublicSchema concept name
+  mapping_path: mappings/individual-person.publicschema.yaml  # required; CEL mapping document
+  schema_validation_path: ../publicschema.org/dist/schemas/Person.schema.json  # optional; validates subject before signing
+  context_url: https://publicschema.org/ctx/draft.jsonld  # optional; overrides default context
+  schema_url: https://publicschema.org/schemas/Person.schema.json  # optional; overrides default credentialSchema.id
+  credential_type: Person                                 # optional; overrides default VC type[1]
+```
+
+| Field | Default | Notes |
+| --- | --- | --- |
+| `target` | (required) | PublicSchema concept name; drives `credential_type` and `schema_url` defaults |
+| `mapping_path` | (required) | Path to a CEL mapping YAML document; compiled at startup |
+| `schema_validation_path` | absent | Local JSON Schema; when set, every mapped subject is validated before signing |
+| `context_url` | `https://publicschema.org/ctx/draft.jsonld` | JSON-LD context URL in the issued VC |
+| `schema_url` | `https://publicschema.org/schemas/{target}.schema.json` | `credentialSchema.id` in the issued VC |
+| `credential_type` | `{target}` | `type[1]` value in the issued VC |
+
+See [provenance.md](provenance.md) for CEL context variables, issuance behavior, audit records, and the build and test commands for this feature.
 
 ## Aggregates
 
@@ -808,7 +785,45 @@ aggregates:
       suppression: omit
 ```
 
-Supported indicator functions include the configured V1 set used by tests and examples, such as `count`, `sum`, and `avg`. `temporal_field` is optional; when present, native aggregate `temporal.from` and `temporal.to` are translated into the declared range-capable allowed filter for that source-entity field. Dataset indicator and dimension discovery is derived from these aggregate declarations, so keep ids stable and labels consumer-friendly. Keep disclosure thresholds explicit and reviewable. Spatial EDR exposure is opt-in with `spatial.mode: admin_area` on the aggregate.
+Supported indicator functions include the configured V1 set used by tests and examples, such as `count`, `sum`, and `avg`. `temporal_field` is optional; when present, native aggregate `temporal.from` and `temporal.to` are translated into the declared range-capable allowed filter for that source-entity field. Dataset indicator and dimension discovery is derived from these aggregate declarations, so keep ids stable and labels consumer-friendly. Keep disclosure thresholds explicit and reviewable.
+
+### Spatial EDR Aggregates
+
+Spatial EDR exposure is opt-in. Requires `--features ogcapi-features`.
+
+```yaml
+aggregates:
+  - id: by_admin_area
+    description: Individuals by administrative area
+    source_entity: individual
+    # ...dimensions, indicators, disclosure_control as normal...
+    spatial:
+      mode: admin_area
+      collection_id: by_admin_area   # optional; defaults to aggregate id
+      dimension: municipality_code   # declared dimension id used to join geometry
+      geometry_entity: municipality  # entity name that holds geometry rows
+      geometry_id_field: code        # field in geometry_entity matching the dimension values
+      geometry_field: geometry       # geojson field in geometry_entity
+      bbox_fields:                   # optional precomputed bbox fields in geometry_entity
+        min_x: bbox_min_x
+        min_y: bbox_min_y
+        max_x: bbox_max_x
+        max_y: bbox_max_y
+      max_geometry_vertices: 10000   # optional; defaults to 10000
+```
+
+| Field | Default | Notes |
+| --- | --- | --- |
+| `mode` | (required) | Must be `admin_area` |
+| `collection_id` | aggregate id | OGC collection identifier; must be unique within the dataset |
+| `dimension` | (required) | Declared aggregate dimension id whose values are joined to geometry |
+| `geometry_entity` | (required) | Entity that holds one geometry row per dimension value |
+| `geometry_id_field` | (required) | Field in `geometry_entity` that matches dimension values |
+| `geometry_field` | (required) | GeoJSON geometry field in `geometry_entity` |
+| `bbox_fields` | absent | Optional precomputed bbox columns; same subkeys as entity `spatial.bbox_fields` |
+| `max_geometry_vertices` | 10000 | Cap on GeoJSON vertices decoded from `geometry_field` |
+
+`geometry_entity` must be an entity declared in the same dataset. `geometry_id_field` and `geometry_field` must be exposed entity fields with compatible types (string/integer for id, geojson-typed string for geometry). Only `kind: geojson` geometry is supported for spatial aggregates in V1.
 
 ## Provenance
 
