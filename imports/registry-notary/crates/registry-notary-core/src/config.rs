@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::HashSet;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -3184,6 +3184,8 @@ pub struct RegistryNotaryHttpConfig {
     pub http1_header_read_timeout: Duration,
     #[serde(default = "default_max_connections")]
     pub max_connections: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trusted_proxy_ips: Vec<IpAddr>,
 }
 
 impl Default for RegistryNotaryHttpConfig {
@@ -3197,6 +3199,7 @@ impl Default for RegistryNotaryHttpConfig {
             request_body_timeout: default_request_body_timeout(),
             http1_header_read_timeout: default_http1_header_read_timeout(),
             max_connections: default_max_connections(),
+            trusted_proxy_ips: Vec::new(),
         }
     }
 }

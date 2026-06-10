@@ -7355,16 +7355,22 @@ async fn oid4vci_nonce_is_rate_limited_before_reservation() {
 
     server
         .post("/oid4vci/nonce")
+        .add_header("x-forwarded-for", "203.0.113.10")
         .json(&json!({}))
         .await
         .assert_status_ok();
     server
         .post("/oid4vci/nonce")
+        .add_header("x-forwarded-for", "203.0.113.11")
         .json(&json!({}))
         .await
         .assert_status_ok();
 
-    let limited = server.post("/oid4vci/nonce").json(&json!({})).await;
+    let limited = server
+        .post("/oid4vci/nonce")
+        .add_header("x-forwarded-for", "203.0.113.12")
+        .json(&json!({}))
+        .await;
     limited.assert_status(StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(
         limited.json::<Value>()["error"],
@@ -12011,23 +12017,24 @@ async fn preauth_random_code_flood_is_throttled_per_client_address() {
     let app = standalone_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
-    // Random codes from one client address: the per-address limiter trips.
-    let flood = |code: &str| {
+    // Random codes from one socket peer: caller-supplied forwarding headers do
+    // not create fresh buckets.
+    let flood = |code: &str, forwarded_for: &str| {
         server
             .post("/oid4vci/token")
             .add_header("content-type", "application/x-www-form-urlencoded")
-            .add_header("x-forwarded-for", "203.0.113.50")
+            .add_header("x-forwarded-for", forwarded_for)
             .text(format!(
                 "grant_type=urn:ietf:params:oauth:grant-type:pre-authorized_code&pre-authorized_code={code}&tx_code=000000"
             ))
     };
-    flood("random-a")
+    flood("random-a", "203.0.113.50")
         .await
         .assert_status(StatusCode::BAD_REQUEST);
-    flood("random-b")
+    flood("random-b", "203.0.113.51")
         .await
         .assert_status(StatusCode::BAD_REQUEST);
-    let throttled = flood("random-c").await;
+    let throttled = flood("random-c", "203.0.113.52").await;
     throttled.assert_status(StatusCode::TOO_MANY_REQUESTS);
     idp.stop().await;
 }
