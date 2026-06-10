@@ -1000,7 +1000,11 @@ async fn health_remains_unauthenticated_on_admin_app() {
     let resp = fixture.server.get("/healthz").await;
 
     resp.assert_status(StatusCode::OK);
-    assert_eq!(resp.json::<Value>(), serde_json::json!({"status": "ok"}));
+    let body: Value = resp.json();
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["checks"]["total"], 1);
+    assert_eq!(body["checks"]["ok"], 1);
+    assert_eq!(body["checks"]["failed"], 0);
 }
 
 #[tokio::test]
