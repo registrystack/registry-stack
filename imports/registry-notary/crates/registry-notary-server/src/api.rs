@@ -3,6 +3,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    net::{IpAddr, SocketAddr},
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -3288,7 +3289,7 @@ struct Oid4vciCredentialOfferQuery {
 
 async fn oid4vci_nonce(
     state: Option<Extension<Arc<RegistryNotaryApiState>>>,
-    connect_info: Option<Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
+    connect_info: Option<Extension<axum::extract::ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -3298,7 +3299,7 @@ async fn oid4vci_nonce(
     if !state.oid4vci.enabled || !state.oid4vci.nonce.enabled {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let client_address = token_client_address(&headers, connect_info.as_deref());
+    let client_address = token_client_address(&state, &headers, connect_info.as_deref());
     if consume_public_client_address_rate_limit(&state, &client_address).is_err() {
         return oid4vci_error_response(Oid4vciWireError::RateLimited);
     }
@@ -3984,7 +3985,7 @@ async fn oid4vci_offer_callback(
 /// short-TTL Notary access token + `c_nonce`.
 async fn oid4vci_token(
     state: Option<Extension<Arc<RegistryNotaryApiState>>>,
-    connect_info: Option<Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
+    connect_info: Option<Extension<axum::extract::ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -3995,7 +3996,7 @@ async fn oid4vci_token(
         return StatusCode::NOT_FOUND.into_response();
     };
     let path = "/oid4vci/token";
-    let client_address = token_client_address(&headers, connect_info.as_deref());
+    let client_address = token_client_address(&state, &headers, connect_info.as_deref());
     let request = match parse_token_request(&headers, &body) {
         Ok(request) => request,
         Err(error) => return token_error_response(error),
@@ -4361,29 +4362,59 @@ async fn issue_c_nonce(state: &RegistryNotaryApiState, configuration_id: &str) -
     }
 }
 
-/// Derive a per-client identifier for the token endpoint's flood throttle.
+/// Derive a per-client identifier for public endpoint flood throttles.
 ///
-/// Prefers the proxy-set forwarding headers (the notary runs behind a reverse
-/// proxy), then the connection peer address, then a constant fallback so the
-/// bucket still functions when no client address is available.
+/// Forwarding headers are accepted only from explicitly trusted proxy peers.
+/// Otherwise the public OID4VCI endpoints use the socket peer so
+/// caller-controlled `X-Forwarded-*` headers cannot create fresh buckets.
 fn token_client_address(
+    state: &RegistryNotaryApiState,
     headers: &HeaderMap,
-    connect_info: Option<&axum::extract::ConnectInfo<std::net::SocketAddr>>,
+    connect_info: Option<&axum::extract::ConnectInfo<SocketAddr>>,
 ) -> String {
-    if let Some(value) = forwarded_header_value(headers, "x-forwarded-for") {
-        return value.to_string();
+    token_client_address_with_trusted_proxy_ips(
+        headers,
+        connect_info,
+        &state
+            .runtime_config()
+            .map(|config| config.server.trusted_proxy_ips.clone())
+            .unwrap_or_default(),
+    )
+}
+
+fn token_client_address_with_trusted_proxy_ips(
+    headers: &HeaderMap,
+    connect_info: Option<&axum::extract::ConnectInfo<SocketAddr>>,
+    trusted_proxy_ips: &[IpAddr],
+) -> String {
+    let Some(axum::extract::ConnectInfo(addr)) = connect_info else {
+        return "unknown-client-address".to_string();
+    };
+    let peer_ip = addr.ip();
+    if trusted_proxy_ips.contains(&peer_ip) {
+        if let Some(forwarded_ip) = forwarded_client_ip(headers) {
+            return forwarded_ip.to_string();
+        }
     }
-    if let Some(value) = headers
-        .get("x-real-ip")
+    peer_ip.to_string()
+}
+
+fn forwarded_client_ip(headers: &HeaderMap) -> Option<IpAddr> {
+    headers
+        .get("x-forwarded-for")
         .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        return value.to_string();
-    }
-    connect_info
-        .map(|axum::extract::ConnectInfo(addr)| addr.ip().to_string())
-        .unwrap_or_else(|| "unknown-client-address".to_string())
+        .and_then(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .find_map(|candidate| candidate.parse::<IpAddr>().ok())
+        })
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.trim().parse::<IpAddr>().ok())
+        })
 }
 
 /// Per-client-address throttle so random-code floods are bounded. Reuses the
@@ -7807,6 +7838,58 @@ mod tests {
     const ISSUER_PRIV_D_B64: &str = "f4QIxnAyRWzhuBOmNRgvBTE56mWePdsPL0mvCtl8Gys";
     const ISSUER_PUB_X_B64: &str = "pv4e_hXHBLN27rcs6VDFV1ED0TiU8M3xy9vsuWFEsec";
     const SUBJECT_BINDING_CLAIM: &str = "https://id.example.gov/claims/national_id";
+
+    #[test]
+    fn token_client_address_ignores_forwarded_headers_from_untrusted_peer() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_static("203.0.113.10"));
+        let connect_info =
+            axum::extract::ConnectInfo("198.51.100.10:443".parse::<SocketAddr>().unwrap());
+
+        assert_eq!(
+            token_client_address_with_trusted_proxy_ips(&headers, Some(&connect_info), &[]),
+            "198.51.100.10"
+        );
+    }
+
+    #[test]
+    fn token_client_address_trusts_forwarded_for_from_configured_proxy() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("203.0.113.10, 198.51.100.20"),
+        );
+        let connect_info =
+            axum::extract::ConnectInfo("198.51.100.10:443".parse::<SocketAddr>().unwrap());
+        let trusted_proxy = "198.51.100.10".parse::<IpAddr>().unwrap();
+
+        assert_eq!(
+            token_client_address_with_trusted_proxy_ips(
+                &headers,
+                Some(&connect_info),
+                &[trusted_proxy]
+            ),
+            "203.0.113.10"
+        );
+    }
+
+    #[test]
+    fn token_client_address_trusts_real_ip_from_configured_proxy() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", HeaderValue::from_static("203.0.113.11"));
+        let connect_info =
+            axum::extract::ConnectInfo("198.51.100.10:443".parse::<SocketAddr>().unwrap());
+        let trusted_proxy = "198.51.100.10".parse::<IpAddr>().unwrap();
+
+        assert_eq!(
+            token_client_address_with_trusted_proxy_ips(
+                &headers,
+                Some(&connect_info),
+                &[trusted_proxy]
+            ),
+            "203.0.113.11"
+        );
+    }
 
     #[test]
     fn config_request_rejects_ambiguous_local_and_remote_tuf_source() {

@@ -124,7 +124,9 @@ pub async fn issue(
     if subject_ref.trim().is_empty() {
         return Err(EvidenceError::InvalidRequest);
     }
-    let expires_at = iat + time::Duration::seconds(profile.validity_seconds);
+    let expires_at = iat
+        .checked_add(time::Duration::seconds(profile.validity_seconds))
+        .ok_or(EvidenceError::CredentialIssuanceFailed)?;
     let public_claims = BTreeMap::from([
         ("issuanceDate".to_string(), json!(format_time(iat))),
         ("expirationDate".to_string(), json!(format_time(expires_at))),
@@ -351,6 +353,27 @@ mod tests {
         assert_eq!(payload["id"], credential_id);
         assert_eq!(payload["jti"], credential_id);
         assert_eq!(payload["status"], status);
+    }
+
+    #[test]
+    fn issuing_with_overflowing_validity_returns_error() {
+        let issuer = EvidenceIssuer::from_jwk_str(RAW_JWK, "did:web:issuer.test#key-1".to_string())
+            .expect("test issuer builds");
+        let mut profile = test_profile();
+        profile.validity_seconds = i64::MAX;
+
+        let error = issue(
+            &profile,
+            &issuer,
+            &[claim_result("first")],
+            "subject-ref",
+            None,
+            OffsetDateTime::now_utc(),
+            IssueOptions::default(),
+        )
+        .expect_err("overflowing validity is rejected");
+
+        assert!(matches!(error, EvidenceError::CredentialIssuanceFailed));
     }
 
     #[test]
