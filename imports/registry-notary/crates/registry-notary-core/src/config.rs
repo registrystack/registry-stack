@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use registry_platform_authcommon::CredentialFingerprintRef;
-use registry_platform_config::RegistryTrustRoot;
+use registry_platform_config::{DeprecatedConfigField, RegistryTrustRoot};
 use registry_platform_crypto::validate_did_web_https_issuer_binding;
 pub use registry_platform_crypto::{
     KeyProviderKind as SigningKeyProviderConfig, KeyStatus as SigningKeyStatus,
@@ -181,13 +181,13 @@ impl StandaloneRegistryNotaryConfig {
             }
         }
         self.replay.validate()?;
-        match self.auth.mode.as_str() {
-            "api_key" => {
+        match self.auth.mode {
+            EvidenceAuthMode::ApiKey => {
                 if self.auth.api_keys.is_empty() && self.auth.bearer_tokens.is_empty() {
                     return Err(EvidenceConfigError::NoCredentialsConfigured);
                 }
             }
-            "oidc" => {
+            EvidenceAuthMode::Oidc => {
                 let oidc = self
                     .auth
                     .oidc
@@ -200,11 +200,6 @@ impl StandaloneRegistryNotaryConfig {
                     });
                 }
                 oidc.validate()?;
-            }
-            _ => {
-                return Err(EvidenceConfigError::UnsupportedAuthMode {
-                    mode: self.auth.mode.clone(),
-                });
             }
         }
         self.evidence.concurrency.validate()?;
@@ -2435,7 +2430,7 @@ impl SelfAttestationConfig {
         if self.requires_auth_mode != "oidc" {
             return self.invalid("requires_auth_mode must be oidc");
         }
-        if auth.mode != "oidc" {
+        if auth.mode != EvidenceAuthMode::Oidc {
             return self.invalid("enabled self_attestation requires auth.mode = oidc");
         }
         let oidc = auth
@@ -3337,8 +3332,8 @@ pub struct RegistryNotaryCorsConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceAuthConfig {
-    #[serde(default = "default_auth_mode")]
-    pub mode: String,
+    #[serde(default)]
+    pub mode: EvidenceAuthMode,
     #[serde(default)]
     pub api_keys: Vec<EvidenceCredentialConfig>,
     #[serde(default)]
@@ -3355,7 +3350,7 @@ pub struct EvidenceAuthConfig {
 impl Default for EvidenceAuthConfig {
     fn default() -> Self {
         Self {
-            mode: default_auth_mode(),
+            mode: EvidenceAuthMode::default(),
             api_keys: Vec::new(),
             bearer_tokens: Vec::new(),
             oidc: None,
@@ -3364,8 +3359,21 @@ impl Default for EvidenceAuthConfig {
     }
 }
 
-fn default_auth_mode() -> String {
-    "api_key".to_string()
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceAuthMode {
+    #[default]
+    ApiKey,
+    Oidc,
+}
+
+impl EvidenceAuthMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ApiKey => "api_key",
+            Self::Oidc => "oidc",
+        }
+    }
 }
 
 /// Self-issued access-token signing configuration.
@@ -3584,7 +3592,7 @@ pub struct EvidenceAuditConfig {
     #[serde(default)]
     pub hash_secret_env: Option<String>,
     #[serde(default)]
-    pub max_size_bytes: Option<u64>,
+    pub max_size_mb: Option<u64>,
     #[serde(default)]
     pub max_files: Option<u32>,
     #[serde(default)]
@@ -3597,7 +3605,7 @@ impl Default for EvidenceAuditConfig {
             sink: default_audit_sink(),
             path: None,
             hash_secret_env: None,
-            max_size_bytes: None,
+            max_size_mb: None,
             max_files: None,
             syslog_socket_path: None,
         }
@@ -3605,11 +3613,11 @@ impl Default for EvidenceAuditConfig {
 }
 
 impl EvidenceAuditConfig {
-    pub const DEFAULT_MAX_SIZE_BYTES: u64 = 10 * 1024 * 1024;
-    pub const DEFAULT_MAX_FILES: u32 = 5;
+    pub const DEFAULT_MAX_SIZE_MB: u64 = 100;
+    pub const DEFAULT_MAX_FILES: u32 = 14;
 
     pub fn max_size_bytes(&self) -> u64 {
-        self.max_size_bytes.unwrap_or(Self::DEFAULT_MAX_SIZE_BYTES)
+        self.max_size_mb.unwrap_or(Self::DEFAULT_MAX_SIZE_MB) * 1024 * 1024
     }
 
     pub fn max_files(&self) -> u32 {
@@ -3619,6 +3627,19 @@ impl EvidenceAuditConfig {
 
 fn default_audit_sink() -> String {
     "stdout".to_string()
+}
+
+pub fn deprecated_config_fields() -> Vec<DeprecatedConfigField> {
+    vec![
+        DeprecatedConfigField::renamed("auth.oidc.jwks_uri", "auth.oidc.jwks_url"),
+        DeprecatedConfigField::renamed("auth.oidc.leeway_seconds", "auth.oidc.leeway"),
+        DeprecatedConfigField::renamed("auth.oidc.allowed_typ", "auth.oidc.allowed_token_types"),
+        DeprecatedConfigField::renamed("audit.max_size_bytes", "audit.max_size_mb"),
+        DeprecatedConfigField::removed(
+            "server.cors.allow_credentials",
+            "Notary now always disables credentialed CORS; remove the field",
+        ),
+    ]
 }
 
 fn invalid_federation<T>(reason: impl Into<String>) -> Result<T, EvidenceConfigError> {
@@ -3692,8 +3713,6 @@ pub enum EvidenceConfigError {
     EvidenceDisabled,
     #[error("at least one API key or bearer token must be configured")]
     NoCredentialsConfigured,
-    #[error("unsupported auth.mode '{mode}'; supported values are 'api_key' and 'oidc'")]
-    UnsupportedAuthMode { mode: String },
     #[error("auth.mode = oidc requires an auth.oidc block")]
     MissingOidcConfig,
     #[error("invalid auth.oidc config: {reason}")]
@@ -5665,7 +5684,7 @@ base_url: ""
 sink: file
 path: /var/log/registry-notary/audit.jsonl
 hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
-max_size_bytes: 4096
+max_size_mb: 4
 max_files: 3
 "#,
         )
@@ -5676,7 +5695,7 @@ max_files: 3
             file.path.as_deref(),
             Some("/var/log/registry-notary/audit.jsonl")
         );
-        assert_eq!(file.max_size_bytes(), 4096);
+        assert_eq!(file.max_size_bytes(), 4 * 1024 * 1024);
         assert_eq!(file.max_files(), 3);
         assert_eq!(file.syslog_socket_path, None);
 
@@ -5691,8 +5710,8 @@ syslog_socket_path: /dev/log
 
         assert_eq!(syslog.sink, "syslog");
         assert_eq!(syslog.path, None);
-        assert_eq!(syslog.max_size_bytes(), 10 * 1024 * 1024);
-        assert_eq!(syslog.max_files(), 5);
+        assert_eq!(syslog.max_size_bytes(), 100 * 1024 * 1024);
+        assert_eq!(syslog.max_files(), 14);
         assert_eq!(syslog.syslog_socket_path.as_deref(), Some("/dev/log"));
     }
 
@@ -6695,7 +6714,7 @@ vct: https://vct.example/test
     #[test]
     fn oidc_auth_mode_requires_oidc_block() {
         let mut config = minimal_config();
-        config.auth.mode = "oidc".to_string();
+        config.auth.mode = EvidenceAuthMode::Oidc;
 
         let err = config
             .validate()
@@ -6707,7 +6726,7 @@ vct: https://vct.example/test
     #[test]
     fn oidc_auth_mode_validates_required_settings() {
         let mut config = minimal_config();
-        config.auth.mode = "oidc".to_string();
+        config.auth.mode = EvidenceAuthMode::Oidc;
         config.auth.api_keys.clear();
         config.auth.oidc = Some(EvidenceOidcAuthConfig {
             issuer: "https://issuer.example".to_string(),
@@ -6732,7 +6751,7 @@ vct: https://vct.example/test
     #[test]
     fn oidc_jwks_url_must_use_https() {
         let mut config = minimal_config();
-        config.auth.mode = "oidc".to_string();
+        config.auth.mode = EvidenceAuthMode::Oidc;
         config.auth.api_keys.clear();
         config.auth.oidc = Some(EvidenceOidcAuthConfig {
             issuer: "https://issuer.example".to_string(),
@@ -6779,7 +6798,7 @@ vct: https://vct.example/test
     #[test]
     fn oidc_jwks_url_allows_insecure_localhost_only_when_enabled() {
         let mut config = minimal_config();
-        config.auth.mode = "oidc".to_string();
+        config.auth.mode = EvidenceAuthMode::Oidc;
         config.auth.api_keys.clear();
         config.auth.oidc = Some(EvidenceOidcAuthConfig {
             issuer: "https://issuer.example".to_string(),
@@ -6836,18 +6855,22 @@ auth:
     }
 
     #[test]
-    fn unsupported_auth_mode_is_rejected() {
-        let mut config = minimal_config();
-        config.auth.mode = "oauth2".to_string();
+    fn unsupported_auth_mode_is_rejected_at_parse_time() {
+        let err = serde_norway::from_str::<StandaloneRegistryNotaryConfig>(
+            r#"
+evidence:
+  enabled: true
+auth:
+  mode: oauth2
+"#,
+        )
+        .expect_err("unknown auth mode must fail deserialization");
 
-        let err = config
-            .validate()
-            .expect_err("unknown auth mode must fail validation");
-
-        assert!(matches!(
-            err,
-            EvidenceConfigError::UnsupportedAuthMode { .. }
-        ));
+        let message = err.to_string();
+        assert!(
+            message.contains("oauth2") || message.contains("unknown variant"),
+            "unexpected error: {message}"
+        );
     }
 
     #[test]
@@ -8160,7 +8183,7 @@ allowed_claims: ["", "   "]
     #[test]
     fn self_attestation_requires_oidc_auth_mode() {
         let mut config = valid_self_attestation_config();
-        config.auth.mode = "api_key".to_string();
+        config.auth.mode = EvidenceAuthMode::ApiKey;
         config.auth.api_keys.push(EvidenceCredentialConfig {
             id: "api".to_string(),
             fingerprint: CredentialFingerprintRef {

@@ -26,8 +26,8 @@ use jsonwebtoken::Algorithm;
 use registry_notary_core::sd_jwt::EvidenceIssuer;
 use registry_notary_core::{
     AccessMode, BoundedCorrelationId, BoundedVerifiedClaims, BulkMode, DciSourceConnectionConfig,
-    EvidenceAuditEvent, EvidenceConfig, EvidenceCredentialConfig, EvidenceEntity, EvidenceError,
-    EvidencePrincipal, EvidenceRequestContext, ExpectedSidecarConfig, Hashed,
+    EvidenceAuditEvent, EvidenceAuthMode, EvidenceConfig, EvidenceCredentialConfig, EvidenceEntity,
+    EvidenceError, EvidencePrincipal, EvidenceRequestContext, ExpectedSidecarConfig, Hashed,
     Oauth2ClientCredentialsSourceAuthConfig, PrincipalIdentifier, RateLimitBucket,
     RegistryNotaryAdminListenerMode, RequestIdentifier, SelfAttestationAssuranceClaimSource,
     SelfAttestationClaimSource, SelfAttestationDenialCode, SigningKeyConfig,
@@ -3701,15 +3701,15 @@ impl AuthAuditState {
 
 impl Authenticator {
     fn from_config(config: &StandaloneRegistryNotaryConfig) -> Result<Self, StandaloneServerError> {
-        match config.auth.mode.as_str() {
-            "api_key" => Ok(Self::Static {
+        match config.auth.mode {
+            EvidenceAuthMode::ApiKey => Ok(Self::Static {
                 api_keys: resolve_credentials(&config.auth.api_keys, CredentialType::ApiKey)?,
                 bearer_tokens: resolve_credentials(
                     &config.auth.bearer_tokens,
                     CredentialType::BearerToken,
                 )?,
             }),
-            "oidc" => {
+            EvidenceAuthMode::Oidc => {
                 let oidc = config.auth.oidc.as_ref().ok_or_else(|| {
                     StandaloneServerError::InvalidOidcConfig(
                         "auth.oidc is required when auth.mode = oidc".to_string(),
@@ -3794,9 +3794,6 @@ impl Authenticator {
                     notary_anchor,
                 })
             }
-            mode => Err(StandaloneServerError::InvalidOidcConfig(format!(
-                "unsupported auth.mode '{mode}'"
-            ))),
         }
     }
 
@@ -3992,9 +3989,9 @@ fn validate_no_file_audit_fields(
             "audit.path is only valid when audit.sink is file or jsonl, not {sink}"
         )));
     }
-    if config.max_size_bytes.is_some() || config.max_files.is_some() {
+    if config.max_size_mb.is_some() || config.max_files.is_some() {
         return Err(StandaloneServerError::InvalidAuditConfig(format!(
-            "audit.max_size_bytes and audit.max_files are only valid when audit.sink is file or jsonl, not {sink}"
+            "audit.max_size_mb and audit.max_files are only valid when audit.sink is file or jsonl, not {sink}"
         )));
     }
     Ok(())
@@ -8480,11 +8477,11 @@ config_trust:
         let path = tmp.path().join("audit.jsonl");
         let mut config = test_audit_config("file");
         config.path = Some(path.display().to_string());
-        config.max_size_bytes = Some(1);
+        config.max_size_mb = Some(1);
         config.max_files = Some(2);
         let audit = AuditPipeline::from_config(&config).expect("audit config builds");
 
-        for _ in 0..3 {
+        for _ in 0..2_500 {
             audit
                 .emit(&audit_event())
                 .await
@@ -8558,7 +8555,7 @@ config_trust:
     #[test]
     fn audit_pipeline_rejects_sink_specific_fields_on_wrong_sink() {
         let mut stdout_config = test_audit_config("stdout");
-        stdout_config.max_size_bytes = Some(1024);
+        stdout_config.max_size_mb = Some(1);
         let stdout_error = AuditPipeline::from_config(&stdout_config)
             .expect_err("stdout cannot accept file rotation");
         assert!(matches!(

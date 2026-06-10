@@ -20,8 +20,9 @@ use base64::Engine;
 use clap::{Args as ClapArgs, Parser, Subcommand};
 use ed25519_dalek::SigningKey;
 use registry_notary_core::{
-    Oauth2ClientCredentialsSourceAuthConfig, RegistryNotaryAdminListenerMode,
-    SigningKeyProviderConfig, SourceAuthConfig, StandaloneRegistryNotaryConfig,
+    deprecated_config_fields, Oauth2ClientCredentialsSourceAuthConfig,
+    RegistryNotaryAdminListenerMode, SigningKeyProviderConfig, SourceAuthConfig,
+    StandaloneRegistryNotaryConfig,
 };
 use registry_notary_server::config_governed::{
     parse_candidate_config, resolve_tuf_config_candidate, ConfigGovernanceContext,
@@ -31,9 +32,7 @@ use registry_notary_server::{
     compile_notary_runtime, notary_router_from_runtime, notary_routers_from_runtime,
     openapi_document, EvidenceIssuerRegistry,
 };
-use registry_platform_config::{
-    expand_config_env_vars, reject_deprecated_config_fields, DeprecatedConfigField,
-};
+use registry_platform_config::{expand_config_env_vars, reject_deprecated_config_fields};
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk};
 use registry_platform_httputil::{url as httputil_url, FetchUrlPolicy};
 use serde_json::{json, Value};
@@ -44,6 +43,8 @@ use time::OffsetDateTime;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 use ulid::Ulid;
+
+const DEFAULT_LOG_FILTER: &str = "info";
 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -461,11 +462,7 @@ async fn run_server(
     config_path: &Path,
     bind_override: Option<SocketAddr>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new("info,registry_notary_server=debug,registry_notary_bin=debug")
-        }))
-        .init();
+    init_tracing()?;
 
     let mut config = load_expanded_config(config_path)?;
     apply_bind_override(&mut config, bind_override);
@@ -540,6 +537,49 @@ async fn run_server(
 
             serve_listener(listener, app, serve_limits, shutdown_signal()).await?;
         }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogFormat {
+    Text,
+    Json,
+}
+
+fn log_format_from_env() -> Result<LogFormat, String> {
+    match std::env::var("REGISTRY_NOTARY_LOG_FORMAT")
+        .unwrap_or_else(|_| "text".to_string())
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "text" => Ok(LogFormat::Text),
+        "json" => Ok(LogFormat::Json),
+        value => Err(format!(
+            "REGISTRY_NOTARY_LOG_FORMAT must be 'text' or 'json', got '{value}'"
+        )),
+    }
+}
+
+fn default_log_filter() -> &'static str {
+    DEFAULT_LOG_FILTER
+}
+
+fn log_env_filter() -> EnvFilter {
+    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_log_filter()))
+}
+
+fn init_tracing() -> Result<(), Box<dyn std::error::Error>> {
+    match log_format_from_env()? {
+        LogFormat::Text => tracing_subscriber::fmt()
+            .with_env_filter(log_env_filter())
+            .try_init()
+            .map_err(|error| io::Error::other(format!("failed to initialize tracing: {error}")))?,
+        LogFormat::Json => tracing_subscriber::fmt()
+            .json()
+            .with_env_filter(log_env_filter())
+            .try_init()
+            .map_err(|error| io::Error::other(format!("failed to initialize tracing: {error}")))?,
     }
     Ok(())
 }
@@ -873,7 +913,13 @@ fn load_expanded_config(
     config_path: &Path,
 ) -> Result<StandaloneRegistryNotaryConfig, Box<dyn std::error::Error>> {
     let raw = fs::read_to_string(config_path)?;
-    let expanded = expand_config_env_vars(&raw)?;
+    parse_expanded_config(&raw)
+}
+
+fn parse_expanded_config(
+    raw: &str,
+) -> Result<StandaloneRegistryNotaryConfig, Box<dyn std::error::Error>> {
+    let expanded = expand_config_env_vars(raw)?;
     let parsed_value = parse_config_value(&expanded)?;
     validate_admin_listener_shape(&parsed_value)?;
     reject_deprecated_config_fields(&parsed_value, &deprecated_config_fields())?;
@@ -933,18 +979,6 @@ fn admin_listener_default_warning_needed(
 ) -> bool {
     !admin_listener_present
         && config.server.admin_listener.mode == RegistryNotaryAdminListenerMode::Disabled
-}
-
-fn deprecated_config_fields() -> Vec<DeprecatedConfigField> {
-    vec![
-        DeprecatedConfigField::renamed("auth.oidc.jwks_uri", "auth.oidc.jwks_url"),
-        DeprecatedConfigField::renamed("auth.oidc.leeway_seconds", "auth.oidc.leeway"),
-        DeprecatedConfigField::renamed("auth.oidc.allowed_typ", "auth.oidc.allowed_token_types"),
-        DeprecatedConfigField::removed(
-            "server.cors.allow_credentials",
-            "Notary now always disables credentialed CORS; remove the field",
-        ),
-    ]
 }
 
 fn load_env_file_arg(
@@ -1079,16 +1113,16 @@ async fn doctor(
             return Ok(false);
         }
     };
-    let parsed = match serde_norway::from_str::<StandaloneRegistryNotaryConfig>(&raw) {
+    let parsed = match parse_expanded_config(&raw) {
         Ok(config) => {
-            diagnostics.push(Diagnostic::ok("config YAML parsed"));
+            diagnostics.push(Diagnostic::ok("config YAML parsed and validated"));
             let mut config = config;
             apply_bind_override(&mut config, bind_override);
             Some(config)
         }
         Err(err) => {
             diagnostics.push(Diagnostic::fail(
-                format!("config YAML parse failed: {err}"),
+                format!("config YAML parse or validation failed: {err}"),
                 "fix the YAML syntax and field names",
             ));
             None
@@ -1096,13 +1130,7 @@ async fn doctor(
     };
     let config = match parsed {
         Some(config) => {
-            match config.validate() {
-                Ok(()) => diagnostics.push(Diagnostic::ok("config semantics validated")),
-                Err(err) => diagnostics.push(Diagnostic::fail(
-                    format!("config semantic validation failed: {err}"),
-                    "fix the reported config relationship before starting the server",
-                )),
-            }
+            diagnostics.push(Diagnostic::ok("config semantics validated"));
             Some(config)
         }
         None => None,
@@ -2517,6 +2545,41 @@ CLIENT_SECRET='secret value'
     }
 
     #[test]
+    fn default_log_filter_is_plain_info() {
+        assert_eq!(default_log_filter(), "info");
+        assert!(!default_log_filter().contains("debug"));
+    }
+
+    #[test]
+    fn log_format_env_accepts_text_and_json() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        std::env::remove_var("REGISTRY_NOTARY_LOG_FORMAT");
+        assert_eq!(
+            log_format_from_env().expect("default is text"),
+            LogFormat::Text
+        );
+
+        std::env::set_var("REGISTRY_NOTARY_LOG_FORMAT", "json");
+        assert_eq!(
+            log_format_from_env().expect("json is accepted"),
+            LogFormat::Json
+        );
+
+        std::env::set_var("REGISTRY_NOTARY_LOG_FORMAT", "text");
+        assert_eq!(
+            log_format_from_env().expect("text is accepted"),
+            LogFormat::Text
+        );
+
+        std::env::set_var("REGISTRY_NOTARY_LOG_FORMAT", "pretty");
+        let err = log_format_from_env().expect_err("unknown format fails");
+        assert!(err.contains("text"));
+        assert!(err.contains("json"));
+
+        std::env::remove_var("REGISTRY_NOTARY_LOG_FORMAT");
+    }
+
+    #[test]
     fn scalar_admin_listener_shape_names_accepted_modes() {
         let value = parse_config_value(
             r#"
@@ -2554,6 +2617,7 @@ server:
                 "server:\n  cors:\n    allow_credentials: true\n",
                 "always disables credentialed CORS",
             ),
+            ("audit:\n  max_size_bytes: 10485760\n", "audit.max_size_mb"),
         ] {
             let value = parse_config_value(raw).expect("deprecated-field fixture parses");
             let err = reject_deprecated_config_fields(&value, &deprecated_config_fields())

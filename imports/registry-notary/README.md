@@ -228,17 +228,17 @@ audit:
   sink: file
   path: /var/log/registry-notary/audit.jsonl
   hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
-  max_size_bytes: 10485760
-  max_files: 5
+  max_size_mb: 100
+  max_files: 14
 ```
 
 Supported sink values:
 
 - `stdout`: writes one JSON audit envelope per line to process stdout. Use this
   when a container runtime or process supervisor owns log collection.
-- `file` or `jsonl`: writes JSONL envelopes to `path`. `max_size_bytes` enables
-  byte-based rotation and `max_files` controls retained files, including the
-  active file. Set `max_size_bytes: 0` to disable in-process rotation.
+- `file` or `jsonl`: writes JSONL envelopes to `path`. `max_size_mb` controls
+  rotation and `max_files` controls retained files, including the active file.
+  Set `max_size_mb: 0` to disable in-process rotation.
 - `syslog`: writes JSONL envelopes as RFC 5424 messages to the local syslog Unix
   datagram socket. Use `syslog_socket_path` when the deployment socket differs
   from the platform default.

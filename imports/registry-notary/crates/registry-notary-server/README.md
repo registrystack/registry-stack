@@ -161,17 +161,17 @@ audit:
   sink: file
   path: /var/log/registry-notary/audit.jsonl
   hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
-  max_size_bytes: 10485760
-  max_files: 5
+  max_size_mb: 100
+  max_files: 14
 ```
 
 Sink options:
 
 - `stdout` writes JSONL to process stdout and is appropriate when platform log
   collection provides durability.
-- `file` and `jsonl` require `path`. Use `max_size_bytes` for active-file
-  rotation and `max_files` for retained file count. `max_files` includes the
-  active file; `max_size_bytes: 0` disables rotation.
+- `file` and `jsonl` require `path`. Use `max_size_mb` for active-file rotation
+  and `max_files` for retained file count. `max_files` includes the active
+  file; `max_size_mb: 0` disables rotation.
 - `syslog` writes JSONL envelopes to a local Unix datagram syslog socket. Set
   `syslog_socket_path` to override the platform default:
 

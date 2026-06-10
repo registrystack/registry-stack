@@ -27,14 +27,15 @@ use registry_notary_core::RegistryNotaryCelConfig;
 use registry_notary_core::{
     AccessMode, BatchEvaluateItemRequest, BatchEvaluateRequest, BoundedClaimId,
     BoundedCorrelationId, ClaimRef, ClaimResultView, ClaimSet, ConfigAuditEvent, ConfigMetadata,
-    CredentialIssueRequest, CredentialProfileConfig, EvaluateRequest, EvidenceBatchItemAuditEvent,
-    EvidenceConfig, EvidenceEntity, EvidenceEntityReference, EvidenceError, EvidencePrincipal,
-    EvidenceRelationship, FederationConfig, Hashed, HolderRequest, Oid4vciConfig,
-    Oid4vciCredentialConfigurationConfig, Oid4vciDisplayImageConfig, Oid4vciIssuerDisplayConfig,
-    PolicyIdentifier, RateLimitBucket, RegistryNotaryAdminListenerMode, RenderEvaluationRequest,
-    SelfAttestationConfig, SelfAttestationDenialCode, SelfAttestationScopePolicy, SigningKeyStatus,
-    SourceCapability, StandaloneRegistryNotaryConfig, StoredSelfAttestationMetadata,
-    SubjectRequest, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
+    CredentialIssueRequest, CredentialProfileConfig, EvaluateRequest, EvidenceAuthMode,
+    EvidenceBatchItemAuditEvent, EvidenceConfig, EvidenceEntity, EvidenceEntityReference,
+    EvidenceError, EvidencePrincipal, EvidenceRelationship, FederationConfig, Hashed,
+    HolderRequest, Oid4vciConfig, Oid4vciCredentialConfigurationConfig, Oid4vciDisplayImageConfig,
+    Oid4vciIssuerDisplayConfig, PolicyIdentifier, RateLimitBucket, RegistryNotaryAdminListenerMode,
+    RenderEvaluationRequest, SelfAttestationConfig, SelfAttestationDenialCode,
+    SelfAttestationScopePolicy, SigningKeyStatus, SourceCapability, StandaloneRegistryNotaryConfig,
+    StoredSelfAttestationMetadata, SubjectRequest, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON,
+    FORMAT_SD_JWT_VC,
 };
 use registry_platform_audit::AuditKeyHasher;
 use registry_platform_config::RegistryTrustRoot;
@@ -1265,8 +1266,8 @@ fn static_auth_changed(
     current: &StandaloneRegistryNotaryConfig,
     candidate: &StandaloneRegistryNotaryConfig,
 ) -> bool {
-    current.auth.mode == "api_key"
-        && candidate.auth.mode == "api_key"
+    current.auth.mode == EvidenceAuthMode::ApiKey
+        && candidate.auth.mode == EvidenceAuthMode::ApiKey
         && serde_json::to_value(&current.auth.oidc).ok()
             == serde_json::to_value(&candidate.auth.oidc).ok()
         && (current.auth.api_keys != candidate.auth.api_keys
@@ -2034,7 +2035,8 @@ fn apply_result_to_posture_audit(apply_result: &str) -> &'static str {
     }
 }
 
-fn config_candidate_invalid(detail: &'static str) -> Response {
+fn config_candidate_invalid(detail: impl Into<String>) -> Response {
+    let detail = detail.into();
     (
         StatusCode::BAD_REQUEST,
         Json(json!({
@@ -7944,7 +7946,7 @@ mod tests {
         let mut mode_candidate = current.clone();
         mode_candidate.auth.api_keys[0].fingerprint.commitment =
             "sha256:6666666666666666666666666666666666666666666666666666666666666666".to_string();
-        mode_candidate.auth.mode = "oidc".to_string();
+        mode_candidate.auth.mode = EvidenceAuthMode::Oidc;
         assert!(!is_client_access_change(&current, &mode_candidate)
             .expect("auth mode candidate classifies"));
     }

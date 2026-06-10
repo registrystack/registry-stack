@@ -19,7 +19,7 @@ use chrono::Utc;
 #[cfg(feature = "registry-notary-cel")]
 use registry_notary_core::FEDERATION_RESPONSE_JWT_TYP;
 use registry_notary_core::{
-    BulkMode, ConfigTrustConfig, ConfigTrustRateLimit, EvidenceCredentialConfig,
+    BulkMode, ConfigTrustConfig, ConfigTrustRateLimit, EvidenceAuthMode, EvidenceCredentialConfig,
     EvidenceOidcAuthConfig, Oid4vciConfig, RegistryNotaryAdminListenerMode,
     SelfAttestationClaimSource, SigningKeyConfig, SigningKeyProviderConfig, SigningKeyStatus,
     StandaloneRegistryNotaryConfig, SD_JWT_VC_SIGNING_ALG,
@@ -6929,7 +6929,7 @@ async fn oidc_mode_verifies_token_from_fixture_idp() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
-    config.auth.mode = "oidc".to_string();
+    config.auth.mode = EvidenceAuthMode::Oidc;
     config.auth.api_keys.clear();
     config.auth.bearer_tokens.clear();
     config.auth.oidc = Some(EvidenceOidcAuthConfig {
@@ -7016,7 +7016,7 @@ async fn oidc_admin_can_scrape_metrics_but_non_admin_cannot() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
-    config.auth.mode = "oidc".to_string();
+    config.auth.mode = EvidenceAuthMode::Oidc;
     config.auth.api_keys.clear();
     config.auth.bearer_tokens.clear();
     config.auth.oidc = Some(EvidenceOidcAuthConfig {
