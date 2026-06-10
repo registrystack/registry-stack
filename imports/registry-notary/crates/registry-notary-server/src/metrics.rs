@@ -17,7 +17,7 @@ pub(crate) struct AppMetrics {
 
 #[derive(Debug, Default)]
 struct MetricsState {
-    http: BTreeMap<HttpKey, CountDuration>,
+    http: BTreeMap<HttpKey, HttpDuration>,
     source: BTreeMap<SourceKey, CountDuration>,
     source_retries: BTreeMap<ConnectorKey, u64>,
     source_in_flight: BTreeMap<ConnectorKey, u64>,
@@ -79,13 +79,34 @@ struct CountDuration {
     duration_ms_total: u64,
 }
 
+const HTTP_DURATION_BUCKETS_SECONDS: &[f64] = &[
+    0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, 1.000, 2.500, 5.000, 10.000,
+];
+
+#[derive(Debug, Clone)]
+struct HttpDuration {
+    count: u64,
+    duration_sum_seconds: f64,
+    duration_buckets: Vec<u64>,
+}
+
+impl Default for HttpDuration {
+    fn default() -> Self {
+        Self {
+            count: 0,
+            duration_sum_seconds: 0.0,
+            duration_buckets: vec![0; HTTP_DURATION_BUCKETS_SECONDS.len()],
+        }
+    }
+}
+
 impl AppMetrics {
     pub(crate) fn record_http(
         &self,
         method: &str,
         route: &str,
         status: StatusCode,
-        duration_ms: u64,
+        duration_seconds: f64,
     ) {
         let key = HttpKey {
             method: normalize_method(method),
@@ -95,7 +116,12 @@ impl AppMetrics {
         let mut metrics = self.inner.lock().expect("metrics mutex is healthy");
         let value = metrics.http.entry(key).or_default();
         value.count = value.count.saturating_add(1);
-        value.duration_ms_total = value.duration_ms_total.saturating_add(duration_ms);
+        value.duration_sum_seconds += duration_seconds;
+        for (index, bucket) in HTTP_DURATION_BUCKETS_SECONDS.iter().enumerate() {
+            if duration_seconds <= *bucket {
+                value.duration_buckets[index] = value.duration_buckets[index].saturating_add(1);
+            }
+        }
     }
 
     pub(crate) fn record_source_request(
@@ -174,7 +200,7 @@ impl AppMetrics {
         let metrics = self.inner.lock().expect("metrics mutex is healthy");
         let mut body = String::new();
         body.push_str("# TYPE registry_notary_http_requests_total counter\n");
-        body.push_str("# TYPE registry_notary_http_request_duration_ms_total counter\n");
+        body.push_str("# TYPE registry_notary_http_request_duration_seconds histogram\n");
         for (key, value) in &metrics.http {
             body.push_str(&format!(
                 "registry_notary_http_requests_total{{method=\"{}\",route=\"{}\",status_class=\"{}\"}} {}\n",
@@ -183,12 +209,36 @@ impl AppMetrics {
                 escape_metric_label(key.status_class),
                 value.count
             ));
+            for (index, bucket) in HTTP_DURATION_BUCKETS_SECONDS.iter().enumerate() {
+                body.push_str(&format!(
+                    "registry_notary_http_request_duration_seconds_bucket{{method=\"{}\",route=\"{}\",status_class=\"{}\",le=\"{:.3}\"}} {}\n",
+                    escape_metric_label(key.method),
+                    escape_metric_label(&key.route),
+                    escape_metric_label(key.status_class),
+                    bucket,
+                    value.duration_buckets[index]
+                ));
+            }
             body.push_str(&format!(
-                "registry_notary_http_request_duration_ms_total{{method=\"{}\",route=\"{}\",status_class=\"{}\"}} {}\n",
+                "registry_notary_http_request_duration_seconds_bucket{{method=\"{}\",route=\"{}\",status_class=\"{}\",le=\"+Inf\"}} {}\n",
                 escape_metric_label(key.method),
                 escape_metric_label(&key.route),
                 escape_metric_label(key.status_class),
-                value.duration_ms_total
+                value.count
+            ));
+            body.push_str(&format!(
+                "registry_notary_http_request_duration_seconds_sum{{method=\"{}\",route=\"{}\",status_class=\"{}\"}} {:.6}\n",
+                escape_metric_label(key.method),
+                escape_metric_label(&key.route),
+                escape_metric_label(key.status_class),
+                value.duration_sum_seconds
+            ));
+            body.push_str(&format!(
+                "registry_notary_http_request_duration_seconds_count{{method=\"{}\",route=\"{}\",status_class=\"{}\"}} {}\n",
+                escape_metric_label(key.method),
+                escape_metric_label(&key.route),
+                escape_metric_label(key.status_class),
+                value.count
             ));
         }
         body.push_str("# TYPE registry_notary_source_requests_total counter\n");
@@ -287,7 +337,7 @@ pub(crate) async fn metrics_middleware(
         method,
         &route,
         response.status(),
-        started_at.elapsed().as_millis() as u64,
+        started_at.elapsed().as_secs_f64(),
     );
     response
 }
@@ -342,20 +392,31 @@ mod tests {
     fn http_method_labels_collapse_unknown_methods() {
         let metrics = AppMetrics::default();
 
-        metrics.record_http("BREW1", "/healthz", StatusCode::METHOD_NOT_ALLOWED, 1);
-        metrics.record_http("BREW2", "/healthz", StatusCode::METHOD_NOT_ALLOWED, 2);
-        metrics.record_http("GET", "/healthz", StatusCode::OK, 3);
+        metrics.record_http("BREW1", "/healthz", StatusCode::METHOD_NOT_ALLOWED, 0.001);
+        metrics.record_http("BREW2", "/healthz", StatusCode::METHOD_NOT_ALLOWED, 0.002);
+        metrics.record_http("GET", "/healthz", StatusCode::OK, 0.003);
 
         let rendered = metrics.render();
         assert!(rendered.contains(
             "registry_notary_http_requests_total{method=\"OTHER\",route=\"/healthz\",status_class=\"4xx\"} 2"
         ));
+        assert!(rendered.contains("# TYPE registry_notary_http_request_duration_seconds histogram"));
         assert!(rendered.contains(
-            "registry_notary_http_request_duration_ms_total{method=\"OTHER\",route=\"/healthz\",status_class=\"4xx\"} 3"
+            "registry_notary_http_request_duration_seconds_bucket{method=\"OTHER\",route=\"/healthz\",status_class=\"4xx\",le=\"0.005\"} 2"
+        ));
+        assert!(rendered.contains(
+            "registry_notary_http_request_duration_seconds_bucket{method=\"OTHER\",route=\"/healthz\",status_class=\"4xx\",le=\"+Inf\"} 2"
+        ));
+        assert!(rendered.contains(
+            "registry_notary_http_request_duration_seconds_sum{method=\"OTHER\",route=\"/healthz\",status_class=\"4xx\"} 0.003000"
+        ));
+        assert!(rendered.contains(
+            "registry_notary_http_request_duration_seconds_count{method=\"OTHER\",route=\"/healthz\",status_class=\"4xx\"} 2"
         ));
         assert!(rendered.contains(
             "registry_notary_http_requests_total{method=\"GET\",route=\"/healthz\",status_class=\"2xx\"} 1"
         ));
+        assert!(!rendered.contains("registry_notary_http_request_duration_ms_total"));
         assert!(!rendered.contains("BREW1"));
         assert!(!rendered.contains("BREW2"));
     }

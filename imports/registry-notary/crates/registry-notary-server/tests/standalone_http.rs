@@ -9251,6 +9251,7 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
         audit_path.to_str().expect("audit path is UTF-8"),
     );
     add_admin_api_key(&mut config);
+    config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
     let app = standalone_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -9343,6 +9344,17 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
     assert!(metrics_body.contains(
         "registry_notary_http_requests_total{method=\"POST\",route=\"/v1/evaluations\",status_class=\"2xx\"}"
     ));
+    assert!(metrics_body.contains("# TYPE registry_notary_http_request_duration_seconds histogram"));
+    assert!(metrics_body.contains(
+        "registry_notary_http_request_duration_seconds_bucket{method=\"POST\",route=\"/v1/evaluations\",status_class=\"2xx\",le=\"+Inf\"}"
+    ));
+    assert!(metrics_body.contains(
+        "registry_notary_http_request_duration_seconds_sum{method=\"POST\",route=\"/v1/evaluations\",status_class=\"2xx\"}"
+    ));
+    assert!(metrics_body.contains(
+        "registry_notary_http_request_duration_seconds_count{method=\"POST\",route=\"/v1/evaluations\",status_class=\"2xx\"}"
+    ));
+    assert!(!metrics_body.contains("registry_notary_http_request_duration_ms_total"));
     assert!(metrics_body
         .contains("registry_notary_source_requests_total{connector=\"rda\",outcome=\"success\"}"));
     assert!(metrics_body.contains("registry_notary_audit_events_total{outcome=\"success\"}"));
