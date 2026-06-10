@@ -71,3 +71,27 @@ ci: fmt-check lint-default lint test-default test deny openapi-check exposure-ch
 #        just run config=path/to/config.yaml
 run config="demo/config/registry-notary.yaml":
     cargo run -p registry-notary-bin -- --config {{config}}
+
+# Generate synthetic perf API keys and write target/perf/perf.env.
+perf-keys env="target/perf/perf.env" force="":
+    mkdir -p $(dirname {{env}})
+    uv run perf/scripts/generate_perf_keys.py --env-file {{env}} {{force}}
+
+# Compile the perf benches without running them.
+perf-bench-build:
+    cargo bench --no-run --workspace --all-features
+
+# Run all Criterion microbenchmarks.
+perf-bench:
+    cargo bench --workspace --all-features
+
+# Run one k6 scenario under perf/k6/.
+# Usage: just perf-run scenario=perf/k6/evaluate_extract.js
+perf-run scenario extra="--env-file target/perf/perf.env":
+    uv run perf/scripts/run_scenario.py --scenario {{scenario}} {{extra}}
+
+# Local CI-equivalent perf smoke.
+perf-smoke:
+    cargo bench --no-run --workspace --all-features
+    for f in perf/k6/*.js perf/k6/lib/*.js; do node --check "$f" || exit 1; done
+    uv run --project perf python -m pytest
