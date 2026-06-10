@@ -19,6 +19,20 @@ Shared security and operations primitives come from sibling
 cache/replay stores, HTTP security helpers, OIDC, OpenID4VCI, and SD-JWT
 support.
 
+See [`docs/README.md`](docs/README.md) for the full documentation map: tutorials,
+operator guides, conformance references, and design history.
+
+## Try locally with registryctl
+
+For the first local tutorial, use
+[Verify a claim from your registry API](https://docs.registrystack.org/tutorials/verify-claim-registry-api/).
+It uses `registryctl` to add Registry Notary to a local registry API project, start both services,
+and run the Notary smoke checks without cloning this repository.
+
+If you already have a source API, use
+[Verify a claim from your own API](https://docs.registrystack.org/tutorials/verify-claim-own-api/).
+That path creates a standalone Notary project and points it at an API you operate.
+
 ## Layout
 
 - [`crates/registry-notary-core`](crates/registry-notary-core/README.md):
@@ -51,148 +65,20 @@ support.
 
 ## Credential Conformance
 
-Registry Notary currently issues SD-JWT VC credentials using
-`application/dc+sd-jwt`, EdDSA over named Ed25519 signing keys, and `did:jwk`
-holder binding. Credential profiles reference keys from `evidence.signing_keys`
-instead of carrying key material themselves. Local JWK keys support development
-and mounted-secret deployments. Published product binaries and container images
-compile the optional `pkcs11` signing provider so operators can attach vendor
-HSM modules at runtime; vendor PKCS#11 modules and token configuration are not
-bundled. Credential profiles default to a short-lived 600-second validity when
-`validity_seconds` is omitted, and explicit values remain bounded by
-`evidence.max_credential_validity_seconds`.
-Self-attestation credential profiles are additionally bounded by
-`self_attestation.token_policy.max_credential_validity_seconds`.
-
-The supported wire contract and explicit non-support list are defined in
+Registry Notary issues SD-JWT VC credentials using `application/dc+sd-jwt`,
+EdDSA over named Ed25519 signing keys, and `did:jwk` holder binding. The
+supported wire contract and explicit non-support list are in
 [`docs/sd-jwt-vc-conformance-profile.md`](docs/sd-jwt-vc-conformance-profile.md).
 Signing key configuration and rotation are covered in
 [`docs/signing-key-provider.md`](docs/signing-key-provider.md).
 
 ## Federated Evaluation
 
-Registry Notary includes a first federation slice for static-peer delegated
-evaluation. When `federation.enabled` is true, the standalone router mounts:
-
-```text
-POST /federation/v1/evaluations
-```
-
-The endpoint accepts a compact JWS request with
-`typ = registry-notary-request+jwt`, verifies the trusted peer and local
-policy before any source read, evaluates one configured profile, emits audit,
-and returns a compact JWS response with
-`typ = registry-notary-response+jwt`.
-
-The MVP is deliberately scoped to delegated evaluation. It does not implement
-open federation, dynamic trust chains, audit checkpoint exchange, or federated
-credential issuance. See
-[`specs/federated-evaluation-mvp-spec.md`](specs/federated-evaluation-mvp-spec.md)
-and
+Registry Notary includes a static-peer delegated evaluation slice. Wire
+profile, config shape, replay limitation, and rollout checklist are in
 [`docs/federated-evaluation-operator-guide.md`](docs/federated-evaluation-operator-guide.md)
-for the wire profile, config shape, replay limitation, and rollout checklist.
-
-## Replay Store
-
-Replay protection for federation request JWTs, OID4VCI nonces, and holder proof
-JWTs is configured under the top-level `replay` block. The default store is
-single-process memory:
-
-```yaml
-replay:
-  storage: in_memory
-```
-
-`in_memory` is safe only for a single running Notary process because replayed
-identifiers are not shared across processes. Active-active deployments should
-use Redis:
-
-```yaml
-replay:
-  storage: redis
-  redis:
-    url_env: REGISTRY_NOTARY_REPLAY_REDIS_URL
-    key_prefix: registry-notary
-    connect_timeout_ms: 1000
-    operation_timeout_ms: 500
-```
-
-Replay storage is implemented through `registry-platform-replay`, which layers
-replay and consumable nonce semantics over `registry-platform-cache`. Redis keys
-hash replay scope and one-time identifiers before storage, keeping peer ids,
-subjects, holders, nonces, and JWT `jti` values out of backend keys.
-
-## Credential Lifecycle
-
-Registry Notary issues holder-bound SD-JWT VC credentials with short lifetimes
-from each credential profile's `validity_seconds`. Profiles default to 600
-seconds when `validity_seconds` is omitted. The default posture is status-free:
-issued credentials do not include credential status, revocation lists, or
-lifecycle callbacks.
-
-Operators can enable a storage-backed status endpoint with
-`credential_status.enabled = true`. When enabled, issued SD-JWT VC payloads
-include a `status` claim whose `statusUrl` points to
-`/v1/credentials/{credential_id}/status`. The backing store can be in-memory for
-lab deployments or Redis for deployable multi-process instances:
-
-```yaml
-credential_status:
-  enabled: true
-  base_url: https://issuer.example
-  storage: redis
-  retention_seconds: 86400
-  redis:
-    url_env: REGISTRY_NOTARY_STATUS_REDIS_URL
-    key_prefix: registry-notary
-```
-
-The public status endpoint returns `valid`, `suspended`, `revoked`, or derived
-`expired`. Operators update mutable states through
-`POST /admin/v1/credentials/{credential_id}/status` with the
-`registry_notary:admin` scope. Status records intentionally contain no subject
-ids, holder keys, claim values, SD-JWT disclosures, or source rows.
-
-## Metrics
-
-The Prometheus metrics surface is `/metrics`. Metrics are intended to be safe to
-scrape and must use low-cardinality labels only, such as endpoint kind, method,
-status code, status class, error code, outcome, profile, and source id. Labels
-must not contain subject ids, principal ids, holder material, tokens, source
-rows, request ids, correlation ids, SD-JWT disclosures, or raw error details.
-The endpoint requires an authenticated principal with the
-`registry_notary:metrics_read` scope; configure Prometheus scrape jobs to send a
-dedicated metrics credential. Static-auth deployments can use a metrics bearer
-token or a metrics API key in `x-api-key`; OIDC deployments can use a token
-whose mapped scopes include `registry_notary:metrics_read`. An
-internal-only listener/proxy is defense in depth only and must still forward or
-inject a valid metrics credential. Keep the endpoint behind the deployment's
-normal network and scrape controls even though the metric content is designed
-to avoid secrets and personal data.
-
-Example Prometheus scrape shape:
-
-```yaml
-scrape_configs:
-  - job_name: registry-notary
-    metrics_path: /metrics
-    authorization:
-      type: Bearer
-      credentials_file: /run/secrets/registry-notary-metrics-token
-    static_configs:
-      - targets: ["registry-notary:8081"]
-```
-
-## Try locally with registryctl
-
-For the first local tutorial, use
-[Verify a claim from your registry API](https://docs.registrystack.org/tutorials/verify-claim-registry-api/).
-It uses `registryctl` to add Registry Notary to a local registry API project, start both services,
-and run the Notary smoke checks without cloning this repository.
-
-If you already have a source API, use
-[Verify a claim from your own API](https://docs.registrystack.org/tutorials/verify-claim-own-api/).
-That path creates a standalone Notary project and points it at an API you operate.
+and the design record at
+[`specs/federated-evaluation-mvp-spec.md`](specs/federated-evaluation-mvp-spec.md).
 
 ## Local Run
 
@@ -229,73 +115,12 @@ no Registry Notary route is served without a configured API key or bearer token.
 
 ## Operating Relay And Notary Together
 
-Registry Relay is the protected registry consultation API. Registry Notary is
-the claim evaluation, credential issuance, and attestation service. Relay can
-publish metadata evidence offerings that point callers to Notary, but Relay
-does not execute Notary claims. Notary calls Relay as an HTTP source when a
-claim profile needs registry data.
-
-Configure credentials on both sides:
-
-- Relay must register a token hash for the Notary source caller, with only the
-  dataset scopes needed by Notary claim profiles.
-- Notary must register the caller token used by programs or wallets against
-  Notary routes, and its source connector must reference the raw Relay token
-  through an environment-backed `token_env`.
-- Operators should keep raw tokens and signing material out of YAML. Use
-  service environment variables such as `REGISTRY_NOTARY_CONFIG`,
-  `REGISTRY_NOTARY_BIND`, `REGISTRY_NOTARY_LOG_FORMAT`, and
-  `REGISTRY_NOTARY_ENV_FILE`; use secret indirection fields ending in `_env` for
-  token hashes, audit secrets, signing keys, Redis URLs, and source tokens.
-
-For side-by-side local compose stacks, keep the public host ports distinct while
-letting each container use its internal default listener. A common convention is
-Relay on host `18080` mapped to container `8080`, and Notary on host `18081`
-mapped to its container listener. Native local runs usually use Relay
-`127.0.0.1:8080` and Notary `127.0.0.1:8081`; align source `base_url` values
-with the network where Notary runs.
-
-## Audit Sink Configuration
-
-Registry Notary emits redacted, tamper-evident audit envelopes. Configure the
-audit destination under `audit` and provide a stable HMAC secret through
-`hash_secret_env`:
-
-```yaml
-audit:
-  sink: file
-  path: /var/log/registry-notary/audit.jsonl
-  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
-  max_size_mb: 100
-  max_files: 14
-```
-
-Supported sink values:
-
-- `stdout`: writes one JSON audit envelope per line to process stdout. Use this
-  when a container runtime or process supervisor owns log collection.
-- `file` or `jsonl`: writes JSONL envelopes to `path`. `max_size_mb` controls
-  rotation and `max_files` controls retained files, including the active file.
-  Set `max_size_mb: 0` to disable in-process rotation.
-- `syslog`: writes JSONL envelopes as RFC 5424 messages to the local syslog Unix
-  datagram socket. Use `syslog_socket_path` when the deployment socket differs
-  from the platform default.
-
-`REGISTRY_NOTARY_AUDIT_HASH_SECRET` must contain a high-entropy deployment
-secret. Registry Notary fails closed when the variable named by
-`hash_secret_env` is missing, and uses it to HMAC identifiers before they enter
-the audit envelope. Keep the secret stable for correlation across records; rotate
-it only with an audit-retention plan.
-
-Each envelope links to the previous envelope through `prev_hash` and exposes its
-own `record_hash`. For file/jsonl sinks, startup resumes from the retained tail
-hash, which proves local chain consistency but does not by itself prevent a
-writer with local file access from rewriting history. Beta deployments that rely
-on audit tamper-evidence must ship stdout/syslog envelopes off-host or publish
-external anchors for retained head and tail hashes in storage the audit writer
-cannot rewrite. Verification should check both the trusted starting `prev_hash`
-for a retained suffix and the trusted final `record_hash` for the period under
-review.
+Relay publishes metadata evidence offerings that point callers to Notary; Notary
+calls Relay as an HTTP source when a claim profile needs registry data.
+Credential wiring, port conventions, replay store, metrics, and audit sink
+configuration: [`docs/operator-config-reference.md`](docs/operator-config-reference.md).
+Credential status states and verifier caveats:
+[`docs/credential-lifecycle-status.md`](docs/credential-lifecycle-status.md).
 
 ## Verification
 
@@ -326,26 +151,14 @@ changes:
 REGISTRY_PLATFORM_SOURCE_DIR=../registry-platform scripts/check-platform-compat.sh
 ```
 
-The command checks the all-feature server build plus the OID4VCI nonce replay
-and keyed audit-chain tests that exercise shared Platform security APIs. When
-`REGISTRY_PLATFORM_SOURCE_DIR` is not the sibling path encoded in Cargo, the
-script builds in a temporary sibling-layout copy so Cargo resolves the same
-Platform checkout the script validated. Set `CEL_MAPPING_SOURCE_DIR` as well
-when the Crosswalk checkout is not available at `../cel-mapping`.
-
-CEL is disabled in default beta builds. It remains available through the
-explicit `registry-notary-cel` feature and is implemented through the local
-`crosswalk-core` crate at `../cel-mapping/crates/crosswalk-core`. CEL-enabled
-builds evaluate expressions in a hardened worker process with environment
-scrubbing, bounded request and response frames, capped stderr capture, resource
-limits where supported, timeout kill, worker replacement, startup policy
-preflight, declared result-type checks, and a deterministic policy hash echoed
-across the worker protocol.
+The script validates the all-feature server build and the Platform security API
+integration tests. Set `CEL_MAPPING_SOURCE_DIR` when Crosswalk is not at
+`../cel-mapping`. CEL is disabled by default; enable with `registry-notary-cel`.
 
 ## Docker
 
-The Docker build also needs the sibling Platform and Crosswalk workspaces.
-Build with Docker BuildKit and pass both named contexts:
+The Docker build needs the sibling Platform and Crosswalk workspaces. Build
+with Docker BuildKit and pass both named contexts:
 
 ```bash
 docker build \
@@ -354,59 +167,14 @@ docker build \
   -t registry-notary .
 ```
 
-Default Docker builds compile CEL and PKCS#11 into one release-capable image.
-Runtime behavior remains config-gated: PKCS#11 activates only when signing
-configuration selects a PKCS#11 provider, and CEL activates only when trusted
-operator config defines CEL rules.
+Default builds compile CEL and PKCS#11 into one release-capable image; runtime
+behavior remains config-gated. Release images publish to
+`ghcr.io/jeremi/registry-notary` on stable `vX.Y.Z` tags; deployments should
+consume version tags or immutable digests. The OpenFn sidecar image builds from
+`Dockerfile.openfn-sidecar` with the same named contexts.
 
-The product container workflow publishes release images only from stable
-`vX.Y.Z` tags to `ghcr.io/jeremi/registry-notary`. Release tags also update
-`vX.Y`, `vX`, and `latest`; `latest` means latest stable release. Pull requests
-and `main` pushes build validation images with both CEL and PKCS#11 compiled
-in, but do not push those validation images. Nightly or manual development
-snapshots may publish `snapshot`, `snapshot-YYYYMMDD`, and
-`snapshot-<shortsha>` unless both existing snapshot images already point at the
-current `main` revision. Deployments should consume specific version tags, such
-as `vX.Y.Z`, or immutable digests for rollback.
-
-Native runs default to `127.0.0.1:8081`. The Docker image sets
-`REGISTRY_NOTARY_BIND=0.0.0.0:8080` and exposes port `8080`; override it with
-`--bind` or `REGISTRY_NOTARY_BIND` when deploying behind a different listener.
-The image runs from `/var/lib/registry-notary` and defaults to
-`--config /etc/registry-notary/config.yaml`; pass replacement arguments to
-`docker run` when mounting a config somewhere else.
-Set `server.admin_listener.mode: dedicated` and
-`server.admin_listener.bind` to serve `/admin/v1/*` and `/metrics` on a
-separate admin listener. Simple local deployments without `config_trust` may
-use `shared_with_public`; governed configuration requires dedicated mode.
-The image healthcheck runs `registry-notary healthcheck`, which probes
-`http://127.0.0.1:8080/healthz` by default and does not require a shell or curl
-inside the distroless runtime. Override `REGISTRY_NOTARY_HEALTHCHECK_URL` when
-the container listener differs.
-
-Mounted config supports simple environment expansion before YAML parsing:
-`${VAR}` requires a non-empty value, `${VAR:-default}` supplies a default, and
-`${VAR:?message}` fails startup with the provided message when the value is
-missing. This keeps distroless deployments from needing shell wrappers for
-environment-specific URLs.
-
-The OpenFn sidecar image is owned by this repository as well:
-
-```bash
-docker build \
-  --build-context registry-platform=../registry-platform \
-  --build-context cel-mapping=../cel-mapping \
-  -f Dockerfile.openfn-sidecar \
-  -t registry-notary-openfn-sidecar .
-```
-
-It packages the Rust sidecar binary, the pinned OpenFn worker, and its locked
-Node dependencies. The sidecar healthcheck uses Node's built-in `fetch` against
-`http://127.0.0.1:9191/healthz` by default; override
-`REGISTRY_NOTARY_OPENFN_SIDECAR_HEALTHCHECK_URL` when the sidecar binds a
-different port. The sidecar now requires governed `config_trust` by default;
-unsigned manifests are local-development only and require the explicit
-`--allow-unsigned-dev-config` startup flag.
+See [`docs/deployment-hardening-runbook.md`](docs/deployment-hardening-runbook.md)
+for listener, admin port, healthcheck, config expansion, and rollback guidance.
 
 ## OpenAPI
 

@@ -1,6 +1,6 @@
 # Identity and record matching
 
-> **Page type:** Concept · **Product:** Registry Notary · **Layer:** consultation, evaluation · **Audience:** integrator, operator · **Status:** draft
+> **Page type:** Concept · **Product:** Registry Notary · **Layer:** consultation, evaluation · **Audience:** integrator, operator · **Status:** current
 
 When a caller asks Registry Notary to evaluate a claim, Notary has to bind the
 request context to a source registry record before the claim rule can run. That
@@ -264,10 +264,9 @@ acting for a dependent. The binding's policy controls which relationship types a
 allowed and which request paths each may carry, and the requester and relationship
 produce their own outcomes.
 
-Multi-party authorization is only partly built. The `profile` and `on_behalf_of`
-fields exist on the request model but are reserved for future use. Two further
-extensions are not yet implemented: binding delegation scope to purpose, and
-gating a match on a minimum assurance of the target inputs.
+The `profile` and `on_behalf_of` fields are accepted by the request model but
+are not evaluated. Binding delegation scope to purpose and minimum-assurance
+gating for target inputs are not implemented.
 
 ## Operator checklist
 

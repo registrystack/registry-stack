@@ -186,8 +186,7 @@ Boundary rules:
 - Return only normalized fields needed by Notary.
 - Do not put claim logic in the sidecar.
 - Set `retry_on_5xx: false` on the Notary source connection. Notary does not
-  retry OpenFn worker execution failures unless a future explicit retry policy
-  is added.
+  retry OpenFn worker execution failures.
 
 See
 [`../crates/registry-notary-openfn-sidecar/README.md`](../crates/registry-notary-openfn-sidecar/README.md)
@@ -195,63 +194,14 @@ for sidecar manifest and worker details.
 
 ### OpenFn Batch Matching Contract
 
-OpenFn sidecar batch matching uses a POST contract, not Registry Data API `.in`
-filter semantics:
-
-```text
-POST /v1/datasets/{dataset}/entities/{entity}/records:batchMatch
-Authorization: Bearer <notary-to-sidecar-token>
-Data-Purpose: <purpose>
-Content-Type: application/json
-```
-
-Request body:
-
-```json
-{
-  "fields": ["national_id", "birth_date"],
-  "query_signature": [
-    { "field": "given_name", "op": "eq" },
-    { "field": "family_name", "op": "eq" },
-    { "field": "birthdate", "op": "eq" }
-  ],
-  "items": [
-    { "id": "0", "values": ["Amina", "Diallo", "1990-01-01"] }
-  ]
-}
-```
-
-Response body:
-
-```json
-{
-  "items": [
-    {
-      "id": "0",
-      "data": [
-        {
-          "national_id": "12345",
-          "birth_date": "1990-01-01"
-        }
-      ]
-    }
-  ]
-}
-```
-
-The batch request must include `fields`, `query_signature`, and `items`; the
-headers must include `Authorization` and `Data-Purpose`. The v1
-`query_signature` supports `op: eq` only, and every item in the request uses the
-same ordered signature. Each item `values` array must have the same length as
-`query_signature`.
-
-Response item ids must correspond exactly to request item ids. A duplicate item
-id or invalid worker output rejects the whole sidecar response. A missing item is
-treated by Notary as source unavailable for that item. `data: []` means not
-found, `data: [record]` means an exact source match, and `data` with two records
-means ambiguous. If a target system returns more than two records for one item,
-the sidecar normalizes the result to two records before returning it, so Notary
-can preserve the same cardinality rule used for single reads.
+OpenFn sidecar batch matching uses a dedicated POST contract. Notary calls this
+route when `bulk_mode: openfn_sidecar_batch` is set on a source connection and
+the request contains multiple subjects. The contract is semantically equivalent
+to running the same source binding as single reads for each item. For the full
+request and response shapes, field rules, cardinality semantics, and HTTP error
+codes, see the
+[OpenFn Sidecar Source API](api-reference.md#openfn-sidecar-source-api)
+section in the API reference.
 
 ### OpenFn Batch Config
 

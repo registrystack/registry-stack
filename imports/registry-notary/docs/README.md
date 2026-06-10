@@ -39,7 +39,6 @@ For operators deploying, configuring, and running a Registry Notary.
 - [Federated evaluation](federated-evaluation-operator-guide.md): static-peer setup, environment variables, and the replay limitation.
 - [Credential lifecycle and status](credential-lifecycle-status.md): short-lived credentials, optional live status, retention, and verifier caveats.
 - [Deployment hardening runbook](deployment-hardening-runbook.md): production-readiness checklist for network boundaries, secrets, Redis, audit, and rollback.
-- [OpenSPP disability DCI example](openspp-disability-dci.md): connect the OpenSPP disability registry demo backend.
 
 ## Build and maintain
 
@@ -48,6 +47,7 @@ For maintainers changing the code or reviewing design history.
 - [Workspace layout](../README.md#layout): the crates and bindings and what each owns.
 - [Command-line interface](../crates/registry-notary-bin/README.md): the server binary and its subcommands.
 - [Design records](../specs/README.md): specifications and implementation traces, kept as design history.
+- [Security assurance](security-assurance.md): CI security gates, image publication and signing policy.
 
 ## Related
 

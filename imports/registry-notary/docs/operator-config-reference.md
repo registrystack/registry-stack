@@ -535,19 +535,18 @@ evidence:
 For OpenFn sidecar connections:
 
 - Set `retry_on_5xx: false`. Notary does not retry OpenFn worker execution
-  failures unless a future explicit retry policy is added.
+  failures.
 - Use `bulk_mode: openfn_sidecar_batch` only after sidecar contract tests cover
   per-item not found, exact match, ambiguous match, missing response item,
   duplicate response item id, worker timeout, worker failure, and output
   projection.
-- Keep the sidecar on localhost or a private pod network reachable only from
-  Notary. Do not expose the sidecar publicly.
 - In governed environments, set `expected_sidecar` on every OpenFn sidecar
   connection. Local demos may omit it only when the assurance boundary is not
   part of the test.
-- Keep policy, minimization, audit, disclosure, and credential issuance in
-  Notary. Keep adaptor execution, target credentials, normalization, source
-  comparison, and worker isolation in the sidecar.
+
+See [deployment-hardening-runbook.md](deployment-hardening-runbook.md) for
+network isolation requirements, responsibility boundaries between Notary and
+the sidecar, and deployment security expectations.
 
 ## CEL Runtime
 
@@ -723,66 +722,64 @@ replay:
     operation_timeout_ms: 500
 ```
 
-The router fails to build when the named Redis URL environment variable is
-missing. `/ready` fails closed when the Redis replay backend is unavailable.
+Key fields: `storage` is `in_memory` or `redis`. `redis.url_env` names the
+environment variable containing the Redis connection URL. `redis.key_prefix`
+scopes keys for shared clusters. `connect_timeout_ms` and
+`operation_timeout_ms` must both be greater than zero when Redis is
+configured. The router fails to build when the named Redis URL environment
+variable is missing. `/ready` fails closed when the Redis replay backend is
+unavailable.
+
+See [deployment-hardening-runbook.md](deployment-hardening-runbook.md) for
+operational expectations, alerting guidance, and when to prefer Redis over
+in-memory.
 
 ## Credential Status
 
-Credential status is disabled by default. Enable it only when verifiers need
-live suspension or revocation for issued credentials.
-
-```yaml
-credential_status:
-  enabled: true
-  base_url: https://notary.example.gov
-  storage: redis
-  retention_seconds: 86400
-  redis:
-    url_env: REGISTRY_NOTARY_STATUS_REDIS_URL
-    key_prefix: registry-notary
-```
-
-Use Redis for deployable multi-process status. In-memory status is suitable only
-for lab flows because records disappear on restart and are not shared across
-instances.
+Credential status tracks the lifecycle of individual issued credentials so
+verifiers can check suspension or revocation after issuance. It is disabled by
+default. Enable it only when verifiers need a live status check beyond
+credential expiry. `base_url` must be the public HTTPS issuer origin verifiers
+can reach; `retention_seconds` should cover maximum credential validity plus
+verifier tolerance. Use Redis for any deployment where more than one process
+can issue credentials or where status records must survive a restart.
 
 See [`credential-lifecycle-status.md`](credential-lifecycle-status.md) for
-status semantics and rollout guidance.
+status semantics, the full config block with all Redis fields, the status
+payload shape, lifecycle state transitions, privacy boundary, and rollout
+checklist.
 
 ## Self-Attestation
 
 Self-attestation lets a citizen use their own OIDC token to evaluate or issue
-only for the subject bound to that token. It requires `auth.mode: oidc`.
+only the claims that policy allows for the subject bound to that token. It
+requires `auth.mode: oidc`. The subject binding is derived from a token claim
+at request time; conflicting caller-supplied identity context is rejected
+before any source read. All operations, claims, formats, disclosures, and
+credential profiles are explicit allow-lists. Batch evaluation is not
+supported. Credential profiles must use DID holder binding with proof of
+possession and `did:jwk`. In-process rate limits are guardrails; public
+deployments need gateway and identity-provider controls as well.
 
-The main controls are:
+The config keys unique to this page are: `subject_binding.token_claim`,
+`subject_binding.normalize` (must be `exact`),
+`subject_binding.allow_sub_as_civil_id`, `citizen_clients`,
+`token_policy` ceilings, `allowed_operations`, `allowed_purposes`,
+`allowed_claims`, `allowed_formats`, `allowed_disclosures`,
+`credential_profiles`, `scope_policy`, `required_scopes`,
+`allowed_wallet_origins`, and `rate_limits`.
 
-- `subject_binding`: exact comparison between a token claim and the request
-  field. `normalize` must be `exact`. Using `sub` as a civil identifier requires
-  `allow_sub_as_civil_id: true`.
-- `citizen_clients`: allowed OIDC clients or audiences. Audiences must also be
-  accepted by `auth.oidc.audiences`.
-- `token_policy`: assurance, auth age, access-token lifetime, evaluation age,
-  credential validity, and clock leeway ceilings.
-- `allowed_operations`: may enable `evaluate`, `render`, and `issue_credential`.
-  `batch_evaluate` is not supported for citizen self-attestation flows.
-- `allowed_purposes`, `allowed_claims`, `allowed_formats`,
-  `allowed_disclosures`, and `credential_profiles`: explicit allow-lists.
-- `scope_policy` and `required_scopes`: citizen token scope requirements.
-- `allowed_wallet_origins`: exact HTTPS origins for browser wallet flows. Do
-  not use wildcards.
-- `rate_limits`: in-process guardrails. Put gateway or identity-provider rate
-  limits in front of public deployments as well.
-
-Self-attestation credential profiles must use DID holder binding with proof of
-possession and `did:jwk`.
+See [`self-attestation-operator-guide.md`](self-attestation-operator-guide.md)
+for the full config blocks, identity-provider requirements, scope policy,
+wallet origin controls, rate-limit fields, and rollout checklist.
 
 ## OID4VCI Wallet Facade
 
 OID4VCI depends on self-attestation. Enable it when a wallet should retrieve
 Notary-issued credentials through OpenID4VCI-style metadata, offers, nonces,
-and credential requests.
-
-Minimum shape:
+and credential requests. The facade is narrow: credential format is `dc+sd-jwt`,
+proof type is JWT with EdDSA, holder binding is `did:jwk`, and issuance is
+backed by self-attestation policy.
 
 ```yaml
 oid4vci:
@@ -834,15 +831,7 @@ oid4vci:
 Public URLs must use HTTPS except for loopback development. Endpoint URLs must
 live under `credential_issuer`, include a path, and have no query string.
 Each `vct` must also be a public HTTPS URL and must match the referenced
-credential profile `vct`. When OID4VCI is enabled, Registry Notary serves public
-SD-JWT VC Type Metadata at that exact URL if its path is under `/credentials/`,
-or under `{credential_issuer path}/credentials/` when `credential_issuer`
-includes a path prefix. Deployments that publish Registry Notary under an issuer
-path prefix must strip that prefix before forwarding to the Notary process while
-preserving the external host and scheme with forwarded headers. The Type
-Metadata route supports nested paths such as `/credentials/dhis2/health-status/v1`,
-returns `404` when no configured `vct` matches, and does not require
-authentication.
+credential profile `vct`.
 
 `authorization.require_pkce_method` pins the PKCE challenge method wallets must
 use. `proof.max_age_seconds` bounds how fresh a holder proof JWT must be, and
@@ -867,8 +856,9 @@ and the credential profile it references:
 - `format` is `dc+sd-jwt`.
 - `vct` matches the credential profile `vct`.
 
-See [`oid4vci-wallet-interop.md`](oid4vci-wallet-interop.md) for wallet flow
-and compatibility notes.
+See [`oid4vci-wallet-interop.md`](oid4vci-wallet-interop.md) for the wallet
+flow sequence, authenticated pre-authorized-code flow details, nonce policy,
+Type Metadata serving, compatibility checklist, and troubleshooting.
 
 ## Validation Workflow
 
