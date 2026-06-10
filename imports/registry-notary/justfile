@@ -2,6 +2,19 @@
 
 export CARGO_NET_GIT_FETCH_WITH_CLI := "true"
 
+# Install the Rust toolchain via mise and fetch all dependencies.
+setup:
+    mise install
+    cargo fetch
+
+# Build the release binary.
+build:
+    cargo build --release --workspace --all-features
+
+# Format all source files in place.
+fmt:
+    cargo fmt --all
+
 # Check formatting without modifying files.
 fmt-check:
     cargo fmt --all -- --check
@@ -10,13 +23,25 @@ fmt-check:
 lint:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+# Run clippy on the default feature shape.
+lint-default:
+    cargo clippy --workspace --all-targets -- -D warnings
+
 # Run all workspace tests with all features enabled.
 test:
     cargo test --workspace --all-features
 
+# Run the default feature shape.
+test-default:
+    cargo test --workspace
+
 # Run cargo-deny through the repo-pinned wrapper.
 deny:
     ./scripts/cargo-deny-check.sh
+
+# Check advisories only.
+audit:
+    ./scripts/cargo-deny-check.sh advisories
 
 # Generate the OpenAPI document to stdout.
 openapi-generate:
@@ -37,3 +62,36 @@ container-security:
 # Run security assurance checks that do not require external services.
 security:
     ./scripts/check-security.sh
+
+# Run the full local CI gate.
+ci: fmt-check lint-default lint test-default test deny openapi-check exposure-check security
+
+# Run the development server with a config file.
+# Usage: just run
+#        just run config=path/to/config.yaml
+run config="demo/config/registry-notary.yaml":
+    cargo run -p registry-notary-bin -- --config {{config}}
+
+# Generate synthetic perf API keys and write target/perf/perf.env.
+perf-keys env="target/perf/perf.env" force="":
+    mkdir -p $(dirname {{env}})
+    uv run perf/scripts/generate_perf_keys.py --env-file {{env}} {{force}}
+
+# Compile the perf benches without running them.
+perf-bench-build:
+    cargo bench --no-run --workspace --all-features
+
+# Run all Criterion microbenchmarks.
+perf-bench:
+    cargo bench --workspace --all-features
+
+# Run one k6 scenario under perf/k6/.
+# Usage: just perf-run scenario=perf/k6/evaluate_extract.js
+perf-run scenario extra="--env-file target/perf/perf.env":
+    uv run perf/scripts/run_scenario.py --scenario {{scenario}} {{extra}}
+
+# Local CI-equivalent perf smoke.
+perf-smoke:
+    cargo bench --no-run --workspace --all-features
+    for f in perf/k6/*.js perf/k6/lib/*.js; do node --check "$f" || exit 1; done
+    uv run --project perf python -m pytest

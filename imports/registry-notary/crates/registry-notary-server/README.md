@@ -110,16 +110,17 @@ rows.
 
 `/metrics` is the Prometheus scrape surface for server metrics. Metric families
 and labels must be safe for operational scraping: use bounded labels such as
-route, method, outcome, status class, profile, and source id. Do not label or
-emit subject ids, principal ids, holder keys, access tokens, source rows,
-request or correlation ids, SD-JWT disclosures, or raw error details. The
-endpoint requires an authenticated principal with the `registry_notary:admin`
-scope, so Prometheus scrape jobs must send an admin credential. Static-auth
-deployments can use an admin bearer token or an admin API key in `x-api-key`;
-OIDC deployments can use a token whose mapped scopes include
-`registry_notary:admin`. An internal-only listener/proxy is defense in depth
-only and must still forward or inject a valid admin credential. It should still
-be exposed only through the deployment's normal network and scrape controls.
+endpoint kind, method, status code, status class, error code, outcome, profile,
+and source id. Do not label or emit subject ids, principal ids, holder keys,
+access tokens, source rows, request or correlation ids, SD-JWT disclosures, or
+raw error details. The endpoint requires an authenticated principal with the
+`registry_notary:metrics_read` scope, so Prometheus scrape jobs must send a
+dedicated metrics credential. Static-auth deployments can use a metrics bearer
+token or a metrics API key in `x-api-key`; OIDC deployments can use a token
+whose mapped scopes include `registry_notary:metrics_read`. An internal-only
+listener/proxy is defense in depth only and must still forward or inject a valid
+metrics credential. It should still be exposed only through the deployment's
+normal network and scrape controls.
 
 Example Prometheus scrape shape:
 
@@ -161,17 +162,17 @@ audit:
   sink: file
   path: /var/log/registry-notary/audit.jsonl
   hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
-  max_size_bytes: 10485760
-  max_files: 5
+  max_size_mb: 100
+  max_files: 14
 ```
 
 Sink options:
 
 - `stdout` writes JSONL to process stdout and is appropriate when platform log
   collection provides durability.
-- `file` and `jsonl` require `path`. Use `max_size_bytes` for active-file
-  rotation and `max_files` for retained file count. `max_files` includes the
-  active file; `max_size_bytes: 0` disables rotation.
+- `file` and `jsonl` require `path`. Use `max_size_mb` for active-file rotation
+  and `max_files` for retained file count. `max_files` includes the active
+  file; `max_size_mb: 0` disables rotation.
 - `syslog` writes JSONL envelopes to a local Unix datagram syslog socket. Set
   `syslog_socket_path` to override the platform default:
 

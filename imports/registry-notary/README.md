@@ -156,16 +156,17 @@ ids, holder keys, claim values, SD-JWT disclosures, or source rows.
 ## Metrics
 
 The Prometheus metrics surface is `/metrics`. Metrics are intended to be safe to
-scrape and must use low-cardinality labels only, such as route, method, outcome,
-status class, profile, and source id. Labels must not contain subject ids,
-principal ids, holder material, tokens, source rows, request ids, correlation
-ids, SD-JWT disclosures, or raw error details. The endpoint requires an
-authenticated principal with the `registry_notary:admin` scope; configure
-Prometheus scrape jobs to send an admin credential. Static-auth deployments can
-use an admin bearer token or an admin API key in `x-api-key`; OIDC deployments
-can use a token whose mapped scopes include `registry_notary:admin`. An
+scrape and must use low-cardinality labels only, such as endpoint kind, method,
+status code, status class, error code, outcome, profile, and source id. Labels
+must not contain subject ids, principal ids, holder material, tokens, source
+rows, request ids, correlation ids, SD-JWT disclosures, or raw error details.
+The endpoint requires an authenticated principal with the
+`registry_notary:metrics_read` scope; configure Prometheus scrape jobs to send a
+dedicated metrics credential. Static-auth deployments can use a metrics bearer
+token or a metrics API key in `x-api-key`; OIDC deployments can use a token
+whose mapped scopes include `registry_notary:metrics_read`. An
 internal-only listener/proxy is defense in depth only and must still forward or
-inject a valid admin credential. Keep the endpoint behind the deployment's
+inject a valid metrics credential. Keep the endpoint behind the deployment's
 normal network and scrape controls even though the metric content is designed
 to avoid secrets and personal data.
 
@@ -195,6 +196,15 @@ That path creates a standalone Notary project and points it at an API you operat
 
 ## Local Run
 
+Use the task runner for the normal local path:
+
+```bash
+just setup
+just run
+```
+
+If `just` is not available, use the raw Cargo fallback:
+
 ```bash
 export REGISTRY_NOTARY_API_KEY_HASH='sha256:<sha256-hex-of-your-api-key>'
 export REGISTRY_NOTARY_BEARER_TOKEN_HASH='sha256:<sha256-hex-of-your-bearer-token>'
@@ -217,6 +227,34 @@ The demo config uses HTTP source connections, so claim evaluation requires a
 source service at the configured `base_url`. The binary still starts fail-closed:
 no Registry Notary route is served without a configured API key or bearer token.
 
+## Operating Relay And Notary Together
+
+Registry Relay is the protected registry consultation API. Registry Notary is
+the claim evaluation, credential issuance, and attestation service. Relay can
+publish metadata evidence offerings that point callers to Notary, but Relay
+does not execute Notary claims. Notary calls Relay as an HTTP source when a
+claim profile needs registry data.
+
+Configure credentials on both sides:
+
+- Relay must register a token hash for the Notary source caller, with only the
+  dataset scopes needed by Notary claim profiles.
+- Notary must register the caller token used by programs or wallets against
+  Notary routes, and its source connector must reference the raw Relay token
+  through an environment-backed `token_env`.
+- Operators should keep raw tokens and signing material out of YAML. Use
+  service environment variables such as `REGISTRY_NOTARY_CONFIG`,
+  `REGISTRY_NOTARY_BIND`, `REGISTRY_NOTARY_LOG_FORMAT`, and
+  `REGISTRY_NOTARY_ENV_FILE`; use secret indirection fields ending in `_env` for
+  token hashes, audit secrets, signing keys, Redis URLs, and source tokens.
+
+For side-by-side local compose stacks, keep the public host ports distinct while
+letting each container use its internal default listener. A common convention is
+Relay on host `18080` mapped to container `8080`, and Notary on host `18081`
+mapped to its container listener. Native local runs usually use Relay
+`127.0.0.1:8080` and Notary `127.0.0.1:8081`; align source `base_url` values
+with the network where Notary runs.
+
 ## Audit Sink Configuration
 
 Registry Notary emits redacted, tamper-evident audit envelopes. Configure the
@@ -228,17 +266,17 @@ audit:
   sink: file
   path: /var/log/registry-notary/audit.jsonl
   hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
-  max_size_bytes: 10485760
-  max_files: 5
+  max_size_mb: 100
+  max_files: 14
 ```
 
 Supported sink values:
 
 - `stdout`: writes one JSON audit envelope per line to process stdout. Use this
   when a container runtime or process supervisor owns log collection.
-- `file` or `jsonl`: writes JSONL envelopes to `path`. `max_size_bytes` enables
-  byte-based rotation and `max_files` controls retained files, including the
-  active file. Set `max_size_bytes: 0` to disable in-process rotation.
+- `file` or `jsonl`: writes JSONL envelopes to `path`. `max_size_mb` controls
+  rotation and `max_files` controls retained files, including the active file.
+  Set `max_size_mb: 0` to disable in-process rotation.
 - `syslog`: writes JSONL envelopes as RFC 5424 messages to the local syslog Unix
   datagram socket. Use `syslog_socket_path` when the deployment socket differs
   from the platform default.
@@ -334,6 +372,9 @@ as `vX.Y.Z`, or immutable digests for rollback.
 Native runs default to `127.0.0.1:8081`. The Docker image sets
 `REGISTRY_NOTARY_BIND=0.0.0.0:8080` and exposes port `8080`; override it with
 `--bind` or `REGISTRY_NOTARY_BIND` when deploying behind a different listener.
+The image runs from `/var/lib/registry-notary` and defaults to
+`--config /etc/registry-notary/config.yaml`; pass replacement arguments to
+`docker run` when mounting a config somewhere else.
 Set `server.admin_listener.mode: dedicated` and
 `server.admin_listener.bind` to serve `/admin/v1/*` and `/metrics` on a
 separate admin listener. Simple local deployments without `config_trust` may

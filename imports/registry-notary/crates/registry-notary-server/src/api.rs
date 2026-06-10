@@ -27,14 +27,15 @@ use registry_notary_core::RegistryNotaryCelConfig;
 use registry_notary_core::{
     AccessMode, BatchEvaluateItemRequest, BatchEvaluateRequest, BoundedClaimId,
     BoundedCorrelationId, ClaimRef, ClaimResultView, ClaimSet, ConfigAuditEvent, ConfigMetadata,
-    CredentialIssueRequest, CredentialProfileConfig, EvaluateRequest, EvidenceBatchItemAuditEvent,
-    EvidenceConfig, EvidenceEntity, EvidenceEntityReference, EvidenceError, EvidencePrincipal,
-    EvidenceRelationship, FederationConfig, Hashed, HolderRequest, Oid4vciConfig,
-    Oid4vciCredentialConfigurationConfig, Oid4vciDisplayImageConfig, Oid4vciIssuerDisplayConfig,
-    PolicyIdentifier, RateLimitBucket, RegistryNotaryAdminListenerMode, RenderEvaluationRequest,
-    SelfAttestationConfig, SelfAttestationDenialCode, SelfAttestationScopePolicy, SigningKeyStatus,
-    SourceCapability, StandaloneRegistryNotaryConfig, StoredSelfAttestationMetadata,
-    SubjectRequest, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
+    CredentialIssueRequest, CredentialProfileConfig, EvaluateRequest, EvidenceAuthMode,
+    EvidenceBatchItemAuditEvent, EvidenceConfig, EvidenceEntity, EvidenceEntityReference,
+    EvidenceError, EvidencePrincipal, EvidenceRelationship, FederationConfig, Hashed,
+    HolderRequest, Oid4vciConfig, Oid4vciCredentialConfigurationConfig, Oid4vciDisplayImageConfig,
+    Oid4vciIssuerDisplayConfig, PolicyIdentifier, RateLimitBucket, RegistryNotaryAdminListenerMode,
+    RenderEvaluationRequest, SelfAttestationConfig, SelfAttestationDenialCode,
+    SelfAttestationScopePolicy, SigningKeyStatus, SourceCapability, StandaloneRegistryNotaryConfig,
+    StoredSelfAttestationMetadata, SubjectRequest, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON,
+    FORMAT_SD_JWT_VC,
 };
 use registry_platform_audit::AuditKeyHasher;
 use registry_platform_config::RegistryTrustRoot;
@@ -92,6 +93,7 @@ use crate::{
 const DATA_PURPOSE_HEADER: &str = "data-purpose";
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 pub(crate) const ADMIN_SCOPE: &str = "registry_notary:admin";
+pub(crate) const METRICS_SCOPE: &str = "registry_notary:metrics_read";
 pub(crate) const OPS_READ_SCOPE: &str = "registry_notary:ops_read";
 const OID4VCI_CREDENTIAL_PATH: &str = "/oid4vci/credential";
 // SD-JWT VC Type Metadata well-known prefix inserted between host and vct path.
@@ -1265,8 +1267,8 @@ fn static_auth_changed(
     current: &StandaloneRegistryNotaryConfig,
     candidate: &StandaloneRegistryNotaryConfig,
 ) -> bool {
-    current.auth.mode == "api_key"
-        && candidate.auth.mode == "api_key"
+    current.auth.mode == EvidenceAuthMode::ApiKey
+        && candidate.auth.mode == EvidenceAuthMode::ApiKey
         && serde_json::to_value(&current.auth.oidc).ok()
             == serde_json::to_value(&candidate.auth.oidc).ok()
         && (current.auth.api_keys != candidate.auth.api_keys
@@ -2034,7 +2036,8 @@ fn apply_result_to_posture_audit(apply_result: &str) -> &'static str {
     }
 }
 
-fn config_candidate_invalid(detail: &'static str) -> Response {
+fn config_candidate_invalid(detail: impl Into<String>) -> Response {
+    let detail = detail.into();
     (
         StatusCode::BAD_REQUEST,
         Json(json!({
@@ -2214,24 +2217,43 @@ async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Respons
         (false, true) => KeyReadiness::Degraded,
         (false, false) => KeyReadiness::NotReady,
     };
-    (
+    let checks = json!({
+        "total": total,
+        "ok": ok,
+        "degraded": degraded,
+        "failed": failed,
+        "signing_providers": {
+            "total": signer_total,
+            "ok": signer_ok,
+            "failed": signer_failed,
+        },
+    });
+    if ready {
+        return Json(json!({
+            "status": status_text.as_str(),
+            "checks": checks,
+        }))
+        .into_response();
+    }
+
+    let mut response = (
         status,
         Json(json!({
-            "status": status_text.as_str(),
-            "checks": {
-                "total": total,
-                "ok": ok,
-                "degraded": degraded,
-                "failed": failed,
-                "signing_providers": {
-                    "total": signer_total,
-                    "ok": signer_ok,
-                    "failed": signer_failed,
-                },
-            },
+            "type": format!("{}/readiness/not-ready", crate::PROBLEM_TYPE_BASE_URL),
+            "title": "Evidence runtime is not ready",
+            "status": status.as_u16(),
+            "detail": "one or more readiness checks are not ready",
+            "code": "readiness.not_ready",
+            "readiness_status": status_text.as_str(),
+            "checks": checks,
         })),
     )
-        .into_response()
+        .into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        "application/problem+json".parse().unwrap(),
+    );
+    response
 }
 
 async fn admin_reload(principal: Option<Extension<EvidencePrincipal>>) -> Response {
@@ -2340,7 +2362,8 @@ fn admin_capabilities_listeners(config: Option<&StandaloneRegistryNotaryConfig>)
             },
             "metrics": {
                 "mode": "admin",
-                "requires_admin_scope": true
+                "requires_admin_scope": false,
+                "required_scope": METRICS_SCOPE
             }
         }),
         RegistryNotaryAdminListenerMode::SharedWithPublic => json!({
@@ -2350,7 +2373,8 @@ fn admin_capabilities_listeners(config: Option<&StandaloneRegistryNotaryConfig>)
             },
             "metrics": {
                 "mode": "shared_with_public",
-                "requires_admin_scope": true
+                "requires_admin_scope": false,
+                "required_scope": METRICS_SCOPE
             }
         }),
         RegistryNotaryAdminListenerMode::Disabled => json!({
@@ -2360,7 +2384,8 @@ fn admin_capabilities_listeners(config: Option<&StandaloneRegistryNotaryConfig>)
             },
             "metrics": {
                 "mode": "disabled",
-                "requires_admin_scope": true
+                "requires_admin_scope": false,
+                "required_scope": METRICS_SCOPE
             }
         }),
     }
@@ -7894,7 +7919,7 @@ mod tests {
         current.auth.oidc = Some(
             serde_json::from_value(json!({
                 "issuer": "https://issuer.example",
-                "jwks_uri": "https://issuer.example/jwks",
+                "jwks_url": "https://issuer.example/jwks",
                 "audiences": ["registry-notary"],
                 "allowed_clients": ["client-a"]
             }))
@@ -7944,7 +7969,7 @@ mod tests {
         let mut mode_candidate = current.clone();
         mode_candidate.auth.api_keys[0].fingerprint.commitment =
             "sha256:6666666666666666666666666666666666666666666666666666666666666666".to_string();
-        mode_candidate.auth.mode = "oidc".to_string();
+        mode_candidate.auth.mode = EvidenceAuthMode::Oidc;
         assert!(!is_client_access_change(&current, &mode_candidate)
             .expect("auth mode candidate classifies"));
     }
@@ -8891,7 +8916,9 @@ mod tests {
             .expect("ready body reads");
         let value: Value = serde_json::from_slice(&body).expect("ready body is JSON");
 
-        assert_eq!(value["status"], "not_ready");
+        assert_eq!(value["status"], json!(503));
+        assert_eq!(value["code"], "readiness.not_ready");
+        assert_eq!(value["readiness_status"], "not_ready");
         assert_eq!(value["checks"]["signing_providers"]["total"], json!(1));
         assert_eq!(value["checks"]["signing_providers"]["ok"], json!(0));
         assert_eq!(value["checks"]["signing_providers"]["failed"], json!(1));
@@ -8917,7 +8944,9 @@ mod tests {
             .expect("ready body reads");
         let value: Value = serde_json::from_slice(&body).expect("ready body is JSON");
 
-        assert_eq!(value["status"], "not_ready");
+        assert_eq!(value["status"], json!(503));
+        assert_eq!(value["code"], "readiness.not_ready");
+        assert_eq!(value["readiness_status"], "not_ready");
         assert_eq!(value["checks"]["total"], json!(2));
         assert_eq!(value["checks"]["ok"], json!(0));
         assert_eq!(value["checks"]["failed"], json!(1));

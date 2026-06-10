@@ -26,8 +26,8 @@ use jsonwebtoken::Algorithm;
 use registry_notary_core::sd_jwt::EvidenceIssuer;
 use registry_notary_core::{
     AccessMode, BoundedCorrelationId, BoundedVerifiedClaims, BulkMode, DciSourceConnectionConfig,
-    EvidenceAuditEvent, EvidenceConfig, EvidenceCredentialConfig, EvidenceEntity, EvidenceError,
-    EvidencePrincipal, EvidenceRequestContext, ExpectedSidecarConfig, Hashed,
+    EvidenceAuditEvent, EvidenceAuthMode, EvidenceConfig, EvidenceCredentialConfig, EvidenceEntity,
+    EvidenceError, EvidencePrincipal, EvidenceRequestContext, ExpectedSidecarConfig, Hashed,
     Oauth2ClientCredentialsSourceAuthConfig, PrincipalIdentifier, RateLimitBucket,
     RegistryNotaryAdminListenerMode, RequestIdentifier, SelfAttestationAssuranceClaimSource,
     SelfAttestationClaimSource, SelfAttestationDenialCode, SigningKeyConfig,
@@ -58,6 +58,7 @@ use serde_json::{json, Map, Value};
 use subtle::ConstantTimeEq;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use tower_http::timeout::{RequestBodyTimeoutLayer, TimeoutLayer};
 use ulid::Ulid;
 use zeroize::Zeroizing;
 
@@ -66,7 +67,7 @@ use crate::cel_worker::{CelWorker, CelWorkerConfig};
 #[cfg(feature = "registry-notary-cel")]
 use crate::runtime::validate_cel_claims_for_startup;
 use crate::{
-    api::ADMIN_SCOPE,
+    api::METRICS_SCOPE,
     config_governed::ConfigGovernanceContext,
     credential_status::{CredentialStatusBuildError, CredentialStatusStore},
     metrics::{metrics_handler, metrics_middleware, AppMetrics},
@@ -78,6 +79,7 @@ use crate::{
 
 const SOURCE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const FILE_WATCH_METADATA_CHECK_INTERVAL: Duration = Duration::from_millis(250);
+const MAX_REQUEST_URI_BYTES: usize = 8 * 1024;
 const MAX_SOURCE_JSON_BYTES: usize = 1024 * 1024;
 const MAX_INBOUND_REQUEST_BODY_BYTES: usize = 1024 * 1024;
 const PREAUTH_LOGIN_STATE_MAX_ENTRIES: usize = 4096;
@@ -179,7 +181,14 @@ pub struct NotaryRuntimeSnapshot {
     api_state: Arc<RegistryNotaryApiState>,
     cors_policy: registry_platform_httpsec::CorsPolicy,
     wallet_cors_policy: SelfAttestationWalletCorsPolicy,
+    http_limits: NotaryHttpLimits,
     federation_enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NotaryHttpLimits {
+    request_timeout: Duration,
+    request_body_timeout: Duration,
 }
 
 pub struct NotaryRouters {
@@ -192,6 +201,10 @@ pub fn compile_notary_runtime(
 ) -> Result<NotaryRuntimeSnapshot, StandaloneServerError> {
     config.validate()?;
     let federation_enabled = config.federation.enabled;
+    let http_limits = NotaryHttpLimits {
+        request_timeout: config.server.request_timeout,
+        request_body_timeout: config.server.request_body_timeout,
+    };
     let evidence = Arc::new(config.evidence.clone());
     let self_attestation = Arc::new(config.self_attestation.clone());
     let oid4vci = Arc::new(config.oid4vci.clone());
@@ -236,7 +249,7 @@ pub fn compile_notary_runtime(
         allowed_origins: config.server.cors.allowed_origins.clone(),
         allowed_methods: Vec::new(),
         allowed_headers: Vec::new(),
-        allow_credentials: config.server.cors.allow_credentials,
+        allow_credentials: false,
     };
     cors_policy.validate()?;
     let wallet_cors_policy = SelfAttestationWalletCorsPolicy::from_config(&config);
@@ -279,6 +292,7 @@ pub fn compile_notary_runtime(
         api_state,
         cors_policy,
         wallet_cors_policy,
+        http_limits,
         federation_enabled,
     })
 }
@@ -294,6 +308,7 @@ pub fn notary_shared_router_from_runtime(snapshot: NotaryRuntimeSnapshot) -> Rou
         api_state,
         cors_policy,
         wallet_cors_policy,
+        http_limits,
         federation_enabled,
     } = snapshot;
     let mut routes = router();
@@ -312,6 +327,7 @@ pub fn notary_shared_router_from_runtime(snapshot: NotaryRuntimeSnapshot) -> Rou
         api_state,
         cors_policy,
         wallet_cors_policy,
+        http_limits,
     )
 }
 
@@ -322,6 +338,7 @@ pub fn notary_routers_from_runtime(snapshot: NotaryRuntimeSnapshot) -> NotaryRou
         api_state,
         cors_policy,
         wallet_cors_policy,
+        http_limits,
         federation_enabled,
     } = snapshot;
     let mut public_routes = crate::api::public_router();
@@ -341,6 +358,7 @@ pub fn notary_routers_from_runtime(snapshot: NotaryRuntimeSnapshot) -> NotaryRou
             Arc::clone(&api_state),
             cors_policy.clone(),
             wallet_cors_policy.clone(),
+            http_limits,
         ),
         admin: layer_notary_routes(
             admin_routes,
@@ -349,6 +367,7 @@ pub fn notary_routers_from_runtime(snapshot: NotaryRuntimeSnapshot) -> NotaryRou
             api_state,
             cors_policy,
             wallet_cors_policy,
+            http_limits,
         ),
     }
 }
@@ -372,8 +391,13 @@ fn layer_notary_routes(
     api_state: Arc<RegistryNotaryApiState>,
     cors_policy: registry_platform_httpsec::CorsPolicy,
     wallet_cors_policy: SelfAttestationWalletCorsPolicy,
+    http_limits: NotaryHttpLimits,
 ) -> Router {
     routes
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            http_limits.request_timeout,
+        ))
         .layer(from_fn_with_state(Arc::clone(&metrics), metrics_middleware))
         .layer(axum::Extension(Arc::clone(&api_state)))
         .layer(from_fn_with_state(auth_state, auth_audit_middleware))
@@ -393,7 +417,14 @@ fn layer_notary_routes(
         .layer(registry_platform_httpsec::request_body_limit(
             MAX_INBOUND_REQUEST_BODY_BYTES,
         ))
+        .layer(RequestBodyTimeoutLayer::new(
+            http_limits.request_body_timeout,
+        ))
         .layer(axum::middleware::from_fn(rewrite_payload_too_large_problem))
+        .layer(axum::middleware::from_fn(reject_oversized_request_uri))
+        .layer(axum::middleware::from_fn(
+            attach_request_id_to_problem_response,
+        ))
 }
 
 #[derive(Debug, Clone)]
@@ -408,7 +439,7 @@ impl SelfAttestationWalletCorsPolicy {
         Self {
             enabled: config.self_attestation.enabled,
             allowed_origins: config.self_attestation.allowed_wallet_origins.clone(),
-            allow_credentials: config.server.cors.allow_credentials,
+            allow_credentials: false,
         }
     }
 
@@ -3673,15 +3704,15 @@ impl AuthAuditState {
 
 impl Authenticator {
     fn from_config(config: &StandaloneRegistryNotaryConfig) -> Result<Self, StandaloneServerError> {
-        match config.auth.mode.as_str() {
-            "api_key" => Ok(Self::Static {
+        match config.auth.mode {
+            EvidenceAuthMode::ApiKey => Ok(Self::Static {
                 api_keys: resolve_credentials(&config.auth.api_keys, CredentialType::ApiKey)?,
                 bearer_tokens: resolve_credentials(
                     &config.auth.bearer_tokens,
                     CredentialType::BearerToken,
                 )?,
             }),
-            "oidc" => {
+            EvidenceAuthMode::Oidc => {
                 let oidc = config.auth.oidc.as_ref().ok_or_else(|| {
                     StandaloneServerError::InvalidOidcConfig(
                         "auth.oidc is required when auth.mode = oidc".to_string(),
@@ -3703,7 +3734,7 @@ impl Authenticator {
                     FetchUrlPolicy::strict()
                 };
                 let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
-                    oidc.jwks_uri.clone(),
+                    oidc.jwks_url.clone(),
                     JwksFetcherConfig::defaults(),
                     fetch_url_policy.clone(),
                 ));
@@ -3715,7 +3746,7 @@ impl Authenticator {
                         oidc.issuer.clone(),
                         oidc.audiences.clone(),
                         allowed_algorithms,
-                        oidc.allowed_typ.clone(),
+                        oidc.allowed_token_types.clone(),
                     )
                     .with_scope_claim(oidc.scope_claim.clone())
                     .with_scope_separator(scope_separator)
@@ -3729,7 +3760,7 @@ impl Authenticator {
                         .filter(|scope_map| !scope_map.is_empty()),
                     )
                     .with_allowed_clients(oidc.allowed_clients.clone())
-                    .with_leeway(Duration::from_secs(oidc.leeway_seconds))
+                    .with_leeway(oidc.leeway)
                     .with_userinfo_requires_exp(userinfo_requires_exp),
                     fetcher,
                 );
@@ -3766,9 +3797,6 @@ impl Authenticator {
                     notary_anchor,
                 })
             }
-            mode => Err(StandaloneServerError::InvalidOidcConfig(format!(
-                "unsupported auth.mode '{mode}'"
-            ))),
         }
     }
 
@@ -3964,9 +3992,9 @@ fn validate_no_file_audit_fields(
             "audit.path is only valid when audit.sink is file or jsonl, not {sink}"
         )));
     }
-    if config.max_size_bytes.is_some() || config.max_files.is_some() {
+    if config.max_size_mb.is_some() || config.max_files.is_some() {
         return Err(StandaloneServerError::InvalidAuditConfig(format!(
-            "audit.max_size_bytes and audit.max_files are only valid when audit.sink is file or jsonl, not {sink}"
+            "audit.max_size_mb and audit.max_files are only valid when audit.sink is file or jsonl, not {sink}"
         )));
     }
     Ok(())
@@ -3991,9 +4019,10 @@ async fn auth_audit_middleware(
 ) -> Response {
     let method = request.method().to_string();
     let path = audit_path(&request);
-    let correlation_id = correlation_id_from_headers(request.headers());
+    let correlation_id = new_request_correlation_id();
     if is_auth_exempt_path(&path, state.auth_exemption_policy()) {
-        return next.run(request).await;
+        request.extensions_mut().insert(correlation_id.clone());
+        return with_request_correlation_id(correlation_id, next.run(request)).await;
     }
     let credentials = request_credentials(&request);
     let client_address = client_address_identifier(&request);
@@ -4212,6 +4241,8 @@ fn is_auth_exempt_path(path: &str, policy: AuthExemptionPolicy) -> bool {
             | "/oid4vci/offer/callback"
             | "/oid4vci/token"
             | "/oid4vci/nonce"
+            // Auth-exempt only from API-key/OIDC middleware. The federation
+            // handler still requires and verifies the peer-signed JWS.
             | "/federation/v1/evaluations"
             | "/docs"
             | "/docs/scalar.js"
@@ -4228,9 +4259,9 @@ async fn admin_metrics_handler(
     let Some(axum::Extension(principal)) = principal else {
         return crate::api::evidence_error_response(EvidenceError::MissingCredential);
     };
-    if !principal.has_scope(ADMIN_SCOPE) {
+    if !principal.has_scope(METRICS_SCOPE) {
         return crate::api::evidence_error_response(EvidenceError::ScopeDenied {
-            required: ADMIN_SCOPE.to_string(),
+            required: METRICS_SCOPE.to_string(),
         });
     }
     metrics_handler(State(metrics)).await
@@ -4335,26 +4366,8 @@ fn build_audit_event(
     }
 }
 
-fn correlation_id_from_headers(headers: &HeaderMap) -> BoundedCorrelationId {
-    headers
-        .get("x-request-id")
-        .or_else(|| headers.get("x-correlation-id"))
-        .and_then(header_str)
-        .and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty()
-                || !trimmed
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-            {
-                return None;
-            }
-            BoundedCorrelationId::new(trimmed).ok()
-        })
-        .unwrap_or_else(|| {
-            BoundedCorrelationId::new(Ulid::new().to_string())
-                .expect("generated correlation id is bounded")
-        })
+fn new_request_correlation_id() -> BoundedCorrelationId {
+    BoundedCorrelationId::new(Ulid::new().to_string()).expect("generated correlation id is bounded")
 }
 
 fn resolve_credentials(
@@ -4856,6 +4869,102 @@ fn principal_from_credential(credential: &ResolvedCredential) -> EvidencePrincip
 
 fn header_str(value: &axum::http::HeaderValue) -> Option<&str> {
     value.to_str().ok()
+}
+
+/// Outermost response middleware: injects `request_id` into any
+/// `application/problem+json` body and sets the `x-request-id` response header.
+///
+/// Mints a server-owned ULID before running the inner stack so that
+/// early-boundary rejections (414, 413) receive a correlation identifier even
+/// when the inner auth/audit layer has not yet run.  For responses produced
+/// by inner handlers that already carry `x-request-id`, the existing header
+/// value is used and the body field is inserted only when absent (idempotent
+/// when the inner response already has both).
+async fn attach_request_id_to_problem_response(request: Request, next: Next) -> Response {
+    // Mint a server-owned ULID for this request.  Early-boundary middlewares
+    // (reject_oversized_request_uri, rewrite_payload_too_large_problem) run
+    // inside this layer; they do not have access to auth_audit_middleware's
+    // task-local, so this is the only opportunity to assign them an id.
+    let minted = Ulid::new().to_string();
+
+    let response = next.run(request).await;
+
+    let is_problem = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("application/problem+json"));
+    if !is_problem {
+        return response;
+    }
+
+    // Prefer a request_id already set by an inner layer (auth_audit_middleware
+    // sets x-request-id on authenticated-path responses); fall back to the
+    // minted value for early-boundary responses.
+    let request_id = response
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or(minted);
+
+    let (mut parts, body) = response.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, 64 * 1024).await else {
+        // Body too large or read error; the body is consumed and cannot be
+        // restored, so return an empty body with corrected framing.
+        parts.headers.remove(header::CONTENT_LENGTH);
+        return Response::from_parts(parts, Body::empty());
+    };
+    let Ok(Value::Object(mut problem)) = serde_json::from_slice::<Value>(&bytes) else {
+        // Non-object or non-JSON body; pass through unchanged.
+        return Response::from_parts(parts, Body::from(bytes));
+    };
+    // Insert only when absent so existing per-handler injection is idempotent.
+    problem
+        .entry("request_id")
+        .or_insert_with(|| Value::String(request_id.clone()));
+    let Ok(body) = serde_json::to_vec(&Value::Object(problem)) else {
+        // Serialization failed (should not happen); pass through original bytes.
+        return Response::from_parts(parts, Body::from(bytes));
+    };
+    parts.headers.remove(header::CONTENT_LENGTH);
+    if let Ok(value) = HeaderValue::from_str(&request_id) {
+        parts.headers.insert("x-request-id", value);
+    }
+    Response::from_parts(parts, Body::from(body))
+}
+
+async fn reject_oversized_request_uri(request: Request, next: Next) -> Response {
+    let uri_len = request
+        .uri()
+        .path_and_query()
+        .map(|value| value.as_str().len())
+        .unwrap_or_else(|| request.uri().path().len());
+    if uri_len <= MAX_REQUEST_URI_BYTES {
+        return next.run(request).await;
+    }
+    request_uri_too_long_problem()
+}
+
+fn request_uri_too_long_problem() -> Response {
+    let status = StatusCode::URI_TOO_LONG;
+    let mut response = (
+        status,
+        Json(json!({
+            "type": format!("{}/request/uri-too-long", crate::PROBLEM_TYPE_BASE_URL),
+            "title": "URI too long",
+            "status": status.as_u16(),
+            "detail": "request URI exceeds the configured 8 KiB limit",
+            "code": "request.uri_too_long",
+        })),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/problem+json"),
+    );
+    response
 }
 
 async fn rewrite_payload_too_large_problem(request: Request, next: Next) -> Response {
@@ -8418,11 +8527,11 @@ config_trust:
         let path = tmp.path().join("audit.jsonl");
         let mut config = test_audit_config("file");
         config.path = Some(path.display().to_string());
-        config.max_size_bytes = Some(1);
+        config.max_size_mb = Some(1);
         config.max_files = Some(2);
         let audit = AuditPipeline::from_config(&config).expect("audit config builds");
 
-        for _ in 0..3 {
+        for _ in 0..2_500 {
             audit
                 .emit(&audit_event())
                 .await
@@ -8496,7 +8605,7 @@ config_trust:
     #[test]
     fn audit_pipeline_rejects_sink_specific_fields_on_wrong_sink() {
         let mut stdout_config = test_audit_config("stdout");
-        stdout_config.max_size_bytes = Some(1024);
+        stdout_config.max_size_mb = Some(1);
         let stdout_error = AuditPipeline::from_config(&stdout_config)
             .expect_err("stdout cannot accept file rotation");
         assert!(matches!(

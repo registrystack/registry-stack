@@ -3,11 +3,17 @@ use axum::{
     body::{to_bytes, Body},
     extract::{Path, Query, RawQuery, State},
     http::{header, HeaderMap, HeaderValue, Request, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
 use chrono::{TimeDelta, Utc};
+use hyper::service::service_fn;
+use hyper_util::{
+    rt::{TokioExecutor, TokioIo, TokioTimer},
+    server::conn::auto::Builder as HyperBuilder,
+};
 use registry_platform_authcommon::{parse_bearer_token, parse_fingerprint, verify_api_key};
 use registry_platform_config::{
     ConfigTargetMetadata, LocalTufRepositoryInput, RegistryAcceptedTrustRoots, RegistryTrustRoot,
@@ -18,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
+    convert::Infallible,
     ffi::OsString,
     fmt,
     net::SocketAddr,
@@ -28,12 +35,15 @@ use std::{
 };
 use thiserror::Error;
 use tokio::process::Command;
-use tokio::sync::Mutex;
+use tokio::sync::{watch, Mutex, Semaphore};
+use tokio::task::JoinSet;
 use tough::{
     editor::{signed::PathExists, RepositoryEditor},
     key_source::{KeySource, LocalKeySource},
     schema::Target,
 };
+use tower::ServiceExt;
+use tower_http::timeout::{RequestBodyTimeoutLayer, TimeoutLayer};
 use tracing::{info, warn};
 
 #[derive(Clone, Debug, Deserialize)]
@@ -57,6 +67,14 @@ pub struct SidecarConfig {
 #[derive(Clone, Debug, Deserialize)]
 pub struct ServerConfig {
     pub bind: SocketAddr,
+    #[serde(default = "default_request_timeout_ms")]
+    pub request_timeout_ms: u64,
+    #[serde(default = "default_request_body_timeout_ms")]
+    pub request_body_timeout_ms: u64,
+    #[serde(default = "default_http1_header_read_timeout_ms")]
+    pub http1_header_read_timeout_ms: u64,
+    #[serde(default = "default_max_connections")]
+    pub max_connections: usize,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -825,6 +843,10 @@ fn validate_governed_runtime_target(target: &GovernedRuntimeTarget) -> Result<()
     let config = SidecarConfig {
         server: ServerConfig {
             bind: SocketAddr::from(([127, 0, 0, 1], 0)),
+            request_timeout_ms: default_request_timeout_ms(),
+            request_body_timeout_ms: default_request_body_timeout_ms(),
+            http1_header_read_timeout_ms: default_http1_header_read_timeout_ms(),
+            max_connections: default_max_connections(),
         },
         auth: AuthConfig {
             bearer_tokens: vec![BearerTokenConfig {
@@ -967,6 +989,8 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
     validate_config(&config)?;
     verify_openfn_runtime(&config).await?;
     let auth_tokens = resolve_auth_tokens(&config)?;
+    let request_timeout = Duration::from_millis(config.server.request_timeout_ms);
+    let request_body_timeout = Duration::from_millis(config.server.request_body_timeout_ms);
 
     let mut command = WorkerCommand::new(config.worker.command.clone());
     for arg in &config.worker.args {
@@ -1015,7 +1039,13 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
             "/v1/datasets/{dataset}/entities/{entity}/records:batchMatch",
             post(batch_match),
         )
-        .with_state(state))
+        .with_state(state)
+        .layer(middleware::from_fn(enforce_uri_limit))
+        .layer(RequestBodyTimeoutLayer::new(request_body_timeout))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            request_timeout,
+        )))
 }
 
 fn accept_governed_config(config: &SidecarConfig) -> Result<(), SidecarError> {
@@ -1048,10 +1078,142 @@ fn sensitive_worker_env_names(config: &SidecarConfig) -> BTreeSet<OsString> {
 
 pub async fn run(config: SidecarConfig) -> Result<(), Box<dyn std::error::Error>> {
     let bind = config.server.bind;
+    let max_connections = config.server.max_connections;
+    let request_timeout_ms = config.server.request_timeout_ms;
+    let request_body_timeout_ms = config.server.request_body_timeout_ms;
+    let http1_header_read_timeout =
+        Duration::from_millis(config.server.http1_header_read_timeout_ms);
+    let http2_keep_alive_interval = http1_header_read_timeout;
     let app = sidecar_router(config).await?;
     let listener = tokio::net::TcpListener::bind(bind).await?;
-    axum::serve(listener, app).await?;
+    let local_addr = listener.local_addr()?;
+    let connection_permits = Arc::new(Semaphore::new(max_connections));
+    let (shutdown_tx, shutdown_rx) = watch::channel(());
+    let mut tasks = JoinSet::new();
+    let shutdown = shutdown_signal();
+    tokio::pin!(shutdown);
+    tracing::info!(
+        %local_addr,
+        max_connections,
+        request_timeout_ms,
+        request_body_timeout_ms,
+        http1_header_read_timeout_ms = %http1_header_read_timeout.as_millis(),
+        "registry notary OpenFn sidecar listening"
+    );
+
+    loop {
+        while let Some(joined) = tasks.try_join_next() {
+            if let Err(error) = joined {
+                warn!(error = %error, bind = %local_addr, "sidecar HTTP connection task failed");
+            }
+        }
+
+        let permit = tokio::select! {
+            biased;
+            _ = &mut shutdown => {
+                tracing::info!("registry notary OpenFn sidecar shutdown signal received");
+                break;
+            }
+            permit = Arc::clone(&connection_permits).acquire_owned() => {
+                match permit {
+                    Ok(permit) => permit,
+                    Err(_) => break,
+                }
+            }
+        };
+        tokio::select! {
+            biased;
+            _ = &mut shutdown => {
+                tracing::info!("registry notary OpenFn sidecar shutdown signal received");
+                break;
+            }
+            accepted = listener.accept() => {
+                match accepted {
+                    Ok((stream, remote_addr)) => {
+                        let app = app.clone();
+                        let close_rx = shutdown_rx.clone();
+                        tasks.spawn(async move {
+                            let _permit = permit;
+                            serve_sidecar_connection(
+                                stream,
+                                remote_addr,
+                                app,
+                                http1_header_read_timeout,
+                                http2_keep_alive_interval,
+                                close_rx,
+                            )
+                            .await;
+                        });
+                    }
+                    Err(error) => {
+                        warn!(error = %error, bind = %local_addr, "failed to accept sidecar connection");
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        continue;
+                    }
+                }
+            }
+        }
+    }
+
+    drop(shutdown_tx);
+    while let Some(joined) = tasks.join_next().await {
+        if let Err(error) = joined {
+            warn!(error = %error, bind = %local_addr, "sidecar HTTP connection task failed during shutdown");
+        }
+    }
     Ok(())
+}
+
+async fn serve_sidecar_connection(
+    stream: tokio::net::TcpStream,
+    remote_addr: SocketAddr,
+    app: Router,
+    http1_header_read_timeout: Duration,
+    http2_keep_alive_interval: Duration,
+    mut close_rx: watch::Receiver<()>,
+) {
+    let service = service_fn(move |request: hyper::Request<hyper::body::Incoming>| {
+        let app = app.clone();
+        async move {
+            let request = request.map(Body::new);
+            match app.oneshot(request).await {
+                Ok(response) => Ok::<_, Infallible>(response),
+                Err(err) => match err {},
+            }
+        }
+    });
+
+    let mut builder = HyperBuilder::new(TokioExecutor::new());
+    builder
+        .http1()
+        .timer(TokioTimer::new())
+        .header_read_timeout(http1_header_read_timeout)
+        .keep_alive(false);
+    builder
+        .http2()
+        .timer(TokioTimer::new())
+        .keep_alive_interval(http2_keep_alive_interval)
+        .keep_alive_timeout(http2_keep_alive_interval);
+
+    let io = TokioIo::new(stream);
+    let conn = builder.serve_connection_with_upgrades(io, service);
+    tokio::pin!(conn);
+    let mut shutdown_initiated = false;
+
+    loop {
+        tokio::select! {
+            result = &mut conn => {
+                if let Err(error) = result {
+                    tracing::debug!(%remote_addr, %error, "sidecar HTTP connection ended with error");
+                }
+                break;
+            }
+            _ = close_rx.changed(), if !shutdown_initiated => {
+                conn.as_mut().graceful_shutdown();
+                shutdown_initiated = true;
+            }
+        }
+    }
 }
 
 fn validate_config(config: &SidecarConfig) -> Result<(), SidecarError> {
@@ -1090,6 +1252,26 @@ fn validate_config(config: &SidecarConfig) -> Result<(), SidecarError> {
     if config.sources.is_empty() {
         return Err(SidecarError::Config(
             "at least one source binding is required".to_string(),
+        ));
+    }
+    if config.server.request_timeout_ms == 0 {
+        return Err(SidecarError::Config(
+            "server.request_timeout_ms must be greater than zero".to_string(),
+        ));
+    }
+    if config.server.request_body_timeout_ms == 0 {
+        return Err(SidecarError::Config(
+            "server.request_body_timeout_ms must be greater than zero".to_string(),
+        ));
+    }
+    if config.server.http1_header_read_timeout_ms == 0 {
+        return Err(SidecarError::Config(
+            "server.http1_header_read_timeout_ms must be greater than zero".to_string(),
+        ));
+    }
+    if config.server.max_connections == 0 {
+        return Err(SidecarError::Config(
+            "server.max_connections must be greater than zero".to_string(),
         ));
     }
     if config.limits.max_workers == 0 {
@@ -1743,7 +1925,10 @@ async fn ready(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-async fn assurance(State(state): State<Arc<AppState>>) -> Response {
+async fn assurance(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if let Err(response) = authorize(&state, &headers) {
+        return *response;
+    }
     match &state.config.assurance {
         Some(assurance) => (StatusCode::OK, Json(assurance)).into_response(),
         None => problem(
@@ -1995,6 +2180,21 @@ async fn batch_match(
         "sidecar batch match completed"
     );
     response
+}
+
+async fn enforce_uri_limit(request: Request<Body>, next: Next) -> Response {
+    if request
+        .uri()
+        .path_and_query()
+        .map_or(0, |value| value.as_str().len())
+        > MAX_URI_BYTES
+    {
+        return problem(
+            StatusCode::URI_TOO_LONG,
+            "request URI exceeds configured byte limit",
+        );
+    }
+    next.run(request).await
 }
 
 async fn parse_batch_match_body(
@@ -2471,8 +2671,44 @@ fn default_max_batch_items() -> usize {
     100
 }
 
+const MAX_URI_BYTES: usize = 8 * 1024;
+
+fn default_request_timeout_ms() -> u64 {
+    30_000
+}
+
+fn default_request_body_timeout_ms() -> u64 {
+    10_000
+}
+
+fn default_http1_header_read_timeout_ms() -> u64 {
+    10_000
+}
+
+fn default_max_connections() -> usize {
+    1024
+}
+
 fn default_smoke_purpose() -> String {
     "startup-readiness-smoke".to_string()
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = terminate.recv() => {}
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 fn problem(status: StatusCode, title: &'static str) -> Response {
@@ -2493,4 +2729,108 @@ fn problem_body(status: StatusCode, title: &'static str, code: Option<&'static s
         body["code"] = json!(code);
     }
     (status, Json(body)).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn minimal_config() -> SidecarConfig {
+        SidecarConfig {
+            server: ServerConfig {
+                bind: SocketAddr::from(([127, 0, 0, 1], 0)),
+                request_timeout_ms: default_request_timeout_ms(),
+                request_body_timeout_ms: default_request_body_timeout_ms(),
+                http1_header_read_timeout_ms: default_http1_header_read_timeout_ms(),
+                max_connections: default_max_connections(),
+            },
+            auth: AuthConfig {
+                bearer_tokens: vec![BearerTokenConfig {
+                    id: "notary".to_string(),
+                    token: None,
+                    hash_env: Some("TEST_OPENFN_SIDECAR_TOKEN_HASH".to_string()),
+                }],
+            },
+            config_trust: None,
+            jobs_root: None,
+            limits: LimitConfig {
+                max_workers: 1,
+                worker_timeout_ms: 1_000,
+                max_output_bytes: 1_024,
+                max_request_bytes: 1_024,
+                max_query_parameter_bytes: 1_024,
+                liveness_window_ms: default_liveness_window_ms(),
+                retry_after_seconds: default_retry_after_seconds(),
+                max_batch_items: default_max_batch_items(),
+                max_worker_memory_mb: Some(256),
+            },
+            openfn: OpenFnConfig {
+                cli_build_tool: "1.2.5".to_string(),
+                runtime: "1.9.3".to_string(),
+            },
+            worker: WorkerProcessConfig {
+                command: PathBuf::from("node"),
+                args: Vec::new(),
+                version_args: None,
+            },
+            sources: BTreeMap::from([(
+                "people".to_string(),
+                SourceConfig {
+                    dataset: "civil_registry".to_string(),
+                    entity: "person".to_string(),
+                    workflow: SourceWorkflowConfig {
+                        start: Some("lookup".to_string()),
+                        steps: vec![SourceWorkflowStepConfig {
+                            id: "lookup".to_string(),
+                            expression: PathBuf::from("lookup.js"),
+                            expression_sha256: None,
+                            adaptors: vec!["@openfn/language-common@3.2.3".to_string()],
+                            next: None,
+                        }],
+                    },
+                    credential_env: "TEST_OPENFN_SOURCE_CREDENTIAL".to_string(),
+                    allowed_base_urls: Vec::new(),
+                    smoke_lookup: Some(SmokeLookupConfig {
+                        field: "national_id".to_string(),
+                        value: "person-1".to_string(),
+                        fields: vec!["national_id".to_string()],
+                        purpose: default_smoke_purpose(),
+                    }),
+                },
+            )]),
+            assurance: None,
+            governed_acceptance: None,
+        }
+    }
+
+    #[test]
+    fn server_limits_must_be_nonzero() {
+        type MutateConfig = fn(&mut SidecarConfig);
+        let cases: [(&str, MutateConfig); 4] = [
+            ("server.request_timeout_ms", |config: &mut SidecarConfig| {
+                config.server.request_timeout_ms = 0
+            }),
+            (
+                "server.request_body_timeout_ms",
+                |config: &mut SidecarConfig| config.server.request_body_timeout_ms = 0,
+            ),
+            (
+                "server.http1_header_read_timeout_ms",
+                |config: &mut SidecarConfig| config.server.http1_header_read_timeout_ms = 0,
+            ),
+            ("server.max_connections", |config: &mut SidecarConfig| {
+                config.server.max_connections = 0
+            }),
+        ];
+        for (label, mutate) in cases {
+            let mut config = minimal_config();
+            mutate(&mut config);
+            let error =
+                validate_config(&config).expect_err("zero sidecar server limit is rejected");
+            assert!(
+                error.to_string().contains(label),
+                "expected {label} in {error}"
+            );
+        }
+    }
 }

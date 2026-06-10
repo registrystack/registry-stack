@@ -919,7 +919,7 @@ impl RegistryNotaryRuntime {
             "auth": {
                 "methods": ["api_key", "bearer"],
                 "api_key": {
-                    "header": "x-api-key",
+                    "header": "X-Api-Key",
                 },
                 "bearer": {
                     "header": "Authorization",
@@ -4024,7 +4024,7 @@ mod tests {
         let document = RegistryNotaryRuntime::service_document(&evidence);
 
         assert_eq!(document["auth"]["methods"], json!(["api_key", "bearer"]));
-        assert_eq!(document["auth"]["api_key"]["header"], json!("x-api-key"));
+        assert_eq!(document["auth"]["api_key"]["header"], json!("X-Api-Key"));
         assert_eq!(document["auth"]["bearer"]["header"], json!("Authorization"));
         assert_eq!(document["auth"]["bearer"]["scheme"], json!("bearer"));
         assert_eq!(
@@ -4900,7 +4900,7 @@ mod tests {
 
     #[cfg(feature = "registry-notary-cel")]
     #[test]
-    fn cel_startup_validation_accepts_date_helper_against_date_source_field() {
+    fn cel_startup_validation_accepts_date_source_field_dummy_values() {
         let mut source_binding = test_source_binding();
         source_binding.fields.insert(
             "birth_date".to_string(),
@@ -4917,12 +4917,11 @@ mod tests {
         claim.value.value_type = "string".to_string();
         claim.source_bindings = BTreeMap::from([("civil".to_string(), source_binding)]);
         claim.rule = RuleConfig::Cel {
-            expression:
-                "date.age_on(source.civil.birth_date, vars.as_of_date) < 18 ? 'child' : 'adult'"
-                    .to_string(),
+            expression: "source.civil.birth_date == vars.as_of_date ? 'same' : 'different'"
+                .to_string(),
             bindings: CelBindingsConfig {
                 claims: BTreeMap::new(),
-                vars: BTreeMap::from([("as_of_date".to_string(), json!("2026-05-27"))]),
+                vars: BTreeMap::from([("as_of_date".to_string(), json!("2000-01-01"))]),
             },
         };
         let evidence = EvidenceConfig {
@@ -4933,7 +4932,7 @@ mod tests {
         };
 
         validate_cel_claims_for_startup(&evidence, &RegistryNotaryCelConfig::default())
-            .expect("date-based CEL helpers should preflight with valid dummy dates");
+            .expect("date-typed CEL bindings should preflight with valid dummy dates");
     }
 
     #[cfg(feature = "registry-notary-cel")]

@@ -42,6 +42,10 @@ target.
 ```yaml
 server:
   bind: "127.0.0.1:9191"
+  request_timeout_ms: 30000
+  request_body_timeout_ms: 10000
+  http1_header_read_timeout_ms: 10000
+  max_connections: 1024
 auth:
   bearer_tokens:
     - id: notary
@@ -173,6 +177,10 @@ listener.
 ```yaml
 server:
   bind: "127.0.0.1:9191"
+  request_timeout_ms: 30000
+  request_body_timeout_ms: 10000
+  http1_header_read_timeout_ms: 10000
+  max_connections: 1024
 auth:
   bearer_tokens:
     - id: notary

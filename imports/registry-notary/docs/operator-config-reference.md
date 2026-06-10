@@ -194,6 +194,10 @@ from one DCI source and can later issue a credential from that claim.
 server:
   bind: 127.0.0.1:8081
   openapi_requires_auth: true
+  request_timeout: 30s
+  request_body_timeout: 10s
+  http1_header_read_timeout: 10s
+  max_connections: 1024
 
 auth:
   mode: api_key
@@ -299,8 +303,13 @@ and credential status mutation, require `registry_notary:admin`.
 `auth.mode: oidc` is for citizen and wallet flows. When OIDC is selected,
 `auth.api_keys` and `auth.bearer_tokens` must be empty. Configure:
 
+OIDC field names follow the shared Registry service runtime configuration
+conventions maintained in `registry-internal/principles/configuration-and-artifact-design-principles.md`.
+Removed pre-convention names are rejected before deserialization with an error
+naming the replacement field.
+
 - `issuer`: expected token issuer.
-- `jwks_uri`: HTTPS JWKS URL, or HTTP loopback only with
+- `jwks_url`: HTTPS JWKS URL, or HTTP loopback only with
   `allow_insecure_localhost: true`.
 - `audiences`: accepted access-token audiences.
 - `allowed_clients`: optional client allow-list.
@@ -899,5 +908,6 @@ registry-notary doctor \
   and a shared store.
 - Audit has a stable high-entropy `hash_secret_env` value and off-host
   retention.
-- `/metrics` is scraped with an admin credential and normal network controls.
+- `/metrics` is scraped with a `registry_notary:metrics_read` credential and
+  normal network controls.
 - `doctor` passes without `--live`, then passes with a controlled live subject.

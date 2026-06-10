@@ -5,9 +5,10 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use registry_platform_authcommon::CredentialFingerprintRef;
-use registry_platform_config::RegistryTrustRoot;
+use registry_platform_config::{DeprecatedConfigField, RegistryTrustRoot};
 use registry_platform_crypto::validate_did_web_https_issuer_binding;
 pub use registry_platform_crypto::{
     KeyProviderKind as SigningKeyProviderConfig, KeyStatus as SigningKeyStatus,
@@ -138,6 +139,7 @@ impl StandaloneRegistryNotaryConfig {
         if !self.evidence.enabled {
             return Err(EvidenceConfigError::EvidenceDisabled);
         }
+        self.server.validate()?;
         self.server
             .admin_listener
             .validate(self.server.bind, self.config_trust.is_some())?;
@@ -179,13 +181,13 @@ impl StandaloneRegistryNotaryConfig {
             }
         }
         self.replay.validate()?;
-        match self.auth.mode.as_str() {
-            "api_key" => {
+        match self.auth.mode {
+            EvidenceAuthMode::ApiKey => {
                 if self.auth.api_keys.is_empty() && self.auth.bearer_tokens.is_empty() {
                     return Err(EvidenceConfigError::NoCredentialsConfigured);
                 }
             }
-            "oidc" => {
+            EvidenceAuthMode::Oidc => {
                 let oidc = self
                     .auth
                     .oidc
@@ -198,11 +200,6 @@ impl StandaloneRegistryNotaryConfig {
                     });
                 }
                 oidc.validate()?;
-            }
-            _ => {
-                return Err(EvidenceConfigError::UnsupportedAuthMode {
-                    mode: self.auth.mode.clone(),
-                });
             }
         }
         self.evidence.concurrency.validate()?;
@@ -2433,7 +2430,7 @@ impl SelfAttestationConfig {
         if self.requires_auth_mode != "oidc" {
             return self.invalid("requires_auth_mode must be oidc");
         }
-        if auth.mode != "oidc" {
+        if auth.mode != EvidenceAuthMode::Oidc {
             return self.invalid("enabled self_attestation requires auth.mode = oidc");
         }
         let oidc = auth
@@ -2756,9 +2753,9 @@ impl SelfAttestationTokenPolicyConfig {
                 "token_policy.max_clock_leeway_seconds must be between 1 and 60",
             );
         }
-        if oidc.leeway_seconds > self.max_clock_leeway_seconds {
+        if oidc.leeway > Duration::from_secs(self.max_clock_leeway_seconds) {
             return invalid_self_attestation(
-                "auth.oidc.leeway_seconds must not exceed token_policy.max_clock_leeway_seconds",
+                "auth.oidc.leeway must not exceed token_policy.max_clock_leeway_seconds",
             );
         }
         Ok(())
@@ -3176,6 +3173,17 @@ pub struct RegistryNotaryHttpConfig {
     pub admin_listener: RegistryNotaryAdminListenerConfig,
     #[serde(default)]
     pub cors: RegistryNotaryCorsConfig,
+    #[serde(default = "default_request_timeout", with = "humantime_serde")]
+    pub request_timeout: Duration,
+    #[serde(default = "default_request_body_timeout", with = "humantime_serde")]
+    pub request_body_timeout: Duration,
+    #[serde(
+        default = "default_http1_header_read_timeout",
+        with = "humantime_serde"
+    )]
+    pub http1_header_read_timeout: Duration,
+    #[serde(default = "default_max_connections")]
+    pub max_connections: usize,
 }
 
 impl Default for RegistryNotaryHttpConfig {
@@ -3185,7 +3193,28 @@ impl Default for RegistryNotaryHttpConfig {
             openapi_requires_auth: default_openapi_requires_auth(),
             admin_listener: RegistryNotaryAdminListenerConfig::default(),
             cors: RegistryNotaryCorsConfig::default(),
+            request_timeout: default_request_timeout(),
+            request_body_timeout: default_request_body_timeout(),
+            http1_header_read_timeout: default_http1_header_read_timeout(),
+            max_connections: default_max_connections(),
         }
+    }
+}
+
+impl RegistryNotaryHttpConfig {
+    fn validate(&self) -> Result<(), EvidenceConfigError> {
+        if self.request_timeout.is_zero()
+            || self.request_body_timeout.is_zero()
+            || self.http1_header_read_timeout.is_zero()
+            || self.max_connections == 0
+        {
+            return Err(EvidenceConfigError::InvalidServerConfig {
+                reason:
+                    "server timeouts must be non-zero and max_connections must be greater than zero"
+                        .to_string(),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -3204,12 +3233,28 @@ fn openapi_requires_auth_is_default(value: &bool) -> bool {
     *value == default_openapi_requires_auth()
 }
 
+fn default_request_timeout() -> Duration {
+    Duration::from_secs(30)
+}
+
+fn default_request_body_timeout() -> Duration {
+    Duration::from_secs(10)
+}
+
+fn default_http1_header_read_timeout() -> Duration {
+    Duration::from_secs(10)
+}
+
+fn default_max_connections() -> usize {
+    1024
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RegistryNotaryAdminListenerMode {
-    #[default]
     SharedWithPublic,
     Dedicated,
+    #[default]
     Disabled,
 }
 
@@ -3256,7 +3301,7 @@ impl RegistryNotaryAdminListenerConfig {
 impl Default for RegistryNotaryAdminListenerConfig {
     fn default() -> Self {
         Self {
-            mode: RegistryNotaryAdminListenerMode::SharedWithPublic,
+            mode: RegistryNotaryAdminListenerMode::Disabled,
             bind: default_admin_bind_addr(),
         }
     }
@@ -3282,15 +3327,13 @@ fn admin_listener_mode_is_default(mode: &RegistryNotaryAdminListenerMode) -> boo
 pub struct RegistryNotaryCorsConfig {
     #[serde(default)]
     pub allowed_origins: Vec<String>,
-    #[serde(default)]
-    pub allow_credentials: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceAuthConfig {
-    #[serde(default = "default_auth_mode")]
-    pub mode: String,
+    #[serde(default)]
+    pub mode: EvidenceAuthMode,
     #[serde(default)]
     pub api_keys: Vec<EvidenceCredentialConfig>,
     #[serde(default)]
@@ -3304,20 +3347,21 @@ pub struct EvidenceAuthConfig {
     pub access_token_signing: AccessTokenSigningConfig,
 }
 
-impl Default for EvidenceAuthConfig {
-    fn default() -> Self {
-        Self {
-            mode: default_auth_mode(),
-            api_keys: Vec::new(),
-            bearer_tokens: Vec::new(),
-            oidc: None,
-            access_token_signing: AccessTokenSigningConfig::default(),
-        }
-    }
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceAuthMode {
+    #[default]
+    ApiKey,
+    Oidc,
 }
 
-fn default_auth_mode() -> String {
-    "api_key".to_string()
+impl EvidenceAuthMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ApiKey => "api_key",
+            Self::Oidc => "oidc",
+        }
+    }
 }
 
 /// Self-issued access-token signing configuration.
@@ -3398,7 +3442,7 @@ pub struct EvidenceCredentialConfig {
 #[serde(deny_unknown_fields)]
 pub struct EvidenceOidcAuthConfig {
     pub issuer: String,
-    pub jwks_uri: String,
+    pub jwks_url: String,
     #[serde(default)]
     pub userinfo_endpoint: Option<String>,
     #[serde(default)]
@@ -3409,8 +3453,8 @@ pub struct EvidenceOidcAuthConfig {
     pub allowed_clients: Vec<String>,
     #[serde(default = "default_oidc_allowed_algorithms")]
     pub allowed_algorithms: Vec<String>,
-    #[serde(default = "default_oidc_allowed_typ")]
-    pub allowed_typ: Vec<String>,
+    #[serde(default = "default_oidc_allowed_token_types")]
+    pub allowed_token_types: Vec<String>,
     #[serde(default = "default_oidc_scope_claim")]
     pub scope_claim: String,
     #[serde(default = "default_oidc_scope_separator")]
@@ -3419,8 +3463,8 @@ pub struct EvidenceOidcAuthConfig {
     pub scope_map: BTreeMap<String, Vec<String>>,
     #[serde(default = "default_oidc_principal_claim")]
     pub principal_claim: String,
-    #[serde(default = "default_oidc_leeway_seconds")]
-    pub leeway_seconds: u64,
+    #[serde(default = "default_oidc_leeway", with = "humantime_serde")]
+    pub leeway: Duration,
     #[serde(default)]
     pub allow_insecure_localhost: bool,
 }
@@ -3429,7 +3473,7 @@ fn default_oidc_allowed_algorithms() -> Vec<String> {
     vec![SD_JWT_VC_SIGNING_ALG.to_string()]
 }
 
-fn default_oidc_allowed_typ() -> Vec<String> {
+fn default_oidc_allowed_token_types() -> Vec<String> {
     vec!["JWT".to_string()]
 }
 
@@ -3445,8 +3489,8 @@ fn default_oidc_principal_claim() -> String {
     "sub".to_string()
 }
 
-fn default_oidc_leeway_seconds() -> u64 {
-    60
+fn default_oidc_leeway() -> Duration {
+    Duration::from_secs(60)
 }
 
 impl EvidenceOidcAuthConfig {
@@ -3456,19 +3500,19 @@ impl EvidenceOidcAuthConfig {
                 reason: "issuer must not be empty".to_string(),
             });
         }
-        if self.jwks_uri.trim().is_empty() {
+        if self.jwks_url.trim().is_empty() {
             return Err(EvidenceConfigError::InvalidOidcConfig {
-                reason: "jwks_uri must not be empty".to_string(),
+                reason: "jwks_url must not be empty".to_string(),
             });
         }
-        validate_jwks_uri_transport(&self.jwks_uri, self.allow_insecure_localhost)?;
+        validate_jwks_url_transport(&self.jwks_url, self.allow_insecure_localhost)?;
         if let Some(userinfo_endpoint) = self.userinfo_endpoint.as_deref() {
             if userinfo_endpoint.trim().is_empty() {
                 return Err(EvidenceConfigError::InvalidOidcConfig {
                     reason: "userinfo_endpoint must not be empty when configured".to_string(),
                 });
             }
-            validate_jwks_uri_transport(userinfo_endpoint, self.allow_insecure_localhost)?;
+            validate_jwks_url_transport(userinfo_endpoint, self.allow_insecure_localhost)?;
         }
         validate_entries("auth.oidc.userinfo_issuers", &self.userinfo_issuers)?;
         if self.audiences.is_empty() {
@@ -3490,19 +3534,19 @@ impl EvidenceOidcAuthConfig {
     }
 }
 
-fn validate_jwks_uri_transport(
-    jwks_uri: &str,
+fn validate_jwks_url_transport(
+    jwks_url: &str,
     allow_insecure_localhost: bool,
 ) -> Result<(), EvidenceConfigError> {
-    let jwks_uri = jwks_uri.trim();
-    if jwks_uri.starts_with("https://")
-        || (allow_insecure_localhost && is_insecure_localhost_url(jwks_uri))
+    let jwks_url = jwks_url.trim();
+    if jwks_url.starts_with("https://")
+        || (allow_insecure_localhost && is_insecure_localhost_url(jwks_url))
     {
         return Ok(());
     }
     Err(EvidenceConfigError::InvalidOidcConfig {
         reason:
-            "jwks_uri must use https unless allow_insecure_localhost permits an http localhost URL"
+            "jwks_url must use https unless allow_insecure_localhost permits an http localhost URL"
                 .to_string(),
     })
 }
@@ -3536,7 +3580,7 @@ pub struct EvidenceAuditConfig {
     #[serde(default)]
     pub hash_secret_env: Option<String>,
     #[serde(default)]
-    pub max_size_bytes: Option<u64>,
+    pub max_size_mb: Option<u64>,
     #[serde(default)]
     pub max_files: Option<u32>,
     #[serde(default)]
@@ -3549,7 +3593,7 @@ impl Default for EvidenceAuditConfig {
             sink: default_audit_sink(),
             path: None,
             hash_secret_env: None,
-            max_size_bytes: None,
+            max_size_mb: None,
             max_files: None,
             syslog_socket_path: None,
         }
@@ -3557,11 +3601,11 @@ impl Default for EvidenceAuditConfig {
 }
 
 impl EvidenceAuditConfig {
-    pub const DEFAULT_MAX_SIZE_BYTES: u64 = 10 * 1024 * 1024;
-    pub const DEFAULT_MAX_FILES: u32 = 5;
+    pub const DEFAULT_MAX_SIZE_MB: u64 = 100;
+    pub const DEFAULT_MAX_FILES: u32 = 14;
 
     pub fn max_size_bytes(&self) -> u64 {
-        self.max_size_bytes.unwrap_or(Self::DEFAULT_MAX_SIZE_BYTES)
+        self.max_size_mb.unwrap_or(Self::DEFAULT_MAX_SIZE_MB) * 1024 * 1024
     }
 
     pub fn max_files(&self) -> u32 {
@@ -3571,6 +3615,19 @@ impl EvidenceAuditConfig {
 
 fn default_audit_sink() -> String {
     "stdout".to_string()
+}
+
+pub fn deprecated_config_fields() -> Vec<DeprecatedConfigField> {
+    vec![
+        DeprecatedConfigField::renamed("auth.oidc.jwks_uri", "auth.oidc.jwks_url"),
+        DeprecatedConfigField::renamed("auth.oidc.leeway_seconds", "auth.oidc.leeway"),
+        DeprecatedConfigField::renamed("auth.oidc.allowed_typ", "auth.oidc.allowed_token_types"),
+        DeprecatedConfigField::renamed("audit.max_size_bytes", "audit.max_size_mb"),
+        DeprecatedConfigField::removed(
+            "server.cors.allow_credentials",
+            "Notary now always disables credentialed CORS; remove the field",
+        ),
+    ]
 }
 
 fn invalid_federation<T>(reason: impl Into<String>) -> Result<T, EvidenceConfigError> {
@@ -3644,8 +3701,6 @@ pub enum EvidenceConfigError {
     EvidenceDisabled,
     #[error("at least one API key or bearer token must be configured")]
     NoCredentialsConfigured,
-    #[error("unsupported auth.mode '{mode}'; supported values are 'api_key' and 'oidc'")]
-    UnsupportedAuthMode { mode: String },
     #[error("auth.mode = oidc requires an auth.oidc block")]
     MissingOidcConfig,
     #[error("invalid auth.oidc config: {reason}")]
@@ -5295,7 +5350,7 @@ auth:
   mode: oidc
   oidc:
     issuer: https://id.example.gov
-    jwks_uri: https://id.example.gov/oauth/v2/keys
+    jwks_url: https://id.example.gov/oauth/v2/keys
     audiences:
       - registry-notary-citizen
     allowed_clients:
@@ -5304,7 +5359,7 @@ auth:
     scope_map:
       citizen_self_attestation:
         - self_attestation
-    leeway_seconds: 30
+    leeway: 30s
 self_attestation:
   enabled: true
   requires_auth_mode: oidc
@@ -5455,16 +5510,48 @@ credential_configurations:
     }
 
     #[test]
-    fn admin_listener_defaults_to_shared_for_simple_local_config() {
+    fn admin_listener_defaults_to_disabled_for_simple_local_config() {
         let config = minimal_config();
 
         assert_eq!(
             config.server.admin_listener.mode,
-            RegistryNotaryAdminListenerMode::SharedWithPublic
+            RegistryNotaryAdminListenerMode::Disabled
         );
         config
             .validate()
-            .expect("simple local config may use shared listener topology");
+            .expect("simple local config may disable admin listener by default");
+    }
+
+    #[test]
+    fn server_limits_default_to_relay_parity_values() {
+        let config = minimal_config();
+        assert_eq!(config.server.request_timeout, Duration::from_secs(30));
+        assert_eq!(config.server.request_body_timeout, Duration::from_secs(10));
+        assert_eq!(
+            config.server.http1_header_read_timeout,
+            Duration::from_secs(10)
+        );
+        assert_eq!(config.server.max_connections, 1024);
+    }
+
+    #[test]
+    fn server_limits_must_be_nonzero() {
+        let mut config = minimal_config();
+        config.server.request_timeout = Duration::ZERO;
+        config.server.request_body_timeout = Duration::ZERO;
+        config.server.http1_header_read_timeout = Duration::ZERO;
+        config.server.max_connections = 0;
+
+        let err = config
+            .validate()
+            .expect_err("zero server limits must fail validation");
+        match err {
+            EvidenceConfigError::InvalidServerConfig { reason } => {
+                assert!(reason.contains("server timeouts must be non-zero"));
+                assert!(reason.contains("max_connections"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]
@@ -5585,7 +5672,7 @@ base_url: ""
 sink: file
 path: /var/log/registry-notary/audit.jsonl
 hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
-max_size_bytes: 4096
+max_size_mb: 4
 max_files: 3
 "#,
         )
@@ -5596,7 +5683,7 @@ max_files: 3
             file.path.as_deref(),
             Some("/var/log/registry-notary/audit.jsonl")
         );
-        assert_eq!(file.max_size_bytes(), 4096);
+        assert_eq!(file.max_size_bytes(), 4 * 1024 * 1024);
         assert_eq!(file.max_files(), 3);
         assert_eq!(file.syslog_socket_path, None);
 
@@ -5611,8 +5698,8 @@ syslog_socket_path: /dev/log
 
         assert_eq!(syslog.sink, "syslog");
         assert_eq!(syslog.path, None);
-        assert_eq!(syslog.max_size_bytes(), 10 * 1024 * 1024);
-        assert_eq!(syslog.max_files(), 5);
+        assert_eq!(syslog.max_size_bytes(), 100 * 1024 * 1024);
+        assert_eq!(syslog.max_files(), 14);
         assert_eq!(syslog.syslog_socket_path.as_deref(), Some("/dev/log"));
     }
 
@@ -6615,7 +6702,7 @@ vct: https://vct.example/test
     #[test]
     fn oidc_auth_mode_requires_oidc_block() {
         let mut config = minimal_config();
-        config.auth.mode = "oidc".to_string();
+        config.auth.mode = EvidenceAuthMode::Oidc;
 
         let err = config
             .validate()
@@ -6627,22 +6714,22 @@ vct: https://vct.example/test
     #[test]
     fn oidc_auth_mode_validates_required_settings() {
         let mut config = minimal_config();
-        config.auth.mode = "oidc".to_string();
+        config.auth.mode = EvidenceAuthMode::Oidc;
         config.auth.api_keys.clear();
         config.auth.oidc = Some(EvidenceOidcAuthConfig {
             issuer: "https://issuer.example".to_string(),
-            jwks_uri: "https://issuer.example/jwks.json".to_string(),
+            jwks_url: "https://issuer.example/jwks.json".to_string(),
             userinfo_endpoint: None,
             userinfo_issuers: Vec::new(),
             audiences: vec!["registry-notary".to_string()],
             allowed_clients: vec!["registry-client".to_string()],
             allowed_algorithms: vec!["EdDSA".to_string()],
-            allowed_typ: vec!["JWT".to_string()],
+            allowed_token_types: vec!["JWT".to_string()],
             scope_claim: "scope".to_string(),
             scope_separator: " ".to_string(),
             scope_map: BTreeMap::new(),
             principal_claim: "sub".to_string(),
-            leeway_seconds: 60,
+            leeway: Duration::from_secs(60),
             allow_insecure_localhost: false,
         });
 
@@ -6650,34 +6737,34 @@ vct: https://vct.example/test
     }
 
     #[test]
-    fn oidc_jwks_uri_must_use_https() {
+    fn oidc_jwks_url_must_use_https() {
         let mut config = minimal_config();
-        config.auth.mode = "oidc".to_string();
+        config.auth.mode = EvidenceAuthMode::Oidc;
         config.auth.api_keys.clear();
         config.auth.oidc = Some(EvidenceOidcAuthConfig {
             issuer: "https://issuer.example".to_string(),
-            jwks_uri: "http://issuer.example/jwks.json".to_string(),
+            jwks_url: "http://issuer.example/jwks.json".to_string(),
             userinfo_endpoint: None,
             userinfo_issuers: Vec::new(),
             audiences: vec!["registry-notary".to_string()],
             allowed_clients: vec!["registry-client".to_string()],
             allowed_algorithms: vec!["EdDSA".to_string()],
-            allowed_typ: vec!["JWT".to_string()],
+            allowed_token_types: vec!["JWT".to_string()],
             scope_claim: "scope".to_string(),
             scope_separator: " ".to_string(),
             scope_map: BTreeMap::new(),
             principal_claim: "sub".to_string(),
-            leeway_seconds: 60,
+            leeway: Duration::from_secs(60),
             allow_insecure_localhost: false,
         });
 
         let err = config
             .validate()
-            .expect_err("remote http jwks_uri must fail validation");
+            .expect_err("remote http jwks_url must fail validation");
         match err {
             EvidenceConfigError::InvalidOidcConfig { reason } => {
                 assert!(
-                    reason.contains("jwks_uri must use https"),
+                    reason.contains("jwks_url must use https"),
                     "unexpected: {reason}"
                 );
             }
@@ -6697,30 +6784,30 @@ vct: https://vct.example/test
     }
 
     #[test]
-    fn oidc_jwks_uri_allows_insecure_localhost_only_when_enabled() {
+    fn oidc_jwks_url_allows_insecure_localhost_only_when_enabled() {
         let mut config = minimal_config();
-        config.auth.mode = "oidc".to_string();
+        config.auth.mode = EvidenceAuthMode::Oidc;
         config.auth.api_keys.clear();
         config.auth.oidc = Some(EvidenceOidcAuthConfig {
             issuer: "https://issuer.example".to_string(),
-            jwks_uri: "http://127.0.0.1:8080/jwks.json".to_string(),
+            jwks_url: "http://127.0.0.1:8080/jwks.json".to_string(),
             userinfo_endpoint: None,
             userinfo_issuers: Vec::new(),
             audiences: vec!["registry-notary".to_string()],
             allowed_clients: vec!["registry-client".to_string()],
             allowed_algorithms: vec!["EdDSA".to_string()],
-            allowed_typ: vec!["JWT".to_string()],
+            allowed_token_types: vec!["JWT".to_string()],
             scope_claim: "scope".to_string(),
             scope_separator: " ".to_string(),
             scope_map: BTreeMap::new(),
             principal_claim: "sub".to_string(),
-            leeway_seconds: 60,
+            leeway: Duration::from_secs(60),
             allow_insecure_localhost: false,
         });
 
         let err = config
             .validate()
-            .expect_err("localhost http jwks_uri needs explicit opt-in");
+            .expect_err("localhost http jwks_url needs explicit opt-in");
         assert!(matches!(err, EvidenceConfigError::InvalidOidcConfig { .. }));
 
         config
@@ -6731,7 +6818,7 @@ vct: https://vct.example/test
             .allow_insecure_localhost = true;
         config
             .validate()
-            .expect("localhost http jwks_uri is allowed only with the opt-in");
+            .expect("localhost http jwks_url is allowed only with the opt-in");
     }
 
     #[test]
@@ -6756,18 +6843,22 @@ auth:
     }
 
     #[test]
-    fn unsupported_auth_mode_is_rejected() {
-        let mut config = minimal_config();
-        config.auth.mode = "oauth2".to_string();
+    fn unsupported_auth_mode_is_rejected_at_parse_time() {
+        let err = serde_norway::from_str::<StandaloneRegistryNotaryConfig>(
+            r#"
+evidence:
+  enabled: true
+auth:
+  mode: oauth2
+"#,
+        )
+        .expect_err("unknown auth mode must fail deserialization");
 
-        let err = config
-            .validate()
-            .expect_err("unknown auth mode must fail validation");
-
-        assert!(matches!(
-            err,
-            EvidenceConfigError::UnsupportedAuthMode { .. }
-        ));
+        let message = err.to_string();
+        assert!(
+            message.contains("oauth2") || message.contains("unknown variant"),
+            "unexpected error: {message}"
+        );
     }
 
     #[test]
@@ -8080,7 +8171,7 @@ allowed_claims: ["", "   "]
     #[test]
     fn self_attestation_requires_oidc_auth_mode() {
         let mut config = valid_self_attestation_config();
-        config.auth.mode = "api_key".to_string();
+        config.auth.mode = EvidenceAuthMode::ApiKey;
         config.auth.api_keys.push(EvidenceCredentialConfig {
             id: "api".to_string(),
             fingerprint: CredentialFingerprintRef {
@@ -8141,7 +8232,7 @@ auth:
   mode: oidc
   oidc:
     issuer: https://id.example.gov
-    jwks_uri: https://id.example.gov/keys
+    jwks_url: https://id.example.gov/keys
     audiences:
       - registry-notary-citizen
 self_attestation:
@@ -8161,6 +8252,37 @@ self_attestation:
     }
 
     #[test]
+    fn shared_canonical_oidc_fixture_parses() {
+        let config = serde_norway::from_str::<StandaloneRegistryNotaryConfig>(
+            r#"
+evidence:
+  enabled: true
+auth:
+  mode: oidc
+  oidc:
+    issuer: https://id.example.gov
+    audiences:
+      - registry-notary
+    jwks_url: https://id.example.gov/oauth/v2/keys
+    allowed_algorithms:
+      - EdDSA
+    allowed_token_types:
+      - JWT
+    leeway: 30s
+"#,
+        )
+        .expect("shared canonical OIDC fixture parses");
+        let oidc = config.auth.oidc.expect("oidc config");
+
+        assert_eq!(oidc.issuer, "https://id.example.gov");
+        assert_eq!(oidc.audiences, vec!["registry-notary"]);
+        assert_eq!(oidc.jwks_url, "https://id.example.gov/oauth/v2/keys");
+        assert_eq!(oidc.allowed_algorithms, vec!["EdDSA"]);
+        assert_eq!(oidc.allowed_token_types, vec!["JWT"]);
+        assert_eq!(oidc.leeway, Duration::from_secs(30));
+    }
+
+    #[test]
     fn self_attestation_rejects_non_exact_normalization() {
         let err = serde_norway::from_str::<StandaloneRegistryNotaryConfig>(
             r#"
@@ -8170,7 +8292,7 @@ auth:
   mode: oidc
   oidc:
     issuer: https://id.example.gov
-    jwks_uri: https://id.example.gov/keys
+    jwks_url: https://id.example.gov/keys
     audiences:
       - registry-notary-citizen
 self_attestation:
@@ -8346,10 +8468,10 @@ self_attestation:
     #[test]
     fn self_attestation_rejects_leeway_above_token_policy() {
         let mut config = valid_self_attestation_config();
-        config.auth.oidc.as_mut().unwrap().leeway_seconds = 61;
+        config.auth.oidc.as_mut().unwrap().leeway = Duration::from_secs(61);
 
         let reason = expect_self_attestation_error(&config);
-        assert!(reason.contains("leeway_seconds"), "unexpected: {reason}");
+        assert!(reason.contains("leeway"), "unexpected: {reason}");
     }
 
     #[test]

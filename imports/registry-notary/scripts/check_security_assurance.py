@@ -257,7 +257,7 @@ def extract_axum_routes(text: str) -> set[tuple[str, str]]:
 
 def strip_rust_test_module(text: str) -> str:
     return re.split(
-        r"\n\s*#\[cfg\(test\)\]\s*mod\s+[A-Za-z0-9_]+\s*\{",
+        r"\n\s*#\[cfg\(test\)\](?:\s*#\[[^\]]+\])*\s*mod\s+[A-Za-z0-9_]+\s*\{",
         text,
         maxsplit=1,
     )[0]

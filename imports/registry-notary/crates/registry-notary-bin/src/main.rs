@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Registry Notary process entrypoint.
 
+mod serve;
+
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs::{self, OpenOptions};
@@ -18,8 +20,9 @@ use base64::Engine;
 use clap::{Args as ClapArgs, Parser, Subcommand};
 use ed25519_dalek::SigningKey;
 use registry_notary_core::{
-    Oauth2ClientCredentialsSourceAuthConfig, RegistryNotaryAdminListenerMode,
-    SigningKeyProviderConfig, SourceAuthConfig, StandaloneRegistryNotaryConfig,
+    deprecated_config_fields, Oauth2ClientCredentialsSourceAuthConfig,
+    RegistryNotaryAdminListenerMode, SigningKeyProviderConfig, SourceAuthConfig,
+    StandaloneRegistryNotaryConfig,
 };
 use registry_notary_server::config_governed::{
     parse_candidate_config, resolve_tuf_config_candidate, ConfigGovernanceContext,
@@ -29,15 +32,19 @@ use registry_notary_server::{
     compile_notary_runtime, notary_router_from_runtime, notary_routers_from_runtime,
     openapi_document, EvidenceIssuerRegistry,
 };
+use registry_platform_config::{expand_config_env_vars, reject_deprecated_config_fields};
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk};
 use registry_platform_httputil::{url as httputil_url, FetchUrlPolicy};
 use serde_json::{json, Value};
+use serve::{serve_listener, ServeLimits};
 use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 use ulid::Ulid;
+
+const DEFAULT_LOG_FILTER: &str = "info";
 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -455,17 +462,14 @@ async fn run_server(
     config_path: &Path,
     bind_override: Option<SocketAddr>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new("info,registry_notary_server=debug,registry_notary_bin=debug")
-        }))
-        .init();
+    init_tracing()?;
 
     let mut config = load_expanded_config(config_path)?;
     apply_bind_override(&mut config, bind_override);
     let bind = config.server.bind;
     let admin_mode = config.server.admin_listener.mode;
     let admin_bind = config.server.admin_listener.bind;
+    let serve_limits = ServeLimits::from_config(&config.server);
     let runtime = compile_notary_runtime(config)?;
     match admin_mode {
         RegistryNotaryAdminListenerMode::Dedicated => {
@@ -488,22 +492,22 @@ async fn run_server(
             });
             let public_shutdown = shutdown_when_signaled(shutdown_rx.clone());
             let admin_shutdown = shutdown_when_signaled(shutdown_rx);
-            let public = axum::serve(
+            let public = serve_listener(
                 public_listener,
                 routers
                     .public
-                    .layer(TraceLayer::new_for_http().make_span_with(http_trace_span))
-                    .into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .with_graceful_shutdown(public_shutdown);
-            let admin = axum::serve(
+                    .layer(TraceLayer::new_for_http().make_span_with(http_trace_span)),
+                serve_limits,
+                public_shutdown,
+            );
+            let admin = serve_listener(
                 admin_listener,
                 routers
                     .admin
-                    .layer(TraceLayer::new_for_http().make_span_with(http_trace_span))
-                    .into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .with_graceful_shutdown(admin_shutdown);
+                    .layer(TraceLayer::new_for_http().make_span_with(http_trace_span)),
+                serve_limits,
+                admin_shutdown,
+            );
             tokio::try_join!(public, admin)?;
         }
         RegistryNotaryAdminListenerMode::SharedWithPublic => {
@@ -517,12 +521,7 @@ async fn run_server(
                 "registry notary listening"
             );
 
-            axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .with_graceful_shutdown(shutdown_signal())
-            .await?;
+            serve_listener(listener, app, serve_limits, shutdown_signal()).await?;
         }
         RegistryNotaryAdminListenerMode::Disabled => {
             let app = notary_routers_from_runtime(runtime)
@@ -536,14 +535,57 @@ async fn run_server(
                 "registry notary listening without admin listener"
             );
 
-            axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .with_graceful_shutdown(shutdown_signal())
-            .await?;
+            serve_listener(listener, app, serve_limits, shutdown_signal()).await?;
         }
     }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogFormat {
+    Text,
+    Json,
+}
+
+fn log_format_from_env() -> Result<LogFormat, String> {
+    match std::env::var("REGISTRY_NOTARY_LOG_FORMAT")
+        .unwrap_or_else(|_| "text".to_string())
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "text" => Ok(LogFormat::Text),
+        "json" => Ok(LogFormat::Json),
+        value => Err(format!(
+            "REGISTRY_NOTARY_LOG_FORMAT must be 'text' or 'json', got '{value}'"
+        )),
+    }
+}
+
+fn default_log_filter() -> &'static str {
+    DEFAULT_LOG_FILTER
+}
+
+fn log_env_filter() -> EnvFilter {
+    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_log_filter()))
+}
+
+fn init_tracing() -> Result<(), Box<dyn std::error::Error>> {
+    let result = match log_format_from_env()? {
+        LogFormat::Text => tracing_subscriber::fmt()
+            .with_env_filter(log_env_filter())
+            .try_init(),
+        LogFormat::Json => tracing_subscriber::fmt()
+            .json()
+            .with_env_filter(log_env_filter())
+            .try_init(),
+    };
+    if let Err(error) = result {
+        let message = error.to_string();
+        if message.contains("global default trace dispatcher has already been set") {
+            return Ok(());
+        }
+        return Err(std::io::Error::other(format!("failed to initialize tracing: {error}")).into());
+    };
     Ok(())
 }
 
@@ -876,71 +918,72 @@ fn load_expanded_config(
     config_path: &Path,
 ) -> Result<StandaloneRegistryNotaryConfig, Box<dyn std::error::Error>> {
     let raw = fs::read_to_string(config_path)?;
-    let expanded = expand_config_env_vars(&raw)?;
+    parse_expanded_config(&raw)
+}
+
+fn parse_expanded_config(
+    raw: &str,
+) -> Result<StandaloneRegistryNotaryConfig, Box<dyn std::error::Error>> {
+    let expanded = expand_config_env_vars(raw)?;
+    let parsed_value = parse_config_value(&expanded)?;
+    validate_admin_listener_shape(&parsed_value)?;
+    reject_deprecated_config_fields(&parsed_value, &deprecated_config_fields())?;
+    let admin_listener_present = server_admin_listener_block_present(&parsed_value);
     let config: StandaloneRegistryNotaryConfig = serde_norway::from_str(&expanded)?;
     config.validate()?;
+    if admin_listener_default_warning_needed(&config, admin_listener_present) {
+        tracing::warn!(
+            restore_key = "server.admin_listener.mode",
+            "server.admin_listener is absent; admin listener defaults to disabled; set server.admin_listener.mode to shared_with_public or dedicated to enable the admin surface"
+        );
+    }
     Ok(config)
 }
 
 #[derive(Debug)]
-struct ConfigEnvExpansionError(String);
+struct ConfigShapeError(String);
 
-impl fmt::Display for ConfigEnvExpansionError {
+impl fmt::Display for ConfigShapeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
 }
 
-impl std::error::Error for ConfigEnvExpansionError {}
+impl std::error::Error for ConfigShapeError {}
 
-fn expand_config_env_vars(raw: &str) -> Result<String, ConfigEnvExpansionError> {
-    let mut expanded = String::with_capacity(raw.len());
-    let mut rest = raw;
-    while let Some(start) = rest.find("${") {
-        expanded.push_str(&rest[..start]);
-        let after_start = &rest[start + 2..];
-        let Some(end) = after_start.find('}') else {
-            return Err(ConfigEnvExpansionError(
-                "unterminated ${...} expression in config".to_string(),
-            ));
-        };
-        let expression = &after_start[..end];
-        expanded.push_str(&resolve_config_env_expression(expression)?);
-        rest = &after_start[end + 1..];
-    }
-    expanded.push_str(rest);
-    Ok(expanded)
+fn parse_config_value(raw: &str) -> Result<Value, serde_norway::Error> {
+    serde_norway::from_str(raw)
 }
 
-fn resolve_config_env_expression(expression: &str) -> Result<String, ConfigEnvExpansionError> {
-    let (name, operator, fallback) = if let Some((name, fallback)) = expression.split_once(":-") {
-        (name, ":-", fallback)
-    } else if let Some((name, fallback)) = expression.split_once(":?") {
-        (name, ":?", fallback)
-    } else {
-        (expression, "", "")
+fn validate_admin_listener_shape(value: &Value) -> Result<(), ConfigShapeError> {
+    let Some(admin_listener) = value
+        .get("server")
+        .and_then(Value::as_object)
+        .and_then(|server| server.get("admin_listener"))
+    else {
+        return Ok(());
     };
-    if !valid_env_key(name) {
-        return Err(ConfigEnvExpansionError(format!(
-            "invalid env var name in config expression: {name}"
-        )));
+    if admin_listener.is_object() {
+        return Ok(());
     }
+    Err(ConfigShapeError(
+        "server.admin_listener must be a mapping with accepted mode values: disabled, dedicated, shared_with_public; use server.admin_listener.mode to restore the admin surface".to_string(),
+    ))
+}
 
-    match std::env::var(name) {
-        Ok(value) if !value.is_empty() => Ok(value),
-        _ if operator == ":-" => Ok(fallback.to_string()),
-        _ if operator == ":?" => {
-            let message = if fallback.trim().is_empty() {
-                format!("missing required env var {name}")
-            } else {
-                fallback.to_string()
-            };
-            Err(ConfigEnvExpansionError(message))
-        }
-        _ => Err(ConfigEnvExpansionError(format!(
-            "missing required env var {name}"
-        ))),
-    }
+fn server_admin_listener_block_present(value: &Value) -> bool {
+    value
+        .get("server")
+        .and_then(Value::as_object)
+        .is_some_and(|server| server.contains_key("admin_listener"))
+}
+
+fn admin_listener_default_warning_needed(
+    config: &StandaloneRegistryNotaryConfig,
+    admin_listener_present: bool,
+) -> bool {
+    !admin_listener_present
+        && config.server.admin_listener.mode == RegistryNotaryAdminListenerMode::Disabled
 }
 
 fn load_env_file_arg(
@@ -1075,16 +1118,16 @@ async fn doctor(
             return Ok(false);
         }
     };
-    let parsed = match serde_norway::from_str::<StandaloneRegistryNotaryConfig>(&raw) {
+    let parsed = match parse_expanded_config(&raw) {
         Ok(config) => {
-            diagnostics.push(Diagnostic::ok("config YAML parsed"));
+            diagnostics.push(Diagnostic::ok("config YAML parsed and validated"));
             let mut config = config;
             apply_bind_override(&mut config, bind_override);
             Some(config)
         }
         Err(err) => {
             diagnostics.push(Diagnostic::fail(
-                format!("config YAML parse failed: {err}"),
+                format!("config YAML parse or validation failed: {err}"),
                 "fix the YAML syntax and field names",
             ));
             None
@@ -1092,13 +1135,7 @@ async fn doctor(
     };
     let config = match parsed {
         Some(config) => {
-            match config.validate() {
-                Ok(()) => diagnostics.push(Diagnostic::ok("config semantics validated")),
-                Err(err) => diagnostics.push(Diagnostic::fail(
-                    format!("config semantic validation failed: {err}"),
-                    "fix the reported config relationship before starting the server",
-                )),
-            }
+            diagnostics.push(Diagnostic::ok("config semantics validated"));
             Some(config)
         }
         None => None,
@@ -2513,6 +2550,129 @@ CLIENT_SECRET='secret value'
     }
 
     #[test]
+    fn default_log_filter_is_plain_info() {
+        assert_eq!(default_log_filter(), "info");
+        assert!(!default_log_filter().contains("debug"));
+    }
+
+    #[test]
+    fn log_format_env_accepts_text_and_json() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        std::env::remove_var("REGISTRY_NOTARY_LOG_FORMAT");
+        assert_eq!(
+            log_format_from_env().expect("default is text"),
+            LogFormat::Text
+        );
+
+        std::env::set_var("REGISTRY_NOTARY_LOG_FORMAT", "json");
+        assert_eq!(
+            log_format_from_env().expect("json is accepted"),
+            LogFormat::Json
+        );
+
+        std::env::set_var("REGISTRY_NOTARY_LOG_FORMAT", "text");
+        assert_eq!(
+            log_format_from_env().expect("text is accepted"),
+            LogFormat::Text
+        );
+
+        std::env::set_var("REGISTRY_NOTARY_LOG_FORMAT", "pretty");
+        let err = log_format_from_env().expect_err("unknown format fails");
+        assert!(err.contains("text"));
+        assert!(err.contains("json"));
+
+        std::env::remove_var("REGISTRY_NOTARY_LOG_FORMAT");
+    }
+
+    #[test]
+    fn scalar_admin_listener_shape_names_accepted_modes() {
+        let value = parse_config_value(
+            r#"
+server:
+  admin_listener: shared_with_public
+"#,
+        )
+        .expect("config shape parses");
+        let err = validate_admin_listener_shape(&value)
+            .expect_err("legacy scalar admin listener shape is rejected");
+
+        let message = err.to_string();
+        assert!(message.contains("server.admin_listener.mode"));
+        assert!(message.contains("disabled"));
+        assert!(message.contains("dedicated"));
+        assert!(message.contains("shared_with_public"));
+    }
+
+    #[test]
+    fn deprecated_config_fields_name_replacements_and_removed_cors_credentials() {
+        for (raw, expected) in [
+            (
+                "auth:\n  oidc:\n    jwks_uri: https://id.example.gov/keys\n",
+                "auth.oidc.jwks_url",
+            ),
+            (
+                "auth:\n  oidc:\n    leeway_seconds: 60\n",
+                "auth.oidc.leeway",
+            ),
+            (
+                "auth:\n  oidc:\n    allowed_typ:\n      - JWT\n",
+                "auth.oidc.allowed_token_types",
+            ),
+            (
+                "server:\n  cors:\n    allow_credentials: true\n",
+                "always disables credentialed CORS",
+            ),
+            ("audit:\n  max_size_bytes: 10485760\n", "audit.max_size_mb"),
+        ] {
+            let value = parse_config_value(raw).expect("deprecated-field fixture parses");
+            let err = reject_deprecated_config_fields(&value, &deprecated_config_fields())
+                .expect_err("deprecated field is rejected before deserialization");
+
+            assert!(err.to_string().contains(expected), "unexpected: {err}");
+        }
+    }
+
+    #[test]
+    fn absent_admin_listener_block_requests_restore_key_warning() {
+        let config: StandaloneRegistryNotaryConfig = serde_norway::from_str(
+            r#"
+server:
+  bind: 127.0.0.1:0
+auth:
+  mode: api_key
+  api_keys:
+    - id: local
+      fingerprint:
+        provider: env
+        name: TEST_ADMIN_WARNING_API_HASH
+        commitment: sha256:31f2999a69fa6301763a9f61eea44388a13318ce8b80a16a115a9efdb62b883b
+      scopes: [registry_notary:credential_issue]
+audit:
+  sink: stdout
+evidence:
+  enabled: true
+  signing_keys:
+    issuer:
+      provider: local_jwk_env
+      private_jwk_env: TEST_ADMIN_WARNING_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:issuer.example#key-1
+      status: active
+  credential_profiles:
+    civil-status:
+      format: application/dc+sd-jwt
+      issuer: did:web:issuer.example
+      signing_key: issuer
+      vct: https://issuer.example/credentials/civil-status
+"#,
+        )
+        .expect("config parses");
+
+        assert!(admin_listener_default_warning_needed(&config, false));
+        assert!(!admin_listener_default_warning_needed(&config, true));
+    }
+
+    #[test]
     fn env_file_ignores_quotes_inside_trailing_comments() {
         let parsed = parse_env_file(
             r#"
@@ -3081,6 +3241,80 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
 
         let _ = fs::remove_file(config_path);
         drop(held_listener);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn run_server_fails_fast_when_active_signing_key_env_is_missing() {
+        let _guard = ENV_LOCK.lock().expect("env lock is not poisoned");
+        std::env::set_var(
+            "TEST_STARTUP_API_HASH",
+            "sha256:31f2999a69fa6301763a9f61eea44388a13318ce8b80a16a115a9efdb62b883b",
+        );
+        std::env::set_var(
+            "TEST_STARTUP_AUDIT_HASH_SECRET",
+            "registry-notary-startup-audit-secret-32-bytes",
+        );
+        std::env::remove_var("TEST_STARTUP_ISSUER_JWK");
+
+        let held_listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("test listener binds");
+        let held_addr = held_listener
+            .local_addr()
+            .expect("test listener exposes local addr");
+        let config_path = std::env::temp_dir().join(format!(
+            "registry-notary-missing-signing-env-{}.yaml",
+            Ulid::new()
+        ));
+        fs::write(
+            &config_path,
+            r#"
+server:
+  bind: 127.0.0.1:0
+auth:
+  mode: api_key
+  api_keys:
+    - id: local
+      fingerprint:
+        provider: env
+        name: TEST_STARTUP_API_HASH
+        commitment: sha256:31f2999a69fa6301763a9f61eea44388a13318ce8b80a16a115a9efdb62b883b
+      scopes: [registry_notary:credential_issue]
+audit:
+  sink: stdout
+  hash_secret_env: TEST_STARTUP_AUDIT_HASH_SECRET
+evidence:
+  enabled: true
+  signing_keys:
+    issuer:
+      provider: local_jwk_env
+      private_jwk_env: TEST_STARTUP_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:issuer.example#key-1
+      status: active
+"#,
+        )
+        .expect("startup config writes");
+
+        let error = run_server(&config_path, Some(held_addr))
+            .await
+            .expect_err("missing signing key env fails before serving");
+        let message = error.to_string();
+
+        assert!(
+            message.contains("signing key 'issuer' is invalid")
+                && message.contains("private_jwk_env is missing or empty"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            !message.contains("Address already in use"),
+            "server bound before signing key validation failed: {message}"
+        );
+
+        let _ = fs::remove_file(config_path);
+        drop(held_listener);
+        std::env::remove_var("TEST_STARTUP_API_HASH");
+        std::env::remove_var("TEST_STARTUP_AUDIT_HASH_SECRET");
     }
 
     #[test]

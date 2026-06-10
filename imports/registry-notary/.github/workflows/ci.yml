@@ -14,7 +14,7 @@ concurrency:
 
 env:
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: 6b115cc6b8e7ecbf7f6e70ec6c5a6e315ee175af
+  REGISTRY_PLATFORM_REF: 05a03973c3048b4d98d22cb29a55837f62594c12
   CROSSWALK_REPOSITORY: PublicSchema/crosswalk
   CROSSWALK_REF: 54e0f537830837fcd0c9efa87990987b1846931c
 
@@ -49,7 +49,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: registry-notary -> target
-      - run: cargo install cargo-deny --version 0.19.7 --locked
+      - run: cargo install cargo-deny --version 0.19.8 --locked
       - run: ~/.cargo/bin/cargo-deny --all-features check --hide-inclusion-graph
 
   openfn-worker:
@@ -106,16 +106,21 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: registry-notary -> target
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        with:
+          tool: nextest@0.9.136
+          fallback: none
       - run: ../registry-platform/scripts/check-hygiene-alignment.sh . ../registry-platform
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo build -p registry-notary-bin --features pkcs11
-      - run: cargo test -p registry-notary-server --no-default-features
+      - run: cargo nextest run -p registry-notary-server --no-default-features
       - name: Require live PKCS#11 SoftHSM signing test
         env:
           REGISTRY_NOTARY_REQUIRE_SOFTHSM: "1"
         run: cargo test -p registry-notary-server --no-default-features --features pkcs11 pkcs11_signing_key_signs_with_softhsm_when_available -- --nocapture
-      - run: cargo test --workspace --all-features
+      - run: cargo nextest run --workspace --all-features
       - run: cargo build --workspace --all-features
       - run: cargo run -p registry-notary-bin -- openapi > target/registry-notary.openapi.json
       - name: Free Rust build artifacts before Docker smoke tests

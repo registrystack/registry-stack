@@ -977,21 +977,18 @@ fn add_response_examples(document: &mut Value) {
             "the evidence request is invalid",
         ),
     );
-    set_json_response(
+    set_problem_response(
         document,
         "/ready",
         "get",
         "503",
         "Evidence runtime is not ready or is degraded",
-        json!({
-            "status": "degraded",
-            "checks": {
-                "total": 1,
-                "ok": 0,
-                "degraded": 1,
-                "failed": 0
-            }
-        }),
+        problem_example(
+            503,
+            "readiness.not_ready",
+            "Evidence runtime is not ready",
+            "one or more readiness checks are not ready",
+        ),
     );
     set_problem_response(
         document,
@@ -1045,7 +1042,8 @@ fn add_response_examples(document: &mut Value) {
                 },
                 "metrics": {
                     "mode": "shared_with_public",
-                    "requires_admin_scope": true
+                    "requires_admin_scope": false,
+                    "required_scope": "registry_notary:metrics_read"
                 }
             },
             "root_transition": {
@@ -2300,7 +2298,7 @@ fn set_response_example(
 fn problem_details_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["type", "title", "status", "detail", "code"],
+        "required": ["type", "title", "status", "detail", "code", "request_id"],
         "properties": {
             "type": { "type": "string", "format": "uri" },
             "title": { "type": "string" },
@@ -2811,7 +2809,7 @@ fn discovery_example() -> Value {
         "auth": {
             "methods": ["api_key", "bearer"],
             "api_key": {
-                "header": "x-api-key"
+                "header": "X-Api-Key"
             },
             "bearer": {
                 "header": "Authorization",
@@ -3399,7 +3397,6 @@ mod tests {
         for (path, method, status) in [
             ("/healthz", "get", "200"),
             ("/ready", "get", "200"),
-            ("/ready", "get", "503"),
             ("/admin/v1/capabilities", "get", "200"),
             ("/admin/v1/config/verify", "post", "200"),
             ("/admin/v1/config/dry-run", "post", "200"),
@@ -3555,6 +3552,7 @@ mod tests {
             ("/v1/credentials", "post", "413"),
             ("/v1/credentials", "post", "429"),
             ("/v1/credentials", "post", "503"),
+            ("/ready", "get", "503"),
             ("/v1/credentials/{credential_id}/status", "get", "404"),
             ("/v1/credentials/{credential_id}/status", "get", "503"),
             (

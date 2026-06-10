@@ -92,7 +92,7 @@ impl PostureContext {
                 jurisdiction: config.instance.jurisdiction.clone(),
                 public_base_url: config.instance.public_base_url.clone(),
             },
-            auth_mode: config.auth.mode.clone(),
+            auth_mode: config.auth.mode.as_str().to_string(),
             config_hash: config_hash(config),
             replay_storage: classify_replay_storage(config.replay.storage.as_str()),
             credential_status_enabled: config.credential_status.enabled,

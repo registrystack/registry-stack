@@ -46,6 +46,7 @@ subtle.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio.workspace = true
+tower-http.workspace = true
 tracing.workspace = true
 ulid.workspace = true
 utoipa.workspace = true
@@ -63,7 +64,7 @@ tough = { version = "0.22.0" }
 wiremock = { version = "0.6" }
 # Criterion drives the microbenchmarks under `benches/`. The benches are
 # manually invoked via `cargo bench`; CI smoke-checks `cargo bench --no-run`.
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 
 [[bench]]
 name = "auth_bench"

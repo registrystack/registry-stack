@@ -19,7 +19,7 @@ use chrono::Utc;
 #[cfg(feature = "registry-notary-cel")]
 use registry_notary_core::FEDERATION_RESPONSE_JWT_TYP;
 use registry_notary_core::{
-    BulkMode, ConfigTrustConfig, ConfigTrustRateLimit, EvidenceCredentialConfig,
+    BulkMode, ConfigTrustConfig, ConfigTrustRateLimit, EvidenceAuthMode, EvidenceCredentialConfig,
     EvidenceOidcAuthConfig, Oid4vciConfig, RegistryNotaryAdminListenerMode,
     SelfAttestationClaimSource, SigningKeyConfig, SigningKeyProviderConfig, SigningKeyStatus,
     StandaloneRegistryNotaryConfig, SD_JWT_VC_SIGNING_ALG,
@@ -62,12 +62,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 #[cfg(feature = "registry-notary-cel")]
 use std::sync::Mutex;
+use std::time::Duration;
 use tempfile::TempDir;
 use time::OffsetDateTime;
 use tough::editor::signed::{PathExists, SignedRole};
 use tough::editor::RepositoryEditor;
 use tough::key_source::LocalKeySource;
 use tough::schema::{KeyHolder, Root, Signed, Snapshot, Target, Timestamp};
+use ulid::Ulid;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -245,6 +247,20 @@ fn add_ops_read_api_key(config: &mut StandaloneRegistryNotaryConfig) {
         fingerprint: env_fingerprint_ref("ops", "TEST_EVIDENCE_OPS_KEY_HASH", fingerprint),
         scopes: vec!["registry_notary:ops_read".to_string()],
     });
+}
+
+fn add_metrics_read_api_key(config: &mut StandaloneRegistryNotaryConfig) {
+    let fingerprint = "sha256:eb5a63e42b6b498364b3f10d5c3bb71cd8c7a7a9ad16524875557fa2e52f5d41";
+    std::env::set_var("TEST_EVIDENCE_METRICS_KEY_HASH", fingerprint);
+    config.auth.api_keys.push(EvidenceCredentialConfig {
+        id: "metrics".to_string(),
+        fingerprint: env_fingerprint_ref("metrics", "TEST_EVIDENCE_METRICS_KEY_HASH", fingerprint),
+        scopes: vec!["registry_notary:metrics_read".to_string()],
+    });
+}
+
+fn enable_shared_admin_listener(config: &mut StandaloneRegistryNotaryConfig) {
+    config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
 }
 
 fn config_apply_request(config: &StandaloneRegistryNotaryConfig, sequence: u64) -> Value {
@@ -1469,19 +1485,19 @@ auth:
   mode: oidc
   oidc:
     issuer: "{issuer}"
-    jwks_uri: "{jwks_uri}"
+    jwks_url: "{jwks_uri}"
     audiences:
       - registry-notary-citizen
     allowed_clients:
       - citizen-portal
     allowed_algorithms:
       - EdDSA
-    allowed_typ:
+    allowed_token_types:
       - JWT
     scope_claim: scope
     scope_separator: " "
     principal_claim: sub
-    leeway_seconds: 60
+    leeway: 60s
     allow_insecure_localhost: true
     scope_map:
       self_attestation:
@@ -1777,8 +1793,15 @@ async fn healthz_ready_opaque_counters_in_503_body() {
 
     let ready = server.get("/ready").await;
     ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let ready_content_type = ready
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .expect("ready content-type is present");
+    assert!(ready_content_type.starts_with("application/problem+json"));
     let ready_body: Value = ready.json();
-    assert_eq!(ready_body["status"], json!("not_ready"));
+    assert_eq!(ready_body["code"], json!("readiness.not_ready"));
+    assert_eq!(ready_body["readiness_status"], json!("not_ready"));
     assert_eq!(ready_body["checks"]["total"], json!(1));
     assert_eq!(ready_body["checks"]["ok"], json!(0));
     assert_eq!(ready_body["checks"]["failed"], json!(1));
@@ -1836,6 +1859,8 @@ async fn federation_evaluation_returns_signed_response_and_rejects_replay() {
         &format!("{}/jwks", peer_jwks.url()),
     );
     add_admin_api_key(&mut config);
+    add_metrics_read_api_key(&mut config);
+    enable_shared_admin_listener(&mut config);
     let app = standalone_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let token = federation_request_jwt(
@@ -1914,7 +1939,7 @@ async fn federation_evaluation_returns_signed_response_and_rejects_replay() {
 
     let metrics = server
         .get("/metrics")
-        .add_header("x-api-key", "admin-token")
+        .add_header("x-api-key", "metrics-token")
         .await;
     metrics.assert_status_ok();
     let metrics_body = metrics.text();
@@ -1927,6 +1952,47 @@ async fn federation_evaluation_returns_signed_response_and_rejects_replay() {
     assert!(!metrics_body.contains("01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q6"));
     assert!(!metrics_body.contains("person-1"));
     assert!(!metrics_body.contains("source-token"));
+}
+
+#[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
+async fn federation_auth_exempt_route_still_requires_valid_jws() {
+    set_federation_env();
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route(
+            "/v1/datasets/farmer_registry/entities/farmer/records",
+            get(registry_data_api),
+        ));
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let peer_jwks = MockHttpUpstream::start().await;
+    let (peer_private, _) = fixtures::ed25519_pair();
+    peer_jwks
+        .expect("GET", "/jwks")
+        .respond_json(200, jwks_from_private_jwk(&peer_private))
+        .await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let config = federation_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &format!("{}/jwks", peer_jwks.url()),
+    );
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let response = server
+        .post("/federation/v1/evaluations")
+        .add_header("content-type", "application/jwt")
+        .bytes(Bytes::from_static(b"not.a.valid-jws"))
+        .await;
+
+    response.assert_status(StatusCode::UNAUTHORIZED);
+    let body: Value = response.json();
+    assert_eq!(body["code"], json!("federation.invalid_token"));
 }
 
 #[tokio::test]
@@ -2873,6 +2939,7 @@ async fn admin_config_apply_routes_are_admin_only() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut config);
     add_admin_api_key(&mut config);
     add_ops_read_api_key(&mut config);
     let body = config_apply_request(&config, 1);
@@ -2995,6 +3062,7 @@ async fn admin_config_dry_run_reports_restart_required_without_mutating_posture(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut config);
     add_admin_api_key(&mut config);
     add_ops_read_api_key(&mut config);
     let mut candidate = config.clone();
@@ -5937,6 +6005,7 @@ async fn admin_posture_requires_ops_read_not_admin_and_ops_cannot_reload() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut config);
     add_admin_api_key(&mut config);
     add_ops_read_api_key(&mut config);
 
@@ -5996,6 +6065,7 @@ async fn admin_capabilities_requires_ops_read_and_reports_notary_surface() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
+    config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
     add_admin_api_key(&mut config);
     add_ops_read_api_key(&mut config);
 
@@ -6065,7 +6135,8 @@ async fn admin_capabilities_requires_ops_read_and_reports_notary_surface() {
             },
             "metrics": {
                 "mode": "shared_with_public",
-                "requires_admin_scope": true
+                "requires_admin_scope": false,
+                "required_scope": "registry_notary:metrics_read"
             }
         })
     );
@@ -6139,7 +6210,8 @@ async fn dedicated_topology_splits_admin_routes_and_reports_capabilities() {
             },
             "metrics": {
                 "mode": "admin",
-                "requires_admin_scope": true
+                "requires_admin_scope": false,
+                "required_scope": "registry_notary:metrics_read"
             }
         })
     );
@@ -6225,6 +6297,7 @@ async fn admin_posture_rejects_unknown_tier_with_shared_error_code() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut config);
     add_ops_read_api_key(&mut config);
 
     let app = standalone_router(config).expect("standalone router builds");
@@ -6259,6 +6332,7 @@ async fn admin_posture_reports_configured_instance_override() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut config);
     config.instance.id = "notary-prod-a".to_string();
     config.instance.environment = "production".to_string();
     config.instance.owner = Some("trust-ops".to_string());
@@ -6298,6 +6372,7 @@ async fn admin_posture_reports_self_attestation_summary_and_redacts_signing_key_
         &issuer_url,
         &jwks_uri,
     );
+    enable_shared_admin_listener(&mut config);
     config
         .auth
         .oidc
@@ -6367,6 +6442,7 @@ async fn admin_posture_reports_oid4vci_bearer_offer_mode() {
         &format!("{}/authorize", issuer.issuer()),
         &format!("{}/token", token_upstream.url()),
     );
+    enable_shared_admin_listener(&mut config);
     config.oid4vci.pre_authorized_code.tx_code.required = false;
     config
         .oid4vci
@@ -6435,6 +6511,7 @@ async fn admin_posture_redacts_runtime_config_secrets_and_private_topology() {
         "http://127.0.0.1:1/private-source?token=source-url-secret",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut config);
     let mut unused_connection = config.evidence.source_connections["farmer_registry"].clone();
     unused_connection.base_url =
         "http://10.24.0.9/internal/openfn?token=unused-url-secret".to_string();
@@ -6530,6 +6607,8 @@ async fn admin_posture_hash_ignores_secret_only_config_changes() {
         "http://127.0.0.1:1",
         second_audit_path.to_str().expect("audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut first);
+    enable_shared_admin_listener(&mut second);
     first
         .evidence
         .source_connections
@@ -6608,6 +6687,8 @@ async fn admin_posture_hash_tracks_public_instance_config_changes() {
         "http://127.0.0.1:1",
         second_audit_path.to_str().expect("audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut first);
+    enable_shared_admin_listener(&mut second);
     first.instance.owner = Some("operations".to_string());
     second.instance.owner = Some("data-office".to_string());
     first
@@ -6671,6 +6752,7 @@ async fn admin_posture_counts_configured_but_unused_source_connections_by_safe_k
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut config);
     let mut unused_dci = config.evidence.source_connections["farmer_registry"].clone();
     unused_dci.base_url = "http://127.0.0.1:2/private-dci".to_string();
     unused_dci.token_env = "TEST_UNUSED_DCI_SOURCE_TOKEN".to_string();
@@ -6724,6 +6806,7 @@ async fn admin_posture_classifies_replay_storage() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut config);
     config.replay.storage = "redis".to_string();
     config.replay.redis.url_env = "TEST_REPLAY_REDIS_URL".to_string();
     add_ops_read_api_key(&mut config);
@@ -6755,6 +6838,7 @@ async fn admin_posture_warns_for_production_like_in_memory_replay() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut config);
     config.instance.environment = "production".to_string();
     add_ops_read_api_key(&mut config);
 
@@ -6789,6 +6873,7 @@ async fn admin_posture_federation_summary_omits_peer_private_data() {
         audit_path.to_str().expect("audit path is UTF-8"),
         &format!("{}/jwks/private", peer_jwks.url()),
     );
+    enable_shared_admin_listener(&mut config);
     add_ops_read_api_key(&mut config);
 
     let app = standalone_router(config).expect("standalone router builds");
@@ -6811,7 +6896,7 @@ async fn admin_posture_federation_summary_omits_peer_private_data() {
 }
 
 #[tokio::test]
-async fn metrics_requires_admin_scope_and_keeps_health_public() {
+async fn metrics_requires_metrics_scope_and_keeps_health_public() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -6829,15 +6914,9 @@ async fn metrics_requires_admin_scope_and_keeps_health_public() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
-    config.auth.api_keys.push(EvidenceCredentialConfig {
-        id: "admin".to_string(),
-        fingerprint: env_fingerprint_ref(
-            "admin",
-            "TEST_EVIDENCE_ADMIN_KEY_HASH",
-            "sha256:10a4c7c9fc5206d6f36dc6944a81bb6f4a3cb0e25014ae3b12e6c3e52712292a",
-        ),
-        scopes: vec!["registry_notary:admin".to_string()],
-    });
+    config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
+    add_admin_api_key(&mut config);
+    add_metrics_read_api_key(&mut config);
 
     let app = standalone_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
@@ -6851,12 +6930,12 @@ async fn metrics_requires_admin_scope_and_keeps_health_public() {
         .text()
         .contains("registry_notary_http_requests_total"));
 
-    let non_admin = server
+    let non_metrics = server
         .get("/metrics")
         .add_header("x-api-key", "api-token")
         .await;
-    non_admin.assert_status(StatusCode::FORBIDDEN);
-    assert!(!non_admin
+    non_metrics.assert_status(StatusCode::FORBIDDEN);
+    assert!(!non_metrics
         .text()
         .contains("registry_notary_http_requests_total"));
 
@@ -6864,15 +6943,24 @@ async fn metrics_requires_admin_scope_and_keeps_health_public() {
         .get("/metrics")
         .add_header("x-api-key", "admin-token")
         .await;
-    admin.assert_status_ok();
-    let content_type = admin
+    admin.assert_status(StatusCode::FORBIDDEN);
+    assert!(!admin.text().contains("registry_notary_http_requests_total"));
+
+    let metrics = server
+        .get("/metrics")
+        .add_header("x-api-key", "metrics-token")
+        .await;
+    metrics.assert_status_ok();
+    let content_type = metrics
         .headers()
         .get("content-type")
         .expect("content-type header")
         .to_str()
         .expect("content-type is valid");
     assert!(content_type.starts_with("text/plain; version=0.0.4"));
-    assert!(admin.text().contains("registry_notary_http_requests_total"));
+    assert!(metrics
+        .text()
+        .contains("registry_notary_http_requests_total"));
 }
 
 #[tokio::test]
@@ -6887,23 +6975,23 @@ async fn oidc_mode_verifies_token_from_fixture_idp() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
-    config.auth.mode = "oidc".to_string();
+    config.auth.mode = EvidenceAuthMode::Oidc;
     config.auth.api_keys.clear();
     config.auth.bearer_tokens.clear();
     config.auth.oidc = Some(EvidenceOidcAuthConfig {
         issuer: idp.issuer(),
-        jwks_uri: idp.jwks_uri(),
+        jwks_url: idp.jwks_uri(),
         userinfo_endpoint: None,
         userinfo_issuers: Vec::new(),
         audiences: vec!["registry-notary".to_string()],
         allowed_clients: vec!["registry-client".to_string()],
         allowed_algorithms: vec!["EdDSA".to_string()],
-        allowed_typ: vec!["JWT".to_string()],
+        allowed_token_types: vec!["JWT".to_string()],
         scope_claim: "scope".to_string(),
         scope_separator: " ".to_string(),
         scope_map: BTreeMap::new(),
         principal_claim: "sub".to_string(),
-        leeway_seconds: 60,
+        leeway: Duration::from_secs(60),
         allow_insecure_localhost: true,
     });
     let token = idp.mint_token(json!({
@@ -6963,7 +7051,7 @@ async fn oidc_mode_verifies_token_from_fixture_idp() {
 }
 
 #[tokio::test]
-async fn oidc_admin_can_scrape_metrics_but_non_admin_cannot() {
+async fn oidc_metrics_scope_can_scrape_metrics_but_non_metrics_cannot() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
@@ -6974,28 +7062,29 @@ async fn oidc_admin_can_scrape_metrics_but_non_admin_cannot() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
-    config.auth.mode = "oidc".to_string();
+    config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
+    config.auth.mode = EvidenceAuthMode::Oidc;
     config.auth.api_keys.clear();
     config.auth.bearer_tokens.clear();
     config.auth.oidc = Some(EvidenceOidcAuthConfig {
         issuer: idp.issuer(),
-        jwks_uri: idp.jwks_uri(),
+        jwks_url: idp.jwks_uri(),
         userinfo_endpoint: None,
         userinfo_issuers: Vec::new(),
         audiences: vec!["registry-notary".to_string()],
         allowed_clients: vec!["registry-client".to_string()],
         allowed_algorithms: vec!["EdDSA".to_string()],
-        allowed_typ: vec!["JWT".to_string()],
+        allowed_token_types: vec!["JWT".to_string()],
         scope_claim: "scope".to_string(),
         scope_separator: " ".to_string(),
         scope_map: [(
-            "metrics_admin".to_string(),
-            vec!["registry_notary:admin".to_string()],
+            "metrics_read".to_string(),
+            vec!["registry_notary:metrics_read".to_string()],
         )]
         .into_iter()
         .collect(),
         principal_claim: "sub".to_string(),
-        leeway_seconds: 60,
+        leeway: Duration::from_secs(60),
         allow_insecure_localhost: true,
     });
     let non_admin_token = idp.mint_token(json!({
@@ -7004,31 +7093,33 @@ async fn oidc_admin_can_scrape_metrics_but_non_admin_cannot() {
         "azp": "registry-client",
         "scope": "farmer_registry:evidence_verification",
     }));
-    let admin_token = idp.mint_token(json!({
-        "sub": "metrics-admin",
+    let metrics_token = idp.mint_token(json!({
+        "sub": "metrics-reader",
         "aud": "registry-notary",
         "azp": "registry-client",
-        "scope": "metrics_admin",
+        "scope": "metrics_read",
     }));
 
     let app = standalone_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
-    let non_admin = server
+    let non_metrics = server
         .get("/metrics")
         .add_header("authorization", format!("Bearer {non_admin_token}"))
         .await;
-    non_admin.assert_status(StatusCode::FORBIDDEN);
-    assert!(!non_admin
+    non_metrics.assert_status(StatusCode::FORBIDDEN);
+    assert!(!non_metrics
         .text()
         .contains("registry_notary_http_requests_total"));
 
-    let admin = server
+    let metrics = server
         .get("/metrics")
-        .add_header("authorization", format!("Bearer {admin_token}"))
+        .add_header("authorization", format!("Bearer {metrics_token}"))
         .await;
-    admin.assert_status_ok();
-    assert!(admin.text().contains("registry_notary_http_requests_total"));
+    metrics.assert_status_ok();
+    assert!(metrics
+        .text()
+        .contains("registry_notary_http_requests_total"));
 
     idp.stop().await;
 }
@@ -7789,7 +7880,9 @@ async fn public_probe_routes_remain_public_except_metrics() {
     let ready = server.get("/ready").await;
     ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
     let ready_body: Value = ready.json();
-    assert_eq!(ready_body["status"], json!("degraded"));
+    assert_eq!(ready_body["status"], json!(503));
+    assert_eq!(ready_body["code"], json!("readiness.not_ready"));
+    assert_eq!(ready_body["readiness_status"], json!("degraded"));
     assert_eq!(ready_body["checks"]["degraded"], json!(1));
     server
         .get("/.well-known/openid-credential-issuer")
@@ -7950,6 +8043,7 @@ async fn credential_status_admin_edges_return_expected_http_statuses() {
             .to_str()
             .expect("enabled audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut enabled_config);
     enable_credential_status(&mut enabled_config);
     enabled_config.auth.api_keys.push(EvidenceCredentialConfig {
         id: "admin".to_string(),
@@ -7990,6 +8084,7 @@ async fn credential_status_admin_edges_return_expected_http_statuses() {
             .to_str()
             .expect("disabled audit path is UTF-8"),
     );
+    enable_shared_admin_listener(&mut disabled_config);
     disabled_config
         .auth
         .api_keys
@@ -8074,6 +8169,7 @@ async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
         &idp.issuer(),
         &idp.jwks_uri(),
     );
+    enable_shared_admin_listener(&mut config);
     enable_credential_status(&mut config);
     config
         .auth
@@ -8770,6 +8866,47 @@ async fn request_body_limit_returns_413_above_threshold() {
 }
 
 #[tokio::test]
+async fn request_uri_limit_returns_414_problem_details() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let long_path = format!("/{}", "a".repeat(8 * 1024 + 1));
+
+    let response = server
+        .get(&long_path)
+        .add_header("x-api-key", "api-token")
+        .await;
+
+    response.assert_status(StatusCode::URI_TOO_LONG);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .expect("content-type header")
+        .to_str()
+        .expect("content-type is valid");
+    assert!(content_type.starts_with("application/problem+json"));
+    let body: Value = response.json();
+    assert_eq!(body["status"], json!(414));
+    assert_eq!(
+        body["type"],
+        json!("https://docs.registry-notary.dev/problems/request/uri-too-long")
+    );
+    assert_eq!(body["code"], json!("request.uri_too_long"));
+}
+
+#[tokio::test]
 async fn error_responses_match_rfc_9457_problem_details_shape() {
     set_audit_secret();
     std::env::set_var(
@@ -8793,13 +8930,6 @@ async fn error_responses_match_rfc_9457_problem_details_shape() {
         .await;
 
     response.assert_status(StatusCode::UNAUTHORIZED);
-    assert_eq!(
-        response
-            .headers()
-            .get("x-request-id")
-            .and_then(|value| value.to_str().ok()),
-        Some("req-auth-1")
-    );
     let content_type = response
         .headers()
         .get("content-type")
@@ -8808,7 +8938,7 @@ async fn error_responses_match_rfc_9457_problem_details_shape() {
         .expect("content-type is valid");
     assert!(content_type.starts_with("application/problem+json"));
     let body: Value = response.json();
-    assert_eq!(body["request_id"], json!("req-auth-1"));
+    assert_server_owned_request_id(&response, &body, "req-auth-1");
     assert_eq!(body["status"], json!(401));
     assert_eq!(body["title"], json!("Missing credential"));
     assert_eq!(body["code"], json!("auth.missing_credential"));
@@ -8845,15 +8975,8 @@ async fn evaluation_json_rejections_and_unsupported_idempotency_are_problem_deta
             br#"{"subject":{"id":"person-1","id_type":"national_id"},"claims":["farmed-land-size"]}"#,
         ))
         .await;
-    assert_eq!(
-        old_shape
-            .headers()
-            .get("x-request-id")
-            .and_then(|value| value.to_str().ok()),
-        Some("req-problem-1")
-    );
     let old_shape_body: Value = old_shape.json();
-    assert_eq!(old_shape_body["request_id"], json!("req-problem-1"));
+    assert_server_owned_request_id(&old_shape, &old_shape_body, "req-problem-1");
     assert_eq!(old_shape_body["code"], json!("request.invalid"));
 
     let old_shape = server
@@ -8896,6 +9019,25 @@ async fn evaluation_json_rejections_and_unsupported_idempotency_are_problem_deta
             .await;
         assert_request_invalid_problem(response);
     }
+}
+
+fn assert_server_owned_request_id(
+    response: &axum_test::TestResponse,
+    body: &Value,
+    inbound_request_id: &str,
+) {
+    let header_request_id = response
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .expect("x-request-id response header is present");
+    let body_request_id = body["request_id"]
+        .as_str()
+        .expect("ProblemDetails request_id is present");
+
+    assert_eq!(header_request_id, body_request_id);
+    assert_ne!(body_request_id, inbound_request_id);
+    Ulid::from_string(body_request_id).expect("request_id is a server-minted ULID");
 }
 
 fn assert_request_invalid_problem(response: axum_test::TestResponse) {
@@ -8947,13 +9089,47 @@ async fn cors_csp_corp_headers_present_and_corp_conditional() {
             .and_then(|value| value.to_str().ok()),
         Some("https://client.example.test")
     );
-    assert!(response.headers().contains_key("content-security-policy"));
+    assert_eq!(
+        response
+            .headers()
+            .get("content-security-policy")
+            .and_then(|value| value.to_str().ok()),
+        Some("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'")
+    );
     assert_eq!(
         response
             .headers()
             .get("x-content-type-options")
             .and_then(|value| value.to_str().ok()),
         Some("nosniff")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("referrer-policy")
+            .and_then(|value| value.to_str().ok()),
+        Some("no-referrer")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-frame-options")
+            .and_then(|value| value.to_str().ok()),
+        Some("DENY")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("permissions-policy")
+            .and_then(|value| value.to_str().ok()),
+        Some("camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("cross-origin-opener-policy")
+            .and_then(|value| value.to_str().ok()),
+        Some("same-origin")
     );
     assert_eq!(
         response
@@ -9134,6 +9310,8 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
         audit_path.to_str().expect("audit path is UTF-8"),
     );
     add_admin_api_key(&mut config);
+    add_metrics_read_api_key(&mut config);
+    config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
     let app = standalone_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -9218,14 +9396,26 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
 
     let metrics = server
         .get("/metrics")
-        .add_header("x-api-key", "admin-token")
+        .add_header("x-api-key", "metrics-token")
         .await;
     metrics.assert_status_ok();
     let metrics_body = metrics.text();
     assert!(metrics_body.contains("registry_notary_http_requests_total"));
     assert!(metrics_body.contains(
-        "registry_notary_http_requests_total{method=\"POST\",route=\"/v1/evaluations\",status_class=\"2xx\"}"
+        "registry_notary_http_requests_total{method=\"POST\",endpoint_kind=\"evaluation\",status_code=\"200\",status_class=\"2xx\",error_code=\"none\"}"
     ));
+    assert!(metrics_body.contains("# TYPE registry_notary_http_request_duration_seconds histogram"));
+    assert!(metrics_body.contains(
+        "registry_notary_http_request_duration_seconds_bucket{method=\"POST\",endpoint_kind=\"evaluation\",status_code=\"200\",status_class=\"2xx\",error_code=\"none\",le=\"+Inf\"}"
+    ));
+    assert!(metrics_body.contains(
+        "registry_notary_http_request_duration_seconds_sum{method=\"POST\",endpoint_kind=\"evaluation\",status_code=\"200\",status_class=\"2xx\",error_code=\"none\"}"
+    ));
+    assert!(metrics_body.contains(
+        "registry_notary_http_request_duration_seconds_count{method=\"POST\",endpoint_kind=\"evaluation\",status_code=\"200\",status_class=\"2xx\",error_code=\"none\"}"
+    ));
+    assert!(!metrics_body.contains("registry_notary_http_request_duration_ms_total"));
+    assert!(!metrics_body.contains("route="));
     assert!(metrics_body
         .contains("registry_notary_source_requests_total{connector=\"rda\",outcome=\"success\"}"));
     assert!(metrics_body.contains("registry_notary_audit_events_total{outcome=\"success\"}"));
@@ -9290,6 +9480,39 @@ async fn standalone_router_hides_admin_and_metrics_when_admin_listener_is_not_sh
             .await
             .assert_status(StatusCode::NOT_FOUND);
     }
+}
+
+#[tokio::test]
+async fn standalone_router_default_config_hides_admin_and_metrics() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    add_admin_api_key(&mut config);
+
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    server.get("/healthz").await.assert_status_ok();
+    server
+        .post("/admin/v1/reload")
+        .add_header("x-api-key", "admin-token")
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    server
+        .get("/metrics")
+        .add_header("x-api-key", "admin-token")
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -12450,4 +12673,65 @@ async fn preauth_callback_and_token_audit_events_carry_only_hashes() {
         .expect("token audit event exists");
     assert_eq!(token_event["status"], json!(200));
     idp.stop().await;
+}
+
+#[tokio::test]
+async fn request_uri_limit_414_carries_server_owned_request_id() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let long_path = format!("/{}", "a".repeat(8 * 1024 + 1));
+
+    let response = server
+        .get(&long_path)
+        .add_header("x-request-id", "client-supplied-id")
+        .await;
+
+    response.assert_status(StatusCode::URI_TOO_LONG);
+    let body: Value = response.json();
+    assert_server_owned_request_id(&response, &body, "client-supplied-id");
+}
+
+#[tokio::test]
+async fn request_body_limit_413_carries_server_owned_request_id() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let too_large = Bytes::from(vec![b' '; 1024 * 1024 + 1]);
+
+    let response = server
+        .post("/v1/evaluations")
+        .add_header("x-api-key", "api-token")
+        .add_header("content-type", "application/json")
+        .add_header("x-request-id", "client-supplied-id")
+        .bytes(too_large)
+        .await;
+
+    response.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+    let body: Value = response.json();
+    assert_server_owned_request_id(&response, &body, "client-supplied-id");
 }

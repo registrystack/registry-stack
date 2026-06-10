@@ -26,9 +26,30 @@
   `dedicated` mode serves `/admin/v1/*` and `/metrics` on a separate admin bind,
   `shared_with_public` serves them on the public listener, and `disabled` drops
   the admin listener entirely. Governed `config_trust` requires `dedicated`.
+- Changed the default `server.admin_listener.mode` from `shared_with_public` to
+  `disabled`; local deployments that intentionally need the old shared topology
+  must set `server.admin_listener.mode: shared_with_public` explicitly.
+- Added bounded HTTP serve defaults: `server.request_timeout: 30s`,
+  `server.request_body_timeout: 10s`, `server.http1_header_read_timeout: 10s`,
+  and `server.max_connections: 1024`. The OpenFn sidecar mirrors the same
+  limits with millisecond-suffixed config keys.
 - Changed `auth.api_keys[]` and `auth.bearer_tokens[]` to a committed
   `fingerprint` reference (`provider`, `name`, `commitment`) in place of
   `hash_env`, so signed config apply can govern caller-credential rotation.
+- Renamed OIDC config fields to the shared Registry service convention:
+  `auth.oidc.jwks_uri` -> `auth.oidc.jwks_url`,
+  `auth.oidc.leeway_seconds` -> `auth.oidc.leeway`, and
+  `auth.oidc.allowed_typ` -> `auth.oidc.allowed_token_types`. Old names fail
+  config load with an error naming the replacement. `auth.oidc.leeway` now uses
+  humantime strings such as `30s`; self-attestation
+  `token_policy.max_clock_leeway_seconds` still bounds the resolved duration.
+- Removed `server.cors.allow_credentials`; Registry Notary now always disables
+  credentialed CORS on the operator-configured server CORS layer. Remove the
+  field from config rather than setting it to `false`.
+- Renamed `audit.max_size_bytes` to `audit.max_size_mb` and aligned the default
+  active-file rotation to 100 MB with 14 retained files.
+- Added `REGISTRY_NOTARY_LOG_FORMAT=text|json`; the default log filter is plain
+  `info`.
 - Product binaries and container images now compile the PKCS#11 provider by
   default, while vendor modules, token state, labels, and PIN handling remain
   operator-supplied runtime configuration.

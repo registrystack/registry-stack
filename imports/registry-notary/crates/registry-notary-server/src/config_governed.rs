@@ -6,12 +6,16 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::path::PathBuf;
 
-use registry_notary_core::{ConfigTrustConfig, StandaloneRegistryNotaryConfig};
+use registry_notary_core::{
+    deprecated_config_fields, ConfigTrustConfig, StandaloneRegistryNotaryConfig,
+};
 use registry_platform_config::{
-    LocalTufRepositoryInput, RemoteTufRepositoryInput, TufConfigVerifier, VerificationContext,
+    reject_deprecated_config_fields, LocalTufRepositoryInput, RemoteTufRepositoryInput,
+    TufConfigVerifier, VerificationContext,
 };
 use registry_platform_ops::{internal_config_hash, ConfigSource};
 use serde::Deserialize;
+use serde_json::Value;
 
 #[derive(Clone, Debug)]
 pub struct ConfigGovernanceContext {
@@ -226,13 +230,28 @@ pub fn is_signed_config_source(source: ConfigSource) -> bool {
     )
 }
 
-pub fn parse_candidate_config(
-    config_yaml: &str,
-) -> Result<StandaloneRegistryNotaryConfig, &'static str> {
-    let config: StandaloneRegistryNotaryConfig =
-        serde_norway::from_str(config_yaml).map_err(|_| "candidate config could not be parsed")?;
+pub fn parse_candidate_config(config_yaml: &str) -> Result<StandaloneRegistryNotaryConfig, String> {
+    let value: Value = serde_norway::from_str(config_yaml)
+        .map_err(|error| format!("candidate config could not be parsed: {error}"))?;
+    reject_deprecated_config_fields(&value, &deprecated_config_fields())
+        .map_err(|error| error.to_string())?;
+    let config: StandaloneRegistryNotaryConfig = serde_norway::from_str(config_yaml)
+        .map_err(|error| format!("candidate config could not be parsed: {error}"))?;
     config
         .validate()
-        .map_err(|_| "candidate config did not validate")?;
+        .map_err(|error| format!("candidate config did not validate: {error}"))?;
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_candidate_config_names_deprecated_field_replacements() {
+        let err = parse_candidate_config("audit:\n  max_size_bytes: 10485760\n")
+            .expect_err("deprecated candidate field is rejected");
+
+        assert!(err.contains("audit.max_size_mb"), "unexpected: {err}");
+    }
 }

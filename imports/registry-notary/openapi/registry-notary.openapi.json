@@ -1041,7 +1041,8 @@
           "title",
           "status",
           "detail",
-          "code"
+          "code",
+          "request_id"
         ],
         "type": "object"
       },
@@ -1320,7 +1321,7 @@
                   "api_version": "2026-05",
                   "auth": {
                     "api_key": {
-                      "header": "x-api-key"
+                      "header": "X-Api-Key"
                     },
                     "audience": "demo.registry-notary",
                     "bearer": {
@@ -1687,7 +1688,8 @@
                     },
                     "metrics": {
                       "mode": "shared_with_public",
-                      "requires_admin_scope": true
+                      "required_scope": "registry_notary:metrics_read",
+                      "requires_admin_scope": false
                     }
                   },
                   "product": "registry-notary",
@@ -2911,15 +2913,16 @@
           },
           "503": {
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "example": {
-                  "checks": {
-                    "degraded": 1,
-                    "failed": 0,
-                    "ok": 0,
-                    "total": 1
-                  },
-                  "status": "degraded"
+                  "code": "readiness.not_ready",
+                  "detail": "one or more readiness checks are not ready",
+                  "status": 503,
+                  "title": "Evidence runtime is not ready",
+                  "type": "https://docs.registry-notary.dev/problems/readiness/not_ready"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
                 }
               }
             },

@@ -75,15 +75,15 @@ Hardening checklist:
 - Hash static API keys and bearer tokens with `registry-notary hash-api-key`;
   never store raw caller secrets in YAML.
 - Give each caller a distinct `id` and the smallest useful scope set.
-- Reserve `registry_notary:admin` for operators, status mutation, metrics
-  scraping, and governed apply actions. Use `registry_notary:ops_read` for
-  posture and admin capability discovery.
-- For OIDC, use HTTPS `jwks_uri`, explicit `audiences`, and a small
+- Reserve `registry_notary:admin` for operators, status mutation, and governed
+  apply actions. Use `registry_notary:metrics_read` for Prometheus scraping and
+  `registry_notary:ops_read` for posture and admin capability discovery.
+- For OIDC, use HTTPS `jwks_url`, explicit `audiences`, and a small
   `allowed_clients` list when your identity provider supports it.
 - Map external scopes with `auth.oidc.scope_map` instead of accepting broad
   identity-provider scopes directly.
 - Keep clock leeway small. Self-attestation requires
-  `auth.oidc.leeway_seconds` to stay within the self-attestation clock-leeway
+  `auth.oidc.leeway` to stay within the self-attestation clock-leeway
   ceiling.
 
 ## Secret Inventory
@@ -180,7 +180,7 @@ storage.
 ## Metrics
 
 `/metrics` is intended for Prometheus scraping and uses low-cardinality labels.
-It still requires an admin credential.
+It requires a dedicated `registry_notary:metrics_read` credential.
 
 ```yaml
 scrape_configs:
@@ -305,7 +305,8 @@ During rollout:
 
 - Deploy with one claim and one source first.
 - Confirm `/ready` passes after startup.
-- Confirm Prometheus can scrape `/metrics` with an admin credential.
+- Confirm Prometheus can scrape `/metrics` with a `registry_notary:metrics_read`
+  credential.
 - Run one controlled evaluation and, if enabled, one controlled credential
   issuance.
 - Confirm audit records arrive in the off-host sink.
