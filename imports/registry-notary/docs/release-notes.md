@@ -26,6 +26,9 @@
   `dedicated` mode serves `/admin/v1/*` and `/metrics` on a separate admin bind,
   `shared_with_public` serves them on the public listener, and `disabled` drops
   the admin listener entirely. Governed `config_trust` requires `dedicated`.
+- Changed the default `server.admin_listener.mode` from `shared_with_public` to
+  `disabled`; local deployments that intentionally need the old shared topology
+  must set `server.admin_listener.mode: shared_with_public` explicitly.
 - Changed `auth.api_keys[]` and `auth.bearer_tokens[]` to a committed
   `fingerprint` reference (`provider`, `name`, `commitment`) in place of
   `hash_env`, so signed config apply can govern caller-credential rotation.

@@ -3207,9 +3207,9 @@ fn openapi_requires_auth_is_default(value: &bool) -> bool {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RegistryNotaryAdminListenerMode {
-    #[default]
     SharedWithPublic,
     Dedicated,
+    #[default]
     Disabled,
 }
 
@@ -3256,7 +3256,7 @@ impl RegistryNotaryAdminListenerConfig {
 impl Default for RegistryNotaryAdminListenerConfig {
     fn default() -> Self {
         Self {
-            mode: RegistryNotaryAdminListenerMode::SharedWithPublic,
+            mode: RegistryNotaryAdminListenerMode::Disabled,
             bind: default_admin_bind_addr(),
         }
     }
@@ -5455,16 +5455,16 @@ credential_configurations:
     }
 
     #[test]
-    fn admin_listener_defaults_to_shared_for_simple_local_config() {
+    fn admin_listener_defaults_to_disabled_for_simple_local_config() {
         let config = minimal_config();
 
         assert_eq!(
             config.server.admin_listener.mode,
-            RegistryNotaryAdminListenerMode::SharedWithPublic
+            RegistryNotaryAdminListenerMode::Disabled
         );
         config
             .validate()
-            .expect("simple local config may use shared listener topology");
+            .expect("simple local config may disable admin listener by default");
     }
 
     #[test]

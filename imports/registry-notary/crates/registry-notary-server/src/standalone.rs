@@ -78,6 +78,7 @@ use crate::{
 
 const SOURCE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const FILE_WATCH_METADATA_CHECK_INTERVAL: Duration = Duration::from_millis(250);
+const MAX_REQUEST_URI_BYTES: usize = 8 * 1024;
 const MAX_SOURCE_JSON_BYTES: usize = 1024 * 1024;
 const MAX_INBOUND_REQUEST_BODY_BYTES: usize = 1024 * 1024;
 const PREAUTH_LOGIN_STATE_MAX_ENTRIES: usize = 4096;
@@ -394,6 +395,7 @@ fn layer_notary_routes(
             MAX_INBOUND_REQUEST_BODY_BYTES,
         ))
         .layer(axum::middleware::from_fn(rewrite_payload_too_large_problem))
+        .layer(axum::middleware::from_fn(reject_oversized_request_uri))
 }
 
 #[derive(Debug, Clone)]
@@ -4212,6 +4214,8 @@ fn is_auth_exempt_path(path: &str, policy: AuthExemptionPolicy) -> bool {
             | "/oid4vci/offer/callback"
             | "/oid4vci/token"
             | "/oid4vci/nonce"
+            // Auth-exempt only from API-key/OIDC middleware. The federation
+            // handler still requires and verifies the peer-signed JWS.
             | "/federation/v1/evaluations"
             | "/docs"
             | "/docs/scalar.js"
@@ -4856,6 +4860,38 @@ fn principal_from_credential(credential: &ResolvedCredential) -> EvidencePrincip
 
 fn header_str(value: &axum::http::HeaderValue) -> Option<&str> {
     value.to_str().ok()
+}
+
+async fn reject_oversized_request_uri(request: Request, next: Next) -> Response {
+    let uri_len = request
+        .uri()
+        .path_and_query()
+        .map(|value| value.as_str().len())
+        .unwrap_or_else(|| request.uri().path().len());
+    if uri_len <= MAX_REQUEST_URI_BYTES {
+        return next.run(request).await;
+    }
+    request_uri_too_long_problem()
+}
+
+fn request_uri_too_long_problem() -> Response {
+    let status = StatusCode::URI_TOO_LONG;
+    let mut response = (
+        status,
+        Json(json!({
+            "type": format!("{}/request/uri-too-long", crate::PROBLEM_TYPE_BASE_URL),
+            "title": "URI too long",
+            "status": status.as_u16(),
+            "detail": "request URI exceeds the configured 8 KiB limit",
+            "code": "request.uri_too_long",
+        })),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/problem+json"),
+    );
+    response
 }
 
 async fn rewrite_payload_too_large_problem(request: Request, next: Next) -> Response {

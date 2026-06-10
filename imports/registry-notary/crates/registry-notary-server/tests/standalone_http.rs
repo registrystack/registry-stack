@@ -1931,6 +1931,47 @@ async fn federation_evaluation_returns_signed_response_and_rejects_replay() {
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
+async fn federation_auth_exempt_route_still_requires_valid_jws() {
+    set_federation_env();
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route(
+            "/v1/datasets/farmer_registry/entities/farmer/records",
+            get(registry_data_api),
+        ));
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let peer_jwks = MockHttpUpstream::start().await;
+    let (peer_private, _) = fixtures::ed25519_pair();
+    peer_jwks
+        .expect("GET", "/jwks")
+        .respond_json(200, jwks_from_private_jwk(&peer_private))
+        .await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let config = federation_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &format!("{}/jwks", peer_jwks.url()),
+    );
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let response = server
+        .post("/federation/v1/evaluations")
+        .add_header("content-type", "application/jwt")
+        .bytes(Bytes::from_static(b"not.a.valid-jws"))
+        .await;
+
+    response.assert_status(StatusCode::UNAUTHORIZED);
+    let body: Value = response.json();
+    assert_eq!(body["code"], json!("federation.invalid_token"));
+}
+
+#[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 async fn admin_config_apply_signed_federation_signing_rotation_swaps_without_restart() {
     set_federation_env();
     std::env::set_var("TEST_FEDERATION_SIGNING_KEY_2", TEST_HOLDER_JWK);
@@ -8770,6 +8811,47 @@ async fn request_body_limit_returns_413_above_threshold() {
 }
 
 #[tokio::test]
+async fn request_uri_limit_returns_414_problem_details() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let long_path = format!("/{}", "a".repeat(8 * 1024 + 1));
+
+    let response = server
+        .get(&long_path)
+        .add_header("x-api-key", "api-token")
+        .await;
+
+    response.assert_status(StatusCode::URI_TOO_LONG);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .expect("content-type header")
+        .to_str()
+        .expect("content-type is valid");
+    assert!(content_type.starts_with("application/problem+json"));
+    let body: Value = response.json();
+    assert_eq!(body["status"], json!(414));
+    assert_eq!(
+        body["type"],
+        json!("https://docs.registry-notary.dev/problems/request/uri-too-long")
+    );
+    assert_eq!(body["code"], json!("request.uri_too_long"));
+}
+
+#[tokio::test]
 async fn error_responses_match_rfc_9457_problem_details_shape() {
     set_audit_secret();
     std::env::set_var(
@@ -9290,6 +9372,39 @@ async fn standalone_router_hides_admin_and_metrics_when_admin_listener_is_not_sh
             .await
             .assert_status(StatusCode::NOT_FOUND);
     }
+}
+
+#[tokio::test]
+async fn standalone_router_default_config_hides_admin_and_metrics() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    add_admin_api_key(&mut config);
+
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    server.get("/healthz").await.assert_status_ok();
+    server
+        .post("/admin/v1/reload")
+        .add_header("x-api-key", "admin-token")
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    server
+        .get("/metrics")
+        .add_header("x-api-key", "admin-token")
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
