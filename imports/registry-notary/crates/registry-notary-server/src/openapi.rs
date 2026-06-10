@@ -2809,7 +2809,7 @@ fn discovery_example() -> Value {
         "auth": {
             "methods": ["api_key", "bearer"],
             "api_key": {
-                "header": "x-api-key"
+                "header": "X-Api-Key"
             },
             "bearer": {
                 "header": "Authorization",

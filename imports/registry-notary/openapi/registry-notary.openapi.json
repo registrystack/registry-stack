@@ -1320,7 +1320,7 @@
                   "api_version": "2026-05",
                   "auth": {
                     "api_key": {
-                      "header": "x-api-key"
+                      "header": "X-Api-Key"
                     },
                     "audience": "demo.registry-notary",
                     "bearer": {
