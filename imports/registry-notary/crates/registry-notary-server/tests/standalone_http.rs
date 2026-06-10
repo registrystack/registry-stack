@@ -9030,13 +9030,47 @@ async fn cors_csp_corp_headers_present_and_corp_conditional() {
             .and_then(|value| value.to_str().ok()),
         Some("https://client.example.test")
     );
-    assert!(response.headers().contains_key("content-security-policy"));
+    assert_eq!(
+        response
+            .headers()
+            .get("content-security-policy")
+            .and_then(|value| value.to_str().ok()),
+        Some("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'")
+    );
     assert_eq!(
         response
             .headers()
             .get("x-content-type-options")
             .and_then(|value| value.to_str().ok()),
         Some("nosniff")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("referrer-policy")
+            .and_then(|value| value.to_str().ok()),
+        Some("no-referrer")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-frame-options")
+            .and_then(|value| value.to_str().ok()),
+        Some("DENY")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("permissions-policy")
+            .and_then(|value| value.to_str().ok()),
+        Some("camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("cross-origin-opener-policy")
+            .and_then(|value| value.to_str().ok()),
+        Some("same-origin")
     );
     assert_eq!(
         response
