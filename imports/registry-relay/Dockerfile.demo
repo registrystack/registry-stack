@@ -35,5 +35,7 @@ WORKDIR /var/lib/registry-relay
 ENV REGISTRY_RELAY_CONFIG=/etc/registry-relay/config.yaml
 EXPOSE 8080
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/usr/local/bin/registry-relay", "healthcheck"]
+
 ENTRYPOINT ["/usr/local/bin/registry-relay"]
 CMD ["--config", "/etc/registry-relay/config.yaml"]
