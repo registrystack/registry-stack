@@ -192,6 +192,34 @@ curl -H "Authorization: Bearer $PROGRAM_SYSTEM_API_KEY" \
   http://127.0.0.1:8080/v1/datasets
 ```
 
+## Operating Relay And Notary Together
+
+Registry Relay is the protected registry consultation API. Registry Notary is
+the claim evaluation, credential issuance, and attestation service. Relay can
+publish metadata evidence offerings that point callers to Notary, but Relay
+does not execute Notary claims. Notary calls Relay as an HTTP source when a
+claim profile needs registry data.
+
+Configure credentials on both sides:
+
+- Relay must register a token hash for the Notary source caller, with only the
+  dataset scopes needed by Notary claim profiles.
+- Notary must register the caller token used by programs or wallets against
+  Notary routes, and its source connector must reference the raw Relay token
+  through an environment-backed `token_env`.
+- Operators should keep raw tokens and signing material out of YAML. Use
+  service environment variables such as `REGISTRY_RELAY_CONFIG`,
+  `REGISTRY_RELAY_BIND`, `REGISTRY_RELAY_LOG_FORMAT`, and
+  `REGISTRY_RELAY_ENV_FILE`; use secret indirection fields ending in `_env` for
+  token hashes, audit secrets, signing keys, database URLs, and source tokens.
+
+For side-by-side local compose stacks, keep the public host ports distinct while
+letting each container use its internal default listener. A common convention is
+Relay on host `18080` mapped to container `8080`, and Notary on host `18081`
+mapped to its container listener. Native local runs usually use Relay
+`127.0.0.1:8080` and Notary `127.0.0.1:8081`; align source `base_url` values
+with the network where Notary runs.
+
 ## Public API Shape
 
 The public URL space is entity-shaped:
