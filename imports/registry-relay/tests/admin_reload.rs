@@ -4519,7 +4519,10 @@ async fn reload_all_publishes_ready_snapshot() {
     resp.assert_status(StatusCode::OK);
     let body: Value = resp.json();
     assert_eq!(body["status"], "ok");
-    assert_eq!(body["counts"]["ready"], 2);
+    assert_eq!(body["checks"]["total"], 2);
+    assert_eq!(body["checks"]["ok"], 2);
+    assert_eq!(body["checks"]["failed"], 0);
+    assert!(body.get("counts").is_none());
     assert!(body.get("resources").is_none());
 }
 

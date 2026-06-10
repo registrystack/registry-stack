@@ -2889,9 +2889,18 @@
     "schemas": {
       "HealthResponse": {
         "type": "object",
+        "required": [
+          "status",
+          "checks"
+        ],
         "examples": [
           {
-            "status": "ok"
+            "status": "ok",
+            "checks": {
+              "total": 1,
+              "ok": 1,
+              "failed": 0
+            }
           }
         ],
         "properties": {
@@ -2900,22 +2909,77 @@
             "examples": [
               "ok"
             ]
+          },
+          "checks": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "total",
+              "ok",
+              "failed"
+            ],
+            "properties": {
+              "total": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "ok": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "failed": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
           }
         }
       },
       "ReadinessResponse": {
         "type": "object",
+        "required": [
+          "status",
+          "checks"
+        ],
         "examples": [
           {
-            "status": "ready"
+            "status": "ok",
+            "checks": {
+              "total": 1,
+              "ok": 1,
+              "failed": 0
+            }
           }
         ],
         "properties": {
           "status": {
             "type": "string",
             "examples": [
-              "ready"
+              "ok"
             ]
+          },
+          "checks": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "total",
+              "ok",
+              "failed"
+            ],
+            "properties": {
+              "total": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "ok": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "failed": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
           }
         }
       },
