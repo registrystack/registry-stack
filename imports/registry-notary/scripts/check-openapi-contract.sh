@@ -2,9 +2,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
 SPEC_PATH="openapi/registry-notary.openapi.json"
 BASE_REF="${1:-${OPENAPI_CONTRACT_BASE_REF:-}}"
-WORK_DIR="$ROOT/target/openapi-contract"
+WORK_DIR="target/openapi-contract"
 GENERATED="$WORK_DIR/generated.openapi.json"
 BASELINE="$WORK_DIR/base.openapi.json"
 
@@ -12,7 +14,7 @@ mkdir -p "$WORK_DIR"
 
 cargo run -q -p registry-notary-bin -- openapi > "$GENERATED"
 
-python3 - "$ROOT/$SPEC_PATH" "$GENERATED" <<'PY'
+python3 - "$SPEC_PATH" "$GENERATED" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -33,5 +35,15 @@ if ! command -v oasdiff >/dev/null 2>&1; then
     exit 1
 fi
 
-git -C "$ROOT" show "$BASE_REF:$SPEC_PATH" > "$BASELINE"
+if ! git rev-parse --verify "$BASE_REF^{commit}" >/dev/null 2>&1; then
+    echo "OpenAPI contract base ref '$BASE_REF' is not available" >&2
+    exit 1
+fi
+
+if ! git cat-file -e "$BASE_REF:$SPEC_PATH" 2>/dev/null; then
+    echo "OpenAPI spec did not exist at '$BASE_REF'; skipped breaking-change diff"
+    exit 0
+fi
+
+git show "$BASE_REF:$SPEC_PATH" > "$BASELINE"
 oasdiff breaking --fail-on ERR "$BASELINE" "$GENERATED"
