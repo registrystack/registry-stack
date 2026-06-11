@@ -78,7 +78,7 @@ jobs:
             paths = ["(^|/)target/"]
 
             [[allowlists]]
-            description = "Allow published tough test signing keys vendored as fixtures."
+            description = "Allow published tough test signing keys vendored as fixtures, not credentials."
             paths = [
               "^crates/registry-platform-config/tests/fixtures/tough-data/snakeoil\\.pem$",
               "^crates/registry-platform-config/tests/fixtures/tough-data/snakeoil_2\\.pem$",
