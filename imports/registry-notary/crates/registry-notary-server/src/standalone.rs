@@ -4241,6 +4241,7 @@ fn is_auth_exempt_path(path: &str, policy: AuthExemptionPolicy) -> bool {
         path,
         "/healthz"
             | "/ready"
+            | "/.well-known/evidence/jwks.json"
             | "/.well-known/openid-credential-issuer"
             | "/oid4vci/credential-offer"
             | "/oid4vci/offer/start"

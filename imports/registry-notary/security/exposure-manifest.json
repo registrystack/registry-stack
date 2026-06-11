@@ -275,19 +275,17 @@
       "path": "/.well-known/evidence/jwks.json",
       "feature": null,
       "audience": "external",
-      "auth": "api_key_or_oidc",
-      "scopes": [
-        "evidence:metadata"
-      ],
+      "auth": "none",
+      "scopes": [],
       "rate_limit": null,
-      "audit": "required",
+      "audit": "not_applicable",
       "openapi": true,
       "stability": "beta",
       "data_classification": "metadata",
-      "notes": "Protected Registry Notary route.",
+      "notes": "Intentionally unauthenticated public JWKS well-known route for wallet and verifier discovery; only public issuer verification keys are emitted.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http.rs::oidc_self_attestation_evaluates_renders_and_audits_access_mode"
       ],
       "waiver": null
     },

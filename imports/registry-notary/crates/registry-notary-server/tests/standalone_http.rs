@@ -7213,10 +7213,7 @@ async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
     }));
     let authorization = format!("Bearer {token}");
 
-    let jwks = server
-        .get("/.well-known/evidence/jwks.json")
-        .add_header("authorization", authorization.clone())
-        .await;
+    let jwks = server.get("/.well-known/evidence/jwks.json").await;
     jwks.assert_status_ok();
     let jwks_body: Value = jwks.json();
     assert_eq!(jwks_body["keys"].as_array().expect("JWKS keys").len(), 1);
@@ -12202,9 +12199,8 @@ async fn preauth_trust_anchor_rejects_wrong_key_and_credential_key_notary_tokens
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
-    // Use a protected route without a proof precheck (the credential endpoint
-    // validates the proof before auth), so the trust-anchor verification alone
-    // decides the outcome.
+    // Use a protected route without a proof precheck, so the trust-anchor
+    // verification alone decides the outcome.
     // A Notary-issuer token signed by the WRONG key (the holder key) is rejected.
     let wrong_key_token = mint_notary_access_token(
         TEST_HOLDER_JWK,
@@ -12214,7 +12210,7 @@ async fn preauth_trust_anchor_rejects_wrong_key_and_credential_key_notary_tokens
         "person-1",
     );
     server
-        .get("/.well-known/evidence/jwks.json")
+        .get("/v1/claims")
         .add_header("authorization", format!("Bearer {wrong_key_token}"))
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
@@ -12229,7 +12225,7 @@ async fn preauth_trust_anchor_rejects_wrong_key_and_credential_key_notary_tokens
         "person-1",
     );
     server
-        .get("/.well-known/evidence/jwks.json")
+        .get("/v1/claims")
         .add_header("authorization", format!("Bearer {credential_key_token}"))
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
@@ -12267,7 +12263,7 @@ async fn preauth_trust_anchor_isolates_esignet_and_notary_paths() {
         "nbf": now,
     }));
     server
-        .get("/.well-known/evidence/jwks.json")
+        .get("/v1/claims")
         .add_header(
             "authorization",
             format!("Bearer {esignet_token_claiming_notary_iss}"),

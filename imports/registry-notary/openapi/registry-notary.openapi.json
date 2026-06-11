@@ -1468,6 +1468,7 @@
     },
     "/.well-known/evidence/jwks.json": {
       "get": {
+        "description": "Returns public issuer verification keys for wallet and verifier discovery. This well-known route is intentionally unauthenticated; it only exposes public JWK members.",
         "operationId": "getEvidenceJwks",
         "responses": {
           "200": {
@@ -1487,25 +1488,9 @@
               }
             },
             "description": "Public JWKS"
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
-                "example": {
-                  "code": "auth.missing_credential",
-                  "detail": "missing authentication credential",
-                  "status": 401,
-                  "title": "Missing credential",
-                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
-                },
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Missing or invalid credential"
           }
         },
+        "security": [],
         "summary": "Fetch public issuer verification keys"
       }
     },

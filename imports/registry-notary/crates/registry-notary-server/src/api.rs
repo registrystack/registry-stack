@@ -4730,13 +4730,7 @@ fn hex_nibble(byte: u8) -> Result<u8, TokenWireError> {
     }
 }
 
-async fn issuer_jwks(
-    state: Option<Extension<Arc<RegistryNotaryApiState>>>,
-    principal: Option<Extension<EvidencePrincipal>>,
-) -> Response {
-    if principal.is_none() {
-        return evidence_error_response(EvidenceError::MissingCredential);
-    }
+async fn issuer_jwks(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Response {
     let Some(Extension(state)) = state else {
         return evidence_error_response(EvidenceError::ServerDisabled);
     };

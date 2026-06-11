@@ -29,9 +29,9 @@ validation time.
 - Startup fails closed if an active signing provider cannot be constructed or
   cannot pass its sign/verify self-test.
 
-The public JWKS endpoint requires normal Notary authentication. It publishes
-public verification keys only; private JWK members such as `d` are rejected on
-public-key inputs and never emitted.
+The public JWKS endpoint is intentionally unauthenticated for wallet and
+verifier discovery. It publishes public verification keys only; private JWK
+members such as `d` are rejected on public-key inputs and never emitted.
 
 ## Provider Fields
 

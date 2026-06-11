@@ -157,9 +157,10 @@ fn build_openapi_document() -> Value {
                 "get": {
                     "summary": "Fetch public issuer verification keys",
                     "operationId": "getEvidenceJwks",
+                    "description": "Returns public issuer verification keys for wallet and verifier discovery. This well-known route is intentionally unauthenticated; it only exposes public JWK members.",
+                    "security": [],
                     "responses": {
-                        "200": { "description": "Public JWKS" },
-                        "401": { "description": "Missing or invalid credential" }
+                        "200": { "description": "Public JWKS" }
                     }
                 }
             },
@@ -3361,6 +3362,10 @@ mod tests {
         assert_eq!(doc["paths"]["/healthz"]["get"]["security"], json!([]));
         assert_eq!(doc["paths"]["/ready"]["get"]["security"], json!([]));
         assert_eq!(
+            doc["paths"]["/.well-known/evidence/jwks.json"]["get"]["security"],
+            json!([])
+        );
+        assert_eq!(
             doc["paths"]["/.well-known/openid-credential-issuer"]["get"]["security"],
             json!([])
         );
@@ -3536,7 +3541,6 @@ mod tests {
             ("/admin/v1/config/apply", "post", "401"),
             ("/admin/v1/config/apply", "post", "403"),
             ("/.well-known/evidence-service", "get", "401"),
-            ("/.well-known/evidence/jwks.json", "get", "401"),
             ("/v1/claims", "get", "401"),
             ("/v1/claims/{claim_id}", "get", "401"),
             ("/v1/claims/{claim_id}", "get", "404"),
