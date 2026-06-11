@@ -423,10 +423,15 @@ def aggregate_query_path(path: str) -> str:
     return f"{parsed.path.rstrip('/')}/query"
 
 
+def aggregate_rows(response: Any) -> list[Any]:
+    if not isinstance(response, dict):
+        return []
+    rows = response.get("observations") if "observations" in response else response.get("data")
+    return rows if isinstance(rows, list) else []
+
+
 def aggregate_summary(response: Any) -> dict[str, Any]:
-    rows = response.get("data") if isinstance(response, dict) else None
-    if not isinstance(rows, list):
-        rows = []
+    rows = aggregate_rows(response)
     disclosure = response.get("disclosure_control") if isinstance(response, dict) else None
     suppressed_rows = disclosure.get("suppressed_rows") if isinstance(disclosure, dict) else None
     return {
@@ -511,12 +516,12 @@ def scenario_summary(
         "market_sizing": {
             "aggregate_rows_seen": aggregate_summary_doc.get("aggregate_rows_seen"),
             "suppressed_rows": aggregate_summary_doc.get("suppressed_rows"),
-            "filtered_rows_seen": len(filtered_body.get("data") or []) if isinstance(filtered_body, dict) else None,
+            "filtered_rows_seen": len(aggregate_rows(filtered_body)) if isinstance(filtered_body, dict) else None,
             "filtered_suppressed_rows": filtered_disclosure.get("suppressed_rows"),
             "row_export_allowed": False,
         },
         "livestock_planning": {
-            "aggregate_rows_seen": len(livestock_aggregate.get("data") or []) if isinstance(livestock_aggregate, dict) else None,
+            "aggregate_rows_seen": len(aggregate_rows(livestock_aggregate)) if isinstance(livestock_aggregate, dict) else None,
             "suppressed_rows": livestock_disclosure.get("suppressed_rows") if isinstance(livestock_disclosure, dict) else None,
             "contains_individual_animal_rows": False,
             "row_export_allowed": False,
@@ -928,7 +933,7 @@ def main() -> int:
         "livestock herd planning aggregate",
     )
     save(out, step, "positive-livestock-herd-aggregate", livestock_aggregate)
-    livestock_rows = livestock_aggregate.get("data") if isinstance(livestock_aggregate, dict) else None
+    livestock_rows = aggregate_rows(livestock_aggregate)
     if not isinstance(livestock_rows, list) or not livestock_rows:
         raise DemoError(f"livestock herd aggregate expected publishable rows, got {livestock_rows!r}")
     livestock_disclosure = livestock_aggregate.get("disclosure_control") if isinstance(livestock_aggregate, dict) else None
@@ -982,7 +987,7 @@ def main() -> int:
     suppressed_rows = disclosure.get("suppressed_rows") if isinstance(disclosure, dict) else None
     if not isinstance(suppressed_rows, int) or suppressed_rows <= 0:
         raise DemoError(f"suppressed aggregate expected suppressed_rows > 0, got {suppressed_rows!r}")
-    filtered_rows = suppressed.body.get("data") if isinstance(suppressed.body, dict) else None
+    filtered_rows = aggregate_rows(suppressed.body)
     if filtered_rows:
         raise DemoError(f"suppressed aggregate filter expected no publishable rows, got {filtered_rows!r}")
     denied_controls["suppressed_aggregate"] = suppressed.status

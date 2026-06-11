@@ -128,7 +128,7 @@ def _summarize_discovery(body: Any, status: int | None, error: str) -> dict[str,
 
 
 def _summarize_aggregate(body: Any, status: int | None, error: str) -> dict[str, Any]:
-    rows = body.get("data") or body.get("rows") or body.get("results") if isinstance(body, dict) else []
+    rows = body.get("observations") or body.get("data") or body.get("rows") or body.get("results") if isinstance(body, dict) else []
     row_count = len(rows) if isinstance(rows, list) else "Check source"
     return {
         "title": "The aggregate returns planning counts." if ok_status(status) else "Aggregate read needs attention.",

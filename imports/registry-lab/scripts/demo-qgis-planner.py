@@ -50,7 +50,9 @@ def square(lon: float, lat: float, size: float = 0.18) -> dict[str, Any]:
 
 
 def rows(body: Any) -> list[dict[str, Any]]:
-    data = body.get("data") if isinstance(body, dict) else None
+    if not isinstance(body, dict):
+        return []
+    data = body.get("observations") if "observations" in body else body.get("data")
     return [row for row in data if isinstance(row, dict)] if isinstance(data, list) else []
 
 

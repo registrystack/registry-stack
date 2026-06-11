@@ -255,7 +255,10 @@ import sys
 
 with open(sys.argv[1], encoding="utf-8") as fh:
     body = json.load(fh)
-rows = body.get("data") if isinstance(body, dict) else None
+if isinstance(body, dict):
+    rows = body.get("observations") if "observations" in body else body.get("data")
+else:
+    rows = None
 if rows != []:
     raise SystemExit(f"expected filtered aggregate to publish no rows, got {rows!r}")
 PY
@@ -268,7 +271,10 @@ import sys
 
 with open(sys.argv[1], encoding="utf-8") as fh:
     body = json.load(fh)
-rows = body.get("data") if isinstance(body, dict) else None
+if isinstance(body, dict):
+    rows = body.get("observations") if "observations" in body else body.get("data")
+else:
+    rows = None
 if not isinstance(rows, list) or not rows:
     raise SystemExit(f"expected livestock aggregate to publish at least one row, got {rows!r}")
 disclosure = body.get("disclosure_control") if isinstance(body, dict) else None

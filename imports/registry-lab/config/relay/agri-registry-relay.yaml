@@ -987,6 +987,7 @@ datasets:
         access:
           metadata_scope: agri_registry:metadata
           aggregate_scope: agri_registry:aggregate
+          aggregate_only_execution: true
         disclosure_control:
           min_cell_size: 5
           suppression: omit
@@ -1032,6 +1033,7 @@ datasets:
         access:
           metadata_scope: agri_registry:metadata
           aggregate_scope: agri_registry:aggregate
+          aggregate_only_execution: true
         disclosure_control:
           min_cell_size: 5
           suppression: omit

@@ -262,6 +262,13 @@ def first_data_row(response: dict[str, Any], label: str) -> dict[str, Any]:
     return rows[0]
 
 
+def aggregate_rows(response: dict[str, Any]) -> list[Any]:
+    if not isinstance(response, dict):
+        return []
+    rows = response.get("observations") if "observations" in response else response.get("data")
+    return rows if isinstance(rows, list) else []
+
+
 def household_benefit_decision(row_response: dict[str, Any], aggregate_response: dict[str, Any]) -> dict[str, Any]:
     household = first_data_row(row_response, "household row read")
     eligibility_band = str(household.get("eligibility_band", "unknown"))
@@ -285,7 +292,7 @@ def household_benefit_decision(row_response: dict[str, Any], aggregate_response:
             "active_members": active_members,
             "deceased_member_count": deceased_members,
             "aggregate_id": aggregate_response.get("aggregate_id"),
-            "aggregate_groups_seen": len(aggregate_response.get("data", [])),
+            "aggregate_groups_seen": len(aggregate_rows(aggregate_response)),
         },
         "decision": {
             "status": "approved" if recommended_amount > 0 and active_members > 0 else "manual_review",
