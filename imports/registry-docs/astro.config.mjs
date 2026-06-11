@@ -150,6 +150,7 @@ export default defineConfig({
             { label: 'Spreadsheet API', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
             { label: 'Registry claim', slug: 'tutorials/verify-claim-registry-api' },
             { label: 'Own API claim', slug: 'tutorials/verify-claim-own-api' },
+            { label: 'Deploy with own data', slug: 'tutorials/deploy-standalone-with-own-data' },
           ],
         },
         {
