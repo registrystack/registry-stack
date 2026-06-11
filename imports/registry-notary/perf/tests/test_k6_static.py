@@ -6,6 +6,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 K6_DIR = ROOT / "perf" / "k6"
+PERF_WORKFLOW = ROOT / ".github" / "workflows" / "perf-smoke.yml"
+COMMON_JS = K6_DIR / "lib" / "common.js"
 REMOTE_IMPORT_RE = re.compile(
     r"""\b(?:import|export)\b\s*(?:[^'"]+\bfrom\s*)?['"]https?://|\bimport\s*\(\s*['"]https?://"""
 )
@@ -22,3 +24,13 @@ def test_k6_scripts_do_not_import_remote_code() -> None:
         "k6 scripts must not import remote executable helper code at runtime: "
         + ", ".join(offenders)
     )
+
+
+def test_perf_workflow_enforces_k6_thresholds() -> None:
+    workflow = PERF_WORKFLOW.read_text(encoding="utf-8")
+    active_workflow = "\n".join(line.split("#", 1)[0] for line in workflow.splitlines())
+    common_js = COMMON_JS.read_text(encoding="utf-8")
+
+    assert re.search(r"\bREGISTRY_NOTARY_NO_THRESHOLD\b", active_workflow) is None
+    assert re.search(r"\bREGISTRY_NOTARY_NO_THRESHOLD\b", common_js) is not None
+    assert "http_req_duration{expected_status:false}" in common_js
