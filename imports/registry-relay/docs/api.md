@@ -216,13 +216,21 @@ Entity collection and record responses include validators where supported. Clien
 
 ## Purpose Headers
 
-Entities can require a purpose string for row reads and OGC feature reads:
+Entities can require a `Data-Purpose` header for row reads and OGC feature reads.
 
 ```http
 Data-Purpose: https://data.example.gov/purposes/service-intake-check
 ```
 
-When `require_purpose_header: true`, missing purpose returns `400 auth.purpose_required`. Use stable, reviewable purpose IRIs. Do not put secrets, bearer tokens, or personal data in this header because it is recorded in audit logs.
+**Frozen semantics** (2026-06-11 evidence-contracts decision record, D5):
+
+- Header **presence** can be required per entity via `require_purpose_header: true`. A missing header when required returns `400 auth.purpose_required`.
+- When the header is present, the value is **always recorded verbatim** in the audit trail.
+- Purpose **values are not enforced** at the consultation layer. Relay does not validate, compare, or allowlist values.
+- **Registry Notary** is the purpose-certification layer.
+- Value-level allowlists, if ever added, will arrive as additive opt-in configuration and will not change this default behavior.
+
+Use stable, reviewable purpose IRIs. Do not put secrets, bearer tokens, or personal data in this header; it is recorded in audit logs.
 
 ## Metadata, Catalog, And OpenAPI
 

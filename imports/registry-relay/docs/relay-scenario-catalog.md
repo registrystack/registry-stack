@@ -22,7 +22,7 @@ Status labels:
 | Planning analyst | Query configured aggregates without enumerating sensitive rows |
 | Metadata consumer | Discover datasets, schemas, policies, profiles, and standards surfaces |
 | Auditor | Reconstruct who accessed what, for which purpose, and under which scope |
-| Standards integrator | Consume Relay through DCAT, OGC, SP DCI, PublicSchema, or provenance contracts |
+| Standards integrator | Consume Relay through DCAT, OGC, SP DCI, PublicSchema, or signed response credential contracts |
 
 ## Systems
 
@@ -109,7 +109,7 @@ sequenceDiagram
 | 4 | Operator publishes portable metadata separately from Relay runtime | Metadata publication | Supported | Static publication release process needs a policy |
 | 5 | Metadata consumer reads DCAT and SHACL views | Metadata publication | Supported | Profile coverage depends on manifest quality |
 | 6 | Auditor traces row access through platform audit records | Governance | Supported | External audit storage is deployment-owned |
-| 7 | Client requests signed response provenance | Provenance | Supported | Remote signer mode is not implemented |
+| 7 | Client requests signed response credentials (VC-JWT) | Signed credentials | Supported | Remote signer mode is not implemented |
 | 8 | Client discovers evidence offerings and calls Registry Notary | Notary handoff | Supported | Notary request semantics live in Notary docs |
 | 9 | GIS consumer reads spatial entities through OGC API Features | Standards adapter | Supported | Requires spatial config and feature build |
 | 10 | Catalog consumer reads metadata through OGC API Records | Standards adapter | Supported | Records surface is metadata-only |
@@ -131,6 +131,6 @@ When adding a scenario, include:
 - the persona and system boundary;
 - the least-privilege scopes required;
 - the source type and metadata profile;
-- whether the flow exposes rows, aggregates, metadata, provenance, or Notary
+- whether the flow exposes rows, aggregates, metadata, signed response credentials, or Notary
   handoff;
 - the unsupported behaviors that must stay out of scope.

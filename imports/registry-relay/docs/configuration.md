@@ -897,9 +897,11 @@ aggregates:
 
 `geometry_entity` must be an entity declared in the same dataset. `geometry_id_field` and `geometry_field` must be exposed entity fields with compatible types (string/integer for id, geojson-typed string for geometry). Only `kind: geojson` geometry is supported for spatial aggregates in V1.
 
-## Provenance
+## Provenance (Response-Credential Issuer Configuration)
 
-The `provenance` block is optional. When absent or `enabled: false`, the gateway behaves as a plain JSON service. When enabled, callers can opt in to signed VC-JWT responses with `Accept: application/vc+jwt`. V1 supports local Ed25519 signing from either a `software` env-var JWK or a `file_watch` JWK file.
+The `provenance` block is optional. When absent or `enabled: false`, the gateway behaves as a plain JSON service. When enabled, callers can opt in to signed response credentials (W3C VCDM 2.0 VC-JWT) with `Accept: application/vc+jwt`. V1 supports local Ed25519 signing from either a `software` env-var JWK or a `file_watch` JWK file.
+
+The key is named `provenance` for compatibility; it governs the response-credential issuer (DID, signing key, claim validity, and accepted media types). These credentials are W3C VCDM 2.0 VC-JWT with a Registry Relay JSON-LD context; they are not W3C PROV-O.
 
 See [provenance.md](provenance.md) for the full signer, DID, schema, context, and rotation contract.
 

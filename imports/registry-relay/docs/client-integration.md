@@ -77,9 +77,11 @@ purpose URI or controlled string that the operator can audit:
 Data-Purpose: https://data.example.gov/purposes/service-intake-check
 ```
 
-The value is written into audit records. Do not put subject identifiers,
-free-text case notes, bearer tokens, or other secrets in this header. For the
-full list of entities that enforce this header and the resulting error code, see
+The value is written verbatim into audit records. Purpose values are not
+enforced or validated at the consultation layer; Registry Notary is the
+purpose-certification layer. Do not put subject identifiers, free-text case
+notes, bearer tokens, or other secrets in this header. For the full list of
+entities that enforce this header and the resulting error code, see
 the [Registry Relay API reference](api.md#purpose-headers).
 
 ## Discovery
@@ -173,13 +175,18 @@ Use conservative retries:
 Relay is read-only for registry data, but retries still create extra audit
 events and may repeat costly source reads.
 
-## Provenance Opt-In
+## Signed Response Credentials
 
-When provenance is enabled, clients can request signed response credentials with
-an accepted VC media type. Treat the returned compact JWS as an opaque signed
-artifact and verify it with the issuer DID document and published schemas.
+When signed response credentials are enabled, clients can request W3C VCDM 2.0
+VC-JWT credentials with an accepted VC media type. Treat the returned compact
+JWS as an opaque signed artifact and verify it with the issuer DID document and
+published schemas.
 
-Do not confuse Relay response provenance with Registry Notary evidence
+These are signed response credentials, not W3C PROV-O. The `provenance` config
+key governs the issuer configuration for backward compatibility, but the correct
+public description is "signed response credentials".
+
+Do not confuse Relay signed response credentials with Registry Notary evidence
 verification. Relay can sign selected data responses. Registry Notary owns
 claim evaluation, evidence verification, credential issuance workflows, and the
 verification semantics behind evidence offerings.

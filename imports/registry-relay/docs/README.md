@@ -13,12 +13,12 @@ The references below describe supported behavior. Each fact has one home; pages 
 ## Integrate
 
 - [API guide](api.md): auth, scopes, filters, pagination, metadata caching, Problem Details, standards surfaces, and the admin route reference. The curated public OpenAPI surface lives in [openapi/registry-relay.openapi.json](../openapi/registry-relay.openapi.json) and the served `/docs` and `/openapi.json`.
-- [Client integration guide](client-integration.md): caller behavior for auth, purpose headers, discovery, pagination, ETags, errors, retries, aggregates, provenance, and the Registry Notary handoff.
-- [Data provenance](provenance.md): VC-JWT response opt-in, issuer modes, schemas, contexts, DID Web, audit, and verification.
+- [Client integration guide](client-integration.md): caller behavior for auth, purpose headers, discovery, pagination, ETags, errors, retries, aggregates, signed response credentials, and the Registry Notary handoff.
+- [Signed response credentials](provenance.md): VC-JWT response opt-in, issuer modes, schemas, contexts, DID Web, audit, and verification. The config key is `provenance` for compatibility.
 
 ## Operate
 
-- [Configuration guide](configuration.md): YAML contract, auth, audit, source formats, Postgres, entities, OGC Features, SP DCI, PublicSchema, aggregates, and provenance.
+- [Configuration guide](configuration.md): YAML contract, auth, audit, source formats, Postgres, entities, OGC Features, SP DCI, PublicSchema, aggregates, and signed response credential issuer configuration (`provenance` key).
 - [Operations runbook](ops.md): deployment, production hardening checklist, build and release, secret rotation, audit handling, reloads, probes, metrics, running with Registry Notary, and troubleshooting.
 - [Portable metadata](metadata.md): manifest split, metadata CLI, static publication, ODRL policy metadata contract, Relay metadata routes, catalog validation, and boundary rules.
 - [Standards adapter operator guide](standards-adapter-operator-guide.md): rollout checklist for OGC Features, OGC Records, OGC EDR, SP DCI sync, and PublicSchema mapping.
