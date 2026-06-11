@@ -39,7 +39,7 @@ You will need:
 - A Docker Compose provider (Docker Desktop, OrbStack, Colima, or Podman) or a host where you
   can run the Registry Relay binary.
 - Your registry data as a CSV, XLSX, or Parquet file, with a stable primary-key column.
-- `curl` and a SHA-256 tool (`shasum` or `sha256sum`) for verification.
+- `curl` for verification.
 - `openssl` for generating an API-key fingerprint.
 
 This guide uses synthetic placeholders.
@@ -133,7 +133,7 @@ datasets:
         materialization: snapshot
         source:
           type: file
-          path: ./data/social_registry.csv
+          path: /var/lib/registry-relay/data/social_registry.csv
           format:
             csv:
               header_row: 1
@@ -198,7 +198,7 @@ Key points the configuration guide spells out in full:
   ```yaml
   source:
     type: file
-    path: ./data/social_registry.xlsx
+    path: /var/lib/registry-relay/data/social_registry.xlsx
     format:
       xlsx:
         sheet: Individuals
@@ -228,7 +228,7 @@ guide):
 
 ```sh
 RAW_KEY="$(openssl rand -base64 32)"
-printf 'sha256:%s\n' "$(printf '%s' "$RAW_KEY" | shasum -a 256 | awk '{print $1}')"
+printf 'sha256:%s\n' "$(printf '%s' "$RAW_KEY" | openssl dgst -sha256 -r | awk '{print $1}')"
 ```
 
 Store the resulting `sha256:...` fingerprint in your secret store under the configured
@@ -252,7 +252,7 @@ environment variables, and a writable cache:
 docker run --rm \
   -p 127.0.0.1:8080:8080 \
   -v "$(pwd)/config.yaml:/etc/registry-relay/config.yaml:ro" \
-  -v "$(pwd)/data:/etc/registry-relay/data:ro" \
+  -v "$(pwd)/data:/var/lib/registry-relay/data:ro" \
   -e PROGRAM_SYSTEM_API_KEY_HASH="sha256:<your fingerprint>" \
   -e REGISTRY_RELAY_AUDIT_HASH_SECRET="<32+ bytes of random secret>" \
   ghcr.io/jeremi/registry-relay:vX.Y.Z
