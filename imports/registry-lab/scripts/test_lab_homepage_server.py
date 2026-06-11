@@ -18,6 +18,22 @@ assert _spec and _spec.loader
 server = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(server)
 
+# The CSS/JS that used to be inlined in the page templates now lives in real static asset
+# files served from /static/<name>. Tests that assert on that CSS/JS read the asset files
+# directly (the same bytes the server serves) instead of grepping the HTML shell.
+STATIC_DIR = Path(__file__).resolve().parent / "lab_homepage_static"
+
+
+def _static_text(name: str) -> str:
+    return (STATIC_DIR / name).read_text(encoding="utf-8")
+
+
+SHARED_CSS = _static_text("shared.css")
+HOMEPAGE_CSS = _static_text("homepage.css")
+SCENARIOS_CSS = _static_text("scenarios.css")
+HOMEPAGE_JS = _static_text("homepage.js")
+SCENARIOS_JS = _static_text("scenarios.js")
+
 
 class ApplyEnvFileTest(unittest.TestCase):
     """apply_env_file must fill absent or empty vars, but never clobber a real value."""
@@ -650,16 +666,16 @@ class HomepageHtmlTest(unittest.TestCase):
 
     def test_open_link_renders_hidden_and_is_status_gated(self) -> None:
         # Open links start hidden; loadStatus only reveals services that are up and browsable.
-        self.assertIn("data-open-for", self.html)
-        self.assertIn("check.ok && check.browsable", self.html)
+        self.assertIn("data-open-for", HOMEPAGE_JS)
+        self.assertIn("check.ok && check.browsable", HOMEPAGE_JS)
 
     def test_wallet_section_guides_hosted_issuance_flow(self) -> None:
-        self.assertIn("Start issuance", self.html)
-        self.assertIn("/oid4vci/offer/start?credential_configuration_id=", self.html)
-        self.assertIn("https://wallet.lab.registrystack.org/signup", self.html)
-        self.assertIn("openid-credential-offer://", self.html)
-        self.assertIn("within 300 seconds", self.html)
-        self.assertIn("no longer requires a separate issuer PIN", self.html)
+        self.assertIn("Start issuance", HOMEPAGE_JS)
+        self.assertIn("/oid4vci/offer/start?credential_configuration_id=", HOMEPAGE_JS)
+        self.assertIn("https://wallet.lab.registrystack.org/signup", HOMEPAGE_JS)
+        self.assertIn("openid-credential-offer://", HOMEPAGE_JS)
+        self.assertIn("within 300 seconds", HOMEPAGE_JS)
+        self.assertIn("no longer requires a separate issuer PIN", HOMEPAGE_JS)
 
     def test_homepage_links_to_dedicated_scenario_runner(self) -> None:
         self.assertIn('href="/scenarios"', self.html)
@@ -677,25 +693,25 @@ class ScenarioPageHtmlTest(unittest.TestCase):
         self.assertIn("Registry Lab Scenarios", self.html)
         self.assertIn('id="chooser"', self.html)
         self.assertIn('id="story"', self.html)
-        self.assertIn("/api/scenarios.json", self.html)
+        self.assertIn("/api/scenarios.json", SCENARIOS_JS)
         self.assertIn("Choose a story to run step by step", self.html)
 
     def test_page_runs_steps_and_hides_sources_by_default(self) -> None:
         story_html = server.scenario_page_html(scenario_id="alive-proof").decode("utf-8")
-        self.assertIn("What this request will do", self.html)
-        self.assertIn("Reuses from the previous step", self.html)
-        self.assertIn("data-run-step", self.html)
-        self.assertIn("Show technical request", self.html)
-        self.assertIn("Show technical response", self.html)
-        self.assertIn("function renderRequestSource", self.html)
-        self.assertIn("function curlCommand", self.html)
-        self.assertIn("Copy as curl", self.html)
-        self.assertIn("data-copy-curl", self.html)
-        self.assertIn("HTTP status", self.html)
-        self.assertIn("source-card", self.html)
-        self.assertIn("/api/scenarios/${encodeURIComponent(state.story.id)}/", self.html)
+        self.assertIn("What this request will do", SCENARIOS_JS)
+        self.assertIn("Reuses from the previous step", SCENARIOS_JS)
+        self.assertIn("data-run-step", SCENARIOS_JS)
+        self.assertIn("Show technical request", SCENARIOS_JS)
+        self.assertIn("Show technical response", SCENARIOS_JS)
+        self.assertIn("function renderRequestSource", SCENARIOS_JS)
+        self.assertIn("function curlCommand", SCENARIOS_JS)
+        self.assertIn("Copy as curl", SCENARIOS_JS)
+        self.assertIn("data-copy-curl", SCENARIOS_JS)
+        self.assertIn("HTTP status", SCENARIOS_JS)
+        self.assertIn("source-card", SCENARIOS_JS)
+        self.assertIn("/api/scenarios/${encodeURIComponent(state.story.id)}/", SCENARIOS_JS)
         self.assertIn('const ACTIVE_SCENARIO = "alive-proof"', story_html)
-        self.assertNotIn("Cell 1", self.html)
+        self.assertNotIn("Cell 1", SCENARIOS_JS)
 
 
 class LabModePayloadTest(unittest.TestCase):
@@ -865,34 +881,27 @@ class LabModePayloadTest(unittest.TestCase):
         self.assertIn('const ACTIVE_SCENARIO = "alive-proof"', html)
 
     def test_chooser_cta_reads_walkthrough_when_not_runnable(self) -> None:
-        html = server.scenario_page_html().decode("utf-8")
-        self.assertIn("Read the walkthrough", html)
+        self.assertIn("Read the walkthrough", SCENARIOS_JS)
 
     def test_chooser_cta_reads_open_story_when_runnable(self) -> None:
-        html = server.scenario_page_html().decode("utf-8")
-        self.assertIn("Open story", html)
+        self.assertIn("Open story", SCENARIOS_JS)
 
     def test_story_local_only_pill_style_present(self) -> None:
-        html = server.scenario_page_html().decode("utf-8")
-        self.assertIn("status-pill.local_only", html)
+        self.assertIn("status-pill.local_only", SCENARIOS_CSS)
 
     def test_story_local_only_no_run_button(self) -> None:
-        html = server.scenario_page_html().decode("utf-8")
-        self.assertIn("This step runs on the local lab profile", html)
+        self.assertIn("This step runs on the local lab profile", SCENARIOS_JS)
 
     def test_story_run_it_locally_block_present(self) -> None:
-        html = server.scenario_page_html().decode("utf-8")
-        self.assertIn("Run this story on your machine", html)
-        self.assertIn("git clone https://github.com/jeremi/registry-lab", html)
+        self.assertIn("Run this story on your machine", SCENARIOS_JS)
+        self.assertIn("git clone https://github.com/jeremi/registry-lab", SCENARIOS_JS)
 
     def test_story_drawers_note_when_not_runnable(self) -> None:
-        html = server.scenario_page_html().decode("utf-8")
-        self.assertIn("Available when the story runs on the local lab profile", html)
+        self.assertIn("Available when the story runs on the local lab profile", SCENARIOS_JS)
 
     def test_status_label_maps_local_only(self) -> None:
-        html = server.scenario_page_html().decode("utf-8")
-        self.assertIn('"local_only"', html)
-        self.assertIn('"Local only"', html)
+        self.assertIn('"local_only"', SCENARIOS_JS)
+        self.assertIn('"Local only"', SCENARIOS_JS)
 
 
 class InternalRequestSourceTest(unittest.TestCase):
@@ -1074,17 +1083,15 @@ class InternalRequestSourceTest(unittest.TestCase):
     # ---- JS renderRequestSource: internal branch must be present in the page HTML ----
 
     def test_scenario_page_html_contains_internal_note_branch(self) -> None:
-        html = server.scenario_page_html().decode("utf-8")
-        self.assertIn("value.internal", html, "renderRequestSource must branch on value.internal")
-        self.assertIn("Internal lab call.", html, "renderRequestSource must render the internal-note text")
+        self.assertIn("value.internal", SCENARIOS_JS, "renderRequestSource must branch on value.internal")
+        self.assertIn("Internal lab call.", SCENARIOS_JS, "renderRequestSource must render the internal-note text")
 
     def test_scenario_page_html_internal_branch_suppresses_curl_button(self) -> None:
         # The canCurl logic must exclude internal requests.
-        html = server.scenario_page_html().decode("utf-8")
         # The combined canCurl expression must gate on !value.internal (or equivalent).
-        self.assertIn("value.internal", html)
+        self.assertIn("value.internal", SCENARIOS_JS)
         # And the "Copy as curl" button must still appear (for public-credential paths).
-        self.assertIn("Copy as curl", html)
+        self.assertIn("Copy as curl", SCENARIOS_JS)
 
 
 class ScenarioPageUxTest(unittest.TestCase):
@@ -1094,25 +1101,25 @@ class ScenarioPageUxTest(unittest.TestCase):
         self.html = server.scenario_page_html().decode("utf-8")
 
     def test_status_pill_has_role_status(self) -> None:
-        self.assertIn('role="status"', self.html, "status pill must have role='status' for screen-reader announcements")
+        self.assertIn('role="status"', SCENARIOS_JS, "status pill must have role='status' for screen-reader announcements")
 
     def test_friendly_response_has_aria_live_polite(self) -> None:
-        self.assertIn('aria-live="polite"', self.html, "friendly-response container must have aria-live='polite'")
+        self.assertIn('aria-live="polite"', SCENARIOS_JS, "friendly-response container must have aria-live='polite'")
 
     def test_aria_disabled_present_for_locked_steps(self) -> None:
-        self.assertIn("aria-disabled", self.html, "locked step buttons must use aria-disabled instead of (or in addition to) disabled")
+        self.assertIn("aria-disabled", SCENARIOS_JS, "locked step buttons must use aria-disabled instead of (or in addition to) disabled")
 
     def test_locked_step_hint_copy_present(self) -> None:
-        self.assertIn("Locked until step", self.html, "locked steps must display a 'Locked until step N completes.' hint")
+        self.assertIn("Locked until step", SCENARIOS_JS, "locked steps must display a 'Locked until step N completes.' hint")
 
     def test_try_again_retry_label_logic_present(self) -> None:
-        self.assertIn("Try again", self.html, "needs_attention status must offer a 'Try again' label on the retry button")
+        self.assertIn("Try again", SCENARIOS_JS, "needs_attention status must offer a 'Try again' label on the retry button")
 
     def test_prefers_reduced_motion_in_css(self) -> None:
-        self.assertIn("prefers-reduced-motion", self.html, "spinner animation must be wrapped in prefers-reduced-motion media query")
+        self.assertIn("prefers-reduced-motion", SCENARIOS_CSS, "spinner animation must be wrapped in prefers-reduced-motion media query")
 
     def test_scroll_into_view_usage_present(self) -> None:
-        self.assertIn("scrollIntoView", self.html, "next step or receipt must be scrolled into view after a step completes")
+        self.assertIn("scrollIntoView", SCENARIOS_JS, "next step or receipt must be scrolled into view after a step completes")
 
 
 class ChooserAndMetadataTest(unittest.TestCase):
@@ -1141,26 +1148,26 @@ class ChooserAndMetadataTest(unittest.TestCase):
     # ---- 1b. Chooser card "Start here" treatment ----
 
     def test_chooser_has_start_here_badge(self) -> None:
-        self.assertIn("Start here", self._chooser_html)
+        self.assertIn("Start here", SCENARIOS_JS)
 
     def test_chooser_default_card_has_css_class(self) -> None:
-        self.assertIn("scenario-card--default", self._chooser_html)
+        self.assertIn("scenario-card--default", SCENARIOS_CSS)
 
     def test_chooser_default_card_alive_proof_is_first(self) -> None:
         # The JS sort logic places the default story first; verify the sort is in the template.
-        self.assertIn("default_scenario_id", self._chooser_html)
+        self.assertIn("default_scenario_id", SCENARIOS_JS)
         # The sort expression must put the default item before hosted-runnable, then local-only.
-        self.assertIn("item.id === defaultId", self._chooser_html)
+        self.assertIn("item.id === defaultId", SCENARIOS_JS)
 
     # ---- 2. Badge explanation line ----
 
     def test_chooser_has_badge_explanation(self) -> None:
         # A line explaining the two badges must appear near the top of the chooser.
-        self.assertIn("Hosted", self._chooser_html)
-        self.assertIn("Local-only", self._chooser_html)
+        self.assertIn("Hosted", SCENARIOS_JS)
+        self.assertIn("Local-only", SCENARIOS_JS)
         # The explanation must mention both what hosted means and what local-only means.
-        self.assertIn("browser", self._chooser_html)
-        self.assertIn("locally", self._chooser_html)
+        self.assertIn("browser", SCENARIOS_JS)
+        self.assertIn("locally", SCENARIOS_JS)
 
     # ---- 3. Domain tags in story payloads ----
 
@@ -1196,12 +1203,13 @@ class ChooserAndMetadataTest(unittest.TestCase):
 
     def test_chooser_renders_domain_tag(self) -> None:
         # domain-tag class must be defined in CSS and referenced in the renderChooser template.
-        self.assertIn("domain-tag", self._chooser_html)
+        self.assertIn("domain-tag", SCENARIOS_JS)
+        self.assertIn(".domain-tag", SCENARIOS_CSS)
         # The JS template must reference item.domain so the value is rendered at runtime.
-        self.assertIn("item.domain", self._chooser_html)
+        self.assertIn("item.domain", SCENARIOS_JS)
 
     def test_chooser_domain_tag_has_css_class(self) -> None:
-        self.assertIn(".domain-tag", self._chooser_html)
+        self.assertIn(".domain-tag", SCENARIOS_CSS)
 
     # ---- 4. Per-story head metadata ----
 
@@ -1573,34 +1581,27 @@ class RequestPreviewTest(unittest.TestCase):
     # ---- page HTML contains preview label and JS wiring ----
 
     def test_scenario_page_html_contains_preview_label(self) -> None:
-        html = server.scenario_page_html().decode("utf-8")
-        self.assertIn("Request preview", html, "Page must contain a preview label text")
+        self.assertIn("Request preview", SCENARIOS_JS, "Page must contain a preview label text")
 
     def test_scenario_page_html_contains_session_storage_key_prefix(self) -> None:
-        html = server.scenario_page_html().decode("utf-8")
-        self.assertIn("lab-progress:", html, "Page must contain sessionStorage key prefix")
+        self.assertIn("lab-progress:", SCENARIOS_JS, "Page must contain sessionStorage key prefix")
 
     def test_scenario_page_html_contains_reset_story_button(self) -> None:
-        html = server.scenario_page_html().decode("utf-8")
-        self.assertIn("Reset story", html, "Page must contain a Reset story button")
+        self.assertIn("Reset story", SCENARIOS_JS, "Page must contain a Reset story button")
 
     def test_scenario_page_html_contains_session_storage_usage(self) -> None:
-        html = server.scenario_page_html().decode("utf-8")
-        self.assertIn("sessionStorage", html, "Page must use sessionStorage for progress persistence")
+        self.assertIn("sessionStorage", SCENARIOS_JS, "Page must use sessionStorage for progress persistence")
 
     def test_scenario_page_html_preview_fills_request_drawer_on_load(self) -> None:
-        html = server.scenario_page_html().decode("utf-8")
-        self.assertIn("request_preview", html, "JS must reference request_preview from story data")
+        self.assertIn("request_preview", SCENARIOS_JS, "JS must reference request_preview from story data")
 
     def test_scenario_page_html_completed_earlier_note_present(self) -> None:
-        html = server.scenario_page_html().decode("utf-8")
-        self.assertIn("Completed earlier", html, "Restored steps must show a 'Completed earlier' note")
+        self.assertIn("Completed earlier", SCENARIOS_JS, "Restored steps must show a 'Completed earlier' note")
 
     def test_scenario_page_html_restore_does_not_scroll(self) -> None:
         # On restore the scroll must be guarded by a flag; the page must not scroll on load.
-        html = server.scenario_page_html().decode("utf-8")
         # The restore code must call unlockNextSteps with a no-scroll flag or similar guard.
-        self.assertIn("restoring", html, "Restore path must set a restoring flag to suppress scroll/focus")
+        self.assertIn("restoring", SCENARIOS_JS, "Restore path must set a restoring flag to suppress scroll/focus")
 
 
 class ProgressPersistenceTest(unittest.TestCase):
@@ -1610,38 +1611,175 @@ class ProgressPersistenceTest(unittest.TestCase):
         self.html = server.scenario_page_html().decode("utf-8")
 
     def test_session_storage_set_on_step_complete(self) -> None:
-        self.assertIn("sessionStorage.setItem", self.html)
+        self.assertIn("sessionStorage.setItem", SCENARIOS_JS)
 
     def test_session_storage_get_on_page_load(self) -> None:
-        self.assertIn("sessionStorage.getItem", self.html)
+        self.assertIn("sessionStorage.getItem", SCENARIOS_JS)
 
     def test_session_storage_remove_on_reset(self) -> None:
-        self.assertIn("sessionStorage.removeItem", self.html)
+        self.assertIn("sessionStorage.removeItem", SCENARIOS_JS)
 
     def test_reset_story_clears_and_reloads(self) -> None:
-        self.assertIn("location.reload", self.html, "Reset story must trigger page reload")
+        self.assertIn("location.reload", SCENARIOS_JS, "Reset story must trigger page reload")
 
     def test_reset_only_on_story_page_not_chooser(self) -> None:
         # The reset button must only be rendered when ACTIVE_SCENARIO is set (i.e. story page).
         # The JS must gate the reset button on ACTIVE_SCENARIO being truthy.
-        self.assertIn("ACTIVE_SCENARIO", self.html)
+        self.assertIn("ACTIVE_SCENARIO", SCENARIOS_JS)
         # The reset button render must be conditional
-        self.assertIn("Reset story", self.html)
+        self.assertIn("Reset story", SCENARIOS_JS)
         # Verify reset is not unconditionally rendered at page load without scenario context
         # The button appears in JS, so it's either in renderStory or conditionally added
-        self.assertIn("reset", self.html.lower())
+        self.assertIn("reset", SCENARIOS_JS.lower())
 
     def test_restored_steps_marked_done(self) -> None:
         # The restore path must call updateStatus with "done"
-        self.assertIn("updateStatus", self.html)
+        self.assertIn("updateStatus", SCENARIOS_JS)
 
     def test_restored_steps_keep_preview_in_request_drawer(self) -> None:
         # Restore must set the request source to preview data, not clear it
-        self.assertIn("request_preview", self.html)
+        self.assertIn("request_preview", SCENARIOS_JS)
 
     def test_unlock_on_restore_does_not_focus(self) -> None:
         # unlockNextSteps called during restore must not focus or scroll
-        self.assertIn("restoring", self.html)
+        self.assertIn("restoring", SCENARIOS_JS)
+
+
+class StaticAssetRouteTest(unittest.TestCase):
+    """The /static/<name> route serves the extracted CSS/JS with strict allowlisting."""
+
+    def _drive_get(self, path: str):
+        """Run do_GET against a fake handler, returning (sent_bytes, errors).
+
+        sent_bytes is a list of (body, content_type); errors is a list of HTTP status codes
+        passed to send_error. This lets us assert content types and 404s without a socket.
+        """
+        import io
+        import http.server
+
+        h = server.LabHomepageHandler.__new__(server.LabHomepageHandler)
+        h.rfile = io.BytesIO(b"")
+        h.wfile = io.BytesIO()
+        h.server = type("S", (), {"server_address": ("127.0.0.1", 8080)})()
+        h.client_address = ("127.0.0.1", 12345)
+        h.request_version = "HTTP/1.0"
+        h.command = "GET"
+        h.path = path
+        h.headers = http.server.BaseHTTPRequestHandler.MessageClass()
+        sent_bytes: list = []
+        errors: list = []
+        h.send_bytes = lambda body, ct: sent_bytes.append((body, ct))
+        h.send_error = lambda code, *a, **kw: errors.append(code)
+        h.do_GET()
+        return sent_bytes, errors
+
+    def test_css_assets_served_with_css_content_type(self) -> None:
+        for name in ("shared.css", "homepage.css", "scenarios.css"):
+            with self.subTest(name=name):
+                sent, errors = self._drive_get(f"/static/{name}")
+                self.assertEqual(errors, [], f"{name} must not 404")
+                self.assertEqual(len(sent), 1)
+                body, ct = sent[0]
+                self.assertEqual(body, (STATIC_DIR / name).read_bytes())
+                self.assertEqual(ct, "text/css; charset=utf-8")
+
+    def test_js_assets_served_with_javascript_content_type(self) -> None:
+        for name in ("homepage.js", "scenarios.js"):
+            with self.subTest(name=name):
+                sent, errors = self._drive_get(f"/static/{name}")
+                self.assertEqual(errors, [], f"{name} must not 404")
+                self.assertEqual(len(sent), 1)
+                body, ct = sent[0]
+                self.assertEqual(body, (STATIC_DIR / name).read_bytes())
+                self.assertEqual(ct, "application/javascript; charset=utf-8")
+
+    def test_unknown_static_asset_is_404(self) -> None:
+        sent, errors = self._drive_get("/static/does-not-exist.css")
+        self.assertEqual(sent, [], "unknown asset must not return bytes")
+        self.assertEqual(errors, [server.HTTPStatus.NOT_FOUND])
+
+    def test_static_with_no_name_is_404(self) -> None:
+        sent, errors = self._drive_get("/static/")
+        self.assertEqual(sent, [])
+        self.assertEqual(errors, [server.HTTPStatus.NOT_FOUND])
+
+    def test_path_traversal_dotdot_is_404(self) -> None:
+        # A literal ../ traversal toward the server source must not escape the allowlist.
+        sent, errors = self._drive_get("/static/../lab-homepage-server.py")
+        self.assertEqual(sent, [], "traversal must not return any file bytes")
+        self.assertEqual(errors, [server.HTTPStatus.NOT_FOUND])
+
+    def test_path_traversal_url_encoded_is_404(self) -> None:
+        # URL-encoded traversal (%2e%2e%2f) must also fail the allowlist, never read a file.
+        sent, errors = self._drive_get("/static/%2e%2e%2fsecrets")
+        self.assertEqual(sent, [], "encoded traversal must not return any file bytes")
+        self.assertEqual(errors, [server.HTTPStatus.NOT_FOUND])
+
+    def test_static_asset_bytes_rejects_non_allowlisted_name(self) -> None:
+        with self.assertRaises(KeyError):
+            server.static_asset_bytes("../lab-homepage-server.py")
+        with self.assertRaises(KeyError):
+            server.static_asset_bytes("secrets")
+
+    def test_allowlist_matches_referenced_assets(self) -> None:
+        # Every /static/* asset linked from the rendered pages must be in the allowlist and
+        # servable, so no page can reference a 404.
+        import re
+
+        pages = [
+            server.homepage_html("Registry Lab").decode("utf-8"),
+            server.scenario_page_html().decode("utf-8"),
+            server.scenario_page_html(scenario_id="alive-proof").decode("utf-8"),
+        ]
+        referenced = set()
+        for page in pages:
+            referenced.update(re.findall(r'/static/([A-Za-z0-9_.-]+)', page))
+        self.assertTrue(referenced, "pages must reference at least one /static/ asset")
+        for name in sorted(referenced):
+            with self.subTest(name=name):
+                self.assertIn(name, server.STATIC_ASSETS, f"{name} referenced but not allowlisted")
+                sent, errors = self._drive_get(f"/static/{name}")
+                self.assertEqual(errors, [], f"{name} referenced by a page must be servable")
+                self.assertEqual(len(sent), 1)
+
+    def test_static_dir_resolves_beside_server_script(self) -> None:
+        # The dir must resolve relative to the script, not the CWD, so it is correct after deploy.
+        self.assertEqual(server.STATIC_DIR, MODULE_PATH.parent / "lab_homepage_static")
+        self.assertTrue(server.STATIC_DIR.is_dir())
+
+
+class VerifyStaticAssetsTest(unittest.TestCase):
+    """The startup check fails loudly when the static dir or any asset is missing."""
+
+    def test_passes_when_all_assets_present(self) -> None:
+        # Should not raise with the real, complete asset directory.
+        server.verify_static_assets()
+
+    def test_aborts_when_dir_missing(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "no_such_static_dir"
+            with mock.patch.object(server, "STATIC_DIR", missing):
+                with self.assertRaises(SystemExit) as ctx:
+                    server.verify_static_assets()
+        self.assertIn(str(missing), str(ctx.exception))
+
+    def test_aborts_when_an_asset_missing(self) -> None:
+        import shutil
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            partial = Path(tmp) / "lab_homepage_static"
+            partial.mkdir()
+            # Copy all but one asset to trigger the missing-asset path.
+            names = list(server.STATIC_ASSETS)
+            for name in names[:-1]:
+                shutil.copy(STATIC_DIR / name, partial / name)
+            with mock.patch.object(server, "STATIC_DIR", partial):
+                with self.assertRaises(SystemExit) as ctx:
+                    server.verify_static_assets()
+        self.assertIn(names[-1], str(ctx.exception))
 
 
 if __name__ == "__main__":

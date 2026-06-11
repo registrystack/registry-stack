@@ -1,0 +1,80 @@
+* { box-sizing: border-box; letter-spacing: 0; }
+html { background: #ffffff; color: var(--registry-body); font-family: var(--registry-font); scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: #ffffff;
+  color: var(--registry-body);
+  font: 14px/1.5 var(--registry-font);
+}
+a { color: var(--registry-blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+:focus-visible { outline: 2px solid var(--registry-blue); outline-offset: 3px; }
+.site-header {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.98);
+  border-bottom: 1px solid var(--registry-rule);
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+  padding: 14px clamp(16px, 4vw, 42px);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.brand {
+  align-items: center;
+  color: var(--registry-ink);
+  display: inline-flex;
+  font-size: 17px;
+  font-weight: 700;
+  gap: 12px;
+  white-space: nowrap;
+}
+.brand:hover { text-decoration: none; }
+.brand-mark {
+  align-items: center;
+  background: var(--registry-blue);
+  color: #ffffff;
+  display: inline-flex;
+  font-family: var(--registry-mono);
+  font-size: 13px;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+.top-nav {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: clamp(12px, 2vw, 24px);
+  justify-content: flex-end;
+}
+.top-nav a {
+  align-items: center;
+  color: var(--registry-muted);
+  display: inline-flex;
+  font-size: 14px;
+  font-weight: 600;
+  min-height: 36px;
+}
+.hero {
+  background: #ffffff;
+  border-bottom: 1px solid var(--registry-rule);
+}
+.eyebrow {
+  color: var(--registry-teal);
+  font-family: var(--registry-mono);
+  font-size: 12px;
+  margin: 0 0 14px;
+  text-transform: uppercase;
+}
+p { line-height: 1.58; margin: 0; }
+code, pre {
+  font-family: var(--registry-mono);
+  font-size: 12px;
+  letter-spacing: 0;
+}
+button:hover, .button:hover { background: var(--registry-active); text-decoration: none; }
+.primary { background: var(--registry-blue); border-color: var(--registry-blue); color: #fff; }
+.primary:hover { background: var(--registry-blue-dark); }
+.actions { display: flex; gap: 10px; flex-wrap: wrap; }
