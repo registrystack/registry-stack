@@ -3,8 +3,6 @@ name: perf-smoke
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: ["**"]
   workflow_dispatch:
 
 # See ci.yml for the rationale; cancel superseded runs on branches, keep main.
@@ -132,9 +130,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p target/perf/reports
-          set -a
-          . target/perf/perf.env
-          set +a
+          # Export env-file lines literally (docker --env-file semantics).
+          # Shell-sourcing would apply quote removal and corrupt the JSON
+          # value of REGISTRY_RELAY_PROVENANCE_JWK.
+          while IFS='=' read -r key value; do
+            case "$key" in ''|'#'*) continue ;; esac
+            export "$key=$value"
+          done < target/perf/perf.env
           target/release/registry-relay --config perf/config/small.yaml >target/perf/relay-smoke.log 2>&1 &
           relay_pid="$!"
           trap 'status=$?; if [ "$status" -ne 0 ]; then cat target/perf/relay-smoke.log || true; fi; kill "$relay_pid" 2>/dev/null || true; exit "$status"' EXIT

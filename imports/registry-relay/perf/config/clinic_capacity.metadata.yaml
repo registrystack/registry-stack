@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-schema_version: registry-metadata/v1
+schema_version: registry-manifest/v1
 
 catalog:
   id: clinic-capacity-perf
@@ -7,6 +7,24 @@ catalog:
   title: Clinic Capacity Perf Metadata
   publisher:
     name: Perf Test Harness
+
+federation:
+  node_id: did:web:perf.example.test
+  issuer: https://perf.example.test
+  jwks_uri: https://perf.example.test/.well-known/jwks.json
+  federation_api: https://perf.example.test/federation
+  supported_protocol_versions:
+    - registry-notary-federation/v0.1
+
+evaluation_profiles:
+  - id: facility-identity-v1
+    ruleset: facility-identity-v1
+    claim_id: facility_identity
+    subject_id_type: id
+  - id: facility-region-v1
+    ruleset: facility-region-v1
+    claim_id: facility_region_category
+    subject_id_type: region_code
 
 requirements:
   - id: facility_identity_requirement
@@ -48,7 +66,9 @@ datasets:
         lookup_keys: [id]
         access:
           kind: registry-notary
-          conforms_to: registry_relay:registry-notary-v1
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://perf.example.test/notary
+          discovery_url: https://perf.example.test/.well-known/evidence-service
           ruleset: facility-identity-v1
         policy:
           purpose:
@@ -66,7 +86,9 @@ datasets:
         lookup_keys: [region_code]
         access:
           kind: registry-notary
-          conforms_to: registry_relay:registry-notary-v1
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://perf.example.test/notary
+          discovery_url: https://perf.example.test/.well-known/evidence-service
           ruleset: facility-region-v1
         policy:
           purpose:
