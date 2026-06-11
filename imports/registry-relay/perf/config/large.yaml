@@ -63,7 +63,7 @@ auth:
         name: PERF_ADMIN_KEY_HASH
         commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
       scopes:
-        - admin
+        - registry_relay:admin
 
 
 # Provenance signer for VC-JWT response checks.
