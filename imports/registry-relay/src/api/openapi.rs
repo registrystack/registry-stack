@@ -747,22 +747,10 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
                     "get",
                     &format!("run_{dataset_slug}_aggregate"),
                 );
-                set_op_id(
-                    &mut paths,
-                    &aggregate_run_path,
-                    "post",
-                    &format!("query_{dataset_slug}_aggregate"),
-                );
                 add_response_404(
                     &mut paths,
                     &aggregate_run_path,
                     "get",
-                    "Aggregate definition not found for this dataset.",
-                );
-                add_response_404(
-                    &mut paths,
-                    &aggregate_run_path,
-                    "post",
                     "Aggregate definition not found for this dataset.",
                 );
                 add_signed_vc_variant(
@@ -774,10 +762,8 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
                 );
                 if dataset_aggregates_require_purpose(dataset_config) {
                     add_purpose_header_parameter(&mut paths, &aggregate_run_path, "get");
-                    add_purpose_header_parameter(&mut paths, &aggregate_run_path, "post");
                 }
                 tag(&mut paths, &aggregate_run_path, "get", &aggregate_tag);
-                tag(&mut paths, &aggregate_run_path, "post", &aggregate_tag);
 
                 let aggregate_query_path = format!(
                     "/v1/datasets/{}/aggregates/{{aggregate_id}}/query",
@@ -3663,15 +3649,6 @@ fn aggregate_run_path_item(dataset_id: &str) -> Value {
             ),
             "parameters": parameters,
             "responses": aggregate_result_responses(),
-        },
-        "post": {
-            "summary": "Query aggregate",
-            "description": format!(
-                "Runs a dataset-scoped aggregate in `{dataset_id}` with caller-selected indicators, group_by dimensions, and configured filters."
-            ),
-            "parameters": [path_parameter("aggregate_id", "Aggregate identifier")],
-            "requestBody": aggregate_query_request_body(),
-            "responses": aggregate_result_responses(),
         }
     })
 }
@@ -4337,6 +4314,28 @@ mod tests {
         assert!(doc["components"]["schemas"]["DidDocument"].is_object());
         assert!(doc["components"]["schemas"]["JsonSchemaDocument"].is_object());
         assert!(doc["components"]["schemas"]["JsonLdContext"].is_object());
+    }
+
+    #[test]
+    fn aggregate_run_path_documents_only_router_mounted_methods() {
+        let config = load_example_config();
+        let doc = openapi_document(&catalog_with_individual(), &config);
+
+        let run_path = &doc["paths"]["/v1/datasets/social_registry/aggregates/{aggregate_id}"];
+        assert!(
+            run_path["get"].is_object(),
+            "GET on the bare aggregate path is mounted and must stay documented"
+        );
+        assert!(
+            run_path["post"].is_null(),
+            "the router does not mount POST on the bare aggregate path, so the \
+             generated document must not advertise it"
+        );
+        assert!(
+            doc["paths"]["/v1/datasets/social_registry/aggregates/{aggregate_id}/query"]["post"]
+                .is_object(),
+            "POST must stay documented on the /query path"
+        );
     }
 
     #[test]
