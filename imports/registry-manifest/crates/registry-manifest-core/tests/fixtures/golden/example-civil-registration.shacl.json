@@ -67,6 +67,7 @@
       "@type": "@id"
     },
     "registry_manifest": "https://registry-manifest.dev/ns/v1#",
+    "schema_version": "registry_manifest:schemaVersion",
     "sh": "http://www.w3.org/ns/shacl#",
     "sh:class": {
       "@type": "@id"
@@ -90,6 +91,9 @@
     "skos:inScheme": {
       "@type": "@id"
     },
+    "valid_from": "registry_manifest:validFrom",
+    "valid_to": "registry_manifest:validTo",
+    "version": "registry_manifest:version",
     "xsd": "http://www.w3.org/2001/XMLSchema#"
   },
   "@graph": [

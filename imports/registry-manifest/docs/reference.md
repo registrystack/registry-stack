@@ -209,6 +209,11 @@ Source manifests, profile descriptors, and generated manifest-owned formats use 
 
 Codelist source definitions use `version` for the codelist scheme version and
 `valid_from` / `valid_to` for the codelist validity window.
+Manifest-owned JSON-LD maps these bare keys to stable Registry Manifest RDF terms:
+`schema_version` -> `registry_manifest:schemaVersion`,
+`version` -> `registry_manifest:version`,
+`valid_from` -> `registry_manifest:validFrom`, and
+`valid_to` -> `registry_manifest:validTo`.
 
 ## Publish output artifacts
 

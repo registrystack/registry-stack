@@ -2088,6 +2088,63 @@ fn generated_manifest_owned_formats_carry_schema_versions() {
     );
 }
 
+fn contains_key(value: &Value, key: &str) -> bool {
+    match value {
+        Value::Object(object) => object
+            .iter()
+            .any(|(candidate, value)| candidate == key || contains_key(value, key)),
+        Value::Array(values) => values.iter().any(|value| contains_key(value, key)),
+        _ => false,
+    }
+}
+
+#[test]
+fn standards_profile_outputs_do_not_carry_manifest_schema_versions() {
+    let mut manifest = fixture("example-civil-registration");
+    manifest.codelists[0].version = Some("2026.1".to_string());
+    manifest.codelists[0].valid_from = Some("2026-06-11".to_string());
+    manifest.codelists[0].valid_to = Some("2027-06-11".to_string());
+    let compiled = compile_manifest(&manifest).expect("compile");
+
+    for (label, document) in [
+        ("BRegDCAT-AP", render_breg_dcat_ap(&compiled)),
+        ("base DCAT", render_base_dcat(&compiled)),
+        ("CPSV-AP", render_cpsv_ap(&compiled)),
+        (
+            "profile DCAT",
+            render_dcat_profile(&compiled, "bregdcat-ap").expect("profile renders"),
+        ),
+    ] {
+        for key in ["schema_version", "version", "valid_from", "valid_to"] {
+            assert!(
+                !contains_key(&document, key),
+                "{label} is standards-owned and must not carry manifest-owned `{key}` markers"
+            );
+        }
+    }
+}
+
+#[test]
+fn jsonld_context_maps_manifest_version_terms() {
+    let compiled = compile_manifest(&fixture("example-civil-registration")).expect("compile");
+
+    for context in [
+        render_shacl(&compiled)["@context"].clone(),
+        render_policy_collection(&compiled)["@context"].clone(),
+        render_dataset_policy_document(&compiled, "vital-events").expect("policy renders")
+            ["@context"]
+            .clone(),
+    ] {
+        assert_eq!(
+            context["schema_version"],
+            json!("registry_manifest:schemaVersion")
+        );
+        assert_eq!(context["version"], json!("registry_manifest:version"));
+        assert_eq!(context["valid_from"], json!("registry_manifest:validFrom"));
+        assert_eq!(context["valid_to"], json!("registry_manifest:validTo"));
+    }
+}
+
 #[test]
 fn policy_validation_rejects_ambiguous_or_textual_terms() {
     let mut manifest = fixture("example-civil-registration");
