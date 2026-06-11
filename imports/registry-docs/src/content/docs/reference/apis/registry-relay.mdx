@@ -52,6 +52,10 @@ For setup steps, scope strings, and credential configuration, see
   ids, and SP-DCI registry ids are runtime configuration, not contract data. To see what a specific
   gateway exposes, fetch `GET /openapi.json` or read `GET /metadata/catalog`. Runtime deployments
   gate OpenAPI by default unless `openapi_requires_auth` is disabled for demos or controlled tooling.
+- **Purpose-header enforcement.** The shared `Data-Purpose` header parameter is optional in the
+  baseline OpenAPI component because not every entity requires purpose capture. At runtime,
+  `api.require_purpose_header: true` on an entity or aggregate source makes the header mandatory for
+  that operation. Calls that omit it are rejected with `400 auth.purpose_required`.
 - **Feature-gated surfaces.** OGC API Features, Records, and EDR adapters, SP-DCI sync routes, and
   the provenance routes (DID document, JSON Schemas, JSON-LD contexts, VC-JWT serialization) only
   mount when the gateway is built and configured with the matching Cargo feature.
