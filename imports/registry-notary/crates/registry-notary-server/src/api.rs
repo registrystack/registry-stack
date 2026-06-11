@@ -849,8 +849,6 @@ async fn admin_config_apply(
         }
     };
     let candidate_config = Arc::new(candidate_config);
-    let runtime_snapshot =
-        state.governed_apply_runtime_snapshot(candidate_config.clone(), &governed_apply);
     let Some(config_trust) = &config_governance.config_trust else {
         return with_config_audit(
             config_apply_unavailable("config_trust.antirollback_state_path is not configured"),
@@ -930,7 +928,7 @@ async fn admin_config_apply(
         );
     }
     consume_apply_metadata(&request);
-    state.publish_runtime_snapshot(runtime_snapshot);
+    state.publish_governed_apply(candidate_config.clone(), &governed_apply);
     match governed_apply {
         GovernedConfigApply::SigningRotation {
             notary_auth_anchor, ..
@@ -3060,12 +3058,16 @@ impl RegistryNotaryApiState {
         self.issuer_runtime().signer_readiness.clone()
     }
 
-    fn governed_apply_runtime_snapshot(
+    fn publish_governed_apply(
         &self,
         runtime_config: Arc<StandaloneRegistryNotaryConfig>,
         apply: &GovernedConfigApply,
-    ) -> Arc<ApiRuntimeSnapshot> {
-        let mut snapshot = (*self.runtime_snapshot()).clone();
+    ) {
+        let mut runtime = self
+            .runtime
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut snapshot = (**runtime).clone();
         snapshot.runtime_config = Some(runtime_config.clone());
         snapshot.config_governance = ConfigGovernanceContext::from_config(&runtime_config);
         if let GovernedConfigApply::SigningRotation {
@@ -3079,7 +3081,7 @@ impl RegistryNotaryApiState {
             snapshot.preauth = issuer_rotation.preauth.clone();
             snapshot.federation_runtime = issuer_rotation.federation.clone();
         }
-        Arc::new(snapshot)
+        *runtime = Arc::new(snapshot);
     }
 
     fn notary_auth_anchor_for_config(
