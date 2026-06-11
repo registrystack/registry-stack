@@ -514,7 +514,9 @@ async fn lists_dataset_measure_and_dimension_discovery() {
     assert_eq!(body["id"], "min_payment");
     assert_eq!(body["unit_measure"], "currency");
     assert!(
-        body.as_object().expect("measure object").contains_key("unit_multiplier"),
+        body.as_object()
+            .expect("measure object")
+            .contains_key("unit_multiplier"),
         "measure discovery must use the unit_multiplier spelling"
     );
     assert!(

@@ -381,7 +381,9 @@ async fn area_get_wkt_returns_grouped_admin_features() {
         "legacy suppressed_rows key must be absent from the EDR disclosure block"
     );
     assert!(
-        body["disclosure_control"].get("suppressed_observations").is_some(),
+        body["disclosure_control"]
+            .get("suppressed_observations")
+            .is_some(),
         "suppressed_observations must be present in the EDR disclosure block"
     );
     let features = body["features"].as_array().expect("features");
