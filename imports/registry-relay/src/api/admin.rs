@@ -8,7 +8,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use axum::extract::{Path, Query};
+use axum::extract::{FromRequest, FromRequestParts, Path, Query, Request};
+use axum::http::request::Parts;
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
@@ -23,6 +24,7 @@ use registry_platform_ops::{
     ConfigProvenance, ConfigSource, FileAntiRollbackStore, FileLocalApprovalStore,
     LocalOperatorApproval, PostureFilterError, PostureTier,
 };
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use time::format_description::well_known::Rfc3339;
@@ -64,6 +66,55 @@ const RUNTIME_UNAVAILABLE_CODE: &str = "registry.admin.runtime_unavailable";
 const ADMIN_SCOPE: &str = "registry_relay:admin";
 const METRICS_SCOPE: &str = crate::observability::METRICS_SCOPE;
 const OPS_READ_SCOPE: &str = "registry_relay:ops_read";
+
+struct AdminPrincipal;
+
+impl<S> FromRequestParts<S> for AdminPrincipal
+where
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        require_scope_from_parts(parts, state, ADMIN_SCOPE)
+            .await
+            .map(|()| Self)
+    }
+}
+
+struct OpsReadPrincipal;
+
+impl<S> FromRequestParts<S> for OpsReadPrincipal
+where
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        require_scope_from_parts(parts, state, OPS_READ_SCOPE)
+            .await
+            .map(|()| Self)
+    }
+}
+
+struct AdminJson<T>(T);
+
+impl<S, T> FromRequest<S> for AdminJson<T>
+where
+    S: Send + Sync,
+    T: DeserializeOwned,
+{
+    type Rejection = Response;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        let principal = req.extensions().get::<Principal>().cloned();
+        let Json(value) = Json::<T>::from_request(req, state)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        require_scope_from_principal(principal, ADMIN_SCOPE)?;
+        Ok(Self(value))
+    }
+}
 
 #[doc(hidden)]
 pub type CandidateProvenanceResolverRef = Arc<dyn CandidateProvenanceResolver>;
@@ -109,13 +160,7 @@ where
         )
 }
 
-async fn capabilities(
-    runtime: RuntimeSnapshot,
-    principal: Option<Extension<Principal>>,
-) -> Response {
-    if let Err(error) = require_ops_scope(principal) {
-        return error.into_response();
-    }
+async fn capabilities(runtime: RuntimeSnapshot, _ops: OpsReadPrincipal) -> Response {
     let Some(config) = runtime.config() else {
         return runtime_unavailable("runtime handle is not installed");
     };
@@ -252,13 +297,9 @@ impl ConfigAdminAction {
 
 async fn config_verify(
     runtime: RuntimeSnapshot,
-    principal: Option<Extension<Principal>>,
     resolver: Option<Extension<CandidateProvenanceResolverRef>>,
-    Json(request): Json<ConfigApplyRequest>,
+    AdminJson(request): AdminJson<ConfigApplyRequest>,
 ) -> Response {
-    if let Err(error) = require_admin_scope(principal) {
-        return error.into_response();
-    }
     let Some(current) = runtime.load() else {
         return with_config_audit(
             config_apply_unavailable("runtime handle is not installed"),
@@ -396,13 +437,9 @@ async fn config_verify(
 
 async fn config_dry_run(
     runtime: RuntimeSnapshot,
-    principal: Option<Extension<Principal>>,
     resolver: Option<Extension<CandidateProvenanceResolverRef>>,
-    Json(request): Json<ConfigApplyRequest>,
+    AdminJson(request): AdminJson<ConfigApplyRequest>,
 ) -> Response {
-    if let Err(error) = require_admin_scope(principal) {
-        return error.into_response();
-    }
     let Some(current) = runtime.load() else {
         return with_config_audit(
             config_apply_unavailable("runtime handle is not installed"),
@@ -545,13 +582,9 @@ async fn config_dry_run(
 
 async fn config_apply(
     runtime: RuntimeSnapshot,
-    principal: Option<Extension<Principal>>,
     resolver: Option<Extension<CandidateProvenanceResolverRef>>,
-    Json(request): Json<ConfigApplyRequest>,
+    AdminJson(request): AdminJson<ConfigApplyRequest>,
 ) -> Response {
-    if let Err(error) = require_admin_scope(principal) {
-        return error.into_response();
-    }
     let Some(handle) = runtime.handle() else {
         return with_config_audit(
             config_apply_unavailable("runtime handle is not installed"),
@@ -1022,11 +1055,8 @@ struct ReloadTablePath {
 async fn reload_table(
     Path(path): Path<ReloadTablePath>,
     runtime: RuntimeSnapshot,
-    principal: Option<Extension<Principal>>,
+    _admin: AdminPrincipal,
 ) -> Response {
-    if let Err(error) = require_admin_scope(principal) {
-        return error.into_response();
-    }
     let Some(registry) = runtime.ingest() else {
         return reload_unavailable(
             "admin table reload route matched, but ingest registry is not installed",
@@ -1051,10 +1081,7 @@ async fn reload_table(
     }
 }
 
-async fn reload_all(runtime: RuntimeSnapshot, principal: Option<Extension<Principal>>) -> Response {
-    if let Err(error) = require_admin_scope(principal) {
-        return error.into_response();
-    }
+async fn reload_all(runtime: RuntimeSnapshot, _admin: AdminPrincipal) -> Response {
     let Some(registry) = runtime.ingest() else {
         return reload_unavailable(
             "admin reload-all route matched, but ingest registry is not installed",
@@ -1097,11 +1124,8 @@ struct PostureQuery {
 async fn posture(
     Query(query): Query<PostureQuery>,
     runtime: RuntimeSnapshot,
-    principal: Option<Extension<Principal>>,
+    _ops: OpsReadPrincipal,
 ) -> Response {
-    if let Err(error) = require_ops_scope(principal) {
-        return error.into_response();
-    }
     let Some(config) = runtime.config() else {
         return Error::from(AdminError::UnknownResource).into_response();
     };
@@ -2305,18 +2329,29 @@ fn publish_readiness(
     }
 }
 
-fn require_admin_scope(principal: Option<Extension<Principal>>) -> Result<(), Error> {
-    let Some(Extension(principal)) = principal else {
-        return Err(AuthError::MissingCredential.into());
-    };
-    require_scope(&principal, ADMIN_SCOPE)
+async fn require_scope_from_parts<S>(
+    parts: &mut Parts,
+    state: &S,
+    required: &'static str,
+) -> Result<(), Response>
+where
+    S: Send + Sync,
+{
+    let principal = Option::<Extension<Principal>>::from_request_parts(parts, state)
+        .await
+        .unwrap_or(None)
+        .map(|Extension(principal)| principal);
+    require_scope_from_principal(principal, required)
 }
 
-fn require_ops_scope(principal: Option<Extension<Principal>>) -> Result<(), Error> {
-    let Some(Extension(principal)) = principal else {
-        return Err(AuthError::MissingCredential.into());
+fn require_scope_from_principal(
+    principal: Option<Principal>,
+    required: &'static str,
+) -> Result<(), Response> {
+    let Some(principal) = principal else {
+        return Err(Error::from(AuthError::MissingCredential).into_response());
     };
-    require_scope(&principal, OPS_READ_SCOPE)
+    require_scope(&principal, required).map_err(IntoResponse::into_response)
 }
 
 #[derive(Debug, Serialize)]

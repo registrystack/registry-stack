@@ -435,7 +435,7 @@ Use `?tier=restricted` only for trusted operations users who need the restricted
 Governed config routes require a token with the independent `registry_relay:admin` scope:
 
 ```text
-POST /admin/reload
+POST /admin/v1/reload
 POST /admin/v1/config/verify
 POST /admin/v1/config/dry-run
 POST /admin/v1/config/apply
