@@ -3,6 +3,8 @@ name: perf-smoke
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: ["**"]
   workflow_dispatch:
 
 # See ci.yml for the rationale; cancel superseded runs on branches, keep main.
@@ -21,12 +23,12 @@ env:
   CROSSWALK_REPOSITORY: PublicSchema/crosswalk
   CROSSWALK_REF: 54e0f537830837fcd0c9efa87990987b1846931c
 
-# Smoke-checks the perf scaffolding with a short CI-sized k6 run.
+# Smoke-checks the perf scaffolding and enforces CI-sized k6 latency thresholds.
 # It verifies:
 #   1. The Criterion benches compile (`cargo bench --no-run`).
 #   2. The fixture generator runs end-to-end at the small profile.
 #   3. Every k6 scenario passes `node --check` for basic syntax.
-#   4. A short small-profile k6 smoke runs against the release server.
+#   4. A short small-profile k6 run gates latency thresholds against the release server.
 # Scheduled perf jobs should still run medium, large, soak, and breakpoint profiles.
 
 # Default the GITHUB_TOKEN to read-only on contents; this workflow only reads.
@@ -123,7 +125,10 @@ jobs:
             python -c "import ast, sys; ast.parse(open('$f').read())"
           done
 
-      - name: Run small k6 smoke
+      - name: Check perf threshold gate wiring
+        run: python3 scripts/check_perf_threshold_gate.py
+
+      - name: Run small k6 threshold gate
         run: |
           set -euo pipefail
           mkdir -p target/perf/reports
@@ -145,7 +150,6 @@ jobs:
               --env-file target/perf/perf.env \
               -e REGISTRY_RELAY_DURATION=5s \
               -e REGISTRY_RELAY_VUS=2 \
-              -e REGISTRY_RELAY_NO_THRESHOLD=1 \
               -e K6_SUMMARY_TREND_STATS=min,med,avg,max,p\(90\),p\(95\),p\(99\) \
               -v "$PWD:/workspace" \
               -w /workspace \

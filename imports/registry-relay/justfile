@@ -201,4 +201,5 @@ perf-smoke:
     uv run perf/scripts/generate_perf_data.py --profile small --out-dir target/perf/smoke-fixtures
     cargo bench --no-run
     for f in perf/k6/*.js perf/k6/lib/*.js; do node --check "$f" || exit 1; done
+    python3 scripts/check_perf_threshold_gate.py
     @echo "perf-smoke OK"
