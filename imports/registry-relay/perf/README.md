@@ -78,9 +78,9 @@ the file, quote removal corrupts the JSON `REGISTRY_RELAY_PROVENANCE_JWK`
 value):
 
 ```bash
-while IFS= read -r line; do
-  case "$line" in ''|'#'*) continue ;; esac
-  export "$line"
+while IFS='=' read -r key value; do
+  case "$key" in ''|'#'*) continue ;; esac
+  export "$key=$value"
 done < target/perf/perf.env
 target/release/registry-relay --config perf/config/medium.yaml
 ```
@@ -109,9 +109,9 @@ Or export the env file (same literal-export loop as above) and run k6
 directly:
 
 ```bash
-while IFS= read -r line; do
-  case "$line" in ''|'#'*) continue ;; esac
-  export "$line"
+while IFS='=' read -r key value; do
+  case "$key" in ''|'#'*) continue ;; esac
+  export "$key=$value"
 done < target/perf/perf.env
 k6 run perf/k6/cached_304.js
 ```
