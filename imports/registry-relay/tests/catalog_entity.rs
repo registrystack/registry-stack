@@ -977,21 +977,25 @@ fn dcat_spatial_aggregate_includes_ogc_edr_distribution_and_service() {
     let distributions = dcat["dcat:dataset"][0]["dcat:distribution"]
         .as_array()
         .expect("dcat distributions");
-    let edr = aggregate_distribution_by_access_url(
-        distributions,
-        "https://data.example.test/ogc/edr/v1/collections/regional_counts_area/area",
-    );
+
+    // The distribution's accessURL is the area query endpoint (the actual data access URL).
+    let area_url = "https://data.example.test/ogc/edr/v1/collections/regional_counts_area/area";
+    let collection_url = "https://data.example.test/ogc/edr/v1/collections/regional_counts_area";
+
+    let edr = aggregate_distribution_by_access_url(distributions, area_url);
 
     assert_eq!(edr["@type"], "dcat:Distribution");
+    assert_eq!(edr["dcat:accessURL"], area_url);
     assert_eq!(edr["dcterms:title"], "Regional counts OGC EDR area");
     assert_eq!(edr["dcterms:format"]["rdfs:label"], "application/geo+json");
+    // The accessService endpointURL must point at the collection root, not the area query.
     assert_eq!(
         edr["dcat:accessService"]["@id"],
-        "https://data.example.test/ogc/edr/v1/collections/regional_counts_area/area#aggregate-query-service"
+        format!("{collection_url}#aggregate-query-service")
     );
     assert_eq!(
         edr["dcat:accessService"]["dcat:endpointURL"],
-        "https://data.example.test/ogc/edr/v1/collections/regional_counts_area/area"
+        collection_url
     );
     assert!(edr["dcat:accessService"]["dcterms:conformsTo"]
         .as_array()
@@ -1004,6 +1008,15 @@ fn dcat_spatial_aggregate_includes_ogc_edr_distribution_and_service() {
         .iter()
         .any(|value| value
             == "https://data.example.test/v1/datasets/social_registry/aggregates/regional_counts/structure"));
+
+    // The same collection-scoped endpointURL must appear in the SHACL/JSON-LD document.
+    // (dcat is the SHACL rendering; we verify the distribution's service node carries the
+    // collection URL, not the area query URL.)
+    let shacl_edr = aggregate_distribution_by_access_url(distributions, area_url);
+    assert_eq!(
+        shacl_edr["dcat:accessService"]["dcat:endpointURL"],
+        collection_url
+    );
 }
 
 #[tokio::test]
