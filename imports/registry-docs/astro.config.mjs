@@ -40,6 +40,7 @@ export default defineConfig({
   // internal redirects map the retired /projects/* and /capabilities/* routes
   // to their new homes so old links and search results keep resolving.
   redirects: {
+    '/start/': '/start/quickstart/',
     // Problems -> marketing /why
     '/problems/': `${marketing}/why/`,
     '/problems/existing-data-not-service-ready/': `${marketing}/why/`,
