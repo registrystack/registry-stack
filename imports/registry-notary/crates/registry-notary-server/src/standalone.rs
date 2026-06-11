@@ -2105,6 +2105,7 @@ struct FileWatchSigningProvider {
 #[derive(Clone, Debug)]
 struct FileWatchFileState {
     last_modified: Option<SystemTime>,
+    last_content_digest: Option<[u8; 32]>,
     last_checked: Instant,
     metadata_missing: bool,
 }
@@ -2114,6 +2115,7 @@ impl FileWatchSigningProvider {
         let path = std::path::PathBuf::from(&key.path);
         let signer = load_file_watch_jwk_signer(key_id, key, &path)?;
         let last_modified = file_watch_key_file_modified(key_id, &path)?;
+        let last_content_digest = file_watch_key_file_content_digest(key_id, &path).ok();
         Ok(Self {
             config_key_id: key_id.to_string(),
             key_config: key.clone(),
@@ -2123,6 +2125,7 @@ impl FileWatchSigningProvider {
             signer: Arc::new(StdMutex::new(signer)),
             file_state: Arc::new(StdMutex::new(FileWatchFileState {
                 last_modified: Some(last_modified),
+                last_content_digest,
                 last_checked: Instant::now(),
                 metadata_missing: false,
             })),
@@ -2181,15 +2184,26 @@ impl FileWatchSigningProvider {
             }
         };
 
+        // Compute a content digest to detect same-mtime replacements (e.g. cp -p,
+        // snapshot restore, coarse filesystem timestamp resolution). This read
+        // happens at most once per debounce window, so for tiny key files it is
+        // effectively free.
+        let content_digest =
+            file_watch_key_file_content_digest(&self.config_key_id, &self.path).ok();
+
         {
             let mut state = self
                 .file_state
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if !state.metadata_missing && state.last_modified == Some(modified) {
+            let mtime_unchanged = !state.metadata_missing && state.last_modified == Some(modified);
+            let digest_unchanged =
+                content_digest.is_some() && state.last_content_digest == content_digest;
+            if mtime_unchanged && digest_unchanged {
                 return;
             }
             state.last_modified = Some(modified);
+            state.last_content_digest = content_digest;
             state.metadata_missing = false;
         }
 
@@ -2272,6 +2286,15 @@ fn file_watch_key_file_modified(
     std::fs::metadata(path)
         .and_then(|metadata| metadata.modified())
         .map_err(|_| invalid_signing_key(key_id, "file_watch key file metadata could not be read"))
+}
+
+fn file_watch_key_file_content_digest(
+    key_id: &str,
+    path: &std::path::Path,
+) -> Result<[u8; 32], StandaloneServerError> {
+    let bytes = std::fs::read(path)
+        .map_err(|_| invalid_signing_key(key_id, "file_watch key file could not be read"))?;
+    Ok(<sha2::Sha256 as sha2::Digest>::digest(&bytes).into())
 }
 
 fn load_file_watch_jwk_signer(
@@ -7117,6 +7140,84 @@ credential_profiles:
             by_kid["did:web:issuer.example#file-watch"],
             KeyReadiness::Degraded
         );
+    }
+
+    #[tokio::test]
+    async fn file_watch_signing_key_detects_same_mtime_content_change_after_debounce() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let key_path = tmp.path().join("issuer.jwk");
+        std::fs::write(&key_path, TEST_ISSUER_JWK).expect("initial key writes");
+        let key = file_watch_key(&key_path);
+        let provider =
+            FileWatchSigningProvider::from_config("file-watch", &key).expect("provider builds");
+        let payload = b"registry-notary file-watch same-mtime content detection";
+        let old_public = provider.public_jwk();
+        let initial_modified = test_file_modified(&key_path);
+
+        // Replace the file with same-key content but a different byte representation,
+        // then restore mtime so it is identical to what was recorded at provider creation.
+        std::fs::write(&key_path, TEST_ISSUER_JWK_WITH_KID).expect("same-key replacement writes");
+        set_test_file_modified(&key_path, initial_modified);
+
+        wait_for_file_watch_metadata_check().await;
+
+        // After the debounce window, the content digest reveals the change even though
+        // mtime is identical. The replacement is a valid same-public-key file, so
+        // the provider should remain Ready with the refreshed signer.
+        let signature = provider
+            .sign(payload)
+            .await
+            .expect("provider signs after same-mtime reload");
+        assert_eq!(
+            provider.readiness(),
+            KeyReadiness::Ready,
+            "valid same-key same-mtime replacement keeps provider Ready"
+        );
+        assert_eq!(
+            provider.public_jwk(),
+            old_public,
+            "public key is unchanged after same-key reload"
+        );
+        verify(payload, &signature, &old_public)
+            .expect("signature from same-mtime refreshed signer verifies");
+    }
+
+    #[tokio::test]
+    async fn file_watch_signing_key_detects_same_mtime_malformed_replacement_after_debounce() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let key_path = tmp.path().join("issuer.jwk");
+        std::fs::write(&key_path, TEST_ISSUER_JWK).expect("initial key writes");
+        let key = file_watch_key(&key_path);
+        let provider =
+            FileWatchSigningProvider::from_config("file-watch", &key).expect("provider builds");
+        let payload = b"registry-notary file-watch same-mtime malformed detection";
+        let old_public = provider.public_jwk();
+        let initial_modified = test_file_modified(&key_path);
+
+        // Replace with malformed content but restore mtime to the original value.
+        std::fs::write(&key_path, "{ not valid jwk }").expect("malformed replacement writes");
+        set_test_file_modified(&key_path, initial_modified);
+
+        wait_for_file_watch_metadata_check().await;
+
+        // After the debounce window the digest reveals the malformed replacement.
+        // The provider must degrade but keep the last good signer.
+        let signature = provider
+            .sign(payload)
+            .await
+            .expect("last good signer still signs after same-mtime malformed replacement");
+        assert_eq!(
+            provider.readiness(),
+            KeyReadiness::Degraded,
+            "malformed same-mtime replacement degrades readiness after debounce"
+        );
+        assert_eq!(
+            provider.public_jwk(),
+            old_public,
+            "last good public key is kept"
+        );
+        verify(payload, &signature, &old_public)
+            .expect("last good signer signature verifies after same-mtime malformed replacement");
     }
 
     #[test]
