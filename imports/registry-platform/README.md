@@ -24,6 +24,7 @@ and integration-test fixtures.
 | [`registry-platform-crypto`](crates/registry-platform-crypto/README.md) | Ed25519 JWK parsing, provider-backed signing, verification, DID validation, and JSON canonicalization. |
 | [`registry-platform-httpsec`](crates/registry-platform-httpsec/README.md) | Axum/Tower HTTP security middleware, CORS policy validation, body limits, and RFC 9457 Problem Details responses. |
 | [`registry-platform-httputil`](crates/registry-platform-httputil/README.md) | Outbound HTTP clients, bounded response reads, URL construction, and SSRF-resistant fetch validation. |
+| [`registry-platform-oid4vci`](crates/registry-platform-oid4vci/README.md) | OID4VCI protocol constants, issuer metadata, holder proof validation, and credential endpoint wire types. |
 | [`registry-platform-oidc`](crates/registry-platform-oidc/README.md) | OIDC discovery, JWKS caching, and JWT verifier configuration shared by registry services. |
 | [`registry-platform-ops`](crates/registry-platform-ops/README.md) | Shared public operations posture schemas, examples, and redaction fixtures. |
 | [`registry-platform-replay`](crates/registry-platform-replay/README.md) | Shared replay and consumable nonce semantics over cache stores for nonce and JWT `jti` rejection. |
@@ -120,6 +121,10 @@ Governed runtime configuration integrations should follow the public
 [`governed-configuration`](docs/governed-configuration.md) guide for TUF
 verification, Registry trust roots, anti-rollback state, approval semantics, and
 apply result vocabulary.
+
+Secret-provider integrations should follow the
+[`secret-provider-readiness`](docs/secret-provider-readiness.md) contract for
+provider labels, readiness-gated apply, and posture-safe redaction.
 
 The in-memory cache and replay stores are for tests and single-process
 development. Services that require replay protection across restarts or

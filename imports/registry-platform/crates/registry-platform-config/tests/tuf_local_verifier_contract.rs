@@ -22,18 +22,9 @@ const TUF_REFERENCE_TARGETS_SIGNER_KID: &str =
     "65171251a9aff5a8b3143a813481cb07f6e0de4eb197c767837fe4491b739093";
 
 fn tough_fixture_dir(name: &str) -> PathBuf {
-    let cargo_home = std::env::var_os("CARGO_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))
-        .expect("CARGO_HOME or HOME is set");
-    let src_root = cargo_home.join("registry/src");
-    let registry = std::fs::read_dir(&src_root)
-        .expect("cargo registry src exists")
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .find(|path| path.join("tough-0.22.0/tests/data").is_dir())
-        .expect("tough-0.22.0 source fixture directory exists");
-    registry.join("tough-0.22.0/tests/data").join(name)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/tough-data")
+        .join(name)
 }
 
 fn input_for_fixture(

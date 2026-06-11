@@ -718,7 +718,9 @@ fn host_is_allowed_localhost(host: ::url::Host<&str>, resolved: &[IpAddr]) -> bo
 
 fn is_cloud_metadata_ip(ip: IpAddr) -> bool {
     match normalize_ipv4_mapped(ip) {
-        IpAddr::V4(ip) => ip == Ipv4Addr::new(169, 254, 169, 254),
+        IpAddr::V4(ip) => {
+            ip == Ipv4Addr::new(169, 254, 169, 254) || ip == Ipv4Addr::new(100, 100, 100, 200)
+        }
         IpAddr::V6(ip) => ip == Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254),
     }
 }
@@ -1176,6 +1178,43 @@ mod tests {
         assert_eq!(body, "pinned");
     }
 
+    #[tokio::test]
+    async fn immediate_get_does_not_follow_redirect_to_unvalidated_destination() {
+        let addr = serve_with_addr(Router::new().route(
+            "/redirect",
+            get(|| async {
+                (
+                    StatusCode::FOUND,
+                    [(header::LOCATION, "http://169.254.169.254/latest/meta-data/")],
+                )
+            }),
+        ))
+        .await;
+        let url = reqwest::Url::parse(&format!("http://example.test:{}/redirect", addr.port()))
+            .expect("url parses");
+        let validated = ValidatedFetchUrl {
+            url,
+            resolved_addrs: vec![addr],
+            validated_at: SystemTime::now(),
+        };
+
+        let response = validated
+            .immediate_get()
+            .expect("pinned request builds")
+            .send()
+            .await
+            .expect("redirect response returns");
+
+        assert_eq!(response.status(), StatusCode::FOUND);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::LOCATION)
+                .expect("location header is preserved"),
+            "http://169.254.169.254/latest/meta-data/"
+        );
+    }
+
     #[test]
     fn strict_policy_rejects_http_and_local_or_private_targets() {
         for raw in [
@@ -1316,6 +1355,8 @@ mod tests {
         for raw in [
             "https://169.254.169.254/latest/meta-data/",
             "https://[::ffff:169.254.169.254]/latest/meta-data/",
+            "https://100.100.100.200/latest/meta-data/",
+            "https://[::ffff:100.100.100.200]/latest/meta-data/",
             "https://[fd00:ec2::254]/latest/meta-data/",
         ] {
             let url = reqwest::Url::parse(raw).expect("url parses");

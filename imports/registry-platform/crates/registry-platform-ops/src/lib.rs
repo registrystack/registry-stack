@@ -200,8 +200,21 @@ pub struct AntiRollbackProposal {
     pub config_hash: String,
     pub root_version: Option<u64>,
     pub break_glass: Option<BreakGlassApproval>,
+    /// Compatibility-only break-glass rate limit policy.
+    ///
+    /// Production callers should configure verifier-owned policy on
+    /// [`FileAntiRollbackStore::with_break_glass_rate_limit`] and leave this
+    /// field empty. A proposal-supplied policy is still accepted only when the
+    /// store has no local break-glass policy configured, preserving older test
+    /// and integration callers until the next breaking API revision can remove
+    /// this request-controlled field.
     pub break_glass_rate_limit: Option<BreakGlassRateLimit>,
     pub local_approval: Option<LocalOperatorApproval>,
+    /// Rate limit policy loaded with a trusted local approval record.
+    ///
+    /// This differs from break-glass proposal policy: local approvals are
+    /// retrieved from a verifier-owned approval store before the proposal is
+    /// built, so the rate limit is not controlled by an apply request.
     pub local_approval_rate_limit: Option<BreakGlassRateLimit>,
 }
 
@@ -342,6 +355,13 @@ impl FileAntiRollbackStore {
     }
 
     #[must_use]
+    /// Configure verifier-owned break-glass rate limit policy for this store.
+    ///
+    /// Product runtimes that support break-glass should use this constructor
+    /// path and leave [`AntiRollbackProposal::break_glass_rate_limit`] empty.
+    /// When both are present, the proposal policy must match the local policy;
+    /// a mismatch is rejected instead of allowing request-controlled policy to
+    /// loosen the verifier's limit.
     pub fn with_break_glass_rate_limit(mut self, rate_limit: BreakGlassRateLimit) -> Self {
         self.break_glass_rate_limit = Some(rate_limit);
         self

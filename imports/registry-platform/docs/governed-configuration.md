@@ -40,6 +40,15 @@ state used to reject stale timestamp and snapshot metadata across applies.
 Remote verification uses the shared outbound fetch policy. Strict mode should be
 the production default. `allow_dev_insecure_fetch_urls` exists only for local
 development and test repositories that cannot satisfy the strict URL policy.
+In strict mode, remote metadata and target URLs must use HTTPS and must not
+resolve to localhost, RFC1918 private networks, link-local ranges, unspecified
+addresses, IPv4-mapped forms of those addresses, or known cloud metadata
+endpoints. The guarded transport validates each metadata and target fetch URL
+immediately before sending it, builds the request from the returned
+DNS-pinned `ValidatedFetchUrl`, disables HTTP redirects, ignores proxy
+environment variables, and applies bounded connect/request timeouts. A redirect
+response is surfaced to TUF verification rather than followed to a new
+destination.
 
 The verifier records:
 
@@ -123,6 +132,15 @@ product config validation, or runtime readiness checks. Break-glass proposals
 must include an approval, and runtimes must source the `BreakGlassRateLimit`
 from trusted local verifier configuration before calling `FileAntiRollbackStore`.
 Accepted approvals are recorded in the anti-rollback state.
+
+`AntiRollbackProposal.break_glass_rate_limit` remains only as a compatibility
+field for older callers that have not yet moved policy into the verifier-owned
+store configuration. Production runtimes should configure
+`FileAntiRollbackStore::with_break_glass_rate_limit(...)` and leave the proposal
+field empty. A locally configured store rejects proposal policy that does not
+match its verifier-owned policy, and the compatibility field should be removed
+in the next breaking API revision once downstream products no longer construct
+break-glass proposals with request-controlled rate limits.
 
 Local operator approval is a separate controlled path for changes that require
 site-local acknowledgement. `FileLocalApprovalStore` loads a
