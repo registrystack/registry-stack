@@ -488,7 +488,7 @@
     "name": "OpenID for Verifiable Credential Issuance",
     "standards_body": "OpenID Foundation",
     "official_url": "https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html",
-    "version_or_profile": "OID4VCI Draft 13 compatible",
+    "version_or_profile": "OID4VCI issuer metadata with SD-JWT VC `dc+sd-jwt` format",
     "status": "used",
     "claim_level": "emits",
     "used_by": [
@@ -522,7 +522,7 @@
       }
     ],
     "last_checked": "2026-06-11",
-    "notes": "Registry Notary exposes the OID4VCI credential offer, nonce, credential, and issuer-metadata routes. Registry Platform owns the underlying primitives in the `registry-platform-oid4vci` crate. Registry Lab exercises the full flow through the `just citizen-oid4vci-*` recipes. Conformance to the full OID4VCI profile is not asserted; the surfaces emit the protocol shape and have been validated against the lab smoke script."
+    "notes": "Registry Notary exposes the OID4VCI credential offer, nonce, credential, and issuer-metadata routes. The hosted lab issuer metadata advertises `format: dc+sd-jwt` for the citizen credential configuration. Registry Platform owns the underlying primitives in the `registry-platform-oid4vci` crate. Registry Lab exercises the full flow through the `just citizen-oid4vci-*` recipes. Conformance to the full OID4VCI profile, including Draft 13 `vc+sd-jwt` compatibility, is not asserted; the surfaces emit the protocol shape and have been validated against the lab smoke script."
   },
   {
     "id": "w3c-did",
