@@ -76,9 +76,19 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+download() {
+	local src="$1"
+	local dest="$2"
+	if ! curl -fsSL "$src" -o "$dest" 2>/dev/null; then
+		printf 'registryctl release %s not found (HTTP 404 or download error).\n' "$version" >&2
+		printf 'Check available releases at https://github.com/%s/releases\n' "$repo" >&2
+		exit 1
+	fi
+}
+
 echo "Downloading registryctl ${version} for ${os_label}/${arch_label}..."
-curl -fsSL "$url" -o "$tmpdir/$asset"
-curl -fsSL "$url.sha256" -o "$tmpdir/$asset.sha256"
+download "$url" "$tmpdir/$asset"
+download "$url.sha256" "$tmpdir/$asset.sha256"
 
 read -r expected_hash _ <"$tmpdir/$asset.sha256"
 
