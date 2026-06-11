@@ -100,7 +100,7 @@ services:
     restart: "no"
     environment:
       CONFIG_REPO_URL: ${CONFIG_REPO_URL:-https://github.com/jeremi/registry-lab}
-      CONFIG_REPO_REF: ${CONFIG_REPO_REF:-main}
+      CONFIG_REPO_REF: ${CONFIG_REPO_REF:?set CONFIG_REPO_REF to the deployed registry-lab git ref}
     entrypoint: ["/bin/sh", "-euc"]
     command:
       - |

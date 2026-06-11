@@ -96,7 +96,13 @@ class HostedDeployValidationTest(unittest.TestCase):
         issues = self._validate(compose, self._valid_esignet())
         self.assertEqual([], issues)
 
-    def test_rejects_stale_config_loader_ref(self) -> None:
+    def test_rejects_floating_config_loader_ref(self) -> None:
+        compose = self._valid_registry_lab()
+        compose["services"]["config-loader"]["environment"]["CONFIG_REPO_REF"] = "${CONFIG_REPO_REF:-main}"
+        issues = self._validate(compose, self._valid_esignet())
+        self.assertIssue(issues, "stale-config-repo-ref")
+
+    def test_rejects_stale_config_loader_ref_across_hosted_apps(self) -> None:
         compose = self._valid_registry_lab()
         compose["services"]["config-loader"] = {
             "image": "alpine:3.20",
@@ -105,6 +111,20 @@ class HostedDeployValidationTest(unittest.TestCase):
             },
         }
         issues = self._validate(compose, self._valid_esignet())
+        self.assertIssue(issues, "stale-config-repo-ref")
+
+        esignet = self._valid_esignet()
+        esignet["services"]["config-loader"]["environment"][
+            "CONFIG_REPO_REF"
+        ] = "registry-stack-technical-preview-2026-06-04"
+        issues = self._validate(self._valid_registry_lab(), esignet)
+        self.assertIssue(issues, "stale-config-repo-ref")
+
+        walt = self._valid_walt()
+        walt["services"]["config-loader"]["environment"][
+            "CONFIG_REPO_REF"
+        ] = "registry-stack-technical-preview-2026-06-04"
+        issues = self._validate_walt(walt)
         self.assertIssue(issues, "stale-config-repo-ref")
 
     def test_rejects_static_metadata_publisher_with_remote_image(self) -> None:
@@ -192,6 +212,151 @@ class HostedDeployValidationTest(unittest.TestCase):
         ]
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "civil-notary-config-not-copied")
+
+    def test_rejects_config_loader_that_does_not_copy_mounted_product_config(self) -> None:
+        compose = self._valid_registry_lab()
+        compose["services"]["extra-notary"] = {
+            "image": "${REGISTRY_NOTARY_IMAGE:-ghcr.io/registrystack/registry-notary@sha256:abc}",
+            "command": ["--config", "/etc/registry-notary/extra-notary.yaml"],
+        }
+
+        issues = self.validator.validate_config_loader_hosted_outputs(
+            "registry-lab",
+            compose["services"],
+        )
+
+        self.assertIssue(issues, "hosted-config-not-copied")
+
+    def test_rejects_duplicate_hosted_yaml_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_dir = root / "config" / "coolify" / "notary"
+            config_dir.mkdir(parents=True)
+            (config_dir / "duplicate.yaml").write_text(
+                "server:\n  bind: 0.0.0.0:8080\n  bind: 127.0.0.1:8080\n",
+                encoding="utf-8",
+            )
+
+            issues = self.validator.validate_hosted_yaml_files("registry-lab", root)
+
+        self.assertIssue(issues, "duplicate-yaml-key")
+
+    def test_rejects_missing_dhis2_programme_profile_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_dir = root / "config" / "coolify" / "notary"
+            config_dir.mkdir(parents=True)
+            (config_dir / "dhis2-health-notary.yaml").write_text(
+                """
+evidence:
+  max_credential_validity_seconds: 600
+  credential_profiles: {}
+  claims: []
+""",
+                encoding="utf-8",
+            )
+
+            issues = self.validator.validate_dhis2_programme_vc_contract("registry-lab", root)
+
+        self.assertIssue(issues, "dhis2-programme-validity-ceiling")
+        self.assertIssue(issues, "missing-dhis2-programme-profile")
+
+    def test_rejects_dhis2_programme_profile_missing_reconciliation_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_dir = root / "config" / "coolify" / "notary"
+            config_dir.mkdir(parents=True)
+            (config_dir / "dhis2-health-notary.yaml").write_text(
+                """
+evidence:
+  max_credential_validity_seconds: 31536000
+  credential_profiles:
+    dhis2_programme_participation_sd_jwt:
+      validity_seconds: 31536000
+      allowed_claims:
+        - dhis2-tracked-entity-first-name
+        - dhis2-tracked-entity-last-name
+        - dhis2-child-age-band
+        - dhis2-programme-code
+        - dhis2-child-program-active
+      holder_binding:
+        mode: did
+        proof_of_possession: required
+        allowed_did_methods:
+          - did:jwk
+  claims:
+    - id: dhis2-child-program-active
+      credential_profiles:
+        - dhis2_programme_participation_sd_jwt
+""",
+                encoding="utf-8",
+            )
+
+            issues = self.validator.validate_dhis2_programme_vc_contract("registry-lab", root)
+
+        self.assertIssue(issues, "dhis2-programme-claims-missing")
+
+    def test_rejects_notary_credential_commitment_mismatch_in_strict_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_dir = root / "config" / "coolify" / "notary"
+            config_dir.mkdir(parents=True)
+            (config_dir / "notary.yaml").write_text(
+                """
+auth:
+  mode: api_key
+  bearer_tokens:
+    - id: hosted_civil_evidence_client
+      fingerprint:
+        provider: env
+        name: CIVIL_EVIDENCE_CLIENT_BEARER_HASH
+        commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
+""",
+                encoding="utf-8",
+            )
+
+            issues = self.validator.validate_credential_commitments(
+                "registry-lab",
+                root,
+                {
+                    "CIVIL_EVIDENCE_CLIENT_BEARER_HASH": (
+                        "sha256:f6091e63acf60468a49a94982b1143f5c88802ab35747bb5cd22839fc21620a5"
+                    )
+                },
+            )
+
+        self.assertIssue(issues, "credential-commitment-mismatch")
+
+    def test_rejects_relay_credential_commitment_mismatch_in_strict_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_dir = root / "config" / "coolify" / "relay"
+            config_dir.mkdir(parents=True)
+            (config_dir / "relay.yaml").write_text(
+                """
+auth:
+  mode: api_key
+  api_keys:
+    - id: metadata_client
+      fingerprint:
+        provider: env
+        name: CIVIL_METADATA_CLIENT_HASH
+        commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
+""",
+                encoding="utf-8",
+            )
+
+            issues = self.validator.validate_credential_commitments(
+                "registry-lab",
+                root,
+                {
+                    "CIVIL_METADATA_CLIENT_HASH": (
+                        "sha256:54e6c08b6ce02c56d258b4f40313d8ec7a2cf9a222fdfa88789d720cb923c254"
+                    )
+                },
+            )
+
+        self.assertIssue(issues, "credential-commitment-mismatch")
 
     def test_rejects_localhost_public_urls(self) -> None:
         compose = self._valid_registry_lab()
@@ -334,15 +499,58 @@ class HostedDeployValidationTest(unittest.TestCase):
     def test_hosted_workflow_declares_minimal_permissions(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         self.assertRegex(workflow, r"(?m)^permissions:\n\s+contents: read$")
-        self.assertRegex(workflow, r"(?m)^  deploy-coolify:\n(?:.*\n)*?    permissions: \{\}$")
+        self.assertRegex(
+            workflow,
+            r"(?m)^  deploy-coolify:\n(?:.*\n)*?    permissions:\n      contents: read$",
+        )
 
     def test_hosted_workflow_deploys_all_coolify_apps_by_api(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         self.assertIn("COOLIFY_API_TOKEN", workflow)
         self.assertNotIn("COOLIFY_DEPLOY_WEBHOOK_URL", workflow)
-        self.assertIn("klhnsuoye8lwuamp0bko387t", workflow)
-        self.assertIn("cewwn93kknzsfzicen9nul6v", workflow)
-        self.assertIn("uvqfk8gwqdbdse4v871xfv56", workflow)
+        self.assertIn("${{ vars.COOLIFY_REGISTRY_LAB_APP_UUID }}", workflow)
+        self.assertIn("${{ vars.COOLIFY_HOSTED_ESIGNET_APP_UUID }}", workflow)
+        self.assertIn("${{ vars.COOLIFY_HOSTED_WALT_APP_UUID }}", workflow)
+        self.assertIn("/applications/${app}/envs", workflow)
+        self.assertIn('"key": "CONFIG_REPO_REF"', workflow)
+        self.assertIn('os.environ["GITHUB_SHA"]', workflow)
+        self.assertIn("/deployments/${deployment_uuid}", workflow)
+        self.assertIn("python3 scripts/hosted-smoke.py", workflow)
+        self.assertNotIn("klhnsuoye8lwuamp0bko387t", workflow)
+        self.assertNotIn("cewwn93kknzsfzicen9nul6v", workflow)
+        self.assertNotIn("uvqfk8gwqdbdse4v871xfv56", workflow)
+
+    def test_hosted_workflow_paths_cover_deployment_automation(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        for path in (
+            "scripts/credential-commitment.py",
+            "scripts/test_credential_commitment.py",
+            "scripts/test_dhis2_programme_vc_config.py",
+            "scripts/generate-holder-proof.js",
+            "scripts/summarize-dhis2-programme-vc.py",
+            "scripts/hosted-smoke.py",
+            "scripts/test_hosted_smoke.py",
+        ):
+            self.assertIn(path, workflow)
+
+    def test_hosted_config_loaders_fetch_exact_config_ref(self) -> None:
+        for path in (
+            SCRIPT_DIR.parent / "compose.coolify.yaml",
+            SCRIPT_DIR.parent / "compose.esignet-hosted.yaml",
+            SCRIPT_DIR.parent / "compose.walt-hosted.yaml",
+        ):
+            with self.subTest(path=path.name):
+                text = path.read_text(encoding="utf-8")
+                self.assertIn(
+                    "CONFIG_REPO_REF: ${CONFIG_REPO_REF:?set CONFIG_REPO_REF to the deployed registry-lab git ref}",
+                    text,
+                )
+                self.assertNotIn('--branch "$$CONFIG_REPO_REF"', text)
+                self.assertIn(
+                    'git -C /tmp/repo fetch --depth 1 origin "$$CONFIG_REPO_REF"',
+                    text,
+                )
+                self.assertRegex(text, r"git -C /tmp/repo .*checkout .*FETCH_HEAD")
 
     def test_rejects_esignet_issuer_mismatch(self) -> None:
         compose = self._valid_registry_lab()
@@ -607,6 +815,7 @@ evidence:
         lab = "lab.registrystack.org"
         required_env = {
             "REGISTRY_LAB_POSTGRES_PASSWORD": "${REGISTRY_LAB_POSTGRES_PASSWORD:-}",
+            "CONFIG_REPO_REF": "${CONFIG_REPO_REF:?set CONFIG_REPO_REF}",
             "ZITADEL_MASTERKEY": "${ZITADEL_MASTERKEY:-}",
             "REGISTRY_NOTARY_AUDIT_HASH_SECRET": "${REGISTRY_NOTARY_AUDIT_HASH_SECRET:-}",
             "REGISTRY_NOTARY_ISSUER_JWK": "${REGISTRY_NOTARY_ISSUER_JWK:-}",
@@ -661,7 +870,9 @@ evidence:
             "services": {
                 "config-loader": {
                     "image": "alpine:3.20",
-                    "environment": {"CONFIG_REPO_REF": "${CONFIG_REPO_REF:-main}"},
+                    "environment": {
+                        "CONFIG_REPO_REF": "${CONFIG_REPO_REF:?set CONFIG_REPO_REF to the deployed registry-lab git ref}",
+                    },
                     "command": [
                         """
 for d in civil-cache social-cache health-cache; do
@@ -830,6 +1041,12 @@ cp -a /tmp/repo/scripts/lab_homepage_scenarios /out/static-scripts/
         lab = "lab.registrystack.org"
         return {
             "services": {
+                "config-loader": {
+                    "image": "alpine:3.20",
+                    "environment": {
+                        "CONFIG_REPO_REF": "${CONFIG_REPO_REF:?set CONFIG_REPO_REF to the deployed registry-lab git ref}",
+                    },
+                },
                 "database": {
                     "image": "postgres:bookworm",
                     "environment": {
@@ -885,6 +1102,12 @@ cp -a /tmp/repo/scripts/lab_homepage_scenarios /out/static-scripts/
         lab = "lab.registrystack.org"
         return {
             "services": {
+                "config-loader": {
+                    "image": "alpine:3.20",
+                    "environment": {
+                        "CONFIG_REPO_REF": "${CONFIG_REPO_REF:?set CONFIG_REPO_REF to the deployed registry-lab git ref}",
+                    },
+                },
                 "walt-postgres": {
                     "image": "postgres:16-alpine",
                     "environment": {
