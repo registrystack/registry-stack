@@ -648,6 +648,57 @@ oid4vci:
         self.assertNoIssue(issues, "missing-credential-configuration")
         self.assertNoIssue(issues, "missing-oid4vci-format")
 
+    def test_rejects_overlong_bearer_offer_ttl(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_dir = root / "config" / "coolify" / "notary"
+            config_dir.mkdir(parents=True)
+            config_path = config_dir / "citizen-civil-notary.yaml"
+            config_path.write_text(
+                """
+oid4vci:
+  pre_authorized_code:
+    enabled: true
+    pre_authorized_code_ttl_seconds: 301
+    tx_code:
+      required: false
+""",
+                encoding="utf-8",
+            )
+            compose = self._valid_registry_lab()
+            compose["services"]["citizen-civil-notary"]["command"] = [
+                "--config",
+                "/etc/registry-notary/citizen-civil-notary.yaml",
+            ]
+            issues = self.validator.validate_artifacts(
+                {
+                    "registry-lab": compose,
+                    "esignet": self._valid_esignet(),
+                },
+                {"registry-lab": root, "esignet": root},
+            )
+            self.assertIssue(issues, "bearer-offer-ttl-too-long")
+
+            config_path.write_text(
+                """
+oid4vci:
+  pre_authorized_code:
+    enabled: true
+    pre_authorized_code_ttl_seconds: 300
+    tx_code:
+      required: false
+""",
+                encoding="utf-8",
+            )
+            issues = self.validator.validate_artifacts(
+                {
+                    "registry-lab": compose,
+                    "esignet": self._valid_esignet(),
+                },
+                {"registry-lab": root, "esignet": root},
+            )
+            self.assertNoIssue(issues, "bearer-offer-ttl-too-long")
+
     def test_rejects_hosted_configs_that_require_openapi_auth(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

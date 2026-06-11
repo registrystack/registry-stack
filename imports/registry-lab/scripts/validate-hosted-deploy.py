@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 
 
 LAB_DOMAIN = "lab.registrystack.org"
+MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS = 300
 
 REQUIRED_SERVICES = {
     "registry-lab": {
@@ -1360,7 +1361,104 @@ def validate_cross_artifact_contracts(
                     "citizen OID4VCI contract must advertise dc+sd-jwt",
                 )
             )
+    issues.extend(validate_citizen_bearer_offer_ttl(registry_lab, registry_root))
     return issues
+
+
+def validate_citizen_bearer_offer_ttl(
+    compose: dict[str, Any], root: Path
+) -> list[Issue]:
+    service_config = compose.get("services", {}).get("citizen-civil-notary")
+    if not isinstance(service_config, dict):
+        return []
+    config_path = hosted_notary_config_path(root, service_config)
+    if not config_path or not config_path.exists():
+        return []
+    text = config_path.read_text(encoding="utf-8")
+    tx_code_required: bool | None = None
+    ttl: int | None = None
+    try:
+        config = load_yaml_mapping(config_path)
+    except Exception:
+        config = {}
+    if config:
+        preauth = nested_get(config, ("oid4vci", "pre_authorized_code"))
+        if isinstance(preauth, dict):
+            tx_code = preauth.get("tx_code")
+            tx_code_required = True
+            if isinstance(tx_code, dict) and tx_code.get("required") is False:
+                tx_code_required = False
+            raw_ttl = preauth.get("pre_authorized_code_ttl_seconds")
+            if not isinstance(raw_ttl, bool) and isinstance(raw_ttl, int):
+                ttl = raw_ttl
+    if tx_code_required is None:
+        preauth_text = hosted_notary_preauth_block(text)
+        if preauth_text is None:
+            return []
+        tx_code_text = yaml_child_block(preauth_text, "tx_code")
+        tx_code_required = not (
+            tx_code_text is not None and yaml_scalar_false(tx_code_text, "required")
+        )
+        ttl = yaml_scalar_int(preauth_text, "pre_authorized_code_ttl_seconds")
+    if tx_code_required:
+        return []
+    if ttl is None:
+        invalid = True
+    else:
+        invalid = ttl < 1 or ttl > MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS
+    if not invalid:
+        return []
+    return [
+        Issue(
+            "bearer-offer-ttl-too-long",
+            "registry-lab",
+            "services.citizen-civil-notary.oid4vci.pre_authorized_code.pre_authorized_code_ttl_seconds",
+            f"hosted Walt-compatible bearer-offer mode must set pre_authorized_code_ttl_seconds between 1 and {MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS}",
+        )
+    ]
+
+
+def hosted_notary_preauth_block(text: str) -> str | None:
+    oid4vci = yaml_child_block(text, "oid4vci")
+    if oid4vci is None:
+        return None
+    return yaml_child_block(oid4vci, "pre_authorized_code")
+
+
+def yaml_child_block(text: str, key: str) -> str | None:
+    lines = text.splitlines()
+    key_re = re.compile(rf"^(?P<indent>\s*){re.escape(key)}\s*:\s*(?:#.*)?$")
+    for index, line in enumerate(lines):
+        match = key_re.match(line)
+        if not match:
+            continue
+        indent = len(match.group("indent"))
+        block: list[str] = []
+        for child in lines[index + 1 :]:
+            stripped = child.strip()
+            if not stripped or stripped.startswith("#"):
+                block.append(child)
+                continue
+            child_indent = len(child) - len(child.lstrip())
+            if child_indent <= indent:
+                break
+            block.append(child)
+        return "\n".join(block)
+    return None
+
+
+def yaml_scalar_false(text: str, key: str) -> bool:
+    return (
+        re.search(rf"^\s*{re.escape(key)}\s*:\s*false\s*(?:#.*)?$", text, re.MULTILINE | re.IGNORECASE)
+        is not None
+    )
+
+
+def yaml_scalar_int(text: str, key: str) -> int | None:
+    match = re.search(rf"^\s*{re.escape(key)}\s*:\s*([0-9]+)\s*(?:#.*)?$", text, re.MULTILINE)
+    if not match:
+        return None
+    return int(match.group(1))
 
 
 def validate_public_text(artifact: str, issue_path: str, key: str, text: str) -> list[Issue]:
