@@ -422,7 +422,7 @@ the container, for example under `/opt/openfn/jobs`.
 ```bash
 docker build \
   --build-context registry-platform=../registry-platform \
-  --build-context cel-mapping=../cel-mapping \
+  --build-context crosswalk=../crosswalk \
   -f Dockerfile.openfn-sidecar \
   -t registry-notary-openfn-sidecar .
 ```

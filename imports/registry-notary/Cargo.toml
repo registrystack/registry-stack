@@ -31,7 +31,7 @@ clap = { version = "4", features = ["derive", "env"] }
 registry-notary-core = { version = "0.3.0", path = "crates/registry-notary-core" }
 registry-notary-server = { version = "0.3.0", path = "crates/registry-notary-server", default-features = false }
 registry-notary-worker-harness = { version = "0.3.0", path = "crates/registry-notary-worker-harness" }
-crosswalk-core = { version = "0.1.1", path = "../cel-mapping/crates/crosswalk-core" }
+crosswalk-core = { version = "0.1.1", path = "../crosswalk/crates/crosswalk-core" }
 cryptoki = { version = "0.12" }
 getrandom = { version = "0.4" }
 hex = { version = "0.4" }

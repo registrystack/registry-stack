@@ -61,7 +61,7 @@ jobs:
         with:
           repository: ${{ env.CROSSWALK_REPOSITORY }}
           ref: ${{ env.CROSSWALK_REF }}
-          path: cel-mapping
+          path: crosswalk
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
