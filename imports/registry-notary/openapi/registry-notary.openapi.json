@@ -1586,15 +1586,16 @@
     },
     "/.well-known/vct/{vct_path}": {
       "get": {
-        "description": "Returns public SD-JWT VC Type Metadata at the SD-JWT VC well-known location. Consumers dereference an HTTPS vct by inserting /.well-known/vct between the host and the path; the server strips that prefix and matches the reconstructed vct (https://{host}/{vct_path}) against a configured OID4VCI credential configuration. The vct_path parameter represents the full path suffix and may contain nested path segments.",
+        "description": "Returns public SD-JWT VC Type Metadata at the SD-JWT VC well-known location. Consumers dereference an HTTPS vct by inserting /.well-known/vct between the host and the path; the server strips that prefix and matches the reconstructed vct (https://{host}/{vct_path}) against a configured OID4VCI credential configuration. The path key uses the OpenAPI single-segment form {vct_path} for standard tooling compatibility, but the route is a multi-segment catch-all: vct_path captures the full path remainder (slashes included, not percent-encoded) and may span multiple segments. This route is unversioned and must remain at this exact path prefix per RFC 8615 well-known URI semantics; the well-known path is determined by the protocol and cannot be versioned.",
         "operationId": "getWellKnownSdJwtVcTypeMetadata",
         "parameters": [
           {
-            "description": "Credential type path suffix from the configured vct, including nested path segments when configured.",
+            "description": "Full path remainder after /.well-known/vct/ captured as a multi-segment catch-all. The value is the unencoded path suffix of the VCT URL (slashes not percent-encoded) and may contain one or more segments.",
             "in": "path",
             "name": "vct_path",
             "required": true,
             "schema": {
+              "pattern": "^[^/]+(/[^/]+)*$",
               "type": "string"
             }
           }
@@ -1642,9 +1643,9 @@
           }
         },
         "security": [],
-        "summary": "Fetch SD-JWT VC Type Metadata at the well-known location",
-        "x-registry-notary-catch-all": true
-      }
+        "summary": "Fetch SD-JWT VC Type Metadata at the well-known location"
+      },
+      "x-registry-notary-catch-all": true
     },
     "/admin/v1/capabilities": {
       "get": {
@@ -2230,15 +2231,16 @@
     },
     "/credentials/{vct_path}": {
       "get": {
-        "description": "Returns public SD-JWT VC Type Metadata for a configured OID4VCI credential configuration whose vct exactly matches the requested absolute URL. The vct_path parameter represents the full path suffix under /credentials and may contain nested path segments.",
+        "description": "Returns public SD-JWT VC Type Metadata for a configured OID4VCI credential configuration whose vct exactly matches the requested absolute URL. The path key uses the OpenAPI single-segment form {vct_path} for standard tooling compatibility, but the route is a multi-segment catch-all: vct_path captures the full path remainder after /credentials/ (slashes included, not percent-encoded) and may span multiple segments. This route is unversioned and must remain at this exact path prefix because the VCT URL is an absolute HTTPS URI whose path component must match directly; adding a /v1/ prefix would break SD-JWT VC type-metadata dereference. This is distinct from POST /v1/credentials (credential issuance).",
         "operationId": "getSdJwtVcTypeMetadata",
         "parameters": [
           {
-            "description": "Credential type path suffix under /credentials, including nested path segments when configured.",
+            "description": "Full path remainder after /credentials/ captured as a multi-segment catch-all. The value is the unencoded path suffix of the VCT URL (slashes not percent-encoded) and may contain one or more segments.",
             "in": "path",
             "name": "vct_path",
             "required": true,
             "schema": {
+              "pattern": "^[^/]+(/[^/]+)*$",
               "type": "string"
             }
           }
@@ -2286,9 +2288,9 @@
           }
         },
         "security": [],
-        "summary": "Fetch SD-JWT VC Type Metadata",
-        "x-registry-notary-catch-all": true
-      }
+        "summary": "Fetch SD-JWT VC Type Metadata"
+      },
+      "x-registry-notary-catch-all": true
     },
     "/federation/v1/evaluations": {
       "post": {

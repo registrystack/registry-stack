@@ -177,9 +177,41 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
         }))
         (self.root / "openapi" / "registry-notary.openapi.json").write_text(json.dumps({
             "openapi": "3.0.3",
-            "paths": {"/credentials/{vct_path}": {"get": {}}},
+            "paths": {"/credentials/{vct_path}": {"get": {}, "x-registry-notary-catch-all": True}},
         }))
         self.module.check_openapi_manifest_coverage(self.root / "openapi" / "registry-notary.openapi.json")
+
+    def test_catch_all_inventory_route_without_extension_fails(self):
+        """Route inventory has {*vct_path} but spec path item lacks x-registry-notary-catch-all."""
+        (self.root / "security" / "exposure-manifest.json").write_text(json.dumps({
+            "version": 1,
+            "service": "registry-notary",
+            "endpoints": [
+                self.entry(path="/credentials/{*vct_path}", method="GET", openapi=True)
+            ],
+        }))
+        (self.root / "openapi" / "registry-notary.openapi.json").write_text(json.dumps({
+            "openapi": "3.0.3",
+            "paths": {"/credentials/{vct_path}": {"get": {}}},
+        }))
+        with self.assertRaises(SystemExit):
+            self.module.check_openapi_manifest_coverage(self.root / "openapi" / "registry-notary.openapi.json")
+
+    def test_single_segment_inventory_route_with_extension_fails(self):
+        """Route inventory has a plain {param} but spec path item has x-registry-notary-catch-all."""
+        (self.root / "security" / "exposure-manifest.json").write_text(json.dumps({
+            "version": 1,
+            "service": "registry-notary",
+            "endpoints": [
+                self.entry(path="/v1/claims/{claim_id}", method="GET", openapi=True)
+            ],
+        }))
+        (self.root / "openapi" / "registry-notary.openapi.json").write_text(json.dumps({
+            "openapi": "3.0.3",
+            "paths": {"/v1/claims/{claim_id}": {"get": {}, "x-registry-notary-catch-all": True}},
+        }))
+        with self.assertRaises(SystemExit):
+            self.module.check_openapi_manifest_coverage(self.root / "openapi" / "registry-notary.openapi.json")
 
     def test_openapi_true_missing_operation_fails(self):
         self.write_contracts(self.entry(openapi=True))
