@@ -29,7 +29,7 @@ SUBJECT_ID = "NID-1001"
 SUBJECT_NAME = "Miguel Santos"
 CLAIM_ID = "person-is-alive"
 DISCOVERY_REUSED = {
-    "evidence_service": "Civil evidence service",
+    "evidence_service": "Civil vital status evidence service",
     "lookup_key": "national_id",
     "data_boundary": "evidence result only",
 }
@@ -67,7 +67,7 @@ def story() -> dict[str, Any]:
                 "button": "Check if Miguel is alive",
                 "request_summary": "POST a person-is-alive request for Miguel to the Notary, using national_id as the lookup key.",
                 "reuses": [
-                    {"label": "Evidence service", "value": "Civil evidence service"},
+                    {"label": "Evidence service", "value": "Civil vital status evidence service"},
                     {"label": "Lookup key", "value": "national_id"},
                     {"label": "Boundary", "value": "Ask for evidence, not rows"},
                 ],
@@ -169,7 +169,7 @@ def _summarize_discovery(body: Any, status: int | None) -> dict[str, Any]:
         "status": "done" if ok_status(status) else "needs_attention",
         "facts": [
             {"label": "HTTP status", "value": status if status is not None else "No response"},
-            {"label": "Evidence service", "value": first.get("title") or "Civil evidence service"},
+            {"label": "Evidence service", "value": first.get("title") or "Civil vital status evidence service"},
             {"label": "Lookup key", "value": ", ".join(first.get("lookup_keys", [])) or "national_id"},
             {"label": "Reused next", "value": "Evidence service + lookup key"},
             {"label": "Raw person row returned", "value": "No"},
@@ -191,7 +191,7 @@ def _summarize_evaluation(result) -> dict[str, Any]:
         "status": "done" if ok else "needs_attention",
         "facts": [
             {"label": "HTTP status", "value": result.status if result.status is not None else "No response"},
-            {"label": "From Step 1", "value": "Civil evidence service"},
+            {"label": "From Step 1", "value": "Civil vital status evidence service"},
             {"label": "Lookup key reused", "value": "national_id"},
             {"label": "Subject", "value": f"{SUBJECT_NAME} ({SUBJECT_ID})"},
             {"label": "Answer", "value": "Yes" if answer is True else ("No" if answer is False else "Unknown")},

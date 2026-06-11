@@ -526,7 +526,7 @@ datasets:
     evidence_offerings:
       - id: civil_child_status_evidence_service
         iri: https://demo.example.gov/evidence-offerings/civil-child-status
-        title: Civil child status evidence service
+        title: Civil vital status evidence service
         evidence_type: civil_child_status_evidence
         issuing_authority:
           id: civil_registration_authority
