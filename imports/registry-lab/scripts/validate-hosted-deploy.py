@@ -740,36 +740,48 @@ def validate_hosted_openapi_policy(
     services: dict[str, Any],
     root: Path,
 ) -> list[Issue]:
-    issues = []
+    # Scan every relay and notary config under config/coolify/ directly rather
+    # than tracing --config references from compose services. This ensures the
+    # posture assertion holds even for configs that are served via named volumes
+    # or whose service entries lack explicit --config flags.
+    # Files without a top-level `server:` block (e.g. relay metadata manifests)
+    # are not product server configs and are skipped.
+    del services
+    issues: list[Issue] = []
     if artifact != "registry-lab":
         return issues
-    for service, config in services.items():
-        if not isinstance(config, dict):
+    for relative_dir in HOSTED_CONFIG_DIRS:
+        directory = root / relative_dir
+        if not directory.exists():
             continue
-        config_path = hosted_product_config_path(root, config)
-        if config_path is None or not config_path.exists():
-            continue
-        try:
-            config_text = config_path.read_text(encoding="utf-8")
-        except Exception as exc:
-            issues.append(
-                Issue(
-                    "unreadable-product-config",
-                    artifact,
-                    f"services.{service}.command",
-                    f"could not read hosted product config {config_path}: {exc}",
+        for config_path in sorted(directory.glob("*.yaml")):
+            try:
+                config = load_yaml_mapping_strict(config_path)
+            except Exception as exc:
+                issues.append(
+                    Issue(
+                        "unreadable-product-config",
+                        artifact,
+                        str(config_path.relative_to(root)),
+                        f"could not read hosted product config {config_path}: {exc}",
+                    )
                 )
-            )
-            continue
-        if not hosted_openapi_requires_auth_is_false(config_text):
-            issues.append(
-                Issue(
-                    "openapi-auth-required",
-                    artifact,
-                    f"services.{service}.server.openapi_requires_auth",
-                    "hosted lab Relay and Notary OpenAPI endpoints must be public for demos",
+                continue
+            server = config.get("server")
+            if server is None:
+                continue
+            if (
+                not isinstance(server, dict)
+                or server.get("openapi_requires_auth") is not False
+            ):
+                issues.append(
+                    Issue(
+                        "openapi-auth-required",
+                        artifact,
+                        str(config_path.relative_to(root)),
+                        "hosted lab Relay and Notary OpenAPI endpoints must be public for demos",
+                    )
                 )
-            )
     return issues
 
 
@@ -1302,28 +1314,6 @@ def shell_command_text(command: Any) -> str:
     if isinstance(command, list):
         return "\n".join(str(item) for item in command)
     return str(command)
-
-
-def hosted_openapi_requires_auth_is_false(text: str) -> bool:
-    in_server = False
-    server_indent = 0
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        indent = len(line) - len(line.lstrip())
-        if stripped == "server:":
-            in_server = True
-            server_indent = indent
-            continue
-        if not in_server:
-            continue
-        if indent <= server_indent:
-            in_server = False
-            continue
-        if re.match(r"openapi_requires_auth\s*:\s*false\b", stripped, flags=re.IGNORECASE):
-            return True
-    return False
 
 
 def validate_cross_artifact_contracts(

@@ -682,6 +682,81 @@ oid4vci:
 
         self.assertIssue(issues, "openapi-auth-required")
 
+    def test_rejects_relay_coolify_config_without_public_openapi(self) -> None:
+        # Scan-based check: relay config file in HOSTED_CONFIG_DIRS must have
+        # openapi_requires_auth: false even if no compose service references it.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            relay_dir = root / "config" / "coolify" / "relay"
+            relay_dir.mkdir(parents=True)
+            (relay_dir / "civil-registry-relay.yaml").write_text(
+                "server:\n  bind: 0.0.0.0:8080\n",
+                encoding="utf-8",
+            )
+            issues = self.validator.validate_hosted_openapi_policy(
+                "registry-lab",
+                {},
+                root,
+            )
+        self.assertIssue(issues, "openapi-auth-required")
+
+    def test_rejects_notary_coolify_config_without_public_openapi(self) -> None:
+        # Scan-based check: notary config file in HOSTED_CONFIG_DIRS must have
+        # openapi_requires_auth: false even if no compose service references it.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            notary_dir = root / "config" / "coolify" / "notary"
+            notary_dir.mkdir(parents=True)
+            (notary_dir / "citizen-civil-notary.yaml").write_text(
+                "server:\n  bind: 0.0.0.0:8080\n  openapi_requires_auth: true\n",
+                encoding="utf-8",
+            )
+            issues = self.validator.validate_hosted_openapi_policy(
+                "registry-lab",
+                {},
+                root,
+            )
+        self.assertIssue(issues, "openapi-auth-required")
+
+    def test_hosted_openapi_policy_allows_public_coolify_configs(self) -> None:
+        # Positive case: all configs in HOSTED_CONFIG_DIRS with the flag set pass.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            relay_dir = root / "config" / "coolify" / "relay"
+            notary_dir = root / "config" / "coolify" / "notary"
+            relay_dir.mkdir(parents=True)
+            notary_dir.mkdir(parents=True)
+            (relay_dir / "civil-registry-relay.yaml").write_text(
+                "server:\n  bind: 0.0.0.0:8080\n  openapi_requires_auth: false\n",
+                encoding="utf-8",
+            )
+            (notary_dir / "citizen-civil-notary.yaml").write_text(
+                "server:\n  bind: 0.0.0.0:8080\n  openapi_requires_auth: false\n",
+                encoding="utf-8",
+            )
+            issues = self.validator.validate_hosted_openapi_policy(
+                "registry-lab",
+                {},
+                root,
+            )
+        self.assertNoIssue(issues, "openapi-auth-required")
+
+    def test_hosted_openapi_policy_ignores_nested_server_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            relay_dir = root / "config" / "coolify" / "relay"
+            relay_dir.mkdir(parents=True)
+            (relay_dir / "metadata.yaml").write_text(
+                "metadata:\n  server:\n    openapi_requires_auth: true\n",
+                encoding="utf-8",
+            )
+            issues = self.validator.validate_hosted_openapi_policy(
+                "registry-lab",
+                {},
+                root,
+            )
+        self.assertNoIssue(issues, "openapi-auth-required")
+
     def test_rejects_relay_healthcheck_that_calls_notary_binary(self) -> None:
         compose = self._valid_registry_lab()
         compose["services"]["civil-registry-relay"]["healthcheck"] = {
