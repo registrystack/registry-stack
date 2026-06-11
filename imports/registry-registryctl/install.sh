@@ -80,18 +80,22 @@ echo "Downloading registryctl ${version} for ${os_label}/${arch_label}..."
 curl -fsSL "$url" -o "$tmpdir/$asset"
 curl -fsSL "$url.sha256" -o "$tmpdir/$asset.sha256"
 
+read -r expected_hash _ <"$tmpdir/$asset.sha256"
+
 if command -v shasum >/dev/null 2>&1; then
-	(
-		cd "$tmpdir"
-		shasum -a 256 -c "$asset.sha256"
-	)
+	actual_hash="$(shasum -a 256 "$tmpdir/$asset")"
 elif command -v sha256sum >/dev/null 2>&1; then
-	(
-		cd "$tmpdir"
-		sha256sum -c "$asset.sha256"
-	)
+	actual_hash="$(sha256sum "$tmpdir/$asset")"
 else
 	echo "registryctl installer needs 'shasum' or 'sha256sum' for checksum verification." >&2
+	exit 1
+fi
+actual_hash="${actual_hash%% *}"
+
+if [ "$actual_hash" != "$expected_hash" ]; then
+	echo "Checksum verification failed for $asset" >&2
+	echo "Expected: $expected_hash" >&2
+	echo "Actual:   $actual_hash" >&2
 	exit 1
 fi
 
