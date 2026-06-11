@@ -101,6 +101,32 @@ def story() -> dict[str, Any]:
     }
 
 
+def _preview_evaluate(claim_id: str, subject: str, disclosure: str) -> dict[str, Any]:
+    credential = runtime_bearer_credential("agri-evidence", TOKEN_ENV)
+    _, display_headers = _headers(credential)
+    url = env_url(URL_ENV, DEFAULT_URL, "/v1/evaluations")
+    display_headers["Content-Type"] = "application/json"
+    body = evaluation_body(subject, claim_id, id_scheme="farmer_id", disclosure=disclosure)
+    return request_source("POST", url, display_headers, body, internal=True)
+
+
+def preview_step(config: dict[str, Any], step_id: str) -> dict[str, Any]:
+    if step_id == "discover":
+        credential = runtime_bearer_credential("agri-evidence", TOKEN_ENV)
+        _, display_headers = _headers(credential)
+        url = env_url(URL_ENV, DEFAULT_URL, "/v1/claims")
+        return request_source("GET", url, display_headers, internal=True)
+    if step_id == "positive-voucher":
+        return _preview_evaluate(CLAIM_ID, POSITIVE_SUBJECT, "predicate")
+    if step_id == "inactive-parcel-control":
+        return _preview_evaluate(CLAIM_ID, PARCEL_CONTROL, "predicate")
+    if step_id == "redeemed-control":
+        return _preview_evaluate(CLAIM_ID, REDEEMED_CONTROL, "predicate")
+    if step_id == "reason-code":
+        return _preview_evaluate(REASON_CLAIM_ID, REDEEMED_CONTROL, "value")
+    return {}
+
+
 def run_step(config: dict[str, Any], step_id: str) -> dict[str, Any]:
     if step_id == "discover":
         return _discover(step_id)

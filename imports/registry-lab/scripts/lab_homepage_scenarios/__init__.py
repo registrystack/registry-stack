@@ -29,12 +29,22 @@ def _is_runnable(story: dict[str, Any], lab_mode: str) -> bool:
     return story.get("availability", "hosted") == "hosted" or lab_mode == "local"
 
 
+def _attach_previews(story: dict[str, Any], module: Any, config: dict[str, Any]) -> dict[str, Any]:
+    steps = story.get("steps", [])
+    enriched_steps = []
+    for step in steps:
+        step_copy = dict(step)
+        step_copy["request_preview"] = module.preview_step(config, step["id"])
+        enriched_steps.append(step_copy)
+    return {**story, "steps": enriched_steps}
+
+
 def scenario_payload(config: dict[str, Any], scenario_id: str | None = None, lab_mode: str = "hosted") -> dict[str, Any]:
     if scenario_id:
         module = STORY_BY_ID.get(scenario_id)
         if not module:
             return {"error": "unknown_scenario", "scenario_id": scenario_id}
-        story = module.story()
+        story = _attach_previews(module.story(), module, config)
         return {"story": story, "lab_mode": lab_mode, "runnable": _is_runnable(story, lab_mode)}
     return {
         "lab_mode": lab_mode,
@@ -253,6 +263,8 @@ def scenario_page_html(scenario_id: str | None = None) -> bytes:
     .source-note, .meta {{ color: var(--registry-muted); font-size: 13px; }}
     .source-toolbar {{ display: flex; justify-content: flex-end; }}
     .copy-curl {{ min-height: 32px; padding: 6px 10px; }}
+    .preview-eyebrow {{ color: var(--registry-muted); font-family: var(--registry-mono); font-size: 11px; margin: 0 0 4px; text-transform: uppercase; }}
+    .story-actions {{ margin-bottom: 10px; }}
     .receipt {{ display: none; gap: 14px; margin-top: 18px; padding: 18px; }}
     .receipt.visible {{ display: grid; }}
     .site-footer {{ margin: 0 auto; max-width: var(--registry-max); padding: 28px clamp(16px, 4vw, 42px); }}
@@ -350,9 +362,11 @@ def scenario_page_html(scenario_id: str | None = None) -> bytes:
       return `<div class="source-section"><h4>${{escapeHtml(title)}}</h4>${{content}}</div>`;
     }}
 
-    function renderRequestSource(value) {{
+    function renderRequestSource(value, isPreview) {{
       const canCurl = value.method && value.method !== "SIMULATE" && value.url && !value.internal;
+      const previewLabel = isPreview ? `<p class="preview-eyebrow">Request preview, not sent yet</p>` : "";
       return `<div class="source-card">
+        ${{previewLabel}}
         ${{canCurl ? `<div class="source-toolbar"><button class="copy-curl" type="button" data-copy-curl="${{escapeHtml(curlCommand(value))}}">Copy as curl</button></div>` : ""}}
         ${{value.internal ? `<div class="source-note">Internal lab call. It authenticates with a runtime-only credential that is never published, so there is no runnable curl for it.</div>` : ""}}
         <div class="source-line">${{escapeHtml(value.method || "")}} ${{escapeHtml(value.url || "")}}</div>
@@ -372,22 +386,22 @@ def scenario_page_html(scenario_id: str | None = None) -> bytes:
       </div>`;
     }}
 
-    function sourceBlock(value) {{
+    function sourceBlock(value, isPreview) {{
       const source = value || {{}};
       if (source.note) return `<div class="source-card"><div class="source-note">${{escapeHtml(source.note)}}</div></div>`;
       if (source.evaluation && source.render) {{
         return `
           <div class="source-section">
             <h4>Evaluation</h4>
-            ${{sourceBlock(source.evaluation)}}
+            ${{sourceBlock(source.evaluation, isPreview)}}
           </div>
           <div class="source-section">
             <h4>Render</h4>
-            ${{sourceBlock(source.render)}}
+            ${{sourceBlock(source.render, isPreview)}}
           </div>
         `;
       }}
-      if (source.method && source.url) return renderRequestSource(source);
+      if (source.method && source.url) return renderRequestSource(source, isPreview);
       if (source.http) return renderResponseSource(source.http, source.reused_from_discovery);
       if ("status" in source || "headers" in source || "body" in source || "error" in source) return renderResponseSource(source);
       return `<pre class="source-code">${{escapeHtml(prettyJson(source))}}</pre>`;
@@ -481,6 +495,7 @@ def scenario_page_html(scenario_id: str | None = None) -> bytes:
           </div>
         </section>
         ${{!state.runnable ? renderLocalOnlyBlock(story) : ""}}
+        <div class="actions story-actions"><button type="button" data-reset-story>Reset story</button></div>
         <section class="step-list">${{story.steps.map(renderStep).join("")}}</section>
         <section class="receipt" id="receipt"><div><p class="eyebrow">Final receipt</p><h2>What the demo proved</h2></div><div class="facts">${{renderFacts(story.receipt || [])}}</div></section>
       `;
@@ -508,6 +523,10 @@ def scenario_page_html(scenario_id: str | None = None) -> bytes:
       const runnable = canRun(index);
       const ariaDisabled = runnable ? "" : `aria-disabled="true"`;
       const lockedHint = !runnable && index > 0 ? `<p class="meta" data-locked-hint-for="${{escapeHtml(step.id)}}">Locked until step ${{index}} completes.</p>` : "";
+      const preview = step.request_preview || {{}};
+      const previewHtml = preview.method || (preview.evaluation && preview.render)
+        ? sourceBlock(preview, true)
+        : sourceBlock({{ note: "Run this step to capture the request source." }});
       return `<article class="step ${{runnable ? "" : "locked"}}" id="step-${{escapeHtml(step.id)}}">
         <div class="step-head">
           <span class="step-number">${{index + 1}}</span>
@@ -520,7 +539,7 @@ def scenario_page_html(scenario_id: str | None = None) -> bytes:
           ${{lockedHint}}
           <div class="actions"><button class="primary" type="button" data-run-step="${{escapeHtml(step.id)}}" data-run-label="${{escapeHtml(step.button)}}" ${{ariaDisabled}}>${{escapeHtml(step.button)}}</button></div>
           <div class="friendly-response" aria-live="polite" data-friendly-for="${{escapeHtml(step.id)}}"></div>
-          <details><summary>Show technical request</summary><div data-request-source-for="${{escapeHtml(step.id)}}">${{sourceBlock({{ note: "Run this step to capture the request source." }})}}</div></details>
+          <details><summary>Show technical request</summary><div data-request-source-for="${{escapeHtml(step.id)}}">${{previewHtml}}</div></details>
           <details><summary>Show technical response</summary><div data-response-source-for="${{escapeHtml(step.id)}}">${{sourceBlock({{ note: "Run this step to capture the response source." }})}}</div></details>
         </div>
       </article>`;
@@ -590,7 +609,35 @@ def scenario_page_html(scenario_id: str | None = None) -> bytes:
       if (node) node.innerHTML = sourceBlock(value);
     }}
 
-    function unlockNextSteps(completedStepId) {{
+    function progressKey(scenarioId) {{
+      return `lab-progress:${{scenarioId}}`;
+    }}
+
+    function saveProgress(scenarioId) {{
+      const ids = Array.from(state.completed);
+      sessionStorage.setItem(progressKey(scenarioId), JSON.stringify(ids));
+    }}
+
+    function loadProgress(scenarioId) {{
+      try {{
+        const raw = sessionStorage.getItem(progressKey(scenarioId));
+        return raw ? new Set(JSON.parse(raw)) : new Set();
+      }} catch (_err) {{
+        return new Set();
+      }}
+    }}
+
+    function resetProgress(scenarioId) {{
+      sessionStorage.removeItem(progressKey(scenarioId));
+      location.reload();
+    }}
+
+    function wireResetButton() {{
+      const btn = document.querySelector("[data-reset-story]");
+      if (btn) btn.addEventListener("click", () => resetProgress(ACTIVE_SCENARIO));
+    }}
+
+    function unlockNextSteps(completedStepId, restoring) {{
       const story = state.story;
       let firstUnlocked = null;
       for (const button of document.querySelectorAll("[data-run-step]")) {{
@@ -607,6 +654,7 @@ def scenario_page_html(scenario_id: str | None = None) -> bytes:
         }}
         button.closest(".step")?.classList.toggle("locked", !runnable);
       }}
+      if (restoring) return;
       const allDone = story.steps.every((step) => state.completed.has(step.id));
       if (allDone) {{
         const receipt = byId("receipt");
@@ -616,6 +664,24 @@ def scenario_page_html(scenario_id: str | None = None) -> bytes:
         firstUnlocked.focus({{ preventScroll: true }});
         firstUnlocked.closest(".step")?.scrollIntoView({{ block: "start" }});
       }}
+    }}
+
+    function restoreCompleted(story) {{
+      if (!ACTIVE_SCENARIO) return;
+      const saved = loadProgress(ACTIVE_SCENARIO);
+      if (!saved.size) return;
+      for (const step of story.steps) {{
+        if (saved.has(step.id)) {{
+          state.completed.add(step.id);
+          updateStatus(step.id, "done");
+          const node = document.querySelector(`[data-friendly-for="${{CSS.escape(step.id)}}"]`);
+          if (node) {{
+            node.className = "friendly-response visible";
+            node.innerHTML = `<p class="meta">Completed earlier in this session. Run it again to see the live result.</p>`;
+          }}
+        }}
+      }}
+      unlockNextSteps(null, true);
     }}
 
     async function runStep(stepId, button) {{
@@ -630,7 +696,8 @@ def scenario_page_html(scenario_id: str | None = None) -> bytes:
       updateStatus(stepId, status);
       if (status === "done" || status === "denied_as_expected") {{
         state.completed.add(stepId);
-        setTimeout(() => unlockNextSteps(stepId), 80);
+        saveProgress(state.story.id);
+        setTimeout(() => unlockNextSteps(stepId, false), 80);
       }} else {{
         button.removeAttribute("aria-disabled");
         if (status === "needs_attention") button.textContent = "Try again";
@@ -650,8 +717,10 @@ def scenario_page_html(scenario_id: str | None = None) -> bytes:
         return;
       }}
       renderStory(data.story, data.runnable !== false);
+      restoreCompleted(data.story);
       wireStepButtons();
       wireCurlCopyButtons();
+      wireResetButton();
     }}
     start();
   </script>

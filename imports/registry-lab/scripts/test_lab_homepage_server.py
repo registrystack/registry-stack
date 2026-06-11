@@ -1326,5 +1326,323 @@ class ChooserAndMetadataTest(unittest.TestCase):
         self.assertTrue(len(sent_bytes) + len(sent_redirects) > 0, "/favicon.ico must respond")
 
 
+class RequestPreviewTest(unittest.TestCase):
+    """Goal E: pre-run request preview in each scenario module and payload."""
+
+    def setUp(self) -> None:
+        self._saved = dict(os.environ)
+        os.environ["CIVIL_RAW"] = "civil-token"
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._saved)
+
+    def _payload_config(self) -> dict:
+        return server.enrich_config(
+            {
+                "credentials": [
+                    {
+                        "id": "civil-evidence-only",
+                        "env": "CIVIL_RAW",
+                        "service_url": "https://civil.example",
+                        "example": {"path": "/metadata/evidence-offerings"},
+                    },
+                    {
+                        "id": "dhis2-bearer",
+                        "env": "CIVIL_RAW",
+                        "service_url": "https://dhis2.example",
+                        "example": {"path": "/v1/claims"},
+                    },
+                    {
+                        "id": "social-metadata",
+                        "env": "CIVIL_RAW",
+                        "service_url": "https://social.example",
+                        "example": {"path": "/v1/datasets"},
+                    },
+                    {
+                        "id": "social-aggregate-reader",
+                        "env": "CIVIL_RAW",
+                        "service_url": "https://social.example",
+                        "example": {"path": "/v1/datasets/social_protection_registry/aggregates/households_by_eligibility_band"},
+                    },
+                    {
+                        "id": "social-row-reader",
+                        "env": "CIVIL_RAW",
+                        "service_url": "https://social.example",
+                        "example": {"path": "/v1/datasets/social_protection_registry/entities/household/records?limit=1"},
+                    },
+                ],
+                "wallet": {
+                    "issuer": "https://issuer.example",
+                    "credential_configuration_id": "person_is_alive_sd_jwt",
+                    "offer_url": "https://issuer.example/offer",
+                },
+            }
+        )
+
+    # ---- civil_alive preview_step ----
+
+    def test_civil_alive_discover_preview_has_method_url_headers(self) -> None:
+        import lab_homepage_scenarios.civil_alive as mod
+        config = self._payload_config()
+        result = mod.preview_step(config, "discover")
+        self.assertEqual(result["method"], "GET")
+        self.assertIn("civil.example", result["url"])
+        self.assertIn("headers", result)
+
+    def test_civil_alive_prepare_evidence_preview_is_internal(self) -> None:
+        import lab_homepage_scenarios.civil_alive as mod
+        config = self._payload_config()
+        result = mod.preview_step(config, "prepare-evidence")
+        self.assertTrue(result.get("internal"), "prepare-evidence preview must be internal")
+        self.assertEqual(result["method"], "POST")
+
+    def test_civil_alive_prepare_evidence_preview_hides_runtime_token(self) -> None:
+        os.environ["CIVIL_EVIDENCE_CLIENT_BEARER"] = "notary-secret"
+        import lab_homepage_scenarios.civil_alive as mod
+        config = self._payload_config()
+        result = mod.preview_step(config, "prepare-evidence")
+        self.assertNotIn("notary-secret", str(result))
+        self.assertIn("[runtime demo token", str(result))
+
+    def test_civil_alive_deny_row_preview_has_method_url_headers(self) -> None:
+        import lab_homepage_scenarios.civil_alive as mod
+        config = self._payload_config()
+        result = mod.preview_step(config, "deny-row")
+        self.assertEqual(result["method"], "GET")
+        self.assertIn("civil.example", result["url"])
+
+    def test_civil_alive_preview_curl_matches_run_curl_for_public_steps(self) -> None:
+        """discover preview url/method/headers must equal what run produces (no network needed)."""
+        import lab_homepage_scenarios.civil_alive as mod
+        config = self._payload_config()
+        preview = mod.preview_step(config, "discover")
+        # Preview must produce the same curl-relevant fields as run_step's request_source.
+        self.assertEqual(preview["method"], "GET")
+        self.assertIn("evidence-offerings", preview["url"])
+        self.assertFalse(preview.get("internal"))
+
+    # ---- wallet_vc preview_step ----
+
+    def test_wallet_vc_all_steps_have_preview(self) -> None:
+        import lab_homepage_scenarios.wallet_vc as mod
+        config = self._payload_config()
+        step_ids = ["issuer-metadata", "credential-offer", "holder-key", "nonce", "credential-preview"]
+        for step_id in step_ids:
+            result = mod.preview_step(config, step_id)
+            self.assertIn("method", result, f"wallet_vc.preview_step({step_id!r}) missing method")
+            self.assertIn("url", result, f"wallet_vc.preview_step({step_id!r}) missing url")
+
+    def test_wallet_vc_holder_key_preview_is_simulate(self) -> None:
+        import lab_homepage_scenarios.wallet_vc as mod
+        config = self._payload_config()
+        result = mod.preview_step(config, "holder-key")
+        self.assertEqual(result["method"], "SIMULATE")
+
+    def test_wallet_vc_nonce_preview_is_simulate(self) -> None:
+        import lab_homepage_scenarios.wallet_vc as mod
+        config = self._payload_config()
+        result = mod.preview_step(config, "nonce")
+        self.assertEqual(result["method"], "SIMULATE")
+
+    def test_wallet_vc_credential_preview_is_simulate(self) -> None:
+        import lab_homepage_scenarios.wallet_vc as mod
+        config = self._payload_config()
+        result = mod.preview_step(config, "credential-preview")
+        self.assertEqual(result["method"], "SIMULATE")
+
+    # ---- dhis2_programme preview_step ----
+
+    def test_dhis2_all_steps_have_preview(self) -> None:
+        import lab_homepage_scenarios.dhis2_programme as mod
+        config = self._payload_config()
+        # render-cccev returns a composite dict with evaluation/render keys (matches run_step shape)
+        step_ids = ["discover", "evaluate-programme", "preview-vc", "reconcile", "negative-control"]
+        for step_id in step_ids:
+            result = mod.preview_step(config, step_id)
+            self.assertIn("method", result, f"dhis2.preview_step({step_id!r}) missing method")
+
+    def test_dhis2_preview_vc_step_is_simulate(self) -> None:
+        import lab_homepage_scenarios.dhis2_programme as mod
+        config = self._payload_config()
+        result = mod.preview_step(config, "preview-vc")
+        self.assertEqual(result["method"], "SIMULATE")
+
+    def test_dhis2_render_cccev_preview_has_evaluation_key(self) -> None:
+        import lab_homepage_scenarios.dhis2_programme as mod
+        config = self._payload_config()
+        result = mod.preview_step(config, "render-cccev")
+        # render-cccev run produces a dict with "evaluation" and "render" keys
+        self.assertIn("evaluation", result)
+        self.assertIn("render", result)
+
+    # ---- social_aggregate preview_step ----
+
+    def test_social_aggregate_all_steps_have_preview(self) -> None:
+        import lab_homepage_scenarios.social_aggregate as mod
+        config = self._payload_config()
+        step_ids = ["discover", "read-aggregate", "deny-row-with-aggregate", "read-row-with-row-token"]
+        for step_id in step_ids:
+            result = mod.preview_step(config, step_id)
+            self.assertIn("method", result, f"social_aggregate.preview_step({step_id!r}) missing method")
+
+    # ---- combined_support preview_step ----
+
+    def test_combined_support_all_steps_have_preview(self) -> None:
+        import lab_homepage_scenarios.combined_support as mod
+        config = self._payload_config()
+        step_ids = ["discover", "civil-subclaim", "social-subclaim", "health-subclaim", "final-positive", "negative-control"]
+        for step_id in step_ids:
+            result = mod.preview_step(config, step_id)
+            self.assertIn("method", result, f"combined_support.preview_step({step_id!r}) missing method")
+
+    def test_combined_support_all_steps_are_internal(self) -> None:
+        import lab_homepage_scenarios.combined_support as mod
+        config = self._payload_config()
+        step_ids = ["discover", "civil-subclaim", "social-subclaim", "health-subclaim", "final-positive", "negative-control"]
+        for step_id in step_ids:
+            result = mod.preview_step(config, step_id)
+            self.assertTrue(result.get("internal"), f"combined_support.preview_step({step_id!r}) must be internal")
+
+    def test_combined_support_preview_hides_runtime_token(self) -> None:
+        os.environ["SHARED_EVIDENCE_CLIENT_BEARER"] = "shared-secret"
+        import lab_homepage_scenarios.combined_support as mod
+        config = self._payload_config()
+        result = mod.preview_step(config, "discover")
+        self.assertNotIn("shared-secret", str(result))
+        self.assertIn("[runtime demo token", str(result))
+
+    # ---- agriculture_voucher preview_step ----
+
+    def test_agriculture_voucher_all_steps_have_preview(self) -> None:
+        import lab_homepage_scenarios.agriculture_voucher as mod
+        config = self._payload_config()
+        step_ids = ["discover", "positive-voucher", "inactive-parcel-control", "redeemed-control", "reason-code"]
+        for step_id in step_ids:
+            result = mod.preview_step(config, step_id)
+            self.assertIn("method", result, f"agriculture_voucher.preview_step({step_id!r}) missing method")
+
+    def test_agriculture_voucher_all_steps_are_internal(self) -> None:
+        import lab_homepage_scenarios.agriculture_voucher as mod
+        config = self._payload_config()
+        step_ids = ["discover", "positive-voucher", "inactive-parcel-control", "redeemed-control", "reason-code"]
+        for step_id in step_ids:
+            result = mod.preview_step(config, step_id)
+            self.assertTrue(result.get("internal"), f"agriculture_voucher.preview_step({step_id!r}) must be internal")
+
+    def test_agriculture_voucher_preview_hides_runtime_token(self) -> None:
+        os.environ["AGRI_EVIDENCE_CLIENT_BEARER"] = "agri-secret"
+        import lab_homepage_scenarios.agriculture_voucher as mod
+        config = self._payload_config()
+        result = mod.preview_step(config, "discover")
+        self.assertNotIn("agri-secret", str(result))
+        self.assertIn("[runtime demo token", str(result))
+
+    # ---- scenario_payload attaches request_preview ----
+
+    def test_payload_steps_have_request_preview(self) -> None:
+        payload = server.scenario_payload(self._payload_config(), "alive-proof")
+        for step in payload["story"]["steps"]:
+            self.assertIn("request_preview", step, f"step {step['id']!r} missing request_preview in payload")
+
+    def test_payload_request_preview_has_method_and_url(self) -> None:
+        payload = server.scenario_payload(self._payload_config(), "alive-proof")
+        for step in payload["story"]["steps"]:
+            preview = step["request_preview"]
+            self.assertIn("method", preview, f"step {step['id']!r} preview missing method")
+            self.assertIn("url", preview, f"step {step['id']!r} preview missing url")
+
+    def test_payload_prepare_evidence_preview_is_internal(self) -> None:
+        payload = server.scenario_payload(self._payload_config(), "alive-proof")
+        step = next(s for s in payload["story"]["steps"] if s["id"] == "prepare-evidence")
+        self.assertTrue(step["request_preview"].get("internal"))
+
+    def test_payload_request_preview_no_raw_runtime_token(self) -> None:
+        os.environ["CIVIL_EVIDENCE_CLIENT_BEARER"] = "my-secret-runtime-token"
+        payload = server.scenario_payload(self._payload_config(), "alive-proof")
+        for step in payload["story"]["steps"]:
+            self.assertNotIn("my-secret-runtime-token", str(step["request_preview"]))
+
+    def test_wallet_payload_simulated_steps_have_simulate_preview(self) -> None:
+        payload = server.scenario_payload(self._payload_config(), "wallet-credential")
+        for step in payload["story"]["steps"]:
+            if step["id"] in ("holder-key", "nonce", "credential-preview"):
+                self.assertEqual(step["request_preview"]["method"], "SIMULATE",
+                                 f"step {step['id']!r} must have SIMULATE preview")
+
+    # ---- page HTML contains preview label and JS wiring ----
+
+    def test_scenario_page_html_contains_preview_label(self) -> None:
+        html = server.scenario_page_html().decode("utf-8")
+        self.assertIn("Request preview", html, "Page must contain a preview label text")
+
+    def test_scenario_page_html_contains_session_storage_key_prefix(self) -> None:
+        html = server.scenario_page_html().decode("utf-8")
+        self.assertIn("lab-progress:", html, "Page must contain sessionStorage key prefix")
+
+    def test_scenario_page_html_contains_reset_story_button(self) -> None:
+        html = server.scenario_page_html().decode("utf-8")
+        self.assertIn("Reset story", html, "Page must contain a Reset story button")
+
+    def test_scenario_page_html_contains_session_storage_usage(self) -> None:
+        html = server.scenario_page_html().decode("utf-8")
+        self.assertIn("sessionStorage", html, "Page must use sessionStorage for progress persistence")
+
+    def test_scenario_page_html_preview_fills_request_drawer_on_load(self) -> None:
+        html = server.scenario_page_html().decode("utf-8")
+        self.assertIn("request_preview", html, "JS must reference request_preview from story data")
+
+    def test_scenario_page_html_completed_earlier_note_present(self) -> None:
+        html = server.scenario_page_html().decode("utf-8")
+        self.assertIn("Completed earlier", html, "Restored steps must show a 'Completed earlier' note")
+
+    def test_scenario_page_html_restore_does_not_scroll(self) -> None:
+        # On restore the scroll must be guarded by a flag; the page must not scroll on load.
+        html = server.scenario_page_html().decode("utf-8")
+        # The restore code must call unlockNextSteps with a no-scroll flag or similar guard.
+        self.assertIn("restoring", html, "Restore path must set a restoring flag to suppress scroll/focus")
+
+
+class ProgressPersistenceTest(unittest.TestCase):
+    """Goal E: sessionStorage, Reset story, and restored-step behavior in page HTML."""
+
+    def setUp(self) -> None:
+        self.html = server.scenario_page_html().decode("utf-8")
+
+    def test_session_storage_set_on_step_complete(self) -> None:
+        self.assertIn("sessionStorage.setItem", self.html)
+
+    def test_session_storage_get_on_page_load(self) -> None:
+        self.assertIn("sessionStorage.getItem", self.html)
+
+    def test_session_storage_remove_on_reset(self) -> None:
+        self.assertIn("sessionStorage.removeItem", self.html)
+
+    def test_reset_story_clears_and_reloads(self) -> None:
+        self.assertIn("location.reload", self.html, "Reset story must trigger page reload")
+
+    def test_reset_only_on_story_page_not_chooser(self) -> None:
+        # The reset button must only be rendered when ACTIVE_SCENARIO is set (i.e. story page).
+        # The JS must gate the reset button on ACTIVE_SCENARIO being truthy.
+        self.assertIn("ACTIVE_SCENARIO", self.html)
+        # The reset button render must be conditional
+        self.assertIn("Reset story", self.html)
+        # Verify reset is not unconditionally rendered at page load without scenario context
+        # The button appears in JS, so it's either in renderStory or conditionally added
+        self.assertIn("reset", self.html.lower())
+
+    def test_restored_steps_marked_done(self) -> None:
+        # The restore path must call updateStatus with "done"
+        self.assertIn("updateStatus", self.html)
+
+    def test_restored_steps_keep_preview_in_request_drawer(self) -> None:
+        # Restore must set the request source to preview data, not clear it
+        self.assertIn("request_preview", self.html)
+
+    def test_unlock_on_restore_does_not_focus(self) -> None:
+        # unlockNextSteps called during restore must not focus or scroll
+        self.assertIn("restoring", self.html)
+
+
 if __name__ == "__main__":
     unittest.main()

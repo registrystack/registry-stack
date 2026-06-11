@@ -119,6 +119,21 @@ def story() -> dict[str, Any]:
     }
 
 
+def preview_step(config: dict[str, Any], step_id: str) -> dict[str, Any]:
+    credential = runtime_bearer_credential("shared-evidence", TOKEN_ENV)
+    _, display_headers = _headers(credential)
+    if step_id == "discover":
+        url = env_url(URL_ENV, DEFAULT_URL, "/v1/claims")
+        return request_source("GET", url, display_headers, internal=True)
+    if step_id in CLAIMS:
+        claim_id, subject, _label = CLAIMS[step_id]
+        url = env_url(URL_ENV, DEFAULT_URL, "/v1/evaluations")
+        body = evaluation_body(subject, claim_id)
+        display_headers["Content-Type"] = "application/json"
+        return request_source("POST", url, display_headers, body, internal=True)
+    return {}
+
+
 def run_step(config: dict[str, Any], step_id: str) -> dict[str, Any]:
     if step_id == "discover":
         return _discover(step_id)
