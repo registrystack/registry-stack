@@ -18,11 +18,18 @@ on:
       - "requests/registry-lab/**"
       - "scripts/check-service-first-deps.sh"
       - "scripts/generate-demo-secrets.py"
+      - "scripts/generate-holder-proof.js"
       - "scripts/publish-static-metadata.sh"
       - "scripts/static-metadata-server.py"
       - "scripts/lab-homepage-server.py"
       - "scripts/lab_homepage_scenarios/**"
       - "scripts/test_lab_homepage_server.py"
+      - "scripts/credential-commitment.py"
+      - "scripts/test_credential_commitment.py"
+      - "scripts/summarize-dhis2-programme-vc.py"
+      - "scripts/test_dhis2_programme_vc_config.py"
+      - "scripts/hosted-smoke.py"
+      - "scripts/test_hosted_smoke.py"
       - "scripts/validate-hosted-deploy.py"
       - "scripts/test_validate_hosted_deploy.py"
       - "scripts/validate-public-api-workspace.py"
@@ -48,11 +55,18 @@ on:
       - "requests/registry-lab/**"
       - "scripts/check-service-first-deps.sh"
       - "scripts/generate-demo-secrets.py"
+      - "scripts/generate-holder-proof.js"
       - "scripts/publish-static-metadata.sh"
       - "scripts/static-metadata-server.py"
       - "scripts/lab-homepage-server.py"
       - "scripts/lab_homepage_scenarios/**"
       - "scripts/test_lab_homepage_server.py"
+      - "scripts/credential-commitment.py"
+      - "scripts/test_credential_commitment.py"
+      - "scripts/summarize-dhis2-programme-vc.py"
+      - "scripts/test_dhis2_programme_vc_config.py"
+      - "scripts/hosted-smoke.py"
+      - "scripts/test_hosted_smoke.py"
       - "scripts/validate-hosted-deploy.py"
       - "scripts/test_validate_hosted_deploy.py"
       - "scripts/validate-public-api-workspace.py"
@@ -68,6 +82,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD: hosted-validation-placeholder
+      CONFIG_REPO_REF: ${{ github.sha }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -96,11 +111,18 @@ jobs:
             requests/registry-lab \
             scripts/check-service-first-deps.sh \
             scripts/generate-demo-secrets.py \
+            scripts/generate-holder-proof.js \
             scripts/publish-static-metadata.sh \
             scripts/static-metadata-server.py \
             scripts/lab-homepage-server.py \
             scripts/lab_homepage_scenarios \
             scripts/test_lab_homepage_server.py \
+            scripts/credential-commitment.py \
+            scripts/test_credential_commitment.py \
+            scripts/summarize-dhis2-programme-vc.py \
+            scripts/test_dhis2_programme_vc_config.py \
+            scripts/hosted-smoke.py \
+            scripts/test_hosted_smoke.py \
             scripts/validate-hosted-deploy.py \
             scripts/test_validate_hosted_deploy.py \
             scripts/validate-public-api-workspace.py \
@@ -136,6 +158,15 @@ jobs:
       - name: Run lab homepage server tests
         run: python3 scripts/test_lab_homepage_server.py
 
+      - name: Run DHIS2 programme VC config tests
+        run: python3 scripts/test_dhis2_programme_vc_config.py
+
+      - name: Run credential commitment tests
+        run: python3 scripts/test_credential_commitment.py
+
+      - name: Run hosted smoke tests
+        run: python3 scripts/test_hosted_smoke.py
+
       - name: Validate hosted deploy artifacts
         run: python3 scripts/validate-hosted-deploy.py
 
@@ -149,28 +180,97 @@ jobs:
     needs: validate-hosted-artifacts
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    permissions: {}
+    permissions:
+      contents: read
     concurrency:
       group: hosted-lab-coolify-deploy
       cancel-in-progress: false
     steps:
-      - name: Trigger Coolify deploys
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Deploy Coolify apps and wait
         env:
           COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
-          COOLIFY_API_BASE_URL: https://cool.pitgenius.com/api/v1
-          REGISTRY_LAB_APP_UUID: klhnsuoye8lwuamp0bko387t
+          COOLIFY_API_BASE_URL: ${{ vars.COOLIFY_API_BASE_URL }}
+          COOLIFY_REGISTRY_LAB_APP_UUID: ${{ vars.COOLIFY_REGISTRY_LAB_APP_UUID }}
+          COOLIFY_HOSTED_ESIGNET_APP_UUID: ${{ vars.COOLIFY_HOSTED_ESIGNET_APP_UUID }}
+          COOLIFY_HOSTED_WALT_APP_UUID: ${{ vars.COOLIFY_HOSTED_WALT_APP_UUID }}
         run: |
+          set -euo pipefail
           if [ -z "$COOLIFY_API_TOKEN" ]; then
             echo "::notice::COOLIFY_API_TOKEN is not configured; hosted deploy trigger skipped."
             exit 0
           fi
-          for app in \
-            "${REGISTRY_LAB_APP_UUID}" \
-            cewwn93kknzsfzicen9nul6v \
-            uvqfk8gwqdbdse4v871xfv56
-          do
-            curl -fsS \
-              -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
-              "${COOLIFY_API_BASE_URL}/deploy?uuid=${app}&force=false"
-            echo
+
+          missing=0
+          for name in COOLIFY_API_BASE_URL COOLIFY_REGISTRY_LAB_APP_UUID COOLIFY_HOSTED_ESIGNET_APP_UUID COOLIFY_HOSTED_WALT_APP_UUID; do
+            if [ -z "${!name:-}" ]; then
+              echo "::notice::${name} is not configured; hosted deploy trigger skipped."
+              missing=1
+            fi
           done
+          if [ "$missing" -eq 1 ]; then
+            exit 0
+          fi
+
+          api_base="${COOLIFY_API_BASE_URL%/}"
+          deployments_file="$(mktemp)"
+          for app in "$COOLIFY_REGISTRY_LAB_APP_UUID" "$COOLIFY_HOSTED_ESIGNET_APP_UUID" "$COOLIFY_HOSTED_WALT_APP_UUID"; do
+            python3 -c 'import json, os; print(json.dumps({"key": "CONFIG_REPO_REF", "value": os.environ["GITHUB_SHA"], "is_preview": False}))' \
+              | curl -fsS -X PATCH \
+                  -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  --data-binary @- \
+                  "${api_base}/applications/${app}/envs" >/dev/null
+            deployment_uuid="$(
+              curl -fsS \
+                -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+                "${api_base}/deploy?uuid=${app}&force=false" \
+                | python3 -c 'import json, sys; print(json.load(sys.stdin)["deployments"][0]["deployment_uuid"])'
+            )"
+            printf '%s\t%s\n' "$app" "$deployment_uuid" >> "$deployments_file"
+            echo "triggered app=${app} deployment_uuid=${deployment_uuid}"
+          done
+
+          while IFS="$(printf '\t')" read -r app deployment_uuid; do
+            deadline=$((SECONDS + 1200))
+            while true; do
+              status="$(
+                curl -fsS \
+                  -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+                  "${api_base}/deployments/${deployment_uuid}" \
+                  | python3 -c 'import json, sys; data=json.load(sys.stdin); print((data.get("status") or data.get("deployment", {}).get("status") or "").lower())'
+              )"
+              echo "status app=${app} deployment_uuid=${deployment_uuid} status=${status}"
+              case "$status" in
+                finished)
+                  break
+                  ;;
+                failed|cancelled|canceled|error)
+                  echo "::error::Coolify deployment failed for ${app}: ${status}"
+                  exit 1
+                  ;;
+              esac
+              if [ "$SECONDS" -ge "$deadline" ]; then
+                echo "::error::Timed out waiting for Coolify deployment ${deployment_uuid}"
+                exit 1
+              fi
+              sleep 15
+            done
+          done < "$deployments_file"
+
+      - name: Run hosted smoke
+        env:
+          HOSTED_LAB_BASE_URL: ${{ vars.HOSTED_LAB_BASE_URL }}
+          HOSTED_CREDENTIAL_SMOKE: ${{ vars.HOSTED_CREDENTIAL_SMOKE }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ -n "${HOSTED_LAB_BASE_URL:-}" ]; then
+            args+=(--base-url "$HOSTED_LAB_BASE_URL")
+          fi
+          if [ "${HOSTED_CREDENTIAL_SMOKE:-}" = "true" ]; then
+            args+=(--credential-smoke)
+          fi
+          python3 scripts/hosted-smoke.py "${args[@]}"

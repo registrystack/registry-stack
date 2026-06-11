@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import os
 import re
@@ -74,6 +75,7 @@ REQUIRED_DOMAINS = {
 REQUIRED_HOSTED_VARIABLES = {
     "registry-lab": {
         "REGISTRY_LAB_POSTGRES_PASSWORD",
+        "CONFIG_REPO_REF",
         "ZITADEL_MASTERKEY",
         "REGISTRY_NOTARY_AUDIT_HASH_SECRET",
         "REGISTRY_NOTARY_ISSUER_JWK",
@@ -200,6 +202,20 @@ SCANNED_FILE_SUFFIXES = {
     ".yaml",
     ".yml",
 }
+HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+HOSTED_CONFIG_DIRS = (
+    Path("config/coolify/notary"),
+    Path("config/coolify/relay"),
+)
+DHIS2_PROGRAMME_PROFILE = "dhis2_programme_participation_sd_jwt"
+DHIS2_PROGRAMME_CLAIMS = {
+    "dhis2-tracked-entity-first-name",
+    "dhis2-tracked-entity-last-name",
+    "dhis2-child-age-band",
+    "dhis2-programme-code",
+    "dhis2-child-program-active",
+    "dhis2-reconciliation-ref",
+}
 
 
 @dataclass(frozen=True)
@@ -211,6 +227,10 @@ class Issue:
 
     def __str__(self) -> str:
         return f"{self.artifact}:{self.path}: [{self.code}] {self.message}"
+
+
+class DuplicateYamlKeyError(ValueError):
+    pass
 
 
 def validate_artifacts(
@@ -271,6 +291,10 @@ def validate_artifacts(
         )
         issues.extend(validate_config_loader_ref(artifact, services))
         issues.extend(validate_config_loader_hosted_outputs(artifact, services))
+        issues.extend(validate_hosted_yaml_files(artifact, root))
+        issues.extend(validate_dhis2_programme_vc_contract(artifact, root))
+        if require_secret_values:
+            issues.extend(validate_credential_commitments(artifact, root, env))
         issues.extend(
             validate_static_metadata_publisher(
                 artifact,
@@ -829,21 +853,24 @@ def service_block_references_variable(raw_text: str, service: str, variable: str
 
 
 def validate_config_loader_ref(artifact: str, services: dict[str, Any]) -> list[Issue]:
-    if artifact != "registry-lab":
+    if artifact not in {"registry-lab", "esignet", "walt"}:
         return []
     config_loader = services.get("config-loader")
     if not isinstance(config_loader, dict):
         return []
     env = normalize_environment(config_loader.get("environment"))
     config_ref = env.get("CONFIG_REPO_REF")
-    if config_ref in {"main", "${CONFIG_REPO_REF:-main}"}:
+    if config_ref in {
+        "${CONFIG_REPO_REF:?set CONFIG_REPO_REF to the deployed registry-lab git ref}",
+        "hosted-validation-placeholder",
+    } or (isinstance(config_ref, str) and bool(re.fullmatch(r"[0-9a-f]{40}", config_ref))):
         return []
     return [
         Issue(
             "stale-config-repo-ref",
             artifact,
             "services.config-loader.environment.CONFIG_REPO_REF",
-            "hosted config-loader must default to current main config",
+            "hosted config-loader must require a deployed git ref, not a floating or stale branch",
         )
     ]
 
@@ -908,7 +935,273 @@ def validate_config_loader_hosted_outputs(
                 "hosted config-loader must copy the internal civil Notary config",
             )
         )
+    for target, config_path in hosted_service_config_copies(services):
+        expected = f"cp -a /tmp/repo/{config_path} {target}"
+        directory = Path(config_path).parent
+        directory_copy = f"cp -a /tmp/repo/{directory}/. {target}"
+        if expected not in command_text and directory_copy not in command_text:
+            issues.append(
+                Issue(
+                    "hosted-config-not-copied",
+                    artifact,
+                    "services.config-loader.command",
+                    f"hosted config-loader must copy {config_path}",
+                )
+            )
     return issues
+
+
+def hosted_service_config_copies(services: dict[str, Any]) -> set[tuple[str, str]]:
+    copies: set[tuple[str, str]] = set()
+    for service, config in services.items():
+        if not isinstance(config, dict):
+            continue
+        command = config.get("command")
+        if not isinstance(command, list):
+            continue
+        for index, value in enumerate(command[:-1]):
+            if value != "--config":
+                continue
+            mounted_path = Path(str(command[index + 1]))
+            name = mounted_path.name
+            if not name:
+                continue
+            mounted_text = str(mounted_path)
+            if "/registry-notary/" in mounted_text:
+                source = f"config/coolify/notary/{name}"
+                target = "/out/notary/"
+            elif "/registry-relay/" in mounted_text:
+                source = f"config/coolify/relay/{name}"
+                target = "/out/relay/"
+            else:
+                continue
+            copies.add((target, source))
+    return copies
+
+
+def validate_hosted_yaml_files(artifact: str, root: Path) -> list[Issue]:
+    if artifact != "registry-lab":
+        return []
+    issues: list[Issue] = []
+    for relative_dir in HOSTED_CONFIG_DIRS:
+        directory = root / relative_dir
+        if not directory.exists():
+            continue
+        for path in sorted(directory.glob("*.yaml")):
+            try:
+                load_yaml_mapping_strict(path)
+            except DuplicateYamlKeyError as exc:
+                issues.append(
+                    Issue(
+                        "duplicate-yaml-key",
+                        artifact,
+                        str(path.relative_to(root)),
+                        str(exc),
+                    )
+                )
+            except Exception as exc:
+                issues.append(
+                    Issue(
+                        "unreadable-hosted-yaml",
+                        artifact,
+                        str(path.relative_to(root)),
+                        f"could not parse hosted YAML config: {exc}",
+                    )
+                )
+    return issues
+
+
+def validate_dhis2_programme_vc_contract(artifact: str, root: Path) -> list[Issue]:
+    if artifact != "registry-lab":
+        return []
+    path = root / "config/coolify/notary/dhis2-health-notary.yaml"
+    try:
+        config = load_yaml_mapping_strict(path)
+    except Exception as exc:
+        return [
+            Issue(
+                "unreadable-dhis2-notary-config",
+                artifact,
+                "config/coolify/notary/dhis2-health-notary.yaml",
+                f"could not read hosted DHIS2 Notary config: {exc}",
+            )
+        ]
+
+    issues: list[Issue] = []
+    evidence = config.get("evidence") if isinstance(config.get("evidence"), dict) else {}
+    if evidence.get("max_credential_validity_seconds") != 31_536_000:
+        issues.append(
+            Issue(
+                "dhis2-programme-validity-ceiling",
+                artifact,
+                "config/coolify/notary/dhis2-health-notary.yaml:evidence.max_credential_validity_seconds",
+                "hosted DHIS2 Notary must allow one-year programme participation credentials",
+            )
+        )
+    profiles = evidence.get("credential_profiles") if isinstance(evidence, dict) else None
+    profile = profiles.get(DHIS2_PROGRAMME_PROFILE) if isinstance(profiles, dict) else None
+    if not isinstance(profile, dict):
+        issues.append(
+            Issue(
+                "missing-dhis2-programme-profile",
+                artifact,
+                "config/coolify/notary/dhis2-health-notary.yaml:evidence.credential_profiles",
+                f"hosted DHIS2 Notary must define {DHIS2_PROGRAMME_PROFILE}",
+            )
+        )
+        return issues
+    if profile.get("validity_seconds") != 31_536_000:
+        issues.append(
+            Issue(
+                "dhis2-programme-profile-validity",
+                artifact,
+                f"config/coolify/notary/dhis2-health-notary.yaml:{DHIS2_PROGRAMME_PROFILE}.validity_seconds",
+                "DHIS2 programme participation VC must be valid for one year",
+            )
+        )
+    allowed_claims = set(profile.get("allowed_claims") or [])
+    missing_claims = sorted(DHIS2_PROGRAMME_CLAIMS - allowed_claims)
+    if missing_claims:
+        issues.append(
+            Issue(
+                "dhis2-programme-claims-missing",
+                artifact,
+                f"config/coolify/notary/dhis2-health-notary.yaml:{DHIS2_PROGRAMME_PROFILE}.allowed_claims",
+                "DHIS2 programme participation VC is missing claims: " + ", ".join(missing_claims),
+            )
+        )
+    holder = profile.get("holder_binding") if isinstance(profile.get("holder_binding"), dict) else {}
+    if (
+        holder.get("mode") != "did"
+        or holder.get("proof_of_possession") != "required"
+        or "did:jwk" not in (holder.get("allowed_did_methods") or [])
+    ):
+        issues.append(
+            Issue(
+                "dhis2-programme-holder-binding",
+                artifact,
+                f"config/coolify/notary/dhis2-health-notary.yaml:{DHIS2_PROGRAMME_PROFILE}.holder_binding",
+                "DHIS2 programme participation VC must require did:jwk proof of possession",
+            )
+        )
+    configured_claims = {
+        claim.get("id"): claim
+        for claim in evidence.get("claims", [])
+        if isinstance(claim, dict) and isinstance(claim.get("id"), str)
+    }
+    for claim_id in sorted(DHIS2_PROGRAMME_CLAIMS):
+        claim = configured_claims.get(claim_id)
+        if not isinstance(claim, dict):
+            issues.append(
+                Issue(
+                    "dhis2-programme-claim-not-configured",
+                    artifact,
+                    "config/coolify/notary/dhis2-health-notary.yaml:evidence.claims",
+                    f"DHIS2 programme claim {claim_id!r} must be configured",
+                )
+            )
+            continue
+        if DHIS2_PROGRAMME_PROFILE not in (claim.get("credential_profiles") or []):
+            issues.append(
+                Issue(
+                    "dhis2-programme-claim-profile-missing",
+                    artifact,
+                    f"config/coolify/notary/dhis2-health-notary.yaml:evidence.claims.{claim_id}",
+                    f"claim {claim_id!r} must allow {DHIS2_PROGRAMME_PROFILE}",
+                )
+            )
+    return issues
+
+
+def validate_credential_commitments(
+    artifact: str,
+    root: Path,
+    env: dict[str, str],
+) -> list[Issue]:
+    if artifact != "registry-lab":
+        return []
+    issues: list[Issue] = []
+    for product, relative_dir in (
+        ("registry-notary", Path("config/coolify/notary")),
+        ("registry-relay", Path("config/coolify/relay")),
+    ):
+        directory = root / relative_dir
+        if not directory.exists():
+            continue
+        for path in sorted(directory.glob("*.yaml")):
+            try:
+                config = load_yaml_mapping_strict(path)
+            except Exception:
+                continue
+            for credential_type, entry in iter_credential_entries(product, config):
+                fingerprint = entry.get("fingerprint") if isinstance(entry, dict) else None
+                if not isinstance(fingerprint, dict):
+                    continue
+                env_name = fingerprint.get("name")
+                commitment = fingerprint.get("commitment")
+                credential_id = entry.get("id")
+                if not all(isinstance(value, str) for value in (env_name, commitment, credential_id)):
+                    continue
+                supplied_fingerprint = env.get(str(env_name))
+                if not supplied_fingerprint:
+                    continue
+                if not HASH_RE.match(supplied_fingerprint):
+                    issues.append(
+                        Issue(
+                            "credential-fingerprint-invalid",
+                            artifact,
+                            f"{path.relative_to(root)}:{credential_id}",
+                            f"{env_name} must contain a sha256 fingerprint",
+                        )
+                    )
+                    continue
+                expected = credential_commitment(
+                    product,
+                    credential_type,
+                    str(credential_id),
+                    supplied_fingerprint,
+                )
+                if commitment != expected:
+                    issues.append(
+                        Issue(
+                            "credential-commitment-mismatch",
+                            artifact,
+                            f"{path.relative_to(root)}:{credential_id}",
+                            f"{env_name} commitment does not match the supplied fingerprint",
+                        )
+                    )
+    return issues
+
+
+def iter_credential_entries(product: str, config: dict[str, Any]):
+    auth = config.get("auth")
+    if not isinstance(auth, dict):
+        return
+    if product == "registry-notary":
+        for key, credential_type in (("api_keys", "api_key"), ("bearer_tokens", "bearer_token")):
+            for entry in auth.get(key) or []:
+                if isinstance(entry, dict):
+                    yield credential_type, entry
+    elif product == "registry-relay":
+        for entry in auth.get("api_keys") or []:
+            if isinstance(entry, dict):
+                yield "api_key", entry
+
+
+def credential_commitment(
+    product: str,
+    credential_type: str,
+    credential_id: str,
+    fingerprint: str,
+) -> str:
+    payload = {
+        "product": product,
+        "credential_type": credential_type,
+        "credential_id": credential_id,
+        "fingerprint": fingerprint,
+    }
+    encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 def validate_static_metadata_publisher(
@@ -1520,6 +1813,62 @@ def load_yaml_mapping(path: Path) -> dict[str, Any]:
 
     loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
     return loaded if isinstance(loaded, dict) else {}
+
+
+def load_yaml_mapping_strict(path: Path) -> dict[str, Any]:
+    text = path.read_text(encoding="utf-8")
+    assert_no_duplicate_yaml_keys_text(text)
+    try:
+        import yaml  # type: ignore[import-not-found]
+    except ModuleNotFoundError:
+        return load_yaml_mapping_with_ruby(path)
+
+    assert_unique_yaml_keys(yaml.compose(text), yaml)
+    loaded = yaml.safe_load(text)
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def assert_no_duplicate_yaml_keys_text(text: str) -> None:
+    scopes: list[tuple[int, set[str]]] = []
+    key_re = re.compile(r"^(?P<indent>\s*)(?P<dash>-\s+)?(?P<key>[A-Za-z0-9_.-]+)\s*:")
+    for lineno, raw_line in enumerate(text.splitlines(), start=1):
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        match = key_re.match(raw_line)
+        if not match:
+            continue
+        indent = len(match.group("indent"))
+        if match.group("dash"):
+            indent += 2
+            scopes = [(level, keys) for level, keys in scopes if level < indent]
+        else:
+            scopes = [(level, keys) for level, keys in scopes if level <= indent]
+        if not scopes or scopes[-1][0] != indent:
+            scopes.append((indent, set()))
+        keys = scopes[-1][1]
+        key = match.group("key")
+        if key in keys:
+            raise DuplicateYamlKeyError(f"duplicate YAML key {key!r} at line {lineno}")
+        keys.add(key)
+
+
+def assert_unique_yaml_keys(node: Any, yaml_module: Any) -> None:
+    if node is None:
+        return
+    if isinstance(node, yaml_module.MappingNode):
+        seen: set[str] = set()
+        for key_node, value_node in node.value:
+            key = str(key_node.value)
+            if key in seen:
+                mark = getattr(key_node, "start_mark", None)
+                location = f"line {mark.line + 1}" if mark is not None else "unknown line"
+                raise DuplicateYamlKeyError(f"duplicate YAML key {key!r} at {location}")
+            seen.add(key)
+            assert_unique_yaml_keys(value_node, yaml_module)
+    elif isinstance(node, yaml_module.SequenceNode):
+        for child in node.value:
+            assert_unique_yaml_keys(child, yaml_module)
 
 
 def load_yaml_mapping_with_ruby(path: Path) -> dict[str, Any]:

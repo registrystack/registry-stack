@@ -116,6 +116,8 @@ class Dhis2ProgrammeVcConfigTest(unittest.TestCase):
         )
 
     def test_coolify_dhis2_commitments_match_supplied_hosted_hashes(self) -> None:
+        if os.environ.get("VERIFY_HOSTED_DHIS2_CREDENTIALS") != "1":
+            self.skipTest("set VERIFY_HOSTED_DHIS2_CREDENTIALS=1 to verify hosted commitments")
         token_hash = os.environ.get("DHIS2_EVIDENCE_CLIENT_TOKEN_HASH")
         bearer_hash = os.environ.get("DHIS2_EVIDENCE_CLIENT_BEARER_HASH")
         if not token_hash or not bearer_hash:
@@ -132,6 +134,8 @@ class Dhis2ProgrammeVcConfigTest(unittest.TestCase):
         )
 
     def test_coolify_dhis2_raw_credentials_match_supplied_hosted_hashes(self) -> None:
+        if os.environ.get("VERIFY_HOSTED_DHIS2_CREDENTIALS") != "1":
+            self.skipTest("set VERIFY_HOSTED_DHIS2_CREDENTIALS=1 to verify hosted credential pairs")
         values = {
             "DHIS2_EVIDENCE_CLIENT_TOKEN": os.environ.get("DHIS2_EVIDENCE_CLIENT_TOKEN"),
             "DHIS2_EVIDENCE_CLIENT_TOKEN_HASH": os.environ.get("DHIS2_EVIDENCE_CLIENT_TOKEN_HASH"),

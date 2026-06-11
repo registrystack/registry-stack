@@ -14,7 +14,7 @@ auth:
       fingerprint:
         provider: env
         name: OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH
-        commitment: sha256:6f0fffc058415730eb660677f9a8a17c8ad64edcbcf8281b9d2c340507f559eb
+        commitment: sha256:5982f670869837dde44ce2f94e26e4e876ae1140935cf458bc657e0273619739
       scopes:
         - civil_registry:evidence_verification
 

@@ -160,21 +160,36 @@ citizen-self-attestation:
 
 # Validate hosted Coolify compose artifacts before deployment.
 hosted-validate:
-    docker compose -f compose.coolify.yaml config >/dev/null
-    REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD="${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:-hosted-validation-placeholder}" docker compose -f compose.esignet-hosted.yaml config >/dev/null
-    WALT_DB_PASSWORD="${WALT_DB_PASSWORD:-hosted-validation-placeholder}" WALT_AUTH_ENCRYPTION_KEY="${WALT_AUTH_ENCRYPTION_KEY:-hosted-validation-placeholder}" WALT_AUTH_SIGN_KEY="${WALT_AUTH_SIGN_KEY:-hosted-validation-placeholder}" WALT_AUTH_TOKEN_KEY="${WALT_AUTH_TOKEN_KEY:-hosted-validation-placeholder}" WALT_KTOR_SIGNING_KEY="${WALT_KTOR_SIGNING_KEY:-hosted-validation-placeholder}" WALT_KTOR_VERIFICATION_KEY="${WALT_KTOR_VERIFICATION_KEY:-hosted-validation-placeholder}" docker compose -f compose.walt-hosted.yaml config >/dev/null
-    REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD="${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:-hosted-validation-placeholder}" uv run scripts/validate-hosted-deploy.py
+    CONFIG_REPO_REF="${CONFIG_REPO_REF:-hosted-validation-placeholder}" docker compose -f compose.coolify.yaml config >/dev/null
+    CONFIG_REPO_REF="${CONFIG_REPO_REF:-hosted-validation-placeholder}" REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD="${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:-hosted-validation-placeholder}" docker compose -f compose.esignet-hosted.yaml config >/dev/null
+    CONFIG_REPO_REF="${CONFIG_REPO_REF:-hosted-validation-placeholder}" WALT_DB_PASSWORD="${WALT_DB_PASSWORD:-hosted-validation-placeholder}" WALT_AUTH_ENCRYPTION_KEY="${WALT_AUTH_ENCRYPTION_KEY:-hosted-validation-placeholder}" WALT_AUTH_SIGN_KEY="${WALT_AUTH_SIGN_KEY:-hosted-validation-placeholder}" WALT_AUTH_TOKEN_KEY="${WALT_AUTH_TOKEN_KEY:-hosted-validation-placeholder}" WALT_KTOR_SIGNING_KEY="${WALT_KTOR_SIGNING_KEY:-hosted-validation-placeholder}" WALT_KTOR_VERIFICATION_KEY="${WALT_KTOR_VERIFICATION_KEY:-hosted-validation-placeholder}" docker compose -f compose.walt-hosted.yaml config >/dev/null
+    CONFIG_REPO_REF="${CONFIG_REPO_REF:-hosted-validation-placeholder}" REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD="${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:-hosted-validation-placeholder}" uv run scripts/validate-hosted-deploy.py
 
 # Validate hosted artifacts and require real secret values in the current environment.
 hosted-validate-strict:
-    docker compose -f compose.coolify.yaml config >/dev/null
-    REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD="${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:-hosted-validation-placeholder}" docker compose -f compose.esignet-hosted.yaml config >/dev/null
-    WALT_DB_PASSWORD="${WALT_DB_PASSWORD:-hosted-validation-placeholder}" WALT_AUTH_ENCRYPTION_KEY="${WALT_AUTH_ENCRYPTION_KEY:-hosted-validation-placeholder}" WALT_AUTH_SIGN_KEY="${WALT_AUTH_SIGN_KEY:-hosted-validation-placeholder}" WALT_AUTH_TOKEN_KEY="${WALT_AUTH_TOKEN_KEY:-hosted-validation-placeholder}" WALT_KTOR_SIGNING_KEY="${WALT_KTOR_SIGNING_KEY:-hosted-validation-placeholder}" WALT_KTOR_VERIFICATION_KEY="${WALT_KTOR_VERIFICATION_KEY:-hosted-validation-placeholder}" docker compose -f compose.walt-hosted.yaml config >/dev/null
+    CONFIG_REPO_REF="${CONFIG_REPO_REF:?set CONFIG_REPO_REF}" docker compose -f compose.coolify.yaml config >/dev/null
+    CONFIG_REPO_REF="${CONFIG_REPO_REF:?set CONFIG_REPO_REF}" REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD="${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:?set REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD}" docker compose -f compose.esignet-hosted.yaml config >/dev/null
+    CONFIG_REPO_REF="${CONFIG_REPO_REF:?set CONFIG_REPO_REF}" WALT_DB_PASSWORD="${WALT_DB_PASSWORD:?set WALT_DB_PASSWORD}" WALT_AUTH_ENCRYPTION_KEY="${WALT_AUTH_ENCRYPTION_KEY:?set WALT_AUTH_ENCRYPTION_KEY}" WALT_AUTH_SIGN_KEY="${WALT_AUTH_SIGN_KEY:?set WALT_AUTH_SIGN_KEY}" WALT_AUTH_TOKEN_KEY="${WALT_AUTH_TOKEN_KEY:?set WALT_AUTH_TOKEN_KEY}" WALT_KTOR_SIGNING_KEY="${WALT_KTOR_SIGNING_KEY:?set WALT_KTOR_SIGNING_KEY}" WALT_KTOR_VERIFICATION_KEY="${WALT_KTOR_VERIFICATION_KEY:?set WALT_KTOR_VERIFICATION_KEY}" docker compose -f compose.walt-hosted.yaml config >/dev/null
     uv run scripts/validate-hosted-deploy.py --require-secret-values
 
 # Run focused tests for hosted deployment validation.
 hosted-validate-test:
     python3 scripts/test_validate_hosted_deploy.py
+
+# Run the hosted lab preflight suite before opening or merging a deployment PR.
+hosted-preflight:
+    just hosted-validate
+    python3 scripts/test_validate_hosted_deploy.py
+    python3 scripts/test_lab_homepage_server.py
+    python3 scripts/test_dhis2_programme_vc_config.py
+    python3 scripts/test_credential_commitment.py
+    python3 scripts/test_hosted_smoke.py
+    python3 scripts/test_validate_public_api_workspace.py
+    python3 scripts/validate-public-api-workspace.py
+
+# Run public hosted smoke checks. Pass extra args after `--`, for example: just hosted-smoke -- --credential-smoke.
+hosted-smoke *args:
+    python3 scripts/hosted-smoke.py {{args}}
 
 # Print the local eSignet authorization URL and save PKCE state.
 citizen-self-attestation-esignet-login:
