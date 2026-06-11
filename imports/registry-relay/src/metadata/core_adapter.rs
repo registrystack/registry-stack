@@ -398,6 +398,9 @@ impl CodelistIds {
             .map(|(scheme_iri, id)| core::CodelistManifest {
                 id,
                 scheme_iri,
+                version: None,
+                valid_from: None,
+                valid_to: None,
                 external_ref: None,
                 concepts: Vec::new(),
             })
@@ -519,5 +522,86 @@ audit:
         assert!(json.contains("https://example.test/vocab/codelists/Region"));
         assert!(!json.contains("households_table"));
         assert!(!json.contains("region_code"));
+    }
+
+    #[test]
+    fn codelist_manifest_version_fields_are_none() {
+        // Uses the same config shape as the existing adapter test so that the
+        // entity and codelist registration paths are fully exercised.
+        let config: Config = serde_saphyr::from_str(
+            r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test Catalog
+  base_url: https://data.example.test/
+  publisher: Test Publisher
+  participant_id: did:web:data.example.test
+vocabularies:
+  ex: https://example.test/vocab/
+auth:
+  mode: api_key
+  api_keys: []
+datasets:
+  - id: ds
+    title: DS
+    description: d
+    owner: Org
+    sensitivity: public
+    access_rights: public
+    update_frequency: unknown
+    defaults:
+      refresh:
+        mode: manual
+    tables:
+      - id: t
+        source:
+          type: file
+          path: fixtures/social_registry.csv
+        primary_key: rec_id
+        schema:
+          strict: true
+          fields:
+            - name: rec_id
+              type: string
+            - name: status_code
+              type: string
+              nullable: true
+              concept_uri: ex:properties/status
+              codelist: ex:codelists/Status
+    entities:
+      - name: record
+        title: Record
+        table: t
+        fields:
+          - name: id
+            from: rec_id
+          - name: status
+            from: status_code
+            concept_uri: ex:properties/status
+        access:
+          metadata_scope: ds:metadata
+          aggregate_scope: ds:aggregate
+          read_scope: ds:rows
+        api:
+          default_limit: 100
+          max_limit: 1000
+audit:
+  sink: stdout
+  format: jsonl
+"#,
+        )
+        .expect("parse config");
+        config::validate::run(&config).expect("config validates");
+        let registry = EntityRegistry::from_config(&config).expect("registry compiles");
+
+        let manifest = manifest_from_runtime(&config, &registry);
+
+        assert_eq!(manifest.codelists.len(), 1);
+        let cl = &manifest.codelists[0];
+        assert_eq!(cl.scheme_iri, "ex:codelists/Status");
+        assert!(cl.version.is_none(), "version must default to None");
+        assert!(cl.valid_from.is_none(), "valid_from must default to None");
+        assert!(cl.valid_to.is_none(), "valid_to must default to None");
     }
 }
