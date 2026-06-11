@@ -111,6 +111,17 @@ jobs:
       - name: Run perf Python tests
         run: uv run --project perf python -m pytest
 
+      - name: Pull k6 image
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if docker pull "$K6_DOCKER_IMAGE"; then
+              exit 0
+            fi
+            sleep "$((attempt * 15))"
+          done
+          docker pull "$K6_DOCKER_IMAGE"
+
       - name: Run small k6 smoke
         run: |
           set -euo pipefail
