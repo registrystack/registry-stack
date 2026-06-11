@@ -1002,7 +1002,10 @@ fn tag_definitions(catalog: &CatalogDocument, config: &Config) -> Value {
     if provenance_enabled(config) {
         tags.push(json!({
             "name": TAG_PROVENANCE,
-            "description": "Public verification artefacts and signed Verifiable Credential support.",
+            "description": "Public verification artefacts for signed response credentials. \
+                            Relay issues W3C VCDM 2.0 VC-JWT signed response credentials \
+                            (not W3C PROV-O). The `provenance` config key governs the \
+                            response-credential issuer configuration.",
         }));
     }
     #[cfg(feature = "ogcapi-features")]
@@ -1352,7 +1355,9 @@ fn add_accept_parameter(op: &mut Map<String, Value>, accepted_media_types: &[Str
         "name": "Accept",
         "in": "header",
         "required": false,
-        "description": "Use `application/json` or omit for the default JSON response. Use an enabled provenance media type to request a signed Verifiable Credential response.",
+        "description": "Use `application/json` or omit for the default JSON response. \
+                        Use an enabled VC media type (for example `application/vc+jwt`) \
+                        to request a signed response credential (W3C VCDM 2.0 VC-JWT).",
         "schema": { "type": "string", "enum": values },
     }));
 }
@@ -3072,12 +3077,13 @@ fn insert_provenance_paths(paths: &mut Map<String, Value>) {
         "/schemas/{claim_type}/{version}".to_string(),
         public_resource_path_item(
             "get_provenance_schema",
-            "Get provenance JSON Schema",
-            "Returns a published JSON Schema for a supported provenance claim type. Schema bytes are stable for a given version and cacheable.",
+            "Get signed response credential JSON Schema",
+            "Returns a published JSON Schema for a supported signed response credential claim type. \
+             Schema bytes are stable for a given version and cacheable.",
             "application/schema+json",
             "JsonSchemaDocument",
             vec![
-                path_parameter("claim_type", "Provenance claim type, for example `aggregate-result`."),
+                path_parameter("claim_type", "Claim type slug, for example `aggregate-result`."),
                 path_parameter("version", "Schema version filename, for example `v1.json`."),
             ],
         ),
@@ -3094,8 +3100,8 @@ fn insert_provenance_paths(paths: &mut Map<String, Value>) {
         "/contexts/{vocab}/{version}".to_string(),
         public_resource_path_item(
             "get_provenance_context",
-            "Get provenance JSON-LD context",
-            "Returns a published JSON-LD context used by signed Verifiable Credential responses.",
+            "Get signed response credential JSON-LD context",
+            "Returns a published JSON-LD context used by signed response credential (VC-JWT) responses.",
             "application/ld+json",
             "JsonLdContext",
             vec![
@@ -3115,7 +3121,9 @@ fn insert_provenance_paths(paths: &mut Map<String, Value>) {
         public_resource_path_item(
             "get_gateway_did_document",
             "Get gateway DID Document",
-            "Returns the gateway-hosted DID Document in gateway issuer mode. Delegated issuer deployments mount the route but return `provenance.did_document_unavailable`.",
+            "Returns the gateway-hosted DID Document in gateway issuer mode. \
+             Used by verifiers to resolve the signing key for signed response credentials (VC-JWT). \
+             Delegated issuer deployments mount the route but return `provenance.did_document_unavailable`.",
             "application/did+json",
             "DidDocument",
             Vec::new(),
@@ -4048,6 +4056,15 @@ fn query_parameter(name: &str, description: &str) -> Value {
 /// omit this header with `auth.purpose_required`. Surfacing it in the
 /// OpenAPI document lets Scalar render a fillable field in the Try-it
 /// panel and lets generated clients carry it through.
+///
+/// Frozen semantics (2026-06-11 evidence-contracts decision record, D5):
+/// - Header *presence* can be required per entity configuration
+///   (`require_purpose_header`).
+/// - When present, the value is recorded verbatim in the audit trail.
+/// - Purpose *values* are not enforced or compared at the consultation layer.
+/// - Registry Notary is the purpose-certification layer.
+/// - Value-level allowlists, if ever added, arrive as additive opt-in config
+///   and do not change this default behavior.
 fn purpose_header_parameter() -> Value {
     purpose_header_parameter_with_required(true)
 }
@@ -4057,11 +4074,14 @@ fn purpose_header_parameter_with_required(required: bool) -> Value {
         "name": "Data-Purpose",
         "in": "header",
         "required": required,
-        "description": "Absolute purpose-of-use IRI recorded in the audit trail. \
-                        Required by this entity's policy. \
-                        Header names are case-insensitive, so `Data-Purpose` and \
-                        `data-purpose` are equivalent.",
-        "schema": { "type": "string", "format": "uri", "minLength": 1 },
+        "description": "Purpose-of-use IRI or controlled string. \
+                        When `require_purpose_header` is set on this entity, \
+                        the header must be present; a missing value returns `400 auth.purpose_required`. \
+                        The value is always recorded verbatim in the audit trail when present; \
+                        purpose values are not enforced or validated at the consultation layer. \
+                        Registry Notary is the purpose-certification layer. \
+                        Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
+        "schema": { "type": "string", "minLength": 1 },
         "example": "https://demo.example.gov/purpose/demo-review",
     })
 }

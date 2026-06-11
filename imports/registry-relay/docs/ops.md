@@ -316,9 +316,9 @@ Live keyring reload is not wired in V1. Treat key rotation as a rolling restart 
 
 Never log raw keys, fingerprints, or full environment dumps. In issue reports, include only key ids and scope names.
 
-## Provenance Signer Rotation
+## Signed Response Credential Signer Rotation
 
-The provenance feature (signed Verifiable Credentials, see [docs/provenance.md](provenance.md)) introduces a signing key. The runtime contract is identical in shape to API-key rotation, but the recovery model is different: existing VCs signed under a retired key must still verify until they expire, so the DID Document keeps publishing those keys for a controlled window.
+The signed response credential feature (W3C VCDM 2.0 VC-JWT; config key `provenance`, see [provenance.md](provenance.md)) introduces a signing key. The runtime contract is identical in shape to API-key rotation, but the recovery model is different: existing VCs signed under a retired key must still verify until they expire, so the DID Document keeps publishing those keys for a controlled window.
 
 The signing key never lives in YAML. It is injected through the env var named by `provenance.issuer.signer.jwk_env`, holding a JSON-encoded private JWK. The public half goes in the DID Document; the private half stays in the secret store.
 
@@ -389,6 +389,8 @@ For container deployments, `stdout` is still the simplest default because the pl
 `audit.hash_secret_env` is required for runtime startup and must point to at least 32 bytes of deployment-specific random secret material. The relay fails closed when the setting is missing, empty, unset, or weak, so sensitive audit lookup hashes never silently downgrade to unkeyed SHA-256.
 
 Audit records must not contain raw secrets or raw API keys. Mark identifier fields as `sensitive: true` in table or entity field config when query values should be deterministically hashed in audit rather than omitted entirely. The flag is audit-only in beta; it does not remove fields from authorized API responses.
+
+**Data-Purpose audit semantics** (frozen, 2026-06-11 evidence-contracts decision record, D5): when the `Data-Purpose` header is present on a request, its value is always recorded verbatim in the audit trail (`purpose` field). Header presence can be required per entity via `require_purpose_header: true`; a missing header returns `400 auth.purpose_required`. Purpose values are not enforced or compared at the consultation layer; Registry Notary is the purpose-certification layer. Value-level allowlists, if ever added, will arrive as additive opt-in configuration.
 
 ## Dataset Refresh And Reload
 

@@ -78,7 +78,7 @@
     },
     {
       "name": "Provenance",
-      "description": "Verifier-support routes (DID Web, JSON Schemas, JSON-LD contexts) used when callers opt in to VC-JWT responses with `Accept: application/vc+jwt`. Mounted only when `provenance.enabled: true`."
+      "description": "Public verification artefacts for signed response credentials. Relay issues W3C VCDM 2.0 VC-JWT signed response credentials (not W3C PROV-O). The `provenance` config key governs the response-credential issuer configuration. Mounted only when `provenance.enabled: true`."
     }
   ],
   "x-tagGroups": [
@@ -2601,8 +2601,8 @@
     "/.well-known/did.json": {
       "get": {
         "operationId": "get_did_document",
-        "summary": "DID Web document (provenance)",
-        "description": "Returns the gateway's W3C DID document, used by verifiers to resolve the signing key for VC-JWT responses. Mounted only when `provenance.enabled: true`. Unauthenticated.",
+        "summary": "DID Web document (signed response credentials)",
+        "description": "Returns the gateway's W3C DID document, used by verifiers to resolve the signing key for signed response credentials (VC-JWT). Mounted only when `provenance.enabled: true`. Unauthenticated.",
         "security": [],
         "tags": [
           "Provenance"
@@ -2647,8 +2647,8 @@
       ],
       "get": {
         "operationId": "get_claim_schema",
-        "summary": "Claim JSON Schema (provenance)",
-        "description": "Returns the Draft 2020-12 JSON Schema for one Verifiable Credential subject claim type. Mounted only when `provenance.enabled: true`. Unauthenticated.",
+        "summary": "Signed response credential JSON Schema",
+        "description": "Returns the Draft 2020-12 JSON Schema for one signed response credential claim type. Mounted only when `provenance.enabled: true`. Unauthenticated.",
         "security": [],
         "tags": [
           "Provenance"
@@ -2693,8 +2693,8 @@
       ],
       "get": {
         "operationId": "get_jsonld_context",
-        "summary": "JSON-LD context (provenance)",
-        "description": "Returns a JSON-LD context referenced by VC-JWT responses. Mounted only when `provenance.enabled: true`. Unauthenticated.",
+        "summary": "Signed response credential JSON-LD context",
+        "description": "Returns a JSON-LD context referenced by signed response credential (VC-JWT) responses. Mounted only when `provenance.enabled: true`. Unauthenticated.",
         "security": [],
         "tags": [
           "Provenance"
@@ -2858,7 +2858,7 @@
           "type": "string",
           "format": "uri"
         },
-        "description": "Stable, reviewable purpose IRI. Required when the entity has `require_purpose_header: true`. Recorded in audit logs; never put secrets or personal data here."
+        "description": "Purpose-of-use IRI or controlled string. When `require_purpose_header` is set on this entity, the header must be present; a missing value returns `400 auth.purpose_required`. The value is always recorded verbatim in the audit trail when present; purpose values are not enforced or validated at the consultation layer. Registry Notary is the purpose-certification layer. Never put secrets or personal data here."
       },
       "IfNoneMatch": {
         "name": "If-None-Match",
@@ -2880,7 +2880,7 @@
             "application/vc+jwt"
           ]
         },
-        "description": "Opt in to a VC-JWT compact serialization. Available only when `provenance.enabled: true`."
+        "description": "Use `application/json` or omit for the default JSON response. Use `application/vc+jwt` to request a signed response credential (W3C VCDM 2.0 VC-JWT). Available only when `provenance.enabled: true`."
       }
     },
     "responses": {

@@ -1,4 +1,4 @@
-# Data Provenance
+# Signed Response Credentials
 
 `registry-relay` can return W3C Verifiable Credentials (VCs), signed as
 compact JWS, for two response families:
@@ -13,6 +13,21 @@ verification execution endpoints.
 The feature is opt-in twice over: by the operator (config flag) and by
 the caller (Accept header). When either says no, responses remain plain
 JSON.
+
+## Standards Posture
+
+These credentials are **W3C VCDM 2.0 VC-JWT** with a Registry Relay
+JSON-LD context. They are **not** W3C PROV-O: no PROV graph is embedded
+in issued VC-JWTs, and no PROV-O terms appear in the payload. The
+feature is named `provenance` in configuration for compatibility; the
+correct public description is "signed response credentials" or "response
+credentials". The 2026-06-11 evidence-contracts decision record (D8)
+records this posture.
+
+The `provenance` config key is retained for compatibility; it governs
+response-credential issuer configuration (DID, signing key, claim
+validity windows, and accepted media types). Renaming it would be a
+breaking change.
 
 This document describes the runtime contract: configuration, wire
 shapes, endpoints, audit events, and key management.
@@ -31,7 +46,7 @@ The current encoding is W3C VCDM 2.0 + JWT binding rather than COSE or
 SD-JWT-VC. The runtime contract here is stable regardless of future
 encoding evolution.
 
-## Enabling Provenance
+## Enabling Signed Response Credentials
 
 Add a `provenance:` block to your config (see
 [`config/example.yaml`](../config/example.yaml) for the canonical
