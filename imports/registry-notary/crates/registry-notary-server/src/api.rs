@@ -849,6 +849,8 @@ async fn admin_config_apply(
         }
     };
     let candidate_config = Arc::new(candidate_config);
+    let runtime_snapshot =
+        state.governed_apply_runtime_snapshot(candidate_config.clone(), &governed_apply);
     let Some(config_trust) = &config_governance.config_trust else {
         return with_config_audit(
             config_apply_unavailable("config_trust.antirollback_state_path is not configured"),
@@ -928,37 +930,28 @@ async fn admin_config_apply(
         );
     }
     consume_apply_metadata(&request);
+    state.publish_runtime_snapshot(runtime_snapshot);
     match governed_apply {
         GovernedConfigApply::SigningRotation {
-            issuer_rotation,
-            notary_auth_anchor,
+            notary_auth_anchor, ..
         } => {
-            state.swap_notary_auth_anchor(notary_auth_anchor);
-            state.swap_issuer_runtime(
-                candidate_config.clone(),
-                issuer_rotation.issuers,
-                issuer_rotation.signer_readiness,
-            );
-            state.swap_preauth_runtime(issuer_rotation.preauth);
-            state.swap_federation_runtime(issuer_rotation.federation);
+            if let (Some(auth_state), Some(anchor)) =
+                (state.auth_state.as_ref(), notary_auth_anchor)
+            {
+                auth_state.swap_notary_anchor(anchor);
+            }
         }
-        GovernedConfigApply::RootTransition { .. } => {
-            state.swap_runtime_config(candidate_config.clone());
-        }
+        GovernedConfigApply::RootTransition { .. } => {}
         GovernedConfigApply::ClientAuthChange { authenticator, .. } => {
             if let Some(auth_state) = state.auth_state.as_ref() {
                 auth_state.swap_prepared_authenticator(authenticator);
             }
-            state.swap_runtime_config(candidate_config.clone());
         }
-        GovernedConfigApply::OpenApiAuthPolicyChange { .. } => {
-            state.swap_runtime_config(candidate_config.clone());
-        }
+        GovernedConfigApply::OpenApiAuthPolicyChange { .. } => {}
     }
     if let Some(auth_state) = state.auth_state.as_ref() {
         auth_state.swap_openapi_requires_auth(candidate_config.server.openapi_requires_auth);
     }
-    state.swap_config_governance(ConfigGovernanceContext::from_config(&candidate_config));
     state.record_config_apply(ConfigApplyPosture {
         source: candidate.source,
         last_config_hash: Some(posture_hash(&candidate_config)),
@@ -2713,7 +2706,6 @@ pub struct RegistryNotaryApiState {
     pub(crate) self_attestation: Arc<SelfAttestationConfig>,
     pub(crate) oid4vci: Arc<Oid4vciConfig>,
     pub(crate) federation: Arc<FederationConfig>,
-    federation_runtime: Arc<RwLock<Option<Arc<crate::federation::FederationRuntimeState>>>>,
     self_attestation_rate_limiter: Arc<SelfAttestationRateLimiter>,
     pub(crate) self_attestation_rate_keys: Arc<SelfAttestationRateLimitKeys>,
     pub(crate) replay: ReplayStores,
@@ -2721,19 +2713,25 @@ pub struct RegistryNotaryApiState {
     pub(crate) metrics: Arc<AppMetrics>,
     pub(crate) source: Arc<dyn SourceReader>,
     pub(crate) store: Arc<EvidenceStore>,
-    issuer_runtime: Arc<RwLock<Arc<IssuerRuntimeBundle>>>,
+    runtime: Arc<RwLock<Arc<ApiRuntimeSnapshot>>>,
     auth_state: Option<Arc<AuthAuditState>>,
     pub(crate) posture: Option<Arc<PostureContext>>,
-    config_governance: Arc<RwLock<ConfigGovernanceContext>>,
-    runtime_config: Arc<RwLock<Option<Arc<StandaloneRegistryNotaryConfig>>>>,
     config_apply_posture: Arc<RwLock<ConfigApplyPosture>>,
-    /// Pre-authorized-code flow runtime. `None` unless the flow is enabled and
-    /// the dedicated access-token signing key plus eSignet RP settings loaded.
-    pub(crate) preauth: Arc<RwLock<Option<Arc<PreAuthRuntime>>>>,
     #[cfg(feature = "registry-notary-cel")]
     pub(crate) cel_worker: Option<Arc<CelWorker>>,
     #[cfg(feature = "registry-notary-cel")]
     pub(crate) cel_config: Arc<RegistryNotaryCelConfig>,
+}
+
+#[derive(Clone)]
+struct ApiRuntimeSnapshot {
+    federation_runtime: Option<Arc<crate::federation::FederationRuntimeState>>,
+    issuer_runtime: Arc<IssuerRuntimeBundle>,
+    config_governance: ConfigGovernanceContext,
+    runtime_config: Option<Arc<StandaloneRegistryNotaryConfig>>,
+    /// Pre-authorized-code flow runtime. `None` unless the flow is enabled and
+    /// the dedicated access-token signing key plus eSignet RP settings loaded.
+    preauth: Option<Arc<PreAuthRuntime>>,
 }
 
 struct IssuerRuntimeBundle {
@@ -2923,12 +2921,18 @@ impl RegistryNotaryApiState {
             issuers,
             signer_readiness,
         });
+        let runtime = Arc::new(ApiRuntimeSnapshot {
+            federation_runtime,
+            issuer_runtime,
+            config_governance: ConfigGovernanceContext::default(),
+            runtime_config: None,
+            preauth: None,
+        });
         Self {
             evidence,
             self_attestation,
             oid4vci,
             federation,
-            federation_runtime: Arc::new(RwLock::new(federation_runtime)),
             self_attestation_rate_limiter,
             self_attestation_rate_keys,
             replay,
@@ -2936,13 +2940,10 @@ impl RegistryNotaryApiState {
             metrics,
             source,
             store,
-            issuer_runtime: Arc::new(RwLock::new(issuer_runtime)),
+            runtime: Arc::new(RwLock::new(runtime)),
             auth_state: None,
             posture: None,
-            config_governance: Arc::new(RwLock::new(ConfigGovernanceContext::default())),
-            runtime_config: Arc::new(RwLock::new(None)),
             config_apply_posture: Arc::new(RwLock::new(ConfigApplyPosture::default())),
-            preauth: Arc::new(RwLock::new(None)),
             #[cfg(feature = "registry-notary-cel")]
             cel_worker: None,
             #[cfg(feature = "registry-notary-cel")]
@@ -2958,22 +2959,20 @@ impl RegistryNotaryApiState {
 
     #[must_use]
     pub(crate) fn with_preauth_runtime(self, preauth: Option<Arc<PreAuthRuntime>>) -> Self {
-        *self
-            .preauth
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = preauth;
+        let mut runtime = (*self.runtime_snapshot()).clone();
+        runtime.preauth = preauth;
+        self.publish_runtime_snapshot(Arc::new(runtime));
         self
     }
 
     pub(crate) fn with_signer_readiness(self, signer_readiness: SignerReadiness) -> Self {
         let current = self.issuer_runtime();
-        *self
-            .issuer_runtime
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Arc::new(IssuerRuntimeBundle {
+        let mut runtime = (*self.runtime_snapshot()).clone();
+        runtime.issuer_runtime = Arc::new(IssuerRuntimeBundle {
             issuers: current.issuers.clone(),
             signer_readiness,
         });
+        self.publish_runtime_snapshot(Arc::new(runtime));
         self
     }
 
@@ -2983,26 +2982,35 @@ impl RegistryNotaryApiState {
     }
 
     pub(crate) fn with_config_governance(self, context: ConfigGovernanceContext) -> Self {
-        *self
-            .config_governance
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = context;
+        let mut runtime = (*self.runtime_snapshot()).clone();
+        runtime.config_governance = context;
+        self.publish_runtime_snapshot(Arc::new(runtime));
         self
     }
 
     pub(crate) fn with_runtime_config(self, config: Arc<StandaloneRegistryNotaryConfig>) -> Self {
-        *self
-            .runtime_config
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(config);
+        let mut runtime = (*self.runtime_snapshot()).clone();
+        runtime.runtime_config = Some(config);
+        self.publish_runtime_snapshot(Arc::new(runtime));
         self
     }
 
-    pub(crate) fn runtime_config(&self) -> Option<Arc<StandaloneRegistryNotaryConfig>> {
-        self.runtime_config
+    fn runtime_snapshot(&self) -> Arc<ApiRuntimeSnapshot> {
+        self.runtime
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
+    }
+
+    fn publish_runtime_snapshot(&self, snapshot: Arc<ApiRuntimeSnapshot>) {
+        *self
+            .runtime
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = snapshot;
+    }
+
+    pub(crate) fn runtime_config(&self) -> Option<Arc<StandaloneRegistryNotaryConfig>> {
+        self.runtime_snapshot().runtime_config.clone()
     }
 
     fn openapi_requires_auth(&self) -> bool {
@@ -3016,34 +3024,14 @@ impl RegistryNotaryApiState {
         )
     }
 
-    fn swap_runtime_config(&self, config: Arc<StandaloneRegistryNotaryConfig>) {
-        *self
-            .runtime_config
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(config);
-    }
-
     fn config_governance(&self) -> ConfigGovernanceContext {
-        self.config_governance
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-    }
-
-    fn swap_config_governance(&self, context: ConfigGovernanceContext) {
-        *self
-            .config_governance
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = context;
+        self.runtime_snapshot().config_governance.clone()
     }
 
     pub(crate) fn federation_runtime(
         &self,
     ) -> Option<Arc<crate::federation::FederationRuntimeState>> {
-        self.federation_runtime
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+        self.runtime_snapshot().federation_runtime.clone()
     }
 
     pub(crate) fn config_apply_posture(&self) -> ConfigApplyPosture {
@@ -3061,10 +3049,7 @@ impl RegistryNotaryApiState {
     }
 
     fn issuer_runtime(&self) -> Arc<IssuerRuntimeBundle> {
-        self.issuer_runtime
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+        self.runtime_snapshot().issuer_runtime.clone()
     }
 
     fn issuer_resolver(&self) -> Arc<dyn EvidenceIssuerResolver> {
@@ -3075,40 +3060,26 @@ impl RegistryNotaryApiState {
         self.issuer_runtime().signer_readiness.clone()
     }
 
-    fn swap_issuer_runtime(
+    fn governed_apply_runtime_snapshot(
         &self,
         runtime_config: Arc<StandaloneRegistryNotaryConfig>,
-        issuers: Arc<dyn EvidenceIssuerResolver>,
-        signer_readiness: SignerReadiness,
-    ) {
-        *self
-            .runtime_config
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(runtime_config);
-        *self
-            .issuer_runtime
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Arc::new(IssuerRuntimeBundle {
-            issuers,
-            signer_readiness,
-        });
-    }
-
-    fn swap_preauth_runtime(&self, preauth: Option<Arc<PreAuthRuntime>>) {
-        *self
-            .preauth
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = preauth;
-    }
-
-    fn swap_federation_runtime(
-        &self,
-        federation: Option<Arc<crate::federation::FederationRuntimeState>>,
-    ) {
-        *self
-            .federation_runtime
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = federation;
+        apply: &GovernedConfigApply,
+    ) -> Arc<ApiRuntimeSnapshot> {
+        let mut snapshot = (*self.runtime_snapshot()).clone();
+        snapshot.runtime_config = Some(runtime_config.clone());
+        snapshot.config_governance = ConfigGovernanceContext::from_config(&runtime_config);
+        if let GovernedConfigApply::SigningRotation {
+            issuer_rotation, ..
+        } = apply
+        {
+            snapshot.issuer_runtime = Arc::new(IssuerRuntimeBundle {
+                issuers: issuer_rotation.issuers.clone(),
+                signer_readiness: issuer_rotation.signer_readiness.clone(),
+            });
+            snapshot.preauth = issuer_rotation.preauth.clone();
+            snapshot.federation_runtime = issuer_rotation.federation.clone();
+        }
+        Arc::new(snapshot)
     }
 
     fn notary_auth_anchor_for_config(
@@ -3122,12 +3093,6 @@ impl RegistryNotaryApiState {
             return auth_state.notary_anchor_for_config(config);
         }
         Ok(None)
-    }
-
-    fn swap_notary_auth_anchor(&self, anchor: Option<crate::standalone::NotaryTokenAnchor>) {
-        if let (Some(auth_state), Some(anchor)) = (&self.auth_state, anchor) {
-            auth_state.swap_notary_anchor(anchor);
-        }
     }
 
     #[cfg(feature = "registry-notary-cel")]
@@ -4244,11 +4209,7 @@ fn preauth_runtime(state: &RegistryNotaryApiState) -> Option<Arc<PreAuthRuntime>
     if !state.oid4vci.enabled {
         return None;
     }
-    state
-        .preauth
-        .read()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone()
+    state.runtime_snapshot().preauth.clone()
 }
 
 /// Validate a requested `credential_configuration_id` against the configured
@@ -7878,13 +7839,14 @@ mod tests {
         SourceBindingConfig, SubjectRequest, VerifiedClaimName, VerifiedClaimValue,
         CREDENTIAL_STATUS_STORAGE_REDIS,
     };
-    use registry_platform_crypto::{did_jwk_from_public_jwk, sign, PrivateJwk};
+    use registry_platform_crypto::{did_jwk_from_public_jwk, sign, LocalJwkSigner, PrivateJwk};
     use registry_platform_replay::ReplayInsertOutcome;
     use registry_platform_testing::{assert_json_absent_strings, sign_openid4vci_proof_jwt};
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
 
     // Ed25519 keypair: `d` is the seed, `x` is the corresponding public key,
     // both base64url (no padding). Identical to the key in
@@ -8207,6 +8169,108 @@ mod tests {
         assert!(!credential_issuer_rotation_ready(&rotation));
         not_ready.store(true, Ordering::SeqCst);
         assert!(credential_issuer_rotation_ready(&rotation));
+    }
+
+    #[test]
+    fn runtime_snapshot_read_never_observes_torn_issuer_federation_generation() {
+        let old_issuers: Arc<dyn EvidenceIssuerResolver> = Arc::new(NoopIssuerResolver);
+        let new_issuers: Arc<dyn EvidenceIssuerResolver> = Arc::new(TestIssuerResolver);
+        let old_federation = test_federation_runtime("old");
+        let new_federation = test_federation_runtime("new");
+        let old_snapshot = Arc::new(ApiRuntimeSnapshot {
+            federation_runtime: Some(Arc::clone(&old_federation)),
+            issuer_runtime: Arc::new(IssuerRuntimeBundle {
+                issuers: Arc::clone(&old_issuers),
+                signer_readiness: SignerReadiness::default(),
+            }),
+            config_governance: ConfigGovernanceContext::default(),
+            runtime_config: None,
+            preauth: None,
+        });
+        let new_snapshot = Arc::new(ApiRuntimeSnapshot {
+            federation_runtime: Some(Arc::clone(&new_federation)),
+            issuer_runtime: Arc::new(IssuerRuntimeBundle {
+                issuers: Arc::clone(&new_issuers),
+                signer_readiness: SignerReadiness::default(),
+            }),
+            config_governance: ConfigGovernanceContext::default(),
+            runtime_config: None,
+            preauth: None,
+        });
+        let state = Arc::new(RegistryNotaryApiState::new_with_runtime_blocks(
+            Arc::new(EvidenceConfig::default()),
+            Arc::new(SelfAttestationConfig::default()),
+            Arc::new(Oid4vciConfig::default()),
+            Arc::new(FederationConfig::default()),
+            Some(Arc::clone(&old_federation)),
+            AuditKeyHasher::unkeyed_dev_only(),
+            ReplayStores::memory(),
+            CredentialStatusStore::disabled(),
+            Arc::new(AppMetrics::default()),
+            Arc::new(CountingSource::default()),
+            Arc::new(EvidenceStore::default()),
+            Arc::clone(&old_issuers),
+            SignerReadiness::default(),
+        ));
+        state.publish_runtime_snapshot(Arc::clone(&old_snapshot));
+
+        let worker_count = 8;
+        let start = Arc::new(Barrier::new(worker_count + 1));
+        let done = Arc::new(AtomicBool::new(false));
+        let torn = Arc::new(AtomicBool::new(false));
+        let observed_old = Arc::new(AtomicBool::new(false));
+        let observed_new = Arc::new(AtomicBool::new(false));
+        let mut workers = Vec::new();
+        for _ in 0..worker_count {
+            let state = Arc::clone(&state);
+            let start = Arc::clone(&start);
+            let done = Arc::clone(&done);
+            let torn = Arc::clone(&torn);
+            let observed_old = Arc::clone(&observed_old);
+            let observed_new = Arc::clone(&observed_new);
+            let old_issuers = Arc::clone(&old_issuers);
+            let new_issuers = Arc::clone(&new_issuers);
+            let old_federation = Arc::clone(&old_federation);
+            let new_federation = Arc::clone(&new_federation);
+            workers.push(thread::spawn(move || {
+                start.wait();
+                while !done.load(Ordering::SeqCst) {
+                    let snapshot = state.runtime_snapshot();
+                    let issuer_is_old = Arc::ptr_eq(&snapshot.issuer_runtime.issuers, &old_issuers);
+                    let issuer_is_new = Arc::ptr_eq(&snapshot.issuer_runtime.issuers, &new_issuers);
+                    let federation_is_old = snapshot
+                        .federation_runtime
+                        .as_ref()
+                        .is_some_and(|runtime| Arc::ptr_eq(runtime, &old_federation));
+                    let federation_is_new = snapshot
+                        .federation_runtime
+                        .as_ref()
+                        .is_some_and(|runtime| Arc::ptr_eq(runtime, &new_federation));
+                    if issuer_is_old && federation_is_old {
+                        observed_old.store(true, Ordering::SeqCst);
+                    } else if issuer_is_new && federation_is_new {
+                        observed_new.store(true, Ordering::SeqCst);
+                    } else {
+                        torn.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                }
+            }));
+        }
+
+        start.wait();
+        for _ in 0..10_000 {
+            state.publish_runtime_snapshot(Arc::clone(&new_snapshot));
+            state.publish_runtime_snapshot(Arc::clone(&old_snapshot));
+        }
+        done.store(true, Ordering::SeqCst);
+        for worker in workers {
+            worker.join().expect("observer thread joins");
+        }
+
+        assert!(!torn.load(Ordering::SeqCst));
+        assert!(observed_old.load(Ordering::SeqCst));
+        assert!(observed_new.load(Ordering::SeqCst));
     }
 
     fn holder_did_jwk() -> String {
@@ -10038,6 +10102,78 @@ mod tests {
             "alg": "EdDSA"
         })
         .to_string()
+    }
+
+    fn test_federation_runtime(generation: &str) -> Arc<crate::federation::FederationRuntimeState> {
+        let secret_env = format!(
+            "TEST_ATOMIC_FEDERATION_SECRET_{}",
+            generation.to_uppercase()
+        );
+        std::env::set_var(&secret_env, format!("{generation}-pairwise-secret"));
+        let federation: FederationConfig = serde_norway::from_str(&format!(
+            r#"
+enabled: true
+node_id: did:web:{generation}.notary.example
+issuer: https://{generation}.notary.example
+jwks_uri: https://{generation}.notary.example/federation/jwks.json
+federation_api: https://{generation}.notary.example/federation/v1
+supported_protocol_versions:
+  - registry-notary-federation/v0.1
+signing:
+  signing_key: federation-key
+pairwise_subject_hash:
+  secret_env: {secret_env}
+replay:
+  storage: in_process_single_instance_only
+  max_entries: 100
+  eviction: expire_oldest
+response_shaping:
+  minimum_denial_latency_ms: 1
+peers:
+  - node_id: did:web:peer.{generation}.example
+    issuer: https://peer.{generation}.example
+    jwks_uri: http://127.0.0.1:9/{generation}/jwks.json
+    allow_insecure_localhost: true
+    allowed_protocol_versions:
+      - registry-notary-federation/v0.1
+    allowed_purposes:
+      - https://purpose.example.test/eligibility
+    allowed_profiles:
+      - person_alive
+    source_scopes:
+      - civil_registry:evidence_verification
+evaluation_profiles:
+  - id: person_alive
+    ruleset: person-alive-v1
+    claim_id: person-is-alive
+    subject_id_type: national_id
+"#
+        ))
+        .expect("federation config parses");
+        let signer_jwk = PrivateJwk::parse(
+            &json!({
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "kid": format!("{generation}-federation-key"),
+                "d": ISSUER_PRIV_D_B64,
+                "x": ISSUER_PUB_X_B64,
+                "alg": "EdDSA"
+            })
+            .to_string(),
+        )
+        .expect("federation signer JWK parses");
+        let signer: Arc<dyn SigningProvider> =
+            Arc::new(LocalJwkSigner::new(signer_jwk).expect("federation signer builds"));
+        Arc::new(
+            crate::federation::FederationRuntimeState::from_config(
+                &federation,
+                signer,
+                None,
+                ReplayStores::memory().store(),
+                Arc::new(AppMetrics::default()),
+            )
+            .expect("federation runtime builds"),
+        )
     }
 
     #[test]
