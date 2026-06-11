@@ -19,22 +19,6 @@ ignore = [
     # Review this ignore when `jsonwebtoken` no longer depends on rsa 0.9.x or
     # before adding any platform-owned RS*/PS* signing support.
     "RUSTSEC-2023-0071",
-    # RUSTSEC-2023-0089: `atomic-polyfill` is pulled transitively by
-    # `crosswalk-core` through phonenumber's build dependency stack (postcard
-    # → heapless 0.7) in consumers. Review when `crosswalk-core` or phonenumber
-    # removes this path, or before making CEL mapping part of a hardened
-    # default runtime.
-    "RUSTSEC-2023-0089",
-    # RUSTSEC-2024-0436: `paste` is pulled transitively by DataFusion in Relay.
-    # It is unmaintained, but remains compile-time/runtime macro plumbing, not
-    # request-facing parsing. Review when DataFusion moves off `paste` or when
-    # upgrading the DataFusion major version.
-    "RUSTSEC-2024-0436",
-    # RUSTSEC-2025-0068: retained for consumers that still carry `serde_yml`.
-    # New platform code should use maintained YAML crates such as
-    # `serde-saphyr` or `serde_norway`; review when consumer lockfiles no
-    # longer contain serde_yml.
-    "RUSTSEC-2025-0068",
 ]
 
 [licenses]
@@ -45,13 +29,11 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "BSL-1.0",
-    "bzip2-1.0.6",
     "CC0-1.0",
     "CDLA-Permissive-2.0",
     "ISC",
     "MIT",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
     "Unlicense",
     "Zlib",
 ]
@@ -67,7 +49,7 @@ ignore = true
 registries = []
 
 [bans]
-multiple-versions = "warn"
+multiple-versions = "deny"
 wildcards = "deny"
 highlight = "all"
 workspace-default-features = "allow"
@@ -75,13 +57,28 @@ external-default-features = "allow"
 allow = []
 allow-workspace = false
 deny = []
-skip = []
+skip = [
+    { name = "block-buffer", version = "0.10.4" },
+    { name = "const-oid", version = "0.9.6" },
+    { name = "cpufeatures", version = "0.2.17" },
+    { name = "crypto-common", version = "0.1.6" },
+    { name = "digest", version = "0.10.7" },
+    { name = "getrandom", version = "0.2.17" },
+    { name = "getrandom", version = "0.3.4" },
+    { name = "hmac", version = "0.12.1" },
+    { name = "r-efi", version = "5.3.0" },
+    { name = "rand", version = "0.8.6" },
+    { name = "rand_chacha", version = "0.3.1" },
+    { name = "rand_core", version = "0.6.4" },
+    { name = "sha2", version = "0.10.9" },
+    { name = "untrusted", version = "0.7.1" },
+    { name = "windows-sys", version = "0.52.0" },
+    { name = "wit-bindgen", version = "0.51.0" },
+]
 skip-tree = []
 
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = [
-    "https://github.com/jeremi/registry-manifest",
-]
+allow-git = []
