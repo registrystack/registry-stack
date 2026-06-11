@@ -1351,6 +1351,19 @@ impl CompiledMetadata {
             .filter(|(id, _)| visible_requirements.contains(id.as_str()))
             .map(|(id, requirement)| (id.clone(), requirement.clone()))
             .collect::<BTreeMap<_, _>>();
+        let visible_codelists = datasets
+            .values()
+            .flat_map(|dataset| dataset.entities.values())
+            .flat_map(|entity| entity.fields.values())
+            .filter_map(|field| field.codelist.as_deref())
+            .collect::<BTreeSet<_>>();
+        let codelists = self
+            .inner
+            .codelists
+            .iter()
+            .filter(|(id, _)| visible_codelists.contains(id.as_str()))
+            .map(|(id, codelist)| (id.clone(), codelist.clone()))
+            .collect::<BTreeMap<_, _>>();
         CompiledMetadata {
             inner: Arc::new(CompiledMetadataInner {
                 catalog: self.inner.catalog.clone(),
@@ -1361,7 +1374,7 @@ impl CompiledMetadata {
                 requirements,
                 evidence_types,
                 datasets,
-                codelists: self.inner.codelists.clone(),
+                codelists,
                 profiles: self.inner.profiles.clone(),
                 federation: self.inner.federation.clone(),
                 evaluation_profiles: self.inner.evaluation_profiles.clone(),
