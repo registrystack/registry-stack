@@ -148,7 +148,7 @@
                     "scope": "none",
                     "tracked": false
                   },
-                  "suppressed_rows": null,
+                  "suppressed_observations": null,
                   "suppression": "omit"
                 },
                 "links": [],
@@ -244,7 +244,7 @@
                       ],
                       "type": "object"
                     },
-                    "suppressed_rows": {
+                    "suppressed_observations": {
                       "minimum": 0,
                       "type": [
                         "integer",
@@ -264,7 +264,7 @@
                     "method",
                     "min_cell_size",
                     "suppression",
-                    "suppressed_rows",
+                    "suppressed_observations",
                     "query_budget"
                   ],
                   "type": "object"
@@ -500,7 +500,7 @@
           "unit_measure": {
             "type": "string"
           },
-          "unit_mult": {
+          "unit_multiplier": {
             "type": [
               "number",
               "null"
@@ -661,7 +661,7 @@
                 "scope": "none",
                 "tracked": false
               },
-              "suppressed_rows": 1,
+              "suppressed_observations": 1,
               "suppression": "omit"
             },
             "freshness": {
@@ -747,7 +747,7 @@
                 ],
                 "type": "object"
               },
-              "suppressed_rows": {
+              "suppressed_observations": {
                 "minimum": 0,
                 "type": [
                   "integer",
@@ -767,7 +767,7 @@
               "method",
               "min_cell_size",
               "suppression",
-              "suppressed_rows",
+              "suppressed_observations",
               "query_budget"
             ],
             "type": "object"
@@ -1000,7 +1000,7 @@
                 ],
                 "type": "object"
               },
-              "suppressed_rows": {
+              "suppressed_observations": {
                 "minimum": 0,
                 "type": [
                   "integer",
@@ -1020,7 +1020,7 @@
               "method",
               "min_cell_size",
               "suppression",
-              "suppressed_rows",
+              "suppressed_observations",
               "query_budget"
             ],
             "type": "object"
