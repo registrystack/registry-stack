@@ -2855,8 +2855,7 @@
         "in": "header",
         "required": false,
         "schema": {
-          "type": "string",
-          "format": "uri"
+          "type": "string"
         },
         "description": "Purpose-of-use IRI or controlled string. When `require_purpose_header` is set on this entity, the header must be present; a missing value returns `400 auth.purpose_required`. The value is always recorded verbatim in the audit trail when present; purpose values are not enforced or validated at the consultation layer. Registry Notary is the purpose-certification layer. Never put secrets or personal data here."
       },
