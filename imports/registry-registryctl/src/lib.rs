@@ -22,8 +22,10 @@ pub use crate::sample::Sample;
 mod sample;
 mod stored_zip;
 
-const RELAY_IMAGE: &str = "ghcr.io/jeremi/registry-relay:snapshot";
-const NOTARY_IMAGE: &str = "ghcr.io/jeremi/registry-notary:snapshot";
+const RELAY_IMAGE: &str =
+    "ghcr.io/jeremi/registry-relay@sha256:1e49c592d0f65378600f1a1745b331e499e226873a30340c0a66f260bb00494b";
+const NOTARY_IMAGE: &str =
+    "ghcr.io/jeremi/registry-notary@sha256:965a4e2d7d487e7cb8d95b5ad6ed35ed3977be21962a2cffa0f57116c9c34da8";
 const NOTARY_REDIS_IMAGE: &str = "redis:7.4-alpine";
 const RELAY_BASE_URL: &str = "http://127.0.0.1:4242";
 const NOTARY_BASE_URL: &str = "http://127.0.0.1:4255";
@@ -606,7 +608,7 @@ fn bruno_notary_files(project: &Project, _secrets: &LocalEnv) -> Result<Vec<Gene
             4,
             "{{notary_base_url}}/v1/claims",
             &[
-                ("x-api-key", "{{notary_evaluator_key}}"),
+                ("X-Api-Key", "{{notary_evaluator_key}}"),
                 ("Accept", "application/json"),
             ],
         ),
@@ -616,7 +618,7 @@ fn bruno_notary_files(project: &Project, _secrets: &LocalEnv) -> Result<Vec<Gene
             5,
             "{{notary_base_url}}/v1/evaluations",
             &[
-                ("x-api-key", "{{notary_evaluator_key}}"),
+                ("X-Api-Key", "{{notary_evaluator_key}}"),
                 ("Content-Type", "application/json"),
                 ("Accept", NOTARY_CLAIM_RESULT_JSON),
             ],
@@ -638,7 +640,7 @@ fn bruno_notary_files(project: &Project, _secrets: &LocalEnv) -> Result<Vec<Gene
             6,
             "{{notary_base_url}}/v1/evaluations",
             &[
-                ("x-api-key", "{{notary_evaluator_key}}"),
+                ("X-Api-Key", "{{notary_evaluator_key}}"),
                 ("Content-Type", "application/json"),
                 ("Accept", NOTARY_CLAIM_RESULT_JSON),
             ],
@@ -1878,6 +1880,12 @@ mod tests {
 
     use super::*;
 
+    fn assert_digest_pinned_image(image: &str, repository: &str) {
+        assert!(image.starts_with(&format!("{repository}@sha256:")));
+        assert!(!image.contains(":snapshot"));
+        assert!(!image.contains(":latest"));
+    }
+
     #[test]
     fn init_sample_creates_expected_project_tree() {
         let temp = TempDir::new().unwrap();
@@ -1943,12 +1951,25 @@ mod tests {
         let env = fs::read_to_string(project.join("secrets/local.env")).unwrap();
         let local_bru =
             fs::read_to_string(project.join("bruno/registry-api/environments/local.bru")).unwrap();
-        let request =
+        let list_claims =
             fs::read_to_string(project.join("bruno/registry-api/Notary/List claims.bru")).unwrap();
+        let evaluate_exists = fs::read_to_string(
+            project.join("bruno/registry-api/Notary/Evaluate person exists.bru"),
+        )
+        .unwrap();
+        let evaluate_missing = fs::read_to_string(
+            project.join("bruno/registry-api/Notary/Evaluate missing person.bru"),
+        )
+        .unwrap();
+        let notary_requests = format!("{list_claims}\n{evaluate_exists}\n{evaluate_missing}");
 
         assert!(local_bru.contains(&env_value(&env, "REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW")));
-        assert!(!request.contains(&env_value(&env, "REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW")));
-        assert!(request.contains("{{notary_evaluator_key}}"));
+        assert!(
+            !notary_requests.contains(&env_value(&env, "REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW"))
+        );
+        assert!(notary_requests.contains("{{notary_evaluator_key}}"));
+        assert!(notary_requests.contains("X-Api-Key: {{notary_evaluator_key}}"));
+        assert!(!notary_requests.contains("x-api-key"));
     }
 
     #[test]
@@ -2042,9 +2063,16 @@ mod tests {
         let manifest: Value =
             serde_yaml::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())
                 .unwrap();
-        assert_eq!(manifest["runtime"]["relay_image"], RELAY_IMAGE);
-        assert_ne!(manifest["runtime"]["relay_image"], "latest");
+        let compose = fs::read_to_string(project.join("compose.yaml")).unwrap();
+
+        assert_digest_pinned_image(
+            manifest["runtime"]["relay_image"].as_str().unwrap(),
+            "ghcr.io/jeremi/registry-relay",
+        );
         assert_eq!(manifest["runtime"]["relay_base_url"], RELAY_BASE_URL);
+        assert!(compose.contains(&format!("image: {RELAY_IMAGE}")));
+        assert!(!compose.contains("registry-relay:snapshot"));
+        assert!(!compose.contains("registry-relay:latest"));
     }
 
     #[test]
@@ -2080,11 +2108,10 @@ mod tests {
             serde_yaml::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())
                 .unwrap();
 
-        assert_eq!(
-            manifest["runtime"]["notary_image"],
-            "ghcr.io/jeremi/registry-notary:snapshot"
+        assert_digest_pinned_image(
+            manifest["runtime"]["notary_image"].as_str().unwrap(),
+            "ghcr.io/jeremi/registry-notary",
         );
-        assert_ne!(manifest["runtime"]["notary_image"], "latest");
         assert_eq!(
             manifest["runtime"]["notary_base_url"],
             "http://127.0.0.1:4255"
@@ -2104,7 +2131,7 @@ mod tests {
     }
 
     #[test]
-    fn compose_after_notary_add_includes_notary_snapshot_service() {
+    fn compose_after_notary_add_includes_digest_pinned_notary_service() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
         init_spreadsheet_api(&project, Sample::Benefits).unwrap();
@@ -2113,7 +2140,8 @@ mod tests {
         let compose = fs::read_to_string(project.join("compose.yaml")).unwrap();
 
         assert!(compose.contains("registry-notary:"));
-        assert!(compose.contains("image: ghcr.io/jeremi/registry-notary:snapshot"));
+        assert!(compose.contains(&format!("image: {NOTARY_IMAGE}")));
+        assert!(!compose.contains("registry-notary:snapshot"));
         assert!(!compose.contains("registry-notary:latest"));
         assert!(compose.contains("registry-notary-redis:"));
         assert!(compose.contains(&format!("image: {NOTARY_REDIS_IMAGE}")));
