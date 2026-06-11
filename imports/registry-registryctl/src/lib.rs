@@ -1880,6 +1880,12 @@ mod tests {
 
     use super::*;
 
+    fn assert_digest_pinned_image(image: &str, repository: &str) {
+        assert!(image.starts_with(&format!("{repository}@sha256:")));
+        assert!(!image.contains(":snapshot"));
+        assert!(!image.contains(":latest"));
+    }
+
     #[test]
     fn init_sample_creates_expected_project_tree() {
         let temp = TempDir::new().unwrap();
@@ -2059,16 +2065,10 @@ mod tests {
                 .unwrap();
         let compose = fs::read_to_string(project.join("compose.yaml")).unwrap();
 
-        assert_eq!(manifest["runtime"]["relay_image"], RELAY_IMAGE);
-        assert!(manifest["runtime"]["relay_image"]
-            .as_str()
-            .unwrap()
-            .contains("@sha256:"));
-        assert!(!manifest["runtime"]["relay_image"]
-            .as_str()
-            .unwrap()
-            .contains(":snapshot"));
-        assert_ne!(manifest["runtime"]["relay_image"], "latest");
+        assert_digest_pinned_image(
+            manifest["runtime"]["relay_image"].as_str().unwrap(),
+            "ghcr.io/jeremi/registry-relay",
+        );
         assert_eq!(manifest["runtime"]["relay_base_url"], RELAY_BASE_URL);
         assert!(compose.contains(&format!("image: {RELAY_IMAGE}")));
         assert!(!compose.contains("registry-relay:snapshot"));
@@ -2108,16 +2108,10 @@ mod tests {
             serde_yaml::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())
                 .unwrap();
 
-        assert_eq!(manifest["runtime"]["notary_image"], NOTARY_IMAGE);
-        assert!(manifest["runtime"]["notary_image"]
-            .as_str()
-            .unwrap()
-            .contains("@sha256:"));
-        assert!(!manifest["runtime"]["notary_image"]
-            .as_str()
-            .unwrap()
-            .contains(":snapshot"));
-        assert_ne!(manifest["runtime"]["notary_image"], "latest");
+        assert_digest_pinned_image(
+            manifest["runtime"]["notary_image"].as_str().unwrap(),
+            "ghcr.io/jeremi/registry-notary",
+        );
         assert_eq!(
             manifest["runtime"]["notary_base_url"],
             "http://127.0.0.1:4255"
@@ -2147,7 +2141,6 @@ mod tests {
 
         assert!(compose.contains("registry-notary:"));
         assert!(compose.contains(&format!("image: {NOTARY_IMAGE}")));
-        assert!(compose.contains("@sha256:"));
         assert!(!compose.contains("registry-notary:snapshot"));
         assert!(!compose.contains("registry-notary:latest"));
         assert!(compose.contains("registry-notary-redis:"));
