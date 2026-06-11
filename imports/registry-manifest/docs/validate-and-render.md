@@ -209,6 +209,11 @@ The `index.json` at the root of the output directory carries schema version
 is excluded because it contains the package digest, and `.well-known/*` may be written under
 `--site-root` while still discovering the same metadata bundle.
 
+Future publish bundles may add optional artifacts and corresponding `index.json` entries.
+Readers should ignore artifact paths, top-level index links, and artifact metadata members
+they do not understand, while continuing to validate known required fields and digests. Adding
+an artifact changes the `package_digest` because the digest covers the full artifact inventory.
+
 ## Verification
 
 After `validate`, confirm the exit code is zero:

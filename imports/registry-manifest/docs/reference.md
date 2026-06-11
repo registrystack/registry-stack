@@ -215,6 +215,27 @@ Manifest-owned JSON-LD maps these bare keys to stable Registry Manifest RDF term
 `valid_from` -> `registry_manifest:validFrom`, and
 `valid_to` -> `registry_manifest:validTo`.
 
+### Extension policy
+
+`registry-manifest/v1` and the manifest-owned `*/v1` generated formats make a
+compatibility promise for additive evolution. A post-beta producer may add optional
+fields to existing mapping objects without requiring a new major schema version.
+Beta-era readers must ignore unrecognized fields while continuing to require and
+validate the fields they understand. Unknown fields do not relax existing validation:
+required fields, identifier syntax, URI syntax, reference integrity, collection limits,
+and runtime-only key rejection still apply.
+
+Readers must treat unrecognized fields as advisory extension data. A reader may expose
+or preserve extension data when it has a typed extension model, but it must not fail
+only because an otherwise valid manifest includes an unknown optional key such as a
+future evidence offering `supported_modes`, `required_subject_binding`, `result_format`,
+`disclosure_profile`, or `risk_tier`.
+
+Breaking changes require a new schema version. Breaking changes include removing or
+renaming required fields, changing the meaning of an existing field, changing an existing
+field to an incompatible type, or making previously valid V1 manifests invalid except
+for validation bugs, security fixes, or explicitly forbidden runtime-only keys.
+
 ## Publish output artifacts
 
 Source:
@@ -261,6 +282,16 @@ The `artifacts` inventory uses paths relative to `--out`, records each artifact'
 and excludes `index.json` because it contains the package digest. Discovery documents under
 `.well-known/` are also excluded because they may be written under a separate `--site-root`
 while still pointing at the same `/metadata/index.json` entry point.
+
+Publish bundles follow the same additive compatibility rule. A future producer may add
+new artifact files, new typed index links, and new `artifacts[]` entries without breaking
+beta-era readers. Readers must consume the artifact paths and index links they understand
+and ignore unknown top-level index members or artifact metadata members. The
+`package_digest` covers the complete sorted `artifacts` inventory, so adding an artifact
+intentionally changes the package digest. Artifacts that describe the bundle digest, such
+as a future `provenance.jsonld`, must avoid a circular digest dependency by either
+describing the source manifest digest, describing a separately defined pre-provenance
+inventory, or being excluded by an explicitly versioned future digest rule.
 
 Minimal example shape:
 
