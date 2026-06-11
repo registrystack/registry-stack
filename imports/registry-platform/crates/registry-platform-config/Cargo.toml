@@ -24,5 +24,6 @@ url.workspace = true
 
 [dev-dependencies]
 chrono.workspace = true
+rsa.workspace = true
 tempfile.workspace = true
 wiremock.workspace = true

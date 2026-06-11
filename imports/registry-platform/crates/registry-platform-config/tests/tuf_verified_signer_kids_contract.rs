@@ -7,11 +7,9 @@
 //! snapshot+timestamp keys appends extra signature objects carrying distinct,
 //! Registry-trusted keyids with garbage signature bytes. `tough` verifies the
 //! one real targets signature, ignores the forged ones for its threshold, but
-//! leaves them in the `signatures` array (it errors only on *duplicate*
-//! keyids; see tough-0.22.0/src/schema/verify.rs). The platform verifier must
-//! not forward those unverified key IDs into `RegistryTrustRoot::authorize`,
-//! because that would let multi-sig authorization pass with a single real
-//! signer.
+//! leaves them in the `signatures` array. The platform verifier must not
+//! forward those unverified key IDs into `RegistryTrustRoot::authorize`, because
+//! that would let multi-sig authorization pass with a single real signer.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
@@ -35,18 +33,7 @@ use tough::schema::{KeyHolder, Root, Signed, Snapshot, Timestamp};
 const FORGED_KID: &str = "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0";
 
 fn tough_data_dir() -> PathBuf {
-    let cargo_home = std::env::var_os("CARGO_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))
-        .expect("CARGO_HOME or HOME is set");
-    let src_root = cargo_home.join("registry/src");
-    std::fs::read_dir(&src_root)
-        .expect("cargo registry src exists")
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .find(|path| path.join("tough-0.22.0/tests/data").is_dir())
-        .expect("tough-0.22.0 source fixture directory exists")
-        .join("tough-0.22.0/tests/data")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tough-data")
 }
 
 fn find_metadata_file(dir: &Path, suffix: &str) -> PathBuf {

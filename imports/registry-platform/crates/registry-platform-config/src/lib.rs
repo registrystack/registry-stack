@@ -1243,18 +1243,9 @@ mod tests {
     use serde_json::json;
 
     fn tough_fixture_dir(name: &str) -> PathBuf {
-        let cargo_home = std::env::var_os("CARGO_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))
-            .expect("CARGO_HOME or HOME is set");
-        let src_root = cargo_home.join("registry/src");
-        let registry = std::fs::read_dir(&src_root)
-            .expect("cargo registry src exists")
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .find(|path| path.join("tough-0.22.0/tests/data").is_dir())
-            .expect("tough-0.22.0 source fixture directory exists");
-        registry.join("tough-0.22.0/tests/data").join(name)
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/tough-data")
+            .join(name)
     }
 
     #[test]
