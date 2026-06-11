@@ -68,7 +68,7 @@ docker buildx imagetools inspect ghcr.io/jeremi/registry-relay:sha-<commit-sha>
 docker buildx imagetools inspect ghcr.io/jeremi/registry-relay:<release-alias>
 ```
 
-Verify the cosign signature for a tag:
+Verify the cosign signature for a tag using the triggering Git release tag:
 
 ```sh
 cosign verify \
