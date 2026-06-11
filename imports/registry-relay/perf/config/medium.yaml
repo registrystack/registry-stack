@@ -11,7 +11,8 @@ catalog:
   publisher: Perf Test Harness
 
 metadata:
-  manifest_path: clinic_capacity.metadata.yaml
+  source:
+    path: clinic_capacity.metadata.yaml
 
 auth:
   mode: api_key
