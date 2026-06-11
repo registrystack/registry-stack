@@ -108,6 +108,12 @@ config_trust:
   break_glass_rate_limit:
     max_accepted: 1
     window_seconds: 3600
+  remote_tuf_repositories:
+    - root_path: /etc/registry-notary/tuf/metadata/1.root.json
+      metadata_base_url: https://config.example.gov/metadata
+      targets_base_url: https://config.example.gov/targets
+      datastore_dir: /var/lib/registry-notary/tuf
+      allow_dev_insecure_fetch_urls: false
   accepted_roots:
     - root_id: ops-root
       production: false
@@ -141,9 +147,20 @@ verify/dry-run diagnostics. Local TUF sources use `root_path`, `metadata_dir`,
 same `root_path`, `datastore_dir`, and `target_name`, and replace local
 repository directories with `metadata_base_url` and `targets_base_url`. Remote
 sources are recorded as `signed_bundle_endpoint`; local repository sources are
-recorded as `signed_bundle_file`. HTTP loopback remote repositories require
-`allow_dev_insecure_fetch_urls: true` and are intended only for tests and local
-development.
+recorded as `signed_bundle_file`.
+
+`remote_tuf_repositories` is an operator-controlled allowlist of remote TUF
+sources that may be submitted in admin apply requests. An apply request whose
+remote TUF source does not exactly match one of the listed entries (comparing
+`root_path`, `metadata_base_url`, `targets_base_url`, and `datastore_dir`) is
+rejected before any TUF fetch is attempted. This prevents an attacker who can
+POST to the admin endpoint from directing the Notary to an arbitrary TUF server.
+When omitted the list is empty and all remote TUF apply requests are rejected.
+Each entry carries its own `allow_dev_insecure_fetch_urls` flag; the flag from
+the matching allowlist entry is always used, never the value in the incoming
+request. HTTP loopback remote repositories require `allow_dev_insecure_fetch_urls:
+true` and are intended only for tests and local development. Production entries
+must use HTTPS URLs and must set `allow_dev_insecure_fetch_urls: false`.
 
 Governed bundle metadata may set `previous_config_hash` as either bare lowercase
 SHA-256 hex or `sha256:<64 lowercase hex>`. Notary normalizes both forms at the
