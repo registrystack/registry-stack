@@ -73,7 +73,8 @@ curl -sS \
   https://civil-relay.lab.registrystack.org/v1/datasets
 ```
 
-The Relay returns `200 OK` with the catalog:
+The Relay returns `200 OK` with the catalog. Additional `DatasetSummary` fields are omitted here
+for brevity:
 
 ```json
 { "data": [ { "dataset_id": "civil_registry" } ] }
