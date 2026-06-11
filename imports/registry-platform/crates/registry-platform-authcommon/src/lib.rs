@@ -56,10 +56,20 @@ pub fn parse_bearer_token(header: &str) -> Result<&str, BearerParseError> {
         return Err(BearerParseError::Malformed);
     }
 
-    let (scheme, rest) = header.split_at(BEARER_SCHEME.len());
-    if !scheme.eq_ignore_ascii_case(BEARER_SCHEME) {
+    // Validate the scheme on bytes before splitting. The byte-length guard above
+    // ensures we have enough bytes, but split_at would panic if byte index
+    // BEARER_SCHEME.len() falls inside a multibyte UTF-8 scalar. Comparing bytes
+    // directly is safe because BEARER_SCHEME is pure ASCII, so a match on bytes
+    // guarantees we are on a char boundary.
+    let scheme_bytes = &header.as_bytes()[..BEARER_SCHEME.len()];
+    if !scheme_bytes.eq_ignore_ascii_case(BEARER_SCHEME.as_bytes()) {
         return Err(BearerParseError::InvalidScheme);
     }
+
+    // SAFETY: BEARER_SCHEME is all ASCII, so its byte length equals its char
+    // length, and we just confirmed the first BEARER_SCHEME.len() bytes are
+    // ASCII. The split is therefore on a valid char boundary.
+    let (_, rest) = header.split_at(BEARER_SCHEME.len());
     if rest.is_empty() {
         return Err(BearerParseError::Malformed);
     }
@@ -675,6 +685,91 @@ mod tests {
             reference.resolve(context),
             Err(CredentialFingerprintRefError::InvalidFingerprint(_))
         ));
+    }
+
+    // --- multibyte UTF-8 at the scheme-split boundary (regression for issue #50) ---
+    //
+    // "Bearer" is 6 bytes. Any input whose byte-length is >= 6 but whose byte
+    // index 6 lands inside a multibyte scalar used to panic with
+    // "end byte index N is not a char boundary". These tests must return a clean
+    // Err, never panic.
+
+    #[test]
+    fn parse_bearer_token_does_not_panic_on_two_byte_char_at_boundary() {
+        // "Beare" + é (U+00E9, encoded as 0xC3 0xA9 in UTF-8): 7 bytes total.
+        // Byte 6 is the continuation byte 0xA9 — not a char boundary.
+        let header = "Beare\u{00e9}";
+        assert_eq!(header.len(), 7);
+        assert_eq!(
+            parse_bearer_token(header),
+            Err(BearerParseError::InvalidScheme)
+        );
+    }
+
+    #[test]
+    fn parse_bearer_token_does_not_panic_on_three_byte_char_straddling_boundary() {
+        // "Bear" + ' (U+2019 RIGHT SINGLE QUOTATION MARK, encoded as 0xE2 0x80 0x99): 7 bytes.
+        // Byte 6 is 0x99 — continuation byte of the 3-byte sequence starting at byte 4.
+        let header = "Bear\u{2019}";
+        assert_eq!(header.len(), 7);
+        assert_eq!(
+            parse_bearer_token(header),
+            Err(BearerParseError::InvalidScheme)
+        );
+    }
+
+    #[test]
+    fn parse_bearer_token_does_not_panic_on_two_byte_char_starting_at_boundary() {
+        // "Bearer" (exactly 6 bytes) followed by a 2-byte UTF-8 char: 8 bytes total.
+        // Byte 6 is 0xC3 — the leading byte of é. split_at(6) lands on a char boundary here,
+        // but the scheme-check must still reject the non-ASCII separator gracefully.
+        let header = "Bearer\u{00e9}";
+        assert_eq!(header.len(), 8);
+        assert_eq!(
+            parse_bearer_token(header),
+            Err(BearerParseError::InvalidSeparator)
+        );
+    }
+
+    #[test]
+    fn parse_bearer_token_does_not_panic_on_non_ascii_scheme_exact_length() {
+        // A 6-byte string whose last char is the second byte of a 2-byte sequence
+        // can never be valid UTF-8, but we can construct a case where a non-ASCII
+        // char starts at byte 5, making byte 6 a continuation byte.
+        // "Beare" (5 bytes) + ñ (U+00F1, 2 bytes) = 7 bytes; byte 6 = 0xB1 (continuation).
+        let header = "Beare\u{00f1}";
+        assert_eq!(header.len(), 7);
+        assert_eq!(
+            parse_bearer_token(header),
+            Err(BearerParseError::InvalidScheme)
+        );
+    }
+
+    #[test]
+    fn parse_bearer_token_does_not_panic_on_empty_header() {
+        assert_eq!(parse_bearer_token(""), Err(BearerParseError::Malformed));
+    }
+
+    #[test]
+    fn parse_bearer_token_does_not_panic_on_scheme_only_no_space() {
+        // Exactly "Bearer" with no trailing space or token.
+        assert_eq!(
+            parse_bearer_token("Bearer"),
+            Err(BearerParseError::Malformed)
+        );
+    }
+
+    #[test]
+    fn parse_bearer_token_does_not_panic_on_four_byte_char_before_boundary() {
+        // "Be" + 𝄞 (U+1D11E MUSICAL SYMBOL G CLEF, 4 bytes) = 6 bytes total.
+        // split_at(6) would land after the 4-byte char — actually on a valid boundary.
+        // The scheme check should still return InvalidScheme.
+        let header = "Be\u{1d11e}";
+        assert_eq!(header.len(), 6);
+        assert_eq!(
+            parse_bearer_token(header),
+            Err(BearerParseError::InvalidScheme)
+        );
     }
 
     proptest! {
