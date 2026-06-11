@@ -895,5 +895,197 @@ class LabModePayloadTest(unittest.TestCase):
         self.assertIn('"Local only"', html)
 
 
+class InternalRequestSourceTest(unittest.TestCase):
+    """request_source() internal flag and renderRequestSource JS behaviour."""
+
+    def setUp(self) -> None:
+        self._saved = dict(os.environ)
+        os.environ["CIVIL_RAW"] = "civil-token"
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._saved)
+
+    # ---- request_source() flag behaviour ----
+
+    def test_request_source_internal_true_includes_flag(self) -> None:
+        from lab_homepage_scenarios.common import request_source as rs
+        result = rs("POST", "http://internal:8080/v1/evaluations", {"Authorization": "Bearer x"}, internal=True)
+        self.assertTrue(result.get("internal"), "internal=True must set the key to True")
+
+    def test_request_source_internal_false_omits_key(self) -> None:
+        from lab_homepage_scenarios.common import request_source as rs
+        result = rs("GET", "https://relay.example/metadata", {"Authorization": "Bearer x"})
+        self.assertNotIn("internal", result, "internal key must be absent when not set")
+
+    def test_request_source_internal_explicit_false_omits_key(self) -> None:
+        from lab_homepage_scenarios.common import request_source as rs
+        result = rs("GET", "https://relay.example/metadata", {"Authorization": "Bearer x"}, internal=False)
+        self.assertNotIn("internal", result, "internal key must be absent when False")
+
+    # ---- alive-proof scenario: prepare-evidence uses runtime_bearer_credential -> internal ----
+
+    def test_alive_proof_prepare_evidence_request_source_is_internal(self) -> None:
+        os.environ["CIVIL_EVIDENCE_CLIENT_BEARER"] = "notary-token"
+        os.environ["CIVIL_EVIDENCE_URL"] = "https://notary.example"
+
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b'{"results":[{"claim_id":"person-is-alive","satisfied":true,"provenance":{"source_count":1}}]}'
+
+        with mock.patch.object(server.urllib.request, "urlopen", lambda req, timeout=None: Resp()):
+            result = server.run_scenario_step(
+                server.enrich_config({"credentials": []}), "alive-proof", "prepare-evidence"
+            )
+        self.assertTrue(result["request_source"].get("internal"), "prepare-evidence request_source must be internal")
+
+    # ---- alive-proof: discover uses configured_credential (public) -> not internal ----
+
+    def test_alive_proof_discover_request_source_is_not_internal(self) -> None:
+        config = {
+            "credentials": [
+                {
+                    "id": "civil-evidence-only",
+                    "env": "CIVIL_RAW",
+                    "service_url": "https://civil.example",
+                    "example": {"path": "/metadata/evidence-offerings"},
+                }
+            ]
+        }
+
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b'{"evidence_offerings":[{"title":"Civil alive check","lookup_keys":["national_id"]}]}'
+
+        with mock.patch.object(server.urllib.request, "urlopen", lambda req, timeout=None: Resp()):
+            result = server.run_alive_proof_step(server.enrich_config(config), "discover")
+        self.assertNotIn("internal", result["request_source"], "discover uses a public credential; must not be internal")
+
+    # ---- combined-support: all steps use runtime_bearer_credential -> internal ----
+
+    def test_combined_support_discover_request_source_is_internal(self) -> None:
+        os.environ["SHARED_EVIDENCE_CLIENT_BEARER"] = "shared-token"
+
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b'{"claims":["civil-record-present","eligible-for-combined-support"]}'
+
+        with mock.patch.object(server.urllib.request, "urlopen", lambda req, timeout=None: Resp()):
+            result = server.run_scenario_step(
+                server.enrich_config({"credentials": []}), "combined-support", "discover", lab_mode="local"
+            )
+        self.assertTrue(result["request_source"].get("internal"), "combined-support discover must be internal")
+
+    def test_combined_support_evaluate_step_request_source_is_internal(self) -> None:
+        os.environ["SHARED_EVIDENCE_CLIENT_BEARER"] = "shared-token"
+
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b'{"results":[{"claim_id":"civil-record-present","satisfied":true}]}'
+
+        with mock.patch.object(server.urllib.request, "urlopen", lambda req, timeout=None: Resp()):
+            result = server.run_scenario_step(
+                server.enrich_config({"credentials": []}), "combined-support", "civil-subclaim", lab_mode="local"
+            )
+        self.assertTrue(result["request_source"].get("internal"), "combined-support civil-subclaim must be internal")
+
+    # ---- agriculture-voucher: all steps use runtime_bearer_credential -> internal ----
+
+    def test_agriculture_voucher_discover_request_source_is_internal(self) -> None:
+        os.environ["AGRI_EVIDENCE_CLIENT_BEARER"] = "agri-token"
+
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b'{"claims":["eligible-for-climate-smart-input-voucher"]}'
+
+        with mock.patch.object(server.urllib.request, "urlopen", lambda req, timeout=None: Resp()):
+            result = server.run_scenario_step(
+                server.enrich_config({"credentials": []}), "agriculture-voucher", "discover", lab_mode="local"
+            )
+        self.assertTrue(result["request_source"].get("internal"), "agriculture-voucher discover must be internal")
+
+    def test_agriculture_voucher_evaluate_step_request_source_is_internal(self) -> None:
+        os.environ["AGRI_EVIDENCE_CLIENT_BEARER"] = "agri-token"
+
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b'{"results":[{"claim_id":"eligible-for-climate-smart-input-voucher","satisfied":true}]}'
+
+        with mock.patch.object(server.urllib.request, "urlopen", lambda req, timeout=None: Resp()):
+            result = server.run_scenario_step(
+                server.enrich_config({"credentials": []}), "agriculture-voucher", "positive-voucher", lab_mode="local"
+            )
+        self.assertTrue(result["request_source"].get("internal"), "agriculture-voucher positive-voucher must be internal")
+
+    # ---- JS renderRequestSource: internal branch must be present in the page HTML ----
+
+    def test_scenario_page_html_contains_internal_note_branch(self) -> None:
+        html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+        self.assertIn("value.internal", html, "renderRequestSource must branch on value.internal")
+        self.assertIn("Internal lab call.", html, "renderRequestSource must render the internal-note text")
+
+    def test_scenario_page_html_internal_branch_suppresses_curl_button(self) -> None:
+        # The canCurl logic must exclude internal requests.
+        html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+        # The combined canCurl expression must gate on !value.internal (or equivalent).
+        self.assertIn("value.internal", html)
+        # And the "Copy as curl" button must still appear (for public-credential paths).
+        self.assertIn("Copy as curl", html)
+
+
 if __name__ == "__main__":
     unittest.main()

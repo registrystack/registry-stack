@@ -131,7 +131,7 @@ def _discover(step_id: str) -> dict[str, Any]:
         return {
             "step_id": step_id,
             "friendly": friendly_unavailable(SERVICE_NAME, TOKEN_ENV, url),
-            "request_source": request_source("GET", url, display_headers),
+            "request_source": request_source("GET", url, display_headers, internal=True),
             "response_source": {"note": "No local agriculture token configured, so the request was not sent."},
         }
     result = http_json("GET", url, real_headers)
@@ -148,7 +148,7 @@ def _discover(step_id: str) -> dict[str, Any]:
                 {"label": "Availability", "value": "Local-only"},
             ],
         },
-        "request_source": request_source("GET", url, display_headers),
+        "request_source": request_source("GET", url, display_headers, internal=True),
         "response_source": source_response(result),
     }
 
@@ -164,7 +164,7 @@ def _evaluate(step_id: str, claim_id: str, subject: str, label: str, disclosure:
         return {
             "step_id": step_id,
             "friendly": friendly_unavailable(SERVICE_NAME, TOKEN_ENV, url),
-            "request_source": request_source("POST", url, display_headers, body),
+            "request_source": request_source("POST", url, display_headers, body, internal=True),
             "response_source": {"note": "No local agriculture token configured, so the request was not sent."},
         }
     result = http_json("POST", url, real_headers, body)
@@ -184,7 +184,7 @@ def _evaluate(step_id: str, claim_id: str, subject: str, label: str, disclosure:
                 {"label": "Workbook rows exported", "value": "No"},
             ],
         },
-        "request_source": request_source("POST", url, display_headers, body),
+        "request_source": request_source("POST", url, display_headers, body, internal=True),
         "response_source": source_response(result),
     }
 

@@ -130,6 +130,7 @@ def _run_evaluation(step_id: str) -> dict[str, Any]:
             url,
             {display_name: display_value, "Content-Type": "application/json", "Data-Purpose": PURPOSE},
             body,
+            internal=True,
         ),
         "response_source": {
             "reused_from_discovery": DISCOVERY_REUSED,

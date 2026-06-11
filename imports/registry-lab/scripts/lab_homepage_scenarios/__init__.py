@@ -325,9 +325,10 @@ def scenario_page_html(title: str = "Registry Lab Scenarios", scenario_id: str |
     }}
 
     function renderRequestSource(value) {{
-      const canCurl = value.method && value.method !== "SIMULATE" && value.url;
+      const canCurl = value.method && value.method !== "SIMULATE" && value.url && !value.internal;
       return `<div class="source-card">
         ${{canCurl ? `<div class="source-toolbar"><button class="copy-curl" type="button" data-copy-curl="${{escapeHtml(curlCommand(value))}}">Copy as curl</button></div>` : ""}}
+        ${{value.internal ? `<div class="source-note">Internal lab call. It authenticates with a runtime-only credential that is never published, so there is no runnable curl for it.</div>` : ""}}
         <div class="source-line">${{escapeHtml(value.method || "")}} ${{escapeHtml(value.url || "")}}</div>
         ${{sourceSection("Headers", sourceRows(value.headers || {{}}))}}
         ${{value.body == null ? "" : sourceSection("Body", `<pre class="source-code">${{escapeHtml(prettyJson(value.body))}}</pre>`)}}
