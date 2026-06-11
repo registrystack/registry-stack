@@ -400,7 +400,6 @@ fn endpoint_kind_renders_canonical_strings() {
         (Catalog, "catalog"),
         (Dataset, "dataset"),
         (Schema, "schema"),
-        (Verify, "verify"),
         (Rows, "rows"),
         (AggregateList, "aggregate_list"),
         (Aggregate, "aggregate"),
@@ -886,10 +885,6 @@ async fn middleware_leaves_non_record_dataset_paths_unredacted() {
             get(|| async { StatusCode::OK }),
         )
         .route(
-            "/v1/datasets/social_registry/entities/individual/verify",
-            get(|| async { StatusCode::OK }),
-        )
-        .route(
             "/v1/datasets/social_registry/aggregates",
             get(|| async { StatusCode::OK }),
         )
@@ -898,7 +893,6 @@ async fn middleware_leaves_non_record_dataset_paths_unredacted() {
 
     for uri in [
         "/v1/datasets/social_registry/entities/individual/schema",
-        "/v1/datasets/social_registry/entities/individual/verify",
         "/v1/datasets/social_registry/aggregates",
     ] {
         let resp = app
@@ -916,7 +910,7 @@ async fn middleware_leaves_non_record_dataset_paths_unredacted() {
     }
 
     let records = sink.snapshot();
-    assert_eq!(records.len(), 3);
+    assert_eq!(records.len(), 2);
     let paths: Vec<String> = records
         .iter()
         .map(|line| {
@@ -930,7 +924,6 @@ async fn middleware_leaves_non_record_dataset_paths_unredacted() {
         paths,
         [
             "/v1/datasets/social_registry/entities/individual/schema",
-            "/v1/datasets/social_registry/entities/individual/verify",
             "/v1/datasets/social_registry/aggregates",
         ]
     );
