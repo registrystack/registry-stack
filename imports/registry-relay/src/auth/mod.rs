@@ -2,7 +2,7 @@
 //! Authentication trait, [`Principal`], and mode tags.
 //!
 //! In V1 the only implementation is [`api_key::ApiKeyAuth`], which
-//! verifies `Authorization: Bearer <token>` or `X-Api-Key: <token>`
+//! verifies `Authorization: Bearer <token>` or `x-api-key: <token>`
 //! against SHA-256 fingerprints loaded from environment variables.
 //!
 //! ## Trait method asynchrony
@@ -73,7 +73,7 @@ pub struct Principal {
 /// Authenticates inbound requests.
 ///
 /// V1 implementation: [`api_key::ApiKeyAuth`], reading
-/// `Authorization: Bearer <key>` or `X-Api-Key: <key>` and verifying
+/// `Authorization: Bearer <key>` or `x-api-key: <key>` and verifying
 /// it against SHA-256 fingerprints loaded from the configured
 /// `auth.api_keys[].fingerprint` references. V2 will add JWT and dataspace
 /// implementations; the trait surface does not change.

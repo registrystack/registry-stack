@@ -1954,7 +1954,7 @@ async fn openapi_json_declares_bearer_security_scheme_and_marks_health_and_ready
     );
     assert_eq!(
         body["components"]["securitySchemes"]["apiKeyAuth"]["name"],
-        "X-Api-Key"
+        "x-api-key"
     );
 
     // `/healthz` and `/ready` are on the unauthenticated sub-router in

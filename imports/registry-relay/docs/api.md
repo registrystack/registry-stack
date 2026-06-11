@@ -151,7 +151,7 @@ Authorization: Bearer <api-key>
 or:
 
 ```http
-X-Api-Key: <api-key>
+x-api-key: <api-key>
 ```
 
 When both are present, `Authorization` wins. The gateway hashes the presented raw key with SHA-256 and compares it to fingerprints resolved from `auth.api_keys[].fingerprint`.
@@ -164,7 +164,7 @@ Clients send:
 Authorization: Bearer <jwt>
 ```
 
-The OIDC mode does not accept `X-Api-Key`. The gateway validates the standard claims (`iss`, `aud`, `exp`, optional `nbf`) against the configured `auth.oidc` block, looks up the signing key in the cached JWKS (refreshed on unknown `kid`), and verifies the signature. The Principal's `principal_id` is taken from the token's `sub` (preferred), then `client_id`, then `azp`. Token verification failures map to granular `auth.*` codes (`token_expired`, `audience_mismatch`, `kid_unknown`, etc.) so audit pipelines can distinguish IdP outages from policy denials; see `docs/configuration.md` for the full table.
+The OIDC mode does not accept `x-api-key`. The gateway validates the standard claims (`iss`, `aud`, `exp`, optional `nbf`) against the configured `auth.oidc` block, looks up the signing key in the cached JWKS (refreshed on unknown `kid`), and verifies the signature. The Principal's `principal_id` is taken from the token's `sub` (preferred), then `client_id`, then `azp`. Token verification failures map to granular `auth.*` codes (`token_expired`, `audience_mismatch`, `kid_unknown`, etc.) so audit pipelines can distinguish IdP outages from policy denials; see `docs/configuration.md` for the full table.
 
 Scopes are independent. Grant the narrowest scope that lets the caller do its job:
 

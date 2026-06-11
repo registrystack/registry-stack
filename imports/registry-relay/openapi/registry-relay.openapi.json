@@ -2129,7 +2129,7 @@
         "examples": [
           {
             "code": "auth.missing_credential",
-            "detail": "no credential provided in Authorization or X-Api-Key header",
+            "detail": "no credential provided in Authorization or x-api-key header",
             "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
             "status": 401,
             "title": "Missing credential",
@@ -2231,7 +2231,7 @@
       "apiKeyAuth": {
         "description": "Compatibility API-key header accepted by API-key deployments. `Authorization: Bearer` takes precedence when both headers are present.",
         "in": "header",
-        "name": "X-Api-Key",
+        "name": "x-api-key",
         "type": "apiKey"
       },
       "bearerAuth": {
@@ -2772,6 +2772,7 @@
             "description": "Problem Details error response."
           }
         },
+        "security": [],
         "summary": "Scalar API reference"
       }
     },
@@ -2812,6 +2813,7 @@
             "description": "Problem Details error response."
           }
         },
+        "security": [],
         "summary": "Scalar JavaScript bundle"
       }
     },
@@ -3920,6 +3922,7 @@
             "description": "Problem Details error response."
           }
         },
+        "security": [],
         "summary": "Metadata entity SHACL"
       }
     },
@@ -4129,7 +4132,17 @@
       "get": {
         "description": "Returns the visible metadata catalog as a BRegDCAT-AP JSON-LD document.",
         "operationId": "get_metadata_dcat_bregdcat_ap",
-        "parameters": [],
+        "parameters": [
+          {
+            "description": "DCAT application profile identifier",
+            "in": "path",
+            "name": "profile",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -4923,6 +4936,7 @@
             "description": "Problem Details error response."
           }
         },
+        "security": [],
         "summary": "Entity JSON Schema"
       }
     },
@@ -4963,6 +4977,7 @@
             "description": "Problem Details error response."
           }
         },
+        "security": [],
         "summary": "Metadata SHACL shapes"
       }
     },
@@ -6666,6 +6681,7 @@
             "description": "Problem Details error response."
           }
         },
+        "security": [],
         "summary": "Instance-specific OpenAPI document"
       }
     },
@@ -6890,7 +6906,17 @@
       "get": {
         "description": "Returns metadata for the `social_registry` dataset: entities, publishers, sensitivity, update frequency, and links to JSON, JSON-LD, and SHACL artifacts.\n\nSynthetic social registry used for OpenAPI contract generation.",
         "operationId": "get_social_registry_metadata",
-        "parameters": [],
+        "parameters": [
+          {
+            "description": "Dataset identifier",
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -6996,7 +7022,17 @@
       "get": {
         "description": "Lists dataset-scoped analytical aggregates defined for `social_registry`.",
         "operationId": "list_social_registry_aggregates",
-        "parameters": [],
+        "parameters": [
+          {
+            "description": "Dataset identifier",
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -7081,6 +7117,15 @@
             "required": true,
             "schema": {
               "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Dataset identifier",
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
               "type": "string"
             }
           }
@@ -7175,6 +7220,15 @@
             "description": "Aggregate identifier",
             "in": "path",
             "name": "aggregate_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Dataset identifier",
+            "in": "path",
+            "name": "dataset_id",
             "required": true,
             "schema": {
               "type": "string"
@@ -7275,6 +7329,15 @@
             "required": true,
             "schema": {
               "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Dataset identifier",
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
               "type": "string"
             }
           }
@@ -7382,6 +7445,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "Dataset identifier",
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -7446,7 +7518,17 @@
       "get": {
         "description": "Lists dimension definitions declared by aggregates in `social_registry`.",
         "operationId": "list_social_registry_dimensions",
-        "parameters": [],
+        "parameters": [
+          {
+            "description": "Dataset identifier",
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -7503,6 +7585,15 @@
             "description": "Dimension identifier",
             "in": "path",
             "name": "item_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Dataset identifier",
+            "in": "path",
+            "name": "dataset_id",
             "required": true,
             "schema": {
               "type": "string"
@@ -7664,6 +7755,24 @@
               "minLength": 1,
               "type": "string"
             }
+          },
+          {
+            "description": "Dataset identifier",
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Entity name",
+            "in": "path",
+            "name": "entity",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -7769,6 +7878,24 @@
             "required": true,
             "schema": {
               "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Dataset identifier",
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Entity name",
+            "in": "path",
+            "name": "entity",
+            "required": true,
+            "schema": {
               "type": "string"
             }
           }
@@ -7892,6 +8019,33 @@
               "minLength": 1,
               "type": "string"
             }
+          },
+          {
+            "description": "Dataset identifier",
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Entity name",
+            "in": "path",
+            "name": "entity",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Relationship name",
+            "in": "path",
+            "name": "relationship",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -7971,7 +8125,26 @@
       "get": {
         "description": "Returns the `household` field schema in a JSON-friendly form: field names, types, concept URIs, codelists, units, and language tags. Useful for codegen and validation.",
         "operationId": "get_social_registry_household_field_schema",
-        "parameters": [],
+        "parameters": [
+          {
+            "description": "Dataset identifier",
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Entity name",
+            "in": "path",
+            "name": "entity",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -8024,7 +8197,17 @@
       "get": {
         "description": "Lists measure definitions declared by aggregates in `social_registry`.",
         "operationId": "list_social_registry_measures",
-        "parameters": [],
+        "parameters": [
+          {
+            "description": "Dataset identifier",
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -8081,6 +8264,15 @@
             "description": "Measure identifier",
             "in": "path",
             "name": "item_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Dataset identifier",
+            "in": "path",
+            "name": "dataset_id",
             "required": true,
             "schema": {
               "type": "string"

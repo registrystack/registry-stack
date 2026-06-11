@@ -942,6 +942,8 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
         }
     }
 
+    ensure_path_parameters_defined(&mut paths);
+
     let server_url = catalog.base_url.trim_end_matches('/').to_string();
 
     json!({
@@ -976,6 +978,7 @@ fn reduce_release_artifact_to_static_contract(document: &mut Value, config: &Con
     if let Some(paths) = document.get_mut("paths").and_then(Value::as_object_mut) {
         abstract_release_paths(paths, config);
         ensure_static_release_paths(paths);
+        ensure_path_parameters_defined(paths);
     }
 
     if let Some(schemas) = document
@@ -1030,6 +1033,96 @@ fn abstract_release_path(path: &str, config: &Config) -> String {
         }
     }
     path.replace("/metadata/dcat/bregdcat-ap", "/metadata/dcat/{profile}")
+}
+
+/// OAS 3.1 requires every template variable in a path key to be
+/// defined as an `in: path` parameter. The concrete builders
+/// interpolate real dataset/entity ids so most operations carry no
+/// path parameters, and `abstract_release_paths` then rewrites the
+/// keys into templates without adding definitions (relay#110). This
+/// pass backfills any template variable not already defined at the
+/// path-item or operation level.
+fn ensure_path_parameters_defined(paths: &mut Map<String, Value>) {
+    const METHODS: [&str; 7] = ["get", "post", "put", "patch", "delete", "head", "options"];
+    for (path, item) in paths.iter_mut() {
+        let vars = path_template_variables(path);
+        if vars.is_empty() {
+            continue;
+        }
+        let Some(item) = item.as_object_mut() else {
+            continue;
+        };
+        let path_level = defined_path_parameter_names(item.get("parameters"));
+        for method in METHODS {
+            let Some(op) = item.get_mut(method).and_then(Value::as_object_mut) else {
+                continue;
+            };
+            let op_level = defined_path_parameter_names(op.get("parameters"));
+            let missing: Vec<String> = vars
+                .iter()
+                .filter(|var| !path_level.contains(*var) && !op_level.contains(*var))
+                .cloned()
+                .collect();
+            if missing.is_empty() {
+                continue;
+            }
+            let params = op
+                .entry("parameters".to_string())
+                .or_insert_with(|| json!([]));
+            if let Some(params) = params.as_array_mut() {
+                for var in missing {
+                    params.push(path_parameter(&var, path_parameter_description(&var)));
+                }
+            }
+        }
+    }
+}
+
+fn path_template_variables(path: &str) -> Vec<String> {
+    let mut vars = Vec::new();
+    let mut rest = path;
+    while let Some(start) = rest.find('{') {
+        let Some(len) = rest[start + 1..].find('}') else {
+            break;
+        };
+        vars.push(rest[start + 1..start + 1 + len].to_string());
+        rest = &rest[start + 1 + len + 1..];
+    }
+    vars
+}
+
+fn defined_path_parameter_names(parameters: Option<&Value>) -> BTreeSet<String> {
+    parameters
+        .and_then(Value::as_array)
+        .map(|params| {
+            params
+                .iter()
+                .filter(|param| param["in"] == "path")
+                .filter_map(|param| param["name"].as_str())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn path_parameter_description(name: &str) -> &'static str {
+    match name {
+        "dataset_id" => "Dataset identifier",
+        "entity" => "Entity name",
+        "id" => "Record identifier",
+        "aggregate_id" => "Aggregate identifier",
+        "item_id" => "Measure or dimension item identifier",
+        "relationship" => "Relationship name",
+        "profile" => "DCAT application profile identifier",
+        "vocab" => "Vocabulary identifier",
+        "version" => "Artefact version",
+        "claim_type" => "Claim type identifier",
+        "collection_id" => "Collection identifier",
+        "record_id" => "Catalog record identifier",
+        "offering_id" => "Evidence offering identifier",
+        "registry" => "Configured SP DCI registry adapter name.",
+        _ => "Path parameter",
+    }
 }
 
 fn ensure_static_release_paths(paths: &mut Map<String, Value>) {
@@ -1381,7 +1474,7 @@ fn security_schemes(config: &Config) -> Value {
             json!({
                 "type": "apiKey",
                 "in": "header",
-                "name": "X-Api-Key",
+                "name": "x-api-key",
                 "description": "Compatibility API-key header accepted by API-key deployments. `Authorization: Bearer` takes precedence when both headers are present.",
             }),
         );
@@ -2453,7 +2546,7 @@ fn problem_details_schema() -> Value {
             "type": format!("{}auth/missing_credential", crate::error::PROBLEM_TYPE_BASE),
             "title": "Missing credential",
             "status": 401,
-            "detail": "no credential provided in Authorization or X-Api-Key header",
+            "detail": "no credential provided in Authorization or x-api-key header",
             "code": "auth.missing_credential",
             "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
         }],
@@ -3839,6 +3932,7 @@ fn public_resource_path_item(
             "summary": summary,
             "description": description,
             "parameters": parameters,
+            "security": [],
             "responses": {
                 "200": {
                     "description": "Successful response",
@@ -4734,7 +4828,7 @@ mod tests {
         );
         assert_eq!(
             api_key_doc["components"]["securitySchemes"]["apiKeyAuth"]["name"],
-            "X-Api-Key"
+            "x-api-key"
         );
 
         config.auth.mode = AuthMode::Oidc;
@@ -4747,6 +4841,58 @@ mod tests {
                 .expect("bearer description")
                 .contains("OIDC/OAuth2 bearer JWT")
         );
+    }
+
+    fn assert_path_parameters_defined(doc: &Value) {
+        const METHODS: [&str; 7] = ["get", "post", "put", "patch", "delete", "head", "options"];
+        let paths = doc["paths"].as_object().expect("paths object");
+        for (path, item) in paths {
+            let vars = path_template_variables(path);
+            if vars.is_empty() {
+                continue;
+            }
+            let item = item.as_object().expect("path item object");
+            let path_level = defined_path_parameter_names(item.get("parameters"));
+            for method in METHODS {
+                let Some(op) = item.get(method) else { continue };
+                let op_level = defined_path_parameter_names(op.get("parameters"));
+                for var in &vars {
+                    assert!(
+                        path_level.contains(var) || op_level.contains(var),
+                        "{path} {method} does not define path parameter {{{var}}}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn served_document_defines_all_path_parameters() {
+        let config = load_example_config();
+        let doc = openapi_document(&catalog_with_individual(), &config);
+        assert_path_parameters_defined(&doc);
+    }
+
+    #[test]
+    fn release_artifact_defines_all_path_parameters() {
+        let config = load_example_config();
+        let mut doc = openapi_document(&catalog_with_individual(), &config);
+        reduce_release_artifact_to_static_contract(&mut doc, &config);
+        assert_path_parameters_defined(&doc);
+    }
+
+    #[test]
+    fn docs_shell_routes_advertise_public_security() {
+        let config = load_example_config();
+        let mut doc = openapi_document(&catalog_with_individual(), &config);
+        reduce_release_artifact_to_static_contract(&mut doc, &config);
+        for path in ["/docs", "/docs/scalar.js", "/openapi.json"] {
+            assert_eq!(
+                doc["paths"][path]["get"]["security"],
+                json!([]),
+                "{path} should advertise security: []"
+            );
+        }
     }
 
     #[test]

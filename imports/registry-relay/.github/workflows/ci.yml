@@ -150,6 +150,12 @@ jobs:
             scripts/check-openapi-contract.sh
           fi
 
+      - name: Lint OpenAPI artifact (spec validity)
+        # The committed artifact is the frozen contract; freezing a
+        # document standard tooling rejects undermines the freeze
+        # (relay#110). Errors fail; warnings do not.
+        run: npx --yes @redocly/cli@2.32.2 lint openapi/registry-relay.openapi.json
+
       - name: Export sample DCAT-AP catalog
         env:
           REGISTRY_RELAY_EXPORT_DCAT_AP_PATH: target/dcat-ap/catalog.dcat-ap.jsonld
