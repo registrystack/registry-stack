@@ -196,11 +196,13 @@ Each contains only a `README.md` that marks it as a placeholder pending official
 ## v0 caveats
 
 Registry Manifest is at v0.1.
-The manifest schema version `registry-manifest/v1` is enforced in code, but the schema
-itself may still change between v0 releases.
+The manifest schema version `registry-manifest/v1` is enforced in code.
+Manifest-owned formats freeze at beta, including the root manifest schema,
+profile descriptor schema, generated artifact formats, codelists, and the static
+publication bundle format.
 Profile fixtures in `profiles/` are non-normative examples.
-The static publication bundle format (including `index.json` schema version
-`registry-manifest-index/v1`) is not yet a stable contract.
+The static publication bundle format includes `index.json` schema version
+`registry-manifest-index/v1`.
 
 The test suite includes golden-fixture assertions for the older example profiles and a
 shared CPSV-AP fixture contract used by Atlas service-first discovery tests.
