@@ -139,6 +139,19 @@ Use the wrapper for dependency policy checks. It installs and runs the pinned
 `cargo-deny` version expected by `deny.toml`, so older global installs do not
 break local or CI verification.
 
+Run the first-push preflight before opening or updating PRs that touch Rust,
+Cargo features, Dockerfiles, workflows, perf config, or companion repository
+refs:
+
+```bash
+just ci-preflight
+```
+
+The preflight stages a temporary workspace, checks out Platform and Crosswalk at
+the workflow-pinned refs, then runs locked Cargo metadata and check commands.
+It catches `Cargo.lock` drift and companion-ref skew before the heavyweight CI
+jobs reach Docker, perf, or security scans.
+
 Registry Notary depends on sibling `../registry-platform` path crates. CI checks
 out `registry-platform` at `REGISTRY_PLATFORM_REF` beside this repository before
 running Cargo jobs. Private platform checkouts require a repository secret named

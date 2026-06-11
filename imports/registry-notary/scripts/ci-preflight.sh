@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+tmp_root=""
+
+cleanup() {
+  if [[ -n "${tmp_root}" && "${CI_PREFLIGHT_KEEP_WORKSPACE:-0}" != "1" ]]; then
+    rm -rf "${tmp_root}"
+  elif [[ -n "${tmp_root}" ]]; then
+    echo "==> registry-notary: kept preflight workspace at ${tmp_root}"
+  fi
+}
+trap cleanup EXIT
+
+fail() {
+  echo "registry-notary CI preflight failed: $*" >&2
+  exit 2
+}
+
+run() {
+  echo "==> registry-notary: $*"
+  "$@"
+}
+
+require_tool() {
+  command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
+}
+
+require_tool cargo
+require_tool git
+require_tool python3
+require_tool rsync
+
+read_workflow_ref_config() {
+  python3 - "$repo_root" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv[1])
+workflow_dir = root / ".github" / "workflows"
+keys = (
+    "REGISTRY_PLATFORM_REPOSITORY",
+    "REGISTRY_PLATFORM_REF",
+    "CROSSWALK_REPOSITORY",
+    "CROSSWALK_REF",
+)
+values = {key: set() for key in keys}
+
+for path in sorted(workflow_dir.glob("*.yml")):
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        for key in keys:
+            match = re.match(rf"^{key}\s*:\s*(.+)$", stripped)
+            if match:
+                values[key].add(match.group(1).strip().strip("'\""))
+
+for key, seen in values.items():
+    if not seen:
+        raise SystemExit(f"missing {key} in .github/workflows/*.yml")
+    if len(seen) != 1:
+        rendered = ", ".join(sorted(seen))
+        raise SystemExit(f"inconsistent {key} values in workflows: {rendered}")
+    value = next(iter(seen))
+    if key.endswith("_REF") and not re.fullmatch(r"[0-9a-f]{40}", value):
+        raise SystemExit(f"{key} must be a full commit SHA, got {value!r}")
+    print(f"{key}={value}")
+PY
+}
+
+registry_platform_repository=""
+registry_platform_ref=""
+crosswalk_repository=""
+crosswalk_ref=""
+
+while IFS='=' read -r key value; do
+  case "$key" in
+    REGISTRY_PLATFORM_REPOSITORY) registry_platform_repository="$value" ;;
+    REGISTRY_PLATFORM_REF) registry_platform_ref="$value" ;;
+    CROSSWALK_REPOSITORY) crosswalk_repository="$value" ;;
+    CROSSWALK_REF) crosswalk_ref="$value" ;;
+  esac
+done < <(read_workflow_ref_config)
+
+checkout_ref() {
+  local label="$1"
+  local env_name="$2"
+  local default_source="$3"
+  local repository="$4"
+  local ref="$5"
+  local destination="$6"
+  local source="${!env_name:-$default_source}"
+  local clone_source=""
+
+  if [[ -d "${source}/.git" ]] && git -C "$source" cat-file -e "${ref}^{commit}" 2>/dev/null; then
+    clone_source="$source"
+  else
+    clone_source="https://github.com/${repository}.git"
+  fi
+
+  echo "==> registry-notary: checking out ${label} ${ref} from ${clone_source}"
+  if ! git clone --quiet --no-checkout "$clone_source" "$destination"; then
+    fail "could not clone ${label} from ${clone_source}; set ${env_name} to a checkout containing ${ref}"
+  fi
+  if ! git -C "$destination" checkout --quiet --detach "$ref"; then
+    fail "could not checkout ${label} ref ${ref}; set ${env_name} to a checkout containing that commit"
+  fi
+  [[ -f "${destination}/Cargo.toml" ]] || fail "${label} checkout is missing Cargo.toml"
+}
+
+tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/registry-notary-ci-preflight.XXXXXX")"
+work_root="${tmp_root}/registry-notary"
+mkdir -p "$work_root"
+
+run rsync -a \
+  --exclude '/.git' \
+  --exclude '/target' \
+  "${repo_root}/" \
+  "${work_root}/"
+
+checkout_ref \
+  "registry-platform" \
+  "REGISTRY_PLATFORM_SOURCE_DIR" \
+  "${repo_root}/../registry-platform" \
+  "$registry_platform_repository" \
+  "$registry_platform_ref" \
+  "${tmp_root}/registry-platform"
+
+checkout_ref \
+  "crosswalk" \
+  "CROSSWALK_SOURCE_DIR" \
+  "${repo_root}/../cel-mapping" \
+  "$crosswalk_repository" \
+  "$crosswalk_ref" \
+  "${tmp_root}/cel-mapping"
+
+cd "$work_root"
+run cargo metadata --locked --all-features --format-version 1 >/dev/null
+run cargo check --locked --workspace --all-features

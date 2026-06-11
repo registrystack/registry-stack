@@ -63,8 +63,12 @@ container-security:
 security:
     ./scripts/check-security.sh
 
+# Run the first-push CI preflight against workflow-pinned companion refs.
+ci-preflight:
+    ./scripts/ci-preflight.sh
+
 # Run the full local CI gate.
-ci: fmt-check lint-default lint test-default test deny openapi-check exposure-check security
+ci: ci-preflight fmt-check lint-default lint test-default test deny openapi-check exposure-check security
 
 # Run the development server with a config file.
 # Usage: just run
