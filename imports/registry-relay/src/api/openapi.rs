@@ -55,7 +55,9 @@ where
 pub fn release_artifact_document(config: &Config, registry: &EntityRegistry) -> Value {
     let visible_entity_ids = all_metadata_entity_ids(config);
     let catalog = catalog_document_for_entity_ids(config, registry, &visible_entity_ids);
-    openapi_document(&catalog, config)
+    let mut document = openapi_document(&catalog, config);
+    reduce_release_artifact_to_static_contract(&mut document, config);
+    document
 }
 
 async fn openapi(runtime: RuntimeSnapshot, principal: Option<Extension<Principal>>) -> Response {
@@ -968,6 +970,233 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
             "securitySchemes": security_schemes(config),
         },
     })
+}
+
+fn reduce_release_artifact_to_static_contract(document: &mut Value, config: &Config) {
+    if let Some(paths) = document.get_mut("paths").and_then(Value::as_object_mut) {
+        abstract_release_paths(paths, config);
+        ensure_static_release_paths(paths);
+    }
+
+    if let Some(schemas) = document
+        .get_mut("components")
+        .and_then(Value::as_object_mut)
+        .and_then(|components| components.get_mut("schemas"))
+        .and_then(Value::as_object_mut)
+    {
+        schemas
+            .entry("DidDocument".to_string())
+            .or_insert_with(|| generic_object_schema("DID Document."));
+        schemas
+            .entry("JsonSchemaDocument".to_string())
+            .or_insert_with(|| generic_object_schema("Published JSON Schema document."));
+        schemas
+            .entry("JsonLdContext".to_string())
+            .or_insert_with(|| generic_object_schema("Published JSON-LD context document."));
+    }
+}
+
+fn abstract_release_paths(paths: &mut Map<String, Value>, config: &Config) {
+    let concrete_paths = std::mem::take(paths);
+    for (path, item) in concrete_paths {
+        paths
+            .entry(abstract_release_path(&path, config))
+            .or_insert(item);
+    }
+}
+
+fn abstract_release_path(path: &str, config: &Config) -> String {
+    let mut path = path.to_string();
+    for dataset in &config.datasets {
+        path = path.replace(
+            &format!("/v1/datasets/{}", dataset.id),
+            "/v1/datasets/{dataset_id}",
+        );
+        for entity in &dataset.entities {
+            path = path.replace(
+                &format!("/entities/{}/", entity.name),
+                "/entities/{entity}/",
+            );
+            if path.ends_with(&format!("/entities/{}", entity.name)) {
+                path = path.replace(&format!("/entities/{}", entity.name), "/entities/{entity}");
+            }
+            for relationship in &entity.relationships {
+                path = path.replace(
+                    &format!("/relationships/{}", relationship.name),
+                    "/relationships/{relationship}",
+                );
+            }
+        }
+    }
+    path.replace("/metadata/dcat/bregdcat-ap", "/metadata/dcat/{profile}")
+}
+
+fn ensure_static_release_paths(paths: &mut Map<String, Value>) {
+    paths.entry("/openapi.json".to_string()).or_insert_with(|| {
+        public_resource_path_item(
+            "get_openapi",
+            "Instance-specific OpenAPI document",
+            "Returns the OpenAPI document for the running instance.",
+            "application/json",
+            "JsonSchemaDocument",
+            Vec::new(),
+        )
+    });
+    paths.entry("/docs".to_string()).or_insert_with(|| {
+        public_resource_path_item(
+            "get_docs",
+            "Scalar API reference",
+            "Serves the browser API reference shell.",
+            "text/html",
+            "JsonLdContext",
+            Vec::new(),
+        )
+    });
+    paths
+        .entry("/docs/scalar.js".to_string())
+        .or_insert_with(|| {
+            public_resource_path_item(
+                "get_docs_scalar_bundle",
+                "Scalar JavaScript bundle",
+                "Serves the vendored Scalar browser bundle.",
+                "application/javascript",
+                "JsonLdContext",
+                Vec::new(),
+            )
+        });
+    paths
+        .entry("/metadata/dcat/{profile}".to_string())
+        .or_insert_with(|| {
+            jsonld_path_item_with_params(
+                "get_metadata_dcat_profile",
+                "Profiled DCAT catalog (JSON-LD)",
+                "Returns the visible metadata catalog in a supported DCAT application profile.",
+                "Profiled DCAT JSON-LD catalog",
+                vec![path_parameter(
+                    "profile",
+                    "DCAT application profile identifier",
+                )],
+            )
+        });
+    paths
+        .entry("/metadata/datasets/{dataset_id}/entities".to_string())
+        .or_insert_with(|| {
+            path_item_with_params(
+                "get",
+                "List dataset entities",
+                "MetadataDataset",
+                vec![path_parameter("dataset_id", "Dataset identifier")],
+            )
+        });
+    paths
+        .entry("/metadata/datasets/{dataset_id}/entities/{entity}".to_string())
+        .or_insert_with(|| {
+            path_item_with_params(
+                "get",
+                "Metadata entity",
+                "MetadataDataset",
+                vec![
+                    path_parameter("dataset_id", "Dataset identifier"),
+                    path_parameter("entity", "Entity identifier"),
+                ],
+            )
+        });
+    paths
+        .entry("/metadata/datasets/{dataset_id}/entities/{entity}/schema".to_string())
+        .or_insert_with(|| {
+            path_item_with_params(
+                "get",
+                "Metadata entity schema",
+                "JsonSchemaDocument",
+                vec![
+                    path_parameter("dataset_id", "Dataset identifier"),
+                    path_parameter("entity", "Entity identifier"),
+                ],
+            )
+        });
+    paths
+        .entry("/metadata/datasets/{dataset_id}/entities/{entity}/shacl".to_string())
+        .or_insert_with(|| {
+            public_resource_path_item(
+                "get_metadata_entity_shacl",
+                "Metadata entity SHACL",
+                "Returns the SHACL shape for one metadata entity.",
+                "text/turtle",
+                "JsonLdContext",
+                vec![
+                    path_parameter("dataset_id", "Dataset identifier"),
+                    path_parameter("entity", "Entity identifier"),
+                ],
+            )
+        });
+    paths
+        .entry("/metadata/schema/{dataset_id}/{entity}/schema.json".to_string())
+        .or_insert_with(|| {
+            public_resource_path_item(
+                "get_metadata_entity_schema_json",
+                "Entity JSON Schema",
+                "Returns a URL-stable JSON Schema for one entity.",
+                "application/schema+json",
+                "JsonSchemaDocument",
+                vec![
+                    path_parameter("dataset_id", "Dataset identifier"),
+                    path_parameter("entity", "Entity identifier"),
+                ],
+            )
+        });
+    paths
+        .entry("/metadata/shacl".to_string())
+        .or_insert_with(|| {
+            public_resource_path_item(
+                "get_metadata_shacl",
+                "Metadata SHACL shapes",
+                "Returns the visible metadata SHACL bundle.",
+                "text/turtle",
+                "JsonLdContext",
+                Vec::new(),
+            )
+        });
+    paths
+        .entry("/metadata/profiles".to_string())
+        .or_insert_with(|| {
+            path_item_with_params(
+                "get",
+                "List metadata profiles",
+                "MetadataDatasetList",
+                Vec::new(),
+            )
+        });
+    paths
+        .entry("/metadata/profiles/{profile}".to_string())
+        .or_insert_with(|| {
+            path_item_with_params(
+                "get",
+                "Metadata profile",
+                "MetadataDataset",
+                vec![path_parameter("profile", "Profile identifier")],
+            )
+        });
+    paths
+        .entry("/metadata/ogc/records".to_string())
+        .or_insert_with(|| {
+            path_item_with_params(
+                "get",
+                "Metadata OGC records",
+                "MetadataCatalogDocument",
+                Vec::new(),
+            )
+        });
+    paths
+        .entry("/metadata/ogc/records/{record_id}".to_string())
+        .or_insert_with(|| {
+            path_item_with_params(
+                "get",
+                "Metadata OGC record",
+                "MetadataDataset",
+                vec![path_parameter("record_id", "Record identifier")],
+            )
+        });
+    insert_provenance_paths(paths);
 }
 
 fn provenance_enabled(config: &Config) -> bool {

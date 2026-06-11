@@ -15,12 +15,15 @@ mkdir -p "$WORK_DIR"
 
 cargo run -q --all-features -- openapi --config "$REFERENCE_CONFIG" > "$GENERATED"
 
-python3 - "$GENERATED" <<'PY'
+python3 - "$SPEC_PATH" "$GENERATED" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+committed = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+generated = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+if committed != generated:
+    raise SystemExit("generated OpenAPI differs from committed baseline")
 PY
 
 if [[ -z "$BASE_REF" ]]; then
@@ -40,6 +43,11 @@ fi
 
 if ! git cat-file -e "$BASE_REF:$SPEC_PATH" 2>/dev/null; then
     echo "OpenAPI spec did not exist at '$BASE_REF'; skipped breaking-change diff"
+    exit 0
+fi
+
+if ! git cat-file -e "$BASE_REF:$REFERENCE_CONFIG" 2>/dev/null; then
+    echo "OpenAPI reference config did not exist at '$BASE_REF'; skipped bootstrap breaking-change diff"
     exit 0
 fi
 
