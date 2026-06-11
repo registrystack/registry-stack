@@ -26,7 +26,75 @@ standards: {}  # optional, feature-gated adapters
 
 Unknown fields are rejected for most blocks. Config validation runs after YAML parsing and checks ids, scopes, table/entity references, filter references, aggregate references, env var presence, and vocabulary prefixes.
 
-A minimal deployment needs only `server` (a listener), `auth` (one auth mode), and at least one entry in `datasets`. Every other block is optional. See [config/example.yaml](../config/example.yaml) for a complete, working starting point; the sections below document each block in full.
+A minimal deployment needs `server` (a listener), `catalog` (public metadata base), `auth` (one auth mode), and at least one entry in `datasets`. Every other root block is optional. This example shows the required shape. For a runnable starting point, use `config/example.yaml`; env-backed API key configs also need a governed `fingerprint.commitment` that matches the configured fingerprint, which must currently be generated out of band.
+
+```yaml
+server:
+  bind: 127.0.0.1:8080
+
+catalog:
+  title: Example Registry Relay
+  base_url: http://127.0.0.1:8080
+  publisher: Example Ministry
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: demo_client
+      fingerprint:
+        provider: env
+        name: API_KEY_HASH
+        commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
+      scopes:
+        - people:metadata
+        - people:rows
+
+datasets:
+  - id: people
+    title: People registry
+    description: Demo people records
+    owner: Example Ministry
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    tables:
+      - id: people_table
+        source:
+          type: file
+          path: ./data/people.csv
+          format:
+            csv:
+              header_row: 1
+        primary_key: person_id
+        schema:
+          strict: true
+          fields:
+            - name: person_id
+              type: string
+              nullable: false
+            - name: name
+              type: string
+              nullable: false
+    entities:
+      - name: person
+        table: people_table
+        fields:
+          - name: person_id
+          - name: name
+        access:
+          metadata_scope: people:metadata
+          aggregate_scope: people:metadata
+          read_scope: people:rows
+        api:
+          default_limit: 50
+          max_limit: 100
+```
+
+Replace the placeholder `commitment` with the governed commitment for the `API_KEY_HASH` value.
+The `API_KEY_HASH` environment variable itself must contain a fingerprint in the form
+`sha256:<64 lowercase hex chars>`.
+
+See [config/example.yaml](../config/example.yaml) for a larger working starting point; the sections below document each block in full.
 
 ## Instance
 
@@ -447,7 +515,11 @@ datasets:
     entities: []
 ```
 
-`sensitivity`, `access_rights`, and `update_frequency` are catalog metadata. They also make review conversations concrete; do not leave them vague in production configs.
+`sensitivity`, `access_rights`, and `update_frequency` are catalog metadata. They also make review conversations concrete; do not leave them vague in production configs. Allowed values:
+
+- `sensitivity`: `public`, `internal`, `personal`, `confidential`, or `secret`.
+- `access_rights`: `public`, `restricted`, or `non_public`.
+- `update_frequency`: `continuous`, `daily`, `weekly`, `termly`, `monthly`, `quarterly`, `annual`, `irregular`, `as_needed`, or `unknown`.
 
 `defaults` is optional. It may provide `materialization` and `refresh` defaults for tables in the same dataset. Source configuration stays table-level.
 
