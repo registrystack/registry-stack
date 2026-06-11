@@ -73,10 +73,10 @@ exceptions are recorded in `security/exposure-manifest.json` (per-entry
 deliberately unversioned (no `/v1/` prefix):
 
 - **`/credentials/{*vct_path}`**: per SD-JWT VC type-metadata dereference, a
-  client resolves credential type metadata by forming
-  `https://{host}/{vct_path}` from the `vct` claim. The server path must match
-  the VCT URL path component exactly. Adding `/v1/` would break dereference for
-  any credential whose `vct` does not include that prefix.
+  client resolves credential type metadata by dereferencing the `vct` claim
+  directly (which is `https://{host}/credentials/{vct_path}`). The server path
+  must match the VCT URL path component exactly. Adding `/v1/` would break
+  dereference for any credential whose `vct` does not include that prefix.
 - **`/.well-known/vct/{*vct_path}`**: per RFC 8615, well-known URI paths are
   determined by the protocol and cannot be prefixed or versioned.
 
@@ -98,4 +98,3 @@ This validates exposure contracts, Dockerfile secret-copy guardrails, the
 OpenAPI baseline, workflow syntax/security tooling when installed, the reviewed
 `zizmor` high-severity ratchet, gitleaks current-tree scanning, and Semgrep
 rules when installed.
-

@@ -2230,7 +2230,7 @@
     },
     "/credentials/{vct_path}": {
       "get": {
-        "description": "Returns public SD-JWT VC Type Metadata for a configured OID4VCI credential configuration whose vct exactly matches the requested absolute URL. The vct_path parameter represents the full path suffix under /credentials and may contain nested path segments. This route is intentionally unversioned and must remain at /credentials/{vct_path} (without a /v1/ prefix): per SD-JWT VC type-metadata dereference, a client resolves the credential type by forming https://{host}/{vct_path} from the vct claim, so the server path must match the vct URL path component exactly. Adding a /v1/ prefix would break dereference for any credential whose vct does not include that prefix. This route serves type metadata only and is unrelated to POST /v1/credentials (credential issuance).",
+        "description": "Returns public SD-JWT VC Type Metadata for a configured OID4VCI credential configuration whose vct exactly matches the requested absolute URL. The vct_path parameter represents the full path suffix under /credentials and may contain nested path segments. This route is intentionally unversioned and must remain at /credentials/{vct_path} (without a /v1/ prefix): per SD-JWT VC type-metadata dereference, a client resolves the credential type by dereferencing the vct claim directly (which is https://{host}/credentials/{vct_path}), so the server path must match the vct URL path component exactly. Adding a /v1/ prefix would break dereference for any credential whose vct does not include that prefix. This route serves type metadata only and is unrelated to POST /v1/credentials (credential issuance).",
         "operationId": "getSdJwtVcTypeMetadata",
         "parameters": [
           {
