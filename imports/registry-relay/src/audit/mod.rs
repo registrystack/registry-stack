@@ -188,7 +188,6 @@ pub enum EndpointKind {
     Catalog,
     Dataset,
     Schema,
-    Verify,
     Rows,
     AggregateList,
     Aggregate,
@@ -1139,7 +1138,6 @@ fn classify_dataset_endpoint(path: &str) -> EndpointKind {
         ["v1", "datasets", _dataset, "aggregates", _aggregate, "metadata"] => {
             EndpointKind::AggregateList
         }
-        ["v1", "datasets", _dataset, "entities", _entity, "verify"] => EndpointKind::Verify,
         ["v1", "datasets", _dataset, "entities", _entity, "records"] => EndpointKind::Rows,
         ["v1", "datasets", _dataset, "entities", _entity, "records", _id] => EndpointKind::Rows,
         ["v1", "datasets", _dataset, "entities", _entity, "records", _id, "relationships", _relationship] => {
@@ -1168,8 +1166,7 @@ fn infer_context_from_path(path: &str) -> AuditContextExt {
             ..AuditContextExt::default()
         },
         ["v1", "datasets", dataset, "entities", entity, "records"]
-        | ["v1", "datasets", dataset, "entities", entity, "schema"]
-        | ["v1", "datasets", dataset, "entities", entity, "verify"] => AuditContextExt {
+        | ["v1", "datasets", dataset, "entities", entity, "schema"] => AuditContextExt {
             dataset_id: Some((*dataset).to_string()),
             entity_name: Some((*entity).to_string()),
             ..AuditContextExt::default()
@@ -1248,9 +1245,11 @@ mod tests {
             classify_endpoint("/ogc/v1/datasets/civic/collections/facilities/items/FAC-1"),
             EndpointKind::OgcFeature
         );
+        // The native verify route is not mounted anywhere; its path must
+        // fall back to the generic dataset bucket instead of a dedicated kind.
         assert_eq!(
             classify_endpoint("/v1/datasets/x/entities/individual/verify"),
-            EndpointKind::Verify
+            EndpointKind::Dataset
         );
         assert_eq!(
             classify_endpoint("/evidence-offerings/person-evidence/verifications"),
