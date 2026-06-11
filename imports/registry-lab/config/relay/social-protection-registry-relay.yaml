@@ -69,7 +69,6 @@ auth:
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:aggregate
-        - social_protection_registry:rows
     - id: shared_evidence_source
       fingerprint:
         provider: env
@@ -265,9 +264,10 @@ datasets:
         access:
           metadata_scope: social_protection_registry:metadata
           aggregate_scope: social_protection_registry:aggregate
+          aggregate_only_execution: true
         disclosure_control:
-          min_cell_size: 1
-          suppression: omit
+          min_cell_size: 2
+          suppression: null
           report_suppressed_rows: true
         spatial:
           mode: admin_area
