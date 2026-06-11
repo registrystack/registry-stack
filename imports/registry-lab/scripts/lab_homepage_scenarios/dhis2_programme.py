@@ -49,6 +49,7 @@ def story() -> dict[str, Any]:
         "title": "Can a DHIS2 programme record become holder-bound evidence without exposing tracker data?",
         "short_title": "DHIS2 programme participation VC",
         "proves": "A Notary can turn DHIS2 tracker facts into evidence, preview a holder-bound VC, and reconcile later with fresh online evidence.",
+        "domain": "Health",
         "availability": "hosted",
         "intro": (
             "A programme team needs to prove that a child is active in a DHIS2 programme. "

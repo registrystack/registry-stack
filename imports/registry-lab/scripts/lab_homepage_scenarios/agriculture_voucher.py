@@ -41,6 +41,7 @@ def story() -> dict[str, Any]:
         "title": "Can a supplier check voucher evidence without exporting the agriculture workbook?",
         "short_title": "Agriculture voucher evidence",
         "proves": "Workbook-backed registries can become governed evidence APIs with positive and negative controls.",
+        "domain": "Agriculture",
         "availability": "local-only",
         "availability_note": "Runs on the local lab profile with the agriculture services started (AGRI_EVIDENCE_CLIENT_BEARER).",
         "intro": (

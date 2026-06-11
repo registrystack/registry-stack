@@ -671,7 +671,7 @@ class ScenarioPageHtmlTest(unittest.TestCase):
     """The dedicated scenario page has a chooser plus progressive story pages."""
 
     def setUp(self) -> None:
-        self.html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+        self.html = server.scenario_page_html().decode("utf-8")
 
     def test_dedicated_page_fetches_scenarios(self) -> None:
         self.assertIn("Registry Lab Scenarios", self.html)
@@ -681,7 +681,7 @@ class ScenarioPageHtmlTest(unittest.TestCase):
         self.assertIn("Choose a story to run step by step", self.html)
 
     def test_page_runs_steps_and_hides_sources_by_default(self) -> None:
-        story_html = server.scenario_page_html("Registry Lab Scenarios", "alive-proof").decode("utf-8")
+        story_html = server.scenario_page_html(scenario_id="alive-proof").decode("utf-8")
         self.assertIn("What this request will do", self.html)
         self.assertIn("Reuses from the previous step", self.html)
         self.assertIn("data-run-step", self.html)
@@ -857,40 +857,40 @@ class LabModePayloadTest(unittest.TestCase):
     # ---- scenario_page_html walkthrough rendering ----
 
     def test_scenario_page_html_renders_for_chooser(self) -> None:
-        html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+        html = server.scenario_page_html().decode("utf-8")
         self.assertIn('id="chooser"', html)
 
     def test_scenario_page_html_renders_for_story_route(self) -> None:
-        html = server.scenario_page_html("Registry Lab Scenarios", "alive-proof").decode("utf-8")
+        html = server.scenario_page_html(scenario_id="alive-proof").decode("utf-8")
         self.assertIn('const ACTIVE_SCENARIO = "alive-proof"', html)
 
     def test_chooser_cta_reads_walkthrough_when_not_runnable(self) -> None:
-        html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+        html = server.scenario_page_html().decode("utf-8")
         self.assertIn("Read the walkthrough", html)
 
     def test_chooser_cta_reads_open_story_when_runnable(self) -> None:
-        html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+        html = server.scenario_page_html().decode("utf-8")
         self.assertIn("Open story", html)
 
     def test_story_local_only_pill_style_present(self) -> None:
-        html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+        html = server.scenario_page_html().decode("utf-8")
         self.assertIn("status-pill.local_only", html)
 
     def test_story_local_only_no_run_button(self) -> None:
-        html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+        html = server.scenario_page_html().decode("utf-8")
         self.assertIn("This step runs on the local lab profile", html)
 
     def test_story_run_it_locally_block_present(self) -> None:
-        html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+        html = server.scenario_page_html().decode("utf-8")
         self.assertIn("Run this story on your machine", html)
         self.assertIn("git clone https://github.com/jeremi/registry-lab", html)
 
     def test_story_drawers_note_when_not_runnable(self) -> None:
-        html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+        html = server.scenario_page_html().decode("utf-8")
         self.assertIn("Available when the story runs on the local lab profile", html)
 
     def test_status_label_maps_local_only(self) -> None:
-        html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+        html = server.scenario_page_html().decode("utf-8")
         self.assertIn('"local_only"', html)
         self.assertIn('"Local only"', html)
 
@@ -1074,13 +1074,13 @@ class InternalRequestSourceTest(unittest.TestCase):
     # ---- JS renderRequestSource: internal branch must be present in the page HTML ----
 
     def test_scenario_page_html_contains_internal_note_branch(self) -> None:
-        html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+        html = server.scenario_page_html().decode("utf-8")
         self.assertIn("value.internal", html, "renderRequestSource must branch on value.internal")
         self.assertIn("Internal lab call.", html, "renderRequestSource must render the internal-note text")
 
     def test_scenario_page_html_internal_branch_suppresses_curl_button(self) -> None:
         # The canCurl logic must exclude internal requests.
-        html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+        html = server.scenario_page_html().decode("utf-8")
         # The combined canCurl expression must gate on !value.internal (or equivalent).
         self.assertIn("value.internal", html)
         # And the "Copy as curl" button must still appear (for public-credential paths).
@@ -1091,7 +1091,7 @@ class ScenarioPageUxTest(unittest.TestCase):
     """Post-run flow cues, screen-reader announcements, and locked-step UX."""
 
     def setUp(self) -> None:
-        self.html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+        self.html = server.scenario_page_html().decode("utf-8")
 
     def test_status_pill_has_role_status(self) -> None:
         self.assertIn('role="status"', self.html, "status pill must have role='status' for screen-reader announcements")
@@ -1113,6 +1113,217 @@ class ScenarioPageUxTest(unittest.TestCase):
 
     def test_scroll_into_view_usage_present(self) -> None:
         self.assertIn("scrollIntoView", self.html, "next step or receipt must be scrolled into view after a step completes")
+
+
+class ChooserAndMetadataTest(unittest.TestCase):
+    """Goal D: default_scenario_id, domain tags, per-story head metadata, favicon."""
+
+    def setUp(self) -> None:
+        self._saved = dict(os.environ)
+        self._config = server.enrich_config({"credentials": []})
+        self._chooser_html = server.scenario_page_html().decode("utf-8")
+        self._alive_html = server.scenario_page_html(scenario_id="alive-proof").decode("utf-8")
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._saved)
+
+    # ---- 1. Chooser hierarchy: default_scenario_id in catalogue payload ----
+
+    def test_catalogue_payload_has_default_scenario_id(self) -> None:
+        payload = server.scenario_payload(self._config)
+        self.assertEqual(payload["default_scenario_id"], "alive-proof")
+
+    def test_default_scenario_id_is_alive_proof(self) -> None:
+        payload = server.scenario_payload(self._config, lab_mode="hosted")
+        self.assertEqual(payload["default_scenario_id"], "alive-proof")
+
+    # ---- 1b. Chooser card "Start here" treatment ----
+
+    def test_chooser_has_start_here_badge(self) -> None:
+        self.assertIn("Start here", self._chooser_html)
+
+    def test_chooser_default_card_has_css_class(self) -> None:
+        self.assertIn("scenario-card--default", self._chooser_html)
+
+    def test_chooser_default_card_alive_proof_is_first(self) -> None:
+        # The JS sort logic places the default story first; verify the sort is in the template.
+        self.assertIn("default_scenario_id", self._chooser_html)
+        # The sort expression must put the default item before hosted-runnable, then local-only.
+        self.assertIn("item.id === defaultId", self._chooser_html)
+
+    # ---- 2. Badge explanation line ----
+
+    def test_chooser_has_badge_explanation(self) -> None:
+        # A line explaining the two badges must appear near the top of the chooser.
+        self.assertIn("Hosted", self._chooser_html)
+        self.assertIn("Local-only", self._chooser_html)
+        # The explanation must mention both what hosted means and what local-only means.
+        self.assertIn("browser", self._chooser_html)
+        self.assertIn("locally", self._chooser_html)
+
+    # ---- 3. Domain tags in story payloads ----
+
+    def test_civil_alive_story_has_domain(self) -> None:
+        story = server.scenario_payload(self._config, "alive-proof")["story"]
+        self.assertEqual(story["domain"], "Civil registry")
+
+    def test_wallet_vc_story_has_domain(self) -> None:
+        story = server.scenario_payload(self._config, "wallet-credential")["story"]
+        self.assertEqual(story["domain"], "Credentials")
+
+    def test_dhis2_story_has_domain(self) -> None:
+        story = server.scenario_payload(self._config, "dhis2-programme-vc")["story"]
+        self.assertEqual(story["domain"], "Health")
+
+    def test_social_aggregate_story_has_domain(self) -> None:
+        story = server.scenario_payload(self._config, "social-aggregate")["story"]
+        self.assertEqual(story["domain"], "Social protection")
+
+    def test_combined_support_story_has_domain(self) -> None:
+        story = server.scenario_payload(self._config, "combined-support")["story"]
+        self.assertEqual(story["domain"], "Social protection")
+
+    def test_agriculture_voucher_story_has_domain(self) -> None:
+        story = server.scenario_payload(self._config, "agriculture-voucher")["story"]
+        self.assertEqual(story["domain"], "Agriculture")
+
+    def test_catalogue_entries_all_have_domain(self) -> None:
+        payload = server.scenario_payload(self._config)
+        for item in payload["scenarios"]:
+            self.assertIn("domain", item, f"catalogue entry {item['id']!r} missing domain")
+            self.assertTrue(item["domain"], f"catalogue entry {item['id']!r} has empty domain")
+
+    def test_chooser_renders_domain_tag(self) -> None:
+        # domain-tag class must be defined in CSS and referenced in the renderChooser template.
+        self.assertIn("domain-tag", self._chooser_html)
+        # The JS template must reference item.domain so the value is rendered at runtime.
+        self.assertIn("item.domain", self._chooser_html)
+
+    def test_chooser_domain_tag_has_css_class(self) -> None:
+        self.assertIn(".domain-tag", self._chooser_html)
+
+    # ---- 4. Per-story head metadata ----
+
+    def test_chooser_page_has_generic_title(self) -> None:
+        self.assertIn("<title>Registry Lab Scenarios</title>", self._chooser_html)
+
+    def test_story_page_title_uses_short_title(self) -> None:
+        self.assertIn("<title>Evidence without row access · Registry Lab</title>", self._alive_html)
+
+    def test_story_page_has_meta_description(self) -> None:
+        self.assertIn('<meta name="description"', self._alive_html)
+        self.assertIn("raw civil record stays protected", self._alive_html)
+
+    def test_story_page_has_og_title(self) -> None:
+        self.assertIn('property="og:title"', self._alive_html)
+        self.assertIn("Evidence without row access", self._alive_html)
+
+    def test_story_page_has_og_description(self) -> None:
+        self.assertIn('property="og:description"', self._alive_html)
+
+    def test_story_page_has_og_type_website(self) -> None:
+        self.assertIn('property="og:type"', self._alive_html)
+        self.assertIn('"website"', self._alive_html)
+
+    def test_chooser_page_has_meta_description(self) -> None:
+        self.assertIn('<meta name="description"', self._chooser_html)
+
+    # ---- 5. Favicon ----
+
+    def test_favicon_route_returns_svg(self) -> None:
+        handler = server.LabHomepageHandler
+        # Build a minimal fake handler to call _serve_favicon_svg directly.
+        # We test via the route logic: call the helper that produces SVG bytes.
+        svg = server.favicon_svg()
+        self.assertIsInstance(svg, bytes)
+        self.assertIn(b"<svg", svg)
+
+    def test_favicon_svg_content_type(self) -> None:
+        # The route must serve image/svg+xml.
+        self.assertEqual(server.FAVICON_CONTENT_TYPE, "image/svg+xml")
+
+    def test_favicon_svg_path_registered(self) -> None:
+        # scenario_page_html must include a <link rel="icon"> pointing at /favicon.svg.
+        self.assertIn('rel="icon"', self._chooser_html)
+        self.assertIn("/favicon.svg", self._chooser_html)
+
+    def test_favicon_svg_path_on_story_page(self) -> None:
+        self.assertIn('rel="icon"', self._alive_html)
+        self.assertIn("/favicon.svg", self._alive_html)
+
+    def test_homepage_html_has_favicon_link(self) -> None:
+        home = server.homepage_html("Registry Lab").decode("utf-8")
+        self.assertIn('rel="icon"', home)
+        self.assertIn("/favicon.svg", home)
+
+    def test_handler_serves_favicon_svg_200(self) -> None:
+        # Verify the handler route exists (do_GET dispatches /favicon.svg).
+        import io
+        import http.server
+
+        class FakeSocket:
+            def makefile(self, mode):
+                return io.BytesIO(b"GET /favicon.svg HTTP/1.0\r\n\r\n")
+
+            def sendall(self, data):
+                self._sent = getattr(self, "_sent", b"") + data
+
+        sock = FakeSocket()
+        h = server.LabHomepageHandler.__new__(server.LabHomepageHandler)
+        output = io.BytesIO()
+        h.rfile = io.BytesIO(b"")
+        h.wfile = output
+        h.server = type("S", (), {"server_address": ("127.0.0.1", 8080)})()
+        h.client_address = ("127.0.0.1", 12345)
+        h.request_version = "HTTP/1.0"
+        h.command = "GET"
+        h.path = "/favicon.svg"
+        h.headers = http.server.BaseHTTPRequestHandler.MessageClass()
+        h.send_response_only = lambda code, msg=None: None
+        # Test via the dispatch method directly.
+        sent = []
+
+        def fake_send_bytes(body, ct):
+            sent.append((body, ct))
+
+        h.send_bytes = fake_send_bytes
+        h.do_GET()
+        self.assertEqual(len(sent), 1)
+        body, ct = sent[0]
+        self.assertIn(b"<svg", body)
+        self.assertIn("image/svg+xml", ct)
+
+    def test_handler_serves_favicon_ico_redirect_or_200(self) -> None:
+        # /favicon.ico must not 404: it either returns bytes or redirects.
+        import io
+        import http.server
+
+        h = server.LabHomepageHandler.__new__(server.LabHomepageHandler)
+        h.rfile = io.BytesIO(b"")
+        h.wfile = io.BytesIO()
+        h.server = type("S", (), {"server_address": ("127.0.0.1", 8080)})()
+        h.client_address = ("127.0.0.1", 12345)
+        h.request_version = "HTTP/1.0"
+        h.command = "GET"
+        h.path = "/favicon.ico"
+        h.headers = http.server.BaseHTTPRequestHandler.MessageClass()
+        sent_bytes = []
+        sent_redirects = []
+
+        def fake_send_bytes(body, ct):
+            sent_bytes.append((body, ct))
+
+        def fake_send_redirect(location):
+            sent_redirects.append(location)
+
+        h.send_bytes = fake_send_bytes
+        h.send_redirect = fake_send_redirect
+        errors = []
+        h.send_error = lambda code, *a, **kw: errors.append(code)
+        h.do_GET()
+        self.assertEqual(errors, [], "/favicon.ico must not 404")
+        self.assertTrue(len(sent_bytes) + len(sent_redirects) > 0, "/favicon.ico must respond")
 
 
 if __name__ == "__main__":

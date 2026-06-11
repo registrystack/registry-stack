@@ -30,6 +30,7 @@ def story() -> dict[str, Any]:
         "title": "Can a planner see eligibility counts without seeing household rows?",
         "short_title": "Aggregate versus row access",
         "proves": "Aggregate credentials can answer planning questions while row data remains separately governed.",
+        "domain": "Social protection",
         "availability": "local-only",
         "availability_note": "Runs on the local lab profile with the social Relay on port 4312.",
         "intro": (

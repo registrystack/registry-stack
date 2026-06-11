@@ -30,6 +30,19 @@ DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "config/lab-homepage/publ
 DEFAULT_ENV_FILE = Path(__file__).resolve().parents[1] / "config/lab-homepage/public-demo-credentials.env"
 TOKEN_SUFFIXES = ("_RAW", "_TOKEN", "_BEARER")
 
+FAVICON_CONTENT_TYPE = "image/svg+xml"
+
+
+def favicon_svg() -> bytes:
+    # Minimal on-brand monogram: "RS" in the registry blue on a white square.
+    return (
+        b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">'
+        b'<rect width="32" height="32" fill="#173b7a"/>'
+        b'<text x="16" y="22" font-family="monospace" font-size="14" font-weight="700"'
+        b' text-anchor="middle" fill="#ffffff">RS</text>'
+        b"</svg>"
+    )
+
 
 def parse_env_file(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
@@ -229,6 +242,7 @@ def homepage_html(title: str) -> bytes:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{safe_title}</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <style>
     :root {{
       color-scheme: light;
@@ -772,14 +786,20 @@ class LabHomepageHandler(BaseHTTPRequestHandler):
         if path == "/":
             self.send_bytes(homepage_html(self.config.get("title", "Registry Lab")), "text/html; charset=utf-8")
             return
+        if path == "/favicon.svg":
+            self.send_bytes(favicon_svg(), FAVICON_CONTENT_TYPE)
+            return
+        if path == "/favicon.ico":
+            self.send_redirect("/favicon.svg")
+            return
         if path == "/scenarios":
-            self.send_bytes(scenario_page_html("Registry Lab Scenarios"), "text/html; charset=utf-8")
+            self.send_bytes(scenario_page_html(), "text/html; charset=utf-8")
             return
         if path.startswith("/scenarios/"):
             scenario_id = path.removeprefix("/scenarios/").strip("/")
             if scenario_id:
                 self.send_bytes(
-                    scenario_page_html("Registry Lab Scenarios", scenario_id),
+                    scenario_page_html(scenario_id=scenario_id),
                     "text/html; charset=utf-8",
                 )
                 return
@@ -828,6 +848,12 @@ class LabHomepageHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    def send_redirect(self, location: str) -> None:
+        self.send_response(HTTPStatus.MOVED_PERMANENTLY)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def log_message(self, fmt: str, *args: object) -> None:
         print(f"{self.address_string()} - {fmt % args}", flush=True)

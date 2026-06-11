@@ -31,6 +31,7 @@ def story() -> dict[str, Any]:
         "title": "What would Maria see when an alive-status proof lands in her wallet?",
         "short_title": "Wallet credential explorer",
         "proves": "A non-developer can inspect a credential as a wallet card, while developers can inspect issuer metadata and holder binding.",
+        "domain": "Credentials",
         "availability": "hosted",
         "intro": (
             "Maria is an adult demo citizen. This scenario simulates the wallet client so the demo stays easy to run, "

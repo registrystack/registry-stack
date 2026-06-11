@@ -45,6 +45,7 @@ def scenario_payload(config: dict[str, Any], scenario_id: str | None = None, lab
                 "title": story["short_title"],
                 "full_title": story["title"],
                 "proves": story["proves"],
+                "domain": story.get("domain", ""),
                 "availability": story.get("availability", "hosted"),
                 "availability_note": story.get("availability_note", ""),
                 "steps": len(story.get("steps", [])),
@@ -103,16 +104,33 @@ def scenario_nav_link() -> str:
     return '<a href="/scenarios">Scenario demos</a>'
 
 
-def scenario_page_html(title: str = "Registry Lab Scenarios", scenario_id: str | None = None) -> bytes:
-    safe_title = html.escape(title)
+def scenario_page_html(scenario_id: str | None = None) -> bytes:
     active_scenario = json.dumps(scenario_id or "")
+    # Build page-level metadata: per-story when scenario_id is given, generic otherwise.
+    if scenario_id and scenario_id in STORY_BY_ID:
+        _story = STORY_BY_ID[scenario_id].story()
+        _short_title = _story.get("short_title") or _story.get("title", "Registry Lab")
+        _proves = _story.get("proves", "")
+        _page_title = html.escape(f"{_short_title} · Registry Lab")
+        _description = html.escape(_proves)
+        _og_title = html.escape(_short_title)
+        _head_extra = (
+            f'  <meta name="description" content="{_description}">\n'
+            f'  <meta property="og:title" content="{_og_title}">\n'
+            f'  <meta property="og:description" content="{_description}">\n'
+            f'  <meta property="og:type" content="website">\n'
+        )
+    else:
+        _page_title = "Registry Lab Scenarios"
+        _head_extra = '  <meta name="description" content="Step-by-step guided demos of governed registry services.">\n'
     return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{safe_title}</title>
-  <style>
+  <title>{_page_title}</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+{_head_extra}  <style>
     :root {{
       color-scheme: light;
       --registry-blue: #173b7a;
@@ -177,6 +195,10 @@ def scenario_page_html(title: str = "Registry Lab Scenarios", scenario_id: str |
     .availability {{ border: 1px solid var(--registry-rule); color: var(--registry-muted); display: inline-flex; font-family: var(--registry-mono); font-size: 12px; min-height: 30px; padding: 5px 8px; width: fit-content; }}
     .availability.hosted {{ background: var(--registry-ok-bg); border-color: #b7ddc9; color: var(--registry-teal); }}
     .availability.local-only {{ background: var(--registry-warn-bg); border-color: #e2b66c; color: var(--registry-amber); }}
+    .domain-tag {{ background: var(--registry-active); border: 1px solid #b7c7dd; color: var(--registry-blue); display: inline-flex; font-family: var(--registry-mono); font-size: 11px; padding: 3px 7px; width: fit-content; }}
+    .start-here-badge {{ background: var(--registry-blue); color: #ffffff; display: inline-flex; font-family: var(--registry-mono); font-size: 11px; padding: 3px 7px; width: fit-content; }}
+    .scenario-card--default {{ border-color: var(--registry-blue); }}
+    .badge-explanation {{ color: var(--registry-muted); font-size: 13px; margin: 0 0 18px; }}
     .story-setup {{ display: grid; gap: 14px; margin-bottom: 18px; padding: 18px; }}
     .local-run {{ border-top: 2px solid var(--registry-amber); }}
     .local-run .eyebrow {{ color: var(--registry-amber); }}
@@ -375,16 +397,33 @@ def scenario_page_html(title: str = "Registry Lab Scenarios", scenario_id: str |
       return (facts || []).map((fact) => `<div class="fact"><span>${{escapeHtml(fact.label)}}</span><strong>${{escapeHtml(fact.value)}}</strong></div>`).join("");
     }}
 
-    function renderChooser(items) {{
-      byId("chooser").innerHTML = `<section class="chooser-grid" aria-label="Scenario chooser">
-        ${{items.map((item) => `<article class="scenario-card">
-          <span class="availability ${{escapeHtml(item.availability)}}">${{escapeHtml(item.availability === "local-only" ? "Local only" : "Hosted")}}</span>
-          <div><h2>${{escapeHtml(item.title)}}</h2><p>${{escapeHtml(item.proves)}}</p></div>
-          ${{item.availability_note ? `<p class="card-meta">${{escapeHtml(item.availability_note)}}</p>` : ""}}
-          <p class="card-meta">${{escapeHtml(item.steps)}} steps</p>
-          <div class="actions"><a class="button primary" href="/scenarios/${{encodeURIComponent(item.id)}}">${{item.runnable ? "Open story" : "Read the walkthrough"}}</a></div>
-        </article>`).join("")}}
-      </section>`;
+    function renderChooser(items, defaultId) {{
+      // Order: default story first, then remaining hosted-runnable, then local-only walkthroughs.
+      const sorted = [
+        ...items.filter((item) => item.id === defaultId),
+        ...items.filter((item) => item.id !== defaultId && item.runnable),
+        ...items.filter((item) => item.id !== defaultId && !item.runnable),
+      ];
+      byId("chooser").innerHTML = `
+        <p class="badge-explanation">
+          <strong>Hosted</strong> stories run live in this lab from the browser.
+          <strong>Local-only</strong> stories are read-only walkthroughs here and runnable via the GitHub repo locally.
+        </p>
+        <section class="chooser-grid" aria-label="Scenario chooser">
+        ${{sorted.map((item) => {{
+          const isDefault = item.id === defaultId;
+          const cardClass = isDefault ? "scenario-card scenario-card--default" : "scenario-card";
+          return `<article class="${{cardClass}}">
+            ${{isDefault ? `<span class="start-here-badge">Start here</span>` : ""}}
+            <span class="availability ${{escapeHtml(item.availability)}}">${{escapeHtml(item.availability === "local-only" ? "Local only" : "Hosted")}}</span>
+            ${{item.domain ? `<span class="domain-tag">${{escapeHtml(item.domain)}}</span>` : ""}}
+            <div><h2>${{escapeHtml(item.title)}}</h2><p>${{escapeHtml(item.proves)}}</p></div>
+            ${{item.availability_note ? `<p class="card-meta">${{escapeHtml(item.availability_note)}}</p>` : ""}}
+            <p class="card-meta">${{escapeHtml(item.steps)}} steps</p>
+            <div class="actions"><a class="button primary" href="/scenarios/${{encodeURIComponent(item.id)}}">${{item.runnable ? "Open story" : "Read the walkthrough"}}</a></div>
+          </article>`;
+        }}).join("")}}
+        </section>`;
     }}
 
     function renderReuse(items) {{
@@ -601,7 +640,7 @@ def scenario_page_html(title: str = "Registry Lab Scenarios", scenario_id: str |
     async function start() {{
       const catalogue = await (await fetch("/api/scenarios.json", {{cache: "no-store"}})).json();
       if (!ACTIVE_SCENARIO) {{
-        renderChooser(catalogue.scenarios || []);
+        renderChooser(catalogue.scenarios || [], catalogue.default_scenario_id || "");
         wireCurlCopyButtons();
         return;
       }}

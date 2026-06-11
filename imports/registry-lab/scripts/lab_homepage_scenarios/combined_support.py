@@ -47,6 +47,7 @@ def story() -> dict[str, Any]:
         "title": "Can a caseworker ask one eligibility question across civil, social, and health evidence?",
         "short_title": "Combined support eligibility",
         "proves": "A Notary can compose subclaims from multiple authorities into one decision-ready evidence result.",
+        "domain": "Social protection",
         "availability": "local-only",
         "availability_note": "Runs on the local lab profile with the shared eligibility Notary on port 4323 (SHARED_EVIDENCE_CLIENT_BEARER).",
         "intro": (

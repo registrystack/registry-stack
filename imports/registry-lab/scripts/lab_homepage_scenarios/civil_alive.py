@@ -42,6 +42,7 @@ def story() -> dict[str, Any]:
         "title": "Can a benefits service verify Miguel is alive without reading his civil registry record?",
         "short_title": "Evidence without row access",
         "proves": "A service can request a decision-ready fact while the raw civil record stays protected.",
+        "domain": "Civil registry",
         "availability": "hosted",
         "intro": (
             "You are a benefits service reviewing Miguel's application. You need one fact: whether Miguel is alive. "
