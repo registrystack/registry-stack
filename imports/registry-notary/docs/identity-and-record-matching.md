@@ -223,13 +223,14 @@ On a match, the result carries a target reference and matching metadata:
   so the response does not expose the raw source identifier.
 - **`matching`** has `policy_id`, `method`, `confidence`, and an optional `score`.
 
-Read `confidence` carefully. It is a value configured on the binding and returned
-verbatim, so it describes the source and method, not how strong this particular
-match was. A match on a full national identifier and a match on name plus birthdate
-against the same binding report the same `confidence`, and `score` is usually
-absent. Treat `confidence` as a policy assertion about the method, not a
-measured quality of the individual match; per-match measured confidence is not
-currently reported.
+Read `confidence` carefully. It is a policy-asserted value configured on the
+source binding and matching method, and it is returned verbatim for successful
+matches against that binding. A match on a full national identifier and a match
+on name plus birthdate against the same binding report the same `confidence`,
+and `score` is usually absent. Treat `confidence` as a policy assertion about
+the method, not a measured quality of the individual match. Future measured
+match-quality fields can be added alongside it without changing this field's
+meaning.
 
 The full result envelope is documented in the
 [API reference](api-reference.md) and the

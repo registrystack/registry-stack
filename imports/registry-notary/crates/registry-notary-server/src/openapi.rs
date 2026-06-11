@@ -2093,10 +2093,22 @@ fn matching_metadata_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "policy_id": { "type": "string" },
-            "method": { "type": "string" },
-            "confidence": { "type": "string" },
-            "score": { "type": ["number", "null"] }
+            "policy_id": {
+                "type": "string",
+                "description": "Configured matching policy identifier for the source binding."
+            },
+            "method": {
+                "type": "string",
+                "description": "Configured matching method for the source binding."
+            },
+            "confidence": {
+                "type": "string",
+                "description": "Policy-asserted confidence label configured on the source binding and method. This is returned verbatim for successful matches against that binding; it is not a measured quality score for the individual match."
+            },
+            "score": {
+                "type": ["number", "null"],
+                "description": "Reserved optional per-match score. Current configured-only matching usually omits this field."
+            }
         },
         "required": ["policy_id", "method", "confidence"],
         "additionalProperties": false

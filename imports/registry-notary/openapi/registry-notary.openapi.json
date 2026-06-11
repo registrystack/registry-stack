@@ -959,15 +959,19 @@
         "additionalProperties": false,
         "properties": {
           "confidence": {
+            "description": "Policy-asserted confidence label configured on the source binding and method. This is returned verbatim for successful matches against that binding; it is not a measured quality score for the individual match.",
             "type": "string"
           },
           "method": {
+            "description": "Configured matching method for the source binding.",
             "type": "string"
           },
           "policy_id": {
+            "description": "Configured matching policy identifier for the source binding.",
             "type": "string"
           },
           "score": {
+            "description": "Reserved optional per-match score. Current configured-only matching usually omits this field.",
             "type": [
               "number",
               "null"
