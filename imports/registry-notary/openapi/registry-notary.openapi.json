@@ -284,25 +284,33 @@
       },
       "ClaimProvenance": {
         "additionalProperties": false,
+        "description": "Versioned claim provenance (registry-notary-claim-provenance/v1). PROV-mappable but not PROV-O. Requester-side identity (client, actor, subject) is deliberately absent; it lives in restricted audit only.",
         "properties": {
-          "computed_by": {
+          "derived_from": {
+            "description": "Upstream provenance records this result was derived from. Always empty in v1; reserved for additive cross-evaluation linking.",
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "generated_by": {
+            "$ref": "#/components/schemas/ProvenanceGeneratedBy"
+          },
+          "schema_version": {
+            "enum": [
+              "registry-notary-claim-provenance/v1"
+            ],
             "type": "string"
           },
-          "source_count": {
-            "minimum": 0,
-            "type": "integer"
-          },
-          "source_versions": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "type": "object"
+          "used": {
+            "$ref": "#/components/schemas/ProvenanceUsed"
           }
         },
         "required": [
-          "source_count",
-          "source_versions",
-          "computed_by"
+          "schema_version",
+          "generated_by",
+          "used",
+          "derived_from"
         ],
         "type": "object"
       },
@@ -816,6 +824,27 @@
         ],
         "type": "object"
       },
+      "EvidenceActor": {
+        "additionalProperties": false,
+        "properties": {
+          "assurance": {
+            "description": "Optional assurance level of the actor (for example an acr value).",
+            "type": "string"
+          },
+          "id_hash": {
+            "description": "Keyed-hash identifier of the actor in hmac-sha256:<hex> format. Never a raw principal value.",
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "id_hash"
+        ],
+        "type": "object"
+      },
       "EvidenceAssurance": {
         "additionalProperties": false,
         "properties": {
@@ -924,7 +953,20 @@
         "type": "object"
       },
       "EvidenceOnBehalfOf": {
-        "additionalProperties": true,
+        "additionalProperties": false,
+        "description": "Frozen minimal actor/delegation envelope. Replaces the previous free-form object; free-form payloads are rejected. Simple deployments omit on_behalf_of entirely. Production-grade delegation (OAuth token exchange / RAR / CIBA) arrives post-1.0 as an additive profile that maps the actor onto OAuth act-claim semantics via the opaque delegation_ref; the shape does not bake in a single-actor assumption.",
+        "properties": {
+          "actor": {
+            "$ref": "#/components/schemas/EvidenceActor"
+          },
+          "delegation_ref": {
+            "description": "Opaque reference to an out-of-band delegation record. Not interpreted by the envelope; the indirection point through which a later OAuth profile resolves an actor chain.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor"
+        ],
         "type": "object"
       },
       "EvidenceRelationship": {
@@ -1007,7 +1049,7 @@
             "type": "string"
           },
           "policy_id": {
-            "description": "Configured matching policy identifier for the source binding.",
+            "description": "Target-matching policy identifier for the source binding: the policy that governs how the request target is matched to a source record. Distinct from generated_by.policy_id in claim provenance, which names the evaluation policy under which the result was produced.",
             "type": "string"
           },
           "score": {
@@ -1095,6 +1137,77 @@
           "detail",
           "code",
           "request_id"
+        ],
+        "type": "object"
+      },
+      "ProvenanceGeneratedBy": {
+        "additionalProperties": false,
+        "properties": {
+          "claim_id": {
+            "type": "string"
+          },
+          "claim_version": {
+            "type": "string"
+          },
+          "evaluation_id": {
+            "type": "string"
+          },
+          "policy_hash": {
+            "description": "sha256:<hex> digest of the evaluation policy. Public in v1: a hash revealing no policy content, used to correlate the result with a policy evidence-pack.",
+            "type": "string"
+          },
+          "policy_id": {
+            "description": "Evaluation policy identifier: the policy under which this result was produced. Distinct from matching.policy_id, which names the target-matching policy for a source binding. Present for flows evaluated under a named policy (e.g. self-attestation); omitted for machine-client flows with no evaluation policy.",
+            "type": "string"
+          },
+          "policy_version": {
+            "type": "string"
+          },
+          "service_id": {
+            "description": "Identifier of the service that produced the result. Replaces the dropped computed_by field; the CCCEV renderer maps its provider agent from here.",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "claim_evaluation"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "service_id",
+          "evaluation_id",
+          "claim_id",
+          "claim_version"
+        ],
+        "type": "object"
+      },
+      "ProvenanceUsed": {
+        "additionalProperties": false,
+        "properties": {
+          "source_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source_runtimes": {
+            "description": "Minimized summaries for connectors that cross an external execution boundary (the OpenFn sidecar). The full assurance document stays in restricted audit.",
+            "items": {
+              "$ref": "#/components/schemas/SourceRuntimeSummary"
+            },
+            "type": "array"
+          },
+          "source_versions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "source_count",
+          "source_versions",
+          "source_runtimes"
         ],
         "type": "object"
       },
@@ -1250,6 +1363,54 @@
           "name",
           "display",
           "claims"
+        ],
+        "type": "object"
+      },
+      "SourceRuntimeAssurance": {
+        "additionalProperties": false,
+        "properties": {
+          "expression_hashes_verified": {
+            "type": "boolean"
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "runtime_verified": {
+            "type": "boolean"
+          },
+          "smoke_verified": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pinned",
+          "expression_hashes_verified",
+          "runtime_verified",
+          "smoke_verified"
+        ],
+        "type": "object"
+      },
+      "SourceRuntimeSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "assurance": {
+            "$ref": "#/components/schemas/SourceRuntimeAssurance"
+          },
+          "config_hash": {
+            "description": "sha256:<hex> digest of the runtime configuration.",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "openfn_sidecar"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "config_hash",
+          "assurance"
         ],
         "type": "object"
       },
@@ -3024,9 +3185,23 @@
                           "claim_version": "2026-05",
                           "disclosure": "predicate",
                           "provenance": {
-                            "computed_by": "demo.registry-notary",
-                            "source_count": 1,
-                            "source_versions": {}
+                            "derived_from": [],
+                            "generated_by": {
+                              "claim_id": "person_is_alive",
+                              "claim_version": "1",
+                              "evaluation_id": "01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
+                              "policy_hash": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                              "policy_id": "self-attestation",
+                              "policy_version": "v1",
+                              "service_id": "demo.registry-notary",
+                              "type": "claim_evaluation"
+                            },
+                            "schema_version": "registry-notary-claim-provenance/v1",
+                            "used": {
+                              "source_count": 1,
+                              "source_runtimes": [],
+                              "source_versions": {}
+                            }
                           },
                           "result_id": "01HX7Y5F31M8BZWQ2HY7P6J9FA",
                           "satisfied": true,
@@ -3672,9 +3847,23 @@
                         "score": 1.0
                       },
                       "provenance": {
-                        "computed_by": "demo.registry-notary",
-                        "source_count": 1,
-                        "source_versions": {}
+                        "derived_from": [],
+                        "generated_by": {
+                          "claim_id": "person_is_alive",
+                          "claim_version": "1",
+                          "evaluation_id": "01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
+                          "policy_hash": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                          "policy_id": "self-attestation",
+                          "policy_version": "v1",
+                          "service_id": "demo.registry-notary",
+                          "type": "claim_evaluation"
+                        },
+                        "schema_version": "registry-notary-claim-provenance/v1",
+                        "used": {
+                          "source_count": 1,
+                          "source_runtimes": [],
+                          "source_versions": {}
+                        }
                       },
                       "requester_ref": {
                         "handle": "rnref:v1:example-requester-ref",
@@ -3872,9 +4061,23 @@
                         "score": 1.0
                       },
                       "provenance": {
-                        "computed_by": "demo.registry-notary",
-                        "source_count": 1,
-                        "source_versions": {}
+                        "derived_from": [],
+                        "generated_by": {
+                          "claim_id": "person_is_alive",
+                          "claim_version": "1",
+                          "evaluation_id": "01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
+                          "policy_hash": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                          "policy_id": "self-attestation",
+                          "policy_version": "v1",
+                          "service_id": "demo.registry-notary",
+                          "type": "claim_evaluation"
+                        },
+                        "schema_version": "registry-notary-claim-provenance/v1",
+                        "used": {
+                          "source_count": 1,
+                          "source_runtimes": [],
+                          "source_versions": {}
+                        }
                       },
                       "requester_ref": {
                         "handle": "rnref:v1:example-requester-ref",

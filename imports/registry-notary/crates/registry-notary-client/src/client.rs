@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use registry_notary_core::{
     BatchEvaluateRequest, ClaimRef, CredentialIssueRequest, EvaluateRequest, EvidenceEntity,
-    EvidenceIdentifier, EvidenceRelationship, RenderEvaluationRequest, RenderRequest,
-    FORMAT_CLAIM_RESULT_JSON,
+    EvidenceIdentifier, EvidenceOnBehalfOf, EvidenceRelationship, RenderEvaluationRequest,
+    RenderRequest, FORMAT_CLAIM_RESULT_JSON,
 };
 use registry_platform_httputil::read_bounded;
 use reqwest::{Method, StatusCode, Url};
@@ -1110,7 +1110,7 @@ pub struct EvaluateBuilder<'a> {
     target: EvidenceEntity,
     requester: Option<EvidenceEntity>,
     relationship: Option<EvidenceRelationship>,
-    on_behalf_of: Option<serde_json::Value>,
+    on_behalf_of: Option<EvidenceOnBehalfOf>,
     claims: Vec<ClaimRef>,
     disclosure: Option<String>,
     format: Option<String>,
@@ -1213,12 +1213,10 @@ impl<'a> EvaluateBuilder<'a> {
         self
     }
 
-    /// Set currently unsupported delegated/on-behalf-of context explicitly.
-    ///
-    /// The server fails closed with `profile.unsupported` until an on-behalf-of
-    /// profile is implemented.
+    /// Set the delegated/on-behalf-of context using the frozen minimal actor
+    /// envelope. Simple deployments omit this entirely.
     #[must_use]
-    pub fn on_behalf_of(mut self, on_behalf_of: serde_json::Value) -> Self {
+    pub fn on_behalf_of(mut self, on_behalf_of: EvidenceOnBehalfOf) -> Self {
         self.on_behalf_of = Some(on_behalf_of);
         self
     }

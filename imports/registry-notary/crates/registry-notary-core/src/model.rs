@@ -578,6 +578,43 @@ impl<'de> Deserialize<'de> for ClaimRef {
     }
 }
 
+/// Frozen minimal actor/delegation envelope for `on_behalf_of`.
+///
+/// Replaces the previous free-form `Option<Value>`. This is the beta-frozen
+/// shape per the 2026-06-11 evidence-contracts decision record (D4): a
+/// structured actor plus an opaque `delegation_ref`. Simple deployments send no
+/// envelope at all (the field stays optional). No OAuth token exchange, RAR, or
+/// CIBA machinery is required here; those arrive post-1.0 as additive profiles
+/// (notary#180) that map the actor onto OAuth `act`-claim semantics. The shape
+/// does not bake in a single-actor assumption: an actor chain is expressed by
+/// `delegation_ref` indirection, so the additive mapping stays open.
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceOnBehalfOf {
+    pub actor: EvidenceActor,
+    /// Opaque reference to an out-of-band delegation record. The envelope does
+    /// not interpret its contents; it is the indirection point through which a
+    /// later OAuth profile resolves an actor chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation_ref: Option<String>,
+}
+
+/// A structured actor in the delegation envelope. The same vocabulary is reused
+/// for stored delegation-chain entries so wire requests and stored evaluations
+/// do not diverge.
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceActor {
+    #[serde(rename = "type")]
+    pub actor_type: String,
+    /// Keyed-hash identifier of the actor in `hmac-sha256:<hex>` format per the
+    /// D7 vocabulary. Never a raw principal value.
+    pub id_hash: String,
+    /// Optional assurance level of the actor (for example an `acr` value).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assurance: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EvaluateRequest {
@@ -588,7 +625,7 @@ pub struct EvaluateRequest {
     #[serde(default)]
     pub relationship: Option<EvidenceRelationship>,
     #[serde(default)]
-    pub on_behalf_of: Option<Value>,
+    pub on_behalf_of: Option<EvidenceOnBehalfOf>,
     pub claims: Vec<ClaimRef>,
     #[serde(default)]
     pub disclosure: Option<String>,
@@ -626,7 +663,7 @@ pub struct EvidenceRequestContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relationship: Option<EvidenceRelationship>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub on_behalf_of: Option<Value>,
+    pub on_behalf_of: Option<EvidenceOnBehalfOf>,
 }
 
 impl EvidenceRequestContext {
@@ -863,7 +900,7 @@ pub struct BatchEvaluateItemRequest {
     #[serde(default)]
     pub relationship: Option<EvidenceRelationship>,
     #[serde(default)]
-    pub on_behalf_of: Option<Value>,
+    pub on_behalf_of: Option<EvidenceOnBehalfOf>,
     #[serde(default)]
     pub purpose: Option<String>,
 }
@@ -1122,11 +1159,127 @@ pub struct MatchingMetadata {
     pub score: Option<f64>,
 }
 
+/// `schema_version` value carried by every [`ClaimProvenance`]. Frozen at beta
+/// per the 2026-06-11 evidence-contracts decision record (D3).
+pub const CLAIM_PROVENANCE_SCHEMA_VERSION: &str = "registry-notary-claim-provenance/v1";
+
+/// The `type` value for a claim-evaluation provenance record.
+pub const PROVENANCE_GENERATED_BY_CLAIM_EVALUATION: &str = "claim_evaluation";
+
+/// The `kind` of a source runtime that crosses an external execution boundary
+/// via the OpenFn sidecar.
+pub const SOURCE_RUNTIME_KIND_OPENFN_SIDECAR: &str = "openfn_sidecar";
+
+/// Versioned claim provenance attached to every public claim result.
+///
+/// This is the frozen v1 contract: a verifier can answer which evaluation
+/// produced the result, under which policy, and across which source runtime
+/// boundary. The shape is documented as PROV-mappable but is not PROV-O.
+/// Requester-side identity (client, actor, subject) is deliberately absent;
+/// those live in restricted audit, never on the public wire.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaimProvenance {
+    pub schema_version: String,
+    pub generated_by: ProvenanceGeneratedBy,
+    pub used: ProvenanceUsed,
+    /// Upstream provenance records this result was derived from. Reserved for
+    /// cross-evaluation linking; always empty in v1 but present in the shape so
+    /// adding entries later is additive.
+    pub derived_from: Vec<Value>,
+}
+
+impl ClaimProvenance {
+    /// Construct a provenance record at the current schema version with the
+    /// canonical `generated_by.type`.
+    #[must_use]
+    pub fn new(
+        service_id: String,
+        evaluation_id: String,
+        claim_id: String,
+        claim_version: String,
+        used: ProvenanceUsed,
+    ) -> Self {
+        Self {
+            schema_version: CLAIM_PROVENANCE_SCHEMA_VERSION.to_string(),
+            generated_by: ProvenanceGeneratedBy {
+                entry_type: PROVENANCE_GENERATED_BY_CLAIM_EVALUATION.to_string(),
+                service_id,
+                evaluation_id,
+                claim_id,
+                claim_version,
+                policy_id: None,
+                policy_version: None,
+                policy_hash: None,
+            },
+            used,
+            derived_from: Vec::new(),
+        }
+    }
+}
+
+/// The producing side of a claim provenance record.
+///
+/// `policy_id` here names the *evaluation* policy under which the result was
+/// produced. This is distinct from [`MatchingMetadata::policy_id`], which names
+/// the *target-matching* policy for a source binding. The two share the
+/// `policy_id` name by D7 vocabulary; the OpenAPI descriptions disambiguate
+/// them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProvenanceGeneratedBy {
+    #[serde(rename = "type")]
+    pub entry_type: String,
+    /// Identifier of the service that produced the result. Replaces the
+    /// dropped `computed_by` field; the CCCEV renderer maps its provider agent
+    /// from here.
+    pub service_id: String,
+    pub evaluation_id: String,
+    pub claim_id: String,
+    pub claim_version: String,
+    /// Evaluation policy identifier. Present for flows evaluated under a named
+    /// policy (e.g. self-attestation); omitted for machine-client flows with no
+    /// evaluation policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_version: Option<String>,
+    /// `sha256:<hex>` digest of the evaluation policy. Public in v1: a hash,
+    /// revealing no policy content, that lets a verifier correlate the result
+    /// with a policy evidence-pack later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_hash: Option<String>,
+}
+
+/// The consumed side of a claim provenance record: how many registry sources
+/// were read, their versions, and any source runtimes that crossed an external
+/// execution boundary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProvenanceUsed {
     pub source_count: usize,
     pub source_versions: BTreeMap<String, String>,
-    pub computed_by: String,
+    /// Minimized summaries for connectors that cross an external execution
+    /// boundary (the OpenFn sidecar). The full assurance document stays in
+    /// restricted audit.
+    pub source_runtimes: Vec<SourceRuntimeSummary>,
+}
+
+/// Minimized public summary of a source runtime that crossed an external
+/// execution boundary. The full assurance document (bundle id, sequence, TUF
+/// versions, signer kids, change classes, TTLs) stays in restricted audit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceRuntimeSummary {
+    pub kind: String,
+    /// `sha256:<hex>` digest of the runtime configuration.
+    pub config_hash: String,
+    pub assurance: SourceRuntimeAssurance,
+}
+
+/// Verification booleans for a source runtime summary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceRuntimeAssurance {
+    pub pinned: bool,
+    pub expression_hashes_verified: bool,
+    pub runtime_verified: bool,
+    pub smoke_verified: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1185,8 +1338,11 @@ pub struct StoredSelfAttestationMetadata {
     pub requested_claims_hash: Hashed<ClaimSet>,
     pub disclosure: ConfigMetadata,
     pub result_format: ConfigMetadata,
+    /// Delegation chain in the frozen envelope vocabulary (D4). Empty in v1;
+    /// populated post-1.0 by the additive OAuth profile (notary#180). The empty
+    /// case serializes identically to the previous placeholder.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub delegation_chain: Vec<Hashed<PrincipalIdentifier>>,
+    pub delegation_chain: Vec<EvidenceActor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_version: Option<BoundedPolicyId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1456,7 +1612,10 @@ mod tests {
                 "type": "self"
             },
             "on_behalf_of": {
-                "mode": "reserved"
+                "actor": {
+                    "type": "operator",
+                    "id_hash": "hmac-sha256:abc123"
+                }
             },
             "claims": ["person-is-alive"],
             "purpose": "https://purpose.example/social-protection"
@@ -1586,17 +1745,222 @@ mod tests {
             format: FORMAT_CLAIM_RESULT_JSON.to_string(),
             issued_at: "2026-05-31T00:00:00Z".to_string(),
             expires_at: None,
-            provenance: ClaimProvenance {
-                source_count: 1,
-                source_versions: BTreeMap::new(),
-                computed_by: "test".to_string(),
-            },
+            provenance: ClaimProvenance::new(
+                "test".to_string(),
+                "eval-1".to_string(),
+                "person-is-alive".to_string(),
+                "1.0.0".to_string(),
+                ProvenanceUsed {
+                    source_count: 1,
+                    source_versions: BTreeMap::new(),
+                    source_runtimes: Vec::new(),
+                },
+            ),
         };
 
         let value = serde_json::to_value(result).expect("result serializes");
         assert!(value.get("target_ref").is_some());
         assert!(value.get("subject_ref").is_none());
         assert!(value["target_ref"].get("id_type").is_none());
+    }
+
+    #[test]
+    fn claim_provenance_v1_serializes_merged_contract_shape() {
+        let mut source_versions = BTreeMap::new();
+        source_versions.insert("civil_registry".to_string(), "2026-05".to_string());
+        let mut provenance = ClaimProvenance::new(
+            "registry-notary".to_string(),
+            "eval_01HX".to_string(),
+            "person_is_alive".to_string(),
+            "1".to_string(),
+            ProvenanceUsed {
+                source_count: 1,
+                source_versions,
+                source_runtimes: vec![SourceRuntimeSummary {
+                    kind: SOURCE_RUNTIME_KIND_OPENFN_SIDECAR.to_string(),
+                    config_hash: "sha256:abc123".to_string(),
+                    assurance: SourceRuntimeAssurance {
+                        pinned: true,
+                        expression_hashes_verified: true,
+                        runtime_verified: true,
+                        smoke_verified: true,
+                    },
+                }],
+            },
+        );
+        provenance.generated_by.policy_id = Some("self-attestation".to_string());
+        provenance.generated_by.policy_version = Some("v1".to_string());
+        provenance.generated_by.policy_hash = Some("sha256:def456".to_string());
+
+        let value = serde_json::to_value(&provenance).expect("provenance serializes");
+
+        assert_eq!(
+            value["schema_version"],
+            json!("registry-notary-claim-provenance/v1")
+        );
+        let generated_by = &value["generated_by"];
+        assert_eq!(generated_by["type"], json!("claim_evaluation"));
+        assert_eq!(generated_by["service_id"], json!("registry-notary"));
+        assert_eq!(generated_by["evaluation_id"], json!("eval_01HX"));
+        assert_eq!(generated_by["claim_id"], json!("person_is_alive"));
+        assert_eq!(generated_by["claim_version"], json!("1"));
+        assert_eq!(generated_by["policy_id"], json!("self-attestation"));
+        assert_eq!(generated_by["policy_version"], json!("v1"));
+        assert_eq!(generated_by["policy_hash"], json!("sha256:def456"));
+
+        let used = &value["used"];
+        assert_eq!(used["source_count"], json!(1));
+        assert_eq!(used["source_versions"]["civil_registry"], json!("2026-05"));
+        let runtime = &used["source_runtimes"][0];
+        assert_eq!(runtime["kind"], json!("openfn_sidecar"));
+        assert_eq!(runtime["config_hash"], json!("sha256:abc123"));
+        assert_eq!(runtime["assurance"]["pinned"], json!(true));
+        assert_eq!(
+            runtime["assurance"]["expression_hashes_verified"],
+            json!(true)
+        );
+        assert_eq!(runtime["assurance"]["runtime_verified"], json!(true));
+        assert_eq!(runtime["assurance"]["smoke_verified"], json!(true));
+
+        assert_eq!(value["derived_from"], json!([]));
+    }
+
+    #[test]
+    fn claim_provenance_v1_round_trips() {
+        let provenance = ClaimProvenance::new(
+            "registry-notary".to_string(),
+            "eval_01HX".to_string(),
+            "person_is_alive".to_string(),
+            "1".to_string(),
+            ProvenanceUsed {
+                source_count: 2,
+                source_versions: BTreeMap::new(),
+                source_runtimes: Vec::new(),
+            },
+        );
+        let value = serde_json::to_value(&provenance).expect("serializes");
+        let parsed: ClaimProvenance =
+            serde_json::from_value(value).expect("provenance round-trips");
+        assert_eq!(parsed.schema_version, CLAIM_PROVENANCE_SCHEMA_VERSION);
+        assert_eq!(parsed.used.source_count, 2);
+        assert!(parsed.generated_by.policy_id.is_none());
+    }
+
+    #[test]
+    fn claim_provenance_omits_computed_by_and_requester_side_fields() {
+        let provenance = ClaimProvenance::new(
+            "registry-notary".to_string(),
+            "eval_01HX".to_string(),
+            "claim".to_string(),
+            "1".to_string(),
+            ProvenanceUsed {
+                source_count: 0,
+                source_versions: BTreeMap::new(),
+                source_runtimes: Vec::new(),
+            },
+        );
+        let value = serde_json::to_value(&provenance).expect("serializes");
+        let text = value.to_string();
+        assert!(
+            !text.contains("computed_by"),
+            "computed_by must be gone from the provenance wire shape"
+        );
+        for forbidden in ["client", "actor", "subject"] {
+            assert!(
+                value.get(forbidden).is_none()
+                    && value["generated_by"].get(forbidden).is_none()
+                    && value["used"].get(forbidden).is_none(),
+                "requester-side field {forbidden} must not appear in claim provenance"
+            );
+        }
+    }
+
+    #[test]
+    fn on_behalf_of_envelope_serializes_and_round_trips() {
+        let envelope = EvidenceOnBehalfOf {
+            actor: EvidenceActor {
+                actor_type: "service_account".to_string(),
+                id_hash: "hmac-sha256:abc123".to_string(),
+                assurance: Some("urn:example:loa:substantial".to_string()),
+            },
+            delegation_ref: Some("urn:delegation:42".to_string()),
+        };
+        let value = serde_json::to_value(&envelope).expect("envelope serializes");
+        assert_eq!(value["actor"]["type"], json!("service_account"));
+        assert_eq!(value["actor"]["id_hash"], json!("hmac-sha256:abc123"));
+        assert_eq!(
+            value["actor"]["assurance"],
+            json!("urn:example:loa:substantial")
+        );
+        assert_eq!(value["delegation_ref"], json!("urn:delegation:42"));
+
+        let parsed: EvidenceOnBehalfOf =
+            serde_json::from_value(value).expect("envelope round-trips");
+        assert_eq!(parsed.actor.actor_type, "service_account");
+        assert_eq!(parsed.delegation_ref.as_deref(), Some("urn:delegation:42"));
+    }
+
+    #[test]
+    fn on_behalf_of_minimal_envelope_omits_optional_fields() {
+        let envelope = EvidenceOnBehalfOf {
+            actor: EvidenceActor {
+                actor_type: "operator".to_string(),
+                id_hash: "hmac-sha256:def456".to_string(),
+                assurance: None,
+            },
+            delegation_ref: None,
+        };
+        let value = serde_json::to_value(&envelope).expect("envelope serializes");
+        assert!(value.get("delegation_ref").is_none());
+        assert!(value["actor"].get("assurance").is_none());
+    }
+
+    #[test]
+    fn on_behalf_of_rejects_free_form_payloads() {
+        let legacy = json!({ "delegator": "did:example:123", "scope": "read" });
+        let err = serde_json::from_value::<EvidenceOnBehalfOf>(legacy)
+            .expect_err("free-form on_behalf_of must be rejected");
+        let message = err.to_string();
+        assert!(
+            message.contains("unknown field") || message.contains("missing field"),
+            "rejection should be a schema mismatch, got: {message}"
+        );
+    }
+
+    #[test]
+    fn on_behalf_of_rejects_unknown_actor_field() {
+        let payload = json!({
+            "actor": {
+                "type": "operator",
+                "id_hash": "hmac-sha256:def456",
+                "raw_id": "leaked"
+            }
+        });
+        let err = serde_json::from_value::<EvidenceOnBehalfOf>(payload)
+            .expect_err("unknown actor field must be rejected");
+        assert!(err.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn evaluate_request_accepts_envelope_and_rejects_loose_json() {
+        let accepted = serde_json::from_value::<EvaluateRequest>(json!({
+            "target": { "type": "Person", "identifiers": [{ "scheme": "id", "value": "x" }] },
+            "claims": ["person_is_alive"],
+            "on_behalf_of": {
+                "actor": { "type": "operator", "id_hash": "hmac-sha256:abc" }
+            }
+        }));
+        assert!(accepted.is_ok(), "structured envelope must be accepted");
+
+        let rejected = serde_json::from_value::<EvaluateRequest>(json!({
+            "target": { "type": "Person", "identifiers": [{ "scheme": "id", "value": "x" }] },
+            "claims": ["person_is_alive"],
+            "on_behalf_of": { "anything": "goes" }
+        }));
+        assert!(
+            rejected.is_err(),
+            "free-form on_behalf_of must be rejected at request level"
+        );
     }
 
     #[test]

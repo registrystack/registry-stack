@@ -77,11 +77,17 @@ fn claim_result(claim_id: &str, value: serde_json::Value) -> ClaimResultView {
         format: registry_notary_core::FORMAT_SD_JWT_VC.to_string(),
         issued_at: "2026-01-01T00:00:00Z".to_string(),
         expires_at: None,
-        provenance: ClaimProvenance {
-            source_count: 1,
-            source_versions: BTreeMap::new(),
-            computed_by: "bench".to_string(),
-        },
+        provenance: ClaimProvenance::new(
+            "bench".to_string(),
+            "eval-bench".to_string(),
+            "claim".to_string(),
+            "1".to_string(),
+            registry_notary_core::ProvenanceUsed {
+                source_count: 1,
+                source_versions: BTreeMap::new(),
+                source_runtimes: Vec::new(),
+            },
+        ),
     }
 }
 

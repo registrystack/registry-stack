@@ -730,11 +730,17 @@ mod tests {
             format: "json".to_string(),
             issued_at: "2026-05-23T00:00:00Z".to_string(),
             expires_at: None,
-            provenance: ClaimProvenance {
-                source_count: 0,
-                source_versions: BTreeMap::new(),
-                computed_by: "test".to_string(),
-            },
+            provenance: ClaimProvenance::new(
+                "test".to_string(),
+                "eval-test".to_string(),
+                "claim".to_string(),
+                "1".to_string(),
+                crate::model::ProvenanceUsed {
+                    source_count: 0,
+                    source_versions: BTreeMap::new(),
+                    source_runtimes: Vec::new(),
+                },
+            ),
         }
     }
 
