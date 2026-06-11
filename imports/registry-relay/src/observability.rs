@@ -506,7 +506,6 @@ fn endpoint_kind_from_pattern(pattern: &str) -> EndpointKind {
         }
         "/v1/datasets/{dataset_id}" => EndpointKind::Dataset,
         "/v1/datasets/{dataset_id}/entities/{entity}/schema" => EndpointKind::Schema,
-        "/v1/datasets/{dataset_id}/entities/{entity}/verify" => EndpointKind::Verify,
         "/v1/datasets/{dataset_id}/entities/{entity}/records" => EndpointKind::Rows,
         "/v1/datasets/{dataset_id}/entities/{entity}/records/{id}" => EndpointKind::Rows,
         "/v1/datasets/{dataset_id}/entities/{entity}/records/{id}/relationships/{relationship}" => {
@@ -557,7 +556,6 @@ fn classify_dataset_endpoint(path: &str) -> EndpointKind {
         ["v1", "datasets", _dataset, "aggregates", _aggregate, "metadata"] => {
             EndpointKind::AggregateList
         }
-        ["v1", "datasets", _dataset, "entities", _entity, "verify"] => EndpointKind::Verify,
         ["v1", "datasets", _dataset, "entities", _entity, "records"] => EndpointKind::Rows,
         ["v1", "datasets", _dataset, "entities", _entity, "records", _id] => EndpointKind::Rows,
         ["v1", "datasets", _dataset, "entities", _entity, "records", _id, "relationships", _relationship] => {
@@ -582,7 +580,6 @@ fn endpoint_kind_label(kind: EndpointKind) -> &'static str {
         EndpointKind::Catalog => "catalog",
         EndpointKind::Dataset => "dataset",
         EndpointKind::Schema => "schema",
-        EndpointKind::Verify => "verify",
         EndpointKind::Rows => "rows",
         EndpointKind::AggregateList => "aggregate_list",
         EndpointKind::Aggregate => "aggregate",
@@ -623,5 +620,24 @@ fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unmounted_verify_path_has_no_dedicated_endpoint_kind() {
+        // The native verify route is not mounted by any router, so the
+        // metrics classifiers must not keep a dedicated bucket for it.
+        assert_eq!(
+            endpoint_kind_from_path("/v1/datasets/x/entities/individual/verify"),
+            EndpointKind::Dataset
+        );
+        assert_eq!(
+            endpoint_kind_from_pattern("/v1/datasets/{dataset_id}/entities/{entity}/verify"),
+            EndpointKind::Other
+        );
     }
 }
