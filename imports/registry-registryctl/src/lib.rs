@@ -1801,7 +1801,7 @@ fn bruno_notary_files(project: &Project, _secrets: &LocalEnv) -> Result<Vec<Gene
             4,
             "{{notary_base_url}}/v1/claims",
             &[
-                ("X-Api-Key", "{{notary_evaluator_key}}"),
+                ("x-api-key", "{{notary_evaluator_key}}"),
                 ("Accept", "application/json"),
             ],
         ),
@@ -1811,7 +1811,7 @@ fn bruno_notary_files(project: &Project, _secrets: &LocalEnv) -> Result<Vec<Gene
             5,
             "{{notary_base_url}}/v1/evaluations",
             &[
-                ("X-Api-Key", "{{notary_evaluator_key}}"),
+                ("x-api-key", "{{notary_evaluator_key}}"),
                 ("Content-Type", "application/json"),
                 ("Accept", NOTARY_CLAIM_RESULT_JSON),
             ],
@@ -1833,7 +1833,7 @@ fn bruno_notary_files(project: &Project, _secrets: &LocalEnv) -> Result<Vec<Gene
             6,
             "{{notary_base_url}}/v1/evaluations",
             &[
-                ("X-Api-Key", "{{notary_evaluator_key}}"),
+                ("x-api-key", "{{notary_evaluator_key}}"),
                 ("Content-Type", "application/json"),
                 ("Accept", NOTARY_CLAIM_RESULT_JSON),
             ],
@@ -2956,7 +2956,7 @@ fn bearer_header(raw_key: &str) -> (String, String) {
 }
 
 fn api_key_header(raw_key: &str) -> (String, String) {
-    ("X-Api-Key".to_string(), raw_key.to_string())
+    ("x-api-key".to_string(), raw_key.to_string())
 }
 
 fn redact_error(error: &str) -> String {
@@ -3555,8 +3555,8 @@ workflows:
             !notary_requests.contains(&env_value(&env, "REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW"))
         );
         assert!(notary_requests.contains("{{notary_evaluator_key}}"));
-        assert!(notary_requests.contains("X-Api-Key: {{notary_evaluator_key}}"));
-        assert!(!notary_requests.contains("x-api-key"));
+        assert!(notary_requests.contains("x-api-key: {{notary_evaluator_key}}"));
+        assert!(!notary_requests.contains("X-Api-Key"));
     }
 
     #[test]
