@@ -9,7 +9,7 @@ Keep product code changes in the product repositories:
 - `registry-manifest`
 - `registry-notary`
 - `registry-relay`
-- `cel-mapping`
+- `crosswalk`
 
 ## Local Checks
 

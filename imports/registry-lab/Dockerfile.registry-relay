@@ -9,8 +9,12 @@ COPY --from=registry_platform_src /Cargo.toml /Cargo.lock /README.md /LICENSE /w
 COPY --from=registry_platform_src /crates /workspace/registry-platform/crates
 COPY --from=registry_manifest_src /Cargo.toml /README.md /workspace/registry-manifest/
 COPY --from=registry_manifest_src /crates /workspace/registry-manifest/crates
-COPY --from=cel_mapping_src /Cargo.toml /Cargo.lock /README.md /workspace/cel-mapping/
-COPY --from=cel_mapping_src /crates /workspace/cel-mapping/crates
+COPY --from=crosswalk_src /Cargo.toml /Cargo.lock /README.md /workspace/crosswalk/
+COPY --from=crosswalk_src /crates /workspace/crosswalk/crates
+# Deprecated compatibility path for vendored checkouts whose Cargo.toml still
+# declares the ../cel-mapping path dependency; remove once all vendor pins
+# reference ../crosswalk.
+RUN ln -sfn /workspace/crosswalk /workspace/cel-mapping
 COPY --from=registry_relay_src benches ./benches
 COPY --from=registry_relay_src resources ./resources
 COPY --from=registry_relay_src src ./src

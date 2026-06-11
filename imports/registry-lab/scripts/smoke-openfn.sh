@@ -17,11 +17,27 @@ default_source_dir() {
   fi
 }
 
+has_custom_cel_mapping_source_dir() {
+  case "${CEL_MAPPING_SOURCE_DIR:-}" in
+    ""|"./vendor/cel-mapping"|"vendor/cel-mapping"|"${demo_dir}/vendor/cel-mapping")
+      return 1
+      ;;
+  esac
+  [[ -d "${CEL_MAPPING_SOURCE_DIR}" ]]
+}
+
 export REGISTRY_NOTARY_SOURCE_DIR="${REGISTRY_NOTARY_SOURCE_DIR:-$(default_source_dir "../registry-notary" "vendor/registry-notary")}"
 export REGISTRY_OPENFN_NOTARY_SOURCE_DIR="${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR}}"
 export REGISTRY_PLATFORM_SOURCE_DIR="${REGISTRY_PLATFORM_SOURCE_DIR:-$(default_source_dir "../registry-platform" "vendor/registry-platform")}"
 export REGISTRY_NOTARY_PLATFORM_SOURCE_DIR="${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR}}"
-export CEL_MAPPING_SOURCE_DIR="${CEL_MAPPING_SOURCE_DIR:-${demo_dir}/vendor/cel-mapping}"
+# CEL_MAPPING_SOURCE_DIR is the deprecated name for CROSSWALK_SOURCE_DIR.
+if [[ -z "${CROSSWALK_SOURCE_DIR:-}" ]]; then
+  if has_custom_cel_mapping_source_dir; then
+    export CROSSWALK_SOURCE_DIR="${CEL_MAPPING_SOURCE_DIR}"
+  else
+    export CROSSWALK_SOURCE_DIR="${demo_dir}/vendor/crosswalk"
+  fi
+fi
 
 if [[ -f "${demo_dir}/.env" ]]; then
   set -a

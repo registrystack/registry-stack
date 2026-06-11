@@ -118,7 +118,7 @@ For the first release, keep the two proof paths separate:
   each pending pin or dirty source checkout. This is a pre-tag proof only.
 - Lab pin proof: run `scripts/release-check.sh` without
   `REGISTRY_LAB_RELEASE_SOURCE_MODE`. The script forces Platform, Relay, Notary,
-  Manifest, and CEL Mapping to the committed `vendor/` submodules even when
+  Manifest, and Crosswalk to the committed `vendor/` submodules even when
   sibling checkouts exist. This is the clean-clone/no-sibling release proof.
 
 Atlas is not part of the first release proof path unless explicitly opted in.
@@ -673,7 +673,7 @@ used without changing `compose.yaml`:
 REGISTRY_RELAY_SOURCE_DIR=../registry-relay \
 REGISTRY_PLATFORM_SOURCE_DIR=../registry-platform \
 REGISTRY_NOTARY_SOURCE_DIR=../registry-notary \
-CEL_MAPPING_SOURCE_DIR=../cel-mapping \
+CROSSWALK_SOURCE_DIR=../crosswalk \
 just build
 ```
 

@@ -8,8 +8,12 @@ WORKDIR /workspace/registry-notary
 ARG REGISTRY_NOTARY_FEATURES=registry-notary-cel,pkcs11
 COPY --from=registry_platform_src Cargo.toml README.md LICENSE /workspace/registry-platform/
 COPY --from=registry_platform_src crates /workspace/registry-platform/crates
-COPY --from=cel_mapping_src Cargo.toml Cargo.lock README.md /workspace/cel-mapping/
-COPY --from=cel_mapping_src crates /workspace/cel-mapping/crates
+COPY --from=crosswalk_src Cargo.toml Cargo.lock README.md /workspace/crosswalk/
+COPY --from=crosswalk_src crates /workspace/crosswalk/crates
+# Deprecated compatibility path for vendored checkouts whose Cargo.toml still
+# declares the ../cel-mapping path dependency; remove once all vendor pins
+# reference ../crosswalk.
+RUN ln -sfn /workspace/crosswalk /workspace/cel-mapping
 COPY --from=notary_src . .
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
