@@ -563,6 +563,13 @@ async fn person_name_birthdate_unique_match_succeeds_with_metadata() {
             .map(|metadata| metadata.policy_id.as_str()),
         Some("demo-person-name-birthdate-v1")
     );
+    let matching = results[0]
+        .matching
+        .as_ref()
+        .expect("successful configured match carries metadata");
+    assert_eq!(matching.method, "exact_name_birthdate");
+    assert_eq!(matching.confidence, "high");
+    assert_eq!(matching.score, None);
     assert_eq!(source.reads(), 1);
 }
 

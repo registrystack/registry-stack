@@ -212,3 +212,9 @@ The `requester` codes (`requester.not_found`, `requester.match_ambiguous`,
 `relationship.attributes_insufficient`, `relationship.policy_rejected`) report the
 same outcomes for the requester and relationship contexts. A successful match
 returns `target_ref` and `matching` metadata instead of a problem code.
+
+`matching.confidence` is a policy-asserted label configured for the source
+binding and matching method. It is returned verbatim for successful matches
+against that binding, so it does not measure the quality of an individual match.
+Future measured match-quality fields can be added alongside it without changing
+this field's meaning.

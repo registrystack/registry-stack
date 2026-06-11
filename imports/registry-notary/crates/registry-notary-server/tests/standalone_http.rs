@@ -3008,7 +3008,7 @@ async fn admin_config_rejects_malformed_previous_config_hash_before_evaluation()
     assert_eq!(body["code"], "config.candidate_invalid");
     assert_eq!(
         body["detail"],
-        "previous_config_hash must be sha256:<64 lowercase hex>"
+        "previous_config_hash must be sha256:<64 lowercase hex> or bare <64 lowercase hex>"
     );
 }
 
@@ -4578,6 +4578,44 @@ async fn admin_config_apply_signed_credential_issuer_rotation_rejects_stale_sequ
     assert_eq!(body["applied"], false);
     assert_eq!(body["restart_required"], false);
 
+    let wrong_previous_bare = current_config_hash
+        .strip_prefix("sha256:")
+        .expect("internal config hash is canonical sha256");
+    let mismatch_signed = write_signed_notary_config_tuf_fixture_with_change_classes(
+        &tmp,
+        wrong_previous_bare,
+        &stale_candidate_yaml,
+        3,
+        "registry-notary-standalone",
+        &["kid-a", "kid-b"],
+        &["signing_key_rotation"],
+    )
+    .await;
+
+    let mismatch = server
+        .post("/admin/v1/config/apply")
+        .add_header("authorization", authorization.clone())
+        .json(&signed_tuf_apply_request(&mismatch_signed))
+        .await;
+
+    mismatch.assert_status(StatusCode::CONFLICT);
+    let body: Value = mismatch.json();
+    assert_eq!(body["result"], "rejected_rollback");
+    assert_eq!(body["posture_result"], "rejected");
+    assert_eq!(body["applied"], false);
+    assert_eq!(body["restart_required"], false);
+    let detail = body["detail"]
+        .as_str()
+        .expect("previous hash mismatch reports detail");
+    assert!(
+        detail.contains(&candidate_config_hash),
+        "detail did not include expected canonical hash: {detail}"
+    );
+    assert!(
+        detail.contains("detected format: bare lowercase hex"),
+        "detail did not include detected received format: {detail}"
+    );
+
     let antirollback = FileAntiRollbackStore::new(&antirollback_path)
         .load(&AntiRollbackKey {
             product: "registry-notary".to_string(),
@@ -6026,6 +6064,16 @@ async fn admin_posture_requires_ops_read_not_admin_and_ops_cannot_reload() {
         .add_header("x-api-key", "ops-token")
         .await
         .assert_status(StatusCode::FORBIDDEN);
+    let unsupported_reload = server
+        .post("/admin/v1/reload")
+        .add_header("x-api-key", "admin-token")
+        .await;
+    unsupported_reload.assert_status(StatusCode::NOT_IMPLEMENTED);
+    let unsupported_reload_body: Value = unsupported_reload.json();
+    assert_eq!(
+        unsupported_reload_body["code"],
+        json!("registry.admin.capability.not_supported")
+    );
     server
         .post("/admin/v1/credentials/urn:ulid:01HX0000000000000000000000/status")
         .add_header("x-api-key", "ops-token")
@@ -7125,6 +7173,36 @@ async fn oidc_metrics_scope_can_scrape_metrics_but_non_metrics_cannot() {
 }
 
 #[tokio::test]
+async fn jwks_is_public_and_contains_no_private_members() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(self_attestation_oidc_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let jwks = server.get("/.well-known/evidence/jwks.json").await;
+
+    jwks.assert_status_ok();
+    let jwks_body: Value = jwks.json();
+    let keys = jwks_body["keys"].as_array().expect("JWKS keys");
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0]["kid"], json!("did:web:issuer.example#key-1"));
+    assert!(keys[0].get("d").is_none());
+
+    idp.stop().await;
+}
+
+#[tokio::test]
 async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
@@ -7165,10 +7243,7 @@ async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
     }));
     let authorization = format!("Bearer {token}");
 
-    let jwks = server
-        .get("/.well-known/evidence/jwks.json")
-        .add_header("authorization", authorization.clone())
-        .await;
+    let jwks = server.get("/.well-known/evidence/jwks.json").await;
     jwks.assert_status_ok();
     let jwks_body: Value = jwks.json();
     assert_eq!(jwks_body["keys"].as_array().expect("JWKS keys").len(), 1);
@@ -12154,9 +12229,8 @@ async fn preauth_trust_anchor_rejects_wrong_key_and_credential_key_notary_tokens
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
-    // Use a protected route without a proof precheck (the credential endpoint
-    // validates the proof before auth), so the trust-anchor verification alone
-    // decides the outcome.
+    // Use a protected route without a proof precheck, so the trust-anchor
+    // verification alone decides the outcome.
     // A Notary-issuer token signed by the WRONG key (the holder key) is rejected.
     let wrong_key_token = mint_notary_access_token(
         TEST_HOLDER_JWK,
@@ -12166,7 +12240,7 @@ async fn preauth_trust_anchor_rejects_wrong_key_and_credential_key_notary_tokens
         "person-1",
     );
     server
-        .get("/.well-known/evidence/jwks.json")
+        .get("/v1/claims")
         .add_header("authorization", format!("Bearer {wrong_key_token}"))
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
@@ -12181,7 +12255,7 @@ async fn preauth_trust_anchor_rejects_wrong_key_and_credential_key_notary_tokens
         "person-1",
     );
     server
-        .get("/.well-known/evidence/jwks.json")
+        .get("/v1/claims")
         .add_header("authorization", format!("Bearer {credential_key_token}"))
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
@@ -12219,7 +12293,7 @@ async fn preauth_trust_anchor_isolates_esignet_and_notary_paths() {
         "nbf": now,
     }));
     server
-        .get("/.well-known/evidence/jwks.json")
+        .get("/v1/claims")
         .add_header(
             "authorization",
             format!("Bearer {esignet_token_claiming_notary_iss}"),

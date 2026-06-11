@@ -130,10 +130,10 @@ checkout_ref \
 checkout_ref \
   "crosswalk" \
   "CROSSWALK_SOURCE_DIR" \
-  "${repo_root}/../cel-mapping" \
+  "${repo_root}/../crosswalk" \
   "$crosswalk_repository" \
   "$crosswalk_ref" \
-  "${tmp_root}/cel-mapping"
+  "${tmp_root}/crosswalk"
 
 cd "$work_root"
 run cargo metadata --locked --all-features --format-version 1 >/dev/null

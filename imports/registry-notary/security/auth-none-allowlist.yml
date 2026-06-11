@@ -18,6 +18,10 @@ allowed:
     reason: Public static Scalar bundle with no generated OpenAPI document or catalog data.
   - listener: public
     method: GET
+    path: /.well-known/evidence/jwks.json
+    reason: Public issuer JWKS for wallet and verifier discovery; only public verification keys are emitted.
+  - listener: public
+    method: GET
     path: /.well-known/openid-credential-issuer
     reason: Public OID4VCI issuer metadata.
   - listener: public

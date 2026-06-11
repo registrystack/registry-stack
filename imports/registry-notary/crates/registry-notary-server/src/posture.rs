@@ -54,11 +54,30 @@ struct SourceConnectionPosture {
     by_kind: BTreeMap<String, usize>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct SigningKeyPosture {
     active: Vec<String>,
     publish_only: Vec<String>,
     disabled: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum SigningKeyPostureError {
+    UnknownStatus { key_id: String },
+}
+
+impl SigningKeyPostureError {
+    pub(crate) fn key_id(&self) -> &str {
+        match self {
+            Self::UnknownStatus { key_id } => key_id,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum PostureDocumentError {
+    Filter(PostureFilterError),
+    SigningKey(SigningKeyPostureError),
 }
 
 #[derive(Clone, Debug)]
@@ -83,8 +102,8 @@ impl PostureContext {
     pub(crate) fn from_config(
         config: &StandaloneRegistryNotaryConfig,
         _audit: &AuditPipeline,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, SigningKeyPostureError> {
+        Ok(Self {
             instance: InstancePosture {
                 id: config.instance.id.clone(),
                 environment: config.instance.environment.clone(),
@@ -103,17 +122,17 @@ impl PostureContext {
             source_connections: SourceConnectionPosture {
                 by_kind: source_connection_counts_by_kind(config),
             },
-            signing_keys: signing_key_posture(config),
+            signing_keys: signing_key_posture(config)?,
             oid4vci: oid4vci_posture(config),
             self_attestation: self_attestation_posture(&config.self_attestation),
-        }
+        })
     }
 }
 
 pub(crate) async fn posture_document(
     state: &RegistryNotaryApiState,
     tier: PostureTier,
-) -> Result<Value, PostureFilterError> {
+) -> Result<Value, PostureDocumentError> {
     let replay_ready = state.replay.check_ready().await;
     let replay_ready_bool = matches!(replay_ready, Ok(ReplayReadiness::Ready));
     let credential_status_ready = state.credential_status.check_ready().await.is_ok();
@@ -136,11 +155,10 @@ pub(crate) async fn posture_document(
         .as_ref()
         .map(|context| (**context).clone())
         .unwrap_or_else(default_posture_context);
-    let signing_keys = state
-        .runtime_config()
-        .as_deref()
-        .map(signing_key_posture)
-        .unwrap_or_else(|| context.signing_keys.clone());
+    let signing_keys = match state.runtime_config().as_deref() {
+        Some(config) => signing_key_posture(config).map_err(PostureDocumentError::SigningKey)?,
+        None => context.signing_keys.clone(),
+    };
     let mut warnings = Vec::<String>::new();
     let mut findings = Vec::new();
     if production_like(context.instance.environment.as_str())
@@ -294,7 +312,7 @@ pub(crate) async fn posture_document(
             },
         },
     });
-    filter_posture_for_tier(posture, tier)
+    filter_posture_for_tier(posture, tier).map_err(PostureDocumentError::Filter)
 }
 
 fn default_posture_context() -> PostureContext {
@@ -319,11 +337,7 @@ fn default_posture_context() -> PostureContext {
         source_connections: SourceConnectionPosture {
             by_kind: BTreeMap::new(),
         },
-        signing_keys: SigningKeyPosture {
-            active: Vec::new(),
-            publish_only: Vec::new(),
-            disabled: Vec::new(),
-        },
+        signing_keys: SigningKeyPosture::default(),
         oid4vci: Oid4vciPosture {
             pre_authorized_code_enabled: false,
             pre_authorized_code_ttl_seconds: 0,
@@ -424,27 +438,42 @@ fn signing_key_readiness_by_kid(state: &RegistryNotaryApiState) -> BTreeMap<Stri
         .collect()
 }
 
-fn signing_key_posture(config: &StandaloneRegistryNotaryConfig) -> SigningKeyPosture {
+fn signing_key_posture(
+    config: &StandaloneRegistryNotaryConfig,
+) -> Result<SigningKeyPosture, SigningKeyPostureError> {
     let now = u64::try_from(OffsetDateTime::now_utc().unix_timestamp()).unwrap_or(0);
-    let mut active = Vec::new();
-    let mut publish_only = Vec::new();
-    let mut disabled = Vec::new();
+    let mut posture = SigningKeyPosture::default();
     for (key_id, key) in &config.evidence.signing_keys {
-        match key.status {
-            SigningKeyStatus::Active => active.push(key_id.clone()),
-            SigningKeyStatus::PublishOnly if key.may_publish_at(now) => {
-                publish_only.push(key_id.clone());
-            }
-            SigningKeyStatus::PublishOnly => {}
-            SigningKeyStatus::Disabled => disabled.push(key_id.clone()),
-            _ => disabled.push(key_id.clone()),
+        project_signing_key_status(
+            key_id,
+            Some(key.status),
+            key.may_publish_at(now),
+            &mut posture,
+        )?;
+    }
+    Ok(posture)
+}
+
+fn project_signing_key_status(
+    key_id: &str,
+    status: Option<SigningKeyStatus>,
+    currently_published: bool,
+    posture: &mut SigningKeyPosture,
+) -> Result<(), SigningKeyPostureError> {
+    match status {
+        Some(SigningKeyStatus::Active) => posture.active.push(key_id.to_string()),
+        Some(SigningKeyStatus::PublishOnly) if currently_published => {
+            posture.publish_only.push(key_id.to_string());
+        }
+        Some(SigningKeyStatus::PublishOnly) => {}
+        Some(SigningKeyStatus::Disabled) => posture.disabled.push(key_id.to_string()),
+        Some(_) | None => {
+            return Err(SigningKeyPostureError::UnknownStatus {
+                key_id: key_id.to_string(),
+            })
         }
     }
-    SigningKeyPosture {
-        active,
-        publish_only,
-        disabled,
-    }
+    Ok(())
 }
 
 fn oid4vci_posture(config: &StandaloneRegistryNotaryConfig) -> Oid4vciPosture {
@@ -683,5 +712,24 @@ evidence:
 
         assert_eq!(counts.get("registry_data_api"), Some(&1));
         assert_eq!(counts.get("dci"), None);
+    }
+
+    #[test]
+    fn unknown_signing_key_status_projection_fails_closed() {
+        let mut posture = SigningKeyPosture::default();
+        // SigningKeyStatus is non_exhaustive, so None is the unit-test stand-in
+        // for a future status variant that this product has not classified yet.
+        let error = project_signing_key_status("future-key", None, true, &mut posture)
+            .expect_err("future signing key status must fail closed");
+
+        assert_eq!(
+            error,
+            SigningKeyPostureError::UnknownStatus {
+                key_id: "future-key".to_string()
+            }
+        );
+        assert!(posture.active.is_empty());
+        assert!(posture.publish_only.is_empty());
+        assert!(posture.disabled.is_empty());
     }
 }

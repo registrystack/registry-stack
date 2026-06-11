@@ -322,6 +322,33 @@ async fn config_verify_bundle_cli_reports_verified_signed_bundle() {
 }
 
 #[tokio::test]
+async fn config_verify_bundle_cli_normalizes_bare_previous_config_hash() {
+    let tmp = TempDir::new().expect("tempdir");
+    let current_config = write_config(&tmp, TUF_TARGETS_SIGNER_KID);
+    let candidate_yaml = config_yaml(&tmp, TUF_TARGETS_SIGNER_KID);
+    let current_hash = internal_config_hash(std::fs::read(&current_config).unwrap().as_slice());
+    let bare_hash = current_hash
+        .strip_prefix("sha256:")
+        .expect("internal config hash is canonical sha256");
+    let signed = write_signed_notary_config_tuf_fixture(&tmp, bare_hash, &candidate_yaml).await;
+
+    let output = verify_bundle_command(&current_config, &signed)
+        .output()
+        .expect("verify-bundle command runs");
+
+    assert!(
+        output.status.success(),
+        "verify-bundle failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value =
+        serde_json::from_slice(&output.stdout).expect("verify-bundle emits JSON report");
+    assert_eq!(report["result"], "verified");
+    assert_eq!(report["previous_config_hash"], current_hash);
+}
+
+#[tokio::test]
 async fn config_verify_bundle_cli_reports_verified_remote_signed_bundle() {
     let tmp = TempDir::new().expect("tempdir");
     let current_config = write_config(&tmp, TUF_TARGETS_SIGNER_KID);
@@ -410,4 +437,6 @@ async fn config_verify_bundle_cli_rejects_unauthorized_local_trust_root() {
         "stderr did not explain authorization failure:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert!(!tmp.path().join("antirollback.json").exists());
+    assert!(!tmp.path().join("local-approvals.json").exists());
 }

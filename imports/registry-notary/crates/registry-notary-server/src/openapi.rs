@@ -157,9 +157,10 @@ fn build_openapi_document() -> Value {
                 "get": {
                     "summary": "Fetch public issuer verification keys",
                     "operationId": "getEvidenceJwks",
+                    "description": "Returns public issuer verification keys for wallet and verifier discovery. This well-known route is intentionally unauthenticated; it only exposes public JWK members.",
+                    "security": [],
                     "responses": {
-                        "200": { "description": "Public JWKS" },
-                        "401": { "description": "Missing or invalid credential" }
+                        "200": { "description": "Public JWKS" }
                     }
                 }
             },
@@ -814,6 +815,7 @@ fn build_openapi_document() -> Value {
                 "TokenRequest": token_request_schema(),
                 "TokenResponse": token_response_schema(),
                 "ConfigApplyRequest": config_apply_request_schema(),
+                "ConfigApplyResponse": config_apply_response_schema(),
                 "TufConfigTargetRequest": tuf_config_target_request_schema(),
                 "LocalTufConfigTargetRequest": local_tuf_config_target_request_schema(),
                 "RemoteTufConfigTargetRequest": remote_tuf_config_target_request_schema(),
@@ -908,6 +910,20 @@ fn build_openapi_document() -> Value {
         "200",
         "#/components/schemas/EvaluationResponse",
     );
+    for (path, status) in [
+        ("/admin/v1/config/verify", "200"),
+        ("/admin/v1/config/dry-run", "200"),
+        ("/admin/v1/config/apply", "200"),
+        ("/admin/v1/config/apply", "409"),
+    ] {
+        set_json_response_schema(
+            &mut document_value,
+            path,
+            "post",
+            status,
+            "#/components/schemas/ConfigApplyResponse",
+        );
+    }
     document_value["info"]["summary"] = json!(INFO_SUMMARY);
     document_value["info"]["contact"] = json!({ "name": CONTACT_NAME });
     serde_json::from_value::<OpenApi>(document_value.clone()).unwrap_or_else(|err| {
@@ -2093,10 +2109,22 @@ fn matching_metadata_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "policy_id": { "type": "string" },
-            "method": { "type": "string" },
-            "confidence": { "type": "string" },
-            "score": { "type": ["number", "null"] }
+            "policy_id": {
+                "type": "string",
+                "description": "Configured matching policy identifier for the source binding."
+            },
+            "method": {
+                "type": "string",
+                "description": "Configured matching method for the source binding."
+            },
+            "confidence": {
+                "type": "string",
+                "description": "Policy-asserted confidence label configured on the source binding and method. This is returned verbatim for successful matches against that binding; it is not a measured quality score for the individual match."
+            },
+            "score": {
+                "type": ["number", "null"],
+                "description": "Reserved optional per-match score. Current configured-only matching usually omits this field."
+            }
         },
         "required": ["policy_id", "method", "confidence"],
         "additionalProperties": false
@@ -2585,7 +2613,8 @@ fn config_apply_request_schema() -> Value {
             },
             "previous_config_hash": {
                 "type": "string",
-                "pattern": "^sha256:[0-9a-f]{64}$"
+                "pattern": "^(sha256:)?[0-9a-f]{64}$",
+                "description": "Governed predecessor config hash. Requests and signed target metadata may provide either bare lowercase SHA-256 hex or sha256:<64 lowercase hex>; responses, audit, docs, and errors use the canonical sha256:-prefixed form."
             },
             "root_version": {
                 "type": "integer",
@@ -2605,6 +2634,39 @@ fn config_apply_request_schema() -> Value {
             },
             "tuf": {
                 "$ref": "#/components/schemas/TufConfigTargetRequest"
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn config_apply_response_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": [
+            "bundle_id",
+            "sequence",
+            "result",
+            "posture_result",
+            "applied",
+            "restart_required"
+        ],
+        "properties": {
+            "bundle_id": { "type": "string" },
+            "sequence": { "type": "integer", "format": "uint64" },
+            "result": {
+                "type": "string",
+                "description": "Config apply outcome, such as applied, verified, rejected_restart_required, rejected_readiness, or rejected_rollback."
+            },
+            "posture_result": {
+                "type": "string",
+                "description": "Posture projection of the outcome, such as accepted, rejected, or not_applied."
+            },
+            "applied": { "type": "boolean" },
+            "restart_required": { "type": "boolean" },
+            "detail": {
+                "type": "string",
+                "description": "Optional diagnostic detail. Previous-config-hash mismatch details use canonical sha256:<64 lowercase hex> for the expected value and name the detected received format."
             }
         },
         "additionalProperties": false
@@ -3340,6 +3402,15 @@ mod tests {
                 ["emergency_change_class"]["description"],
             json!("Must appear in the signed target change_classes and be authorized by local trust roots.")
         );
+        assert_eq!(
+            doc["components"]["schemas"]["ConfigApplyResponse"]["properties"]["detail"]["type"],
+            json!("string")
+        );
+        assert_eq!(
+            doc["paths"]["/admin/v1/config/apply"]["post"]["responses"]["409"]["content"]
+                ["application/json"]["schema"]["$ref"],
+            json!("#/components/schemas/ConfigApplyResponse")
+        );
     }
 
     #[test]
@@ -3347,6 +3418,10 @@ mod tests {
         let doc = serde_json::to_value(openapi_document()).expect("document serializes");
         assert_eq!(doc["paths"]["/healthz"]["get"]["security"], json!([]));
         assert_eq!(doc["paths"]["/ready"]["get"]["security"], json!([]));
+        assert_eq!(
+            doc["paths"]["/.well-known/evidence/jwks.json"]["get"]["security"],
+            json!([])
+        );
         assert_eq!(
             doc["paths"]["/.well-known/openid-credential-issuer"]["get"]["security"],
             json!([])
@@ -3523,7 +3598,6 @@ mod tests {
             ("/admin/v1/config/apply", "post", "401"),
             ("/admin/v1/config/apply", "post", "403"),
             ("/.well-known/evidence-service", "get", "401"),
-            ("/.well-known/evidence/jwks.json", "get", "401"),
             ("/v1/claims", "get", "401"),
             ("/v1/claims/{claim_id}", "get", "401"),
             ("/v1/claims/{claim_id}", "get", "404"),

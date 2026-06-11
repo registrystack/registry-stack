@@ -145,6 +145,13 @@ recorded as `signed_bundle_file`. HTTP loopback remote repositories require
 `allow_dev_insecure_fetch_urls: true` and are intended only for tests and local
 development.
 
+Governed bundle metadata may set `previous_config_hash` as either bare lowercase
+SHA-256 hex or `sha256:<64 lowercase hex>`. Notary normalizes both forms at the
+product boundary before anti-rollback comparison. The canonical form in
+verification reports, admin API responses, audit events, docs, and mismatch
+errors is `sha256:<64 lowercase hex>`. On a true chain mismatch, the error detail
+includes the expected canonical hash and the received value's detected format.
+
 ### TUF root transition
 
 For TUF root transition, apply a signed local TUF bundle whose target metadata
@@ -169,7 +176,9 @@ active signing references. Inline config candidates are accepted only by verify
 and dry-run; apply rejects them with
 `registry.admin.config.inline_apply_rejected`. Other signed changes continue to
 reject with `rejected_restart_required`, so rejected signed targets do not
-advance anti-rollback state or change active posture provenance.
+advance anti-rollback state or change active posture provenance. This
+restart-required apply result is distinct from unsupported live reload: it means
+the signed candidate is valid but cannot be hot-applied.
 Use `GET /admin/v1/capabilities` with `registry_notary:ops_read` before
 automation invokes governed config or reload operations. Standalone Notary does
 not support resource, table, or runtime config reload; the mounted

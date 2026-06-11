@@ -52,10 +52,10 @@ use registry_platform_oid4vci::{
     ValidatedProof, WireError, PRE_AUTHORIZED_CODE_GRANT_TYPE, PROOF_TYPE_JWT, SD_JWT_VC_FORMAT,
 };
 use registry_platform_ops::{
-    internal_config_hash, is_sha256_config_hash, posture_safe_runtime_config_hash, AntiRollbackKey,
-    AntiRollbackProposal, AntiRollbackStoreError, ApplyReportResult, BreakGlassApproval,
-    BreakGlassRateLimit, ConfigSource, FileAntiRollbackStore, FileLocalApprovalStore,
-    LocalApprovalStoreError, LocalOperatorApproval, PostureApplyResult, PostureFilterError,
+    internal_config_hash, posture_safe_runtime_config_hash, AntiRollbackKey, AntiRollbackProposal,
+    AntiRollbackStoreError, ApplyReportResult, BreakGlassApproval, BreakGlassRateLimit,
+    ConfigSource, FileAntiRollbackStore, FileLocalApprovalStore, LocalApprovalStoreError,
+    LocalOperatorApproval, PostureApplyResult,
 };
 use registry_platform_replay::{ReplayKey, ReplayScope, ReplayStoreError, RequiredReplayError};
 use registry_platform_sdjwt::{validate_holder_proof, HolderProofBindings, HolderProofPolicy};
@@ -68,8 +68,10 @@ use time::OffsetDateTime;
 #[cfg(feature = "registry-notary-cel")]
 use crate::cel_worker::CelWorker;
 use crate::config_governed::{
-    is_signed_config_source, parse_candidate_config, resolve_tuf_config_candidate,
-    ConfigCandidateError, ConfigGovernanceContext, ResolvedConfigCandidate, TufConfigTargetRequest,
+    is_signed_config_source, normalize_previous_config_hash, parse_candidate_config,
+    resolve_tuf_config_candidate, ConfigCandidateError, ConfigGovernanceContext,
+    NormalizedPreviousConfigHash, PreviousConfigHashFormat, ResolvedConfigCandidate,
+    TufConfigTargetRequest,
 };
 use crate::{
     credential_profile_for,
@@ -77,7 +79,7 @@ use crate::{
     format_time,
     metrics::AppMetrics,
     openapi_document,
-    posture::{posture_document, PostureContext},
+    posture::{posture_document, PostureContext, PostureDocumentError},
     preauth_state::{LoginState, SingleUseReserveError},
     replay::{require_replay_insert, ReplayReadiness, ReplayStores},
     runtime::claim_ids,
@@ -235,6 +237,8 @@ struct ConfigApplyResponse {
     posture_result: &'static str,
     applied: bool,
     restart_required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -864,9 +868,10 @@ async fn admin_config_apply(
     };
     let antirollback_store = FileAntiRollbackStore::new(&config_trust.antirollback_state_path)
         .with_break_glass_rate_limit(break_glass_rate_limit);
+    let antirollback_key = antirollback_key(&config_governance, &candidate.stream_id);
     let local_approval = governed_apply.local_approval().cloned();
     if let Err(error) = antirollback_store.accept(
-        &antirollback_key(&config_governance, &candidate.stream_id),
+        &antirollback_key,
         AntiRollbackProposal {
             sequence: candidate.sequence,
             previous_config_hash: candidate.previous_config_hash.clone(),
@@ -879,12 +884,36 @@ async fn admin_config_apply(
         },
     ) {
         let (result, status) = antirollback_apply_failure(&error);
-        return config_apply_report(
-            candidate.bundle_id.clone(),
-            candidate.sequence,
-            result,
-            false,
-            false,
+        let detail = if matches!(error, AntiRollbackStoreError::PreviousConfigHashMismatch) {
+            match antirollback_store.load(&antirollback_key) {
+                Ok(record) => Some(previous_config_hash_mismatch_detail(
+                    &record.last_config_hash,
+                    &NormalizedPreviousConfigHash {
+                        value: candidate.previous_config_hash.clone(),
+                        format: candidate.previous_config_hash_format,
+                    },
+                )),
+                Err(load_error) => {
+                    tracing::debug!(
+                        error = %load_error,
+                        "failed to load antirollback record for previous_config_hash mismatch detail"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        return config_apply_response(
+            ConfigApplyResponse {
+                bundle_id: candidate.bundle_id.clone(),
+                sequence: candidate.sequence,
+                result: result.as_str(),
+                posture_result: result.as_posture_result().as_str(),
+                applied: false,
+                restart_required: false,
+                detail,
+            },
             status,
             resolved_config_audit(
                 ConfigAdminAction::Apply,
@@ -1770,11 +1799,14 @@ async fn resolve_config_candidate(
                 .ok_or(ConfigCandidateError::CandidateInvalid(
                     "sequence is required for inline config",
                 ))?;
+            let previous_config_hash =
+                normalize_previous_config_hash(request.previous_config_hash.as_deref())?;
             let resolved = ResolvedConfigCandidate {
                 bundle_id,
                 stream_id: request.stream_id.clone(),
                 sequence,
-                previous_config_hash: request.previous_config_hash.clone(),
+                previous_config_hash: previous_config_hash.value,
+                previous_config_hash_format: previous_config_hash.format,
                 root_version: request.root_version,
                 change_classes: BTreeSet::new(),
                 signer_kids: BTreeSet::new(),
@@ -1782,27 +1814,13 @@ async fn resolve_config_candidate(
                 config_yaml: config_yaml.clone(),
                 source: ConfigSource::LocalFile,
             };
-            validate_previous_config_hash(resolved.previous_config_hash.as_deref())?;
             Ok(resolved)
         }
-        (None, Some(tuf)) => {
-            let resolved = resolve_tuf_config_candidate(tuf, &state.config_governance()).await?;
-            validate_previous_config_hash(resolved.previous_config_hash.as_deref())?;
-            Ok(resolved)
-        }
+        (None, Some(tuf)) => resolve_tuf_config_candidate(tuf, &state.config_governance()).await,
         (None, None) => Err(ConfigCandidateError::CandidateInvalid(
             "candidate config source was not provided",
         )),
     }
-}
-
-fn validate_previous_config_hash(value: Option<&str>) -> Result<(), ConfigCandidateError> {
-    if value.is_some_and(|hash| !is_sha256_config_hash(hash)) {
-        return Err(ConfigCandidateError::CandidateInvalid(
-            "previous_config_hash must be sha256:<64 lowercase hex>",
-        ));
-    }
-    Ok(())
 }
 
 fn consume_apply_metadata(request: &ConfigApplyRequest) {
@@ -1837,6 +1855,20 @@ fn posture_hash(config: &StandaloneRegistryNotaryConfig) -> String {
     posture_safe_runtime_config_hash(&value)
 }
 
+fn previous_config_hash_mismatch_detail(
+    expected: &str,
+    received: &NormalizedPreviousConfigHash,
+) -> String {
+    let received_value = received.value.as_deref().unwrap_or("<missing>");
+    let format = received
+        .format
+        .map(PreviousConfigHashFormat::as_str)
+        .unwrap_or("missing");
+    format!(
+        "previous_config_hash mismatch: expected {expected}; received {received_value} (detected format: {format})"
+    )
+}
+
 fn config_apply_report(
     bundle_id: String,
     sequence: u64,
@@ -1846,18 +1878,27 @@ fn config_apply_report(
     status: StatusCode,
     audit: ConfigAuditEvent,
 ) -> Response {
-    let mut response = (
-        status,
-        Json(ConfigApplyResponse {
+    config_apply_response(
+        ConfigApplyResponse {
             bundle_id,
             sequence,
             result: result.as_str(),
             posture_result: result.as_posture_result().as_str(),
             applied,
             restart_required,
-        }),
+            detail: None,
+        },
+        status,
+        audit,
     )
-        .into_response();
+}
+
+fn config_apply_response(
+    body: ConfigApplyResponse,
+    status: StatusCode,
+    audit: ConfigAuditEvent,
+) -> Response {
+    let mut response = (status, Json(body)).into_response();
     response.extensions_mut().insert(EvidenceAuditContext {
         config: Some(audit),
         ..EvidenceAuditContext::default()
@@ -1887,7 +1928,9 @@ fn unresolved_config_audit(
         bundle_id: request.bundle_id.clone(),
         sequence: request.sequence,
         signer_kids: Vec::new(),
-        previous_config_hash: request.previous_config_hash.clone(),
+        previous_config_hash: normalized_previous_config_hash_for_audit(
+            request.previous_config_hash.as_deref(),
+        ),
         config_hash: request
             .config_yaml
             .as_deref()
@@ -1911,6 +1954,13 @@ fn unresolved_config_audit(
         local_approval_change_class: None,
         local_approval_expires_at_unix_seconds: None,
         local_approval_rate_limit_identity: None,
+    }
+}
+
+fn normalized_previous_config_hash_for_audit(previous_config_hash: Option<&str>) -> Option<String> {
+    match normalize_previous_config_hash(previous_config_hash) {
+        Ok(normalized) => normalized.value,
+        Err(_) => previous_config_hash.map(ToOwned::to_owned),
     }
 }
 
@@ -2588,8 +2638,20 @@ fn credential_status_problem(
     response
 }
 
-fn posture_filter_failed(error: PostureFilterError) -> Response {
-    tracing::error!(error = %error, "failed to filter admin posture");
+fn posture_filter_failed(error: PostureDocumentError) -> Response {
+    let detail = match &error {
+        PostureDocumentError::Filter(filter_error) => {
+            tracing::error!(error = %filter_error, "failed to filter admin posture");
+            "admin posture could not be filtered for the requested tier"
+        }
+        PostureDocumentError::SigningKey(signing_key_error) => {
+            tracing::error!(
+                key_id = signing_key_error.key_id(),
+                "failed to project signing key posture"
+            );
+            "admin posture contains an unsupported signing key status"
+        }
+    };
     let status = StatusCode::INTERNAL_SERVER_ERROR;
     let mut response = (
         status,
@@ -2597,7 +2659,7 @@ fn posture_filter_failed(error: PostureFilterError) -> Response {
             "type": format!("{}/posture/filter_failed", crate::PROBLEM_TYPE_BASE_URL),
             "title": "Admin posture unavailable",
             "status": status.as_u16(),
-            "detail": "admin posture could not be filtered for the requested tier",
+            "detail": detail,
             "code": POSTURE_FILTER_FAILED_CODE,
         })),
     )
@@ -4693,13 +4755,7 @@ fn hex_nibble(byte: u8) -> Result<u8, TokenWireError> {
     }
 }
 
-async fn issuer_jwks(
-    state: Option<Extension<Arc<RegistryNotaryApiState>>>,
-    principal: Option<Extension<EvidencePrincipal>>,
-) -> Response {
-    if principal.is_none() {
-        return evidence_error_response(EvidenceError::MissingCredential);
-    }
+async fn issuer_jwks(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Response {
     let Some(Extension(state)) = state else {
         return evidence_error_response(EvidenceError::ServerDisabled);
     };
@@ -7908,6 +7964,83 @@ mod tests {
         assert!(
             request.is_err(),
             "TUF request must choose exactly one local or remote source shape"
+        );
+    }
+
+    #[test]
+    fn previous_config_hash_normalization_accepts_bare_and_prefixed_forms() {
+        let bare = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let prefixed = format!("sha256:{bare}");
+
+        let bare_normalized =
+            normalize_previous_config_hash(Some(bare)).expect("bare lowercase hex is accepted");
+        assert_eq!(bare_normalized.value.as_deref(), Some(prefixed.as_str()));
+        assert_eq!(
+            bare_normalized.format,
+            Some(PreviousConfigHashFormat::BareLowercaseHex)
+        );
+
+        let prefixed_normalized = normalize_previous_config_hash(Some(&prefixed))
+            .expect("sha256-prefixed lowercase hex is accepted");
+        assert_eq!(
+            prefixed_normalized.value.as_deref(),
+            Some(prefixed.as_str())
+        );
+        assert_eq!(
+            prefixed_normalized.format,
+            Some(PreviousConfigHashFormat::Sha256Prefixed)
+        );
+    }
+
+    #[test]
+    fn previous_config_hash_mismatch_detail_reports_expected_and_received_format() {
+        let expected = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let received = NormalizedPreviousConfigHash {
+            value: Some(
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    .to_string(),
+            ),
+            format: Some(PreviousConfigHashFormat::BareLowercaseHex),
+        };
+
+        let detail = previous_config_hash_mismatch_detail(expected, &received);
+
+        assert!(detail.contains(expected), "missing expected hash: {detail}");
+        assert!(
+            detail.contains("detected format: bare lowercase hex"),
+            "missing received format: {detail}"
+        );
+    }
+
+    #[test]
+    fn unresolved_config_audit_uses_canonical_previous_config_hash_when_possible() {
+        let bare = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let request = ConfigApplyRequest {
+            bundle_id: Some("demo-bundle".to_string()),
+            sequence: Some(7),
+            config_yaml: None,
+            stream_id: default_stream_id(),
+            previous_config_hash: Some(bare.to_string()),
+            root_version: None,
+            break_glass: false,
+            break_glass_approval: None,
+            break_glass_rate_limit: None,
+            local_approval_reference: None,
+            tuf: None,
+        };
+
+        let audit = unresolved_config_audit(
+            ConfigAdminAction::Apply,
+            &request,
+            "rejected",
+            "rejected_compile",
+            false,
+            false,
+        );
+
+        assert_eq!(
+            audit.previous_config_hash.as_deref(),
+            Some("sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
         );
     }
 
