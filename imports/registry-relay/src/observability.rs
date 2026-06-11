@@ -640,4 +640,47 @@ mod tests {
             EndpointKind::Other
         );
     }
+
+    #[test]
+    fn measures_and_dimensions_routes_classify_as_dataset_not_other() {
+        // measures/dimensions have no dedicated EndpointKind variant. Via the
+        // path-based classifier they fall through classify_dataset_endpoint's
+        // wildcard arm and land in Dataset, which is correct. Pin this so a
+        // future refactor cannot silently drop them into Other.
+        //
+        // Via the pattern-based classifier they fall to Other (no explicit
+        // arm for these patterns); that is also acceptable and is pinned here.
+        assert_eq!(
+            endpoint_kind_from_path("/v1/datasets/hdx/measures"),
+            EndpointKind::Dataset
+        );
+        assert_eq!(
+            endpoint_kind_from_path("/v1/datasets/hdx/measures/population"),
+            EndpointKind::Dataset
+        );
+        assert_eq!(
+            endpoint_kind_from_path("/v1/datasets/hdx/dimensions"),
+            EndpointKind::Dataset
+        );
+        assert_eq!(
+            endpoint_kind_from_path("/v1/datasets/hdx/dimensions/region"),
+            EndpointKind::Dataset
+        );
+        assert_eq!(
+            endpoint_kind_from_pattern("/v1/datasets/{dataset_id}/measures"),
+            EndpointKind::Other
+        );
+        assert_eq!(
+            endpoint_kind_from_pattern("/v1/datasets/{dataset_id}/measures/{item_id}"),
+            EndpointKind::Other
+        );
+        assert_eq!(
+            endpoint_kind_from_pattern("/v1/datasets/{dataset_id}/dimensions"),
+            EndpointKind::Other
+        );
+        assert_eq!(
+            endpoint_kind_from_pattern("/v1/datasets/{dataset_id}/dimensions/{item_id}"),
+            EndpointKind::Other
+        );
+    }
 }

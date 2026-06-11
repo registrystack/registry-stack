@@ -1265,6 +1265,30 @@ mod tests {
     }
 
     #[test]
+    fn measures_and_dimensions_routes_classify_as_dataset() {
+        // /v1/datasets/{id}/measures and /v1/datasets/{id}/dimensions have no
+        // dedicated EndpointKind variant; they fall through classify_dataset_endpoint's
+        // wildcard arm and land in Dataset. Pin this so a future refactor cannot
+        // silently drop them into Other.
+        assert_eq!(
+            classify_endpoint("/v1/datasets/hdx/measures"),
+            EndpointKind::Dataset
+        );
+        assert_eq!(
+            classify_endpoint("/v1/datasets/hdx/measures/population"),
+            EndpointKind::Dataset
+        );
+        assert_eq!(
+            classify_endpoint("/v1/datasets/hdx/dimensions"),
+            EndpointKind::Dataset
+        );
+        assert_eq!(
+            classify_endpoint("/v1/datasets/hdx/dimensions/region"),
+            EndpointKind::Dataset
+        );
+    }
+
+    #[test]
     fn trusted_proxy_cidr_matching_supports_v4_and_v6() {
         assert!(trusted_proxy_spec_matches(
             "10.1.2.3".parse().unwrap(),
