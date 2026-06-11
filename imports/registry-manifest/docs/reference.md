@@ -177,11 +177,10 @@ Their presence causes `validate`, `publish`, and `validate-profiles` to fail.
 They belong in Registry Relay or Registry Notary runtime configuration, not in a metadata manifest.
 
 `admin_bind`, `admin_listener`, `audit`, `auth`, `bind`, `bindings`, `capabilities`,
-`column`, `config_trust`, `file_path`, `jwks_uri`, `listener`, `listeners`,
-`peer_allowlist`, `peers`, `private_jwk`, `private_jwk_env`, `query`, `replay`,
-`required_filters`, `rows_scope`, `scope`, `secret_provider`, `secret_providers`,
-`signing_keys`, `source`, `source_id`, `table`, `token_url`, `url`, `url_env`,
-`visibility`
+`column`, `config_trust`, `file_path`, `listener`, `listeners`, `peer_allowlist`,
+`peers`, `private_jwk`, `private_jwk_env`, `query`, `replay`, `required_filters`,
+`rows_scope`, `scope`, `secret_provider`, `secret_providers`, `signing_keys`,
+`source`, `source_id`, `table`, `token_url`, `url`, `url_env`, `visibility`
 
 Source:
 [`crates/registry-manifest-core/src/lib.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/src/lib.rs)
