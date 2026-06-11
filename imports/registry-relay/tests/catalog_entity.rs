@@ -2374,3 +2374,53 @@ async fn single_entity_schema_returns_not_found_for_unknown_entity() {
     let body: Value = resp.json();
     assert_eq!(body["code"], "schema.unknown_resource");
 }
+
+#[tokio::test]
+async fn entity_scoped_catalog_includes_aggregates_of_visible_entities() {
+    use registry_relay::metadata::catalog::catalog_document_for_entity_ids;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let path = write_config(&tmp);
+    let cfg = config::load(&path).expect("config loads");
+    let registry = EntityRegistry::from_config(&cfg).expect("registry compiles");
+
+    // The household entity is the source_entity of households_by_region, so an
+    // entity-scoped catalog for it must surface that aggregate distribution.
+    let household_ids: std::collections::BTreeSet<(String, String)> =
+        [("social_registry".to_string(), "household".to_string())]
+            .into_iter()
+            .collect();
+    let doc = catalog_document_for_entity_ids(&cfg, &registry, &household_ids);
+    let social_registry = doc
+        .datasets
+        .iter()
+        .find(|dataset| dataset.dataset_id == "social_registry")
+        .expect("social_registry dataset is visible");
+    assert!(
+        social_registry
+            .aggregate_distributions
+            .iter()
+            .any(|distribution| distribution.aggregate_id == "households_by_region"),
+        "household-scoped catalog must include the household aggregate distribution"
+    );
+
+    // The individual entity does not own households_by_region, so scoping to it
+    // must not surface that aggregate.
+    let individual_ids: std::collections::BTreeSet<(String, String)> =
+        [("social_registry".to_string(), "individual".to_string())]
+            .into_iter()
+            .collect();
+    let individual_doc = catalog_document_for_entity_ids(&cfg, &registry, &individual_ids);
+    let individual_dataset = individual_doc
+        .datasets
+        .iter()
+        .find(|dataset| dataset.dataset_id == "social_registry")
+        .expect("social_registry dataset is visible for individual scope");
+    assert!(
+        !individual_dataset
+            .aggregate_distributions
+            .iter()
+            .any(|distribution| distribution.aggregate_id == "households_by_region"),
+        "individual-scoped catalog must not include the household aggregate"
+    );
+}

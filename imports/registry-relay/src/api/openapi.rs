@@ -2513,7 +2513,7 @@ fn aggregate_list_schema() -> Value {
                 "temporal_field": null,
                 "dimensions": [{ "id": "region", "label": "Region", "field": "region" }],
                 "measures": [{ "id": "household_count", "label": "Households", "aggregation_method": "count", "column": "id", "unit_measure": "households" }],
-                "disclosure_control": { "method": ["k-anonymity"], "min_cell_size": 2, "suppression": "omit", "suppressed_rows": null, "query_budget": { "tracked": false, "scope": "none" } },
+                "disclosure_control": { "method": ["k-anonymity"], "min_cell_size": 2, "suppression": "omit", "suppressed_observations": null, "query_budget": { "tracked": false, "scope": "none" } },
                 "links": [],
             }],
             "links": [],
@@ -2569,7 +2569,7 @@ fn aggregate_result_schema() -> Value {
                 "measures": [{ "id": "household_count", "label": "Households", "aggregation_method": "count", "column": "id", "unit_measure": "households" }]
             },
             "completeness": { "complete": true, "truncated": false },
-            "disclosure_control": { "method": ["k-anonymity"], "min_cell_size": 2, "suppression": "omit", "suppressed_rows": 1, "query_budget": { "tracked": false, "scope": "none" } },
+            "disclosure_control": { "method": ["k-anonymity"], "min_cell_size": 2, "suppression": "omit", "suppressed_observations": 1, "query_budget": { "tracked": false, "scope": "none" } },
             "freshness": { "computed_at": "2026-05-16T08:00:00Z", "as_of": "2026-05-16T07:55:00Z" },
             "links": [],
         }],
@@ -2605,7 +2605,7 @@ fn aggregate_measure_discovery_schema() -> Value {
             "aggregation_method": { "type": "string" },
             "column": { "type": "string" },
             "unit_measure": { "type": "string" },
-            "unit_mult": { "type": ["number", "null"] },
+            "unit_multiplier": { "type": ["number", "null"] },
             "decimals": { "type": ["integer", "null"] },
             "frequency": { "type": ["string", "null"] },
             "definition_uri": { "type": ["string", "null"], "format": "uri" },
@@ -2751,12 +2751,12 @@ fn aggregate_schema_measure_array() -> Value {
 fn aggregate_disclosure_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["method", "min_cell_size", "suppression", "suppressed_rows", "query_budget"],
+        "required": ["method", "min_cell_size", "suppression", "suppressed_observations", "query_budget"],
         "properties": {
             "method": { "type": "array", "items": { "type": "string" } },
             "min_cell_size": { "type": "integer", "minimum": 1 },
             "suppression": { "type": "string", "enum": ["omit", "mask", "null"] },
-            "suppressed_rows": { "type": ["integer", "null"], "minimum": 0 },
+            "suppressed_observations": { "type": ["integer", "null"], "minimum": 0 },
             "query_budget": {
                 "type": "object",
                 "required": ["tracked", "scope"],

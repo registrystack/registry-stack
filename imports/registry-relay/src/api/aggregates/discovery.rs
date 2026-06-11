@@ -219,7 +219,7 @@ impl MeasureDiscovery {
             "aggregation_method": self.function,
             "column": self.column,
             "unit_measure": self.unit_measure,
-            "unit_mult": self.unit_mult,
+            "unit_multiplier": self.unit_mult,
             "decimals": self.decimals,
             "frequency": self.frequency,
             "definition_uri": self.definition_uri,

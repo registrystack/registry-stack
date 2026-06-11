@@ -138,6 +138,23 @@ SDMX JSON output is intended for statistical tooling. Request it with
 `https://json.sdmx.org/2.1/sdmx-json-data-schema.json`; clients should also
 check the `meta.x-completeness` object before treating a cube as complete.
 
+### Relay SDMX conventions
+
+Relay maps aggregate results onto SDMX JSON with a few relay-specific
+conventions that integrators should account for:
+
+- Measure descriptors carry relay extension keys alongside the standard SDMX
+  fields: `x-unitMeasure` reports the measure unit, `x-unitMultiplier` reports
+  the unit multiplier (or `null` when unset), and `x-decimals` reports the
+  configured decimal precision (or `null` when unset).
+- `meta.sender` is fixed to `{ "id": "registry-relay", "name": "Registry
+  Relay" }`. It identifies the relay as the message sender and does not vary by
+  deployment or dataset.
+- The measure `definition_uri` available in the native JSON and discovery
+  responses is not mapped into the SDMX output. Clients that need a measure's
+  definition URI should read it from the native structure or measure-discovery
+  responses.
+
 ## Errors
 
 Relay returns Problem Details for non-2xx responses. Log only safe fields:

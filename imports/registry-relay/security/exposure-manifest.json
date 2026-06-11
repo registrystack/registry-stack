@@ -340,7 +340,7 @@
       "rate_limit": null,
       "audit": "required",
       "openapi": true,
-      "stability": "stable",
+      "stability": "deprecated",
       "data_classification": "metadata",
       "notes": "Protected Registry Relay route.",
       "source": "manual",

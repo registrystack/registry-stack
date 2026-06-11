@@ -513,6 +513,14 @@ async fn lists_dataset_measure_and_dimension_discovery() {
     let body: Value = measure.json();
     assert_eq!(body["id"], "min_payment");
     assert_eq!(body["unit_measure"], "currency");
+    assert!(
+        body.as_object().expect("measure object").contains_key("unit_multiplier"),
+        "measure discovery must use the unit_multiplier spelling"
+    );
+    assert!(
+        body.get("unit_mult").is_none(),
+        "legacy unit_mult spelling must be dropped from measure discovery"
+    );
 
     let dimensions = server.get("/v1/datasets/social_registry/dimensions").await;
     dimensions.assert_status_ok();
@@ -639,6 +647,45 @@ async fn aggregate_only_execution_requires_explicit_opt_in() {
         .get("/v1/datasets/social_registry/entities/individual/records")
         .await;
     rows.assert_status_forbidden();
+}
+
+fn aggregate_only_config_with_sensitivity(sensitivity: &str) -> String {
+    AGGREGATE_CONFIG
+        .replace("    sensitivity: personal\n", &format!("    sensitivity: {sensitivity}\n"))
+        .replace(
+            "      - id: by_municipality\n",
+            "      - id: by_municipality\n        access:\n          aggregate_only_execution: true\n",
+        )
+}
+
+#[tokio::test]
+async fn aggregate_only_execution_on_confidential_dataset_requires_min_cell_size_two() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = tmp.path().join("aggregates_entity.yaml");
+    std::fs::write(
+        &config_path,
+        aggregate_only_config_with_sensitivity("confidential"),
+    )
+    .expect("write config");
+
+    let err = config::load(&config_path)
+        .expect_err("confidential aggregate-only dataset with min_cell_size 1 must be rejected");
+    assert_eq!(err.code(), "config.validation_error");
+}
+
+#[tokio::test]
+async fn aggregate_only_execution_on_secret_dataset_requires_min_cell_size_two() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = tmp.path().join("aggregates_entity.yaml");
+    std::fs::write(
+        &config_path,
+        aggregate_only_config_with_sensitivity("secret"),
+    )
+    .expect("write config");
+
+    let err = config::load(&config_path)
+        .expect_err("secret aggregate-only dataset with min_cell_size 1 must be rejected");
+    assert_eq!(err.code(), "config.validation_error");
 }
 
 #[tokio::test]
@@ -778,7 +825,24 @@ async fn executes_single_entity_count_aggregate() {
     );
     assert_eq!(body["structure"]["measures"][0]["id"], "individual_count");
     assert!(body["structure"].get("indicators").is_none());
-    assert_eq!(body["disclosure_control"]["suppressed_rows"], 0);
+    assert_eq!(body["disclosure_control"]["suppressed_observations"], 0);
+    assert!(
+        body["disclosure_control"].get("suppressed_rows").is_none(),
+        "legacy suppressed_rows alias must be dropped from the native response"
+    );
+    let links = body["links"].as_array().expect("links array");
+    let alternate = links
+        .iter()
+        .find(|link| link["rel"] == "alternate")
+        .expect("native response advertises the SDMX representation");
+    assert_eq!(
+        alternate["href"],
+        "/v1/datasets/social_registry/aggregates/by_municipality?f=sdmx-json"
+    );
+    assert_eq!(
+        alternate["type"],
+        "application/vnd.sdmx.data+json;version=2.1"
+    );
     assert_eq!(
         sorted_rows(&body),
         vec![
@@ -808,7 +872,7 @@ async fn aggregate_detail_route_is_not_captured_by_entity_relationship() {
     resp.assert_status_ok();
     let body: Value = resp.json();
     assert_eq!(body["aggregate_id"], "by_municipality");
-    assert_eq!(body["disclosure_control"]["suppressed_rows"], 0);
+    assert_eq!(body["disclosure_control"]["suppressed_observations"], 0);
     assert_eq!(
         sorted_rows(&body),
         vec![
@@ -1174,7 +1238,7 @@ async fn masks_measures_below_min_group_size_without_removing_group_keys() {
     resp.assert_status_ok();
     let body: Value = resp.json();
     assert_eq!(body["disclosure_control"]["min_cell_size"], 2);
-    assert_eq!(body["disclosure_control"]["suppressed_rows"], 1);
+    assert_eq!(body["disclosure_control"]["suppressed_observations"], 1);
     assert_eq!(
         sorted_rows(&body),
         vec![
@@ -1194,7 +1258,7 @@ async fn executes_direct_relationship_group_by_with_min_group_size() {
     resp.assert_status_ok();
     let body: Value = resp.json();
     assert_eq!(body["disclosure_control"]["min_cell_size"], 2);
-    assert_eq!(body["disclosure_control"]["suppressed_rows"], 1);
+    assert_eq!(body["disclosure_control"]["suppressed_observations"], 1);
     assert_eq!(
         sorted_rows(&body),
         vec![json!({"household_region": "north", "individual_count": 2})]

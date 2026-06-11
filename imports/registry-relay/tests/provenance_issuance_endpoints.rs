@@ -686,7 +686,7 @@ async fn aggregate_vc_subject_reflects_disclosure_suppression() {
         .await;
     plain_resp.assert_status_ok();
     let plain_body: Value = plain_resp.json();
-    assert_eq!(plain_body["disclosure_control"]["suppressed_rows"], 1);
+    assert_eq!(plain_body["disclosure_control"]["suppressed_observations"], 1);
     let plain_rows = plain_body["observations"]
         .as_array()
         .expect("observations array");
