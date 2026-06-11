@@ -131,6 +131,8 @@ different scope, different answer. For more on this service, see
 Now see the issuance side. The citizen Notary issues an SD-JWT VC credential of type
 `person_is_alive_sd_jwt` (format `dc+sd-jwt`). The credential discloses a single predicate, whether
 the person is alive, as a true or false claim. It never hands over the underlying civil record.
+The Relay row-read example uses `NID-1001` / Miguel Santos, while this wallet flow uses the lab
+wallet identity `NID-2001` / Maria Santos.
 
 Unlike the Relay reads above, this part is a guided browser flow, not a curl sequence: a real
 [OID4VCI](../../reference/glossary/) issuance needs a holder key and a sign-in, which is wallet
@@ -143,8 +145,8 @@ to end. The Notary requires you to sign in before it issues. The sign-in runs th
 lab's hosted demo identity provider; you do not need an account, and the values below are synthetic
 demo identities:
 
-- National ID: `NID-1001`
-- Name: Miguel Santos
+- National ID: `NID-2001`
+- Name: Maria Santos
 - Login and OTP code: `111111`
 - PIN: `545411`
 
@@ -159,10 +161,10 @@ https://citizen-notary.lab.registrystack.org/oid4vci/credential-offer?credential
 ### The negative control
 
 Try this in the same browser flow. Self-attestation binds the credential subject to the identity you
-signed in as. If you sign in as `NID-1001` but ask for a credential bound to a different subject
-(`NID-1002`, a different person, also alive), the Notary refuses: it will not issue a credential for a
-subject you did not authenticate as. The issuer cannot be talked into vouching for someone else. For
-more on this service, see [Registry Notary](../../products/registry-notary/).
+signed in as. If you sign in as `NID-2001` but ask for a credential bound to `NID-1001`, the Notary
+refuses: it will not issue a credential for a subject you did not authenticate as. The issuer cannot
+be talked into vouching for someone else. For more on this service, see
+[Registry Notary](../../products/registry-notary/).
 
 ## Now run your own
 
