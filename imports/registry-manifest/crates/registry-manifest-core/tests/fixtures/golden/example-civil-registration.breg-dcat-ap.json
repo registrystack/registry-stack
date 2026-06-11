@@ -232,6 +232,7 @@
           "dcterms:identifier": "sex",
           "dcterms:title": "Sex",
           "rdfs:seeAlso": "https://civil-registration.example.gov/codelists/sex.ttl",
+          "schema_version": "registry-manifest-codelist/v1",
           "skos:hasTopConcept": [
             {
               "@id": "https://civil-registration.example.gov/codelists/sex/female",
@@ -256,6 +257,7 @@
           "dcterms:identifier": "vital_event_type",
           "dcterms:title": "Vital Event Type",
           "rdfs:seeAlso": "https://civil-registration.example.gov/codelists/vital-event-type.ttl",
+          "schema_version": "registry-manifest-codelist/v1",
           "skos:hasTopConcept": [
             {
               "@id": "https://civil-registration.example.gov/codelists/vital-event-type/birth",
