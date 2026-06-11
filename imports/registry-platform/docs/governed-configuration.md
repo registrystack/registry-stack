@@ -124,6 +124,15 @@ must include an approval, and runtimes must source the `BreakGlassRateLimit`
 from trusted local verifier configuration before calling `FileAntiRollbackStore`.
 Accepted approvals are recorded in the anti-rollback state.
 
+`AntiRollbackProposal.break_glass_rate_limit` remains only as a compatibility
+field for older callers that have not yet moved policy into the verifier-owned
+store configuration. Production runtimes should configure
+`FileAntiRollbackStore::with_break_glass_rate_limit(...)` and leave the proposal
+field empty. A locally configured store rejects proposal policy that does not
+match its verifier-owned policy, and the compatibility field should be removed
+in the next breaking API revision once downstream products no longer construct
+break-glass proposals with request-controlled rate limits.
+
 Local operator approval is a separate controlled path for changes that require
 site-local acknowledgement. `FileLocalApprovalStore` loads a
 `LocalOperatorApproval` by approval reference, change class, config hash, and
