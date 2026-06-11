@@ -58,6 +58,24 @@ class ReleaseSourceModelTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("submodule is not initialized", result.stderr)
 
+    def test_vendor_mode_ignores_deprecated_in_repo_cel_mapping_default(self) -> None:
+        with ReleaseSourceFixture() as lab_root:
+            stale = lab_root / "vendor" / "cel-mapping"
+            stale.mkdir()
+            (stale / "Cargo.toml").write_text(
+                "[package]\nname = \"cel-mapping\"\nversion = \"0.1.0\"\n",
+                encoding="utf-8",
+            )
+
+            result = run_validator(
+                lab_root,
+                extra_env={"CEL_MAPPING_SOURCE_DIR": "./vendor/cel-mapping"},
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("release-source crosswalk", result.stdout)
+        self.assertNotIn("vendor/cel-mapping", result.stdout)
+
 
 class ReleaseSourceFixture:
     def __enter__(self) -> Path:
@@ -77,7 +95,7 @@ class ReleaseSourceFixture:
             "registry-relay",
             "registry-notary",
             "registry-manifest",
-            "cel-mapping",
+            "crosswalk",
         ):
             source = self.sources / name
             source.mkdir()
@@ -107,9 +125,15 @@ class ReleaseSourceFixture:
         self.tmp.cleanup()
 
 
-def run_validator(lab_root: Path) -> subprocess.CompletedProcess[str]:
+def run_validator(
+    lab_root: Path,
+    *,
+    extra_env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["REGISTRY_LAB_CHECK_ATLAS"] = "0"
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(
         ["bash", "scripts/check-release-source-model.sh", "vendor"],
         cwd=lab_root,

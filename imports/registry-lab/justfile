@@ -12,7 +12,13 @@ openfn_notary_src := env_var_or_default("REGISTRY_OPENFN_NOTARY_SOURCE_DIR", not
 platform_src := env_var_or_default("REGISTRY_PLATFORM_SOURCE_DIR", default_platform_src)
 atlas_src := env_var_or_default("REGISTRY_ATLAS_SOURCE_DIR", default_atlas_src)
 manifest_src := env_var_or_default("REGISTRY_MANIFEST_REPO", "./vendor/registry-manifest")
-cel_mapping_src := env_var_or_default("CEL_MAPPING_SOURCE_DIR", "./vendor/cel-mapping")
+# CEL_MAPPING_SOURCE_DIR is the deprecated name for CROSSWALK_SOURCE_DIR; the
+# fallback keeps old operator environments working until they migrate.
+deprecated_crosswalk_src := env_var_or_default("CEL_MAPPING_SOURCE_DIR", "")
+deprecated_crosswalk_exists := if deprecated_crosswalk_src != "" { path_exists(deprecated_crosswalk_src) } else { "false" }
+deprecated_crosswalk_is_old_default := if deprecated_crosswalk_src == "./vendor/cel-mapping" { "true" } else { if deprecated_crosswalk_src == "vendor/cel-mapping" { "true" } else { "false" } }
+deprecated_crosswalk_is_usable := if deprecated_crosswalk_exists == "true" { if deprecated_crosswalk_is_old_default == "true" { "false" } else { "true" } } else { "false" }
+crosswalk_src := env_var_or_default("CROSSWALK_SOURCE_DIR", if deprecated_crosswalk_is_usable == "true" { deprecated_crosswalk_src } else { "./vendor/crosswalk" })
 relay_features := env_var_or_default("REGISTRY_RELAY_FEATURES", "spdci-api-standards,standards-cel-mapping,ogcapi-edr")
 
 export REGISTRY_RELAY_SOURCE_DIR := relay_src
@@ -23,7 +29,7 @@ export REGISTRY_RELAY_PLATFORM_SOURCE_DIR := platform_src
 export REGISTRY_NOTARY_PLATFORM_SOURCE_DIR := platform_src
 export REGISTRY_MANIFEST_REPO := manifest_src
 export REGISTRY_ATLAS_SOURCE_DIR := atlas_src
-export CEL_MAPPING_SOURCE_DIR := cel_mapping_src
+export CROSSWALK_SOURCE_DIR := crosswalk_src
 export REGISTRY_RELAY_FEATURES := relay_features
 
 # List available demo commands.
@@ -442,12 +448,12 @@ agri-publicschema-integrator:
 
 # Build the local Crosswalk Python binding used by the strict PublicSchema projection check.
 agri-crosswalk-python:
-    cd ../cel-mapping/crates/crosswalk-python && test -d .venv || uv venv --python 3.13 .venv
-    cd ../cel-mapping/crates/crosswalk-python && . .venv/bin/activate && uv pip install maturin pytest && maturin develop --release && pytest -q
+    cd ../crosswalk/crates/crosswalk-python && test -d .venv || uv venv --python 3.13 .venv
+    cd ../crosswalk/crates/crosswalk-python && . .venv/bin/activate && uv pip install maturin pytest && maturin develop --release && pytest -q
 
 # Run the PublicSchema projection and require executable Crosswalk mappings.
 agri-publicschema-integrator-strict:
-    bash -lc 'source ../cel-mapping/crates/crosswalk-python/.venv/bin/activate && python scripts/demo-publicschema-integrator.py --require-crosswalk'
+    bash -lc 'source ../crosswalk/crates/crosswalk-python/.venv/bin/activate && python scripts/demo-publicschema-integrator.py --require-crosswalk'
 
 # Run the agriculture wallet-holder credential demo.
 agri-wallet:
@@ -465,7 +471,7 @@ agri-verify-consumer-artifacts:
 
 # Validate agriculture consumer artifacts and require Crosswalk-backed PublicSchema output.
 agri-verify-consumer-artifacts-strict:
-    bash -lc 'source ../cel-mapping/crates/crosswalk-python/.venv/bin/activate && python scripts/check-agri-consumer-artifacts.py --require-crosswalk'
+    bash -lc 'source ../crosswalk/crates/crosswalk-python/.venv/bin/activate && python scripts/check-agri-consumer-artifacts.py --require-crosswalk'
 
 # Open the generated live story briefing in the terminal.
 briefing:

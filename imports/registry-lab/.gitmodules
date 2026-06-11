@@ -7,8 +7,8 @@
 [submodule "vendor/registry-notary"]
 	path = vendor/registry-notary
 	url = git@github.com:jeremi/registry-notary.git
-[submodule "vendor/cel-mapping"]
-	path = vendor/cel-mapping
+[submodule "vendor/crosswalk"]
+	path = vendor/crosswalk
 	url = git@github.com:PublicSchema/crosswalk.git
 [submodule "vendor/registry-manifest"]
 	path = vendor/registry-manifest

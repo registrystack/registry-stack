@@ -175,12 +175,30 @@ atlas_enabled() {
 	[[ "${REGISTRY_LAB_CHECK_ATLAS:-0}" == "1" || "${REGISTRY_LAB_RUN_LIVE_STORIES:-0}" == "1" ]]
 }
 
+has_custom_cel_mapping_source_dir() {
+	case "${CEL_MAPPING_SOURCE_DIR:-}" in
+	""|"./vendor/cel-mapping"|"vendor/cel-mapping"|"${lab_root}/vendor/cel-mapping")
+		return 1
+		;;
+	esac
+	[[ -d "${CEL_MAPPING_SOURCE_DIR}" ]]
+}
+
 vendor_platform="${lab_root}/vendor/registry-platform"
 vendor_relay="${lab_root}/vendor/registry-relay"
 vendor_notary="${lab_root}/vendor/registry-notary"
 vendor_manifest="${lab_root}/vendor/registry-manifest"
 vendor_atlas="${lab_root}/vendor/registry-atlas"
-vendor_cel_mapping="${lab_root}/vendor/cel-mapping"
+# CEL_MAPPING_SOURCE_DIR is the deprecated name for CROSSWALK_SOURCE_DIR; the
+# fallback keeps old operator environments working until they migrate.
+vendor_crosswalk="${lab_root}/vendor/crosswalk"
+if [[ -n "${CROSSWALK_SOURCE_DIR:-}" ]]; then
+	crosswalk_source_dir="${CROSSWALK_SOURCE_DIR}"
+elif has_custom_cel_mapping_source_dir; then
+	crosswalk_source_dir="${CEL_MAPPING_SOURCE_DIR}"
+else
+	crosswalk_source_dir="${vendor_crosswalk}"
+fi
 
 case "${mode}" in
 vendor)
@@ -191,7 +209,7 @@ vendor)
 	expect_vendor_path "registry-notary" "${REGISTRY_NOTARY_SOURCE_DIR:-${vendor_notary}}" "${vendor_notary}"
 	expect_vendor_path "registry-openfn-notary" "${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-${vendor_notary}}}" "${vendor_notary}"
 	expect_vendor_path "registry-manifest" "${REGISTRY_MANIFEST_REPO:-${vendor_manifest}}" "${vendor_manifest}"
-	expect_vendor_path "cel-mapping" "${CEL_MAPPING_SOURCE_DIR:-${vendor_cel_mapping}}" "${vendor_cel_mapping}"
+	expect_vendor_path "crosswalk" "${crosswalk_source_dir}" "${vendor_crosswalk}"
 	if atlas_enabled; then
 		expect_vendor_path "registry-atlas" "${REGISTRY_ATLAS_SOURCE_DIR:-${vendor_atlas}}" "${vendor_atlas}"
 	else
@@ -206,7 +224,7 @@ source)
 	notary_platform_dir="$(resolve_dir "${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${platform_dir}}")"
 	openfn_notary_dir="$(resolve_dir "${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${notary_dir}}")"
 	manifest_dir="$(resolve_dir "${REGISTRY_MANIFEST_REPO:-${vendor_manifest}}")"
-	cel_mapping_dir="$(resolve_dir "${CEL_MAPPING_SOURCE_DIR:-${vendor_cel_mapping}}")"
+	crosswalk_dir="$(resolve_dir "${crosswalk_source_dir}")"
 
 	require_cargo_repo "registry-platform" "${platform_dir}"
 	require_cargo_repo "registry-relay" "${relay_dir}"
@@ -215,14 +233,14 @@ source)
 	expect_path "registry-notary-platform" "${notary_platform_dir}" "${platform_dir}"
 	expect_path "registry-openfn-notary" "${openfn_notary_dir}" "${notary_dir}"
 	require_cargo_repo "registry-manifest" "${manifest_dir}"
-	require_cargo_repo "cel-mapping" "${cel_mapping_dir}"
+	require_cargo_repo "crosswalk" "${crosswalk_dir}"
 
 	pending=0
 	compare_pin "registry-platform" "${platform_dir}" "${vendor_platform}"
 	compare_pin "registry-relay" "${relay_dir}" "${vendor_relay}"
 	compare_pin "registry-notary" "${notary_dir}" "${vendor_notary}"
 	printf 'release-source registry-manifest %s %s\n' "${manifest_dir}" "$(repo_head "${manifest_dir}")"
-	printf 'release-source cel-mapping %s %s\n' "${cel_mapping_dir}" "$(repo_head "${cel_mapping_dir}")"
+	printf 'release-source crosswalk %s %s\n' "${crosswalk_dir}" "$(repo_head "${crosswalk_dir}")"
 
 	if atlas_enabled; then
 		atlas_dir="$(resolve_dir "${REGISTRY_ATLAS_SOURCE_DIR:-../registry-atlas}")"

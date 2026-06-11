@@ -9,7 +9,7 @@ x-relay-common: &relay-common
       registry_relay_src: ${REGISTRY_RELAY_SOURCE_DIR:-./vendor/registry-relay}
       registry_platform_src: ${REGISTRY_RELAY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
       registry_manifest_src: ${REGISTRY_MANIFEST_REPO:-./vendor/registry-manifest}
-      cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-./vendor/cel-mapping}
+      crosswalk_src: ${CROSSWALK_SOURCE_DIR:-${CEL_MAPPING_SOURCE_DIR:-./vendor/crosswalk}}
     args:
       REGISTRY_RELAY_FEATURES: ${REGISTRY_RELAY_FEATURES:-spdci-api-standards,standards-cel-mapping,ogcapi-edr}
   env_file:
@@ -31,7 +31,7 @@ x-notary-common: &notary-common
     additional_contexts:
       notary_src: ${REGISTRY_NOTARY_SOURCE_DIR:-./vendor/registry-notary}
       registry_platform_src: ${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
-      cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-./vendor/cel-mapping}
+      crosswalk_src: ${CROSSWALK_SOURCE_DIR:-${CEL_MAPPING_SOURCE_DIR:-./vendor/crosswalk}}
   env_file:
     - .env
   environment:
@@ -220,7 +220,7 @@ services:
       additional_contexts:
         notary_src: ${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-./vendor/registry-notary}}
         registry_platform_src: ${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
-        cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-./vendor/cel-mapping}
+        crosswalk_src: ${CROSSWALK_SOURCE_DIR:-${CEL_MAPPING_SOURCE_DIR:-./vendor/crosswalk}}
     entrypoint: ["/bin/sh", "-eu", "-c"]
     command:
       - |
@@ -250,7 +250,7 @@ services:
       additional_contexts:
         notary_src: ${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-./vendor/registry-notary}}
         registry_platform_src: ${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
-        cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-./vendor/cel-mapping}
+        crosswalk_src: ${CROSSWALK_SOURCE_DIR:-${CEL_MAPPING_SOURCE_DIR:-./vendor/crosswalk}}
     env_file:
       - .env
     environment:
@@ -289,7 +289,7 @@ services:
       additional_contexts:
         notary_src: ${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-./vendor/registry-notary}}
         registry_platform_src: ${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
-        cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-./vendor/cel-mapping}
+        crosswalk_src: ${CROSSWALK_SOURCE_DIR:-${CEL_MAPPING_SOURCE_DIR:-./vendor/crosswalk}}
     command: ["--config", "/etc/registry-notary/openfn-civil-notary.yaml"]
     environment:
       RUST_LOG: info
@@ -315,7 +315,7 @@ services:
       additional_contexts:
         notary_src: ${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-./vendor/registry-notary}}
         registry_platform_src: ${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
-        cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-./vendor/cel-mapping}
+        crosswalk_src: ${CROSSWALK_SOURCE_DIR:-${CEL_MAPPING_SOURCE_DIR:-./vendor/crosswalk}}
     env_file:
       - .env
     environment:
@@ -354,7 +354,7 @@ services:
       additional_contexts:
         notary_src: ${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-./vendor/registry-notary}}
         registry_platform_src: ${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
-        cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-./vendor/cel-mapping}
+        crosswalk_src: ${CROSSWALK_SOURCE_DIR:-${CEL_MAPPING_SOURCE_DIR:-./vendor/crosswalk}}
     command: ["--config", "/etc/registry-notary/dhis2-health-notary.yaml"]
     environment:
       RUST_LOG: info
@@ -379,7 +379,7 @@ services:
       additional_contexts:
         notary_src: ${REGISTRY_NOTARY_SOURCE_DIR:-./vendor/registry-notary}
         registry_platform_src: ${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
-        cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-./vendor/cel-mapping}
+        crosswalk_src: ${CROSSWALK_SOURCE_DIR:-${CEL_MAPPING_SOURCE_DIR:-./vendor/crosswalk}}
     profiles: ["opencrvs"]
     command: ["--config", "/etc/registry-notary/opencrvs-dci-notary.yaml"]
     env_file:
