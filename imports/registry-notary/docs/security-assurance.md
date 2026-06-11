@@ -100,6 +100,26 @@ cosign verify \
   ghcr.io/jeremi/registry-notary-openfn-sidecar:<tag>
 ```
 
+The certificate identity is the Git tag that triggered the workflow, not
+necessarily the GHCR tag being verified. When verifying moving aliases such as
+`latest`, `vX`, `vX.Y`, or either image's immutable `sha-<commit-sha>` tag, set
+`<git-tag>` to the stable `vX.Y.Z` tag or
+`registry-stack-technical-preview-<date-or-version>` tag that produced the
+alias. To verify a moving alias without preselecting one release tag, constrain
+the signing workflow with a release-tag regexp:
+
+```sh
+cosign verify \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github.com/jeremi/registry-notary/\.github/workflows/container\.yml@refs/tags/(v[0-9]+\.[0-9]+\.[0-9]+|registry-stack-technical-preview-[0-9A-Za-z][0-9A-Za-z._-]*)$' \
+  ghcr.io/jeremi/registry-notary:<moving-tag>
+
+cosign verify \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github.com/jeremi/registry-notary/\.github/workflows/container\.yml@refs/tags/(v[0-9]+\.[0-9]+\.[0-9]+|registry-stack-technical-preview-[0-9A-Za-z][0-9A-Za-z._-]*)$' \
+  ghcr.io/jeremi/registry-notary-openfn-sidecar:<moving-tag>
+```
+
 ## Deliberate route posture exceptions
 
 Some routes deviate from the `/v1/` versioning convention by design. These
