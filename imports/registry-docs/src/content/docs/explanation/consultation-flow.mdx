@@ -81,11 +81,11 @@ Storage tables are an implementation detail.
 Public routes reference datasets and entity names, never table ids.
 The four primary route shapes for row access are:
 
-- `GET /datasets/{dataset_id}/{entity}` : paginated list of entity records.
-- `GET /datasets/{dataset_id}/{entity}/{id}` : single record by identifier.
-- `GET /datasets/{dataset_id}/{entity}/{id}/{relationship}` : related records for a
-  declared relationship.
-- `GET /datasets/{dataset_id}/aggregates/{aggregate_id}` : a pre-configured aggregate over
+- `GET /v1/datasets/{dataset_id}/entities/{entity}/records` : paginated list of entity records.
+- `GET /v1/datasets/{dataset_id}/entities/{entity}/records/{id}` : single record by identifier.
+- `GET /v1/datasets/{dataset_id}/entities/{entity}/records/{id}/relationships/{relationship}` :
+  related records for a declared relationship.
+- `GET /v1/datasets/{dataset_id}/aggregates/{aggregate_id}` : a pre-configured aggregate over
   entity records.
 
 Metadata routes under `/metadata/*` follow the same auth path but require a `metadata`
