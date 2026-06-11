@@ -17,6 +17,7 @@ auth:
         commitment: sha256:52b497e943584ba3a0cf7aed4de9b6ee8e3d47127f4a1af50a517580bd65d324
       scopes:
         - registry_notary:ops_read
+        - registry_notary:metrics_read
     - id: civil_evidence_client
       fingerprint:
         provider: env
@@ -36,6 +37,11 @@ auth:
 audit:
   sink: stdout
   hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+
+replay:
+  storage: redis
+  redis:
+    url_env: REGISTRY_NOTARY_REDIS_URL
 
 config_trust:
   antirollback_state_path: /var/lib/registry-notary/config-state/civil-notary-config-antirollback.json
