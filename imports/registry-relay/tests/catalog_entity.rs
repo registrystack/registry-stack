@@ -1613,10 +1613,6 @@ async fn openapi_json_groups_operations_into_sidebar_tags() {
             "get",
         ),
         (
-            "/v1/datasets/social_registry/aggregates/{aggregate_id}",
-            "post",
-        ),
-        (
             "/v1/datasets/social_registry/aggregates/{aggregate_id}/query",
             "post",
         ),
