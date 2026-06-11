@@ -38,7 +38,7 @@ LISTENERS = {"public", "admin", "internal", "metrics", "demo", "sidecar"}
 AUDIENCES = {"external", "operator", "platform", "internal", "demo", "health"}
 AUTHS = {"none", "api_key", "oidc", "api_key_or_oidc", "bearer", "internal", "mTLS"}
 AUDIT = {"required", "optional", "not_applicable", "suppressed"}
-STABILITY = {"stable", "beta", "experimental", "admin", "demo"}
+STABILITY = {"stable", "beta", "experimental", "deprecated", "admin", "demo"}
 DATA = {"none", "operational", "metadata", "personal", "credential", "audit", "secret-adjacent"}
 SOURCES = {"manual", "generated", "mixed"}
 

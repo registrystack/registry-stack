@@ -26,7 +26,8 @@ pub(super) fn aggregate_result_json(result: &AggregateResult, as_of: Option<&str
         "freshness": freshness,
         "links": [
             { "rel": "self", "href": format!("/v1/datasets/{}/aggregates/{}", result.dataset_id, result.aggregate_id), "type": "application/json" },
-            { "rel": "describedby", "href": format!("/v1/datasets/{}/aggregates/{}/structure", result.dataset_id, result.aggregate_id), "type": "application/json" }
+            { "rel": "describedby", "href": format!("/v1/datasets/{}/aggregates/{}/structure", result.dataset_id, result.aggregate_id), "type": "application/json" },
+            { "rel": "alternate", "href": format!("/v1/datasets/{}/aggregates/{}?f=sdmx-json", result.dataset_id, result.aggregate_id), "type": "application/vnd.sdmx.data+json;version=2.1" }
         ]
     })
 }
@@ -118,7 +119,6 @@ fn disclosure_json(disclosure: &crate::query::aggregates::AggregateDisclosure) -
         "min_cell_size": disclosure.min_cell_size,
         "suppression": disclosure.suppression,
         "suppressed_observations": disclosure.suppressed_rows,
-        "suppressed_rows": disclosure.suppressed_rows,
         "query_budget": {
             "tracked": disclosure.tracked_query_budget,
             "scope": disclosure.query_budget_scope

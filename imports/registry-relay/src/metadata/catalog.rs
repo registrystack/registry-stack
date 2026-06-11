@@ -249,7 +249,11 @@ pub fn catalog_document_for_entity_ids(
         config,
         registry,
         |dataset, entity| entity_ids.contains(&(dataset.id.to_string(), entity.name.clone())),
-        |_, _, _| false,
+        |dataset, _aggregate, source_entity| {
+            source_entity.is_some_and(|entity| {
+                entity_ids.contains(&(dataset.id.to_string(), entity.name.clone()))
+            })
+        },
     )
 }
 
