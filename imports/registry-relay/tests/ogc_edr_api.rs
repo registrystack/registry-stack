@@ -42,17 +42,35 @@ fn server_with_options(
     include_spatial_filter: bool,
     max_geometry_vertices: u32,
 ) -> TestServer {
-    let tmp = TempDir::new().expect("tempdir");
-    let config_path = tmp.path().join("ogc_edr.yaml");
-    std::fs::write(
-        &config_path,
+    server_from_config(
+        scopes,
         edr_config_yaml(
             require_purpose_header,
             include_spatial_filter,
             max_geometry_vertices,
+            false,
         ),
     )
-    .expect("write config");
+}
+
+fn server_with_aggregate_only_execution(scopes: &[&str]) -> TestServer {
+    server_from_config(
+        scopes,
+        edr_config_yaml_with_geometry_read_scope(
+            false,
+            true,
+            100,
+            true,
+            "social_registry:geometry",
+        )
+        .replace("min_group_size: 1", "min_group_size: 2"),
+    )
+}
+
+fn server_from_config(scopes: &[&str], yaml: String) -> TestServer {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = tmp.path().join("ogc_edr.yaml");
+    std::fs::write(&config_path, yaml).expect("write config");
     let cfg = Arc::new(
         config::load(&config_path)
             .unwrap_or_else(|err| panic!("config loads for {}: {err:?}", config_path.display())),
@@ -88,6 +106,23 @@ fn edr_config_yaml(
     require_purpose_header: bool,
     include_spatial_filter: bool,
     max_geometry_vertices: u32,
+    aggregate_only_execution: bool,
+) -> String {
+    edr_config_yaml_with_geometry_read_scope(
+        require_purpose_header,
+        include_spatial_filter,
+        max_geometry_vertices,
+        aggregate_only_execution,
+        "social_registry:rows",
+    )
+}
+
+fn edr_config_yaml_with_geometry_read_scope(
+    require_purpose_header: bool,
+    include_spatial_filter: bool,
+    max_geometry_vertices: u32,
+    aggregate_only_execution: bool,
+    geometry_read_scope: &str,
 ) -> String {
     let spatial_filter = if include_spatial_filter {
         r#"          - field: municipality
@@ -159,6 +194,8 @@ datasets:
         title: Beneficiaries by municipality
         description: Beneficiary count by municipality
         source_entity: individual
+        access:
+          aggregate_only_execution: __AGGREGATE_ONLY_EXECUTION__
         default_group_by:
           - municipality
         dimensions:
@@ -207,7 +244,7 @@ __SPATIAL_FILTER__
         access:
           metadata_scope: social_registry:metadata
           aggregate_scope: social_registry:aggregate
-          read_scope: social_registry:rows
+          read_scope: __GEOMETRY_READ_SCOPE__
         api:
           default_limit: 100
           max_limit: 10000
@@ -225,6 +262,15 @@ __SPATIAL_FILTER__
             "false"
         },
     )
+    .replace(
+        "__AGGREGATE_ONLY_EXECUTION__",
+        if aggregate_only_execution {
+            "true"
+        } else {
+            "false"
+        },
+    )
+    .replace("__GEOMETRY_READ_SCOPE__", geometry_read_scope)
 }
 
 fn register_individuals(ctx: &SessionContext) {
@@ -351,7 +397,7 @@ async fn area_post_geojson_returns_single_submitted_geometry_feature() {
         .json(&json!({
             "type": "Feature",
             "properties": {
-                "indicators": ["individual_count"],
+                "measures": ["individual_count"],
                 "filters": { "municipality": "mun-2" }
             },
             "geometry": {
@@ -366,6 +412,8 @@ async fn area_post_geojson_returns_single_submitted_geometry_feature() {
     }
     let body: Value = resp.json();
     assert!(body.get("crs").is_none());
+    assert_eq!(body["schema"]["measures"][0]["id"], "individual_count");
+    assert!(body["schema"].get("indicators").is_none());
     let features = body["features"].as_array().expect("features");
     assert_eq!(features.len(), 1);
     assert_eq!(features[0]["geometry"]["type"], "Polygon");
@@ -407,6 +455,24 @@ async fn area_enforces_source_entity_purpose_header() {
         .add_header("data-purpose", "capacity planning")
         .await;
     ok.assert_status_ok();
+}
+
+#[tokio::test]
+async fn area_rejects_unsupported_response_format_with_aggregate_code() {
+    let server = server(&[
+        "social_registry:metadata",
+        "social_registry:aggregate",
+        "social_registry:rows",
+    ]);
+
+    let resp = server
+        .get("/ogc/edr/v1/collections/social_registry_beneficiaries_by_municipality/area")
+        .add_query_param("coords", "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))")
+        .add_query_param("f", "xml")
+        .await;
+
+    resp.assert_status_bad_request();
+    assert_eq!(resp.json::<Value>()["code"], "aggregate.format_unsupported");
 }
 
 #[tokio::test]
@@ -466,7 +532,7 @@ async fn area_no_matching_admin_geometry_returns_empty_feature_collection() {
 fn spatial_aggregate_requires_in_filter_on_area_dimension() {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = tmp.path().join("ogc_edr_invalid.yaml");
-    std::fs::write(&config_path, edr_config_yaml(false, false, 100)).expect("write config");
+    std::fs::write(&config_path, edr_config_yaml(false, false, 100, false)).expect("write config");
 
     config::load(&config_path).expect_err("spatial aggregate without in filter is rejected");
 }
@@ -497,4 +563,54 @@ async fn area_requires_source_entity_read_scope() {
     resp.assert_status_forbidden();
     let body: Value = resp.json();
     assert_eq!(body["code"], "auth.scope_denied");
+}
+
+#[tokio::test]
+async fn area_requires_geometry_entity_read_scope() {
+    let server = server_from_config(
+        &[
+            "social_registry:metadata",
+            "social_registry:aggregate",
+            "social_registry:rows",
+        ],
+        edr_config_yaml_with_geometry_read_scope(
+            false,
+            true,
+            100,
+            false,
+            "social_registry:geometry",
+        ),
+    );
+
+    let resp = server
+        .get("/ogc/edr/v1/collections/social_registry_beneficiaries_by_municipality/area")
+        .add_query_param("coords", "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))")
+        .await;
+
+    resp.assert_status_forbidden();
+    let body: Value = resp.json();
+    assert_eq!(body["code"], "auth.scope_denied");
+}
+
+#[tokio::test]
+async fn area_allows_aggregate_only_execution_when_explicitly_configured() {
+    let server = server_with_aggregate_only_execution(&[
+        "social_registry:metadata",
+        "social_registry:aggregate",
+        "social_registry:geometry",
+    ]);
+
+    let resp = server
+        .get("/ogc/edr/v1/collections/social_registry_beneficiaries_by_municipality/area")
+        .add_query_param("coords", "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))")
+        .add_query_param("parameter-name", "individual_count")
+        .add_query_param("group_by", "municipality")
+        .await;
+
+    resp.assert_status_ok();
+    let body: Value = resp.json();
+    let features = body["features"].as_array().expect("features");
+    assert_eq!(features.len(), 1);
+    assert_eq!(features[0]["properties"]["municipality"], "mun-1");
+    assert_eq!(features[0]["properties"]["individual_count"], 2);
 }

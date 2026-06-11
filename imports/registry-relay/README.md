@@ -52,7 +52,7 @@ See [demo/README.md](demo/README.md) for the datasets, personas, Bruno collectio
 
 [docs/README.md](docs/README.md) is the documentation map. The main references:
 
-- [API guide](docs/api.md): auth, scopes, filters, pagination, error contract, and standards surfaces. The route inventory lives in [openapi/registry-relay.openapi.json](openapi/registry-relay.openapi.json) and at the served `/docs` and `/openapi.json`.
+- [API guide](docs/api.md): auth, scopes, filters, pagination, error contract, and standards surfaces. The curated public OpenAPI surface lives in [openapi/registry-relay.openapi.json](openapi/registry-relay.openapi.json) and at the served `/docs` and `/openapi.json`.
 - [Client integration guide](docs/client-integration.md): caller behavior, discovery, retries, and the Registry Notary handoff.
 - [Configuration guide](docs/configuration.md): the full YAML contract. The binary reads `--config <path>`, then `REGISTRY_RELAY_CONFIG`, then `./config/example.yaml`; [config/example.yaml](config/example.yaml) is the canonical example. API keys are never stored in YAML: configs reference environment-backed SHA-256 fingerprints, and `auth.mode: oidc` validates bearer JWTs against an external IdP.
 - [Portable metadata](docs/metadata.md): `metadata.yaml` manifests, the metadata CLI, static publication, ODRL policy metadata, and DCAT-AP/SHACL validation. Manifests can outlive Relay itself and be published as static files.

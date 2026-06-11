@@ -26,6 +26,16 @@
   `--env-file` / `REGISTRY_RELAY_ENV_FILE`, and `--bind` /
   `REGISTRY_RELAY_BIND` support. The bind override applies after YAML
   validation; `server.bind` remains required in config.
+- BREAKING: Aggregate responses now use `observations`, `structure`, and
+  `measures` as the public vocabulary. `/metadata` remains a deprecated alias
+  for aggregate `/structure`, and `indicators` remains a deprecated request
+  alias where accepted.
+- Aggregate queries now support CSV and SDMX JSON 2.1 representations, including
+  `Accept: text/csv` and `Accept: application/vnd.sdmx.data+json;version=2.1`.
+  Truncated aggregate results carry an explicit completeness signal.
+- DCAT aggregate distributions now advertise each visible aggregate
+  representation separately, including OGC EDR `/area` links for configured
+  spatial aggregates when the `ogcapi-edr` feature is enabled.
 
 ## 0.1.0 - 2026-05-16
 

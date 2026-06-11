@@ -790,18 +790,35 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
                 }
                 tag(&mut paths, &aggregate_query_path, "post", &aggregate_tag);
 
+                let aggregate_structure_path = format!(
+                    "/v1/datasets/{}/aggregates/{{aggregate_id}}/structure",
+                    dataset.dataset_id
+                );
+                paths.insert(
+                    aggregate_structure_path.clone(),
+                    aggregate_structure_path_item("Get aggregate structure"),
+                );
+                set_op_id(
+                    &mut paths,
+                    &aggregate_structure_path,
+                    "get",
+                    &format!("get_{dataset_slug}_aggregate_structure"),
+                );
+                add_response_404(
+                    &mut paths,
+                    &aggregate_structure_path,
+                    "get",
+                    "Aggregate definition not found for this dataset.",
+                );
+                tag(&mut paths, &aggregate_structure_path, "get", &aggregate_tag);
+
                 let aggregate_metadata_path = format!(
                     "/v1/datasets/{}/aggregates/{{aggregate_id}}/metadata",
                     dataset.dataset_id
                 );
                 paths.insert(
                     aggregate_metadata_path.clone(),
-                    path_item_with_params(
-                        "get",
-                        "Get aggregate metadata",
-                        "AggregateMetadata",
-                        vec![path_parameter("aggregate_id", "Aggregate identifier")],
-                    ),
+                    aggregate_structure_path_item("Get aggregate structure (metadata alias)"),
                 );
                 set_op_id(
                     &mut paths,
@@ -815,54 +832,55 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
                     "get",
                     "Aggregate definition not found for this dataset.",
                 );
+                mark_deprecated(&mut paths, &aggregate_metadata_path, "get");
                 tag(&mut paths, &aggregate_metadata_path, "get", &aggregate_tag);
 
-                let indicators_path = format!("/v1/datasets/{}/indicators", dataset.dataset_id);
+                let measures_path = format!("/v1/datasets/{}/measures", dataset.dataset_id);
                 paths.insert(
-                    indicators_path.clone(),
-                    json_path_item("get", "List dataset indicators", "AggregateIndicatorList"),
+                    measures_path.clone(),
+                    json_path_item("get", "List dataset measures", "AggregateMeasureList"),
                 );
                 set_op_id(
                     &mut paths,
-                    &indicators_path,
+                    &measures_path,
                     "get",
-                    &format!("list_{dataset_slug}_indicators"),
+                    &format!("list_{dataset_slug}_measures"),
                 );
                 set_description(
                     &mut paths,
-                    &indicators_path,
+                    &measures_path,
                     "get",
                     &format!(
-                        "Lists indicator definitions declared by aggregates in `{}`.",
+                        "Lists measure definitions declared by aggregates in `{}`.",
                         dataset.dataset_id,
                     ),
                 );
-                tag(&mut paths, &indicators_path, "get", &aggregate_tag);
+                tag(&mut paths, &measures_path, "get", &aggregate_tag);
 
-                let indicator_path =
-                    format!("/v1/datasets/{}/indicators/{{item_id}}", dataset.dataset_id);
+                let measure_path =
+                    format!("/v1/datasets/{}/measures/{{item_id}}", dataset.dataset_id);
                 paths.insert(
-                    indicator_path.clone(),
+                    measure_path.clone(),
                     path_item_with_params(
                         "get",
-                        "Get dataset indicator",
-                        "AggregateIndicatorDiscovery",
-                        vec![path_parameter("item_id", "Indicator identifier")],
+                        "Get dataset measure",
+                        "AggregateMeasureDiscovery",
+                        vec![path_parameter("item_id", "Measure identifier")],
                     ),
                 );
                 set_op_id(
                     &mut paths,
-                    &indicator_path,
+                    &measure_path,
                     "get",
-                    &format!("get_{dataset_slug}_indicator"),
+                    &format!("get_{dataset_slug}_measure"),
                 );
                 add_response_404(
                     &mut paths,
-                    &indicator_path,
+                    &measure_path,
                     "get",
-                    "Indicator definition not found for this dataset.",
+                    "Measure definition not found for this dataset.",
                 );
-                tag(&mut paths, &indicator_path, "get", &aggregate_tag);
+                tag(&mut paths, &measure_path, "get", &aggregate_tag);
 
                 let dimensions_path = format!("/v1/datasets/{}/dimensions", dataset.dataset_id);
                 paths.insert(
@@ -1352,6 +1370,12 @@ fn add_response_404(paths: &mut Map<String, Value>, path: &str, method: &str, de
 fn tag(paths: &mut Map<String, Value>, path: &str, method: &str, tag: &str) {
     if let Some(op) = op_at(paths, path, method) {
         op.insert("tags".to_string(), json!([tag]));
+    }
+}
+
+fn mark_deprecated(paths: &mut Map<String, Value>, path: &str, method: &str) {
+    if let Some(op) = op_at(paths, path, method) {
+        op.insert("deprecated".to_string(), json!(true));
     }
 }
 
@@ -1900,14 +1924,17 @@ fn schemas(catalog: &CatalogDocument, config: &Config) -> Value {
     }
     schemas.insert("AggregateListResponse".to_string(), aggregate_list_schema());
     schemas.insert("AggregateResult".to_string(), aggregate_result_schema());
-    schemas.insert("AggregateMetadata".to_string(), aggregate_metadata_schema());
     schemas.insert(
-        "AggregateIndicatorList".to_string(),
-        aggregate_indicator_list_schema(),
+        "AggregateStructure".to_string(),
+        aggregate_structure_schema(),
     );
     schemas.insert(
-        "AggregateIndicatorDiscovery".to_string(),
-        aggregate_indicator_discovery_schema(),
+        "AggregateMeasureList".to_string(),
+        aggregate_measure_list_schema(),
+    );
+    schemas.insert(
+        "AggregateMeasureDiscovery".to_string(),
+        aggregate_measure_discovery_schema(),
     );
     schemas.insert(
         "AggregateDimensionList".to_string(),
@@ -2452,9 +2479,8 @@ fn aggregate_list_schema() -> Value {
                 "type": "array",
                 "items": {
                     "type": "object",
-                    "required": ["dataset_id", "aggregate_id", "title", "description", "source_entity", "dimensions", "indicators"],
+                    "required": ["aggregate_id", "title", "description", "dimensions", "measures"],
                     "properties": {
-                        "dataset_id": { "type": "string" },
                         "aggregate_id": { "type": "string" },
                         "title": { "type": "string" },
                         "description": { "type": "string" },
@@ -2462,8 +2488,10 @@ fn aggregate_list_schema() -> Value {
                         "default_group_by": { "type": "array", "items": { "type": "string" } },
                         "temporal_field": { "type": ["string", "null"] },
                         "dimensions": aggregate_schema_dimension_array(),
-                        "indicators": aggregate_schema_indicator_array(),
+                        "measures": aggregate_schema_measure_array(),
                         "disclosure_control": aggregate_disclosure_schema(),
+                        "min_cell_size": { "type": "integer", "minimum": 1 },
+                        "edr_collection_id": { "type": ["string", "null"] },
                         "links": link_array_schema(),
                     },
                 },
@@ -2472,7 +2500,6 @@ fn aggregate_list_schema() -> Value {
         },
         "examples": [{
             "data": [{
-                "dataset_id": "social_registry",
                 "aggregate_id": "households_by_region",
                 "title": "Households by region",
                 "description": "Household count by region",
@@ -2480,7 +2507,7 @@ fn aggregate_list_schema() -> Value {
                 "default_group_by": ["region"],
                 "temporal_field": null,
                 "dimensions": [{ "id": "region", "label": "Region", "field": "region" }],
-                "indicators": [{ "id": "household_count", "label": "Households", "function": "count", "column": "id", "unit_measure": "households" }],
+                "measures": [{ "id": "household_count", "label": "Households", "aggregation_method": "count", "column": "id", "unit_measure": "households" }],
                 "disclosure_control": { "method": ["k-anonymity"], "min_cell_size": 2, "suppression": "omit", "suppressed_rows": null, "query_budget": { "tracked": false, "scope": "none" } },
                 "links": [],
             }],
@@ -2495,8 +2522,9 @@ fn aggregate_result_schema() -> Value {
         "required": [
             "dataset_id",
             "aggregate_id",
-            "data",
-            "schema",
+            "observations",
+            "structure",
+            "completeness",
             "disclosure_control",
             "freshness",
             "links"
@@ -2504,13 +2532,22 @@ fn aggregate_result_schema() -> Value {
         "properties": {
             "dataset_id": { "type": "string" },
             "aggregate_id": { "type": "string" },
-            "data": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
-            "schema": {
+            "observations": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+            "structure": {
                 "type": "object",
-                "required": ["dimensions", "indicators"],
+                "required": ["dimensions", "measures"],
                 "properties": {
                     "dimensions": aggregate_schema_dimension_array(),
-                    "indicators": aggregate_schema_indicator_array(),
+                    "measures": aggregate_schema_measure_array(),
+                },
+                "additionalProperties": false,
+            },
+            "completeness": {
+                "type": "object",
+                "required": ["complete", "truncated"],
+                "properties": {
+                    "complete": { "type": "boolean" },
+                    "truncated": { "type": "boolean" },
                 },
                 "additionalProperties": false,
             },
@@ -2521,11 +2558,12 @@ fn aggregate_result_schema() -> Value {
         "examples": [{
             "dataset_id": "social_registry",
             "aggregate_id": "households_by_region",
-            "data": [{ "region": "north", "household_count": 42 }],
-            "schema": {
+            "observations": [{ "region": "north", "household_count": 42 }],
+            "structure": {
                 "dimensions": [{ "id": "region", "label": "Region", "field": "region" }],
-                "indicators": [{ "id": "household_count", "label": "Households", "function": "count", "column": "id", "unit_measure": "households" }]
+                "measures": [{ "id": "household_count", "label": "Households", "aggregation_method": "count", "column": "id", "unit_measure": "households" }]
             },
+            "completeness": { "complete": true, "truncated": false },
             "disclosure_control": { "method": ["k-anonymity"], "min_cell_size": 2, "suppression": "omit", "suppressed_rows": 1, "query_budget": { "tracked": false, "scope": "none" } },
             "freshness": { "computed_at": "2026-05-16T08:00:00Z", "as_of": "2026-05-16T07:55:00Z" },
             "links": [],
@@ -2533,18 +2571,18 @@ fn aggregate_result_schema() -> Value {
     })
 }
 
-fn aggregate_metadata_schema() -> Value {
+fn aggregate_structure_schema() -> Value {
     aggregate_list_schema()["properties"]["data"]["items"].clone()
 }
 
-fn aggregate_indicator_list_schema() -> Value {
+fn aggregate_measure_list_schema() -> Value {
     json!({
         "type": "object",
         "required": ["data", "links"],
         "properties": {
             "data": {
                 "type": "array",
-                "items": { "$ref": "#/components/schemas/AggregateIndicatorDiscovery" },
+                "items": { "$ref": "#/components/schemas/AggregateMeasureDiscovery" },
             },
             "links": link_array_schema(),
         },
@@ -2552,7 +2590,7 @@ fn aggregate_indicator_list_schema() -> Value {
     })
 }
 
-fn aggregate_indicator_discovery_schema() -> Value {
+fn aggregate_measure_discovery_schema() -> Value {
     json!({
         "type": "object",
         "required": ["id", "label", "aggregation_method", "unit_measure", "valid_dimensions", "queryable_via", "aggregates", "links"],
@@ -2625,7 +2663,19 @@ fn aggregate_query_request_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "indicators": { "type": "array", "items": { "type": "string" }, "maxItems": 20 },
+            "measures": {
+                "type": "array",
+                "items": { "type": "string" },
+                "maxItems": 20,
+                "description": "Measure identifiers to compute. Defaults to the aggregate's configured measures when omitted."
+            },
+            "indicators": {
+                "type": "array",
+                "items": { "type": "string" },
+                "maxItems": 20,
+                "deprecated": true,
+                "description": "Deprecated compatibility alias for `measures`."
+            },
             "group_by": { "type": "array", "items": { "type": "string" }, "maxItems": 5 },
             "filters": { "type": "object", "additionalProperties": true, "maxProperties": 20 },
             "temporal": {
@@ -2637,11 +2687,16 @@ fn aggregate_query_request_schema() -> Value {
                 },
                 "additionalProperties": false,
             },
-            "format": { "type": "string", "enum": ["json", "csv"] },
+            "max_rows": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Maximum aggregate observations to return. Results that exceed the cap are truncated and marked incomplete."
+            },
+            "format": { "type": "string", "enum": ["json", "csv", "sdmx-json"] },
         },
         "additionalProperties": false,
         "examples": [{
-            "indicators": ["household_count"],
+            "measures": ["household_count"],
             "group_by": ["region"],
             "filters": { "region": ["north", "south"] },
             "format": "json",
@@ -2666,19 +2721,19 @@ fn aggregate_schema_dimension_array() -> Value {
     })
 }
 
-fn aggregate_schema_indicator_array() -> Value {
+fn aggregate_schema_measure_array() -> Value {
     json!({
         "type": "array",
         "items": {
             "type": "object",
-            "required": ["id", "label", "function", "column", "unit_measure"],
+            "required": ["id", "label", "aggregation_method", "column", "unit_measure"],
             "properties": {
                 "id": { "type": "string" },
                 "label": { "type": "string" },
-                "function": { "type": "string" },
+                "aggregation_method": { "type": "string" },
                 "column": { "type": "string" },
                 "unit_measure": { "type": "string" },
-                "unit_mult": { "type": ["number", "null"] },
+                "unit_multiplier": { "type": ["number", "null"] },
                 "decimals": { "type": ["integer", "null"] },
                 "frequency": { "type": ["string", "null"] },
                 "definition_uri": { "type": ["string", "null"], "format": "uri" },
@@ -3420,7 +3475,7 @@ fn insert_ogc_edr_paths(paths: &mut Map<String, Value>) {
                 "parameters": [
                     path_parameter("collection_id", "EDR collection identifier"),
                     query_parameter("coords", "WKT geometry in CRS84."),
-                    query_parameter("parameter-name", "Comma-separated aggregate indicator ids."),
+                    query_parameter("parameter-name", "Comma-separated aggregate measure ids."),
                     query_parameter("group_by", "Optional aggregate dimension id."),
                     query_parameter("f", "Response format. Phase 1 accepts `geojson`.")
                 ],
@@ -3431,7 +3486,7 @@ fn insert_ogc_edr_paths(paths: &mut Map<String, Value>) {
                 "summary": "Query OGC EDR area with GeoJSON",
                 "parameters": [
                     path_parameter("collection_id", "EDR collection identifier"),
-                    query_parameter("parameter-name", "Comma-separated aggregate indicator ids."),
+                    query_parameter("parameter-name", "Comma-separated aggregate measure ids."),
                     query_parameter("group_by", "Optional aggregate dimension id."),
                     query_parameter("f", "Response format. Phase 1 accepts `geojson`.")
                 ],
@@ -3639,13 +3694,17 @@ fn path_item_with_params(
 fn aggregate_run_path_item(dataset_id: &str) -> Value {
     let parameters = vec![
         path_parameter("aggregate_id", "Aggregate identifier"),
-        query_parameter("f", "Response format. Use `json` or `csv`."),
+        enum_query_parameter(
+            "f",
+            "Response format. Use `json`, `csv`, or `sdmx-json`.",
+            vec!["json", "csv", "sdmx-json"],
+        ),
     ];
     json!({
         "get": {
             "summary": "Run aggregate defaults",
             "description": format!(
-                "Runs a dataset-scoped aggregate in `{dataset_id}` with its configured default indicators, default group_by, and no optional filters."
+                "Runs a dataset-scoped aggregate in `{dataset_id}` with its configured default measures, default group_by, and no optional filters."
             ),
             "parameters": parameters,
             "responses": aggregate_result_responses(),
@@ -3654,13 +3713,21 @@ fn aggregate_run_path_item(dataset_id: &str) -> Value {
 }
 
 fn aggregate_query_path_item(dataset_id: &str) -> Value {
+    let parameters = vec![
+        path_parameter("aggregate_id", "Aggregate identifier"),
+        enum_query_parameter(
+            "f",
+            "Response format. Use `json`, `csv`, or `sdmx-json`.",
+            vec!["json", "csv", "sdmx-json"],
+        ),
+    ];
     json!({
         "post": {
             "summary": "Query aggregate",
             "description": format!(
-                "Runs a dataset-scoped aggregate in `{dataset_id}` with caller-selected indicators, group_by dimensions, and configured filters."
+                "Runs a dataset-scoped aggregate in `{dataset_id}` with caller-selected measures, group_by dimensions, and configured filters."
             ),
-            "parameters": [path_parameter("aggregate_id", "Aggregate identifier")],
+            "parameters": parameters,
             "requestBody": aggregate_query_request_body(),
             "responses": aggregate_result_responses(),
         }
@@ -3678,6 +3745,29 @@ fn aggregate_query_request_body() -> Value {
     })
 }
 
+fn aggregate_structure_path_item(summary: &str) -> Value {
+    json!({
+        "get": {
+            "summary": summary,
+            "description": "Returns descriptive structure for one aggregate: group-by dimensions, measures, disclosure-control policy, optional temporal field, and links.",
+            "parameters": [path_parameter("aggregate_id", "Aggregate identifier")],
+            "responses": {
+                "200": {
+                    "description": "Aggregate structure descriptor.",
+                    "content": {
+                        "application/json": {
+                            "schema": { "$ref": "#/components/schemas/AggregateStructure" }
+                        }
+                    }
+                },
+                "401": problem_response("Missing or invalid bearer credential."),
+                "403": problem_response("Authenticated principal lacks the scope required for this operation."),
+                "default": problem_response("Problem Details error response."),
+            }
+        }
+    })
+}
+
 fn aggregate_result_responses() -> Value {
     json!({
         "200": {
@@ -3685,6 +3775,13 @@ fn aggregate_result_responses() -> Value {
             "content": {
                 "application/json": {
                     "schema": { "$ref": "#/components/schemas/AggregateResult" }
+                },
+                "application/vnd.sdmx.data+json;version=2.1": {
+                    "schema": {
+                        "type": "object",
+                        "description": "SDMX JSON data message for the aggregate result.",
+                        "additionalProperties": true
+                    }
                 },
                 "text/csv": {
                     "schema": { "type": "string" }
@@ -4100,6 +4197,7 @@ mod tests {
                     ogc_records: None,
                 },
                 standards: Default::default(),
+                aggregate_distributions: Vec::new(),
                 entities: vec![EntityMetadata {
                     name: "individual".to_string(),
                     title: Some("Individual".to_string()),
@@ -4368,6 +4466,80 @@ mod tests {
                 .expect("bearer description")
                 .contains("OIDC/OAuth2 bearer JWT")
         );
+    }
+
+    #[test]
+    fn aggregate_openapi_uses_measure_structure_and_sdmx_contract() {
+        let config = load_example_config();
+        let doc = openapi_document(&catalog_with_individual(), &config);
+        let paths = &doc["paths"];
+        let aggregate_path = "/v1/datasets/social_registry/aggregates/{aggregate_id}";
+        let query_path = "/v1/datasets/social_registry/aggregates/{aggregate_id}/query";
+        let structure_path = "/v1/datasets/social_registry/aggregates/{aggregate_id}/structure";
+        let metadata_alias_path = "/v1/datasets/social_registry/aggregates/{aggregate_id}/metadata";
+
+        assert!(paths[aggregate_path]["get"].is_object());
+        assert!(
+            paths[aggregate_path]["post"].is_null(),
+            "aggregate POST belongs under /query only"
+        );
+        assert!(paths[query_path]["post"].is_object());
+        assert!(paths[structure_path]["get"].is_object());
+        assert_eq!(paths[metadata_alias_path]["get"]["deprecated"], true);
+
+        assert!(paths["/v1/datasets/social_registry/measures"]["get"].is_object());
+        assert!(paths["/v1/datasets/social_registry/measures/{item_id}"]["get"].is_object());
+        assert!(paths["/v1/datasets/social_registry/indicators"].is_null());
+        assert!(paths["/v1/datasets/social_registry/indicators/{item_id}"].is_null());
+
+        for (path, method) in [(aggregate_path, "get"), (query_path, "post")] {
+            assert!(
+                paths[path][method]["responses"]["200"]["content"]
+                    ["application/vnd.sdmx.data+json;version=2.1"]
+                    .is_object(),
+                "{path} {method} should document SDMX JSON"
+            );
+            assert!(
+                paths[path][method]["responses"]["200"]["content"]["text/csv"].is_object(),
+                "{path} {method} should document CSV"
+            );
+        }
+        for (path, method) in [(aggregate_path, "get"), (query_path, "post")] {
+            let format_param = paths[path][method]["parameters"]
+                .as_array()
+                .expect("aggregate parameters")
+                .iter()
+                .find(|parameter| parameter["name"] == "f" && parameter["in"] == "query")
+                .unwrap_or_else(|| panic!("{path} {method} should document query parameter f"));
+            assert_eq!(
+                format_param["schema"]["enum"],
+                json!(["json", "csv", "sdmx-json"])
+            );
+        }
+
+        let schemas = &doc["components"]["schemas"];
+        assert!(schemas["AggregateMeasureList"].is_object());
+        assert!(schemas["AggregateMeasureDiscovery"].is_object());
+        assert!(schemas["AggregateIndicatorList"].is_null());
+        assert!(schemas["AggregateIndicatorDiscovery"].is_null());
+
+        let result_props = &schemas["AggregateResult"]["properties"];
+        assert!(result_props["observations"].is_object());
+        assert!(result_props["structure"].is_object());
+        assert!(result_props["completeness"].is_object());
+        assert!(result_props["data"].is_null());
+        assert!(result_props["schema"].is_null());
+        assert!(result_props["structure"]["properties"]["measures"].is_object());
+
+        let query_props = &schemas["AggregateQueryRequest"]["properties"];
+        assert!(query_props["measures"].is_object());
+        assert!(query_props["max_rows"].is_object());
+        assert_eq!(query_props["indicators"]["deprecated"], true);
+        assert!(query_props["format"]["enum"]
+            .as_array()
+            .expect("format enum")
+            .iter()
+            .any(|value| value == "sdmx-json"));
     }
 
     #[cfg(feature = "spdci-api-standards")]

@@ -172,6 +172,50 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.module.check_openapi_manifest_coverage(self.root / "openapi" / "registry-relay.openapi.json")
 
+    def test_openapi_extra_operation_without_manifest_entry_fails(self):
+        self.write_contracts(self.entry(openapi=True))
+        (self.root / "openapi" / "registry-relay.openapi.json").write_text(json.dumps({
+            "openapi": "3.0.3",
+            "paths": {
+                "/x": {"get": {}},
+                "/extra": {"get": {}},
+            },
+        }))
+        with self.assertRaises(SystemExit):
+            self.module.check_openapi_manifest_coverage(self.root / "openapi" / "registry-relay.openapi.json")
+
+    def test_openapi_false_manifest_entry_present_in_static_openapi_fails(self):
+        self.write_contracts(self.entry(openapi=False))
+        with self.assertRaises(SystemExit):
+            self.module.check_openapi_manifest_coverage(self.root / "openapi" / "registry-relay.openapi.json")
+
+    def test_openapi_extra_allowlist_requires_comment(self):
+        self.write_contracts(self.entry(openapi=True))
+        (self.root / "openapi" / "registry-relay.openapi.json").write_text(json.dumps({
+            "openapi": "3.0.3",
+            "paths": {
+                "/x": {"get": {}},
+                "/extra": {"get": {}},
+            },
+        }))
+        old_allowlist = self.module.STATIC_OPENAPI_OPERATION_ALLOWLIST
+        try:
+            self.module.STATIC_OPENAPI_OPERATION_ALLOWLIST = {
+                (self.module.openapi_path_shape("/extra"), "GET"): "",
+            }
+            with self.assertRaises(SystemExit):
+                self.module.check_openapi_manifest_coverage(
+                    self.root / "openapi" / "registry-relay.openapi.json"
+                )
+            self.module.STATIC_OPENAPI_OPERATION_ALLOWLIST = {
+                (self.module.openapi_path_shape("/extra"), "GET"): "fixture-only exception",
+            }
+            self.module.check_openapi_manifest_coverage(
+                self.root / "openapi" / "registry-relay.openapi.json"
+            )
+        finally:
+            self.module.STATIC_OPENAPI_OPERATION_ALLOWLIST = old_allowlist
+
     def test_openapi_paths_must_be_object(self):
         self.write_contracts(self.entry(openapi=True))
         (self.root / "openapi" / "registry-relay.openapi.json").write_text(json.dumps({

@@ -19,6 +19,9 @@ use registry_relay::query::{AggregateQueryEngine, EntityQueryEngine};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
+const SDMX_JSON_DATA_SCHEMA_2_1: &str =
+    include_str!("../resources/schemas/sdmx-json/2.1/sdmx-json-data-schema.json");
+
 fn id<T: serde::de::DeserializeOwned>(value: &str) -> T {
     serde_json::from_str(&format!(r#""{value}""#)).expect("id deserializes")
 }
@@ -272,6 +275,10 @@ async fn server_with_aggregate_scopes(scopes: &[&str]) -> TestServer {
 }
 
 async fn server_with_formula_cells() -> TestServer {
+    server_with_municipalities(&["=cmd", "+cmd", "-cmd", "@cmd", "\tcmd", "\rcmd"]).await
+}
+
+async fn server_with_municipalities(municipality_codes: &[&str]) -> TestServer {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = tmp.path().join("aggregates_entity.yaml");
     std::fs::write(&config_path, AGGREGATE_CONFIG).expect("write config");
@@ -280,10 +287,7 @@ async fn server_with_formula_cells() -> TestServer {
     let ctx = Arc::new(SessionContext::new());
 
     register_households(&ctx);
-    register_individuals_with_municipalities(
-        &ctx,
-        &["=cmd", "+cmd", "-cmd", "@cmd", "\tcmd", "\rcmd"],
-    );
+    register_individuals_with_municipalities(&ctx, municipality_codes);
 
     let query = Arc::new(AggregateQueryEngine::new(
         Arc::clone(&ctx),
@@ -449,33 +453,48 @@ async fn lists_configured_dataset_aggregates() {
     let body: Value = resp.json();
     assert_eq!(body["data"].as_array().expect("data array").len(), 4);
     assert_eq!(body["data"][0]["aggregate_id"], "by_municipality");
+    assert!(body["data"][0].get("indicators").is_none());
     assert_eq!(
-        body["data"][0]["indicators"][0]["aggregation_method"],
+        body["data"][0]["measures"][0]["aggregation_method"],
         "count"
     );
+    assert_eq!(body["data"][0]["measures"][1]["aggregation_method"], "min");
+    assert_eq!(body["data"][0]["measures"][2]["aggregation_method"], "max");
+}
+
+#[tokio::test]
+async fn aggregate_structure_route_returns_dimensions_and_measures() {
+    let resp = server_with_aggregates()
+        .await
+        .get("/v1/datasets/social_registry/aggregates/by_municipality/structure")
+        .await;
+
+    resp.assert_status_ok();
+    let body: Value = resp.json();
+    assert_eq!(body["aggregate_id"], "by_municipality");
+    assert_eq!(body["dimensions"][0]["id"], "municipality_code");
+    assert_eq!(body["measures"][0]["id"], "individual_count");
+    assert_eq!(body["measures"][1]["aggregation_method"], "min");
+    assert!(body.get("indicators").is_none());
     assert_eq!(
-        body["data"][0]["indicators"][1]["aggregation_method"],
-        "min"
-    );
-    assert_eq!(
-        body["data"][0]["indicators"][2]["aggregation_method"],
-        "max"
+        body["links"][0]["href"],
+        "/v1/datasets/social_registry/aggregates/by_municipality/structure"
     );
 }
 
 #[tokio::test]
-async fn lists_dataset_indicator_and_dimension_discovery() {
+async fn lists_dataset_measure_and_dimension_discovery() {
     let server = server_with_aggregates().await;
 
-    let indicators = server.get("/v1/datasets/social_registry/indicators").await;
-    indicators.assert_status_ok();
-    let body: Value = indicators.json();
-    let data = body["data"].as_array().expect("indicator data");
+    let measures = server.get("/v1/datasets/social_registry/measures").await;
+    measures.assert_status_ok();
+    let body: Value = measures.json();
+    let data = body["data"].as_array().expect("measure data");
     assert_eq!(data.len(), 3);
     let individual_count = data
         .iter()
         .find(|item| item["id"] == "individual_count")
-        .expect("individual count indicator");
+        .expect("individual count measure");
     assert_eq!(individual_count["aggregation_method"], "count");
     assert_eq!(
         individual_count["valid_dimensions"],
@@ -487,11 +506,11 @@ async fn lists_dataset_indicator_and_dimension_discovery() {
         .iter()
         .any(|value| value == "aggregates:by_municipality"));
 
-    let indicator = server
-        .get("/v1/datasets/social_registry/indicators/min_payment")
+    let measure = server
+        .get("/v1/datasets/social_registry/measures/min_payment")
         .await;
-    indicator.assert_status_ok();
-    let body: Value = indicator.json();
+    measure.assert_status_ok();
+    let body: Value = measure.json();
     assert_eq!(body["id"], "min_payment");
     assert_eq!(body["unit_measure"], "currency");
 
@@ -530,15 +549,15 @@ async fn aggregate_discovery_filters_by_aggregate_metadata_scope() {
         "aggregate list must omit aggregate-specific metadata the principal lacks"
     );
 
-    let indicators = server.get("/v1/datasets/social_registry/indicators").await;
-    indicators.assert_status_ok();
-    let body: Value = indicators.json();
+    let measures = server.get("/v1/datasets/social_registry/measures").await;
+    measures.assert_status_ok();
+    let body: Value = measures.json();
     let individual_count = body["data"]
         .as_array()
-        .expect("indicator data")
+        .expect("measure data")
         .iter()
         .find(|item| item["id"] == "individual_count")
-        .expect("individual count indicator");
+        .expect("individual count measure");
     assert_eq!(
         individual_count["valid_dimensions"],
         json!(["municipality_code"])
@@ -567,6 +586,59 @@ async fn aggregate_execution_requires_source_entity_read_scope() {
 
     resp.assert_status_forbidden();
     assert_eq!(resp.json::<Value>()["code"], "auth.scope_denied");
+}
+
+#[tokio::test]
+async fn aggregate_only_execution_requires_explicit_opt_in() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = tmp.path().join("aggregates_entity.yaml");
+    let config = AGGREGATE_CONFIG.replace(
+        "      - id: by_municipality_masked\n",
+        "      - id: by_municipality_masked\n        access:\n          aggregate_only_execution: true\n",
+    );
+    std::fs::write(&config_path, config).expect("write config");
+    let cfg = Arc::new(config::load(&config_path).expect("config loads"));
+    let registry = Arc::new(EntityRegistry::from_config(&cfg).expect("registry"));
+    let ctx = Arc::new(SessionContext::new());
+    register_households(&ctx);
+    register_individuals(&ctx);
+    let query = Arc::new(AggregateQueryEngine::new(
+        Arc::clone(&ctx),
+        Arc::clone(&registry),
+        Arc::clone(&cfg),
+    ));
+    let app = Router::new()
+        .merge(aggregates_router::<()>())
+        .merge(entity_router())
+        .layer(Extension(query))
+        .layer(Extension(Arc::new(EntityQueryEngine::new(
+            Arc::clone(&ctx),
+            Arc::clone(&registry),
+        ))))
+        .layer(Extension(registry))
+        .layer(Extension(principal(&[
+            "social_registry:metadata",
+            "social_registry:aggregate",
+        ])));
+    let server = TestServer::new(app);
+
+    let not_opted_in = server
+        .get("/v1/datasets/social_registry/aggregates/by_municipality")
+        .await;
+    not_opted_in.assert_status_forbidden();
+
+    let opted_in = server
+        .get("/v1/datasets/social_registry/aggregates/by_municipality_masked")
+        .await;
+    opted_in.assert_status_ok();
+    let body: Value = opted_in.json();
+    assert_eq!(body["aggregate_id"], "by_municipality_masked");
+    assert_eq!(body["disclosure_control"]["min_cell_size"], 2);
+
+    let rows = server
+        .get("/v1/datasets/social_registry/entities/individual/records")
+        .await;
+    rows.assert_status_forbidden();
 }
 
 #[tokio::test]
@@ -643,7 +715,7 @@ async fn csv_response_carries_metadata_headers_and_status_columns() {
         .header("link")
         .to_str()
         .expect("link header")
-        .contains("</v1/datasets/social_registry/aggregates/by_municipality_masked/metadata>; rel=\"describedby\""));
+        .contains("</v1/datasets/social_registry/aggregates/by_municipality_masked/structure>; rel=\"describedby\""));
 
     let body = resp.text();
     assert_eq!(
@@ -698,6 +770,14 @@ async fn executes_single_entity_count_aggregate() {
 
     resp.assert_status_ok();
     let body: Value = resp.json();
+    assert!(body.get("data").is_none());
+    assert!(body.get("schema").is_none());
+    assert_eq!(
+        body["structure"]["dimensions"][0]["id"],
+        "municipality_code"
+    );
+    assert_eq!(body["structure"]["measures"][0]["id"], "individual_count");
+    assert!(body["structure"].get("indicators").is_none());
     assert_eq!(body["disclosure_control"]["suppressed_rows"], 0);
     assert_eq!(
         sorted_rows(&body),
@@ -754,7 +834,7 @@ async fn post_query_applies_temporal_filter_when_configured() {
         .await
         .post("/v1/datasets/social_registry/aggregates/by_municipality/query")
         .json(&json!({
-            "indicators": ["individual_count"],
+            "measures": ["individual_count"],
             "group_by": ["municipality_code"],
             "temporal": {
                 "from": "2024-01-01",
@@ -772,6 +852,316 @@ async fn post_query_applies_temporal_filter_when_configured() {
             "individual_count": 2
         })]
     );
+}
+
+#[tokio::test]
+async fn aggregate_sdmx_applies_temporal_filter_when_configured() {
+    let resp = server_with_aggregates()
+        .await
+        .post("/v1/datasets/social_registry/aggregates/by_municipality/query?f=sdmx-json")
+        .json(&json!({
+            "measures": ["individual_count"],
+            "group_by": ["municipality_code"],
+            "temporal": {
+                "from": "2024-01-01",
+                "to": "2024-12-31"
+            }
+        }))
+        .await;
+
+    resp.assert_status_ok();
+    let body: Value = resp.json();
+    assert_valid_sdmx_data_message(&body);
+    let observations = body["data"]["dataSets"][0]["observations"]
+        .as_object()
+        .expect("observations");
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations["0"], json!([2]));
+}
+
+#[tokio::test]
+async fn aggregate_supports_sdmx_json_query_format() {
+    let resp = server_with_aggregates()
+        .await
+        .get("/v1/datasets/social_registry/aggregates/by_municipality?f=sdmx-json")
+        .await;
+
+    resp.assert_status_ok();
+    assert!(resp
+        .header("content-type")
+        .to_str()
+        .expect("content-type")
+        .starts_with("application/vnd.sdmx.data+json;version=2.1"));
+    assert_eq!(resp.header("vary"), "Accept");
+    let body: Value = resp.json();
+    assert_valid_sdmx_data_message(&body);
+    assert_eq!(
+        body["meta"]["schema"],
+        "https://json.sdmx.org/2.1/sdmx-json-data-schema.json"
+    );
+    assert_eq!(body["meta"]["id"], "social_registry$by_municipality");
+    assert_eq!(
+        body["data"]["structures"][0]["dimensions"]["observation"][0]["id"],
+        "municipality_code"
+    );
+    assert_eq!(
+        body["data"]["structures"][0]["measures"]["observation"][0]["id"],
+        "individual_count"
+    );
+    assert_eq!(
+        body["data"]["dataSets"][0]["observations"]["0"],
+        json!([2, 10.0, 20.0])
+    );
+    assert_eq!(
+        body["data"]["dataSets"][0]["observations"]["1"],
+        json!([1, 30.0, 30.0])
+    );
+}
+
+#[tokio::test]
+async fn aggregate_sdmx_marks_truncated_results() {
+    let resp = server_with_aggregates()
+        .await
+        .post("/v1/datasets/social_registry/aggregates/by_municipality/query?f=sdmx-json")
+        .json(&json!({
+            "measures": ["individual_count"],
+            "group_by": ["municipality_code"],
+            "max_rows": 1
+        }))
+        .await;
+
+    resp.assert_status_ok();
+    let body: Value = resp.json();
+    assert_valid_sdmx_data_message(&body);
+    assert_eq!(body["meta"]["x-completeness"]["complete"], false);
+    assert_eq!(body["meta"]["x-completeness"]["truncated"], true);
+    assert_eq!(
+        body["data"]["dataSets"][0]["observations"]
+            .as_object()
+            .expect("observations")
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn aggregate_supports_sdmx_json_accept_negotiation_for_post_query() {
+    let resp = server_with_aggregates()
+        .await
+        .post("/v1/datasets/social_registry/aggregates/by_municipality/query")
+        .add_header("accept", "application/vnd.sdmx.data+json;version=2.1")
+        .json(&json!({
+            "measures": ["individual_count"],
+            "group_by": ["municipality_code"]
+        }))
+        .await;
+
+    resp.assert_status_ok();
+    assert!(resp
+        .header("content-type")
+        .to_str()
+        .expect("content-type")
+        .starts_with("application/vnd.sdmx.data+json;version=2.1"));
+    let body: Value = resp.json();
+    assert_valid_sdmx_data_message(&body);
+    assert_eq!(
+        body["data"]["structures"][0]["measures"]["observation"]
+            .as_array()
+            .expect("measures")
+            .len(),
+        1
+    );
+    assert_eq!(body["data"]["dataSets"][0]["observations"]["0"], json!([2]));
+}
+
+#[tokio::test]
+async fn aggregate_supports_sdmx_json_query_parameter_for_post_query() {
+    let resp = server_with_aggregates()
+        .await
+        .post("/v1/datasets/social_registry/aggregates/by_municipality/query?f=sdmx-json")
+        .json(&json!({
+            "measures": ["individual_count"],
+            "group_by": ["municipality_code"]
+        }))
+        .await;
+
+    resp.assert_status_ok();
+    assert!(resp
+        .header("content-type")
+        .to_str()
+        .expect("content-type")
+        .starts_with("application/vnd.sdmx.data+json;version=2.1"));
+    let body: Value = resp.json();
+    assert_valid_sdmx_data_message(&body);
+    assert_eq!(body["data"]["dataSets"][0]["observations"]["0"], json!([2]));
+}
+
+#[tokio::test]
+async fn aggregate_sdmx_dimension_value_ids_do_not_collapse_observations() {
+    let resp = server_with_municipalities(&["a b", "a_x20_b"])
+        .await
+        .get("/v1/datasets/social_registry/aggregates/by_municipality?f=sdmx-json")
+        .await;
+
+    resp.assert_status_ok();
+    let body: Value = resp.json();
+    assert_valid_sdmx_data_message(&body);
+    let observations = body["data"]["dataSets"][0]["observations"]
+        .as_object()
+        .expect("observations");
+    assert_eq!(
+        observations.len(),
+        2,
+        "distinct dimension values must not collide into one SDMX observation key"
+    );
+    let dimension_values = body["data"]["structures"][0]["dimensions"]["observation"][0]["values"]
+        .as_array()
+        .expect("dimension values");
+    assert_eq!(dimension_values.len(), 2);
+    assert_ne!(dimension_values[0]["id"], dimension_values[1]["id"]);
+}
+
+#[tokio::test]
+async fn aggregate_sdmx_carries_suppression_status_as_observation_attribute() {
+    let resp = server_with_aggregates()
+        .await
+        .get("/v1/datasets/social_registry/aggregates/by_municipality_masked?f=sdmx-json")
+        .await;
+
+    resp.assert_status_ok();
+    let body: Value = resp.json();
+    assert_valid_sdmx_data_message(&body);
+    assert_eq!(
+        body["data"]["structures"][0]["attributes"]["observation"][0]["id"],
+        "OBS_STATUS"
+    );
+    assert_eq!(
+        body["data"]["dataSets"][0]["observations"]["0"],
+        json!([2, null])
+    );
+    assert_eq!(
+        body["data"]["dataSets"][0]["observations"]["1"],
+        json!([null, "S"])
+    );
+}
+
+#[tokio::test]
+async fn aggregate_accept_negotiation_ignores_sdmx_json_with_zero_quality() {
+    let resp = server_with_aggregates()
+        .await
+        .post("/v1/datasets/social_registry/aggregates/by_municipality/query")
+        .add_header(
+            "accept",
+            "application/vnd.sdmx.data+json;q=0, application/json;q=1",
+        )
+        .json(&json!({
+            "measures": ["individual_count"],
+            "group_by": ["municipality_code"]
+        }))
+        .await;
+
+    resp.assert_status_ok();
+    assert!(resp
+        .header("content-type")
+        .to_str()
+        .expect("content-type")
+        .starts_with("application/json"));
+    let body: Value = resp.json();
+    assert!(body.get("observations").is_some());
+    assert!(body.get("structure").is_some());
+}
+
+#[tokio::test]
+async fn aggregate_accept_negotiates_csv() {
+    let resp = server_with_aggregates()
+        .await
+        .post("/v1/datasets/social_registry/aggregates/by_municipality/query")
+        .add_header("accept", "text/csv")
+        .json(&json!({
+            "measures": ["individual_count"],
+            "group_by": ["municipality_code"]
+        }))
+        .await;
+
+    resp.assert_status_ok();
+    assert!(resp
+        .header("content-type")
+        .to_str()
+        .expect("content-type")
+        .starts_with("text/csv"));
+    assert_eq!(resp.header("vary"), "Accept");
+}
+
+#[tokio::test]
+async fn aggregate_rejects_unsupported_accept_format() {
+    let resp = server_with_aggregates()
+        .await
+        .post("/v1/datasets/social_registry/aggregates/by_municipality/query")
+        .add_header("accept", "application/vnd.sdmx.data+json;version=2.0")
+        .json(&json!({
+            "measures": ["individual_count"],
+            "group_by": ["municipality_code"]
+        }))
+        .await;
+
+    resp.assert_status_bad_request();
+    let body: Value = resp.json();
+    assert_eq!(body["code"], "aggregate.format_unsupported");
+}
+
+#[tokio::test]
+async fn aggregate_query_format_overrides_accept_header() {
+    let resp = server_with_aggregates()
+        .await
+        .get("/v1/datasets/social_registry/aggregates/by_municipality?f=json")
+        .add_header("accept", "application/vnd.sdmx.data+json")
+        .await;
+
+    resp.assert_status_ok();
+    assert!(resp
+        .header("content-type")
+        .to_str()
+        .expect("content-type")
+        .starts_with("application/json"));
+    let body: Value = resp.json();
+    assert!(body.get("observations").is_some());
+    assert!(body.get("structure").is_some());
+    assert!(body.get("data").is_none());
+}
+
+#[tokio::test]
+async fn aggregate_query_parameter_overrides_post_body_format() {
+    let resp = server_with_aggregates()
+        .await
+        .post("/v1/datasets/social_registry/aggregates/by_municipality/query?f=sdmx-json")
+        .json(&json!({
+            "format": "json",
+            "measures": ["individual_count"],
+            "group_by": ["municipality_code"]
+        }))
+        .await;
+
+    resp.assert_status_ok();
+    assert!(resp
+        .header("content-type")
+        .to_str()
+        .expect("content-type")
+        .starts_with("application/vnd.sdmx.data+json;version=2.1"));
+    let body: Value = resp.json();
+    assert_valid_sdmx_data_message(&body);
+    assert!(body.get("data").is_some());
+}
+
+#[tokio::test]
+async fn aggregate_rejects_unknown_response_format() {
+    let resp = server_with_aggregates()
+        .await
+        .get("/v1/datasets/social_registry/aggregates/by_municipality?f=xml")
+        .await;
+
+    resp.assert_status_bad_request();
+    let body: Value = resp.json();
+    assert_eq!(body["code"], "aggregate.format_unsupported");
 }
 
 #[tokio::test]
@@ -812,7 +1202,10 @@ async fn executes_direct_relationship_group_by_with_min_group_size() {
 }
 
 fn sorted_rows(body: &Value) -> Vec<Value> {
-    let mut rows = body["data"].as_array().expect("data array").clone();
+    let mut rows = body["observations"]
+        .as_array()
+        .expect("observations array")
+        .clone();
     rows.sort_by_key(|row| {
         row.get("municipality_code")
             .or_else(|| row.get("household.region"))
@@ -822,4 +1215,16 @@ fn sorted_rows(body: &Value) -> Vec<Value> {
             .to_string()
     });
     rows
+}
+
+fn assert_valid_sdmx_data_message(body: &Value) {
+    let schema: Value =
+        serde_json::from_str(SDMX_JSON_DATA_SCHEMA_2_1).expect("SDMX schema parses");
+    let compiled = jsonschema::JSONSchema::compile(&schema).expect("SDMX contract schema compiles");
+    if let Err(errors) = compiled.validate(body) {
+        let messages = errors.map(|error| error.to_string()).collect::<Vec<_>>();
+        panic!(
+            "SDMX data message must match official SDMX-JSON 2.1 schema: {messages:?}\nbody: {body}"
+        );
+    };
 }

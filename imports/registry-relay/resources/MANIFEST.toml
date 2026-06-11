@@ -28,6 +28,15 @@ path = "schemas/entity-record/v1.json"
 sha256 = "4ec670064f4d9f4717b9870ec7ca87167359d239e113c875168f09288cb0b80c"
 served_as = "schema"
 
+# SDMX-JSON 2.1.0 data message schema for offline validation of aggregate
+# `application/vnd.sdmx.data+json` responses.
+# Source: https://json.sdmx.org/2.1/sdmx-json-data-schema.json
+# Retrieved: 2026-06-11
+[[resource]]
+path = "schemas/sdmx-json/2.1/sdmx-json-data-schema.json"
+sha256 = "ca1c85c7693a2d9d0602a1ca8e5a8b1cc56437fcb05e25cce15165ee75dcd80d"
+served_as = "vendored"
+
 # Scalar API Reference standalone bundle, @scalar/api-reference@1.57.1
 # from cdn.jsdelivr.net. Served by the `/docs/scalar.js` route under the
 # authenticated data-plane surface; the `/docs` HTML page loads it.

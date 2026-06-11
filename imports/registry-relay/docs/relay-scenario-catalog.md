@@ -63,7 +63,7 @@ sequenceDiagram
   participant Relay as Registry Relay
   participant Source as Source Registry
 
-  Analyst->>Relay: Discover aggregate metadata
+  Analyst->>Relay: Discover aggregate structure and measures
   Analyst->>Relay: Execute configured aggregate
   Relay->>Source: Read bounded source data
   Relay->>Relay: Apply disclosure controls

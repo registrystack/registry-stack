@@ -485,7 +485,10 @@ async fn aggregate_plain_json_path_unchanged_without_accept_header() {
     resp.assert_status_ok();
     let body: Value = resp.json();
     assert_eq!(body["aggregate_id"], "by_municipality");
-    assert!(body["data"].is_array());
+    assert!(body["observations"].is_array());
+    assert!(body["structure"]["measures"].is_array());
+    assert!(body.get("data").is_none());
+    assert!(body.get("schema").is_none());
 }
 
 #[tokio::test]
@@ -532,6 +535,30 @@ async fn aggregate_returns_signed_vc_when_accept_opts_in() {
     assert_eq!(
         record["provenance"]["subject"],
         "https://gw.example/v1/datasets/social_registry/aggregates/by_municipality"
+    );
+}
+
+#[tokio::test]
+async fn aggregate_signed_vc_accept_takes_precedence_over_format_query() {
+    let harness = build_aggregate_harness("PROVENANCE_ISSUANCE_AGGREGATE_VC_PRECEDENCE_JWK");
+    let resp = harness
+        .server
+        .get("/v1/datasets/social_registry/aggregates/by_municipality?f=sdmx-json")
+        .add_header("accept", "application/vc+jwt")
+        .await;
+
+    resp.assert_status_ok();
+    assert_eq!(
+        resp.header("content-type").to_str().unwrap_or(""),
+        "application/vc+jwt"
+    );
+
+    let body = String::from_utf8(resp.as_bytes().to_vec()).expect("body utf8");
+    let payload = decode_and_verify_payload(&body, &harness.verifying_key);
+    assert_eq!(payload["type"][1], "AggregateResult");
+    assert_eq!(
+        payload["credentialSubject"]["aggregateId"],
+        "by_municipality"
     );
 }
 
@@ -660,7 +687,9 @@ async fn aggregate_vc_subject_reflects_disclosure_suppression() {
     plain_resp.assert_status_ok();
     let plain_body: Value = plain_resp.json();
     assert_eq!(plain_body["disclosure_control"]["suppressed_rows"], 1);
-    let plain_rows = plain_body["data"].as_array().expect("data array");
+    let plain_rows = plain_body["observations"]
+        .as_array()
+        .expect("observations array");
     assert_eq!(plain_rows.len(), 1, "mun-2 group must be omitted");
     assert_eq!(plain_rows[0]["municipality_code"], "mun-1");
     assert_eq!(plain_rows[0]["individual_count"], 2);

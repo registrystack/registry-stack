@@ -480,12 +480,16 @@ mod tests {
     #[cfg(feature = "standards-cel-mapping")]
     #[test]
     fn cel_issue_diagnostics_omit_instance_values() {
-        let issues = vec![crosswalk_core::MappingError::error(
-            crosswalk_core::ErrorCode::ValidationError,
-            "failed while reading SECRET-ROW-VALUE-451123",
-            Some("records.disabled_person.fields.member_identifier".to_string()),
-            None,
-        )];
+        let issues = vec![crosswalk_core::MappingError {
+            code: crosswalk_core::ErrorCode::EvaluationError,
+            path: Some("records.disabled_person.fields.member_identifier".to_string()),
+            message: "failed while reading SECRET-ROW-VALUE-451123".to_string(),
+            expression: None,
+            source_path: None,
+            record: None,
+            index: None,
+            severity: crosswalk_core::ErrorSeverity::Error,
+        }];
         let formatted = mapping_issue_diagnostics(&issues, "error").join("\n");
 
         assert!(formatted.contains("path=records.disabled_person.fields.member_identifier"));

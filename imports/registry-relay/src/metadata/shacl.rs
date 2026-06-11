@@ -10,8 +10,9 @@ use crate::entity::EntityRegistry;
 
 use super::catalog::{
     catalog_document, catalog_document_for_dataset_ids, catalog_document_for_entity_ids,
-    entity_class_uri, field_property_uri, normalized_base_url, CatalogDocument, DatasetMetadata,
-    EntityMetadata, FieldMetadata, PublicServiceMetadata,
+    catalog_document_for_metadata_scopes, entity_class_uri, field_property_uri,
+    normalized_base_url, AggregateDistributionMetadata, AggregateRepresentationMetadata,
+    CatalogDocument, DatasetMetadata, EntityMetadata, FieldMetadata, PublicServiceMetadata,
 };
 
 #[must_use]
@@ -37,6 +38,16 @@ pub fn dcat_ap_document_for_entity_ids(
     entity_ids: &BTreeSet<(String, String)>,
 ) -> Value {
     let catalog = catalog_document_for_entity_ids(config, registry, entity_ids);
+    dcat_ap_document_from_catalog(catalog)
+}
+
+#[must_use]
+pub fn dcat_ap_document_for_metadata_scopes(
+    config: &Config,
+    registry: &EntityRegistry,
+    scopes: &BTreeSet<String>,
+) -> Value {
+    let catalog = catalog_document_for_metadata_scopes(config, registry, scopes);
     dcat_ap_document_from_catalog(catalog)
 }
 
@@ -143,6 +154,12 @@ fn dcat_dataset(
     default_assigner: &str,
 ) -> Value {
     let mut distributions = dataset_standard_distributions(dataset);
+    distributions.extend(
+        dataset
+            .aggregate_distributions
+            .iter()
+            .flat_map(aggregate_distributions),
+    );
     distributions.extend(
         dataset
             .entities
@@ -545,6 +562,38 @@ fn dataset_spdci_distribution(
             "dcterms:conformsTo": "https://spdci.org/",
         },
         "dcterms:conformsTo": "https://spdci.org/",
+    })
+}
+
+fn aggregate_distributions(aggregate: &AggregateDistributionMetadata) -> Vec<Value> {
+    aggregate
+        .representations
+        .iter()
+        .map(|representation| aggregate_distribution(aggregate, representation))
+        .collect()
+}
+
+fn aggregate_distribution(
+    aggregate: &AggregateDistributionMetadata,
+    representation: &AggregateRepresentationMetadata,
+) -> Value {
+    let access_service = format!("{}#aggregate-query-service", representation.service_url);
+    json!({
+        "@id": representation.access_url,
+        "@type": "dcat:Distribution",
+        "dcterms:title": representation.title,
+        "dcterms:description": representation.description,
+        "dcterms:format": media_type_format(representation.media_type),
+        "dcat:accessURL": representation.access_url,
+        "dcat:accessService": {
+            "@id": access_service,
+            "@type": "dcat:DataService",
+            "dcterms:identifier": format!("aggregate:{}:{}", aggregate.aggregate_id, representation.format),
+            "dcterms:title": format!("{} aggregate query service", aggregate.title),
+            "dcat:endpointURL": representation.service_url,
+            "dcterms:conformsTo": representation.conforms_to,
+        },
+        "dcterms:conformsTo": representation.conforms_to,
     })
 }
 

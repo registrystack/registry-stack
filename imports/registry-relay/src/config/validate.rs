@@ -25,7 +25,7 @@ use super::capabilities::source_capabilities;
 use super::{
     AggregateConfig, AggregateSpatialConfig, AllowedFilter, AuthMode, Config, DatasetConfig,
     EntityConfig, EntityRelationshipConfig, EntitySpatialConfig, FieldConfig, FieldType, FilterOp,
-    OidcConfig, RefreshConfig, RelationshipKind, ResourceConfig, SourceConfig,
+    OidcConfig, RefreshConfig, RelationshipKind, ResourceConfig, Sensitivity, SourceConfig,
     SpatialBboxFieldsConfig, SpatialGeometryConfig, CRS84,
 };
 
@@ -2688,6 +2688,21 @@ fn validate_dataset_aggregates(dataset: &DatasetConfig) -> Result<(), ConfigErro
         let Some(source_fields) = exposed_by_entity.get(source_entity_name) else {
             return Err(ConfigError::ValidationError);
         };
+        if aggregate
+            .access
+            .as_ref()
+            .is_some_and(|access| access.aggregate_only_execution)
+            && dataset.sensitivity == Sensitivity::Personal
+            && aggregate.disclosure_control.effective_min_cell_size() < 2
+        {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                aggregate_id = %aggregate.id,
+                "aggregate_only_execution on personal datasets requires disclosure_control.min_cell_size >= 2"
+            );
+            return Err(ConfigError::ValidationError);
+        }
         validate_reserved_ids(dataset, aggregate)?;
         let dimension_ids = aggregate
             .dimensions

@@ -20,7 +20,7 @@ use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
 use crate::config::{AggregateConfig, AggregateSpatialConfig, Config, DatasetConfig};
 use crate::entity::EntityRegistry;
-use crate::error::{AuthError, Error, FilterError, OgcError, SpatialError};
+use crate::error::{AggregateError, AuthError, Error, FilterError, OgcError, SpatialError};
 use crate::ingest::ReadinessSnapshot;
 use crate::query::{
     AggregateFilter, AggregateFilterOp, AggregateQueryRequest, EntityCollectionQuery,
@@ -217,7 +217,7 @@ async fn area_common(
         .as_deref()
         .is_some_and(|format| format != "geojson")
     {
-        return Error::from(FilterError::UnsupportedOp).into_response();
+        return Error::from(AggregateError::FormatUnsupported).into_response();
     }
     let geometry_vertex_count = count_vertices(&input_geometry) as u64;
     let Some(config) = runtime.config() else {
@@ -263,6 +263,8 @@ async fn area_common(
         return Error::from(SpatialError::GeometryTooLarge).into_response();
     }
     let matched = match matching_admin_geometries(
+        &config,
+        &principal,
         &entity_query,
         &collection.dataset_id,
         geometry_entity,
@@ -352,7 +354,7 @@ async fn area_common(
         "aggregate_id": result.aggregate_id,
         "schema": {
             "dimensions": result.schema.dimensions,
-            "indicators": result.schema.indicators,
+            "measures": result.schema.indicators,
         },
         "disclosure_control": {
             "method": result.disclosure_control.method,
@@ -480,7 +482,10 @@ fn collection_json(collection: &EdrCollection<'_>) -> Value {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn matching_admin_geometries(
+    config: &Config,
+    principal: &Principal,
     entity_query: &EntityQueryEngine,
     dataset_id: &str,
     geometry_entity: &str,
@@ -489,6 +494,7 @@ async fn matching_admin_geometries(
     max_geometry_vertices: u32,
     input_geometry: &Geometry,
 ) -> Result<Vec<AdminGeometry>, Error> {
+    require_geometry_entity_read_scope(config, principal, dataset_id, geometry_entity)?;
     let input_geo = geo_geometry(input_geometry)?;
     let mut matched = Vec::new();
     let mut after_primary_key = None;
@@ -527,6 +533,28 @@ async fn matching_admin_geometries(
         }
     }
     Ok(matched)
+}
+
+fn require_geometry_entity_read_scope(
+    config: &Config,
+    principal: &Principal,
+    dataset_id: &str,
+    geometry_entity: &str,
+) -> Result<(), Error> {
+    let read_scope = config
+        .datasets
+        .iter()
+        .find(|dataset| dataset.id.as_str() == dataset_id)
+        .and_then(|dataset| {
+            dataset
+                .entities
+                .iter()
+                .find(|entity| entity.name == geometry_entity)
+        })
+        .map(|entity| entity.access.read_scope.as_str())
+        .ok_or(OgcError::CollectionNotFound)?;
+    require_scope(principal, read_scope)?;
+    Ok(())
 }
 
 fn grouped_features(
@@ -637,7 +665,7 @@ fn apply_body_query_fields(params: &mut AreaQuery, body: &Value) {
     if params.parameter_name.is_none() {
         if let Some(value) = properties.get("parameter-name").and_then(Value::as_str) {
             params.parameter_name = Some(value.to_string());
-        } else if let Some(values) = properties.get("indicators").and_then(Value::as_array) {
+        } else if let Some(values) = properties.get("measures").and_then(Value::as_array) {
             let csv = values
                 .iter()
                 .filter_map(Value::as_str)
@@ -846,6 +874,14 @@ fn require_collection_source_read_scope(
     principal: &Principal,
     collection: &EdrCollection<'_>,
 ) -> Result<(), Error> {
+    if collection
+        .aggregate
+        .access
+        .as_ref()
+        .is_some_and(|access| access.aggregate_only_execution)
+    {
+        return Ok(());
+    }
     if let Some(scope) = collection.source_entity_read_scope.as_deref() {
         require_scope(principal, scope)?;
     }

@@ -49,6 +49,17 @@ fn sample_path(path: &str) -> String {
         .replace("{feature_id}", "social_registry")
 }
 
+fn feature_enabled(feature: Option<&str>) -> bool {
+    match feature {
+        None => true,
+        Some("ogcapi-edr") => cfg!(feature = "ogcapi-edr"),
+        Some("ogcapi-features") => cfg!(feature = "ogcapi-features"),
+        Some("ogcapi-records") => cfg!(feature = "ogcapi-records"),
+        Some("spdci-api-standards") => cfg!(feature = "spdci-api-standards"),
+        Some(_) => false,
+    }
+}
+
 #[tokio::test]
 async fn manifest_public_protected_routes_are_mounted_behind_auth() {
     let manifest: ExposureManifest =
@@ -62,7 +73,7 @@ async fn manifest_public_protected_routes_are_mounted_behind_auth() {
     for endpoint in manifest.endpoints.iter().filter(|endpoint| {
         endpoint.listener == "public"
             && endpoint.auth != "none"
-            && endpoint.feature.is_none()
+            && feature_enabled(endpoint.feature.as_deref())
             && endpoint.method != "HEAD"
     }) {
         let method = Method::from_bytes(endpoint.method.as_bytes()).expect("method parses");

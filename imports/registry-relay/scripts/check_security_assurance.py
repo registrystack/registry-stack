@@ -47,6 +47,12 @@ SECRET_COPY_RE = re.compile(
     re.IGNORECASE,
 )
 CONST_STR_RE = re.compile(r'const\s+([A-Z][A-Z0-9_]*)\s*:\s*&str\s*=\s*"([^"]+)"\s*;')
+OPENAPI_HTTP_METHODS = {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}
+
+# Keep this empty unless a static OpenAPI operation is intentionally broader
+# than the security exposure manifest. Each entry must explain why the drift is
+# acceptable and is reviewed as a narrow exception.
+STATIC_OPENAPI_OPERATION_ALLOWLIST: dict[tuple[str, str], str] = {}
 
 
 def load_json(path: Path) -> object:
@@ -376,30 +382,98 @@ def check_openapi_manifest_coverage(path: Path) -> None:
     document = load_json(path)
     if not isinstance(manifest, dict) or not isinstance(document, dict):
         fail("OpenAPI coverage inputs must be JSON objects")
+    endpoints = manifest.get("endpoints")
+    if not isinstance(endpoints, list):
+        fail("exposure-manifest.json must contain endpoints list")
     paths = document.get("paths")
     if paths is None:
         paths = {}
     if not isinstance(paths, dict):
         fail("OpenAPI paths must be an object")
-    openapi_ops = {
-        (openapi_path_shape(openapi_path), method.upper())
-        for openapi_path, methods in paths.items()
-        if isinstance(methods, dict)
-        for method in methods
-        if method.upper() in {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}
-    }
+    openapi_ops = extract_static_openapi_operations(paths)
+    openapi_op_keys = {op.key for op in openapi_ops}
+    manifest_ops: dict[tuple[str, str], list[dict]] = {}
+    manifest_openapi_ops: set[tuple[str, str]] = set()
+    for entry in endpoints:
+        if not isinstance(entry, dict):
+            fail("endpoint entries must be objects")
+        op_key = (openapi_path_shape(str(entry.get("path"))), str(entry.get("method")))
+        manifest_ops.setdefault(op_key, []).append(entry)
+        if entry.get("openapi") is True:
+            manifest_openapi_ops.add(op_key)
+
     missing = sorted(
         (entry["method"], entry["path"])
-        for entry in manifest.get("endpoints", [])
+        for entry in endpoints
         if entry.get("openapi")
-        and (openapi_path_shape(entry["path"]), entry["method"]) not in openapi_ops
+        and (openapi_path_shape(entry["path"]), entry["method"]) not in openapi_op_keys
     )
     if missing:
         fail(f"manifest endpoints marked openapi:true are missing from OpenAPI: {missing}")
 
+    extras: list[tuple[str, str]] = []
+    false_contradictions: list[tuple[str, str, list[tuple[str, str, str]]]] = []
+    for op in openapi_ops:
+        if op.key in manifest_openapi_ops or static_openapi_operation_is_allowlisted(op.key):
+            continue
+        entries = manifest_ops.get(op.key, [])
+        if entries:
+            false_contradictions.append(
+                (
+                    op.method,
+                    op.path,
+                    sorted(
+                        (
+                            str(entry.get("listener")),
+                            str(entry.get("method")),
+                            str(entry.get("path")),
+                        )
+                        for entry in entries
+                        if entry.get("openapi") is not True
+                    ),
+                )
+            )
+        else:
+            extras.append((op.method, op.path))
+    if extras:
+        fail(f"OpenAPI operations missing from exposure manifest openapi:true coverage: {sorted(extras)}")
+    if false_contradictions:
+        fail(
+            "OpenAPI operations map to manifest endpoints not marked openapi:true: "
+            f"{sorted(false_contradictions)}"
+        )
+
 
 def openapi_path_shape(path: str) -> str:
     return re.sub(r"\{\*?[^}]+\}", "{}", path)
+
+
+class StaticOpenapiOperation:
+    def __init__(self, method: str, path: str) -> None:
+        self.method = method
+        self.path = path
+        self.key = (openapi_path_shape(path), method)
+
+
+def extract_static_openapi_operations(paths: dict) -> list[StaticOpenapiOperation]:
+    operations: list[StaticOpenapiOperation] = []
+    for openapi_path, methods in paths.items():
+        if not isinstance(methods, dict):
+            continue
+        for method in methods:
+            normalized_method = method.upper()
+            if normalized_method in OPENAPI_HTTP_METHODS:
+                operations.append(StaticOpenapiOperation(normalized_method, str(openapi_path)))
+    return operations
+
+
+def static_openapi_operation_is_allowlisted(op_key: tuple[str, str]) -> bool:
+    comment = STATIC_OPENAPI_OPERATION_ALLOWLIST.get(op_key)
+    if comment is None:
+        return False
+    if not comment.strip():
+        fail(f"static OpenAPI allowlist entry {op_key} must include a comment")
+    return True
 
 
 def main() -> None:

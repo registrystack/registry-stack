@@ -117,7 +117,7 @@ authorization control and does not hide fields from authorized API responses.
 ## Aggregates
 
 Aggregates are predeclared by the operator. Clients may discover available
-indicators, dimensions, defaults, disclosure controls, and metadata before
+measures, dimensions, defaults, disclosure controls, and structure before
 executing an aggregate.
 
 For JSON responses, handle suppression and masking as normal result states.
@@ -127,8 +127,14 @@ CSV output is intended for operational exports and interoperability. When a
 deployment supports CSV aggregate output, clients should preserve:
 
 - response headers describing disclosure and freshness;
-- the `Link: rel="describedby"` aggregate metadata relation;
+- the `Link: rel="describedby"` aggregate structure relation;
 - CSV header names exactly as returned.
+
+SDMX JSON output is intended for statistical tooling. Request it with
+`?f=sdmx-json`, request body `"format": "sdmx-json"`, or
+`Accept: application/vnd.sdmx.data+json;version=2.1`. SDMX messages declare
+`https://json.sdmx.org/2.1/sdmx-json-data-schema.json`; clients should also
+check the `meta.x-completeness` object before treating a cube as complete.
 
 ## Errors
 
@@ -151,7 +157,7 @@ Typical client handling:
 | `entity.filter_required` | Add one of the required filters |
 | `pagination.cursor_invalidated` | Restart pagination |
 | `metadata.*` | Refresh discovery or report deployment mismatch |
-| `aggregate.*` | Check aggregate metadata and caller scope |
+| `aggregate.*` | Check aggregate structure, measure discovery, and caller scope |
 | `provenance.*` | Fall back to plain JSON only if the workflow permits unsigned data |
 
 ## Retries

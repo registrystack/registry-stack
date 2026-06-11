@@ -17,6 +17,7 @@ use crate::auth::Principal;
 use crate::config::Config;
 use crate::error::{AuthError, Error, SchemaError};
 use crate::metadata::scoped_compiled_from_runtime;
+use crate::metadata::shacl::dcat_ap_document_for_metadata_scopes;
 use crate::runtime_config::RuntimeSnapshot;
 
 const JSON_LD: HeaderValue = HeaderValue::from_static("application/ld+json");
@@ -290,11 +291,22 @@ async fn dcat(
     runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
-    let compiled = match scoped_metadata(runtime, principal) {
-        Ok(compiled) => compiled,
-        Err(response) => return *response,
+    let Some(config) = runtime.config() else {
+        return metadata_unavailable("metadata route matched, but config state is not installed");
     };
-    json_ld_response(metadata_core::render_base_dcat(&compiled), &headers)
+    let Some(registry) = runtime.entity_registry() else {
+        return metadata_unavailable(
+            "metadata route matched, but entity registry state is not installed",
+        );
+    };
+    let scopes = match visible_metadata_scopes(&config, principal) {
+        Ok(scopes) => scopes,
+        Err(error) => return error.into_response(),
+    };
+    json_ld_response(
+        dcat_ap_document_for_metadata_scopes(&config, &registry, &scopes),
+        &headers,
+    )
 }
 
 async fn dcat_profile(
@@ -587,6 +599,42 @@ fn visible_metadata_entity_ids(
     } else {
         Ok(entity_ids)
     }
+}
+
+fn visible_metadata_scopes(
+    config: &Config,
+    principal: Option<Extension<Principal>>,
+) -> Result<BTreeSet<String>, Error> {
+    let Some(Extension(principal)) = principal else {
+        return Err(AuthError::MissingCredential.into());
+    };
+    let has_visible_metadata = config.datasets.iter().any(|dataset| {
+        let has_visible_entity = dataset
+            .entities
+            .iter()
+            .any(|entity| principal.scopes.contains(&entity.access.metadata_scope));
+        let default_metadata_scope = format!("{}:metadata", dataset.id);
+        let has_visible_aggregate = dataset.aggregates.iter().any(|aggregate| {
+            let scope = aggregate
+                .access
+                .as_ref()
+                .and_then(|access| access.metadata_scope.as_deref())
+                .unwrap_or(default_metadata_scope.as_str());
+            principal.scopes.contains(scope)
+        });
+        has_visible_entity || has_visible_aggregate
+    });
+    if !has_visible_metadata {
+        return Err(AuthError::ScopeDenied {
+            required: "metadata scope on at least one entity or aggregate".to_string(),
+        }
+        .into());
+    }
+    Ok(principal
+        .scopes
+        .iter()
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>())
 }
 
 fn json_response<T>(value: T, headers: &HeaderMap) -> Response

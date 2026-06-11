@@ -95,6 +95,10 @@ fn compiled_in_resources_match_pinned_sha256() {
         "scalar/api-reference.js",
         registry_relay::api::docs::SCALAR_BUNDLE,
     );
+    compiled.insert(
+        "schemas/sdmx-json/2.1/sdmx-json-data-schema.json",
+        registry_relay::api::aggregates::SDMX_JSON_DATA_SCHEMA_2_1,
+    );
 
     let manifest_bytes = fs::read(manifest_path()).expect("manifest readable");
     let manifest: Manifest =

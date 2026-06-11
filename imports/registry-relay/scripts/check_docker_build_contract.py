@@ -96,6 +96,13 @@ def main() -> int:
     failures.extend(
         require(
             dockerfile,
+            "COPY --from=crosswalk /crates /workspace/crosswalk/crates",
+            "crosswalk build context copy",
+        )
+    )
+    failures.extend(
+        require(
+            dockerfile,
             "cargo build --release --locked",
             "default cargo build path",
         )
@@ -147,6 +154,13 @@ def main() -> int:
             build_script,
             '--build-context "registry-manifest=$manifest_dir"',
             "registry-manifest build context",
+        )
+    )
+    failures.extend(
+        require(
+            build_script,
+            '--build-context "crosswalk=$crosswalk_dir"',
+            "crosswalk build context",
         )
     )
     failures.extend(

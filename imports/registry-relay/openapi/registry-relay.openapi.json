@@ -42,7 +42,7 @@
     },
     {
       "name": "Aggregates",
-      "description": "Pre-declared aggregate discovery and execution. Disclosure control is per-aggregate configuration. Indicator and dimension discovery routes are dataset-scoped and generated from the aggregate declarations: reused identifiers are merged into single records with `queryable_via` links. CSV output is available via `?f=csv` and carries `X-Registry-Relay-*` and `X-SPDCI-*` disclosure/freshness headers plus a `Link: rel=\"describedby\"` to aggregate metadata. When built with `ogcapi-edr`, configured `admin_area` aggregates are also exposed as OGC EDR `/area` collections."
+      "description": "Pre-declared aggregate discovery and execution. Disclosure control is per-aggregate configuration. Measure and dimension discovery routes are dataset-scoped and generated from the aggregate declarations: reused identifiers are merged into single records with `queryable_via` links. CSV output is available via `?f=csv` and carries `X-Registry-Relay-*` and `X-SPDCI-*` disclosure/freshness headers plus a `Link: rel=\"describedby\"` to aggregate structure. SDMX JSON output is advertised as `application/vnd.sdmx.data+json;version=2.1`. When built with `ogcapi-edr`, configured `admin_area` aggregates are also exposed as OGC EDR `/area` collections."
     },
     {
       "name": "Metadata",
@@ -1276,9 +1276,25 @@
       "get": {
         "operationId": "run_dataset_aggregate",
         "summary": "Execute an aggregate (GET)",
-        "description": "Executes a declared aggregate with no body. Use the `POST .../query` variant when you need to pass dimension filters or temporal bounds.",
+        "description": "Executes a declared aggregate with no body. Use the `POST .../query` variant when you need to pass dimension filters or temporal bounds. Use `?f=json`, `?f=csv`, or `?f=sdmx-json` to select the response format.",
         "tags": [
           "Aggregates"
+        ],
+        "parameters": [
+          {
+            "name": "f",
+            "in": "query",
+            "required": false,
+            "description": "Response format. Use `json`, `csv`, or `sdmx-json`.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "csv",
+                "sdmx-json"
+              ]
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -1287,6 +1303,18 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AggregateResult"
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/vnd.sdmx.data+json;version=2.1": {
+                "schema": {
+                  "type": "object",
+                  "description": "SDMX JSON data message for the aggregate result.",
+                  "additionalProperties": true
                 }
               }
             }
@@ -1315,9 +1343,25 @@
       "post": {
         "operationId": "query_dataset_aggregate",
         "summary": "Execute an aggregate with filters",
-        "description": "Executes a declared aggregate with dimension filters and optional temporal bounds. Temporal bounds are accepted only for aggregates that declare a `temporal_field`. CSV output is available with `?f=csv` or request body `\"format\": \"csv\"`; the response then carries `X-Registry-Relay-*` and `X-SPDCI-*` disclosure/freshness headers and a `Link: rel=\"describedby\"` to the aggregate metadata.",
+        "description": "Executes a declared aggregate with dimension filters and optional temporal bounds. Request bodies should use `measures`; `indicators` is accepted only as a deprecated compatibility alias. Temporal bounds are accepted only for aggregates that declare a `temporal_field`. Select output with `?f=json`, `?f=csv`, `?f=sdmx-json`, request body `\"format\": \"csv\"`, request body `\"format\": \"sdmx-json\"`, or `Accept: application/vnd.sdmx.data+json;version=2.1`. CSV responses carry `X-Registry-Relay-*` and `X-SPDCI-*` disclosure/freshness headers and a `Link: rel=\"describedby\"` to the aggregate structure.",
         "tags": [
           "Aggregates"
+        ],
+        "parameters": [
+          {
+            "name": "f",
+            "in": "query",
+            "required": false,
+            "description": "Response format. Use `json`, `csv`, or `sdmx-json`.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "csv",
+                "sdmx-json"
+              ]
+            }
+          }
         ],
         "requestBody": {
           "required": false,
@@ -1342,11 +1386,57 @@
                 "schema": {
                   "type": "string"
                 }
+              },
+              "application/vnd.sdmx.data+json;version=2.1": {
+                "schema": {
+                  "type": "object",
+                  "description": "SDMX JSON data message for the aggregate result.",
+                  "additionalProperties": true
+                }
               }
             }
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/v1/datasets/{dataset_id}/aggregates/{aggregate_id}/structure": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/DatasetId"
+        },
+        {
+          "$ref": "#/components/parameters/AggregateId"
+        }
+      ],
+      "get": {
+        "operationId": "get_dataset_aggregate_structure",
+        "summary": "Aggregate structure descriptor",
+        "description": "Returns descriptive structure for one aggregate: group-by dimensions, measures, disclosure-control policy, optional temporal field, and links.",
+        "tags": [
+          "Aggregates"
+        ],
+        "responses": {
+          "200": {
+            "description": "Aggregate structure descriptor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AggregateStructure"
+                }
+              }
+            }
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
@@ -1371,18 +1461,18 @@
       ],
       "get": {
         "operationId": "get_dataset_aggregate_metadata",
-        "summary": "Aggregate metadata descriptor",
-        "description": "Returns descriptive metadata for one aggregate (group-by columns, measures, disclosure-control policy, optional temporal field, linked indicators and dimensions).",
+        "summary": "Aggregate structure descriptor (metadata alias)",
+        "description": "Deprecated compatibility alias for `/v1/datasets/{dataset_id}/aggregates/{aggregate_id}/structure`.",
         "tags": [
           "Aggregates"
         ],
         "responses": {
           "200": {
-            "description": "Aggregate metadata descriptor.",
+            "description": "Aggregate structure descriptor.",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/AggregateStructure"
                 }
               }
             }
@@ -1396,25 +1486,26 @@
           "404": {
             "$ref": "#/components/responses/NotFound"
           }
-        }
+        },
+        "deprecated": true
       }
     },
-    "/v1/datasets/{dataset_id}/indicators": {
+    "/v1/datasets/{dataset_id}/measures": {
       "parameters": [
         {
           "$ref": "#/components/parameters/DatasetId"
         }
       ],
       "get": {
-        "operationId": "list_dataset_indicators",
-        "summary": "List indicators for a dataset",
-        "description": "Returns the indicators discovered from aggregate declarations. Reused indicator identifiers are merged into one record, with `queryable_via`, `valid_dimensions`, and links back to the aggregate routes that can compute them.",
+        "operationId": "list_dataset_measures",
+        "summary": "List measures for a dataset",
+        "description": "Returns the measures discovered from aggregate declarations. Reused measure identifiers are merged into one record, with `queryable_via`, `valid_dimensions`, and links back to the aggregate routes that can compute them.",
         "tags": [
           "Aggregates"
         ],
         "responses": {
           "200": {
-            "description": "Indicator discovery list.",
+            "description": "Measure discovery list.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1435,25 +1526,25 @@
         }
       }
     },
-    "/v1/datasets/{dataset_id}/indicators/{indicator_id}": {
+    "/v1/datasets/{dataset_id}/measures/{item_id}": {
       "parameters": [
         {
           "$ref": "#/components/parameters/DatasetId"
         },
         {
-          "$ref": "#/components/parameters/IndicatorId"
+          "$ref": "#/components/parameters/ItemId"
         }
       ],
       "get": {
-        "operationId": "get_dataset_indicator",
-        "summary": "Describe one indicator",
-        "description": "Returns the merged discovery record for one indicator, including the aggregates that can compute it and the dimensions it accepts.",
+        "operationId": "get_dataset_measure",
+        "summary": "Describe one measure",
+        "description": "Returns the merged discovery record for one measure, including the aggregates that can compute it and the dimensions it accepts.",
         "tags": [
           "Aggregates"
         ],
         "responses": {
           "200": {
-            "description": "Indicator descriptor.",
+            "description": "Measure descriptor.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1510,13 +1601,13 @@
         }
       }
     },
-    "/v1/datasets/{dataset_id}/dimensions/{dimension_id}": {
+    "/v1/datasets/{dataset_id}/dimensions/{item_id}": {
       "parameters": [
         {
           "$ref": "#/components/parameters/DatasetId"
         },
         {
-          "$ref": "#/components/parameters/DimensionId"
+          "$ref": "#/components/parameters/ItemId"
         }
       ],
       "get": {
@@ -2686,23 +2777,14 @@
         },
         "description": "Pre-declared aggregate identifier (`config.datasets[*].aggregates[*].id`)."
       },
-      "IndicatorId": {
-        "name": "indicator_id",
+      "ItemId": {
+        "name": "item_id",
         "in": "path",
         "required": true,
         "schema": {
           "type": "string"
         },
-        "description": "Indicator identifier discovered from aggregate declarations."
-      },
-      "DimensionId": {
-        "name": "dimension_id",
-        "in": "path",
-        "required": true,
-        "schema": {
-          "type": "string"
-        },
-        "description": "Dimension identifier discovered from aggregate declarations."
+        "description": "Measure or dimension identifier discovered from aggregate declarations."
       },
       "CollectionId": {
         "name": "collection_id",
@@ -3096,32 +3178,103 @@
       },
       "AggregateQueryRequest": {
         "type": "object",
-        "description": "Optional dimension filters and temporal bounds for `POST /v1/datasets/{dataset_id}/aggregates/{aggregate_id}/query`. Temporal bounds are accepted only when the aggregate declares a `temporal_field`.",
-        "additionalProperties": true,
+        "description": "Optional measures, dimension filters, and temporal bounds for `POST /v1/datasets/{dataset_id}/aggregates/{aggregate_id}/query`. Temporal bounds are accepted only when the aggregate declares a `temporal_field`.",
+        "additionalProperties": false,
         "properties": {
+          "measures": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Measure identifiers to compute. Defaults to the aggregate's configured measures when omitted."
+          },
+          "indicators": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "deprecated": true,
+            "description": "Deprecated compatibility alias for `measures`."
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 5
+          },
           "filters": {
             "type": "object",
-            "additionalProperties": true
+            "additionalProperties": true,
+            "maxProperties": 20
           },
-          "datetime": {
+          "temporal": {
+            "type": "object",
+            "description": "Date bounds applied to the aggregate temporal_field when configured.",
+            "additionalProperties": false,
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date"
+              },
+              "to": {
+                "type": "string",
+                "format": "date"
+              }
+            }
+          },
+          "format": {
             "type": "string",
-            "description": "RFC 3339 instant or interval."
+            "enum": [
+              "json",
+              "csv",
+              "sdmx-json"
+            ]
+          },
+          "max_rows": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Maximum aggregate observations to return. Results that exceed the cap are truncated and marked incomplete."
           }
         }
       },
       "AggregateResult": {
         "type": "object",
-        "description": "Aggregate result with disclosure-control applied to groups.",
+        "description": "Aggregate result with disclosure-control applied to observations.",
         "additionalProperties": true,
         "properties": {
-          "data": {
+          "observations": {
             "type": "array",
             "items": {
               "type": "object",
               "additionalProperties": true
             }
+          },
+          "structure": {
+            "$ref": "#/components/schemas/AggregateStructure"
+          },
+          "completeness": {
+            "type": "object",
+            "required": [
+              "complete",
+              "truncated"
+            ],
+            "properties": {
+              "complete": {
+                "type": "boolean"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
           }
-        }
+        },
+        "required": [
+          "observations",
+          "structure",
+          "completeness"
+        ]
       },
       "MetadataLanding": {
         "type": "object",
@@ -3403,6 +3556,74 @@
         "type": "object",
         "description": "SP DCI sync response envelope.",
         "additionalProperties": true
+      },
+      "AggregateStructure": {
+        "type": "object",
+        "description": "Aggregate structure descriptor: dimensions, measures, disclosure control, and links.",
+        "additionalProperties": true,
+        "required": [
+          "dimensions",
+          "measures"
+        ],
+        "properties": {
+          "aggregate_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "dimensions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id"
+              ],
+              "additionalProperties": true,
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "measures": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id"
+              ],
+              "additionalProperties": true,
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "aggregation_method": {
+                  "type": "string"
+                },
+                "column": {
+                  "type": "string"
+                },
+                "unit_measure": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
       }
     }
   }
