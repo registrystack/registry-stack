@@ -14,6 +14,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 VALIDATOR_PATH = SCRIPT_DIR / "validate-hosted-deploy.py"
 WORKFLOW_PATH = SCRIPT_DIR.parent / ".github" / "workflows" / "hosted-lab.yml"
+IMAGE_PIN_WORKFLOW_PATH = SCRIPT_DIR.parent / ".github" / "workflows" / "coolify-image-pin.yml"
 
 
 def load_validator():
@@ -80,6 +81,31 @@ class HostedDeployValidationTest(unittest.TestCase):
         ] = "registry-notary-openfn-sidecar:hosted"
         issues = self._validate(compose, self._valid_esignet())
         self.assertEqual([], issues)
+
+    def test_strict_mode_rejects_interim_local_hosted_product_tags(self) -> None:
+        compose = self._valid_registry_lab()
+        compose["services"]["civil-registry-relay"]["image"] = "registry-relay:hosted"
+        compose["services"]["citizen-civil-notary"]["image"] = "registry-notary:hosted"
+        compose["services"]["openfn-dhis2-sidecar"][
+            "image"
+        ] = "registry-notary-openfn-sidecar:hosted"
+
+        issues = self.validator.validate_artifacts(
+            {
+                "registry-lab": compose,
+                "esignet": self._valid_esignet(),
+            },
+            reject_interim_product_images=True,
+        )
+
+        self.assertIssue(issues, "interim-product-image-tag")
+
+    def test_strict_mode_env_flag_accepts_common_truthy_values(self) -> None:
+        self.assertTrue(self.validator.truthy_env("1"))
+        self.assertTrue(self.validator.truthy_env("true"))
+        self.assertTrue(self.validator.truthy_env("TRUE"))
+        self.assertFalse(self.validator.truthy_env(""))
+        self.assertFalse(self.validator.truthy_env(None))
 
     def test_allows_env_overridable_digest_pinned_product_images(self) -> None:
         compose = self._valid_registry_lab()
@@ -519,6 +545,17 @@ auth:
         self.assertNotIn("klhnsuoye8lwuamp0bko387t", workflow)
         self.assertNotIn("cewwn93kknzsfzicen9nul6v", workflow)
         self.assertNotIn("uvqfk8gwqdbdse4v871xfv56", workflow)
+
+    def test_hosted_workflow_rejects_interim_product_images(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        self.assertIn("--reject-interim-product-images", workflow)
+
+    def test_image_pin_workflow_validates_digest_inputs_and_smokes(self) -> None:
+        workflow = IMAGE_PIN_WORKFLOW_PATH.read_text(encoding="utf-8")
+        self.assertIn("validate_image REGISTRY_RELAY_IMAGE", workflow)
+        self.assertIn("@sha256:[0-9a-f]{64}", workflow)
+        self.assertIn("/deployments/${DEPLOYMENT_UUID}", workflow)
+        self.assertIn("python3 scripts/hosted-smoke.py", workflow)
 
     def test_hosted_workflow_paths_cover_deployment_automation(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")

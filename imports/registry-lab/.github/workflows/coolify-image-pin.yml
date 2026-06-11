@@ -13,12 +13,37 @@ on:
         description: "Digest-pinned REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE value"
         required: true
 
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
   patch-and-deploy:
     runs-on: ubuntu-latest
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate digest-pinned image inputs
+        env:
+          REGISTRY_RELAY_IMAGE: ${{ inputs.registry_relay_image }}
+          REGISTRY_NOTARY_IMAGE: ${{ inputs.registry_notary_image }}
+          REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE: ${{ inputs.registry_notary_openfn_sidecar_image }}
+        run: |
+          set -euo pipefail
+
+          validate_image() {
+            key="$1"
+            value="$2"
+            if [[ ! "$value" =~ ^([a-z0-9]+([._-][a-z0-9]+)*(:[0-9]+)?/)*[a-z0-9]+([._-][a-z0-9]+)*@sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::${key} must be digest-pinned as name@sha256:<64 lowercase hex chars>."
+              exit 1
+            fi
+          }
+
+          validate_image REGISTRY_RELAY_IMAGE "${REGISTRY_RELAY_IMAGE}"
+          validate_image REGISTRY_NOTARY_IMAGE "${REGISTRY_NOTARY_IMAGE}"
+          validate_image REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE "${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE}"
+
       - name: Patch Coolify image env vars
         env:
           COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
@@ -52,13 +77,66 @@ jobs:
           patch_env REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE "${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE}"
 
       - name: Trigger Registry Lab deploy
+        id: deploy
         env:
           COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
           COOLIFY_API_BASE_URL: https://cool.pitgenius.com/api/v1
           REGISTRY_LAB_APP_UUID: klhnsuoye8lwuamp0bko387t
         run: |
           set -euo pipefail
-          curl -fsS \
+          deployment_uuid="$(
+            curl -fsS \
             -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
-            "${COOLIFY_API_BASE_URL}/deploy?uuid=${REGISTRY_LAB_APP_UUID}&force=false"
-          echo
+            "${COOLIFY_API_BASE_URL}/deploy?uuid=${REGISTRY_LAB_APP_UUID}&force=false" \
+            | python3 -c 'import json, sys; print(json.load(sys.stdin)["deployments"][0]["deployment_uuid"])'
+          )"
+          echo "deployment_uuid=${deployment_uuid}" >> "$GITHUB_OUTPUT"
+          echo "triggered deployment_uuid=${deployment_uuid}"
+
+      - name: Wait for Registry Lab deploy
+        env:
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          COOLIFY_API_BASE_URL: https://cool.pitgenius.com/api/v1
+          DEPLOYMENT_UUID: ${{ steps.deploy.outputs.deployment_uuid }}
+        run: |
+          set -euo pipefail
+
+          deadline=$((SECONDS + 1200))
+          while true; do
+            status="$(
+              curl -fsS \
+                -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+                "${COOLIFY_API_BASE_URL}/deployments/${DEPLOYMENT_UUID}" \
+                | python3 -c 'import json, sys; data=json.load(sys.stdin); print((data.get("status") or data.get("deployment", {}).get("status") or "").lower())'
+            )"
+            echo "status deployment_uuid=${DEPLOYMENT_UUID} status=${status}"
+            case "$status" in
+              finished)
+                break
+                ;;
+              failed|cancelled|canceled|error)
+                echo "::error::Coolify deployment failed: ${status}"
+                exit 1
+                ;;
+            esac
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::Timed out waiting for Coolify deployment ${DEPLOYMENT_UUID}"
+              exit 1
+            fi
+            sleep 15
+          done
+
+      - name: Run hosted smoke
+        env:
+          HOSTED_LAB_BASE_URL: ${{ vars.HOSTED_LAB_BASE_URL }}
+          HOSTED_CREDENTIAL_SMOKE: ${{ vars.HOSTED_CREDENTIAL_SMOKE }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ -n "${HOSTED_LAB_BASE_URL:-}" ]; then
+            args+=(--base-url "$HOSTED_LAB_BASE_URL")
+          fi
+          if [ "${HOSTED_CREDENTIAL_SMOKE:-}" = "true" ]; then
+            args+=(--credential-smoke)
+          fi
+          python3 scripts/hosted-smoke.py "${args[@]}"

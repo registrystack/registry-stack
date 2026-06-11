@@ -239,6 +239,7 @@ def validate_artifacts(
     artifact_texts: dict[str, str] | None = None,
     *,
     require_secret_values: bool = False,
+    reject_interim_product_images: bool = False,
     env: dict[str, str] | None = None,
 ) -> list[Issue]:
     issues: list[Issue] = []
@@ -273,7 +274,12 @@ def validate_artifacts(
         issues.extend(validate_service_ports(artifact, services))
         issues.extend(validate_build_inputs(artifact, compose))
         issues.extend(
-            validate_image_refs(artifact, services, artifact_texts.get(artifact, ""))
+            validate_image_refs(
+                artifact,
+                services,
+                artifact_texts.get(artifact, ""),
+                reject_interim_product_images=reject_interim_product_images,
+            )
         )
         issues.extend(validate_runtime_commands(artifact, services))
         issues.extend(validate_openfn_sidecar_governance(artifact, services, root))
@@ -427,7 +433,11 @@ def validate_build_inputs(artifact: str, compose: dict[str, Any]) -> list[Issue]
 
 
 def validate_image_refs(
-    artifact: str, services: dict[str, Any], artifact_text: str = ""
+    artifact: str,
+    services: dict[str, Any],
+    artifact_text: str = "",
+    *,
+    reject_interim_product_images: bool = False,
 ) -> list[Issue]:
     issues = []
     for service, config in services.items():
@@ -452,6 +462,15 @@ def validate_image_refs(
                     artifact,
                     f"services.{service}.image",
                     "canonical product images must be digest-pinned; use only local :hosted tags as interim",
+                )
+            )
+        if reject_interim_product_images and image_uses_interim_product_tag(image):
+            issues.append(
+                Issue(
+                    "interim-product-image-tag",
+                    artifact,
+                    f"services.{service}.image",
+                    "strict hosted validation requires digest-pinned product images, not interim local :hosted tags",
                 )
             )
         if artifact == "registry-lab":
@@ -1529,6 +1548,14 @@ def image_uses_floating_product_tag(image: str) -> bool:
     return name in PRODUCT_IMAGE_NAMES
 
 
+def image_uses_interim_product_tag(image: str) -> bool:
+    return image in ALLOWED_INTERIM_PRODUCT_IMAGES
+
+
+def truthy_env(value: str | None) -> bool:
+    return str(value or "").lower() in {"1", "true"}
+
+
 def product_image_name(image: str) -> str | None:
     if image in ALLOWED_INTERIM_PRODUCT_IMAGES:
         return None
@@ -1983,6 +2010,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="also require every hosted secret variable to have a non-placeholder environment value",
     )
+    parser.add_argument(
+        "--reject-interim-product-images",
+        action="store_true",
+        help="reject interim local :hosted tags for Registry product images",
+    )
     return parser.parse_args(argv)
 
 
@@ -2028,6 +2060,10 @@ def main(argv: list[str]) -> int:
             artifact_roots,
             artifact_texts,
             require_secret_values=args.require_secret_values,
+            reject_interim_product_images=(
+                args.reject_interim_product_images
+                or truthy_env(os.environ.get("REGISTRY_LAB_REJECT_INTERIM_PRODUCT_IMAGES"))
+            ),
         )
     )
     issues = sorted(dedupe_issues(issues), key=lambda issue: (issue.artifact, issue.path, issue.code))
