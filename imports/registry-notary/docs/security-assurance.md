@@ -61,6 +61,31 @@ reports.
 Operators should pin the selected image by digest and treat image-signature
 verification as not available for this release.
 
+## Deliberate route posture exceptions
+
+Some routes deviate from the `/v1/` versioning convention by design. These
+exceptions are recorded in `security/exposure-manifest.json` (per-entry
+`notes`) and `security/auth-none-allowlist.yml` (per-entry `reason`).
+
+### Bare VCT type-metadata routes
+
+`GET /credentials/{*vct_path}` and `GET /.well-known/vct/{*vct_path}` are
+deliberately unversioned (no `/v1/` prefix):
+
+- **`/credentials/{*vct_path}`**: per SD-JWT VC type-metadata dereference, a
+  client resolves credential type metadata by dereferencing the `vct` claim
+  directly (which is `https://{host}/credentials/{vct_path}`). The server path
+  must match the VCT URL path component exactly. Adding `/v1/` would break
+  dereference for any credential whose `vct` does not include that prefix.
+- **`/.well-known/vct/{*vct_path}`**: per RFC 8615, well-known URI paths are
+  determined by the protocol and cannot be prefixed or versioned.
+
+Both routes serve type metadata only and are unrelated to `POST /v1/credentials`
+(credential issuance). The namespace proximity (`GET /credentials/*` vs
+`POST /v1/credentials`) is a known hazard; it is resolved by documentation and
+the explicit `deliberate freeze exception` notes in the exposure manifest rather
+than by route changes that would violate the protocol constraints above.
+
 ## Local security command
 
 Run the practical local subset:
@@ -73,4 +98,3 @@ This validates exposure contracts, Dockerfile secret-copy guardrails, the
 OpenAPI baseline, workflow syntax/security tooling when installed, the reviewed
 `zizmor` high-severity ratchet, gitleaks current-tree scanning, and Semgrep
 rules when installed.
-

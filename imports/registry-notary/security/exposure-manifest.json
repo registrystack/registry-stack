@@ -324,7 +324,7 @@
       "openapi": true,
       "stability": "beta",
       "data_classification": "credential",
-      "notes": "Intentionally unauthenticated public route; auth/audit middleware bypass is exact-match allowlisted and route-local controls apply where relevant.",
+      "notes": "Intentionally unauthenticated public route; auth/audit middleware bypass is exact-match allowlisted and route-local controls apply where relevant. Deliberate freeze exception: this route is intentionally bare (no /v1/ prefix) because per SD-JWT VC type-metadata dereference the path must match the VCT URL path component exactly; prefixing would break dereference for any credential whose vct does not include that prefix. Unrelated to POST /v1/credentials (credential issuance).",
       "source": "manual",
       "enforcement_tests": [],
       "waiver": null
@@ -343,7 +343,7 @@
       "openapi": true,
       "stability": "beta",
       "data_classification": "credential",
-      "notes": "Intentionally unauthenticated public SD-JWT VC Type Metadata well-known route; auth/audit middleware bypass is exact prefix allowlisted.",
+      "notes": "Intentionally unauthenticated public SD-JWT VC Type Metadata well-known route; auth/audit middleware bypass is exact prefix allowlisted. Deliberate freeze exception: this route is intentionally bare (no /v1/ prefix) because per RFC 8615 well-known URI semantics the path prefix is determined by the protocol and cannot be changed. Unrelated to POST /v1/credentials (credential issuance).",
       "source": "manual",
       "enforcement_tests": [],
       "waiver": null

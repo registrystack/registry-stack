@@ -43,11 +43,11 @@ allowed:
   - listener: public
     method: GET
     path: /credentials/{*vct_path}
-    reason: Public OID4VCI credential type metadata.
+    reason: "Public SD-JWT VC type metadata. Bare path is protocol-required: the VCT URL path component must be preserved exactly for dereference; adding /v1/ would break any credential whose vct does not include that prefix. Distinct from POST /v1/credentials (credential issuance)."
   - listener: public
     method: GET
     path: /.well-known/vct/{*vct_path}
-    reason: Public SD-JWT VC Type Metadata well-known route.
+    reason: "Public SD-JWT VC Type Metadata well-known route. Bare path is protocol-required per RFC 8615: well-known URI paths are determined by the protocol and cannot be prefixed."
   - listener: public
     method: GET
     path: /v1/credentials/{credential_id}/status
