@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import importlib.util
 import socket
-import sys
 import tempfile
 import threading
 import time
@@ -24,6 +23,8 @@ SCRIPT = ROOT / "demo" / "decentralized" / "scripts" / "static_metadata_server.p
 
 def _load_server_module():
     spec = importlib.util.spec_from_file_location("static_metadata_server", SCRIPT)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load server module from {SCRIPT}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
