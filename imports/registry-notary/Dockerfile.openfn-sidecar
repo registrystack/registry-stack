@@ -30,6 +30,9 @@ COPY crates/registry-notary-openfn-sidecar/workers/adaptors ./adaptors
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 
+# Runtime policy exception: this image intentionally uses Node slim because it
+# ships the OpenFn JavaScript worker runtime and npm dependencies. It is not the
+# shell-free distroless policy image for the main Notary service.
 FROM node:24-bookworm-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf AS runtime
 
 ENV NODE_ENV=production \

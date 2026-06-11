@@ -1,19 +1,36 @@
 # Security Assurance
 
-Registry Notary's container workflow publishes stable images only from
-`vX.Y.Z` tags to `ghcr.io/jeremi/registry-notary` and
-`ghcr.io/jeremi/registry-notary-openfn-sidecar`. Release tags also update
-`vX.Y`, `vX`, and `latest`; `latest` means latest stable release. Pull requests
-and `main` pushes build local validation images for smoke, SBOM, and Grype
-evidence, but do not push GHCR tags. Nightly or manual development snapshots
-publish `snapshot`, `snapshot-YYYYMMDD`, and `snapshot-<shortsha>` unless both
-existing `snapshot` images' `org.opencontainers.image.revision` labels already
-match the current `main` revision. Final deployments should pin the selected
-images by digest.
+Registry Notary's container workflow publishes release images from stable
+`vX.Y.Z` tags and `registry-stack-technical-preview-<date-or-version>` tags to
+`ghcr.io/jeremi/registry-notary` and
+`ghcr.io/jeremi/registry-notary-openfn-sidecar`. Every release publishes
+`sha-<commit-sha>` as the immutable image tag for both images. Stable releases
+also update `vX.Y.Z`, `vX.Y`, `vX`, and `latest`; `latest` means latest stable
+release. Technical-preview releases publish the matching
+`registry-stack-technical-preview-<date-or-version>` alias and do not move
+`latest`. Pull requests and `main` pushes build local validation images for
+smoke, SBOM, and Grype evidence, but do not push GHCR tags. Nightly or manual
+development snapshots publish `snapshot`, `snapshot-YYYYMMDD`, and
+`snapshot-<shortsha>` unless both existing `snapshot` images'
+`org.opencontainers.image.revision` labels already match the current `main`
+revision. Final deployments should pin the selected images by digest.
 
 The Registry Notary image is built with CEL and PKCS#11 compiled in. Runtime
 use remains config-gated, and the image is covered by the CEL worker-protocol
 smoke, SBOM, and Grype critical-vulnerability gate.
+
+## Container runtime policy
+
+The main Registry Notary image is a distroless Rust service image. Its runtime
+stage must remain `gcr.io/distroless/cc-debian12:nonroot` pinned by digest,
+shell-free, package-manager-free, and compatible with a binary healthcheck and
+JSON-array entrypoint. The container CI guard enforces the runtime base,
+`registry-notary healthcheck`, and `ENTRYPOINT ["/usr/local/bin/registry-notary"]`.
+
+`Dockerfile.openfn-sidecar` is an intentional Node slim exception because it
+ships the OpenFn JavaScript worker runtime and npm dependencies. It still uses a
+JSON-array entrypoint, runs as the image's `node` user, and keeps its healthcheck
+runtime-native with `node /opt/openfn/container-healthcheck.mjs`.
 
 Security waivers live in `security/waivers.yml` when needed. Each waiver must
 name an owner, rationale, review trigger, and expiration. The default owner is
@@ -54,12 +71,34 @@ and must be committed intentionally with review.
 
 ## Image signing status
 
-Registry Notary release images are not signed with `cosign` or another image
-signature workflow yet. The current release evidence relies on immutable
-`vX.Y.Z` tags, digest pinning, SBOM generation, and Grype image vulnerability
-reports.
-Operators should pin the selected image by digest and treat image-signature
-verification as not available for this release.
+Published Registry Notary and OpenFn sidecar image tags are signed with keyless
+`cosign` from the container workflow after they are pushed to GHCR. The workflow
+verifies that each pushed alias resolves to the same digest as that image's
+`sha-<commit-sha>` tag and verifies the signature for every pushed ref before it
+completes.
+
+Verify a release alias and its immutable SHA tag resolve to the same digest:
+
+```sh
+docker buildx imagetools inspect ghcr.io/jeremi/registry-notary:sha-<commit-sha>
+docker buildx imagetools inspect ghcr.io/jeremi/registry-notary:<release-alias>
+docker buildx imagetools inspect ghcr.io/jeremi/registry-notary-openfn-sidecar:sha-<commit-sha>
+docker buildx imagetools inspect ghcr.io/jeremi/registry-notary-openfn-sidecar:<release-alias>
+```
+
+Verify the cosign signature for a tag:
+
+```sh
+cosign verify \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "https://github.com/jeremi/registry-notary/.github/workflows/container.yml@refs/tags/<git-tag>" \
+  ghcr.io/jeremi/registry-notary:<tag>
+
+cosign verify \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "https://github.com/jeremi/registry-notary/.github/workflows/container.yml@refs/tags/<git-tag>" \
+  ghcr.io/jeremi/registry-notary-openfn-sidecar:<tag>
+```
 
 ## Deliberate route posture exceptions
 

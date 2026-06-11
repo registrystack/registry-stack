@@ -114,8 +114,9 @@ for them with deployment controls.
   sidecar's assurance on readiness checks and caches it for a short interval, so a
   sidecar that changes underneath a running Notary is recognized on the next
   refresh, not instantaneously.
-- **Container images are not yet cryptographically signed.** Pin images by
-  digest. See [Security assurance](security-assurance.md).
+- **Container images are signed by the release workflow.** Pin images by
+  digest and verify the `cosign` signature for release tags. See
+  [Security assurance](security-assurance.md).
 
 ## Development mode
 
