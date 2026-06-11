@@ -59,7 +59,7 @@ repos:
     #   docs/development.md                 contributor guide, repo-owned
   registry-notary:
     remote: https://github.com/jeremi/registry-notary
-    ref: 7b9f26c42af9423584a8cab846bd551153058b28
+    ref: b5240790ce124218c3023e4b571296675b2d6551
     local: ../registry-notary
     docs:
       - src: docs/README.md
