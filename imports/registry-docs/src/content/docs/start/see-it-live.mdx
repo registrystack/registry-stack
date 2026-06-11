@@ -45,6 +45,9 @@ unauthenticated as JSON at
 [lab.registrystack.org/api/lab.json](https://lab.registrystack.org/api/lab.json).
 :::
 
+If the hosted lab or one of its service URLs is unavailable, run the same multi-service topology
+locally with [First run with Registry Lab](../../tutorials/first-run-with-registry-lab/).
+
 ## Read a protected registry API
 
 This is the part you can run right now from a terminal. The civil Relay authenticates callers with
@@ -70,7 +73,8 @@ curl -sS \
   https://civil-relay.lab.registrystack.org/v1/datasets
 ```
 
-The Relay returns `200 OK` with the catalog:
+The Relay returns `200 OK` with the catalog. Additional `DatasetSummary` fields are omitted here
+for brevity:
 
 ```json
 { "data": [ { "dataset_id": "civil_registry" } ] }
@@ -128,6 +132,8 @@ different scope, different answer. For more on this service, see
 Now see the issuance side. The citizen Notary issues an SD-JWT VC credential of type
 `person_is_alive_sd_jwt` (format `dc+sd-jwt`). The credential discloses a single predicate, whether
 the person is alive, as a true or false claim. It never hands over the underlying civil record.
+The Relay row-read example uses `NID-1001` / Miguel Santos, while this wallet flow uses the lab
+wallet identity `NID-2001` / Maria Santos.
 
 Unlike the Relay reads above, this part is a guided browser flow, not a curl sequence: a real
 [OID4VCI](../../reference/glossary/) issuance needs a holder key and a sign-in, which is wallet
@@ -140,8 +146,8 @@ to end. The Notary requires you to sign in before it issues. The sign-in runs th
 lab's hosted demo identity provider; you do not need an account, and the values below are synthetic
 demo identities:
 
-- National ID: `NID-1001`
-- Name: Miguel Santos
+- National ID: `NID-2001`
+- Name: Maria Santos
 - Login and OTP code: `111111`
 - PIN: `545411`
 
@@ -156,10 +162,150 @@ https://citizen-notary.lab.registrystack.org/oid4vci/credential-offer?credential
 ### The negative control
 
 Try this in the same browser flow. Self-attestation binds the credential subject to the identity you
-signed in as. If you sign in as `NID-1001` but ask for a credential bound to a different subject
-(`NID-1002`, a different person, also alive), the Notary refuses: it will not issue a credential for a
-subject you did not authenticate as. The issuer cannot be talked into vouching for someone else. For
-more on this service, see [Registry Notary](../../products/registry-notary/).
+signed in as. If you sign in as `NID-2001` but ask for a credential bound to `NID-1001`, the Notary
+refuses: it will not issue a credential for a subject you did not authenticate as. The issuer cannot
+be talked into vouching for someone else. For more on this service, see
+[Registry Notary](../../products/registry-notary/).
+
+### Developer API round-trip
+
+For a pure API credential flow, use the hosted DHIS2 Notary. This path does not use the browser
+wallet sign-in. It evaluates DHIS2 child-program claims, issues an `application/dc+sd-jwt`
+credential, fetches the issuer JWKS, verifies the Ed25519 signature, and checks that each disclosure
+hash is listed in the issuer-signed JWT.
+
+Set the hosted Notary URL and load the current demo bearer token from the lab JSON:
+
+```sh
+export DHIS2_NOTARY_URL="https://dhis2-notary.lab.registrystack.org"
+export DHIS2_PURPOSE="https://demo.example.gov/purpose/dhis2-openfn-health-evidence"
+export DHIS2_EVIDENCE_CLIENT_BEARER="$(
+  curl -fsS https://lab.registrystack.org/api/lab.json |
+    jq -r '.credentials[] | select(.id == "dhis2-bearer") | .token'
+)"
+```
+
+Evaluate the credential claims for the live demo tracked entity:
+
+```sh
+cat > evaluation-request.json <<'JSON'
+{
+  "target": {
+    "type": "TrackedEntity",
+    "identifiers": [
+      { "scheme": "dhis2_tracked_entity", "value": "PQfMcpmXeFE" }
+    ]
+  },
+  "claims": [
+    "dhis2-tracked-entity-first-name",
+    "dhis2-tracked-entity-last-name",
+    "dhis2-child-program-active"
+  ],
+  "disclosure": "value",
+  "format": "application/dc+sd-jwt"
+}
+JSON
+
+curl -fsS -X POST "$DHIS2_NOTARY_URL/v1/evaluations" \
+  -H "Authorization: Bearer $DHIS2_EVIDENCE_CLIENT_BEARER" \
+  -H "Content-Type: application/json" \
+  -H "Data-Purpose: $DHIS2_PURPOSE" \
+  --data @evaluation-request.json \
+  -o evaluation.json
+
+jq '.results[] | {claim_id, value, evaluation_id, format}' evaluation.json
+```
+
+Issue the SD-JWT VC from that evaluation:
+
+```sh
+EVALUATION_ID="$(jq -r '.results[0].evaluation_id' evaluation.json)"
+
+jq -n --arg evaluation_id "$EVALUATION_ID" '{
+  evaluation_id: $evaluation_id,
+  credential_profile: "dhis2_child_program_sd_jwt",
+  format: "application/dc+sd-jwt",
+  claims: [
+    "dhis2-tracked-entity-first-name",
+    "dhis2-tracked-entity-last-name",
+    "dhis2-child-program-active"
+  ],
+  disclosure: "value"
+}' > credential-request.json
+
+curl -fsS -X POST "$DHIS2_NOTARY_URL/v1/credentials" \
+  -H "Authorization: Bearer $DHIS2_EVIDENCE_CLIENT_BEARER" \
+  -H "Content-Type: application/json" \
+  --data @credential-request.json \
+  -o credential.json
+
+jq '{credential_id, credential_profile, issuer, format, disclosure_count: (.disclosures | length)}' credential.json
+```
+
+Fetch the issuer keys and verify the credential:
+
+```sh
+curl -fsS "$DHIS2_NOTARY_URL/.well-known/evidence/jwks.json" \
+  -H "Authorization: Bearer $DHIS2_EVIDENCE_CLIENT_BEARER" \
+  -o jwks.json
+
+node <<'NODE'
+const { createHash, createPublicKey, verify } = require('node:crypto');
+const { readFileSync } = require('node:fs');
+
+const credential = JSON.parse(readFileSync('credential.json', 'utf8'));
+const jwks = JSON.parse(readFileSync('jwks.json', 'utf8'));
+const [header64, payload64, signature64] = credential.issuer_signed_jwt.split('.');
+const header = JSON.parse(Buffer.from(header64, 'base64url').toString('utf8'));
+const payload = JSON.parse(Buffer.from(payload64, 'base64url').toString('utf8'));
+const keys = Array.isArray(jwks.keys) ? jwks.keys : [];
+const key = keys.find((candidate) => candidate.kid === header.kid);
+
+if (!key) throw new Error(`Missing JWKS key ${header.kid}`);
+
+const signed = Buffer.from(`${header64}.${payload64}`);
+const signature = Buffer.from(signature64, 'base64url');
+const signatureValid = verify(null, signed, createPublicKey({ key, format: 'jwk' }), signature);
+
+if (!signatureValid) throw new Error('Bad issuer signature');
+
+const disclosureDigests = new Set(payload._sd || []);
+const disclosureClaims = [];
+
+for (const disclosure of credential.disclosures || []) {
+  const digest = createHash('sha256').update(disclosure).digest('base64url');
+  if (!disclosureDigests.has(digest)) {
+    throw new Error(`Disclosure digest not present in _sd: ${digest}`);
+  }
+  const decoded = JSON.parse(Buffer.from(disclosure, 'base64url').toString('utf8'));
+  disclosureClaims.push(decoded[1]);
+}
+
+console.log(JSON.stringify({
+  issuer: payload.iss,
+  vct: payload.vct,
+  signature_valid: signatureValid,
+  disclosure_count: disclosureClaims.length,
+  disclosure_claims: disclosureClaims.sort()
+}, null, 2));
+NODE
+```
+
+Expected verification summary:
+
+```json
+{
+  "issuer": "did:web:dhis2-notary.lab.registrystack.org",
+  "vct": "https://dhis2-notary.lab.registrystack.org/credentials/dhis2/child-program/v1",
+  "signature_valid": true,
+  "disclosure_count": 3,
+  "disclosure_claims": [
+    "dhis2-child-program-active",
+    "dhis2-tracked-entity-first-name",
+    "dhis2-tracked-entity-last-name"
+  ]
+}
+```
 
 ## Now run your own
 

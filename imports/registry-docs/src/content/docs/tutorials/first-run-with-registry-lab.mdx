@@ -1,7 +1,7 @@
 ---
 title: First run with Registry Lab
 description: Run the Registry Lab compose demo on a laptop, verify the topology with the smoke suite, and walk the three narrated scenarios, including credential issuance and a cross-authority claim.
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - registry-lab
@@ -16,10 +16,9 @@ standards_referenced:
   - cccev
   - openapi
   - sd-jwt-vc
-draft: true
 ---
 
-[Registry Lab](../../products/registry-lab/) is the compose-based local demo for the registry stack.
+Registry Lab is the compose-based local demo for the registry stack.
 It wires Registry Platform source crates, three [Registry Relay](../../products/registry-relay/)
 instances, the [Registry Notary](../../products/registry-notary/) instances, live Postgres and
 Zitadel services, a private OpenFn sidecar path, a static metadata publisher, and narrated demo
@@ -27,9 +26,9 @@ clients into a single topology that runs on a laptop.
 
 This tutorial brings the topology up with the `just` recipes the lab provides, verifies it with the
 smoke suite, runs the narrated demo client, and explains what each of the three scenarios exercises
-across the Relay and Notary services. If you only want the shortest path to a single Relay read and a
-single Notary evaluation, start with [Your first call](../../start/your-first-call/) instead; this
-page is the full tour.
+across the Relay and Notary services. If you only want the shortest hosted path before running the
+stack locally, start with [See it live](../../start/see-it-live/) instead. This page is the full
+local tour.
 
 ## Prerequisites
 
@@ -95,7 +94,8 @@ The default topology runs three Relay instances (civil `4311`, social protection
 `4313`), the core Notary instances (civil `4321`, social protection `4322`, shared eligibility
 `4323`), live Postgres and Zitadel services, the OpenFn sidecar, the static metadata publisher
 (`4331`), and a profile-gated narrated demo client. For the full service inventory with host ports
-and network layout, see the [Registry Lab documentation](../../products/registry-lab/).
+and network layout, see the
+[Registry Lab repository](https://github.com/jeremi/registry-lab).
 
 ## Expected output
 
@@ -233,13 +233,20 @@ issuer and key configuration, and the wallet-driven OID4VCI alternative, see
 [Registry Notary](../../products/registry-notary/). The lab also drives an end-to-end citizen wallet
 flow through the `just citizen-oid4vci-login`, `just citizen-oid4vci-code`,
 `just citizen-oid4vci-token`, and `just citizen-oid4vci-report` recipes; see the
-[Registry Lab documentation](../../products/registry-lab/) for that path and its extra services.
+[Registry Lab repository](https://github.com/jeremi/registry-lab) for that path and its extra
+services.
 
 ## Cross-authority evaluation
 
 You can reproduce the scenario 3 cross-authority call directly. With the demo credentials loaded into
-your shell (the `set -a; . ./.env; set +a` step from [Your first call](../../start/your-first-call/)),
-evaluate the combined-support claim on the shared eligibility Notary for subject `NID-1001`:
+your shell, evaluate the combined-support claim on the shared eligibility Notary for subject
+`NID-1001`:
+
+```sh
+set -a
+. ./.env
+set +a
+```
 
 ```sh
 curl -fsS -X POST \
@@ -300,7 +307,7 @@ pnpm dev
 
 Open the UI at `http://127.0.0.1:5177`. Load the `Registry Lab CPSV-AP service catalogue` demo chip,
 or paste `http://127.0.0.1:4331/metadata/cpsv-ap.jsonld`, then open the Services tab. For the full
-walkthrough, see [Run Atlas locally](../../products/registry-atlas/run-locally/).
+walkthrough, see the [Registry Atlas repository](https://github.com/jeremi/registry-atlas).
 
 ## Troubleshooting
 
@@ -339,8 +346,8 @@ just down
 
 ## Next
 
-- [Registry Lab](../../products/registry-lab/): the full demo topology, fixture data contract, and
-  per-scenario tutorials.
+- [Registry Lab](https://github.com/jeremi/registry-lab): the full demo topology, fixture data
+  contract, and per-scenario tutorials.
 - [Registry Relay](../../products/registry-relay/): route reference, auth scopes, and configuration
   guide.
 - [Registry Notary](../../products/registry-notary/): claim configuration, disclosure modes, and

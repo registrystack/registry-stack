@@ -40,6 +40,8 @@ export default defineConfig({
   // internal redirects map the retired /projects/* and /capabilities/* routes
   // to their new homes so old links and search results keep resolving.
   redirects: {
+    '/start/': '/start/quickstart/',
+    '/start/your-first-call/': '/tutorials/first-run-with-registry-lab/',
     // Problems -> marketing /why
     '/problems/': `${marketing}/why/`,
     '/problems/existing-data-not-service-ready/': `${marketing}/why/`,
@@ -142,6 +144,7 @@ export default defineConfig({
             // orient, then the minimal call, then the full tour.
             { label: 'Overview', link: '/' },
             { label: 'See it live', slug: 'start/see-it-live' },
+            { label: 'Run lab', slug: 'tutorials/first-run-with-registry-lab' },
             { label: 'When to use', slug: 'start/when-to-use' },
             { label: 'Where to start', slug: 'start/quickstart' },
             { label: 'Spreadsheet API', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },

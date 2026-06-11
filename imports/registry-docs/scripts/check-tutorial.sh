@@ -150,7 +150,7 @@ done
 # inside `sh` fences. Bump the expected count when you intentionally add or
 # remove a documented command.
 REGISTRYCTL_TUTORIALS=(
-	"publish-spreadsheet-secured-registry-api:29"
+	"publish-spreadsheet-secured-registry-api:30"
 	"verify-claim-registry-api:60"
 	"verify-claim-own-api:44"
 )
