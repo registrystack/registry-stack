@@ -1,0 +1,184 @@
+# SPDX-License-Identifier: Apache-2.0
+# Reference config used to generate openapi/registry-relay.openapi.json.
+
+server:
+  bind: 127.0.0.1:0
+  openapi_requires_auth: false
+
+catalog:
+  title: Registry Relay API
+  base_url: https://data.example.test/
+  publisher: Ministry of Delivery
+  participant_id: did:web:data.example.test
+
+vocabularies:
+  psc: https://publicschema.org/
+  ex: https://example.test/vocab/
+  spdci: https://schema.spdci.org/
+  spdci_social: https://schema.spdci.org/extensions/social/v1/
+
+auth:
+  mode: api_key
+  api_keys: []
+
+standards:
+  spdci:
+    registries:
+      sr:
+        dataset: social_registry
+        entity: household
+        registry_type: ns:org:RegistryType:SR
+        record_type: spdci_social:Group
+        identifiers:
+          HOUSEHOLD_ID: id
+        expression_fields:
+          region: region
+
+datasets:
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic social registry used for OpenAPI contract generation.
+    owner: Social Ministry
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    conforms_to:
+      - psc:concepts/Household
+      - spdci:extensions/social/v1/Group
+    defaults:
+      refresh:
+        mode: manual
+    tables:
+      - id: households_table
+        source:
+          type: file
+          path: fixtures/social_registry.csv
+        primary_key: household_id
+        schema:
+          strict: true
+          fields:
+            - name: household_id
+              type: string
+              nullable: false
+              concept_uri: ex:properties/householdId
+            - name: region_code
+              type: string
+              nullable: true
+              concept_uri: ex:properties/regionCode
+              codelist: ex:codelists/Region
+            - name: area_geojson
+              type: string
+              nullable: true
+      - id: individuals_table
+        source:
+          type: file
+          path: fixtures/social_registry.csv
+        primary_key: individual_id
+        schema:
+          strict: true
+          fields:
+            - name: individual_id
+              type: string
+              nullable: false
+            - name: household_id
+              type: string
+              nullable: false
+            - name: age
+              type: integer
+              nullable: true
+    aggregates:
+      - id: households_by_region
+        title: Households by region
+        description: Household count by region
+        source_entity: household
+        default_group_by:
+          - region
+        dimensions:
+          - id: region
+            label: Region
+            field: region
+        indicators:
+          - id: household_count
+            label: Households
+            function: count
+            column: id
+            unit_measure: households
+        allowed_filters:
+          - field: region
+            ops: [in]
+        spatial:
+          mode: admin_area
+          collection_id: households_by_region_area
+          dimension: region
+          geometry_entity: household
+          geometry_id_field: region
+          geometry_field: area_geometry
+        disclosure_control:
+          min_group_size: 2
+          suppression: omit
+    entities:
+      - name: household
+        title: Household
+        description: Registered household.
+        table: households_table
+        concept_uri: psc:concepts/Household
+        fields:
+          - name: id
+            from: household_id
+            concept_uri: ex:properties/householdId
+          - name: region
+            from: region_code
+            concept_uri: ex:properties/region
+            codelist: ex:codelists/Region
+          - name: area_geometry
+            from: area_geojson
+        relationships:
+          - name: members
+            kind: has_many
+            target: individual
+            foreign_key: household_id
+            concept_uri: ex:relationships/householdMember
+        access:
+          metadata_scope: social_registry:metadata
+          aggregate_scope: social_registry:aggregate
+          read_scope: social_registry:rows
+          evidence_verification_scope: social_registry:evidence_verification
+        api:
+          default_limit: 100
+          max_limit: 1000
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: region
+              ops: [eq, in]
+          allowed_expansions: [members]
+      - name: individual
+        title: Individual
+        table: individuals_table
+        fields:
+          - name: id
+            from: individual_id
+          - name: household_id
+          - name: age
+        relationships:
+          - name: household
+            kind: belongs_to
+            target: household
+            foreign_key: household_id
+        access:
+          metadata_scope: social_registry:metadata
+          aggregate_scope: social_registry:aggregate
+          read_scope: social_registry:rows
+          evidence_verification_scope: social_registry:evidence_verification
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: household_id
+              ops: [eq]
+          allowed_expansions: [household]
+
+audit:
+  sink: stdout
+  format: jsonl
