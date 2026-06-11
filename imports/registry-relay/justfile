@@ -111,9 +111,13 @@ exposure-check:
 container-security:
     python3 scripts/check_security_assurance.py dockerfile-secrets
 
-# Run the full CI gate locally: Docker build contract, fmt-check, default/all-feature lint,
-# default/all-feature tests, and cargo-deny.
-ci: docker-build-contract fmt-check lint-default lint test-default test deny
+# Check locked Cargo resolution against the workflow-pinned companion repos.
+ci-preflight:
+    scripts/ci-preflight.sh
+
+# Run the full CI gate locally: pinned-ref preflight, Docker build contract,
+# fmt-check, default/all-feature lint, default/all-feature tests, and cargo-deny.
+ci: ci-preflight docker-build-contract fmt-check lint-default lint test-default test deny
 
 # Run the development server with a config file.
 # Usage: just run              (uses config/example.yaml)
