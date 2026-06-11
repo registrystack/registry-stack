@@ -52,7 +52,7 @@ datasets:
     evidence_offerings:
       - id: civil_child_status_evidence_service
         iri: https://metadata.lab.registrystack.org/evidence-offerings/civil-child-status
-        title: Civil child status evidence service
+        title: Civil vital status evidence service
         description: Evidence Server endpoint that computes birth date and alive status from the civil registry.
         evidence_type: civil_child_status_evidence
         issuing_authority:

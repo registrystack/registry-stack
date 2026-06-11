@@ -447,7 +447,7 @@ class ScenarioPayloadTest(unittest.TestCase):
 
         self.assertEqual(result["friendly"]["status"], "done")
         self.assertEqual(result["friendly"]["facts"][0], {"label": "HTTP status", "value": 200})
-        self.assertEqual(result["friendly"]["facts"][1], {"label": "From Step 1", "value": "Civil evidence service"})
+        self.assertEqual(result["friendly"]["facts"][1], {"label": "From Step 1", "value": "Civil vital status evidence service"})
         self.assertEqual(result["friendly"]["facts"][4], {"label": "Answer", "value": "Yes"})
         self.assertEqual(result["response_source"]["reused_from_discovery"]["lookup_key"], "national_id")
         self.assertEqual(captured["req"].full_url, "https://notary.example/v1/evaluations")
