@@ -255,9 +255,9 @@ pub fn compile_notary_runtime(
     let wallet_cors_policy = SelfAttestationWalletCorsPolicy::from_config(&config);
     let auth_state = Arc::new(AuthAuditState::from_config(&config, Arc::clone(&metrics))?);
     let posture_context =
-        PostureContext::from_config(&config, &auth_state.audit).map_err(|_| {
+        PostureContext::from_config(&config, &auth_state.audit).map_err(|error| {
             StandaloneServerError::InvalidSigningKey {
-                key: "<unknown>".to_string(),
+                key: error.key_id().to_string(),
                 reason: "unsupported signing key status".to_string(),
             }
         })?;

@@ -285,7 +285,7 @@
       "notes": "Intentionally unauthenticated public JWKS well-known route for wallet and verifier discovery; only public issuer verification keys are emitted.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::oidc_self_attestation_evaluates_renders_and_audits_access_mode"
+        "crates/registry-notary-server/tests/standalone_http.rs::jwks_is_public_and_contains_no_private_members"
       ],
       "waiver": null
     },

@@ -815,6 +815,7 @@ fn build_openapi_document() -> Value {
                 "TokenRequest": token_request_schema(),
                 "TokenResponse": token_response_schema(),
                 "ConfigApplyRequest": config_apply_request_schema(),
+                "ConfigApplyResponse": config_apply_response_schema(),
                 "TufConfigTargetRequest": tuf_config_target_request_schema(),
                 "LocalTufConfigTargetRequest": local_tuf_config_target_request_schema(),
                 "RemoteTufConfigTargetRequest": remote_tuf_config_target_request_schema(),
@@ -909,6 +910,20 @@ fn build_openapi_document() -> Value {
         "200",
         "#/components/schemas/EvaluationResponse",
     );
+    for (path, status) in [
+        ("/admin/v1/config/verify", "200"),
+        ("/admin/v1/config/dry-run", "200"),
+        ("/admin/v1/config/apply", "200"),
+        ("/admin/v1/config/apply", "409"),
+    ] {
+        set_json_response_schema(
+            &mut document_value,
+            path,
+            "post",
+            status,
+            "#/components/schemas/ConfigApplyResponse",
+        );
+    }
     document_value["info"]["summary"] = json!(INFO_SUMMARY);
     document_value["info"]["contact"] = json!({ "name": CONTACT_NAME });
     serde_json::from_value::<OpenApi>(document_value.clone()).unwrap_or_else(|err| {
@@ -2625,6 +2640,39 @@ fn config_apply_request_schema() -> Value {
     })
 }
 
+fn config_apply_response_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": [
+            "bundle_id",
+            "sequence",
+            "result",
+            "posture_result",
+            "applied",
+            "restart_required"
+        ],
+        "properties": {
+            "bundle_id": { "type": "string" },
+            "sequence": { "type": "integer", "format": "uint64" },
+            "result": {
+                "type": "string",
+                "description": "Config apply outcome, such as applied, verified, rejected_restart_required, rejected_readiness, or rejected_rollback."
+            },
+            "posture_result": {
+                "type": "string",
+                "description": "Posture projection of the outcome, such as accepted, rejected, or not_applied."
+            },
+            "applied": { "type": "boolean" },
+            "restart_required": { "type": "boolean" },
+            "detail": {
+                "type": "string",
+                "description": "Optional diagnostic detail. Previous-config-hash mismatch details use canonical sha256:<64 lowercase hex> for the expected value and name the detected received format."
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
 fn tuf_config_target_request_schema() -> Value {
     json!({
         "oneOf": [
@@ -3353,6 +3401,15 @@ mod tests {
             doc["components"]["schemas"]["BreakGlassApproval"]["properties"]
                 ["emergency_change_class"]["description"],
             json!("Must appear in the signed target change_classes and be authorized by local trust roots.")
+        );
+        assert_eq!(
+            doc["components"]["schemas"]["ConfigApplyResponse"]["properties"]["detail"]["type"],
+            json!("string")
+        );
+        assert_eq!(
+            doc["paths"]["/admin/v1/config/apply"]["post"]["responses"]["409"]["content"]
+                ["application/json"]["schema"]["$ref"],
+            json!("#/components/schemas/ConfigApplyResponse")
         );
     }
 

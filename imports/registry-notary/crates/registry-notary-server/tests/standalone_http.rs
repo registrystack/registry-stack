@@ -7173,6 +7173,36 @@ async fn oidc_metrics_scope_can_scrape_metrics_but_non_metrics_cannot() {
 }
 
 #[tokio::test]
+async fn jwks_is_public_and_contains_no_private_members() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(self_attestation_oidc_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let jwks = server.get("/.well-known/evidence/jwks.json").await;
+
+    jwks.assert_status_ok();
+    let jwks_body: Value = jwks.json();
+    let keys = jwks_body["keys"].as_array().expect("JWKS keys");
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0]["kid"], json!("did:web:issuer.example#key-1"));
+    assert!(keys[0].get("d").is_none());
+
+    idp.stop().await;
+}
+
+#[tokio::test]
 async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");

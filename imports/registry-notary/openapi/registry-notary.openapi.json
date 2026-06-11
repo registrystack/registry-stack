@@ -441,6 +441,45 @@
         },
         "type": "object"
       },
+      "ConfigApplyResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "type": "boolean"
+          },
+          "bundle_id": {
+            "type": "string"
+          },
+          "detail": {
+            "description": "Optional diagnostic detail. Previous-config-hash mismatch details use canonical sha256:<64 lowercase hex> for the expected value and name the detected received format.",
+            "type": "string"
+          },
+          "posture_result": {
+            "description": "Posture projection of the outcome, such as accepted, rejected, or not_applied.",
+            "type": "string"
+          },
+          "restart_required": {
+            "type": "boolean"
+          },
+          "result": {
+            "description": "Config apply outcome, such as applied, verified, rejected_restart_required, rejected_readiness, or rejected_rollback.",
+            "type": "string"
+          },
+          "sequence": {
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bundle_id",
+          "sequence",
+          "result",
+          "posture_result",
+          "applied",
+          "restart_required"
+        ],
+        "type": "object"
+      },
       "CredentialConfigurationMetadata": {
         "properties": {
           "credential_signing_alg_values_supported": {
@@ -1783,6 +1822,9 @@
                   "restart_required": false,
                   "result": "applied",
                   "sequence": 2
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigApplyResponse"
                 }
               }
             },
@@ -1849,6 +1891,9 @@
                   "restart_required": true,
                   "result": "rejected_restart_required",
                   "sequence": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigApplyResponse"
                 }
               }
             },
@@ -1883,6 +1928,9 @@
                   "restart_required": true,
                   "result": "rejected_restart_required",
                   "sequence": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigApplyResponse"
                 }
               }
             },
@@ -1968,6 +2016,9 @@
                   "restart_required": true,
                   "result": "verified",
                   "sequence": 1
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigApplyResponse"
                 }
               }
             },

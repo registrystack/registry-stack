@@ -55,7 +55,7 @@ use registry_platform_ops::{
     internal_config_hash, posture_safe_runtime_config_hash, AntiRollbackKey, AntiRollbackProposal,
     AntiRollbackStoreError, ApplyReportResult, BreakGlassApproval, BreakGlassRateLimit,
     ConfigSource, FileAntiRollbackStore, FileLocalApprovalStore, LocalApprovalStoreError,
-    LocalOperatorApproval, PostureApplyResult, PostureFilterError,
+    LocalOperatorApproval, PostureApplyResult,
 };
 use registry_platform_replay::{ReplayKey, ReplayScope, ReplayStoreError, RequiredReplayError};
 use registry_platform_sdjwt::{validate_holder_proof, HolderProofBindings, HolderProofPolicy};
@@ -79,7 +79,7 @@ use crate::{
     format_time,
     metrics::AppMetrics,
     openapi_document,
-    posture::{posture_document, PostureContext},
+    posture::{posture_document, PostureContext, PostureDocumentError},
     preauth_state::{LoginState, SingleUseReserveError},
     replay::{require_replay_insert, ReplayReadiness, ReplayStores},
     runtime::claim_ids,
@@ -885,18 +885,22 @@ async fn admin_config_apply(
     ) {
         let (result, status) = antirollback_apply_failure(&error);
         let detail = if matches!(error, AntiRollbackStoreError::PreviousConfigHashMismatch) {
-            antirollback_store
-                .load(&antirollback_key)
-                .ok()
-                .map(|record| {
-                    previous_config_hash_mismatch_detail(
-                        &record.last_config_hash,
-                        &NormalizedPreviousConfigHash {
-                            value: candidate.previous_config_hash.clone(),
-                            format: candidate.previous_config_hash_format,
-                        },
-                    )
-                })
+            match antirollback_store.load(&antirollback_key) {
+                Ok(record) => Some(previous_config_hash_mismatch_detail(
+                    &record.last_config_hash,
+                    &NormalizedPreviousConfigHash {
+                        value: candidate.previous_config_hash.clone(),
+                        format: candidate.previous_config_hash_format,
+                    },
+                )),
+                Err(load_error) => {
+                    tracing::debug!(
+                        error = %load_error,
+                        "failed to load antirollback record for previous_config_hash mismatch detail"
+                    );
+                    None
+                }
+            }
         } else {
             None
         };
@@ -1924,7 +1928,9 @@ fn unresolved_config_audit(
         bundle_id: request.bundle_id.clone(),
         sequence: request.sequence,
         signer_kids: Vec::new(),
-        previous_config_hash: request.previous_config_hash.clone(),
+        previous_config_hash: normalized_previous_config_hash_for_audit(
+            request.previous_config_hash.as_deref(),
+        ),
         config_hash: request
             .config_yaml
             .as_deref()
@@ -1948,6 +1954,13 @@ fn unresolved_config_audit(
         local_approval_change_class: None,
         local_approval_expires_at_unix_seconds: None,
         local_approval_rate_limit_identity: None,
+    }
+}
+
+fn normalized_previous_config_hash_for_audit(previous_config_hash: Option<&str>) -> Option<String> {
+    match normalize_previous_config_hash(previous_config_hash) {
+        Ok(normalized) => normalized.value,
+        Err(_) => previous_config_hash.map(ToOwned::to_owned),
     }
 }
 
@@ -2625,8 +2638,20 @@ fn credential_status_problem(
     response
 }
 
-fn posture_filter_failed(error: PostureFilterError) -> Response {
-    tracing::error!(error = %error, "failed to filter admin posture");
+fn posture_filter_failed(error: PostureDocumentError) -> Response {
+    let detail = match &error {
+        PostureDocumentError::Filter(filter_error) => {
+            tracing::error!(error = %filter_error, "failed to filter admin posture");
+            "admin posture could not be filtered for the requested tier"
+        }
+        PostureDocumentError::SigningKey(signing_key_error) => {
+            tracing::error!(
+                key_id = signing_key_error.key_id(),
+                "failed to project signing key posture"
+            );
+            "admin posture contains an unsupported signing key status"
+        }
+    };
     let status = StatusCode::INTERNAL_SERVER_ERROR;
     let mut response = (
         status,
@@ -2634,7 +2659,7 @@ fn posture_filter_failed(error: PostureFilterError) -> Response {
             "type": format!("{}/posture/filter_failed", crate::PROBLEM_TYPE_BASE_URL),
             "title": "Admin posture unavailable",
             "status": status.as_u16(),
-            "detail": "admin posture could not be filtered for the requested tier",
+            "detail": detail,
             "code": POSTURE_FILTER_FAILED_CODE,
         })),
     )
@@ -7984,6 +8009,38 @@ mod tests {
         assert!(
             detail.contains("detected format: bare lowercase hex"),
             "missing received format: {detail}"
+        );
+    }
+
+    #[test]
+    fn unresolved_config_audit_uses_canonical_previous_config_hash_when_possible() {
+        let bare = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let request = ConfigApplyRequest {
+            bundle_id: Some("demo-bundle".to_string()),
+            sequence: Some(7),
+            config_yaml: None,
+            stream_id: default_stream_id(),
+            previous_config_hash: Some(bare.to_string()),
+            root_version: None,
+            break_glass: false,
+            break_glass_approval: None,
+            break_glass_rate_limit: None,
+            local_approval_reference: None,
+            tuf: None,
+        };
+
+        let audit = unresolved_config_audit(
+            ConfigAdminAction::Apply,
+            &request,
+            "rejected",
+            "rejected_compile",
+            false,
+            false,
+        );
+
+        assert_eq!(
+            audit.previous_config_hash.as_deref(),
+            Some("sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
         );
     }
 

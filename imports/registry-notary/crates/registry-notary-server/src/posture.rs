@@ -61,9 +61,23 @@ struct SigningKeyPosture {
     disabled: Vec<String>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SigningKeyPostureError {
-    UnknownStatus,
+    UnknownStatus { key_id: String },
+}
+
+impl SigningKeyPostureError {
+    pub(crate) fn key_id(&self) -> &str {
+        match self {
+            Self::UnknownStatus { key_id } => key_id,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum PostureDocumentError {
+    Filter(PostureFilterError),
+    SigningKey(SigningKeyPostureError),
 }
 
 #[derive(Clone, Debug)]
@@ -118,7 +132,7 @@ impl PostureContext {
 pub(crate) async fn posture_document(
     state: &RegistryNotaryApiState,
     tier: PostureTier,
-) -> Result<Value, PostureFilterError> {
+) -> Result<Value, PostureDocumentError> {
     let replay_ready = state.replay.check_ready().await;
     let replay_ready_bool = matches!(replay_ready, Ok(ReplayReadiness::Ready));
     let credential_status_ready = state.credential_status.check_ready().await.is_ok();
@@ -142,9 +156,7 @@ pub(crate) async fn posture_document(
         .map(|context| (**context).clone())
         .unwrap_or_else(default_posture_context);
     let signing_keys = match state.runtime_config().as_deref() {
-        Some(config) => {
-            signing_key_posture(config).map_err(|_| PostureFilterError::InvalidAllowlist)?
-        }
+        Some(config) => signing_key_posture(config).map_err(PostureDocumentError::SigningKey)?,
         None => context.signing_keys.clone(),
     };
     let mut warnings = Vec::<String>::new();
@@ -300,7 +312,7 @@ pub(crate) async fn posture_document(
             },
         },
     });
-    filter_posture_for_tier(posture, tier)
+    filter_posture_for_tier(posture, tier).map_err(PostureDocumentError::Filter)
 }
 
 fn default_posture_context() -> PostureContext {
@@ -455,7 +467,11 @@ fn project_signing_key_status(
         }
         Some(SigningKeyStatus::PublishOnly) => {}
         Some(SigningKeyStatus::Disabled) => posture.disabled.push(key_id.to_string()),
-        Some(_) | None => return Err(SigningKeyPostureError::UnknownStatus),
+        Some(_) | None => {
+            return Err(SigningKeyPostureError::UnknownStatus {
+                key_id: key_id.to_string(),
+            })
+        }
     }
     Ok(())
 }
@@ -701,10 +717,17 @@ evidence:
     #[test]
     fn unknown_signing_key_status_projection_fails_closed() {
         let mut posture = SigningKeyPosture::default();
+        // SigningKeyStatus is non_exhaustive, so None is the unit-test stand-in
+        // for a future status variant that this product has not classified yet.
         let error = project_signing_key_status("future-key", None, true, &mut posture)
             .expect_err("future signing key status must fail closed");
 
-        assert_eq!(error, SigningKeyPostureError::UnknownStatus);
+        assert_eq!(
+            error,
+            SigningKeyPostureError::UnknownStatus {
+                key_id: "future-key".to_string()
+            }
+        );
         assert!(posture.active.is_empty());
         assert!(posture.publish_only.is_empty());
         assert!(posture.disabled.is_empty());
