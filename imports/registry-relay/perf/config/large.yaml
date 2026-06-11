@@ -181,23 +181,6 @@ datasets:
             disclosure_control:
               min_group_size: 1
 
-            # Drives the ambiguous decision path.
-            # candidate_lookup on region_code (20 distinct values, ~50000 rows each in 1M)
-            # returns many candidates. Matching on category still leaves many matches,
-            # so the decision is ambiguous. expose_ambiguous: true is required here so
-            # the endpoint reports "ambiguous" rather than collapsing to "mismatch".
-            facility-region-v1:
-              mode: normalized_exact
-              required_claims: [region_code, category]
-              candidate_lookup: [region_code]
-              match_fields:
-                region_code: region_code
-                category: category
-              allow_subject_id_targeting: false
-              diagnostics: false
-              expose_ambiguous: true
-              scope: clinic_capacity:evidence_verification
-
 audit:
   sink: file
   format: jsonl
