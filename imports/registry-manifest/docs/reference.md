@@ -113,6 +113,18 @@ Source:
 | `public_services` | Dataset-scoped public registry services, when a dataset is itself the produced registry resource. |
 | `codelists` | List of codelist IDs referenced by this dataset's fields. |
 
+### CodelistManifest keys
+
+| Key | Type | Required | Description |
+| --- | --- | --- | --- |
+| `id` | string | Yes | Codelist identifier. Must be unique within the manifest. |
+| `scheme_iri` | string | Yes | Concept scheme IRI or CURIE. |
+| `version` | string | No | Version marker for this codelist scheme. Rendered on generated codelist nodes when present. |
+| `valid_from` | string | No | Start date or instant for this codelist version's validity window. Rendered on generated codelist nodes when present. |
+| `valid_to` | string | No | End date or instant for this codelist version's validity window. Rendered on generated codelist nodes when present. |
+| `external_ref` | string | No | Optional external codelist document IRI. |
+| `concepts` | list of `CodelistConcept` | No | Code values and optional concept IRIs or labels. |
+
 ### Service-first keys
 
 | Key | Description |
@@ -165,11 +177,10 @@ Their presence causes `validate`, `publish`, and `validate-profiles` to fail.
 They belong in Registry Relay or Registry Notary runtime configuration, not in a metadata manifest.
 
 `admin_bind`, `admin_listener`, `audit`, `auth`, `bind`, `bindings`, `capabilities`,
-`column`, `config_trust`, `file_path`, `jwks_uri`, `listener`, `listeners`,
-`peer_allowlist`, `peers`, `private_jwk`, `private_jwk_env`, `query`, `replay`,
-`required_filters`, `rows_scope`, `scope`, `secret_provider`, `secret_providers`,
-`signing_keys`, `source`, `source_id`, `table`, `token_url`, `url`, `url_env`,
-`visibility`
+`column`, `config_trust`, `file_path`, `listener`, `listeners`, `peer_allowlist`,
+`peers`, `private_jwk`, `private_jwk_env`, `query`, `replay`, `required_filters`,
+`rows_scope`, `scope`, `secret_provider`, `secret_providers`, `signing_keys`,
+`source`, `source_id`, `table`, `token_url`, `url`, `url_env`, `visibility`
 
 Source:
 [`crates/registry-manifest-core/src/lib.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/src/lib.rs)
@@ -177,7 +188,32 @@ Source:
 
 ## Schema versions
 
-The three schema version strings are: metadata manifest (`registry-manifest/v1`), profile descriptor (`registry-manifest-profile/v1`), and publish index (`registry-manifest-index/v1`).
+The root version marker field is `schema_version`.
+Source manifests, profile descriptors, and generated manifest-owned formats use explicit format IDs:
+
+| Format | `schema_version` value |
+| --- | --- |
+| Metadata manifest | `registry-manifest/v1` |
+| Profile descriptor | `registry-manifest-profile/v1` |
+| Publish index | `registry-manifest-index/v1` |
+| Catalog JSON | `registry-manifest-catalog/v1` |
+| Evidence offerings collection JSON | `registry-manifest-evidence-offerings/v1` |
+| Single evidence offering JSON | `registry-manifest-evidence-offering/v1` |
+| ODRL policy collection JSON-LD | `registry-manifest-policy-collection/v1` |
+| Single ODRL policy JSON-LD | `registry-manifest-policy/v1` |
+| SHACL JSON-LD | `registry-manifest-shacl/v1` |
+| Generated codelist node | `registry-manifest-codelist/v1` |
+| Entity JSON Schema | `registry-manifest-entity-json-schema/v1` |
+| Form JSON Schema | `registry-manifest-form-json-schema/v1` |
+| OGC Records FeatureCollection JSON | `registry-manifest-ogc-records/v1` |
+
+Codelist source definitions use `version` for the codelist scheme version and
+`valid_from` / `valid_to` for the codelist validity window.
+Manifest-owned JSON-LD maps these bare keys to stable Registry Manifest RDF terms:
+`schema_version` -> `registry_manifest:schemaVersion`,
+`version` -> `registry_manifest:version`,
+`valid_from` -> `registry_manifest:validFrom`, and
+`valid_to` -> `registry_manifest:validTo`.
 
 ## Publish output artifacts
 
@@ -187,23 +223,23 @@ Source:
 
 All paths are relative to the `--out` directory.
 
-| Artifact path | Format | Source renderer |
-| --- | --- | --- |
-| `metadata.yaml` | YAML | Copy of input manifest |
-| `catalog.json` | JSON | `render_catalog()` |
-| `dcat.jsonld` | JSON-LD | `render_base_dcat()` |
-| `cpsv-ap` | JSON-LD | `render_cpsv_ap()` when the catalog declares the `cpsv-ap` profile |
-| `cpsv-ap.jsonld` | JSON-LD | `render_cpsv_ap()` when the catalog declares the `cpsv-ap` profile |
-| `dcat.<profile-id>.jsonld` | JSON-LD | `render_dcat_profile()` per application profile |
-| `shacl.jsonld` | JSON-LD | `render_shacl()` |
-| `evidence-offerings.json` | JSON | `render_evidence_offerings()` |
-| `evidence-offerings/<offering-id>.json` | JSON | `render_evidence_offering()` per offering |
-| `policies.jsonld` | JSON-LD | `render_policy_collection()` |
-| `policies/<dataset-id>.jsonld` | JSON-LD | `render_dataset_policy_document()` per dataset |
-| `schema/<dataset-id>/<entity-name>/schema.json` | JSON Schema Draft 2020-12 | `render_entity_schema_draft_2020_12()` per entity |
-| `forms/<form-id>/schema.json` | JSON Schema Draft 2020-12 | `render_form_schema_draft_2020_12()` per form |
-| `profiles/<profile-id>.json` | JSON | Compiled profile structure |
-| `index.json` | JSON | Bundle manifest index (schema version `registry-manifest-index/v1`) |
+| Artifact path | Format | Source renderer | Version marker |
+| --- | --- | --- | --- |
+| `metadata.yaml` | YAML | Copy of input manifest | Root `schema_version` |
+| `catalog.json` | JSON | `render_catalog()` | `schema_version: registry-manifest-catalog/v1` |
+| `dcat.jsonld` | JSON-LD | `render_base_dcat()` | Standards profile output |
+| `cpsv-ap` | JSON-LD | `render_cpsv_ap()` when the catalog declares the `cpsv-ap` profile | Standards profile output |
+| `cpsv-ap.jsonld` | JSON-LD | `render_cpsv_ap()` when the catalog declares the `cpsv-ap` profile | Standards profile output |
+| `dcat.<profile-id>.jsonld` | JSON-LD | `render_dcat_profile()` per application profile | Standards profile output |
+| `shacl.jsonld` | JSON-LD | `render_shacl()` | `schema_version: registry-manifest-shacl/v1` |
+| `evidence-offerings.json` | JSON | `render_evidence_offerings()` | `schema_version: registry-manifest-evidence-offerings/v1` |
+| `evidence-offerings/<offering-id>.json` | JSON | `render_evidence_offering()` per offering | `schema_version: registry-manifest-evidence-offering/v1` |
+| `policies.jsonld` | JSON-LD | `render_policy_collection()` | `schema_version: registry-manifest-policy-collection/v1` |
+| `policies/<dataset-id>.jsonld` | JSON-LD | `render_dataset_policy_document()` per dataset | `schema_version: registry-manifest-policy/v1` |
+| `schema/<dataset-id>/<entity-name>/schema.json` | JSON Schema Draft 2020-12 | `render_entity_schema_draft_2020_12()` per entity | `schema_version: registry-manifest-entity-json-schema/v1` |
+| `forms/<form-id>/schema.json` | JSON Schema Draft 2020-12 | `render_form_schema_draft_2020_12()` per form | `schema_version: registry-manifest-form-json-schema/v1` |
+| `profiles/<profile-id>.json` | JSON | Compiled profile structure | Profile descriptor `schema_version` |
+| `index.json` | JSON | Bundle manifest index | `schema_version: registry-manifest-index/v1` |
 
 The `index.json` structure contains the schema version, digest metadata, top-level
 artifact URLs, and arrays for per-profile, per-schema, per-policy, and per-offering

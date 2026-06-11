@@ -17,6 +17,16 @@ const EU_DATA_THEME_SCHEME: &str = "http://publications.europa.eu/resource/autho
 const EUROVOC_THEME_SCHEME: &str = "http://eurovoc.europa.eu/100141";
 const EU_LOCATION_IRI: &str = "http://publications.europa.eu/resource/authority/country/EUR";
 const REGISTRY_NOTARY_FEDERATION_PROTOCOL: &str = "registry-notary-federation/v0.1";
+const CATALOG_SCHEMA_VERSION: &str = "registry-manifest-catalog/v1";
+const EVIDENCE_OFFERINGS_SCHEMA_VERSION: &str = "registry-manifest-evidence-offerings/v1";
+const EVIDENCE_OFFERING_SCHEMA_VERSION: &str = "registry-manifest-evidence-offering/v1";
+const POLICY_COLLECTION_SCHEMA_VERSION: &str = "registry-manifest-policy-collection/v1";
+const POLICY_SCHEMA_VERSION: &str = "registry-manifest-policy/v1";
+const SHACL_SCHEMA_VERSION: &str = "registry-manifest-shacl/v1";
+const CODELIST_SCHEMA_VERSION: &str = "registry-manifest-codelist/v1";
+const ENTITY_JSON_SCHEMA_VERSION: &str = "registry-manifest-entity-json-schema/v1";
+const FORM_JSON_SCHEMA_VERSION: &str = "registry-manifest-form-json-schema/v1";
+const OGC_RECORDS_SCHEMA_VERSION: &str = "registry-manifest-ogc-records/v1";
 const MAX_PROFILES: usize = 64;
 const MAX_CATALOG_CONFORMS_TO: usize = 64;
 const MAX_CATALOG_APPLICATION_PROFILES: usize = 32;
@@ -772,6 +782,12 @@ impl RelationshipManifest {
 pub struct CodelistManifest {
     pub id: String,
     pub scheme_iri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_to: Option<String>,
     #[serde(default)]
     pub external_ref: Option<String>,
     #[serde(default)]
@@ -1195,6 +1211,12 @@ pub struct CompiledRelationship {
 pub struct CompiledCodelist {
     pub id: String,
     pub scheme_iri: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub valid_from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub valid_to: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_ref: Option<String>,
     pub concepts: Vec<CodelistConcept>,
@@ -1888,6 +1910,9 @@ pub fn compile_manifest(manifest: &MetadataManifest) -> Result<CompiledMetadata,
                     id: codelist.id.clone(),
                     scheme_iri: expand_uri(&codelist.scheme_iri, &manifest.vocabularies)
                         .unwrap_or_else(|| codelist.scheme_iri.clone()),
+                    version: codelist.version.clone(),
+                    valid_from: codelist.valid_from.clone(),
+                    valid_to: codelist.valid_to.clone(),
                     external_ref: codelist
                         .external_ref
                         .as_deref()
@@ -2014,6 +2039,7 @@ pub fn compile_manifest(manifest: &MetadataManifest) -> Result<CompiledMetadata,
 
 pub fn render_catalog(compiled: &CompiledMetadata) -> Value {
     let mut catalog = json!({
+        "schema_version": CATALOG_SCHEMA_VERSION,
         "id": compiled.catalog().id,
         "title": compiled.catalog().title,
         "description": compiled.catalog().description,
@@ -2064,6 +2090,7 @@ pub fn render_catalog(compiled: &CompiledMetadata) -> Value {
 
 pub fn render_evidence_offerings(compiled: &CompiledMetadata) -> Value {
     json!({
+        "schema_version": EVIDENCE_OFFERINGS_SCHEMA_VERSION,
         "evidence_offerings": compiled.evidence_offerings().collect::<Vec<_>>(),
     })
 }
@@ -2071,12 +2098,17 @@ pub fn render_evidence_offerings(compiled: &CompiledMetadata) -> Value {
 pub fn render_evidence_offering(compiled: &CompiledMetadata, offering_id: &str) -> Option<Value> {
     compiled
         .evidence_offering(offering_id)
-        .map(|offering| json!(offering))
+        .map(|offering| with_schema_version(json!(offering), EVIDENCE_OFFERING_SCHEMA_VERSION))
+}
+
+fn with_schema_version(mut value: Value, schema_version: &str) -> Value {
+    value["schema_version"] = json!(schema_version);
+    value
 }
 
 pub fn render_base_dcat(compiled: &CompiledMetadata) -> Value {
     let mut catalog = json!({
-        "@context": jsonld_context_with_policy_terms(),
+        "@context": standards_jsonld_context(jsonld_context_with_policy_terms()),
         "@id": format!("{}/metadata/dcat.jsonld", compiled.catalog().base_url),
         "@type": "dcat:Catalog",
         "dcterms:identifier": compiled.catalog().id,
@@ -2126,7 +2158,7 @@ pub fn render_breg_dcat_ap(compiled: &CompiledMetadata) -> Value {
     included.extend(public_services);
     included.extend(dcat_range_reference_nodes(&catalog));
     if has_public_service_terms || compiled.evidence_offerings().next().is_some() {
-        catalog["@context"] = jsonld_context_with_evidence_terms();
+        catalog["@context"] = standards_jsonld_context(jsonld_context_with_evidence_terms());
     }
     append_included_nodes(&mut catalog, included);
     append_graph_nodes(&mut catalog, evidence_jsonld_nodes(compiled));
@@ -2160,7 +2192,7 @@ pub fn render_cpsv_ap(compiled: &CompiledMetadata) -> Value {
         .map(|service| iri_object(&service.iri))
         .collect::<Vec<_>>();
     let mut catalog = json!({
-        "@context": jsonld_context_with_service_catalogue_terms(),
+        "@context": standards_jsonld_context(jsonld_context_with_service_catalogue_terms()),
         "@id": format!("{}/metadata/cpsv-ap", compiled.catalog().base_url),
         "@type": "dcat:Catalog",
         "dcterms:identifier": compiled.catalog().id,
@@ -2231,6 +2263,7 @@ pub fn render_cpsv_ap(compiled: &CompiledMetadata) -> Value {
 
 pub fn render_policy_collection(compiled: &CompiledMetadata) -> Value {
     json!({
+        "schema_version": POLICY_COLLECTION_SCHEMA_VERSION,
         "@context": jsonld_context_with_policy_terms(),
         "@id": format!("{}/metadata/policies", compiled.catalog().base_url),
         "dcterms:title": "Dataset access policies",
@@ -2248,6 +2281,7 @@ pub fn render_dataset_policy_document(
 ) -> Option<Value> {
     let mut policy = render_dataset_policy(compiled.dataset(dataset_id)?);
     policy["@context"] = json!(jsonld_context_with_policy_terms());
+    policy["schema_version"] = json!(POLICY_SCHEMA_VERSION);
     Some(policy)
 }
 
@@ -2539,11 +2573,12 @@ pub fn render_dcat_profile(compiled: &CompiledMetadata, profile: &str) -> Option
 
 pub fn render_shacl(compiled: &CompiledMetadata) -> Value {
     json!({
+        "schema_version": SHACL_SCHEMA_VERSION,
         "@context": jsonld_context(),
         "@graph": compiled
             .datasets()
             .flat_map(|dataset| dataset.entities.values().map(move |entity| entity_shape(compiled, dataset, entity)))
-            .chain(compiled.codelists().map(codelist_shape))
+            .chain(compiled.codelists().map(manifest_codelist_shape))
             .collect::<Vec<_>>(),
     })
 }
@@ -2587,6 +2622,7 @@ pub fn render_ogc_records_items(compiled: &CompiledMetadata) -> Value {
         .map(record_feature_json)
         .collect::<Vec<_>>();
     json!({
+        "schema_version": OGC_RECORDS_SCHEMA_VERSION,
         "type": "FeatureCollection",
         "numberMatched": features.len(),
         "numberReturned": features.len(),
@@ -4634,7 +4670,7 @@ fn dataset_codelist_references(
             compiled
                 .codelists()
                 .find(|codelist| codelist.scheme_iri == scheme)
-                .map(codelist_shape)
+                .map(standards_codelist_shape)
         })
         .collect()
 }
@@ -5496,7 +5532,15 @@ fn relationship_shape(
     shape
 }
 
-fn codelist_shape(codelist: &CompiledCodelist) -> Value {
+fn manifest_codelist_shape(codelist: &CompiledCodelist) -> Value {
+    codelist_shape(codelist, true)
+}
+
+fn standards_codelist_shape(codelist: &CompiledCodelist) -> Value {
+    codelist_shape(codelist, false)
+}
+
+fn codelist_shape(codelist: &CompiledCodelist, include_manifest_metadata: bool) -> Value {
     let mut scheme = json!({
         "@id": codelist.scheme_iri,
         "@type": "skos:ConceptScheme",
@@ -5522,6 +5566,18 @@ fn codelist_shape(codelist: &CompiledCodelist) -> Value {
     });
     if let Some(external_ref) = codelist.external_ref.as_deref() {
         scheme["rdfs:seeAlso"] = json!(external_ref);
+    }
+    if include_manifest_metadata {
+        scheme["schema_version"] = json!(CODELIST_SCHEMA_VERSION);
+        if let Some(version) = codelist.version.as_deref() {
+            scheme["version"] = json!(version);
+        }
+        if let Some(valid_from) = codelist.valid_from.as_deref() {
+            scheme["valid_from"] = json!(valid_from);
+        }
+        if let Some(valid_to) = codelist.valid_to.as_deref() {
+            scheme["valid_to"] = json!(valid_to);
+        }
     }
     scheme
 }
@@ -5580,6 +5636,7 @@ fn entity_json_schema(
         .map(|field| field.name.clone())
         .collect::<Vec<_>>();
     json!({
+        "schema_version": ENTITY_JSON_SCHEMA_VERSION,
         "$schema": JSON_SCHEMA_DRAFT_2020_12,
         "$id": entity_schema_id(compiled, dataset, entity),
         "title": entity.title,
@@ -5636,6 +5693,7 @@ fn form_json_schema(form: &CompiledForm) -> Value {
     }
 
     json!({
+        "schema_version": FORM_JSON_SCHEMA_VERSION,
         "$schema": JSON_SCHEMA_DRAFT_2020_12,
         "$id": form
             .validates_with
@@ -6226,7 +6284,7 @@ fn ogc_records_conformance() -> Value {
 }
 
 fn jsonld_context() -> Value {
-    json!({
+    let mut context = json!({
         "adms": "http://www.w3.org/ns/adms#",
         "dcat": "http://www.w3.org/ns/dcat#",
         "dcterms": "http://purl.org/dc/terms/",
@@ -6264,7 +6322,29 @@ fn jsonld_context() -> Value {
         "skos:inScheme": { "@type": "@id" },
         "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
         "rdfs:seeAlso": { "@type": "@id" },
-    })
+    });
+    if let Some(object) = context.as_object_mut() {
+        object.insert(
+            "schema_version".to_string(),
+            json!("registry_manifest:schemaVersion"),
+        );
+        object.insert("version".to_string(), json!("registry_manifest:version"));
+        object.insert(
+            "valid_from".to_string(),
+            json!("registry_manifest:validFrom"),
+        );
+        object.insert("valid_to".to_string(), json!("registry_manifest:validTo"));
+    }
+    context
+}
+
+fn standards_jsonld_context(mut context: Value) -> Value {
+    if let Some(object) = context.as_object_mut() {
+        for term in ["schema_version", "version", "valid_from", "valid_to"] {
+            object.remove(term);
+        }
+    }
+    context
 }
 
 fn jsonld_context_with_policy_terms() -> Value {

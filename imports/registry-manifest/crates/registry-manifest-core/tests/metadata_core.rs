@@ -3,9 +3,9 @@
 use registry_manifest_core::{
     compile_manifest, render_base_dcat, render_breg_dcat_ap, render_catalog, render_cpsv_ap,
     render_dataset_policy_document, render_dcat_profile, render_entity_schema_draft_2020_12,
-    render_entity_shacl, render_form_schema_draft_2020_12, render_ogc_records_items,
-    render_policy_collection, render_shacl, validate_manifest, CodelistConcept, CodelistManifest,
-    MetadataError, MetadataManifest, ProfileClaim,
+    render_entity_shacl, render_evidence_offering, render_form_schema_draft_2020_12,
+    render_ogc_records_items, render_policy_collection, render_shacl, validate_manifest,
+    CodelistConcept, CodelistManifest, MetadataError, MetadataManifest, ProfileClaim,
 };
 use serde_json::{json, Value};
 
@@ -683,6 +683,9 @@ fn codelist_concepts_are_validated_and_fallback_ids_are_percent_encoded() {
     manifest.codelists.push(CodelistManifest {
         id: "status".to_string(),
         scheme_iri: "https://registry.example.test/codelists/status".to_string(),
+        version: None,
+        valid_from: None,
+        valid_to: None,
         external_ref: None,
         concepts: vec![
             CodelistConcept {
@@ -727,6 +730,9 @@ fn codelist_concepts_are_validated_and_fallback_ids_are_percent_encoded() {
     manifest.codelists.push(CodelistManifest {
         id: "codes".to_string(),
         scheme_iri: "https://registry.example.test/codelists/codes".to_string(),
+        version: None,
+        valid_from: None,
+        valid_to: None,
         external_ref: None,
         concepts: ["US", "USD", "ACTIVE", "01.02", "A/B C?x#y"]
             .into_iter()
@@ -759,6 +765,56 @@ fn codelist_concepts_are_validated_and_fallback_ids_are_percent_encoded() {
     assert!(
         concept_ids.contains(&"https://registry.example.test/codelists/codes/A%2FB%20C%3Fx%23y")
     );
+}
+
+#[test]
+fn codelists_carry_version_and_validity_window() {
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(
+        r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: codelist-versioning
+  base_url: https://registry.example.test
+  title: Codelist Versioning
+  publisher:
+    name: Publisher
+datasets:
+  - id: people
+    title: People
+    entities:
+      - name: person
+        fields:
+          - name: status
+            type: code
+            codelist: status
+codelists:
+  - id: status
+    scheme_iri: https://registry.example.test/codelists/status
+    version: "2026-06-11"
+    valid_from: "2026-06-11"
+    valid_to: "2027-06-11"
+    concepts:
+      - code: ACTIVE
+"#,
+    )
+    .expect("manifest parses");
+
+    let compiled = compile_manifest(&manifest).expect("manifest compiles");
+    let shacl = render_shacl(&compiled);
+    let codelist = shacl["@graph"]
+        .as_array()
+        .expect("@graph")
+        .iter()
+        .find(|node| node["@id"] == "https://registry.example.test/codelists/status")
+        .expect("codelist node");
+
+    assert_eq!(
+        codelist["schema_version"],
+        json!("registry-manifest-codelist/v1")
+    );
+    assert_eq!(codelist["version"], json!("2026-06-11"));
+    assert_eq!(codelist["valid_from"], json!("2026-06-11"));
+    assert_eq!(codelist["valid_to"], json!("2027-06-11"));
 }
 
 #[test]
@@ -903,6 +959,10 @@ fn form_profile_renders_validation_sections_and_schema() {
     let schema = render_form_schema_draft_2020_12(&compiled, "child-support-review-form")
         .expect("form schema renders");
 
+    assert_eq!(
+        schema["schema_version"],
+        json!("registry-manifest-form-json-schema/v1")
+    );
     assert_eq!(
         schema["$id"],
         "https://child-support.example.gov/metadata/forms/child-support-review-form/schema.json"
@@ -1975,6 +2035,114 @@ fn policy_documents_are_dataset_scoped_json_ld() {
     assert_eq!(policy["@id"], json!("#policy-vital-events-offer"));
     assert_eq!(policy["@type"], json!("odrl:Offer"));
     assert!(render_dataset_policy_document(&compiled, "missing").is_none());
+}
+
+#[test]
+fn generated_manifest_owned_formats_carry_schema_versions() {
+    let compiled = compile_manifest(&service_first_fixture()).expect("compile");
+
+    assert_eq!(
+        render_catalog(&compiled)["schema_version"],
+        json!("registry-manifest-catalog/v1")
+    );
+
+    let evidence_offerings = registry_manifest_core::render_evidence_offerings(&compiled);
+    assert_eq!(
+        evidence_offerings["schema_version"],
+        json!("registry-manifest-evidence-offerings/v1")
+    );
+    assert_eq!(
+        render_evidence_offering(&compiled, "health-coverage-evidence-offering")
+            .expect("offering renders")["schema_version"],
+        json!("registry-manifest-evidence-offering/v1")
+    );
+
+    let policy_collection = render_policy_collection(&compiled);
+    assert_eq!(
+        policy_collection["schema_version"],
+        json!("registry-manifest-policy-collection/v1")
+    );
+    assert_eq!(
+        render_dataset_policy_document(&compiled, "child-support-cases").expect("policy renders")
+            ["schema_version"],
+        json!("registry-manifest-policy/v1")
+    );
+
+    assert_eq!(
+        render_shacl(&compiled)["schema_version"],
+        json!("registry-manifest-shacl/v1")
+    );
+    assert_eq!(
+        render_ogc_records_items(&compiled)["schema_version"],
+        json!("registry-manifest-ogc-records/v1")
+    );
+    assert_eq!(
+        render_entity_schema_draft_2020_12(&compiled, "child-support-cases", "case")
+            .expect("entity schema renders")["schema_version"],
+        json!("registry-manifest-entity-json-schema/v1")
+    );
+    assert_eq!(
+        render_form_schema_draft_2020_12(&compiled, "child-support-review-form")
+            .expect("form schema renders")["schema_version"],
+        json!("registry-manifest-form-json-schema/v1")
+    );
+}
+
+fn contains_key(value: &Value, key: &str) -> bool {
+    match value {
+        Value::Object(object) => object
+            .iter()
+            .any(|(candidate, value)| candidate == key || contains_key(value, key)),
+        Value::Array(values) => values.iter().any(|value| contains_key(value, key)),
+        _ => false,
+    }
+}
+
+#[test]
+fn standards_profile_outputs_do_not_carry_manifest_schema_versions() {
+    let mut manifest = fixture("example-civil-registration");
+    manifest.codelists[0].version = Some("2026.1".to_string());
+    manifest.codelists[0].valid_from = Some("2026-06-11".to_string());
+    manifest.codelists[0].valid_to = Some("2027-06-11".to_string());
+    let compiled = compile_manifest(&manifest).expect("compile");
+
+    for (label, document) in [
+        ("BRegDCAT-AP", render_breg_dcat_ap(&compiled)),
+        ("base DCAT", render_base_dcat(&compiled)),
+        ("CPSV-AP", render_cpsv_ap(&compiled)),
+        (
+            "profile DCAT",
+            render_dcat_profile(&compiled, "bregdcat-ap").expect("profile renders"),
+        ),
+    ] {
+        for key in ["schema_version", "version", "valid_from", "valid_to"] {
+            assert!(
+                !contains_key(&document, key),
+                "{label} is standards-owned and must not carry manifest-owned `{key}` markers"
+            );
+        }
+    }
+}
+
+#[test]
+fn jsonld_context_maps_manifest_version_terms() {
+    let compiled = compile_manifest(&fixture("example-civil-registration")).expect("compile");
+
+    for context in [
+        render_shacl(&compiled)["@context"].clone(),
+        render_policy_collection(&compiled)["@context"].clone(),
+        render_dataset_policy_document(&compiled, "vital-events").expect("policy renders")
+            ["@context"]
+            .clone(),
+    ] {
+        assert_eq!(
+            context["schema_version"],
+            json!("registry_manifest:schemaVersion")
+        );
+        assert_eq!(context["version"], json!("registry_manifest:version"));
+        assert_eq!(context["valid_from"], json!("registry_manifest:validFrom"));
+        assert_eq!(context["valid_to"], json!("registry_manifest:validTo"));
+    }
 }
 
 #[test]

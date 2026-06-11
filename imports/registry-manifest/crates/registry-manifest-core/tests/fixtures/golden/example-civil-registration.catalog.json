@@ -179,5 +179,6 @@
     }
   ],
   "publisher": "Civil Registration Authority",
+  "schema_version": "registry-manifest-catalog/v1",
   "title": "Civil Registration Metadata"
 }
