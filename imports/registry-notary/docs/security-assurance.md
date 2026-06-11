@@ -86,7 +86,7 @@ docker buildx imagetools inspect ghcr.io/jeremi/registry-notary-openfn-sidecar:s
 docker buildx imagetools inspect ghcr.io/jeremi/registry-notary-openfn-sidecar:<release-alias>
 ```
 
-Verify the cosign signature for a tag:
+Verify the cosign signature for a tag using the triggering Git release tag:
 
 ```sh
 cosign verify \
