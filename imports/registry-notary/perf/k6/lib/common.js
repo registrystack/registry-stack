@@ -142,10 +142,10 @@ export function nextSubjectId(vu, iter) {
 
 export function targetForSubjectId(subjectId) {
   return {
-    type: 'Person',
+    type: 'person',
     identifiers: [
       {
-        scheme: 'NATIONAL_ID',
+        scheme: 'national_id',
         value: subjectId,
       },
     ],

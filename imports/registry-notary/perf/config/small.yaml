@@ -110,7 +110,7 @@ evidence:
           dataset: civil_registry
           entity: civil_person
           lookup:
-            input: subject_id
+            input: target.identifiers.national_id
             field: NATIONAL_ID
             op: eq
             cardinality: one
@@ -154,7 +154,7 @@ evidence:
           dataset: farmer_registry
           entity: farmer
           lookup:
-            input: subject_id
+            input: target.identifiers.national_id
             field: NATIONAL_ID
             op: eq
             cardinality: one

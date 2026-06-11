@@ -131,12 +131,11 @@ jobs:
           target/release/registry-notary --config perf/config/small.yaml >target/perf/notary-smoke.log 2>&1 &
           notary_pid="$!"
           for _ in $(seq 1 150); do
-            if curl -fsS http://127.0.0.1:14255/ready >/dev/null; then
+            if curl -fsS -H "Authorization: Bearer ${REGISTRY_NOTARY_BEARER_TOKEN}" http://127.0.0.1:14255/v1/claims >/dev/null; then
               break
             fi
             sleep 0.2
           done
-          curl -fsS http://127.0.0.1:14255/ready >/dev/null
           curl -fsS -H "Authorization: Bearer ${REGISTRY_NOTARY_BEARER_TOKEN}" http://127.0.0.1:14255/v1/claims >/dev/null
           for scenario in list_claims evaluate_extract; do
             docker run --rm --network host \
