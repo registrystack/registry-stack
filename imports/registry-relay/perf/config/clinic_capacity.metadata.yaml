@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-schema_version: registry-metadata/v1
+schema_version: registry-manifest/v1
 
 catalog:
   id: clinic-capacity-perf
