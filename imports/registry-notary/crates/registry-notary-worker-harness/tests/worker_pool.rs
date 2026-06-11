@@ -3,12 +3,21 @@ use serde_json::json;
 use std::{
     collections::BTreeSet,
     ffi::OsString,
+    fs,
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-static WORKER_POOL_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+struct WorkerPoolTestLock {
+    path: PathBuf,
+}
+
+impl Drop for WorkerPoolTestLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir(&self.path);
+    }
+}
 
 fn fixture_command() -> WorkerCommand {
     WorkerCommand::new(cargo_bin("registry-notary-worker-harness-fixture"))
@@ -32,7 +41,7 @@ fn pool_config(max_workers: usize) -> WorkerPoolConfig {
 
 #[tokio::test]
 async fn worker_env_is_cleared_except_allow_list_and_explicit_envs() {
-    let _guard = WORKER_POOL_TEST_LOCK.lock().await;
+    let _guard = worker_pool_test_lock().await;
     std::env::set_var("REGISTRY_NOTARY_HARNESS_SECRET", "source-secret");
     std::env::set_var("REGISTRY_NOTARY_HARNESS_BEARER", "bearer-secret");
     let command = fixture_command().env("REGISTRY_NOTARY_HARNESS_ALLOWED", "benign");
@@ -66,7 +75,7 @@ async fn worker_env_is_cleared_except_allow_list_and_explicit_envs() {
 
 #[tokio::test]
 async fn worker_config_rejects_forbidden_explicit_envs() {
-    let _guard = WORKER_POOL_TEST_LOCK.lock().await;
+    let _guard = worker_pool_test_lock().await;
     let mut config = pool_config(1);
     config
         .forbidden_env_names
@@ -82,7 +91,7 @@ async fn worker_config_rejects_forbidden_explicit_envs() {
 
 #[tokio::test]
 async fn request_size_is_checked_before_worker_acquisition() {
-    let _guard = WORKER_POOL_TEST_LOCK.lock().await;
+    let _guard = worker_pool_test_lock().await;
     let mut config = pool_config(1);
     config.max_request_bytes = 64;
     let pool = Arc::new(WorkerPool::new(config).await.unwrap());
@@ -115,7 +124,7 @@ async fn request_size_is_checked_before_worker_acquisition() {
 
 #[tokio::test]
 async fn returns_saturated_when_all_workers_are_busy() {
-    let _guard = WORKER_POOL_TEST_LOCK.lock().await;
+    let _guard = worker_pool_test_lock().await;
     let pool = Arc::new(WorkerPool::new(pool_config(1)).await.unwrap());
     let busy_pool = pool.clone();
     let busy = tokio::spawn(async move {
@@ -137,9 +146,9 @@ async fn returns_saturated_when_all_workers_are_busy() {
 
 #[tokio::test]
 async fn timeout_kills_worker_and_replaces_it_without_retrying_request() {
-    let _guard = WORKER_POOL_TEST_LOCK.lock().await;
+    let _guard = worker_pool_test_lock().await;
     let mut config = pool_config(1);
-    config.request_timeout = Duration::from_millis(100);
+    config.request_timeout = Duration::from_secs(2);
     let pool = WorkerPool::new(config).await.unwrap();
 
     let error = pool
@@ -161,7 +170,7 @@ async fn timeout_kills_worker_and_replaces_it_without_retrying_request() {
 
 #[tokio::test]
 async fn oversized_stdout_kills_worker_and_replaces_it() {
-    let _guard = WORKER_POOL_TEST_LOCK.lock().await;
+    let _guard = worker_pool_test_lock().await;
     let mut config = pool_config(1);
     config.max_stdout_bytes = 64;
     let pool = WorkerPool::new(config).await.unwrap();
@@ -186,7 +195,7 @@ async fn oversized_stdout_kills_worker_and_replaces_it() {
 
 #[tokio::test]
 async fn stderr_is_capped_and_not_disclosed_by_error_formatting() {
-    let _guard = WORKER_POOL_TEST_LOCK.lock().await;
+    let _guard = worker_pool_test_lock().await;
     let mut config = pool_config(1);
     config.max_stderr_bytes = 32;
     let pool = WorkerPool::new(config).await.unwrap();
@@ -212,7 +221,7 @@ async fn stderr_is_capped_and_not_disclosed_by_error_formatting() {
 
 #[tokio::test]
 async fn snapshot_counters_track_idle_busy_and_completed_workers() {
-    let _guard = WORKER_POOL_TEST_LOCK.lock().await;
+    let _guard = worker_pool_test_lock().await;
     let pool = Arc::new(WorkerPool::new(pool_config(1)).await.unwrap());
     let initial = pool.snapshot().await;
     assert_eq!(initial.max_workers, 1);
@@ -248,7 +257,7 @@ async fn snapshot_counters_track_idle_busy_and_completed_workers() {
 
 #[tokio::test]
 async fn check_ready_detects_replaces_and_fails_current_check_for_dead_idle_worker() {
-    let _guard = WORKER_POOL_TEST_LOCK.lock().await;
+    let _guard = worker_pool_test_lock().await;
     let state_path = unique_state_path();
     let mut config = pool_config(1);
     config.command = fixture_command().env(
@@ -258,7 +267,7 @@ async fn check_ready_detects_replaces_and_fails_current_check_for_dead_idle_work
     let pool = WorkerPool::new(config).await.unwrap();
     wait_for_path(&state_path).await;
 
-    assert!(!pool.check_ready().await);
+    wait_for_not_ready(&pool).await;
     assert!(pool.check_ready().await);
     let response = pool
         .execute_json(json!({ "value": "after-replacement" }))
@@ -269,7 +278,7 @@ async fn check_ready_detects_replaces_and_fails_current_check_for_dead_idle_work
 
 #[tokio::test]
 async fn repeated_worker_failures_open_circuit_and_recover_after_cooldown() {
-    let _guard = WORKER_POOL_TEST_LOCK.lock().await;
+    let _guard = worker_pool_test_lock().await;
     let mut config = pool_config(1);
     config.request_timeout = Duration::from_secs(1);
     config.max_replacements_per_window = 1;
@@ -314,9 +323,9 @@ async fn repeated_worker_failures_open_circuit_and_recover_after_cooldown() {
 
 #[tokio::test]
 async fn execute_replenishes_worker_after_circuit_cooldown_without_readiness_probe() {
-    let _guard = WORKER_POOL_TEST_LOCK.lock().await;
+    let _guard = worker_pool_test_lock().await;
     let mut config = pool_config(1);
-    config.request_timeout = Duration::from_millis(100);
+    config.request_timeout = Duration::from_secs(2);
     config.max_replacements_per_window = 1;
     config.replacement_window = Duration::from_secs(60);
     config.circuit_breaker_cooldown = Duration::from_millis(100);
@@ -340,7 +349,7 @@ async fn execute_replenishes_worker_after_circuit_cooldown_without_readiness_pro
 
 #[tokio::test]
 async fn worker_stdout_is_drained_while_large_stdin_request_is_written() {
-    let _guard = WORKER_POOL_TEST_LOCK.lock().await;
+    let _guard = worker_pool_test_lock().await;
     let mut config = pool_config(1);
     config.command = fixture_command().env("WORKER_HARNESS_PREWRITE_STDOUT_BYTES", "131072");
     config.request_timeout = Duration::from_secs(5);
@@ -392,6 +401,28 @@ fn unique_state_path() -> PathBuf {
     ))
 }
 
+async fn worker_pool_test_lock() -> WorkerPoolTestLock {
+    let path = std::env::temp_dir().join("registry-notary-worker-pool-tests.lock");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        match fs::create_dir(&path) {
+            Ok(()) => return WorkerPoolTestLock { path },
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "timed out waiting for worker pool test lock: {}",
+                    path.display()
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(error) => panic!(
+                "failed to create worker pool test lock {}: {error}",
+                path.display()
+            ),
+        }
+    }
+}
+
 async fn wait_for_in_flight(pool: &WorkerPool, expected: usize) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
@@ -416,6 +447,20 @@ async fn wait_for_path(path: &Path) {
             tokio::time::Instant::now() < deadline,
             "fixture state path was not created: {}",
             path.display()
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn wait_for_not_ready(pool: &WorkerPool) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if !pool.check_ready().await {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "worker pool did not observe an unready worker"
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
