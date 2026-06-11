@@ -710,7 +710,7 @@ class ScenarioPageHtmlTest(unittest.TestCase):
         self.assertIn("HTTP status", SCENARIOS_JS)
         self.assertIn("source-card", SCENARIOS_JS)
         self.assertIn("/api/scenarios/${encodeURIComponent(state.story.id)}/", SCENARIOS_JS)
-        self.assertIn('const ACTIVE_SCENARIO = "alive-proof"', story_html)
+        self.assertIn('data-active-scenario="alive-proof"', story_html)
         self.assertNotIn("Cell 1", SCENARIOS_JS)
 
 
@@ -878,7 +878,7 @@ class LabModePayloadTest(unittest.TestCase):
 
     def test_scenario_page_html_renders_for_story_route(self) -> None:
         html = server.scenario_page_html(scenario_id="alive-proof").decode("utf-8")
-        self.assertIn('const ACTIVE_SCENARIO = "alive-proof"', html)
+        self.assertIn('data-active-scenario="alive-proof"', html)
 
     def test_chooser_cta_reads_walkthrough_when_not_runnable(self) -> None:
         self.assertIn("Read the walkthrough", SCENARIOS_JS)
@@ -1809,6 +1809,90 @@ class VerifyStaticAssetsTest(unittest.TestCase):
                 with self.assertRaises(SystemExit) as ctx:
                     server.verify_static_assets()
         self.assertIn(names[-1], str(ctx.exception))
+
+
+class SecurityHeadersTest(unittest.TestCase):
+    """Every homepage response carries the browser-hardening headers (relay#87/#88 parity)."""
+
+    EXPECTED_HEADERS = {
+        "Content-Security-Policy": (
+            "default-src 'none'; style-src 'self'; script-src 'self'; "
+            "img-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
+            "base-uri 'none'; form-action 'none'"
+        ),
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "Referrer-Policy": "no-referrer",
+    }
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        import threading
+        from http.server import ThreadingHTTPServer
+
+        cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.LabHomepageHandler)
+        cls.port = cls.httpd.server_address[1]
+        cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+
+    def _get(self, path: str):
+        return urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=5)
+
+    def _assert_security_headers(self, response) -> None:
+        for name, value in self.EXPECTED_HEADERS.items():
+            self.assertEqual(response.headers.get(name), value, name)
+
+    def test_homepage_carries_security_headers(self) -> None:
+        with self._get("/") as response:
+            self._assert_security_headers(response)
+
+    def test_scenario_page_carries_security_headers(self) -> None:
+        with self._get("/scenarios") as response:
+            self._assert_security_headers(response)
+
+    def test_api_response_carries_security_headers(self) -> None:
+        with self._get("/healthz") as response:
+            self._assert_security_headers(response)
+
+    def test_not_found_carries_security_headers(self) -> None:
+        try:
+            self._get("/definitely-not-a-route")
+        except urllib.error.HTTPError as error:
+            self._assert_security_headers(error)
+        else:
+            self.fail("expected 404")
+
+    def test_server_banner_does_not_advertise_python(self) -> None:
+        with self._get("/healthz") as response:
+            banner = response.headers.get("Server", "")
+        self.assertNotIn("Python", banner)
+        self.assertNotIn("BaseHTTP", banner)
+
+
+class StrictCspCompatibilityTest(unittest.TestCase):
+    """The pages must not need inline script, or the strict CSP above would break them."""
+
+    def test_scenario_page_has_no_inline_script(self) -> None:
+        page = server.scenario_page_html(scenario_id="alive-proof").decode("utf-8")
+        self.assertNotIn("<script>", page)
+        self.assertIn('data-active-scenario="alive-proof"', page)
+
+    def test_scenario_chooser_page_has_no_inline_script(self) -> None:
+        page = server.scenario_page_html().decode("utf-8")
+        self.assertNotIn("<script>", page)
+        self.assertIn('data-active-scenario=""', page)
+
+    def test_homepage_has_no_inline_script(self) -> None:
+        page = server.homepage_html("Registry Lab").decode("utf-8")
+        self.assertNotIn("<script>", page)
+
+    def test_scenarios_js_reads_active_scenario_from_body_dataset(self) -> None:
+        self.assertIn("document.body.dataset.activeScenario", SCENARIOS_JS)
 
 
 if __name__ == "__main__":

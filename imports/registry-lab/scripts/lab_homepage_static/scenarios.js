@@ -1,3 +1,6 @@
+// The page template publishes the active scenario as a body data attribute
+// instead of an inline <script>, so the strict script-src 'self' CSP holds.
+const ACTIVE_SCENARIO = document.body.dataset.activeScenario || "";
 const text = (value) => value == null ? "" : String(value);
 const byId = (id) => document.getElementById(id);
 const state = { completed: new Set(), story: null, runnable: true };

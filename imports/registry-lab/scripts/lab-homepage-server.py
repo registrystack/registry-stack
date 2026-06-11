@@ -350,10 +350,36 @@ def homepage_html(title: str) -> bytes:
 
 
 
+# Browser-hardening headers on every response (parity with the relay's
+# restrictive CSP, registry-relay#87). The pages self-host all CSS/JS under
+# /static/ and fetch only same-origin /api/ endpoints, so 'self' covers
+# everything they need; anything else stays denied.
+SECURITY_HEADERS = (
+    (
+        "Content-Security-Policy",
+        "default-src 'none'; style-src 'self'; script-src 'self'; "
+        "img-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
+        "base-uri 'none'; form-action 'none'",
+    ),
+    ("X-Content-Type-Options", "nosniff"),
+    ("X-Frame-Options", "DENY"),
+    ("Referrer-Policy", "no-referrer"),
+)
+
+
 class LabHomepageHandler(BaseHTTPRequestHandler):
     config: dict[str, Any] = {}
     status_timeout: float = 2.0
     lab_mode: str = "hosted"
+    # Mask the BaseHTTP/Python banner; version details do not belong on a
+    # public surface.
+    server_version = "registry-lab"
+    sys_version = ""
+
+    def end_headers(self) -> None:
+        for name, value in SECURITY_HEADERS:
+            self.send_header(name, value)
+        super().end_headers()
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
