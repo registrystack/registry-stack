@@ -360,7 +360,7 @@ async fn area_common(
             "method": result.disclosure_control.method,
             "min_cell_size": result.disclosure_control.min_cell_size,
             "suppression": result.disclosure_control.suppression,
-            "suppressed_rows": result.disclosure_control.suppressed_rows,
+            "suppressed_observations": result.disclosure_control.suppressed_rows,
             "query_budget": {
                 "tracked": result.disclosure_control.tracked_query_budget,
                 "scope": result.disclosure_control.query_budget_scope,

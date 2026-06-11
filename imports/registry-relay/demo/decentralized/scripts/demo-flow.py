@@ -338,7 +338,7 @@ def main() -> int:
         save(out, step, f"{relay.name}-metadata", body)
         step += 1
 
-        body = require(request("GET", relay.url, "/datasets", token), 200, f"{relay.name} datasets")
+        body = require(request("GET", relay.url, "/v1/datasets", token), 200, f"{relay.name} datasets")
         save(out, step, f"{relay.name}-datasets", body)
         step += 1
 

@@ -249,7 +249,11 @@ pub fn catalog_document_for_entity_ids(
         config,
         registry,
         |dataset, entity| entity_ids.contains(&(dataset.id.to_string(), entity.name.clone())),
-        |_, _, _| false,
+        |dataset, _aggregate, source_entity| {
+            source_entity.is_some_and(|entity| {
+                entity_ids.contains(&(dataset.id.to_string(), entity.name.clone()))
+            })
+        },
     )
 }
 
@@ -517,13 +521,17 @@ fn aggregate_distribution_representations(
     {
         let mut representations = representations;
         if let Some(collection_id) = aggregate_edr_collection_id(dataset, aggregate) {
-            let area_url = format!("{base_url}/ogc/edr/v1/collections/{collection_id}/area");
+            let collection_url = format!("{base_url}/ogc/edr/v1/collections/{collection_id}");
+            let area_url = format!("{collection_url}/area");
             representations.push(AggregateRepresentationMetadata {
                 format: "ogc-edr-area",
                 title: format!("{title} OGC EDR area"),
                 description: format!("{description} as an OGC EDR area query."),
-                access_url: area_url.clone(),
-                service_url: area_url,
+                access_url: area_url,
+                // service_url is the collection root, not the area query endpoint.
+                // dcat:accessService.dcat:endpointURL must identify the service
+                // (the collection), while access_url identifies the specific query.
+                service_url: collection_url,
                 media_type: "application/geo+json",
                 conforms_to: vec![
                     "http://www.opengis.net/spec/ogcapi-edr-1/1.1/conf/area".to_string(),
