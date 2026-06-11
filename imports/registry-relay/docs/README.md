@@ -12,7 +12,7 @@ The references below describe supported behavior. Each fact has one home; pages 
 
 ## Integrate
 
-- [API guide](api.md): auth, scopes, filters, pagination, metadata caching, Problem Details, standards surfaces, and the admin route reference. The route inventory is owned by [openapi/registry-relay.openapi.json](../openapi/registry-relay.openapi.json) and the served `/docs` and `/openapi.json`.
+- [API guide](api.md): auth, scopes, filters, pagination, metadata caching, Problem Details, standards surfaces, and the admin route reference. The curated public OpenAPI surface lives in [openapi/registry-relay.openapi.json](../openapi/registry-relay.openapi.json) and the served `/docs` and `/openapi.json`.
 - [Client integration guide](client-integration.md): caller behavior for auth, purpose headers, discovery, pagination, ETags, errors, retries, aggregates, provenance, and the Registry Notary handoff.
 - [Data provenance](provenance.md): VC-JWT response opt-in, issuer modes, schemas, contexts, DID Web, audit, and verification.
 

@@ -100,6 +100,7 @@ pub struct AggregateResult {
     pub aggregate_id: String,
     pub computed_at: String,
     pub data: Vec<Value>,
+    pub truncated: bool,
     pub schema: AggregateSchema,
     pub disclosure_control: AggregateDisclosure,
     pub group_by: Vec<String>,
@@ -133,6 +134,7 @@ struct AggregatePlan {
 struct ExecutedAggregateRows {
     suppressed_groups: usize,
     rows: Vec<Value>,
+    truncated: bool,
 }
 
 impl AggregateQueryEngine {
@@ -199,6 +201,9 @@ impl AggregateQueryEngine {
         )
         .await?;
         let max_rows = request.max_rows.unwrap_or(DEFAULT_MAX_RESULT_ROWS);
+        if max_rows == 0 || max_rows > DEFAULT_MAX_RESULT_ROWS {
+            return Err(FilterError::LimitOutOfRange.into());
+        }
         let source_tables = plan.source_tables.clone();
         let rows = plan.execute(aggregate, &indicators, max_rows).await?;
 
@@ -230,6 +235,7 @@ impl AggregateQueryEngine {
                 .format(&Rfc3339)
                 .map_err(|_| Error::from(AggregateError::ExecutionFailed))?,
             data: rows.rows,
+            truncated: rows.truncated,
             schema,
             disclosure_control: AggregateDisclosure {
                 method: aggregate.disclosure_control.method.clone(),
@@ -433,10 +439,9 @@ impl AggregatePlan {
             .await
             .map_err(aggregate_execution_failed)?;
         let rows = batches_to_json_rows(&batches)?;
-        if rows.len() > max_rows {
-            return Err(FilterError::LimitOutOfRange.into());
-        }
-        apply_disclosure_control(rows, aggregate, indicators, &self.group_keys)
+        let truncated = rows.len() > max_rows;
+        let rows = rows.into_iter().take(max_rows).collect();
+        apply_disclosure_control(rows, aggregate, indicators, &self.group_keys, truncated)
     }
 }
 
@@ -568,6 +573,7 @@ fn apply_disclosure_control(
     aggregate: &AggregateConfig,
     indicators: &[&AggregateIndicatorConfig],
     group_keys: &[(String, String)],
+    truncated: bool,
 ) -> Result<ExecutedAggregateRows, Error> {
     let mut suppressed_groups = 0;
     let mut returned = Vec::new();
@@ -604,6 +610,7 @@ fn apply_disclosure_control(
     Ok(ExecutedAggregateRows {
         suppressed_groups,
         rows: returned,
+        truncated,
     })
 }
 

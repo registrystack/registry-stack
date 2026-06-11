@@ -14,9 +14,11 @@ use registry_manifest_core as metadata_core;
 use serde::Serialize;
 
 use crate::config::vocabularies;
+#[cfg(feature = "ogcapi-edr")]
+use crate::config::AggregateSpatialConfig;
 use crate::config::{
-    AccessRights, AdmsStatus, Config, DatasetConfig, EntityConfig, FieldConfig, FieldType,
-    RelationshipKind, UpdateFrequency,
+    AccessRights, AdmsStatus, AggregateConfig, Config, DatasetConfig, EntityConfig, FieldConfig,
+    FieldType, RelationshipKind, UpdateFrequency,
 };
 use crate::entity::{EntityField, EntityModel, EntityRegistry};
 
@@ -69,6 +71,8 @@ pub struct DatasetMetadata {
     pub links: DatasetLinks,
     #[serde(skip_serializing_if = "DatasetStandardsMetadata::is_empty")]
     pub standards: DatasetStandardsMetadata,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub aggregate_distributions: Vec<AggregateDistributionMetadata>,
     pub entities: Vec<EntityMetadata>,
 }
 
@@ -140,6 +144,27 @@ pub struct SpdciRegistryMetadata {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AggregateDistributionMetadata {
+    pub aggregate_id: String,
+    pub title: String,
+    pub description: String,
+    pub aggregate_url: String,
+    pub metadata_url: String,
+    pub representations: Vec<AggregateRepresentationMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AggregateRepresentationMetadata {
+    pub format: &'static str,
+    pub title: String,
+    pub description: String,
+    pub access_url: String,
+    pub service_url: String,
+    pub media_type: &'static str,
+    pub conforms_to: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct EntityMetadata {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -197,7 +222,7 @@ pub struct RelationshipLinks {
 
 #[must_use]
 pub fn catalog_document(config: &Config, registry: &EntityRegistry) -> CatalogDocument {
-    catalog_document_with_entity_filter(config, registry, |_, _| true)
+    catalog_document_with_filters(config, registry, |_, _| true, |_, _, _| true)
 }
 
 #[must_use]
@@ -206,9 +231,12 @@ pub fn catalog_document_for_dataset_ids(
     registry: &EntityRegistry,
     dataset_ids: &BTreeSet<String>,
 ) -> CatalogDocument {
-    catalog_document_with_entity_filter(config, registry, |dataset, _entity| {
-        dataset_ids.contains(dataset.id.as_str())
-    })
+    catalog_document_with_filters(
+        config,
+        registry,
+        |dataset, _entity| dataset_ids.contains(dataset.id.as_str()),
+        |dataset, _aggregate, _source_entity| dataset_ids.contains(dataset.id.as_str()),
+    )
 }
 
 #[must_use]
@@ -217,22 +245,52 @@ pub fn catalog_document_for_entity_ids(
     registry: &EntityRegistry,
     entity_ids: &BTreeSet<(String, String)>,
 ) -> CatalogDocument {
-    catalog_document_with_entity_filter(config, registry, |dataset, entity| {
-        entity_ids.contains(&(dataset.id.to_string(), entity.name.clone()))
-    })
+    catalog_document_with_filters(
+        config,
+        registry,
+        |dataset, entity| entity_ids.contains(&(dataset.id.to_string(), entity.name.clone())),
+        |_, _, _| false,
+    )
 }
 
-fn catalog_document_with_entity_filter(
+#[must_use]
+pub fn catalog_document_for_metadata_scopes(
+    config: &Config,
+    registry: &EntityRegistry,
+    scopes: &BTreeSet<String>,
+) -> CatalogDocument {
+    catalog_document_with_filters(
+        config,
+        registry,
+        |_, entity| scopes.contains(&entity.access.metadata_scope),
+        |dataset, aggregate, source_entity| {
+            scopes.contains(&aggregate_metadata_scope(dataset.id.as_str(), aggregate))
+                && source_entity
+                    .map(|entity| scopes.contains(&entity.access.metadata_scope))
+                    .unwrap_or(true)
+        },
+    )
+}
+
+fn catalog_document_with_filters(
     config: &Config,
     registry: &EntityRegistry,
     is_visible: impl Fn(&DatasetConfig, &EntityConfig) -> bool,
+    is_aggregate_visible: impl Fn(&DatasetConfig, &AggregateConfig, Option<&EntityConfig>) -> bool,
 ) -> CatalogDocument {
     let base_url = normalized_base_url(&config.catalog.base_url);
     let datasets = config
         .datasets
         .iter()
         .filter_map(|dataset| {
-            dataset_metadata_with_entity_filter(config, registry, &base_url, dataset, &is_visible)
+            dataset_metadata_with_filters(
+                config,
+                registry,
+                &base_url,
+                dataset,
+                &is_visible,
+                &is_aggregate_visible,
+            )
         })
         .collect();
 
@@ -265,15 +323,23 @@ pub fn dataset_metadata(
     base_url: &str,
     dataset: &DatasetConfig,
 ) -> Option<DatasetMetadata> {
-    dataset_metadata_with_entity_filter(config, registry, base_url, dataset, &|_, _| true)
+    dataset_metadata_with_filters(
+        config,
+        registry,
+        base_url,
+        dataset,
+        &|_, _| true,
+        &|_, _, _| true,
+    )
 }
 
-fn dataset_metadata_with_entity_filter(
+fn dataset_metadata_with_filters(
     config: &Config,
     registry: &EntityRegistry,
     base_url: &str,
     dataset: &DatasetConfig,
     is_visible: &impl Fn(&DatasetConfig, &EntityConfig) -> bool,
+    is_aggregate_visible: &impl Fn(&DatasetConfig, &AggregateConfig, Option<&EntityConfig>) -> bool,
 ) -> Option<DatasetMetadata> {
     let dataset_id = dataset.id.as_str();
     let compiled = registry.dataset(dataset_id)?;
@@ -306,6 +372,8 @@ fn dataset_metadata_with_entity_filter(
 
     let links = dataset_links(base_url, dataset_id, &entities);
     let standards = dataset_standards(config, base_url, dataset_id, &entities);
+    let aggregate_distributions =
+        aggregate_distributions(base_url, dataset, &entity_configs, is_aggregate_visible);
 
     let spatial_coverage = dataset
         .spatial_coverage
@@ -350,8 +418,145 @@ fn dataset_metadata_with_entity_filter(
         compiled_policy: None,
         links,
         standards,
+        aggregate_distributions,
         entities,
     })
+}
+
+fn aggregate_distributions(
+    base_url: &str,
+    dataset: &DatasetConfig,
+    entity_configs: &BTreeMap<&str, &EntityConfig>,
+    is_aggregate_visible: &impl Fn(&DatasetConfig, &AggregateConfig, Option<&EntityConfig>) -> bool,
+) -> Vec<AggregateDistributionMetadata> {
+    dataset
+        .aggregates
+        .iter()
+        .filter(|aggregate| {
+            let source_entity = aggregate
+                .source_entity
+                .as_deref()
+                .and_then(|name| entity_configs.get(name).copied());
+            is_aggregate_visible(dataset, aggregate, source_entity)
+        })
+        .map(|aggregate| {
+            let aggregate_url = format!(
+                "{base_url}/v1/datasets/{}/aggregates/{}",
+                dataset.id, aggregate.id
+            );
+            let metadata_url = format!("{aggregate_url}/structure");
+            let title = aggregate
+                .title
+                .as_deref()
+                .unwrap_or_else(|| aggregate.id.as_str())
+                .to_string();
+            AggregateDistributionMetadata {
+                aggregate_id: aggregate.id.as_str().to_string(),
+                title: title.clone(),
+                description: aggregate.description.clone(),
+                aggregate_url,
+                metadata_url: metadata_url.clone(),
+                representations: aggregate_distribution_representations(
+                    &title,
+                    &aggregate.description,
+                    &metadata_url,
+                    base_url,
+                    dataset,
+                    aggregate,
+                ),
+            }
+        })
+        .collect()
+}
+
+fn aggregate_distribution_representations(
+    title: &str,
+    description: &str,
+    metadata_url: &str,
+    base_url: &str,
+    dataset: &DatasetConfig,
+    aggregate: &AggregateConfig,
+) -> Vec<AggregateRepresentationMetadata> {
+    let aggregate_url = format!(
+        "{base_url}/v1/datasets/{}/aggregates/{}",
+        dataset.id, aggregate.id
+    );
+    let representations = vec![
+        AggregateRepresentationMetadata {
+            format: "json",
+            title: format!("{title} native JSON"),
+            description: format!("{description} as native JSON."),
+            access_url: format!("{aggregate_url}?f=json"),
+            service_url: aggregate_url.clone(),
+            media_type: "application/json",
+            conforms_to: vec![metadata_url.to_string()],
+        },
+        AggregateRepresentationMetadata {
+            format: "sdmx-json",
+            title: format!("{title} SDMX JSON"),
+            description: format!("{description} as SDMX JSON."),
+            access_url: format!("{aggregate_url}?f=sdmx-json"),
+            service_url: aggregate_url.clone(),
+            media_type: "application/vnd.sdmx.data+json;version=2.1",
+            conforms_to: vec![
+                "https://json.sdmx.org/2.1/sdmx-json-data-schema.json".to_string(),
+                metadata_url.to_string(),
+            ],
+        },
+        AggregateRepresentationMetadata {
+            format: "csv",
+            title: format!("{title} CSV"),
+            description: format!("{description} as CSV."),
+            access_url: format!("{aggregate_url}?f=csv"),
+            service_url: aggregate_url,
+            media_type: "text/csv",
+            conforms_to: vec![metadata_url.to_string()],
+        },
+    ];
+    #[cfg(feature = "ogcapi-edr")]
+    {
+        let mut representations = representations;
+        if let Some(collection_id) = aggregate_edr_collection_id(dataset, aggregate) {
+            let area_url = format!("{base_url}/ogc/edr/v1/collections/{collection_id}/area");
+            representations.push(AggregateRepresentationMetadata {
+                format: "ogc-edr-area",
+                title: format!("{title} OGC EDR area"),
+                description: format!("{description} as an OGC EDR area query."),
+                access_url: area_url.clone(),
+                service_url: area_url,
+                media_type: "application/geo+json",
+                conforms_to: vec![
+                    "http://www.opengis.net/spec/ogcapi-edr-1/1.1/conf/area".to_string(),
+                    metadata_url.to_string(),
+                ],
+            });
+        }
+        representations
+    }
+    #[cfg(not(feature = "ogcapi-edr"))]
+    {
+        representations
+    }
+}
+
+#[cfg(feature = "ogcapi-edr")]
+fn aggregate_edr_collection_id(
+    dataset: &DatasetConfig,
+    aggregate: &AggregateConfig,
+) -> Option<String> {
+    match aggregate.spatial.as_ref()? {
+        AggregateSpatialConfig::AdminArea { collection_id, .. } => collection_id
+            .clone()
+            .or_else(|| Some(format!("{}_{}", dataset.id, aggregate.id))),
+    }
+}
+
+fn aggregate_metadata_scope(dataset_id: &str, aggregate: &AggregateConfig) -> String {
+    aggregate
+        .access
+        .as_ref()
+        .and_then(|access| access.metadata_scope.clone())
+        .unwrap_or_else(|| format!("{dataset_id}:metadata"))
 }
 
 pub fn attach_compiled_policies(

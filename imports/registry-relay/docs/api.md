@@ -14,7 +14,7 @@ The admin listener is optional and only exists when `server.admin_bind` is confi
 
 The public URL space is structured as follows:
 
-- `/v1/datasets/{dataset_id}/entities/{entity}/...` and related aggregate, indicator, and dimension routes are the entity-oriented data-plane surface.
+- `/v1/datasets/{dataset_id}/entities/{entity}/...` and related aggregate, measure, and dimension routes are the entity-oriented data-plane surface.
 - `/metadata/*` is the standards-facing metadata surface: catalog, DCAT, SHACL, policies, evidence offerings, and dataset/entity descriptors.
 - `/.well-known/api-catalog` is the public well-known discovery entry point.
 - `/ogc/v1/*` (feature: `ogcapi-features`) exposes spatial entities as OGC API Features collections.
@@ -25,7 +25,7 @@ The public URL space is structured as follows:
 - `/healthz`, `/ready`, `/docs`, and `/docs/scalar.js` are unauthenticated.
 - `/openapi.json` and `/docs` serve the machine-readable and human-readable API surface respectively.
 
-The complete route list with request methods, path parameters, and security requirements is in [`openapi/registry-relay.openapi.json`](../openapi/registry-relay.openapi.json) and is served at runtime from `/openapi.json` and browsable at `/docs`.
+The curated public OpenAPI surface, including documented request methods, path parameters, and security requirements, is in [`openapi/registry-relay.openapi.json`](../openapi/registry-relay.openapi.json) and is served at runtime from `/openapi.json` and browsable at `/docs`. The security assurance route inventory remains the source for mounted public and admin exposure checks.
 
 For SP DCI, `sync/search` is the generic path for any configured
 `standards.spdci.registries` entry. The disability-status, details, and support
@@ -234,7 +234,7 @@ adapters. Standards routes remain canonical at their protocol roots, such as
 `/v1/datasets/{dataset_id}` acts as the Relay-native discovery surface that
 connects them back to the native dataset model.
 
-`GET /metadata/*` is the canonical standards-facing metadata surface. When the runtime config points at a split metadata manifest, these routes render from the compiled portable manifest and filter the compiled view to the caller's metadata scopes. They expose catalog JSON, base DCAT, application-profile DCAT, SHACL, dataset/entity metadata, evidence-offering metadata, Draft 2020-12 JSON Schemas, and link-free OGC Records bodies. They do not grant row, evidence verification, aggregate, or admin access.
+`GET /metadata/*` is the canonical standards-facing metadata surface. When the runtime config points at a split metadata manifest, these routes render from the compiled portable manifest and filter the compiled view to the caller's metadata scopes. They expose catalog JSON, base DCAT, application-profile DCAT, SHACL, dataset/entity metadata, evidence-offering metadata, Draft 2020-12 JSON Schemas, and link-free OGC Records bodies. Visible aggregate distributions advertise native JSON, SDMX JSON 2.1, CSV, and, for configured spatial aggregates when built with `ogcapi-edr`, the OGC EDR `/area` endpoint. They do not grant row, evidence verification, aggregate, or admin access.
 
 Relay-native discovery remains under `/v1/datasets` and runtime entity routes. Portable metadata consumers should use `/metadata/*` or static publication.
 
@@ -338,15 +338,16 @@ Aggregates are predeclared in config. Clients can list available aggregates and 
 
 ```text
 GET /v1/datasets/social_registry/aggregates
-GET /v1/datasets/social_registry/indicators
+GET /v1/datasets/social_registry/measures
 GET /v1/datasets/social_registry/dimensions
 GET /v1/datasets/social_registry/aggregates/by_municipality
+GET /v1/datasets/social_registry/aggregates/by_municipality/structure
 POST /v1/datasets/social_registry/aggregates/by_municipality/query
 ```
 
-Indicator and dimension discovery is dataset-scoped and generated from aggregate declarations. Reused indicator or dimension ids are merged into one discovery record with `queryable_via`, `valid_dimensions` for indicators, and links back to the aggregate routes.
+Measure and dimension discovery is dataset-scoped and generated from aggregate declarations. Reused measure or dimension ids are merged into one discovery record with `queryable_via`, `valid_dimensions` for measures, and links back to the aggregate routes. `GET /v1/datasets/{dataset_id}/aggregates/{aggregate_id}/metadata` remains a deprecated compatibility alias for `/structure` while the runtime still mounts it.
 
-Disclosure control is configured per aggregate. Suppressed or masked groups are normal results, not errors. Temporal query bounds are supported for aggregates that declare a `temporal_field`; requests with temporal bounds against aggregates without one are rejected instead of guessing. CSV output is available with `?f=csv` or request `"format": "csv"` and carries `X-Registry-Relay-*` and `X-SPDCI-*` disclosure/freshness headers plus a `Link: rel="describedby"` header to aggregate metadata. When built with `ogcapi-edr`, configured `admin_area` spatial aggregates are also exposed as OGC EDR `/area` collections under `/ogc/edr/v1`.
+Aggregate JSON results use `observations` for rows and `structure` for dimensions/measures. Query bodies should use `measures`; `indicators` is accepted only as a deprecated compatibility alias. Disclosure control is configured per aggregate. Suppressed or masked groups are normal results, not errors. Temporal query bounds are supported for aggregates that declare a `temporal_field`; requests with temporal bounds against aggregates without one are rejected instead of guessing. POST queries may set `max_rows`; truncated results are marked with `completeness.complete: false` and `completeness.truncated: true` so a partial cube is not confused with a complete one. CSV output is available with `?f=csv`, request `"format": "csv"`, or `Accept: text/csv` and carries `X-Registry-Relay-*` and `X-SPDCI-*` disclosure/freshness headers plus a `Link: rel="describedby"` header to aggregate structure. SDMX JSON 2.1 is available with `?f=sdmx-json`, request `"format": "sdmx-json"`, or `Accept: application/vnd.sdmx.data+json;version=2.1`; messages declare the official schema at `https://json.sdmx.org/2.1/sdmx-json-data-schema.json`. When built with `ogcapi-edr`, configured `admin_area` spatial aggregates are also exposed as OGC EDR `/area` collections under `/ogc/edr/v1`.
 
 ## Problem Details
 

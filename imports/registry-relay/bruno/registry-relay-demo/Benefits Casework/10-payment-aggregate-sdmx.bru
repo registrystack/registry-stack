@@ -1,0 +1,25 @@
+meta {
+  name: Payment aggregate as SDMX JSON
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/benefits_casework/aggregates/by_district_cycle?f=sdmx-json
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{aggregateKey}}
+}
+
+headers {
+  Accept: application/vnd.sdmx.data+json;version=2.1
+}
+
+docs {
+  Runs the payment aggregate and requests SDMX JSON 2.1.
+  Expected: 200 with Content-Type application/vnd.sdmx.data+json;version=2.1
+  and an SDMX data message declaring https://json.sdmx.org/2.1/sdmx-json-data-schema.json.
+}

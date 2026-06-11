@@ -392,7 +392,7 @@ pub use enabled::{build_publicschema_registry, PublicSchemaVcRegistry};
 #[cfg(all(test, feature = "publicschema-cel"))]
 mod tests {
     use super::enabled::{mapping_issue_diagnostics, schema_validation_diagnostics};
-    use crosswalk_core::{ErrorCode, MappingError};
+    use crosswalk_core::{ErrorCode, ErrorSeverity, MappingError};
     use serde_json::json;
 
     #[test]
@@ -420,12 +420,16 @@ mod tests {
 
     #[test]
     fn mapping_issue_diagnostics_omit_instance_values() {
-        let issues = vec![MappingError::error(
-            ErrorCode::ValidationError,
-            "failed while reading SECRET-ROW-VALUE-451123",
-            Some("records.disabled_person.fields.member_identifier".to_string()),
-            None,
-        )];
+        let issues = vec![MappingError {
+            code: ErrorCode::EvaluationError,
+            path: Some("records.disabled_person.fields.member_identifier".to_string()),
+            message: "failed while reading SECRET-ROW-VALUE-451123".to_string(),
+            expression: None,
+            source_path: None,
+            record: None,
+            index: None,
+            severity: ErrorSeverity::Error,
+        }];
         let formatted = mapping_issue_diagnostics(&issues, "error").join("\n");
 
         assert!(formatted.contains("path=records.disabled_person.fields.member_identifier"));

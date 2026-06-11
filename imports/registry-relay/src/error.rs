@@ -211,6 +211,8 @@ pub enum IngestError {
 pub enum AggregateError {
     #[error("aggregate execution failed")]
     ExecutionFailed,
+    #[error("aggregate format unsupported")]
+    FormatUnsupported,
     #[error("aggregate measure unsupported")]
     MeasureUnsupported,
     #[error("disclosure violation")]
@@ -852,6 +854,7 @@ impl AggregateError {
     fn code(&self) -> &'static str {
         match self {
             AggregateError::ExecutionFailed => "aggregate.execution_failed",
+            AggregateError::FormatUnsupported => "aggregate.format_unsupported",
             AggregateError::MeasureUnsupported => "aggregate.measure_unsupported",
             AggregateError::DisclosureViolation => "aggregate.disclosure_violation",
             AggregateError::FilterRequired { .. } => "aggregate.filter_required",
@@ -860,7 +863,9 @@ impl AggregateError {
 
     fn http_status(&self) -> StatusCode {
         match self {
-            AggregateError::FilterRequired { .. } => StatusCode::BAD_REQUEST,
+            AggregateError::FilterRequired { .. } | AggregateError::FormatUnsupported => {
+                StatusCode::BAD_REQUEST
+            }
             AggregateError::ExecutionFailed
             | AggregateError::MeasureUnsupported
             | AggregateError::DisclosureViolation => StatusCode::INTERNAL_SERVER_ERROR,
@@ -870,6 +875,7 @@ impl AggregateError {
     fn title(&self) -> &'static str {
         match self {
             AggregateError::ExecutionFailed => "Aggregate execution failed",
+            AggregateError::FormatUnsupported => "Aggregate format unsupported",
             AggregateError::MeasureUnsupported => "Aggregate measure unsupported",
             AggregateError::DisclosureViolation => "Disclosure violation",
             AggregateError::FilterRequired { .. } => "Filter required",
@@ -880,6 +886,9 @@ impl AggregateError {
         match self {
             AggregateError::ExecutionFailed => {
                 "query engine returned an execution error".to_string()
+            }
+            AggregateError::FormatUnsupported => {
+                "requested aggregate response format is not supported".to_string()
             }
             AggregateError::MeasureUnsupported => {
                 "configured measure references a function that is not implemented".to_string()

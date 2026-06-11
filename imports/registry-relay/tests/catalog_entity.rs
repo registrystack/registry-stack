@@ -10,6 +10,8 @@ use registry_relay::api::{metadata_router, openapi_router};
 use registry_relay::auth::{AuthMode, Principal, ScopeSet};
 use registry_relay::config;
 use registry_relay::entity::EntityRegistry;
+use registry_relay::metadata::catalog::catalog_document_for_metadata_scopes;
+use registry_relay::metadata::shacl::dcat_ap_document_for_metadata_scopes;
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -239,6 +241,89 @@ fn server_from_config(path: std::path::PathBuf, scopes: &[&str]) -> TestServer {
             .layer(Extension(cfg))
             .layer(Extension(principal(scopes))),
     )
+}
+
+fn aggregate_metadata_config(tmp: &TempDir) -> std::path::PathBuf {
+    let path = write_config(tmp);
+    let mut body = std::fs::read_to_string(&path).expect("read config");
+    body = body.replace("households_by_region", "regional_counts");
+    body = body.replace("Households by region", "Regional counts");
+    body = body.replace("Household count by region", "Regional total");
+    body = body.replace(
+        "        source_entity: household\n",
+        "        source_entity: household\n        access:\n          metadata_scope: social_registry:aggregate_metadata\n          aggregate_scope: social_registry:aggregate_execute\n",
+    );
+    std::fs::write(&path, body).expect("write aggregate metadata config");
+    path
+}
+
+#[cfg(feature = "ogcapi-edr")]
+fn spatial_aggregate_metadata_config(tmp: &TempDir) -> std::path::PathBuf {
+    let path = aggregate_metadata_config(tmp);
+    let mut body = std::fs::read_to_string(&path).expect("read config");
+    body = body.replace(
+        "            - name: region_code\n              type: string\n              nullable: true\n              concept_uri: ex:properties/regionCode\n              codelist: ex:codelists/Region\n",
+        "            - name: region_code\n              type: string\n              nullable: true\n              concept_uri: ex:properties/regionCode\n              codelist: ex:codelists/Region\n            - name: area_geojson\n              type: string\n              nullable: true\n",
+    );
+    body = body.replace(
+        "            unit_measure: households\n",
+        "            unit_measure: households\n        allowed_filters:\n          - field: region\n            ops: [in]\n        spatial:\n          mode: admin_area\n          collection_id: regional_counts_area\n          dimension: region\n          geometry_entity: household\n          geometry_id_field: region\n          geometry_field: area_geometry\n",
+    );
+    body = body.replace(
+        "          - name: region\n            from: region_code\n            concept_uri: ex:properties/region\n",
+        "          - name: region\n            from: region_code\n            concept_uri: ex:properties/region\n          - name: area_geometry\n            from: area_geojson\n",
+    );
+    std::fs::write(&path, body).expect("write spatial aggregate metadata config");
+    path
+}
+
+fn aggregate_metadata_docs_for_scopes(
+    scopes: &[&str],
+) -> (registry_relay::metadata::catalog::CatalogDocument, Value) {
+    let tmp = TempDir::new().expect("tempdir");
+    let path = aggregate_metadata_config(&tmp);
+    let cfg = config::load(&path).expect("config loads");
+    let registry = EntityRegistry::from_config(&cfg).expect("registry compiles");
+    let scopes = scopes
+        .iter()
+        .map(|scope| scope.to_string())
+        .collect::<std::collections::BTreeSet<_>>();
+    (
+        catalog_document_for_metadata_scopes(&cfg, &registry, &scopes),
+        dcat_ap_document_for_metadata_scopes(&cfg, &registry, &scopes),
+    )
+}
+
+#[cfg(feature = "ogcapi-edr")]
+fn spatial_aggregate_metadata_docs_for_scopes(
+    scopes: &[&str],
+) -> (registry_relay::metadata::catalog::CatalogDocument, Value) {
+    let tmp = TempDir::new().expect("tempdir");
+    let path = spatial_aggregate_metadata_config(&tmp);
+    let cfg = config::load(&path).expect("config loads");
+    let registry = EntityRegistry::from_config(&cfg).expect("registry compiles");
+    let scopes = scopes
+        .iter()
+        .map(|scope| scope.to_string())
+        .collect::<std::collections::BTreeSet<_>>();
+    (
+        catalog_document_for_metadata_scopes(&cfg, &registry, &scopes),
+        dcat_ap_document_for_metadata_scopes(&cfg, &registry, &scopes),
+    )
+}
+
+fn raw_json(value: &Value) -> String {
+    serde_json::to_string(value).expect("json serializes")
+}
+
+fn aggregate_distribution_by_access_url<'a>(
+    distributions: &'a [Value],
+    access_url: &str,
+) -> &'a Value {
+    distributions
+        .iter()
+        .find(|distribution| distribution["dcat:accessURL"] == access_url)
+        .unwrap_or_else(|| panic!("aggregate distribution {access_url}"))
 }
 
 fn server_from_config_without_principal(path: std::path::PathBuf) -> TestServer {
@@ -660,6 +745,316 @@ async fn catalog_lists_entity_grain_metadata_without_hidden_columns() {
         .as_array()
         .expect("relationships")
         .is_empty());
+}
+
+#[test]
+fn catalog_aggregate_distributions_follow_aggregate_and_source_metadata_scopes() {
+    let (catalog, _) = aggregate_metadata_docs_for_scopes(&[
+        "social_registry:metadata",
+        "social_registry:aggregate_metadata",
+    ]);
+
+    let aggregate_distributions = &serde_json::to_value(&catalog).expect("catalog serializes")
+        ["datasets"][0]["aggregate_distributions"];
+    let distributions = aggregate_distributions
+        .as_array()
+        .expect("aggregate distributions");
+    assert_eq!(distributions.len(), 1);
+    assert_eq!(
+        distributions[0]["aggregate_url"],
+        "https://data.example.test/v1/datasets/social_registry/aggregates/regional_counts"
+    );
+    assert_eq!(
+        distributions[0]["metadata_url"],
+        "https://data.example.test/v1/datasets/social_registry/aggregates/regional_counts/structure"
+    );
+    assert_eq!(distributions[0]["aggregate_id"], "regional_counts");
+    assert_eq!(distributions[0]["title"], "Regional counts");
+    assert_eq!(distributions[0]["description"], "Regional total");
+    let representations = distributions[0]["representations"]
+        .as_array()
+        .expect("aggregate representations");
+    assert_eq!(representations.len(), 3);
+    assert!(representations.iter().any(|representation| {
+        representation["format"] == "json"
+            && representation["access_url"]
+                == "https://data.example.test/v1/datasets/social_registry/aggregates/regional_counts?f=json"
+            && representation["media_type"] == "application/json"
+            && representation["conforms_to"]
+                .as_array()
+                .expect("json conforms_to")
+                .iter()
+                .any(|value| value == "https://data.example.test/v1/datasets/social_registry/aggregates/regional_counts/structure")
+    }));
+    assert!(representations.iter().any(|representation| {
+        representation["format"] == "sdmx-json"
+            && representation["access_url"]
+                == "https://data.example.test/v1/datasets/social_registry/aggregates/regional_counts?f=sdmx-json"
+            && representation["media_type"] == "application/vnd.sdmx.data+json;version=2.1"
+            && representation["conforms_to"]
+                .as_array()
+                .expect("sdmx conforms_to")
+                .iter()
+                .any(|value| value == "https://json.sdmx.org/2.1/sdmx-json-data-schema.json")
+    }));
+    assert!(representations.iter().any(|representation| {
+        representation["format"] == "csv"
+            && representation["access_url"]
+                == "https://data.example.test/v1/datasets/social_registry/aggregates/regional_counts?f=csv"
+            && representation["media_type"] == "text/csv"
+            && representation["conforms_to"]
+                .as_array()
+                .expect("csv conforms_to")
+                .iter()
+                .any(|value| value == "https://data.example.test/v1/datasets/social_registry/aggregates/regional_counts/structure")
+    }));
+
+    let (source_only, _) = aggregate_metadata_docs_for_scopes(&["social_registry:metadata"]);
+    assert!(source_only.datasets[0].aggregate_distributions.is_empty());
+
+    let (execution_only, _) = aggregate_metadata_docs_for_scopes(&[
+        "social_registry:metadata",
+        "social_registry:aggregate_execute",
+        "social_registry:rows",
+    ]);
+    assert!(execution_only.datasets[0]
+        .aggregate_distributions
+        .is_empty());
+
+    let (aggregate_without_source, _) =
+        aggregate_metadata_docs_for_scopes(&["social_registry:aggregate_metadata"]);
+    assert!(aggregate_without_source.datasets.is_empty());
+}
+
+#[test]
+fn dcat_aggregate_distributions_are_thin_and_do_not_leak_sources() {
+    let (_, dcat) = aggregate_metadata_docs_for_scopes(&[
+        "social_registry:metadata",
+        "social_registry:aggregate_metadata",
+    ]);
+
+    let distributions = dcat["dcat:dataset"][0]["dcat:distribution"]
+        .as_array()
+        .expect("dcat distributions");
+    let native = aggregate_distribution_by_access_url(
+        distributions,
+        "https://data.example.test/v1/datasets/social_registry/aggregates/regional_counts?f=json",
+    );
+    let sdmx = aggregate_distribution_by_access_url(
+        distributions,
+        "https://data.example.test/v1/datasets/social_registry/aggregates/regional_counts?f=sdmx-json",
+    );
+    let csv = aggregate_distribution_by_access_url(
+        distributions,
+        "https://data.example.test/v1/datasets/social_registry/aggregates/regional_counts?f=csv",
+    );
+    assert_eq!(native["@type"], "dcat:Distribution");
+    assert_eq!(sdmx["@type"], "dcat:Distribution");
+    assert_eq!(csv["@type"], "dcat:Distribution");
+    assert_eq!(native["dcterms:title"], "Regional counts native JSON");
+    assert_eq!(sdmx["dcterms:title"], "Regional counts SDMX JSON");
+    assert_eq!(csv["dcterms:title"], "Regional counts CSV");
+    assert_eq!(
+        native["dcterms:description"],
+        "Regional total as native JSON."
+    );
+    assert_eq!(sdmx["dcterms:description"], "Regional total as SDMX JSON.");
+    assert_eq!(csv["dcterms:description"], "Regional total as CSV.");
+    assert_eq!(native["dcterms:format"]["rdfs:label"], "application/json");
+    assert_eq!(
+        sdmx["dcterms:format"]["rdfs:label"],
+        "application/vnd.sdmx.data+json;version=2.1"
+    );
+    assert_eq!(csv["dcterms:format"]["rdfs:label"], "text/csv");
+    assert!(native["dcterms:conformsTo"]
+        .as_array()
+        .expect("native conforms_to")
+        .iter()
+        .any(|value| value
+            == "https://data.example.test/v1/datasets/social_registry/aggregates/regional_counts/structure"));
+    assert!(sdmx["dcterms:conformsTo"]
+        .as_array()
+        .expect("sdmx conforms_to")
+        .iter()
+        .any(|value| value == "https://json.sdmx.org/2.1/sdmx-json-data-schema.json"));
+    assert!(csv["dcterms:conformsTo"]
+        .as_array()
+        .expect("csv conforms_to")
+        .iter()
+        .any(|value| value
+            == "https://data.example.test/v1/datasets/social_registry/aggregates/regional_counts/structure"));
+    for aggregate_distribution in [native, sdmx, csv] {
+        assert!(aggregate_distribution["dcat:endpointDescription"].is_null());
+        assert_eq!(
+            aggregate_distribution["dcat:accessService"]["@type"],
+            "dcat:DataService"
+        );
+        assert_eq!(
+            aggregate_distribution["dcat:accessService"]["dcat:endpointURL"],
+            "https://data.example.test/v1/datasets/social_registry/aggregates/regional_counts"
+        );
+        assert!(aggregate_distribution["dcat:accessService"]["dcat:endpointDescription"].is_null());
+    }
+
+    let raw = raw_json(&Value::Array(vec![
+        native.clone(),
+        sdmx.clone(),
+        csv.clone(),
+    ]));
+    for leaked in [
+        "source_entity",
+        "household",
+        "households_table",
+        "individuals_table",
+        "fixtures/social_registry.csv",
+        "region_code",
+        "household_id",
+        "individual_id",
+        "\"column\"",
+    ] {
+        assert!(
+            !raw.contains(leaked),
+            "aggregate distribution leaked internal detail {leaked}: {raw}"
+        );
+    }
+
+    let (_, source_only_dcat) = aggregate_metadata_docs_for_scopes(&["social_registry:metadata"]);
+    assert!(source_only_dcat["dcat:dataset"][0]["dcat:distribution"]
+        .as_array()
+        .expect("dcat distributions")
+        .iter()
+        .all(|distribution| distribution["dcat:accessURL"]
+            != "https://data.example.test/v1/datasets/social_registry/aggregates/regional_counts?f=json"));
+}
+
+#[cfg(feature = "ogcapi-edr")]
+#[test]
+fn spatial_aggregate_catalog_advertises_ogc_edr_representation() {
+    let (catalog, _) = spatial_aggregate_metadata_docs_for_scopes(&[
+        "social_registry:metadata",
+        "social_registry:aggregate_metadata",
+    ]);
+    let aggregate_distributions = &serde_json::to_value(&catalog).expect("catalog serializes")
+        ["datasets"][0]["aggregate_distributions"];
+    let distributions = aggregate_distributions
+        .as_array()
+        .expect("aggregate distributions");
+    let representations = distributions[0]["representations"]
+        .as_array()
+        .expect("aggregate representations");
+
+    assert_eq!(representations.len(), 4);
+    let edr = representations
+        .iter()
+        .find(|representation| representation["format"] == "ogc-edr-area")
+        .expect("OGC EDR area representation");
+    assert_eq!(
+        edr["access_url"],
+        "https://data.example.test/ogc/edr/v1/collections/regional_counts_area/area"
+    );
+    assert_eq!(edr["media_type"], "application/geo+json");
+    assert!(edr["conforms_to"]
+        .as_array()
+        .expect("edr conforms_to")
+        .iter()
+        .any(|value| value == "http://www.opengis.net/spec/ogcapi-edr-1/1.1/conf/area"));
+    assert!(edr["conforms_to"]
+        .as_array()
+        .expect("edr conforms_to")
+        .iter()
+        .any(|value| value
+            == "https://data.example.test/v1/datasets/social_registry/aggregates/regional_counts/structure"));
+}
+
+#[cfg(feature = "ogcapi-edr")]
+#[test]
+fn dcat_spatial_aggregate_includes_ogc_edr_distribution_and_service() {
+    let (_, dcat) = spatial_aggregate_metadata_docs_for_scopes(&[
+        "social_registry:metadata",
+        "social_registry:aggregate_metadata",
+    ]);
+
+    let distributions = dcat["dcat:dataset"][0]["dcat:distribution"]
+        .as_array()
+        .expect("dcat distributions");
+    let edr = aggregate_distribution_by_access_url(
+        distributions,
+        "https://data.example.test/ogc/edr/v1/collections/regional_counts_area/area",
+    );
+
+    assert_eq!(edr["@type"], "dcat:Distribution");
+    assert_eq!(edr["dcterms:title"], "Regional counts OGC EDR area");
+    assert_eq!(edr["dcterms:format"]["rdfs:label"], "application/geo+json");
+    assert_eq!(
+        edr["dcat:accessService"]["@id"],
+        "https://data.example.test/ogc/edr/v1/collections/regional_counts_area/area#aggregate-query-service"
+    );
+    assert_eq!(
+        edr["dcat:accessService"]["dcat:endpointURL"],
+        "https://data.example.test/ogc/edr/v1/collections/regional_counts_area/area"
+    );
+    assert!(edr["dcat:accessService"]["dcterms:conformsTo"]
+        .as_array()
+        .expect("service conforms_to")
+        .iter()
+        .any(|value| value == "http://www.opengis.net/spec/ogcapi-edr-1/1.1/conf/area"));
+    assert!(edr["dcterms:conformsTo"]
+        .as_array()
+        .expect("distribution conforms_to")
+        .iter()
+        .any(|value| value
+            == "https://data.example.test/v1/datasets/social_registry/aggregates/regional_counts/structure"));
+}
+
+#[tokio::test]
+async fn public_dcat_includes_visible_aggregate_distributions() {
+    let tmp = TempDir::new().expect("tempdir");
+    let path = aggregate_metadata_config(&tmp);
+    let server = server_from_config(
+        path,
+        &[
+            "social_registry:metadata",
+            "social_registry:aggregate_metadata",
+        ],
+    );
+
+    let resp = server.get("/metadata/dcat").await;
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    let distributions = body["dcat:dataset"][0]["dcat:distribution"]
+        .as_array()
+        .expect("dcat distributions");
+    assert!(distributions.iter().any(|distribution| {
+        distribution["dcat:accessURL"]
+            == "https://data.example.test/v1/datasets/social_registry/aggregates/regional_counts?f=json"
+    }));
+    assert!(distributions.iter().any(|distribution| {
+        distribution["dcat:accessURL"]
+            == "https://data.example.test/v1/datasets/social_registry/aggregates/regional_counts?f=sdmx-json"
+    }));
+    assert!(distributions.iter().any(|distribution| {
+        distribution["dcat:accessURL"]
+            == "https://data.example.test/v1/datasets/social_registry/aggregates/regional_counts?f=csv"
+    }));
+}
+
+#[tokio::test]
+async fn dcat_allows_aggregate_metadata_scope_without_entity_metadata_scope() {
+    let tmp = TempDir::new().expect("tempdir");
+    let path = aggregate_metadata_config(&tmp);
+    let server = server_from_config(path, &["social_registry:aggregate_metadata"]);
+
+    let resp = server.get("/metadata/dcat").await;
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert_eq!(
+        body["dcat:dataset"]
+            .as_array()
+            .expect("dcat dataset array")
+            .len(),
+        0,
+        "aggregate-only metadata scope authorizes DCAT but must not reveal source-backed datasets"
+    );
 }
 
 #[cfg(not(feature = "ogcapi-features"))]
@@ -1377,7 +1772,12 @@ async fn openapi_json_describes_entity_v1_client_generation_surface() {
     assert_eq!(
         body["paths"]["/v1/datasets/social_registry/aggregates/{aggregate_id}/metadata"]["get"]
             ["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
-        "#/components/schemas/AggregateMetadata"
+        "#/components/schemas/AggregateStructure"
+    );
+    assert_eq!(
+        body["paths"]["/v1/datasets/social_registry/aggregates/{aggregate_id}/structure"]["get"]
+            ["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/AggregateStructure"
     );
     assert!(
         body["paths"]["/v1/datasets/social_registry/entities/household/records/aggregates"]
@@ -1615,6 +2015,10 @@ async fn openapi_json_groups_operations_into_sidebar_tags() {
         (
             "/v1/datasets/social_registry/aggregates/{aggregate_id}/query",
             "post",
+        ),
+        (
+            "/v1/datasets/social_registry/aggregates/{aggregate_id}/structure",
+            "get",
         ),
         (
             "/v1/datasets/social_registry/aggregates/{aggregate_id}/metadata",

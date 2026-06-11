@@ -64,6 +64,7 @@ fn all_variants() -> Vec<Error> {
         Error::Ingest(IngestError::RegistrationFailed),
         // aggregate.*
         Error::Aggregate(AggregateError::ExecutionFailed),
+        Error::Aggregate(AggregateError::FormatUnsupported),
         Error::Aggregate(AggregateError::MeasureUnsupported),
         Error::Aggregate(AggregateError::DisclosureViolation),
         Error::Aggregate(AggregateError::FilterRequired {
@@ -172,6 +173,7 @@ fn expected_table() -> Vec<(&'static str, StatusCode)> {
             "aggregate.execution_failed",
             StatusCode::INTERNAL_SERVER_ERROR,
         ),
+        ("aggregate.format_unsupported", StatusCode::BAD_REQUEST),
         (
             "aggregate.measure_unsupported",
             StatusCode::INTERNAL_SERVER_ERROR,

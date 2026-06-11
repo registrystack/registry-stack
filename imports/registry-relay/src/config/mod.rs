@@ -1225,6 +1225,8 @@ pub struct AggregateAccessConfig {
     pub metadata_scope: Option<String>,
     #[serde(default)]
     pub aggregate_scope: Option<String>,
+    #[serde(default)]
+    pub aggregate_only_execution: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
