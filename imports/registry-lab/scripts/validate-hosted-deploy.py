@@ -737,7 +737,7 @@ def validate_hosted_openapi_policy(
             continue
         for config_path in sorted(directory.glob("*.yaml")):
             try:
-                config_text = config_path.read_text(encoding="utf-8")
+                config = load_yaml_mapping_strict(config_path)
             except Exception as exc:
                 issues.append(
                     Issue(
@@ -748,9 +748,13 @@ def validate_hosted_openapi_policy(
                     )
                 )
                 continue
-            if not _yaml_has_server_block(config_text):
+            server = config.get("server")
+            if server is None:
                 continue
-            if not hosted_openapi_requires_auth_is_false(config_text):
+            if (
+                not isinstance(server, dict)
+                or server.get("openapi_requires_auth") is not False
+            ):
                 issues.append(
                     Issue(
                         "openapi-auth-required",
@@ -1291,39 +1295,6 @@ def shell_command_text(command: Any) -> str:
     if isinstance(command, list):
         return "\n".join(str(item) for item in command)
     return str(command)
-
-
-def _yaml_has_server_block(text: str) -> bool:
-    """Return True if the YAML text contains a top-level `server:` mapping key."""
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if stripped == "server:":
-            return True
-    return False
-
-
-def hosted_openapi_requires_auth_is_false(text: str) -> bool:
-    in_server = False
-    server_indent = 0
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        indent = len(line) - len(line.lstrip())
-        if stripped == "server:":
-            in_server = True
-            server_indent = indent
-            continue
-        if not in_server:
-            continue
-        if indent <= server_indent:
-            in_server = False
-            continue
-        if re.match(r"openapi_requires_auth\s*:\s*false\b", stripped, flags=re.IGNORECASE):
-            return True
-    return False
 
 
 def validate_cross_artifact_contracts(

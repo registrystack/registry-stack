@@ -704,6 +704,22 @@ oid4vci:
             )
         self.assertNoIssue(issues, "openapi-auth-required")
 
+    def test_hosted_openapi_policy_ignores_nested_server_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            relay_dir = root / "config" / "coolify" / "relay"
+            relay_dir.mkdir(parents=True)
+            (relay_dir / "metadata.yaml").write_text(
+                "metadata:\n  server:\n    openapi_requires_auth: true\n",
+                encoding="utf-8",
+            )
+            issues = self.validator.validate_hosted_openapi_policy(
+                "registry-lab",
+                {},
+                root,
+            )
+        self.assertNoIssue(issues, "openapi-auth-required")
+
     def test_rejects_relay_healthcheck_that_calls_notary_binary(self) -> None:
         compose = self._valid_registry_lab()
         compose["services"]["civil-registry-relay"]["healthcheck"] = {
