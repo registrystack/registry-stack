@@ -194,7 +194,7 @@ fn build_openapi_document() -> Value {
                 "get": {
                     "summary": "Fetch SD-JWT VC Type Metadata",
                     "operationId": "getSdJwtVcTypeMetadata",
-                    "description": "Returns public SD-JWT VC Type Metadata for a configured OID4VCI credential configuration whose vct exactly matches the requested absolute URL. The vct_path parameter represents the full path suffix under /credentials and may contain nested path segments.",
+                    "description": "Returns public SD-JWT VC Type Metadata for a configured OID4VCI credential configuration whose vct exactly matches the requested absolute URL. The vct_path parameter represents the full path suffix under /credentials and may contain nested path segments. This route is intentionally unversioned and must remain at /credentials/{vct_path} (without a /v1/ prefix): per SD-JWT VC type-metadata dereference, a client resolves the credential type by forming https://{host}/{vct_path} from the vct claim, so the server path must match the vct URL path component exactly. Adding a /v1/ prefix would break dereference for any credential whose vct does not include that prefix. This route serves type metadata only and is unrelated to POST /v1/credentials (credential issuance).",
                     "x-registry-notary-catch-all": true,
                     "security": [],
                     "parameters": [
@@ -223,7 +223,7 @@ fn build_openapi_document() -> Value {
                 "get": {
                     "summary": "Fetch SD-JWT VC Type Metadata at the well-known location",
                     "operationId": "getWellKnownSdJwtVcTypeMetadata",
-                    "description": "Returns public SD-JWT VC Type Metadata at the SD-JWT VC well-known location. Consumers dereference an HTTPS vct by inserting /.well-known/vct between the host and the path; the server strips that prefix and matches the reconstructed vct (https://{host}/{vct_path}) against a configured OID4VCI credential configuration. The vct_path parameter represents the full path suffix and may contain nested path segments.",
+                    "description": "Returns public SD-JWT VC Type Metadata at the SD-JWT VC well-known location. Consumers dereference an HTTPS vct by inserting /.well-known/vct between the host and the path; the server strips that prefix and matches the reconstructed vct (https://{host}/{vct_path}) against a configured OID4VCI credential configuration. The vct_path parameter represents the full path suffix and may contain nested path segments. This route is intentionally unversioned and must remain at /.well-known/vct/{vct_path}: per RFC 8615 well-known URI semantics, the path prefix is determined by the protocol and cannot be changed. Adding a /v1/ prefix would violate the well-known URI convention. This route serves type metadata only and is unrelated to POST /v1/credentials (credential issuance).",
                     "x-registry-notary-catch-all": true,
                     "security": [],
                     "parameters": [
