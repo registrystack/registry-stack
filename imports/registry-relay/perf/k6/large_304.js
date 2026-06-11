@@ -12,7 +12,7 @@
 //
 // This script uses cached_304_large thresholds. If you want to observe the
 // raw timing without failing the run, set REGISTRY_RELAY_NO_THRESHOLD=1 to skip
-// the threshold gate (not yet wired; document the intent).
+// the threshold gate.
 
 import http from 'k6/http';
 import { check, fail } from 'k6';
