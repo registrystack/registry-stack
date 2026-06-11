@@ -311,5 +311,5 @@ The command checks the all-feature build plus the focused OIDC and audit tests
 that exercise the shared Platform security APIs. When
 `REGISTRY_PLATFORM_SOURCE_DIR` is not the sibling path encoded in Cargo, the
 script builds in a temporary sibling-layout copy so Cargo resolves the same
-Platform checkout the script validated. Set `CEL_MAPPING_SOURCE_DIR` as well
-when the Crosswalk checkout is not available at `../cel-mapping`.
+Platform checkout the script validated. Set `CROSSWALK_SOURCE_DIR` as well
+when the Crosswalk checkout is not available at `../crosswalk`.

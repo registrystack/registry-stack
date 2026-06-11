@@ -74,7 +74,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 # Optional Crosswalk CEL mapping support. Disabled by default so the core VC
 # path does not pull in the mapping dependency graph.
-crosswalk-core = { version = "0.1.1", path = "../cel-mapping/crates/crosswalk-core", optional = true }
+crosswalk-core = { version = "0.1.1", path = "../crosswalk/crates/crosswalk-core", optional = true }
 jsonschema = { version = "0.18", optional = true }
 # Pure Rust YAML parser used instead of the previous unmaintained YAML stack.
 serde-saphyr = { version = "0.0.26" }
