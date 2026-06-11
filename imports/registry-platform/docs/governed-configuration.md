@@ -40,6 +40,15 @@ state used to reject stale timestamp and snapshot metadata across applies.
 Remote verification uses the shared outbound fetch policy. Strict mode should be
 the production default. `allow_dev_insecure_fetch_urls` exists only for local
 development and test repositories that cannot satisfy the strict URL policy.
+In strict mode, remote metadata and target URLs must use HTTPS and must not
+resolve to localhost, RFC1918 private networks, link-local ranges, unspecified
+addresses, IPv4-mapped forms of those addresses, or known cloud metadata
+endpoints. The guarded transport validates each metadata and target fetch URL
+immediately before sending it, builds the request from the returned
+DNS-pinned `ValidatedFetchUrl`, disables HTTP redirects, ignores proxy
+environment variables, and applies bounded connect/request timeouts. A redirect
+response is surfaced to TUF verification rather than followed to a new
+destination.
 
 The verifier records:
 

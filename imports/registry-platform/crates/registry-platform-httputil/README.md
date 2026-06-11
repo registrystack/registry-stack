@@ -37,6 +37,9 @@ async fn fetch_document() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 
 - `FetchUrlPolicy::strict` allows HTTPS only and denies localhost, private
   ranges, link-local ranges, and cloud metadata endpoints.
+- Known metadata endpoints include link-local metadata services and public-IP
+  metadata services such as `100.100.100.200`; IPv4-mapped IPv6 literals are
+  normalized before classification.
 - `FetchUrlPolicy::dev` allows HTTP and HTTPS, but plain HTTP is allowed only
   for loopback hosts. Non-loopback private ranges stay denied.
 - `FetchUrlPolicy::validate` is deprecated compatibility. It resolves the host
@@ -51,6 +54,9 @@ async fn fetch_document() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 - `ValidatedFetchUrl::immediate_get` applies a 30 second request timeout and a
   10 second connect timeout by default. Use `immediate_get_with_timeout` or
   `RequestBuilder::timeout` for a tighter per-call bound.
+- Requests built from `ValidatedFetchUrl` disable redirects and ignore proxy
+  environment variables, so a redirect response cannot move the fetch to a URL
+  that bypassed validation.
 - Enabling private-network HTTP does not by itself allow link-local or cloud
   metadata targets. Keeping `deny_cloud_metadata = true` denies those ranges;
   set it to `false` only for explicit, trusted fixtures or deployments that
