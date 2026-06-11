@@ -171,6 +171,8 @@ op run --env-file=target/perf/perf.env -- k6 run perf/k6/auth_deny.js
 
 Or source the env file and call `k6 run` directly. Each scenario writes its
 result to `target/perf/results/<scenario>.json` so baselines can be diffed.
+Set `REGISTRY_NOTARY_NO_THRESHOLD=1` only for CI smoke or wiring checks where
+the goal is to verify that the scenario runs, not to enforce capacity targets.
 
 ---
 

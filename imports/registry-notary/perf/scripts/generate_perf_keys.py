@@ -46,6 +46,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import sys
 from pathlib import Path
 
@@ -153,7 +154,7 @@ def build_env_lines(
         "#",
         "# Issuer signing key: JSON-encoded Ed25519 private JWK.",
         "# Notary validates this at startup even when issuance is not exercised.",
-        f"REGISTRY_NOTARY_ISSUER_JWK={issuer_jwk}",
+        f"REGISTRY_NOTARY_ISSUER_JWK={shlex.quote(issuer_jwk)}",
     ]
 
 
@@ -165,6 +166,15 @@ def env_values_from_lines(lines: list[str]) -> dict[str, str]:
         key, value = line.split("=", 1)
         values[key] = value
     return values
+
+
+def remove_stale_audit_logs(env_path: Path) -> int:
+    """Remove generated perf audit chains invalidated by a new hash secret."""
+    removed = 0
+    for path in env_path.parent.glob("registry-notary-audit-*.jsonl"):
+        path.unlink()
+        removed += 1
+    return removed
 
 
 def refresh_config_commitments(values: dict[str, str]) -> int:
@@ -293,9 +303,12 @@ def main() -> None:
 
     env_path.write_text(env_content, encoding="utf-8")
     os.chmod(env_path, 0o600)
+    removed_audit_logs = remove_stale_audit_logs(env_path)
     updated_configs = refresh_config_commitments(env_values_from_lines(env_lines))
 
     print(f"Wrote: {env_path}")
+    if removed_audit_logs:
+        print(f"Removed {removed_audit_logs} stale perf audit log file(s)")
     if updated_configs:
         print(f"Updated fingerprint commitments in {updated_configs} perf config files")
     print("Variables written:")

@@ -192,6 +192,7 @@ limits:
   max_output_bytes: 1048576
   max_request_bytes: 16384
   max_query_parameter_bytes: 1024
+  max_batch_items: 100
   liveness_window_ms: 30000
   retry_after_seconds: 1
 openfn:
@@ -220,6 +221,7 @@ sources:
       max_in_flight: 2
     workflow:
       start: prepare_request
+      batch_mode: per_item
       steps:
         - id: prepare_request
           expression: /opt/openfn/jobs/prepare-person-request.js
@@ -265,8 +267,17 @@ version exactly matches the configured pin.
 The production worker script is [workers/openfn_worker.mjs](workers/openfn_worker.mjs).
 Install its pinned dependencies from [workers/package.json](workers/package.json)
 inside the sidecar image and preinstall each configured adaptor in the same
-Node package root. Each source uses a `workflow.steps` plan for an OpenFn runtime
-workflow. Workflow steps use the OpenFn runtime `next` edge map, including
+Node package root. The image includes the local
+`@registry/notary-openfn` adaptor package from
+[workers/adaptors/registry-notary](workers/adaptors/registry-notary). Use it in
+OpenFn jobs when authors should work with Registry Notary concepts instead of
+the sidecar wire format. It exposes helpers such as `assertNotaryRequest`,
+`lookup`, `requestedFields`, `returnRecords`, `assertBatchRequest`,
+`batchItems`, `batchItemLookup`, and `returnBatchItems`, and re-exports
+`fn` from `@openfn/language-common` for simple jobs.
+
+Each source uses a `workflow.steps` plan for an OpenFn runtime workflow.
+Workflow steps use the OpenFn runtime `next` edge map, including
 boolean and conditional edges. Linear flows and mutually exclusive branches are
 supported when each lookup produces exactly one final leaf state. Join/merge
 aggregation is not automatic: Lightning-style merge runs the target once per
@@ -297,16 +308,20 @@ POST /v1/datasets/{dataset}/entities/{entity}/records:batchMatch
 
 Source batch behavior is explicit:
 
-- `batch.mode: sequential_lookup` is the default compatibility mode. The sidecar
-  sends one batch worker request, but the worker runs the configured lookup
-  workflow once per item. This reduces HTTP chatter between Notary and the
-  sidecar, but it does not reduce calls to the upstream registry.
-- `batch.mode: workflow_batch` runs the configured OpenFn workflow once with the
-  full batch in `state.data.items` and the query signature in
+- `batch_mode: per_item` in the source workflow, or request-level
+  `batch.mode: sequential_lookup`, is the default compatibility mode. The
+  sidecar sends one batch worker request, but the worker runs the configured
+  lookup workflow once per item. This reduces HTTP chatter between Notary and
+  the sidecar, but it does not reduce calls to the upstream registry.
+- `batch_mode: native` in the source workflow, or request-level
+  `batch.mode: workflow_batch`, runs the configured OpenFn workflow once with
+  the full batch in `state.data.items` and the query signature in
   `state.data.query_signature`. Use this only for source jobs that intentionally
   translate a batch into a backend-supported bulk API, for example a target
   search endpoint or bulk read endpoint. A workflow that still loops and calls
-  the target once per item is not a real upstream batch optimization.
+  the target once per item is not a real upstream batch optimization. Native
+  workflows should usually return through `returnBatchItems` from
+  `@registry/notary-openfn`.
 
 Each source can also set `limits.max_in_flight`. When all permits for that source
 are in use, the sidecar returns `503` with `Retry-After` before dispatching a
@@ -326,6 +341,10 @@ registry_notary_openfn_sidecar_source_permits{source_id="openfn_crvs",state="in_
 
 Metrics labels intentionally include only `source_id` and outcome. They must not
 include credentials, lookup values, correlation IDs, or target URLs.
+
+The smoke fixture
+[examples/jobs/registry-notary-native-batch-person-lookup.js](examples/jobs/registry-notary-native-batch-person-lookup.js)
+shows native batch authoring with `@registry/notary-openfn`.
 
 ## Worker Protocol
 

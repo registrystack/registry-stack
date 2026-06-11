@@ -142,10 +142,10 @@ export function nextSubjectId(vu, iter) {
 
 export function targetForSubjectId(subjectId) {
   return {
-    type: 'Person',
+    type: 'person',
     identifiers: [
       {
-        scheme: 'NATIONAL_ID',
+        scheme: 'national_id',
         value: subjectId,
       },
     ],
@@ -186,6 +186,9 @@ const GLOBAL_THRESHOLDS = {
 };
 
 export function thresholdsFor(key) {
+  if (__ENV.REGISTRY_NOTARY_NO_THRESHOLD === '1') {
+    return GLOBAL_THRESHOLDS;
+  }
   const specific = THRESHOLDS[key] || {};
   return Object.assign({}, specific, GLOBAL_THRESHOLDS);
 }

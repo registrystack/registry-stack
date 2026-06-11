@@ -17,6 +17,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  K6_DOCKER_IMAGE: grafana/k6:0.57.0
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
   REGISTRY_PLATFORM_REF: 05a03973c3048b4d98d22cb29a55837f62594c12
   CROSSWALK_REPOSITORY: PublicSchema/crosswalk
@@ -26,13 +27,13 @@ defaults:
   run:
     working-directory: registry-notary
 
-# Smoke-checks the perf scaffolding without running any actual load.
+# Smoke-checks the perf scaffolding with a short CI-sized k6 run.
 # It verifies:
 #   1. The Criterion benches compile (`cargo bench --no-run`).
 #   2. Every k6 scenario and shared lib passes `node --check`.
 #   3. Perf Python scripts, source stub, and tests pass.
-# It does NOT install k6 or execute load scenarios; use perf/README.md for
-# the baseline capture workflow.
+#   4. A short small-profile k6 smoke runs against the release server and stub.
+# Use perf/README.md for the longer baseline capture workflow.
 
 jobs:
   perf-smoke:
@@ -82,6 +83,12 @@ jobs:
       - name: Compile Criterion benches
         run: cargo bench --no-run --workspace --all-features
 
+      - name: Build release binary for k6 smoke
+        run: cargo build --release -p registry-notary-bin
+
+      - name: Generate perf credentials
+        run: uv run perf/scripts/generate_perf_keys.py --env-file target/perf/perf.env --force
+
       - name: Syntax-check every k6 scenario
         run: |
           set -euo pipefail
@@ -103,3 +110,54 @@ jobs:
 
       - name: Run perf Python tests
         run: uv run --project perf python -m pytest
+
+      - name: Pull k6 image
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if docker pull "$K6_DOCKER_IMAGE"; then
+              exit 0
+            fi
+            sleep "$((attempt * 15))"
+          done
+          docker pull "$K6_DOCKER_IMAGE"
+
+      - name: Run small k6 smoke
+        run: |
+          set -euo pipefail
+          mkdir -p target/perf/reports target/perf/results
+          set -a
+          . target/perf/perf.env
+          set +a
+          uv run perf/stub/source_stub.py --profile small --bind 127.0.0.1:14256 >target/perf/source-stub-smoke.log 2>&1 &
+          stub_pid="$!"
+          trap 'kill "${notary_pid:-}" "$stub_pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 150); do
+            if curl -fsS http://127.0.0.1:14256/health >/dev/null; then
+              break
+            fi
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:14256/health >/dev/null
+          target/release/registry-notary --config perf/config/small.yaml >target/perf/notary-smoke.log 2>&1 &
+          notary_pid="$!"
+          for _ in $(seq 1 150); do
+            if curl -fsS -H "Authorization: Bearer ${REGISTRY_NOTARY_BEARER_TOKEN}" http://127.0.0.1:14255/v1/claims >/dev/null; then
+              break
+            fi
+            sleep 0.2
+          done
+          curl -fsS -H "Authorization: Bearer ${REGISTRY_NOTARY_BEARER_TOKEN}" http://127.0.0.1:14255/v1/claims >/dev/null
+          for scenario in list_claims evaluate_extract; do
+            docker run --rm --network host \
+              --env-file target/perf/perf.env \
+              -e REGISTRY_NOTARY_DURATION=5s \
+              -e REGISTRY_NOTARY_VUS=2 \
+              -e REGISTRY_NOTARY_PROFILE=small \
+              -e REGISTRY_NOTARY_SUBJECT_COUNT=1000 \
+              -e REGISTRY_NOTARY_NO_THRESHOLD=1 \
+              -e K6_SUMMARY_TREND_STATS=min,med,avg,max,p\(90\),p\(95\),p\(99\) \
+              -v "$PWD:/workspace" \
+              -w /workspace \
+              "$K6_DOCKER_IMAGE" run "perf/k6/${scenario}.js"
+          done

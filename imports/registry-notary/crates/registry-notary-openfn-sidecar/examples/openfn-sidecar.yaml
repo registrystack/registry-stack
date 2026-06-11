@@ -18,6 +18,7 @@ limits:
   max_output_bytes: 1048576
   max_request_bytes: 16384
   max_query_parameter_bytes: 1024
+  max_batch_items: 100
   liveness_window_ms: 30000
   retry_after_seconds: 1
 openfn:
@@ -40,6 +41,7 @@ sources:
     entity: civil_person
     workflow:
       start: prepare_lookup
+      batch_mode: per_item
       steps:
         - id: prepare_lookup
           expression: ./crates/registry-notary-openfn-sidecar/examples/jobs/common-prepare-lookup.js
