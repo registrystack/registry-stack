@@ -517,8 +517,7 @@ fn aggregate_distribution_representations(
     {
         let mut representations = representations;
         if let Some(collection_id) = aggregate_edr_collection_id(dataset, aggregate) {
-            let collection_url =
-                format!("{base_url}/ogc/edr/v1/collections/{collection_id}");
+            let collection_url = format!("{base_url}/ogc/edr/v1/collections/{collection_id}");
             let area_url = format!("{collection_url}/area");
             representations.push(AggregateRepresentationMetadata {
                 format: "ogc-edr-area",

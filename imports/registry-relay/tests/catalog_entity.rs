@@ -979,10 +979,8 @@ fn dcat_spatial_aggregate_includes_ogc_edr_distribution_and_service() {
         .expect("dcat distributions");
 
     // The distribution's accessURL is the area query endpoint (the actual data access URL).
-    let area_url =
-        "https://data.example.test/ogc/edr/v1/collections/regional_counts_area/area";
-    let collection_url =
-        "https://data.example.test/ogc/edr/v1/collections/regional_counts_area";
+    let area_url = "https://data.example.test/ogc/edr/v1/collections/regional_counts_area/area";
+    let collection_url = "https://data.example.test/ogc/edr/v1/collections/regional_counts_area";
 
     let edr = aggregate_distribution_by_access_url(distributions, area_url);
 
