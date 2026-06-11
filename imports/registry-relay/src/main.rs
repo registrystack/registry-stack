@@ -36,8 +36,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Extension;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use datafusion::execution::context::SessionContext;
 use registry_platform_audit::AuditChainProfile;
+use registry_platform_authcommon::{
+    credential_fingerprint_commitment, fingerprint_api_key, CredentialCommitmentContext,
+    CredentialProduct, CredentialType,
+};
 use registry_relay::audit::{AuditPipeline, FileSink, StdoutSink, SyslogSink};
 use registry_relay::auth::middleware::{AuthProviderRef, RuntimeAuthProvider};
 use registry_relay::auth::runtime::build_auth;
@@ -72,9 +77,13 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 const CONFIG_FLAG: &str = "--config";
 const ENV_FILE_FLAG: &str = "--env-file";
 const BIND_FLAG: &str = "--bind";
+const ID_FLAG: &str = "--id";
 
 /// Top-level command for shell-free container liveness probing.
 const HEALTHCHECK_COMMAND: &str = "healthcheck";
+
+/// Generates a standalone API key and its governed config commitment.
+const GENERATE_API_KEY_COMMAND: &str = "generate-api-key";
 
 /// Top-level namespace for operator configuration commands.
 const CONFIG_COMMAND: &str = "config";
@@ -121,8 +130,14 @@ enum CliCommand {
         url: String,
         timeout: Duration,
     },
+    GenerateApiKey(GenerateApiKeyCommand),
     ConfigVerifyBundle(ConfigVerifyBundleCommand),
     ConfigApplyBundle(ConfigApplyBundleCommand),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GenerateApiKeyCommand {
+    id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -216,6 +231,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         CliCommand::Healthcheck { url, timeout } => {
             run_healthcheck(&url, timeout).await?;
             println!("registry-relay healthcheck ok");
+            Ok(())
+        }
+        CliCommand::GenerateApiKey(command) => {
+            println!("{}", generate_api_key_output(&command.id)?);
             Ok(())
         }
         CliCommand::ConfigVerifyBundle(command) => run_config_verify_bundle(command).await,
@@ -610,6 +629,11 @@ fn parse_cli_command_from(args: Vec<String>) -> Result<CliCommand, CliError> {
     let rest: Vec<String> = args.collect();
     if rest.first().is_some_and(|arg| arg == HEALTHCHECK_COMMAND) {
         parse_healthcheck_command(&rest[1..])
+    } else if rest
+        .first()
+        .is_some_and(|arg| arg == GENERATE_API_KEY_COMMAND)
+    {
+        parse_generate_api_key_command(&rest[1..])
     } else if rest.first().is_some_and(|arg| arg == CONFIG_COMMAND) {
         parse_config_command(&rest[1..])
     } else {
@@ -657,6 +681,29 @@ fn parse_serve_command(args: &[String]) -> Result<CliCommand, CliError> {
         env_file,
         bind_override,
     })
+}
+
+fn parse_generate_api_key_command(args: &[String]) -> Result<CliCommand, CliError> {
+    let mut id: Option<String> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if let Some(value) = flag_value(arg, ID_FLAG) {
+            id = Some(required_api_key_id_value(ID_FLAG, value)?);
+        } else if arg == ID_FLAG {
+            index += 1;
+            id = Some(required_api_key_id_arg(args, index, ID_FLAG)?);
+        } else {
+            return Err(CliError(format!(
+                "unknown {GENERATE_API_KEY_COMMAND} argument: {arg}"
+            )));
+        }
+        index += 1;
+    }
+
+    Ok(CliCommand::GenerateApiKey(GenerateApiKeyCommand {
+        id: require_flag(id, ID_FLAG)?,
+    }))
 }
 
 fn parse_config_command(args: &[String]) -> Result<CliCommand, CliError> {
@@ -908,6 +955,30 @@ fn required_string_value(flag: &str, value: &str) -> Result<String, CliError> {
     Ok(value.to_string())
 }
 
+fn required_api_key_id_arg(args: &[String], index: usize, flag: &str) -> Result<String, CliError> {
+    let Some(value) = args.get(index) else {
+        return Err(CliError(format!(
+            "{flag} requires a lower-snake API key id"
+        )));
+    };
+    required_api_key_id_value(flag, value)
+}
+
+fn required_api_key_id_value(flag: &str, value: &str) -> Result<String, CliError> {
+    if !is_valid_api_key_id(value) {
+        return Err(CliError(format!(
+            "{flag} requires a lower-snake API key id"
+        )));
+    }
+    Ok(value.to_string())
+}
+
+fn is_valid_api_key_id(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(chars.next(), Some('a'..='z'))
+        && chars.all(|ch| matches!(ch, 'a'..='z' | '0'..='9' | '_'))
+}
+
 fn require_flag<T>(value: Option<T>, flag: &str) -> Result<T, CliError> {
     value.ok_or_else(|| CliError(format!("{flag} is required")))
 }
@@ -1086,6 +1157,27 @@ async fn run_healthcheck(
     Ok(())
 }
 
+fn generate_api_key_output(id: &str) -> Result<String, CliError> {
+    let mut bytes = [0_u8; registry_platform_authcommon::MIN_API_KEY_ENTROPY_BYTES];
+    getrandom::fill(&mut bytes)
+        .map_err(|err| CliError(format!("failed to generate API key material: {err}")))?;
+    Ok(render_generated_api_key(id, &bytes))
+}
+
+fn render_generated_api_key(id: &str, bytes: &[u8]) -> String {
+    let key = URL_SAFE_NO_PAD.encode(bytes);
+    let fingerprint = fingerprint_api_key(&key);
+    let commitment = credential_fingerprint_commitment(
+        CredentialCommitmentContext {
+            product: CredentialProduct::RegistryRelay,
+            credential_type: CredentialType::ApiKey,
+            credential_id: id,
+        },
+        &fingerprint,
+    );
+    format!("api_key_id={id}\napi_key={key}\nfingerprint={fingerprint}\ncommitment={commitment}")
+}
+
 /// Instantiate the configured audit sink.
 fn build_audit_sink(config: &Config) -> Result<Arc<AuditPipeline>, Error> {
     let sink: Arc<dyn registry_platform_audit::AuditSink> = match &config.audit.sink {
@@ -1179,9 +1271,10 @@ async fn shutdown_signal() {
 mod tests {
     use super::{
         build_audit_sink, compile_relay_runtime, config_apply_bundle_request_body,
-        load_env_file_arg, parse_cli_command_from, parse_env_file_value, run_config_apply_bundle,
-        run_healthcheck, CliCommand, ConfigApplyBundleCommand, ConfigVerifyBundleSource,
-        OperationalLogFormat, DEFAULT_HEALTHCHECK_TIMEOUT_MS, DEFAULT_HEALTHCHECK_URL,
+        load_env_file_arg, parse_cli_command_from, parse_env_file_value, render_generated_api_key,
+        run_config_apply_bundle, run_healthcheck, CliCommand, ConfigApplyBundleCommand,
+        ConfigVerifyBundleSource, GenerateApiKeyCommand, OperationalLogFormat,
+        DEFAULT_HEALTHCHECK_TIMEOUT_MS, DEFAULT_HEALTHCHECK_URL,
     };
     use axum::extract::State;
     use axum::http::{HeaderMap, StatusCode};
@@ -1493,6 +1586,46 @@ audit:
 
         std::env::remove_var("REGISTRY_RELAY_BIND");
         std::env::remove_var("REGISTRY_RELAY_ENV_FILE");
+    }
+
+    #[test]
+    fn generate_api_key_cli_accepts_id() {
+        let command = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "generate-api-key",
+            "--id=operator_reader",
+        ]))
+        .expect("generate command parses");
+
+        assert_eq!(
+            command,
+            CliCommand::GenerateApiKey(GenerateApiKeyCommand {
+                id: "operator_reader".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn generate_api_key_cli_rejects_invalid_id() {
+        let err = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "generate-api-key",
+            "--id",
+            "OperatorReader",
+        ]))
+        .expect_err("uppercase id rejected");
+
+        assert_eq!(err.to_string(), "--id requires a lower-snake API key id");
+    }
+
+    #[test]
+    fn generated_api_key_output_contains_fingerprint_and_commitment() {
+        let output = render_generated_api_key("operator_reader", &[7_u8; 32]);
+
+        assert!(output.contains("api_key_id=operator_reader\n"));
+        assert!(output.contains("api_key=BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc\n"));
+        assert!(output.contains("fingerprint=sha256:"));
+        assert!(output.contains("commitment=sha256:"));
     }
 
     #[test]

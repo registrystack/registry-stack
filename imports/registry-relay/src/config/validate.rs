@@ -1822,8 +1822,8 @@ fn validate_env_vars_and_hashes(config: &Config) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// Validate a high-entropy API key fingerprint. Raw API keys are random
-/// 32-byte values generated out-of-band; configs store only
+/// Validate a high-entropy API key fingerprint. Raw API keys are generated
+/// as at least 32 bytes of random material; configs store only
 /// `sha256:<64 lowercase hex chars>` so request authentication is a
 /// digest plus a map lookup.
 #[cfg(test)]
