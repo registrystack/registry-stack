@@ -166,6 +166,146 @@ refuses: it will not issue a credential for a subject you did not authenticate a
 be talked into vouching for someone else. For more on this service, see
 [Registry Notary](../../products/registry-notary/).
 
+### Developer API round-trip
+
+For a pure API credential flow, use the hosted DHIS2 Notary. This path does not use the browser
+wallet sign-in. It evaluates DHIS2 child-program claims, issues an `application/dc+sd-jwt`
+credential, fetches the issuer JWKS, verifies the Ed25519 signature, and checks that each disclosure
+hash is listed in the issuer-signed JWT.
+
+Set the hosted Notary URL and load the current demo bearer token from the lab JSON:
+
+```sh
+export DHIS2_NOTARY_URL="https://dhis2-notary.lab.registrystack.org"
+export DHIS2_PURPOSE="https://demo.example.gov/purpose/dhis2-openfn-health-evidence"
+export DHIS2_EVIDENCE_CLIENT_BEARER="$(
+  curl -fsS https://lab.registrystack.org/api/lab.json |
+    jq -r '.credentials[] | select(.id == "dhis2-bearer") | .token'
+)"
+```
+
+Evaluate the credential claims for the live demo tracked entity:
+
+```sh
+cat > evaluation-request.json <<'JSON'
+{
+  "target": {
+    "type": "TrackedEntity",
+    "identifiers": [
+      { "scheme": "dhis2_tracked_entity", "value": "PQfMcpmXeFE" }
+    ]
+  },
+  "claims": [
+    "dhis2-tracked-entity-first-name",
+    "dhis2-tracked-entity-last-name",
+    "dhis2-child-program-active"
+  ],
+  "disclosure": "value",
+  "format": "application/dc+sd-jwt"
+}
+JSON
+
+curl -fsS -X POST "$DHIS2_NOTARY_URL/v1/evaluations" \
+  -H "Authorization: Bearer $DHIS2_EVIDENCE_CLIENT_BEARER" \
+  -H "Content-Type: application/json" \
+  -H "Data-Purpose: $DHIS2_PURPOSE" \
+  --data @evaluation-request.json \
+  -o evaluation.json
+
+jq '.results[] | {claim_id, value, evaluation_id, format}' evaluation.json
+```
+
+Issue the SD-JWT VC from that evaluation:
+
+```sh
+EVALUATION_ID="$(jq -r '.results[0].evaluation_id' evaluation.json)"
+
+jq -n --arg evaluation_id "$EVALUATION_ID" '{
+  evaluation_id: $evaluation_id,
+  credential_profile: "dhis2_child_program_sd_jwt",
+  format: "application/dc+sd-jwt",
+  claims: [
+    "dhis2-tracked-entity-first-name",
+    "dhis2-tracked-entity-last-name",
+    "dhis2-child-program-active"
+  ],
+  disclosure: "value"
+}' > credential-request.json
+
+curl -fsS -X POST "$DHIS2_NOTARY_URL/v1/credentials" \
+  -H "Authorization: Bearer $DHIS2_EVIDENCE_CLIENT_BEARER" \
+  -H "Content-Type: application/json" \
+  --data @credential-request.json \
+  -o credential.json
+
+jq '{credential_id, credential_profile, issuer, format, disclosure_count: (.disclosures | length)}' credential.json
+```
+
+Fetch the issuer keys and verify the credential:
+
+```sh
+curl -fsS "$DHIS2_NOTARY_URL/.well-known/evidence/jwks.json" \
+  -H "Authorization: Bearer $DHIS2_EVIDENCE_CLIENT_BEARER" \
+  -o jwks.json
+
+node <<'NODE'
+const { createHash, createPublicKey, verify } = require('node:crypto');
+const { readFileSync } = require('node:fs');
+
+const credential = JSON.parse(readFileSync('credential.json', 'utf8'));
+const jwks = JSON.parse(readFileSync('jwks.json', 'utf8'));
+const [header64, payload64, signature64] = credential.issuer_signed_jwt.split('.');
+const header = JSON.parse(Buffer.from(header64, 'base64url').toString('utf8'));
+const payload = JSON.parse(Buffer.from(payload64, 'base64url').toString('utf8'));
+const keys = Array.isArray(jwks.keys) ? jwks.keys : [];
+const key = keys.find((candidate) => candidate.kid === header.kid);
+
+if (!key) throw new Error(`Missing JWKS key ${header.kid}`);
+
+const signed = Buffer.from(`${header64}.${payload64}`);
+const signature = Buffer.from(signature64, 'base64url');
+const signatureValid = verify(null, signed, createPublicKey({ key, format: 'jwk' }), signature);
+
+if (!signatureValid) throw new Error('Bad issuer signature');
+
+const disclosureDigests = new Set(payload._sd || []);
+const disclosureClaims = [];
+
+for (const disclosure of credential.disclosures || []) {
+  const digest = createHash('sha256').update(disclosure).digest('base64url');
+  if (!disclosureDigests.has(digest)) {
+    throw new Error(`Disclosure digest not present in _sd: ${digest}`);
+  }
+  const decoded = JSON.parse(Buffer.from(disclosure, 'base64url').toString('utf8'));
+  disclosureClaims.push(decoded[1]);
+}
+
+console.log(JSON.stringify({
+  issuer: payload.iss,
+  vct: payload.vct,
+  signature_valid: signatureValid,
+  disclosure_count: disclosureClaims.length,
+  disclosure_claims: disclosureClaims.sort()
+}, null, 2));
+NODE
+```
+
+Expected verification summary:
+
+```json
+{
+  "issuer": "did:web:dhis2-notary.lab.registrystack.org",
+  "vct": "https://dhis2-notary.lab.registrystack.org/credentials/dhis2/child-program/v1",
+  "signature_valid": true,
+  "disclosure_count": 3,
+  "disclosure_claims": [
+    "dhis2-child-program-active",
+    "dhis2-tracked-entity-first-name",
+    "dhis2-tracked-entity-last-name"
+  ]
+}
+```
+
 ## Now run your own
 
 You have seen the two payoffs against the hosted lab. To run the same shapes on your own machine,
