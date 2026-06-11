@@ -1021,10 +1021,11 @@ fn abstract_release_path(path: &str, config: &Config) -> String {
                 path = path.replace(&format!("/entities/{}", entity.name), "/entities/{entity}");
             }
             for relationship in &entity.relationships {
-                path = path.replace(
-                    &format!("/relationships/{}", relationship.name),
-                    "/relationships/{relationship}",
-                );
+                let relationship_path = format!("/relationships/{}", relationship.name);
+                if path.ends_with(&relationship_path) {
+                    let prefix_len = path.len() - relationship_path.len();
+                    path.replace_range(prefix_len.., "/relationships/{relationship}");
+                }
             }
         }
     }
@@ -4690,6 +4691,29 @@ mod tests {
             doc["paths"]["/v1/datasets/social_registry/aggregates/{aggregate_id}/query"]["post"]
                 .is_object(),
             "POST must stay documented on the /query path"
+        );
+    }
+
+    #[test]
+    fn release_path_abstraction_only_replaces_terminal_relationship_segment() {
+        let mut config = load_example_config();
+        let household = config.datasets[0]
+            .entities
+            .iter_mut()
+            .find(|entity| entity.name == "household")
+            .expect("household entity");
+        let mut prefix_relationship = household.relationships[0].clone();
+        prefix_relationship.name = "member".to_string();
+        household.relationships.push(prefix_relationship);
+
+        let path = abstract_release_path(
+            "/v1/datasets/social_registry/entities/household/records/{id}/relationships/members",
+            &config,
+        );
+
+        assert_eq!(
+            path,
+            "/v1/datasets/{dataset_id}/entities/{entity}/records/{id}/relationships/{relationship}"
         );
     }
 
