@@ -138,6 +138,13 @@ def main() -> int:
     failures.extend(
         require(
             build_script,
+            "warning: CEL_MAPPING_DIR is deprecated, please use CROSSWALK_DIR instead",
+            "deprecated CEL_MAPPING_DIR fallback warning",
+        )
+    )
+    failures.extend(
+        require(
+            build_script,
             '--build-context "registry-manifest=$manifest_dir"',
             "registry-manifest build context",
         )
@@ -197,6 +204,13 @@ def main() -> int:
             ci_workflow,
             release_features,
             "CI container build release feature list",
+        )
+    )
+    failures.extend(
+        require(
+            ROOT / "scripts" / "check-platform-compat.sh",
+            "warning: CEL_MAPPING_SOURCE_DIR is deprecated, please use CROSSWALK_SOURCE_DIR instead",
+            "deprecated CEL_MAPPING_SOURCE_DIR fallback warning",
         )
     )
     failures.extend(

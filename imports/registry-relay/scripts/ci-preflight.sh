@@ -45,7 +45,7 @@ keys = (
     "REGISTRY_PLATFORM_REF",
     "REGISTRY_MANIFEST_REPOSITORY",
     "REGISTRY_MANIFEST_REF",
-    "CEL_MAPPING_REPOSITORY",
+    "CROSSWALK_REPOSITORY",
     "CROSSWALK_REF",
 )
 values = {key: set() for key in keys}
@@ -75,7 +75,7 @@ registry_platform_repository=""
 registry_platform_ref=""
 registry_manifest_repository=""
 registry_manifest_ref=""
-cel_mapping_repository=""
+crosswalk_repository=""
 crosswalk_ref=""
 
 while IFS='=' read -r key value; do
@@ -84,7 +84,7 @@ while IFS='=' read -r key value; do
     REGISTRY_PLATFORM_REF) registry_platform_ref="$value" ;;
     REGISTRY_MANIFEST_REPOSITORY) registry_manifest_repository="$value" ;;
     REGISTRY_MANIFEST_REF) registry_manifest_ref="$value" ;;
-    CEL_MAPPING_REPOSITORY) cel_mapping_repository="$value" ;;
+    CROSSWALK_REPOSITORY) crosswalk_repository="$value" ;;
     CROSSWALK_REF) crosswalk_ref="$value" ;;
   esac
 done < <(read_workflow_ref_config)
@@ -144,6 +144,7 @@ checkout_ref \
 if [[ -n "${CROSSWALK_SOURCE_DIR:-}" ]]; then
   crosswalk_source_env="CROSSWALK_SOURCE_DIR"
 elif [[ -n "${CEL_MAPPING_SOURCE_DIR:-}" ]]; then
+  echo "warning: CEL_MAPPING_SOURCE_DIR is deprecated, please use CROSSWALK_SOURCE_DIR instead" >&2
   crosswalk_source_env="CEL_MAPPING_SOURCE_DIR"
 else
   crosswalk_source_env="CROSSWALK_SOURCE_DIR"
@@ -152,10 +153,10 @@ fi
 checkout_ref \
   "crosswalk" \
   "$crosswalk_source_env" \
-  "${repo_root}/../cel-mapping" \
-  "$cel_mapping_repository" \
+  "${repo_root}/../crosswalk" \
+  "$crosswalk_repository" \
   "$crosswalk_ref" \
-  "${tmp_root}/cel-mapping"
+  "${tmp_root}/crosswalk"
 
 cd "$work_root"
 run cargo metadata --locked --all-features --format-version 1 >/dev/null

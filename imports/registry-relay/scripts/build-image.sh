@@ -5,7 +5,12 @@ image="${1:-registry-relay:local}"
 platform_dir="${REGISTRY_PLATFORM_DIR:-../registry-platform}"
 manifest_dir="${REGISTRY_MANIFEST_DIR:-../registry-manifest}"
 manifest_ref="${REGISTRY_MANIFEST_REF:-a2e648aaac864563a3311b9d95b8143afa1b7334}"
-cel_mapping_dir="${CEL_MAPPING_DIR:-../cel-mapping}"
+# CEL_MAPPING_DIR is the deprecated name for CROSSWALK_DIR; remove the fallback
+# once operators have migrated.
+if [ -z "${CROSSWALK_DIR:-}" ] && [ -n "${CEL_MAPPING_DIR:-}" ]; then
+  echo "warning: CEL_MAPPING_DIR is deprecated, please use CROSSWALK_DIR instead" >&2
+fi
+crosswalk_dir="${CROSSWALK_DIR:-${CEL_MAPPING_DIR:-../crosswalk}}"
 
 verify_pinned_git_context() {
   name="$1"
@@ -47,9 +52,9 @@ if [ ! -f "$platform_dir/Cargo.toml" ] || [ ! -d "$platform_dir/crates" ]; then
   exit 1
 fi
 
-if [ ! -f "$cel_mapping_dir/Cargo.toml" ] || [ ! -d "$cel_mapping_dir/crates" ]; then
-  echo "cel-mapping checkout not found at $cel_mapping_dir" >&2
-  echo "Set CEL_MAPPING_DIR or clone cel-mapping next to registry-relay." >&2
+if [ ! -f "$crosswalk_dir/Cargo.toml" ] || [ ! -d "$crosswalk_dir/crates" ]; then
+  echo "crosswalk checkout not found at $crosswalk_dir" >&2
+  echo "Set CROSSWALK_DIR or clone crosswalk next to registry-relay." >&2
   exit 1
 fi
 
@@ -64,7 +69,7 @@ set -- docker buildx build \
   --load \
   --build-context "registry-platform=$platform_dir" \
   --build-context "registry-manifest=$manifest_dir" \
-  --build-context "cel-mapping=$cel_mapping_dir" \
+  --build-context "crosswalk=$crosswalk_dir" \
   -t "$image"
 
 if [ -n "${REGISTRY_RELAY_FEATURES:-}" ]; then

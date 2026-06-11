@@ -210,9 +210,9 @@ If release notes claim SP DCI, standards CEL mapping, or OGC EDR support, record
 the standards-enabled image tag or digest in the release evidence.
 
 The build requires the pinned `registry-platform`, `registry-manifest`, and
-`cel-mapping` source trees because Relay uses sibling path dependencies. For
+`crosswalk` source trees because Relay uses sibling path dependencies. For
 local builds, keep those checkouts next to this repository or set
-`REGISTRY_PLATFORM_DIR`, `REGISTRY_MANIFEST_DIR`, and `CEL_MAPPING_DIR` before
+`REGISTRY_PLATFORM_DIR`, `REGISTRY_MANIFEST_DIR`, and `CROSSWALK_DIR` before
 running `scripts/build-image.sh`.
 
 Before promoting an image, inspect the effective config and verify that every env-backed `fingerprint.name` is supplied by the runtime environment and matches its signed commitment. Do not bake API keys or API-key hashes into the image.

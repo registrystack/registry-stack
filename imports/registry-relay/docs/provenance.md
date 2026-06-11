@@ -299,7 +299,7 @@ Operators may override those defaults with `context_url`, `schema_url`,
 and `credential_type` under the same `publicschema:` block.
 
 The mapper dependency uses the local Crosswalk crate at
-`../cel-mapping/crates/crosswalk-core` in `Cargo.toml`, matching the
+`../crosswalk/crates/crosswalk-core` in `Cargo.toml`, matching the
 workspace checkout used for release builds.
 Profile overrides do not bypass provenance audit: PublicSchema issuance
 still attaches the `provenance.vc.issued` block, with `claim_type`

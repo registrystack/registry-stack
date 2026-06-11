@@ -9,8 +9,8 @@ COPY --from=registry-platform /Cargo.toml /Cargo.lock /workspace/registry-platfo
 COPY --from=registry-platform /crates /workspace/registry-platform/crates
 COPY --from=registry-manifest /Cargo.toml /README.md /workspace/registry-manifest/
 COPY --from=registry-manifest /crates /workspace/registry-manifest/crates
-COPY --from=cel-mapping /Cargo.toml /Cargo.lock /workspace/cel-mapping/
-COPY --from=cel-mapping /crates /workspace/cel-mapping/crates
+COPY --from=crosswalk /Cargo.toml /Cargo.lock /workspace/crosswalk/
+COPY --from=crosswalk /crates /workspace/crosswalk/crates
 COPY benches ./benches
 COPY resources ./resources
 COPY src ./src

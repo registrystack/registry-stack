@@ -21,7 +21,7 @@ env:
   REGISTRY_PLATFORM_REF: 05a03973c3048b4d98d22cb29a55837f62594c12
   REGISTRY_MANIFEST_REPOSITORY: jeremi/registry-manifest
   REGISTRY_MANIFEST_REF: a2e648aaac864563a3311b9d95b8143afa1b7334
-  CEL_MAPPING_REPOSITORY: PublicSchema/crosswalk
+  CROSSWALK_REPOSITORY: PublicSchema/crosswalk
   CROSSWALK_REF: 54e0f537830837fcd0c9efa87990987b1846931c
 
 # Default the GITHUB_TOKEN granted to each job to read-only on contents.
@@ -61,15 +61,15 @@ jobs:
       - name: Link registry-platform path dependency
         run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
 
-      - name: Checkout cel-mapping
+      - name: Checkout crosswalk
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.CEL_MAPPING_REPOSITORY }}
+          repository: ${{ env.CROSSWALK_REPOSITORY }}
           ref: ${{ env.CROSSWALK_REF }}
-          path: cel-mapping
+          path: crosswalk
 
-      - name: Link cel-mapping path dependency
-        run: ln -s "$GITHUB_WORKSPACE/cel-mapping" "$GITHUB_WORKSPACE/../cel-mapping"
+      - name: Link crosswalk path dependency
+        run: ln -s "$GITHUB_WORKSPACE/crosswalk" "$GITHUB_WORKSPACE/../crosswalk"
 
       - name: Checkout registry-manifest
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -158,15 +158,15 @@ jobs:
       - name: Link registry-platform path dependency
         run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
 
-      - name: Checkout cel-mapping
+      - name: Checkout crosswalk
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.CEL_MAPPING_REPOSITORY }}
+          repository: ${{ env.CROSSWALK_REPOSITORY }}
           ref: ${{ env.CROSSWALK_REF }}
-          path: cel-mapping
+          path: crosswalk
 
-      - name: Link cel-mapping path dependency
-        run: ln -s "$GITHUB_WORKSPACE/cel-mapping" "$GITHUB_WORKSPACE/../cel-mapping"
+      - name: Link crosswalk path dependency
+        run: ln -s "$GITHUB_WORKSPACE/crosswalk" "$GITHUB_WORKSPACE/../crosswalk"
 
       - name: Checkout registry-manifest
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -218,15 +218,15 @@ jobs:
       - name: Link registry-platform path dependency
         run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
 
-      - name: Checkout cel-mapping
+      - name: Checkout crosswalk
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.CEL_MAPPING_REPOSITORY }}
+          repository: ${{ env.CROSSWALK_REPOSITORY }}
           ref: ${{ env.CROSSWALK_REF }}
-          path: cel-mapping
+          path: crosswalk
 
-      - name: Link cel-mapping path dependency
-        run: ln -s "$GITHUB_WORKSPACE/cel-mapping" "$GITHUB_WORKSPACE/../cel-mapping"
+      - name: Link crosswalk path dependency
+        run: ln -s "$GITHUB_WORKSPACE/crosswalk" "$GITHUB_WORKSPACE/../crosswalk"
 
       - name: Checkout registry-manifest
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -326,12 +326,12 @@ jobs:
           token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
           path: registry-platform
 
-      - name: Checkout cel-mapping
+      - name: Checkout crosswalk
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.CEL_MAPPING_REPOSITORY }}
+          repository: ${{ env.CROSSWALK_REPOSITORY }}
           ref: ${{ env.CROSSWALK_REF }}
-          path: cel-mapping
+          path: crosswalk
 
       - name: Checkout registry-manifest
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -356,7 +356,7 @@ jobs:
           build-contexts: |
             registry-platform=./registry-platform
             registry-manifest=./registry-manifest
-            cel-mapping=./cel-mapping
+            crosswalk=./crosswalk
           build-args: |
             REGISTRY_RELAY_FEATURES=spdci-api-standards,standards-cel-mapping,ogcapi-features,ogcapi-edr,ogcapi-records
           tags: registry-relay:ci

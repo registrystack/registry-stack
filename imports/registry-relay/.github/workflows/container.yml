@@ -27,7 +27,7 @@ env:
   REGISTRY_PLATFORM_REF: 05a03973c3048b4d98d22cb29a55837f62594c12
   REGISTRY_MANIFEST_REPOSITORY: jeremi/registry-manifest
   REGISTRY_MANIFEST_REF: a2e648aaac864563a3311b9d95b8143afa1b7334
-  CEL_MAPPING_REPOSITORY: PublicSchema/crosswalk
+  CROSSWALK_REPOSITORY: PublicSchema/crosswalk
   CROSSWALK_REF: 54e0f537830837fcd0c9efa87990987b1846931c
   REGISTRY_RELAY_IMAGE: ghcr.io/jeremi/registry-relay
   REGISTRY_RELAY_RELEASE_FEATURES: spdci-api-standards,standards-cel-mapping,ogcapi-features,ogcapi-edr,ogcapi-records
@@ -150,13 +150,13 @@ jobs:
           path: registry-manifest
           persist-credentials: false
 
-      - name: Checkout cel-mapping
+      - name: Checkout crosswalk
         if: steps.channel.outputs.build == 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.CEL_MAPPING_REPOSITORY }}
+          repository: ${{ env.CROSSWALK_REPOSITORY }}
           ref: ${{ env.CROSSWALK_REF }}
-          path: cel-mapping
+          path: crosswalk
           persist-credentials: false
 
       - name: Build registry-relay image
@@ -172,7 +172,7 @@ jobs:
           docker build \
             --build-context registry-platform=registry-platform \
             --build-context registry-manifest=registry-manifest \
-            --build-context cel-mapping=cel-mapping \
+            --build-context crosswalk=crosswalk \
             --build-arg "REGISTRY_RELAY_FEATURES=$REGISTRY_RELAY_RELEASE_FEATURES" \
             --file registry-relay/Dockerfile \
             --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \

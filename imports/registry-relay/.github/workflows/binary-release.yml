@@ -20,7 +20,7 @@ env:
   REGISTRY_PLATFORM_REF: 05a03973c3048b4d98d22cb29a55837f62594c12
   REGISTRY_MANIFEST_REPOSITORY: jeremi/registry-manifest
   REGISTRY_MANIFEST_REF: a2e648aaac864563a3311b9d95b8143afa1b7334
-  CEL_MAPPING_REPOSITORY: PublicSchema/crosswalk
+  CROSSWALK_REPOSITORY: PublicSchema/crosswalk
   CROSSWALK_REF: 54e0f537830837fcd0c9efa87990987b1846931c
 
 jobs:
@@ -80,12 +80,12 @@ jobs:
           path: registry-manifest
           persist-credentials: false
 
-      - name: Checkout cel-mapping
+      - name: Checkout crosswalk
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.CEL_MAPPING_REPOSITORY }}
+          repository: ${{ env.CROSSWALK_REPOSITORY }}
           ref: ${{ env.CROSSWALK_REF }}
-          path: cel-mapping
+          path: crosswalk
           persist-credentials: false
 
       - name: Install Rust stable
