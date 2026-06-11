@@ -1955,6 +1955,14 @@
             "description": "Caller lacks registry_notary:ops_read scope"
           }
         },
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Discover authenticated admin capabilities"
       }
     },
@@ -2061,6 +2069,14 @@
             "description": "Candidate config requires restart and was not applied"
           }
         },
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Attempt to apply a candidate runtime config"
       }
     },
@@ -2149,6 +2165,14 @@
             "description": "Caller lacks registry_notary:admin scope"
           }
         },
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Dry-run a candidate runtime config"
       }
     },
@@ -2237,6 +2261,14 @@
             "description": "Caller lacks registry_notary:admin scope"
           }
         },
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Validate a candidate runtime config"
       }
     },
@@ -2366,6 +2398,14 @@
             "description": "Credential status store is unavailable"
           }
         },
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Update credential lifecycle status"
       }
     },
@@ -2428,6 +2468,14 @@
             "description": "Runtime configuration reload is not supported"
           }
         },
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Report unsupported runtime reload"
       }
     },
