@@ -63,6 +63,7 @@ audit:
 #[tokio::test]
 async fn generated_api_key_round_trips_through_startup_validation() {
     let output = Command::new(env!("CARGO_BIN_EXE_registry-relay"))
+        .env("RUST_LOG", "off")
         .args(["generate-api-key", "--id", "operator_reader"])
         .output()
         .expect("generator command runs");
