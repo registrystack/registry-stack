@@ -63,7 +63,7 @@ auth:
         name: PERF_ADMIN_KEY_HASH
         commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
       scopes:
-        - admin
+        - registry_relay:admin
 
 
 # Provenance signer for VC-JWT response checks.
@@ -79,8 +79,8 @@ provenance:
     entity_record: 24h
   issuer:
     mode: gateway
-    did: did:web:127.0.0.1%3A18080
-    verification_method_id: did:web:127.0.0.1%3A18080#perf-evidence-verification-v1
+    did: did:web:perf.example.test
+    verification_method_id: did:web:perf.example.test#perf-evidence-verification-v1
     signer:
       kind: software
       jwk_env: REGISTRY_RELAY_PROVENANCE_JWK

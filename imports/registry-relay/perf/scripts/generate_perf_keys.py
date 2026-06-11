@@ -51,9 +51,9 @@ KEY_DEFS = [
     ("perf_rows",               "PERF_ROWS_KEY_HASH",               ["clinic_capacity:rows"]),
     ("perf_metadata",           "PERF_METADATA_KEY_HASH",           ["clinic_capacity:metadata"]),
     ("perf_aggregate",          "PERF_AGGREGATE_KEY_HASH",          ["clinic_capacity:aggregate"]),
-    ("perf_no_scope",           "PERF_NO_SCOPE_KEY_HASH",           ["other:metadata"]),
+    ("perf_no_scope",           "PERF_NO_SCOPE_KEY_HASH",           []),
     ("perf_evidence_verification", "PERF_EVIDENCE_VERIFICATION_KEY_HASH", ["clinic_capacity:evidence_verification"]),
-    ("perf_admin",              "PERF_ADMIN_KEY_HASH",              ["admin"]),
+    ("perf_admin",              "PERF_ADMIN_KEY_HASH",              ["registry_relay:admin"]),
 ]
 
 INVALID_TOKEN_VALUE = "not-a-real-token-xxxx"

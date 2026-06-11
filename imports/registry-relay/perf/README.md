@@ -129,7 +129,8 @@ Config files in `perf/config/` mirror these profiles. Each config uses
 (`perf_rows`, `perf_metadata`, `perf_aggregate`, `perf_no_scope`,
 `perf_evidence_verification`, `perf_admin`). The evidence-verification key carries
 `clinic_capacity:evidence_verification` for scope-bound discovery and standards
-adapter checks. The admin key carries `admin` for reload-under-load scenarios.
+adapter checks. The admin key carries `registry_relay:admin` for reload-under-load
+scenarios.
 
 The `large` profile requires roughly 2 GB of memory for the server process.
 The optional 5M tier (`--include-5m`) requires ~8 GB and should only be used on
@@ -201,7 +202,7 @@ correct choice only when freshness is worth the upstream database round trip.
 | `REGISTRY_RELAY_TOKEN_AGGREGATE`          | (generated)              | Token with `clinic_capacity:aggregate` scope           |
 | `REGISTRY_RELAY_TOKEN_NO_SCOPE`           | (generated)              | Valid token with no `clinic_capacity:*` scope          |
 | `REGISTRY_RELAY_TOKEN_EVIDENCE_VERIFICATION` | (generated)              | Token with `clinic_capacity:evidence_verification` scope  |
-| `REGISTRY_RELAY_TOKEN_ADMIN`              | (generated)              | Token with `admin` scope for admin reload scenarios    |
+| `REGISTRY_RELAY_TOKEN_ADMIN`              | (generated)              | Token with `registry_relay:admin` scope for admin reload scenarios |
 | `REGISTRY_RELAY_TOKEN_INVALID`            | `not-a-real-token-xxxx`  | Deliberately invalid token for 401 tests               |
 | `REGISTRY_RELAY_DATASET_ID`               | `clinic_capacity`        | Dataset id used in k6 URL construction                 |
 | `REGISTRY_RELAY_ENTITY`                   | `facility`               | Entity name used in k6 URL construction                |

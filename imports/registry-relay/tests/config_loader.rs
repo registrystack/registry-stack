@@ -311,7 +311,7 @@ fn perf_api_key_scopes_are_explicit_lists() {
                 "perf_aggregate" => vec!["clinic_capacity:aggregate"],
                 "perf_no_scope" => Vec::new(),
                 "perf_evidence_verification" => vec!["clinic_capacity:evidence_verification"],
-                "perf_admin" => vec!["admin"],
+                "perf_admin" => vec!["registry_relay:admin"],
                 other => panic!("{} unexpected perf API key {other}", path.display()),
             };
             assert_eq!(

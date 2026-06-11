@@ -41,7 +41,7 @@ datasets:
         evidence_type: facility_identity_evidence
         issuing_authority:
           id: perf_harness
-          iri: did:web:127.0.0.1%3A18080
+          iri: did:web:perf.example.test
           name: Perf Test Harness
           country: ZZ
         entity: facility
@@ -59,7 +59,7 @@ datasets:
         evidence_type: facility_region_evidence
         issuing_authority:
           id: perf_harness
-          iri: did:web:127.0.0.1%3A18080
+          iri: did:web:perf.example.test
           name: Perf Test Harness
           country: ZZ
         entity: facility
