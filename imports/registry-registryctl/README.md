@@ -2,7 +2,7 @@
 
 `registryctl` is the local adopter CLI for Registry Commons.
 
-Install the latest main snapshot without cloning this repo:
+Install a pinned release without cloning this repo:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/jeremi/registry-registryctl/main/install.sh | sh
@@ -27,15 +27,14 @@ For the full walkthroughs, use the Registry Docs tutorials:
 - [Verify a claim from your registry API](https://docs.registrystack.org/tutorials/verify-claim-registry-api/)
 - [Verify a claim from your own API](https://docs.registrystack.org/tutorials/verify-claim-own-api/)
 
-The installer downloads the `snapshot` release binary for your OS and CPU. To
-install a tagged release instead:
+The installer defaults to `v0.1.0`. To install a different pinned release, set
+`REGISTRYCTL_VERSION`:
 
 ```sh
 REGISTRYCTL_VERSION=vX.Y.Z curl -fsSL https://raw.githubusercontent.com/jeremi/registry-registryctl/main/install.sh | sh
 ```
 
-Snapshot binaries are currently published for Linux x86_64, Linux aarch64, and
-macOS aarch64.
+Binaries are published for Linux x86_64, Linux aarch64, and macOS aarch64.
 
 ## OpenFn sidecar import
 
