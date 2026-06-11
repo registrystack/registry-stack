@@ -125,6 +125,31 @@ jobs:
       - run: cargo run -p registry-notary-bin -- openapi > target/registry-notary.openapi.json
       - name: Free Rust build artifacts before Docker smoke tests
         run: cargo clean
+      - name: Enforce container runtime policy
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+
+          require_literal() {
+            file="$1"
+            literal="$2"
+            if ! grep -Fq "$literal" "$file"; then
+              echo "$file must contain: $literal" >&2
+              exit 1
+            fi
+          }
+
+          require_literal registry-notary/Dockerfile "FROM gcr.io/distroless/cc-debian12:nonroot@sha256:"
+          require_literal registry-notary/Dockerfile 'HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/usr/local/bin/registry-notary", "healthcheck"]'
+          require_literal registry-notary/Dockerfile 'ENTRYPOINT ["/usr/local/bin/registry-notary"]'
+          if awk '/^FROM .* AS runtime$/ {runtime=1; next} runtime && /^RUN / {found=1} END {exit found ? 0 : 1}' registry-notary/Dockerfile; then
+            echo "registry-notary/Dockerfile runtime stage must stay distroless and must not add RUN/package-manager steps." >&2
+            exit 1
+          fi
+
+          require_literal registry-notary/Dockerfile.openfn-sidecar "FROM node:24-bookworm-slim@sha256:"
+          require_literal registry-notary/Dockerfile.openfn-sidecar 'HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["node", "/opt/openfn/container-healthcheck.mjs"]'
+          require_literal registry-notary/Dockerfile.openfn-sidecar 'ENTRYPOINT ["/usr/local/bin/registry-notary-openfn-sidecar"]'
       - name: Build release Docker image
         working-directory: ${{ github.workspace }}
         run: docker build --build-context registry-platform=registry-platform --build-context crosswalk=crosswalk --build-arg REGISTRY_NOTARY_FEATURES=registry-notary-cel,pkcs11 --file registry-notary/Dockerfile --tag registry-notary:ci registry-notary
