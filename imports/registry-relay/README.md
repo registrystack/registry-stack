@@ -70,6 +70,10 @@ just build
 ```
 
 The release binary is written to `target/release/registry-relay`. The full local CI gate is `just ci`.
+Before opening a PR that changes Rust, Cargo, Docker, workflow, perf, or
+companion-repo references, run `just ci-preflight` to check the workflow-pinned
+`registry-platform`, `registry-manifest`, and `crosswalk` commits with locked
+Cargo resolution.
 
 ## Container Image
 
