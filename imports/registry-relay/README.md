@@ -81,7 +81,7 @@ Cargo resolution.
 scripts/build-image.sh registry-relay:local
 ```
 
-The production image is distroless, non-root, and built with no optional Cargo features; standards-enabled images opt in through `REGISTRY_RELAY_FEATURES`. Build steps, sibling-checkout requirements, and promotion gates are in [docs/ops.md](docs/ops.md#build-and-release); image publication, tagging, and signing policy are in [docs/security-assurance.md](docs/security-assurance.md). Release images publish to `ghcr.io/jeremi/registry-relay` from stable `vX.Y.Z` tags only; consume version tags or digests, not `latest`, for rollback guarantees. `Dockerfile.demo` is demo-only and is not release evidence.
+The production image is distroless, non-root, and built with no optional Cargo features; standards-enabled images opt in through `REGISTRY_RELAY_FEATURES`. Build steps, sibling-checkout requirements, and promotion gates are in [docs/ops.md](docs/ops.md#build-and-release); image publication, tagging, and signing policy are in [docs/security-assurance.md](docs/security-assurance.md). Release images publish to `ghcr.io/jeremi/registry-relay` from stable `vX.Y.Z` tags and `registry-stack-technical-preview-<date-or-version>` tags; consume release tags or digests, not `latest`, for rollback guarantees. `Dockerfile.demo` is demo-only and is not release evidence.
 
 ## Operating With Registry Notary
 

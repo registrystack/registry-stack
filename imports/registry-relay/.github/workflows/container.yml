@@ -3,7 +3,7 @@ name: Container Image
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    tags: ["v*", "registry-stack-technical-preview-*"]
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
@@ -36,6 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write
       packages: write
     steps:
       - name: Decide image channel
@@ -51,20 +52,27 @@ jobs:
           tags=("$REGISTRY_RELAY_IMAGE:ci-${GITHUB_SHA}")
 
           if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF_TYPE" == "tag" ]]; then
-            if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "Release image tags must be stable semver tags like v0.1.2." >&2
-              exit 1
-            fi
-            version="${GITHUB_REF_NAME#v}"
-            IFS=. read -r major minor patch <<< "$version"
             channel=release
             publish=true
-            tags=(
-              "$REGISTRY_RELAY_IMAGE:v${major}.${minor}.${patch}"
-              "$REGISTRY_RELAY_IMAGE:v${major}.${minor}"
-              "$REGISTRY_RELAY_IMAGE:v${major}"
-              "$REGISTRY_RELAY_IMAGE:latest"
-            )
+            if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              version="${GITHUB_REF_NAME#v}"
+              IFS=. read -r major minor patch <<< "$version"
+              tags=(
+                "$REGISTRY_RELAY_IMAGE:sha-${GITHUB_SHA}"
+                "$REGISTRY_RELAY_IMAGE:v${major}.${minor}.${patch}"
+                "$REGISTRY_RELAY_IMAGE:v${major}.${minor}"
+                "$REGISTRY_RELAY_IMAGE:v${major}"
+                "$REGISTRY_RELAY_IMAGE:latest"
+              )
+            elif [[ "$GITHUB_REF_NAME" =~ ^registry-stack-technical-preview-[0-9A-Za-z][0-9A-Za-z._-]*$ ]]; then
+              tags=(
+                "$REGISTRY_RELAY_IMAGE:sha-${GITHUB_SHA}"
+                "$REGISTRY_RELAY_IMAGE:${GITHUB_REF_NAME}"
+              )
+            else
+              echo "Release image tags must be stable semver tags like v0.1.2 or registry-stack-technical-preview-<date-or-version>." >&2
+              exit 1
+            fi
           elif [[ "$GITHUB_EVENT_NAME" == "schedule" || "$PUBLISH_SNAPSHOT_INPUT" == "true" ]]; then
             if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
               echo "Snapshot publishing is only allowed from refs/heads/main; got $GITHUB_REF."
@@ -272,11 +280,55 @@ jobs:
           GHCR_TOKEN: ${{ github.token }}
         run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin
 
+      - name: Install cosign
+        if: steps.channel.outputs.publish == 'true'
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+
       - name: Push image
         if: steps.channel.outputs.publish == 'true'
         run: |
+          set -euo pipefail
           while IFS= read -r tag; do
             [ -n "$tag" ] && docker push "$tag"
+          done <<'EOF'
+          ${{ steps.channel.outputs.tags }}
+          EOF
+
+      - name: Sign image tags
+        if: steps.channel.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && cosign sign --yes "$tag"
+          done <<'EOF'
+          ${{ steps.channel.outputs.tags }}
+          EOF
+
+      - name: Verify published image aliases and signatures
+        if: steps.channel.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          expected_digest=""
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            digest="$(
+              docker buildx imagetools inspect "$tag" \
+                | awk '/^Digest:/ {print $2; exit}'
+            )"
+            if [ -z "$digest" ]; then
+              echo "Could not resolve digest for $tag" >&2
+              exit 1
+            fi
+            if [ -z "$expected_digest" ]; then
+              expected_digest="$digest"
+            elif [ "$digest" != "$expected_digest" ]; then
+              echo "$tag resolves to $digest, expected $expected_digest" >&2
+              exit 1
+            fi
+            cosign verify \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container.yml@${GITHUB_REF}" \
+              "$tag" >/dev/null
           done <<'EOF'
           ${{ steps.channel.outputs.tags }}
           EOF

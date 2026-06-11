@@ -15,9 +15,9 @@
 //! ## What this module does *not* do
 //!
 //! * No logging of credential bytes at any level.
-//! * No minting of new keys. Operators generate raw keys outside the
-//!   gateway, store only `sha256:<hex>` fingerprints in secret storage,
-//!   and rotate by rolling config plus secret changes together.
+//! * No retention of generated keys. Operators can use the relay binary's
+//!   provisioning command, then store only `sha256:<hex>` fingerprints in
+//!   secret storage and rotate by rolling config plus secret changes together.
 //! * No credential source is preferred for security reasons. When both
 //!   headers are present, `Authorization` wins because it is the standard
 //!   HTTP auth surface.
