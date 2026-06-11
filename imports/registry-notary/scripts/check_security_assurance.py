@@ -393,21 +393,55 @@ def check_openapi_manifest_coverage(path: Path) -> None:
         paths = {}
     if not isinstance(paths, dict):
         fail("OpenAPI paths must be an object")
-    openapi_ops = {
-        (openapi_path_shape(openapi_path), method.upper())
-        for openapi_path, methods in paths.items()
-        if isinstance(methods, dict)
-        for method in methods
-        if method.upper() in {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}
-    }
-    missing = sorted(
-        (entry["method"], entry["path"])
-        for entry in manifest.get("endpoints", [])
-        if entry.get("openapi")
-        and (openapi_path_shape(entry["path"]), entry["method"]) not in openapi_ops
-    )
+
+    # Index OpenAPI path items by their normalised shape so we can look them up
+    # by shape while still checking the extension on the original path item.
+    openapi_path_items: dict[tuple[str, str], dict] = {}
+    for openapi_path, path_item in paths.items():
+        if not isinstance(path_item, dict):
+            continue
+        shape = openapi_path_shape(openapi_path)
+        for method in path_item:
+            if method.upper() in {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}:
+                openapi_path_items[(shape, method.upper())] = path_item
+
+    missing = []
+    catch_all_mismatch = []
+    for entry in manifest.get("endpoints", []):
+        if not entry.get("openapi"):
+            continue
+        entry_path = entry["path"]
+        entry_method = entry["method"]
+        shape = openapi_path_shape(entry_path)
+        key = (shape, entry_method)
+        if key not in openapi_path_items:
+            missing.append((entry_method, entry_path))
+            continue
+        path_item = openapi_path_items[key]
+        inventory_is_catch_all = is_catch_all_path(entry_path)
+        spec_is_catch_all = bool(path_item.get("x-registry-notary-catch-all"))
+        if inventory_is_catch_all != spec_is_catch_all:
+            catch_all_mismatch.append(
+                (entry_method, entry_path, inventory_is_catch_all, spec_is_catch_all)
+            )
+
     if missing:
-        fail(f"manifest endpoints marked openapi:true are missing from OpenAPI: {missing}")
+        fail(f"manifest endpoints marked openapi:true are missing from OpenAPI: {sorted(missing)}")
+    if catch_all_mismatch:
+        details = "; ".join(
+            f"{m} {p}: inventory catch-all={inv} but spec x-registry-notary-catch-all={spec}"
+            for m, p, inv, spec in catch_all_mismatch
+        )
+        fail(
+            f"catch-all mismatch between route inventory and OpenAPI spec "
+            f"(inventory {{*name}} must map to a spec path item with "
+            f"x-registry-notary-catch-all:true, and plain {{name}} must not): {details}"
+        )
+
+
+def is_catch_all_path(path: str) -> bool:
+    """Return True if any path segment is an axum-style multi-segment wildcard ({*name})."""
+    return bool(re.search(r"\{\*[^}]+\}", path))
 
 
 def openapi_path_shape(path: str) -> str:

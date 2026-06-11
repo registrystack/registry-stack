@@ -191,19 +191,22 @@ fn build_openapi_document() -> Value {
                 }
             },
             "/credentials/{vct_path}": {
+                "x-registry-notary-catch-all": true,
                 "get": {
                     "summary": "Fetch SD-JWT VC Type Metadata",
                     "operationId": "getSdJwtVcTypeMetadata",
-                    "description": "Returns public SD-JWT VC Type Metadata for a configured OID4VCI credential configuration whose vct exactly matches the requested absolute URL. The vct_path parameter represents the full path suffix under /credentials and may contain nested path segments. This route is intentionally unversioned and must remain at /credentials/{vct_path} (without a /v1/ prefix): per SD-JWT VC type-metadata dereference, a client resolves the credential type by dereferencing the vct claim directly (which is https://{host}/credentials/{vct_path}), so the server path must match the vct URL path component exactly. Adding a /v1/ prefix would break dereference for any credential whose vct does not include that prefix. This route serves type metadata only and is unrelated to POST /v1/credentials (credential issuance).",
-                    "x-registry-notary-catch-all": true,
+                    "description": "Returns public SD-JWT VC Type Metadata for a configured OID4VCI credential configuration whose vct exactly matches the requested absolute URL. The path key uses the OpenAPI single-segment form {vct_path} for standard tooling compatibility, but the route is a multi-segment catch-all: vct_path captures the full path remainder after /credentials/ (slashes included, not percent-encoded) and may span multiple segments. This route is intentionally unversioned and must remain at /credentials/{vct_path} (without a /v1/ prefix): per SD-JWT VC type-metadata dereference, a client resolves the credential type by dereferencing the vct claim directly (for example, https://{host}/credentials/{vct_path}), so the server path must match the vct URL path component exactly. Adding a /v1/ prefix would break dereference for any credential whose vct does not include that prefix. This route serves type metadata only and is unrelated to POST /v1/credentials (credential issuance).",
                     "security": [],
                     "parameters": [
                         {
                             "name": "vct_path",
                             "in": "path",
                             "required": true,
-                            "schema": { "type": "string" },
-                            "description": "Credential type path suffix under /credentials, including nested path segments when configured."
+                            "schema": {
+                                "type": "string",
+                                "pattern": "^[^/]+(/[^/]+)*$"
+                            },
+                            "description": "Full path remainder after /credentials/ captured as a multi-segment catch-all. The value is the unencoded path suffix of the VCT URL (slashes not percent-encoded) and may contain one or more segments."
                         }
                     ],
                     "responses": {
@@ -220,19 +223,22 @@ fn build_openapi_document() -> Value {
                 }
             },
             "/.well-known/vct/{vct_path}": {
+                "x-registry-notary-catch-all": true,
                 "get": {
                     "summary": "Fetch SD-JWT VC Type Metadata at the well-known location",
                     "operationId": "getWellKnownSdJwtVcTypeMetadata",
-                    "description": "Returns public SD-JWT VC Type Metadata at the SD-JWT VC well-known location. Consumers dereference an HTTPS vct by inserting /.well-known/vct between the host and the path; the server strips that prefix and matches the reconstructed vct (https://{host}/{vct_path}) against a configured OID4VCI credential configuration. The vct_path parameter represents the full path suffix and may contain nested path segments. This route is intentionally unversioned and must remain at /.well-known/vct/{vct_path}: per RFC 8615 well-known URI semantics, the path prefix is determined by the protocol and cannot be changed. Adding a /v1/ prefix would violate the well-known URI convention. This route serves type metadata only and is unrelated to POST /v1/credentials (credential issuance).",
-                    "x-registry-notary-catch-all": true,
+                    "description": "Returns public SD-JWT VC Type Metadata at the SD-JWT VC well-known location. Consumers dereference an HTTPS vct by inserting /.well-known/vct between the host and the path; the server strips that prefix and matches the reconstructed vct (https://{host}/{vct_path}) against a configured OID4VCI credential configuration. The path key uses the OpenAPI single-segment form {vct_path} for standard tooling compatibility, but the route is a multi-segment catch-all: vct_path captures the full path remainder (slashes included, not percent-encoded) and may span multiple segments. This route is intentionally unversioned and must remain at /.well-known/vct/{vct_path}: per RFC 8615 well-known URI semantics, the path prefix is determined by the protocol and cannot be changed. Adding a /v1/ prefix would violate the well-known URI convention. This route serves type metadata only and is unrelated to POST /v1/credentials (credential issuance).",
                     "security": [],
                     "parameters": [
                         {
                             "name": "vct_path",
                             "in": "path",
                             "required": true,
-                            "schema": { "type": "string" },
-                            "description": "Credential type path suffix from the configured vct, including nested path segments when configured."
+                            "schema": {
+                                "type": "string",
+                                "pattern": "^[^/]+(/[^/]+)*$"
+                            },
+                            "description": "Full path remainder after /.well-known/vct/ captured as a multi-segment catch-all. The value is the unencoded path suffix of the VCT URL (slashes not percent-encoded) and may contain one or more segments."
                         }
                     ],
                     "responses": {
@@ -3682,12 +3688,18 @@ mod tests {
         assert!(
             doc["paths"]["/credentials/{vct_path}"]["get"]["description"]
                 .as_str()
-                .is_some_and(|description| description.contains("nested path segments")),
-            "Type Metadata route must document that vct_path is a catch-all suffix"
+                .is_some_and(|description| description.contains("multi-segment catch-all")),
+            "Type Metadata route must document that vct_path is a multi-segment catch-all"
+        );
+        // x-registry-notary-catch-all lives on the path item, not the operation.
+        assert_eq!(
+            doc["paths"]["/credentials/{vct_path}"]["x-registry-notary-catch-all"],
+            json!(true)
         );
         assert_eq!(
-            doc["paths"]["/credentials/{vct_path}"]["get"]["x-registry-notary-catch-all"],
-            json!(true)
+            doc["paths"]["/credentials/{vct_path}"]["get"]["parameters"][0]["schema"]["pattern"],
+            json!("^[^/]+(/[^/]+)*$"),
+            "vct_path parameter schema must carry a pattern permitting slash-separated segments"
         );
         assert_eq!(
             doc["paths"]["/.well-known/vct/{vct_path}"]["get"]["responses"]["200"]["content"]
@@ -3703,12 +3715,19 @@ mod tests {
             doc["paths"]["/.well-known/vct/{vct_path}"]["get"]["description"]
                 .as_str()
                 .is_some_and(|description| description.contains("/.well-known/vct")
-                    && description.contains("nested path segments")),
-            "well-known Type Metadata route must document the well-known prefix and catch-all suffix"
+                    && description.contains("multi-segment catch-all")),
+            "well-known Type Metadata route must document the well-known prefix and catch-all semantics"
+        );
+        // x-registry-notary-catch-all lives on the path item, not the operation.
+        assert_eq!(
+            doc["paths"]["/.well-known/vct/{vct_path}"]["x-registry-notary-catch-all"],
+            json!(true)
         );
         assert_eq!(
-            doc["paths"]["/.well-known/vct/{vct_path}"]["get"]["x-registry-notary-catch-all"],
-            json!(true)
+            doc["paths"]["/.well-known/vct/{vct_path}"]["get"]["parameters"][0]["schema"]
+                ["pattern"],
+            json!("^[^/]+(/[^/]+)*$"),
+            "well-known vct_path parameter schema must carry a pattern permitting slash-separated segments"
         );
     }
 
