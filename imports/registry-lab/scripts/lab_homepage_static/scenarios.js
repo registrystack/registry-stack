@@ -298,7 +298,11 @@ function progressKey(scenarioId) {
 
 function saveProgress(scenarioId) {
   const ids = Array.from(state.completed);
-  sessionStorage.setItem(progressKey(scenarioId), JSON.stringify(ids));
+  try {
+    sessionStorage.setItem(progressKey(scenarioId), JSON.stringify(ids));
+  } catch (err) {
+    console.warn("Progress will not survive a reload; sessionStorage is unavailable:", err);
+  }
 }
 
 function loadProgress(scenarioId) {
@@ -311,7 +315,11 @@ function loadProgress(scenarioId) {
 }
 
 function resetProgress(scenarioId) {
-  sessionStorage.removeItem(progressKey(scenarioId));
+  try {
+    sessionStorage.removeItem(progressKey(scenarioId));
+  } catch (err) {
+    console.warn("Could not clear saved progress; sessionStorage is unavailable:", err);
+  }
   location.reload();
 }
 
@@ -388,21 +396,27 @@ async function runStep(stepId, button) {
 }
 
 async function start() {
-  const catalogue = await (await fetch("/api/scenarios.json", {cache: "no-store"})).json();
-  if (!ACTIVE_SCENARIO) {
-    renderChooser(catalogue.scenarios || [], catalogue.default_scenario_id || "");
+  try {
+    const catalogue = await (await fetch("/api/scenarios.json", {cache: "no-store"})).json();
+    if (!ACTIVE_SCENARIO) {
+      renderChooser(catalogue.scenarios || [], catalogue.default_scenario_id || "");
+      wireCurlCopyButtons();
+      return;
+    }
+    const data = await (await fetch(`/api/scenarios/${encodeURIComponent(ACTIVE_SCENARIO)}.json`, {cache: "no-store"})).json();
+    if (!data.story) {
+      byId("story").innerHTML = `<div class="story-setup"><h2>Scenario not found</h2><p>${escapeHtml(ACTIVE_SCENARIO)}</p></div>`;
+      return;
+    }
+    renderStory(data.story, data.runnable !== false);
+    restoreCompleted(data.story);
+    wireStepButtons();
     wireCurlCopyButtons();
-    return;
+    wireResetButton();
+  } catch (err) {
+    console.error("Scenario data failed to load:", err);
+    const target = byId(ACTIVE_SCENARIO ? "story" : "chooser");
+    target.innerHTML = `<div class="story-setup"><h2>The scenarios did not load</h2><p>The lab API did not respond. Reload the page to try again.</p></div>`;
   }
-  const data = await (await fetch(`/api/scenarios/${encodeURIComponent(ACTIVE_SCENARIO)}.json`, {cache: "no-store"})).json();
-  if (!data.story) {
-    byId("story").innerHTML = `<div class="story-setup"><h2>Scenario not found</h2><p>${escapeHtml(ACTIVE_SCENARIO)}</p></div>`;
-    return;
-  }
-  renderStory(data.story, data.runnable !== false);
-  restoreCompleted(data.story);
-  wireStepButtons();
-  wireCurlCopyButtons();
-  wireResetButton();
 }
 start();

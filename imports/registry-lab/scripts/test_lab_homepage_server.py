@@ -1645,6 +1645,35 @@ class ProgressPersistenceTest(unittest.TestCase):
         self.assertIn("restoring", SCENARIOS_JS)
 
 
+class FrontEndFailureHandlingTest(unittest.TestCase):
+    """Front-end failures must degrade visibly instead of leaving a blank or stuck page."""
+
+    def test_save_progress_survives_blocked_storage(self) -> None:
+        # saveProgress runs in the step-completion path; a sessionStorage throw must not
+        # stop the next step from unlocking, only skip persistence with a console warning.
+        body = SCENARIOS_JS.split("function saveProgress", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("try {", body)
+        self.assertIn("console.warn", body)
+
+    def test_reset_progress_survives_blocked_storage(self) -> None:
+        # resetProgress must still reload the page when sessionStorage is blocked.
+        body = SCENARIOS_JS.split("function resetProgress", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("try {", body)
+        self.assertIn("location.reload()", body)
+
+    def test_scenarios_start_reports_load_failure(self) -> None:
+        body = SCENARIOS_JS.split("async function start", 1)[1]
+        self.assertIn("catch", body)
+        self.assertIn("console.error", body)
+        self.assertIn("did not load", body)
+
+    def test_homepage_start_reports_load_failure(self) -> None:
+        body = HOMEPAGE_JS.split("async function start", 1)[1]
+        self.assertIn("catch", body)
+        self.assertIn("console.error", body)
+        self.assertIn("did not load", body)
+
+
 class StaticAssetRouteTest(unittest.TestCase):
     """The /static/<name> route serves the extracted CSS/JS with strict allowlisting."""
 

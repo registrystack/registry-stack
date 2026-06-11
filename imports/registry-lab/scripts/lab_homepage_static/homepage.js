@@ -129,16 +129,21 @@ async function loadStatus() {
 }
 
 async function start() {
-  const response = await fetch("/api/lab.json", {cache: "no-store"});
-  const data = await response.json();
-  byId("title").textContent = data.title || "Registry Lab";
-  byId("subtitle").textContent = data.subtitle || "";
-  byId("domain").textContent = data.environment?.domain || "";
-  byId("notice").textContent = data.environment?.notice || "";
-  byId("missing-count").textContent = (data.credentials || []).filter((credential) => !credential.configured).length;
-  renderServices(data.services || []);
-  renderWallet(data.wallet || {});
-  wireCopyButtons();
-  loadStatus();
+  try {
+    const response = await fetch("/api/lab.json", {cache: "no-store"});
+    const data = await response.json();
+    byId("title").textContent = data.title || "Registry Lab";
+    byId("subtitle").textContent = data.subtitle || "";
+    byId("domain").textContent = data.environment?.domain || "";
+    byId("notice").textContent = data.environment?.notice || "";
+    byId("missing-count").textContent = (data.credentials || []).filter((credential) => !credential.configured).length;
+    renderServices(data.services || []);
+    renderWallet(data.wallet || {});
+    wireCopyButtons();
+    loadStatus();
+  } catch (err) {
+    console.error("Lab configuration failed to load:", err);
+    byId("subtitle").textContent = "The lab configuration did not load. Reload the page to try again.";
+  }
 }
 start();
