@@ -874,7 +874,7 @@ def yaml_child_block(text: str, key: str) -> str | None:
 
 def yaml_scalar_false(text: str, key: str) -> bool:
     return (
-        re.search(rf"^\s*{re.escape(key)}\s*:\s*false\s*(?:#.*)?$", text, re.MULTILINE)
+        re.search(rf"^\s*{re.escape(key)}\s*:\s*false\s*(?:#.*)?$", text, re.MULTILINE | re.IGNORECASE)
         is not None
     )
 
