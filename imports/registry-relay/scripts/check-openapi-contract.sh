@@ -52,4 +52,5 @@ if ! git cat-file -e "$BASE_REF:$REFERENCE_CONFIG" 2>/dev/null; then
 fi
 
 git show "$BASE_REF:$SPEC_PATH" > "$BASELINE"
-oasdiff breaking --fail-on ERR "$BASELINE" "$SPEC_PATH"
+# Accepted one-time diffs live in the ignore file; see its header comment.
+oasdiff breaking --fail-on ERR --err-ignore openapi/oasdiff-err-ignore.txt "$BASELINE" "$SPEC_PATH"

@@ -1,0 +1,23 @@
+# One-time accepted diff for PR #112: declaring path parameters that were always
+# required by the URL templates but previously undeclared. Documentation fix, not
+# a contract break. Lines below stop matching once the baseline includes them.
+GET /metadata/dcat/{profile} added the new path request parameter 'profile'
+GET /v1/datasets/{dataset_id} added the new path request parameter 'dataset_id'
+GET /v1/datasets/{dataset_id}/aggregates added the new path request parameter 'dataset_id'
+GET /v1/datasets/{dataset_id}/aggregates/{aggregate_id} added the new path request parameter 'dataset_id'
+GET /v1/datasets/{dataset_id}/aggregates/{aggregate_id}/metadata added the new path request parameter 'dataset_id'
+POST /v1/datasets/{dataset_id}/aggregates/{aggregate_id}/query added the new path request parameter 'dataset_id'
+GET /v1/datasets/{dataset_id}/aggregates/{aggregate_id}/structure added the new path request parameter 'dataset_id'
+GET /v1/datasets/{dataset_id}/dimensions added the new path request parameter 'dataset_id'
+GET /v1/datasets/{dataset_id}/dimensions/{item_id} added the new path request parameter 'dataset_id'
+GET /v1/datasets/{dataset_id}/entities/{entity}/records added the new path request parameter 'dataset_id'
+GET /v1/datasets/{dataset_id}/entities/{entity}/records added the new path request parameter 'entity'
+GET /v1/datasets/{dataset_id}/entities/{entity}/records/{id} added the new path request parameter 'dataset_id'
+GET /v1/datasets/{dataset_id}/entities/{entity}/records/{id} added the new path request parameter 'entity'
+GET /v1/datasets/{dataset_id}/entities/{entity}/records/{id}/relationships/{relationship} added the new path request parameter 'dataset_id'
+GET /v1/datasets/{dataset_id}/entities/{entity}/records/{id}/relationships/{relationship} added the new path request parameter 'entity'
+GET /v1/datasets/{dataset_id}/entities/{entity}/records/{id}/relationships/{relationship} added the new path request parameter 'relationship'
+GET /v1/datasets/{dataset_id}/entities/{entity}/schema added the new path request parameter 'dataset_id'
+GET /v1/datasets/{dataset_id}/entities/{entity}/schema added the new path request parameter 'entity'
+GET /v1/datasets/{dataset_id}/measures added the new path request parameter 'dataset_id'
+GET /v1/datasets/{dataset_id}/measures/{item_id} added the new path request parameter 'dataset_id'
