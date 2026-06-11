@@ -402,6 +402,30 @@
     "notes": "Relay catalog JSON-LD can include dataset-scoped ODRL Offers; Manifest renders policies. Policies are published as metadata; Relay does not evaluate or enforce them at runtime."
   },
   {
+    "id": "sdmx",
+    "name": "SDMX-JSON",
+    "standards_body": "SDMX",
+    "official_url": "https://sdmx.org/",
+    "version_or_profile": "SDMX-JSON 2.1 data messages",
+    "status": "used",
+    "claim_level": "emits",
+    "used_by": [
+      "registry-relay"
+    ],
+    "surfaces": [
+      "aggregate data output",
+      "content negotiation delivery"
+    ],
+    "evidence_docs": [
+      {
+        "label": "Registry Relay client integration guide",
+        "url": "https://github.com/jeremi/registry-relay/blob/main/docs/client-integration.md"
+      }
+    ],
+    "last_checked": "2026-06-11",
+    "notes": "Relay serves configured aggregates as SDMX-JSON 2.1 data messages via content negotiation (application/vnd.sdmx.data+json;version=2.1) or ?f=sdmx-json. Scope is data messages only: structure messages and the SDMX REST API are not implemented. Relay-specific x-extensions carry unit, multiplier, decimals, and completeness metadata; measure definition URIs are not mapped; the message sender is fixed. Conformance evidence is the Relay test suite validating output against the published SDMX-JSON data-message schema."
+  },
+  {
     "id": "prov-o",
     "name": "PROV-O",
     "standards_body": "W3C",
