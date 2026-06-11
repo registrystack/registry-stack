@@ -107,6 +107,11 @@ security:
 exposure-check:
     python3 scripts/check_security_assurance.py manifest
 
+# Validate the committed OpenAPI artifact and, when a base ref is supplied,
+# fail on breaking API diffs while allowing additive changes.
+openapi-contract base_ref="":
+    if [ -n "{{base_ref}}" ]; then scripts/check-openapi-contract.sh "{{base_ref}}"; else scripts/check-openapi-contract.sh; fi
+
 # Validate Dockerfiles for obvious secret-copy hazards.
 container-security:
     python3 scripts/check_security_assurance.py dockerfile-secrets
@@ -117,7 +122,7 @@ ci-preflight:
 
 # Run the full CI gate locally: pinned-ref preflight, Docker build contract,
 # fmt-check, default/all-feature lint, default/all-feature tests, and cargo-deny.
-ci: ci-preflight docker-build-contract fmt-check lint-default lint test-default test deny
+ci: ci-preflight docker-build-contract fmt-check lint-default lint test-default test deny openapi-contract
 
 # Run the development server with a config file.
 # Usage: just run              (uses config/example.yaml)

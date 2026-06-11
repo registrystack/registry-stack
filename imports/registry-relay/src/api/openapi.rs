@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 use crate::audit::ErrorCodeExt;
 use crate::auth::Principal;
 use crate::config::{AuthMode, Config, DatasetConfig, EntityConfig, FilterOp};
+use crate::entity::EntityRegistry;
 use crate::error::{AuthError, Error};
 // Reads the local `CatalogDocument`, not `registry-manifest-core`'s
 // `CompiledMetadata`, because the OpenAPI synthesizer below depends on
@@ -48,6 +49,13 @@ where
     S: Clone + Send + Sync + 'static,
 {
     Router::new().route("/openapi.json", get(openapi))
+}
+
+/// Generate the full OpenAPI release artifact for a representative config.
+pub fn release_artifact_document(config: &Config, registry: &EntityRegistry) -> Value {
+    let visible_entity_ids = all_metadata_entity_ids(config);
+    let catalog = catalog_document_for_entity_ids(config, registry, &visible_entity_ids);
+    openapi_document(&catalog, config)
 }
 
 async fn openapi(runtime: RuntimeSnapshot, principal: Option<Extension<Principal>>) -> Response {

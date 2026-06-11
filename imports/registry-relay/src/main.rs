@@ -85,6 +85,9 @@ const HEALTHCHECK_COMMAND: &str = "healthcheck";
 /// Generates a standalone API key and its governed config commitment.
 const GENERATE_API_KEY_COMMAND: &str = "generate-api-key";
 
+/// Top-level command for generating the OpenAPI release artifact.
+const OPENAPI_COMMAND: &str = "openapi";
+
 /// Top-level namespace for operator configuration commands.
 const CONFIG_COMMAND: &str = "config";
 
@@ -131,6 +134,10 @@ enum CliCommand {
         timeout: Duration,
     },
     GenerateApiKey(GenerateApiKeyCommand),
+    Openapi {
+        config_path: PathBuf,
+        env_file: Option<PathBuf>,
+    },
     ConfigVerifyBundle(ConfigVerifyBundleCommand),
     ConfigApplyBundle(ConfigApplyBundleCommand),
 }
@@ -237,6 +244,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             println!("{}", generate_api_key_output(&command.id)?);
             Ok(())
         }
+        CliCommand::Openapi {
+            config_path,
+            env_file,
+        } => run_openapi(config_path, env_file).await,
         CliCommand::ConfigVerifyBundle(command) => run_config_verify_bundle(command).await,
         CliCommand::ConfigApplyBundle(command) => run_config_apply_bundle(command).await,
     }
@@ -354,6 +365,18 @@ async fn run_server(
     }
 
     result
+}
+
+async fn run_openapi(
+    config_path: PathBuf,
+    env_file: Option<PathBuf>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    load_env_file_arg(env_file.as_deref())?;
+    let config = config::load(&config_path)?;
+    let registry = EntityRegistry::from_config(&config)?;
+    let document = registry_relay::api::openapi::release_artifact_document(&config, &registry);
+    println!("{}", serde_json::to_string_pretty(&document)?);
+    Ok(())
 }
 
 async fn run_config_verify_bundle(
@@ -634,11 +657,45 @@ fn parse_cli_command_from(args: Vec<String>) -> Result<CliCommand, CliError> {
         .is_some_and(|arg| arg == GENERATE_API_KEY_COMMAND)
     {
         parse_generate_api_key_command(&rest[1..])
+    } else if rest.first().is_some_and(|arg| arg == OPENAPI_COMMAND) {
+        parse_openapi_command(&rest[1..])
     } else if rest.first().is_some_and(|arg| arg == CONFIG_COMMAND) {
         parse_config_command(&rest[1..])
     } else {
         parse_serve_command(&rest)
     }
+}
+
+fn parse_openapi_command(args: &[String]) -> Result<CliCommand, CliError> {
+    let mut config_path: Option<PathBuf> = None;
+    let mut env_file: Option<PathBuf> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if let Some(value) = flag_value(arg, CONFIG_FLAG) {
+            config_path = Some(required_path_value(CONFIG_FLAG, value)?);
+        } else if arg == CONFIG_FLAG {
+            index += 1;
+            config_path = Some(required_path_arg(args, index, CONFIG_FLAG)?);
+        } else if let Some(value) = flag_value(arg, ENV_FILE_FLAG) {
+            env_file = Some(required_path_value(ENV_FILE_FLAG, value)?);
+        } else if arg == ENV_FILE_FLAG {
+            index += 1;
+            env_file = Some(required_path_arg(args, index, ENV_FILE_FLAG)?);
+        } else {
+            return Err(CliError(format!(
+                "unknown {OPENAPI_COMMAND} argument: {arg}"
+            )));
+        }
+        index += 1;
+    }
+    if env_file.is_none() {
+        env_file = default_env_file_from_env();
+    }
+    Ok(CliCommand::Openapi {
+        config_path: config_path.unwrap_or_else(default_config_path_from_env),
+        env_file,
+    })
 }
 
 fn parse_serve_command(args: &[String]) -> Result<CliCommand, CliError> {
@@ -1498,6 +1555,47 @@ audit:
         };
         assert_eq!(url, "http://127.0.0.1:9091/healthz");
         assert_eq!(timeout, Duration::from_millis(750));
+    }
+
+    #[test]
+    fn openapi_cli_accepts_config_and_env_file() {
+        let command = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "openapi",
+            "--config",
+            "openapi/registry-relay.reference.yaml",
+            "--env-file=/etc/registry-relay/openapi.env",
+        ]))
+        .expect("openapi command parses");
+
+        let CliCommand::Openapi {
+            config_path,
+            env_file,
+        } = command
+        else {
+            panic!("expected openapi command");
+        };
+        assert_eq!(
+            config_path,
+            std::path::PathBuf::from("openapi/registry-relay.reference.yaml")
+        );
+        assert_eq!(
+            env_file,
+            Some(std::path::PathBuf::from("/etc/registry-relay/openapi.env"))
+        );
+    }
+
+    #[test]
+    fn openapi_cli_rejects_serve_only_arguments() {
+        let err = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "openapi",
+            "--bind",
+            "127.0.0.1:9090",
+        ]))
+        .expect_err("openapi command rejects serve-only flag");
+
+        assert_eq!(err.to_string(), "unknown openapi argument: --bind");
     }
 
     #[test]
