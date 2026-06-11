@@ -4,7 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
-    tags: ["v*"]
+    tags: ["v*", "registry-stack-technical-preview-*"]
   schedule:
     - cron: "43 3 * * *"
   workflow_dispatch:
@@ -35,6 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write
       packages: write
     steps:
       - name: Decide image channel
@@ -51,26 +52,38 @@ jobs:
           sidecar_tags=("$OPENFN_SIDECAR_IMAGE:ci-${GITHUB_SHA}")
 
           if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF_TYPE" == "tag" ]]; then
-            if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "Release image tags must be stable semver tags like v0.1.2." >&2
-              exit 1
-            fi
-            version="${GITHUB_REF_NAME#v}"
-            IFS=. read -r major minor patch <<< "$version"
             channel=release
             publish=true
-            notary_tags=(
-              "$NOTARY_IMAGE:v${major}.${minor}.${patch}"
-              "$NOTARY_IMAGE:v${major}.${minor}"
-              "$NOTARY_IMAGE:v${major}"
-              "$NOTARY_IMAGE:latest"
-            )
-            sidecar_tags=(
-              "$OPENFN_SIDECAR_IMAGE:v${major}.${minor}.${patch}"
-              "$OPENFN_SIDECAR_IMAGE:v${major}.${minor}"
-              "$OPENFN_SIDECAR_IMAGE:v${major}"
-              "$OPENFN_SIDECAR_IMAGE:latest"
-            )
+            if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              version="${GITHUB_REF_NAME#v}"
+              IFS=. read -r major minor patch <<< "$version"
+              notary_tags=(
+                "$NOTARY_IMAGE:sha-${GITHUB_SHA}"
+                "$NOTARY_IMAGE:v${major}.${minor}.${patch}"
+                "$NOTARY_IMAGE:v${major}.${minor}"
+                "$NOTARY_IMAGE:v${major}"
+                "$NOTARY_IMAGE:latest"
+              )
+              sidecar_tags=(
+                "$OPENFN_SIDECAR_IMAGE:sha-${GITHUB_SHA}"
+                "$OPENFN_SIDECAR_IMAGE:v${major}.${minor}.${patch}"
+                "$OPENFN_SIDECAR_IMAGE:v${major}.${minor}"
+                "$OPENFN_SIDECAR_IMAGE:v${major}"
+                "$OPENFN_SIDECAR_IMAGE:latest"
+              )
+            elif [[ "$GITHUB_REF_NAME" =~ ^registry-stack-technical-preview-[0-9A-Za-z][0-9A-Za-z._-]*$ ]]; then
+              notary_tags=(
+                "$NOTARY_IMAGE:sha-${GITHUB_SHA}"
+                "$NOTARY_IMAGE:${GITHUB_REF_NAME}"
+              )
+              sidecar_tags=(
+                "$OPENFN_SIDECAR_IMAGE:sha-${GITHUB_SHA}"
+                "$OPENFN_SIDECAR_IMAGE:${GITHUB_REF_NAME}"
+              )
+            else
+              echo "Release image tags must be stable semver tags like v0.1.2 or registry-stack-technical-preview-<date-or-version>." >&2
+              exit 1
+            fi
           elif [[ "$GITHUB_EVENT_NAME" == "schedule" || "$PUBLISH_SNAPSHOT_INPUT" == "true" ]]; then
             if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
               echo "Snapshot publishing is only allowed from refs/heads/main; got $GITHUB_REF."
@@ -126,6 +139,26 @@ jobs:
         with:
           path: registry-notary
           persist-credentials: false
+      - name: Verify release tag is protected-main reachable
+        if: steps.channel.outputs.publish == 'true' && steps.channel.outputs.channel == 'release'
+        working-directory: registry-notary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          protected="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.protected')"
+          if [[ "$protected" != "true" ]]; then
+            echo "Official release image aliases require the repository's main branch to be protected." >&2
+            exit 1
+          fi
+
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: bearer ${GH_TOKEN}" \
+            fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "Official release image aliases require tag commit $GITHUB_SHA to be reachable from protected main." >&2
+            exit 1
+          fi
       - name: Checkout registry-platform
         if: steps.channel.outputs.build == 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -249,9 +282,13 @@ jobs:
           GHCR_ACTOR: ${{ github.actor }}
           GHCR_TOKEN: ${{ github.token }}
         run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin
+      - name: Install cosign
+        if: steps.channel.outputs.publish == 'true'
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
       - name: Push images
         if: steps.channel.outputs.publish == 'true'
         run: |
+          set -euo pipefail
           while IFS= read -r tag; do
             [ -n "$tag" ] && docker push "$tag"
           done <<'EOF'
@@ -260,5 +297,53 @@ jobs:
           while IFS= read -r tag; do
             [ -n "$tag" ] && docker push "$tag"
           done <<'EOF'
+          ${{ steps.channel.outputs.sidecar_tags }}
+          EOF
+      - name: Sign image tags
+        if: steps.channel.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && cosign sign --yes "$tag"
+          done <<'EOF'
+          ${{ steps.channel.outputs.notary_tags }}
+          EOF
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && cosign sign --yes "$tag"
+          done <<'EOF'
+          ${{ steps.channel.outputs.sidecar_tags }}
+          EOF
+      - name: Verify published image aliases and signatures
+        if: steps.channel.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          verify_tag_set() {
+            expected_digest=""
+            while IFS= read -r tag; do
+              [ -n "$tag" ] || continue
+              digest="$(
+                docker buildx imagetools inspect "$tag" \
+                  | awk '/^Digest:/ {print $2; exit}'
+              )"
+              if [ -z "$digest" ]; then
+                echo "Could not resolve digest for $tag" >&2
+                exit 1
+              fi
+              if [ -z "$expected_digest" ]; then
+                expected_digest="$digest"
+              elif [ "$digest" != "$expected_digest" ]; then
+                echo "$tag resolves to $digest, expected $expected_digest" >&2
+                exit 1
+              fi
+              cosign verify \
+                --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+                --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container.yml@${GITHUB_REF}" \
+                "$tag" >/dev/null
+            done
+          }
+          verify_tag_set <<'EOF'
+          ${{ steps.channel.outputs.notary_tags }}
+          EOF
+          verify_tag_set <<'EOF'
           ${{ steps.channel.outputs.sidecar_tags }}
           EOF

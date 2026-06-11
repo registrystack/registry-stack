@@ -29,7 +29,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
         *) true ;; \
     esac
 
-# Distroless cc keeps glibc and CA certificates while dropping shell/package tools.
+# Runtime policy: the main Notary image is a distroless Rust service image.
+# Keep the runtime shell-free, non-root, and compatible with binary healthchecks
+# and JSON-array entrypoints. CI enforces this policy.
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:bd2899c12b335c827750ccf2359879eab09c09b206023dcebea408947d54127c AS runtime
 
 COPY --from=builder /workspace/out/ /usr/local/bin/
