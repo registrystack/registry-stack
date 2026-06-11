@@ -3008,7 +3008,7 @@ async fn admin_config_rejects_malformed_previous_config_hash_before_evaluation()
     assert_eq!(body["code"], "config.candidate_invalid");
     assert_eq!(
         body["detail"],
-        "previous_config_hash must be sha256:<64 lowercase hex>"
+        "previous_config_hash must be sha256:<64 lowercase hex> or bare <64 lowercase hex>"
     );
 }
 
@@ -4577,6 +4577,44 @@ async fn admin_config_apply_signed_credential_issuer_rotation_rejects_stale_sequ
     assert_eq!(body["posture_result"], "rejected");
     assert_eq!(body["applied"], false);
     assert_eq!(body["restart_required"], false);
+
+    let wrong_previous_bare = current_config_hash
+        .strip_prefix("sha256:")
+        .expect("internal config hash is canonical sha256");
+    let mismatch_signed = write_signed_notary_config_tuf_fixture_with_change_classes(
+        &tmp,
+        wrong_previous_bare,
+        &stale_candidate_yaml,
+        3,
+        "registry-notary-standalone",
+        &["kid-a", "kid-b"],
+        &["signing_key_rotation"],
+    )
+    .await;
+
+    let mismatch = server
+        .post("/admin/v1/config/apply")
+        .add_header("authorization", authorization.clone())
+        .json(&signed_tuf_apply_request(&mismatch_signed))
+        .await;
+
+    mismatch.assert_status(StatusCode::CONFLICT);
+    let body: Value = mismatch.json();
+    assert_eq!(body["result"], "rejected_rollback");
+    assert_eq!(body["posture_result"], "rejected");
+    assert_eq!(body["applied"], false);
+    assert_eq!(body["restart_required"], false);
+    let detail = body["detail"]
+        .as_str()
+        .expect("previous hash mismatch reports detail");
+    assert!(
+        detail.contains(&candidate_config_hash),
+        "detail did not include expected canonical hash: {detail}"
+    );
+    assert!(
+        detail.contains("detected format: bare lowercase hex"),
+        "detail did not include detected received format: {detail}"
+    );
 
     let antirollback = FileAntiRollbackStore::new(&antirollback_path)
         .load(&AntiRollbackKey {

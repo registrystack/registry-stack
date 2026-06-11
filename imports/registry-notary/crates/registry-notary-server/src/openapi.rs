@@ -2597,7 +2597,8 @@ fn config_apply_request_schema() -> Value {
             },
             "previous_config_hash": {
                 "type": "string",
-                "pattern": "^sha256:[0-9a-f]{64}$"
+                "pattern": "^(sha256:)?[0-9a-f]{64}$",
+                "description": "Governed predecessor config hash. Requests and signed target metadata may provide either bare lowercase SHA-256 hex or sha256:<64 lowercase hex>; responses, audit, docs, and errors use the canonical sha256:-prefixed form."
             },
             "root_version": {
                 "type": "integer",

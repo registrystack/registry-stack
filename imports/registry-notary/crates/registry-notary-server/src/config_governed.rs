@@ -13,7 +13,7 @@ use registry_platform_config::{
     reject_deprecated_config_fields, LocalTufRepositoryInput, RemoteTufRepositoryInput,
     TufConfigVerifier, VerificationContext,
 };
-use registry_platform_ops::{internal_config_hash, ConfigSource};
+use registry_platform_ops::{internal_config_hash, is_sha256_config_hash, ConfigSource};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -94,12 +94,35 @@ pub struct ResolvedConfigCandidate {
     pub stream_id: String,
     pub sequence: u64,
     pub previous_config_hash: Option<String>,
+    pub previous_config_hash_format: Option<PreviousConfigHashFormat>,
     pub root_version: Option<u64>,
     pub change_classes: BTreeSet<String>,
     pub signer_kids: BTreeSet<String>,
     pub tuf_root_sha256: Option<String>,
     pub config_yaml: String,
     pub(crate) source: ConfigSource,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PreviousConfigHashFormat {
+    Sha256Prefixed,
+    BareLowercaseHex,
+}
+
+impl PreviousConfigHashFormat {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Sha256Prefixed => "sha256-prefixed",
+            Self::BareLowercaseHex => "bare lowercase hex",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NormalizedPreviousConfigHash {
+    pub value: Option<String>,
+    pub format: Option<PreviousConfigHashFormat>,
 }
 
 impl ResolvedConfigCandidate {
@@ -112,6 +135,36 @@ impl ResolvedConfigCandidate {
     pub fn internal_config_hash(&self) -> String {
         internal_config_hash(self.config_yaml.as_bytes())
     }
+}
+
+pub fn normalize_previous_config_hash(
+    value: Option<&str>,
+) -> Result<NormalizedPreviousConfigHash, ConfigCandidateError> {
+    let Some(value) = value else {
+        return Ok(NormalizedPreviousConfigHash::default());
+    };
+    if is_sha256_config_hash(value) {
+        return Ok(NormalizedPreviousConfigHash {
+            value: Some(value.to_string()),
+            format: Some(PreviousConfigHashFormat::Sha256Prefixed),
+        });
+    }
+    if is_lowercase_sha256_hex(value) {
+        return Ok(NormalizedPreviousConfigHash {
+            value: Some(format!("sha256:{value}")),
+            format: Some(PreviousConfigHashFormat::BareLowercaseHex),
+        });
+    }
+    Err(ConfigCandidateError::CandidateInvalid(
+        "previous_config_hash must be sha256:<64 lowercase hex> or bare <64 lowercase hex>",
+    ))
+}
+
+fn is_lowercase_sha256_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 #[derive(Debug)]
@@ -208,11 +261,14 @@ pub async fn resolve_tuf_config_candidate(
     let config_yaml = String::from_utf8(verified.tuf.target_bytes).map_err(|_| {
         ConfigCandidateError::CandidateInvalid("candidate config payload is not valid UTF-8")
     })?;
+    let previous_config_hash =
+        normalize_previous_config_hash(verified.metadata.previous_config_hash.as_deref())?;
     Ok(ResolvedConfigCandidate {
         bundle_id: verified.metadata.bundle_id,
         stream_id: verified.metadata.stream_id,
         sequence: verified.metadata.sequence,
-        previous_config_hash: verified.metadata.previous_config_hash,
+        previous_config_hash: previous_config_hash.value,
+        previous_config_hash_format: previous_config_hash.format,
         root_version: Some(verified.tuf.root_version),
         change_classes: verified.metadata.change_classes,
         signer_kids: verified.tuf.signer_kids.into_iter().collect(),

@@ -145,6 +145,13 @@ recorded as `signed_bundle_file`. HTTP loopback remote repositories require
 `allow_dev_insecure_fetch_urls: true` and are intended only for tests and local
 development.
 
+Governed bundle metadata may set `previous_config_hash` as either bare lowercase
+SHA-256 hex or `sha256:<64 lowercase hex>`. Notary normalizes both forms at the
+product boundary before anti-rollback comparison. The canonical form in
+verification reports, admin API responses, audit events, docs, and mismatch
+errors is `sha256:<64 lowercase hex>`. On a true chain mismatch, the error detail
+includes the expected canonical hash and the received value's detected format.
+
 ### TUF root transition
 
 For TUF root transition, apply a signed local TUF bundle whose target metadata

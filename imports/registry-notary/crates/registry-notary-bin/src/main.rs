@@ -153,8 +153,14 @@ enum Command {
 #[derive(Debug, Subcommand)]
 enum ConfigCommand {
     /// Verify a local or remote TUF-profile signed configuration target.
+    #[command(
+        long_about = "Verify a local or remote TUF-profile signed configuration target. Signed target metadata may provide previous_config_hash as either sha256:<64 lowercase hex> or bare <64 lowercase hex>; reports and diagnostics use the canonical sha256:-prefixed form."
+    )]
     VerifyBundle(ConfigVerifyBundleArgs),
     /// Apply a local or remote TUF-profile signed configuration target through the admin API.
+    #[command(
+        long_about = "Apply a local or remote TUF-profile signed configuration target through the admin API. Signed target metadata may provide previous_config_hash as either sha256:<64 lowercase hex> or bare <64 lowercase hex>; reports, diagnostics, and admin API responses use the canonical sha256:-prefixed form."
+    )]
     ApplyBundle(ConfigApplyBundleArgs),
 }
 
