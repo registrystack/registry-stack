@@ -470,7 +470,7 @@ refresh:
   mode: manual
 ```
 
-Config reload is restart-only in V1. Data reload can be driven by source mtime, interval, or `POST /admin/reload`.
+Config reload is restart-only in V1. Data reload can be driven by source mtime, interval, or `POST /admin/v1/reload`.
 
 ## Tables
 
@@ -729,15 +729,15 @@ Public entity-oriented routes:
 - `GET /ready`
 - `GET /catalog`
 - `GET /catalog/dcat-ap.jsonld`
-- `GET /datasets`
-- `GET /datasets/{dataset_id}`
-- `GET /datasets/{dataset_id}/{entity}/schema`
-- `GET /datasets/{dataset_id}/{entity}`
-- `GET /datasets/{dataset_id}/{entity}/{id}`
-- `GET /datasets/{dataset_id}/{entity}/{id}/{relationship}`
-- `GET /datasets/{dataset_id}/{entity}/aggregates`
-- `GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}`
-- `POST /admin/reload`
+- `GET /v1/datasets`
+- `GET /v1/datasets/{dataset_id}`
+- `GET /v1/datasets/{dataset_id}/entities/{entity}/schema`
+- `GET /v1/datasets/{dataset_id}/entities/{entity}/records`
+- `GET /v1/datasets/{dataset_id}/entities/{entity}/records/{id}`
+- `GET /v1/datasets/{dataset_id}/entities/{entity}/records/{id}/relationships/{relationship}`
+- `GET /v1/datasets/{dataset_id}/aggregates`
+- `GET /v1/datasets/{dataset_id}/aggregates/{aggregate_id}`
+- `POST /admin/v1/reload`
 - `GET /openapi.json`
 
 Do not add public table-ID routes.
