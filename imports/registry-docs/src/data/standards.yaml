@@ -297,10 +297,10 @@
     Relay serves configured aggregates as SDMX-JSON 2.1 data messages via
     content negotiation (application/vnd.sdmx.data+json;version=2.1) or
     ?f=sdmx-json. Scope is data messages only: structure messages and the
-    SDMX REST API are not implemented. Relay-specific x- extensions carry
+    SDMX REST API are not implemented. Relay-specific x-extensions carry
     unit, multiplier, decimals, and completeness metadata; measure definition
     URIs are not mapped; the message sender is fixed. Conformance evidence is
-    the relay test suite validating output against the published SDMX-JSON
+    the Relay test suite validating output against the published SDMX-JSON
     data-message schema.
 - id: prov-o
   name: PROV-O
