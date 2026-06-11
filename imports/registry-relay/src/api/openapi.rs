@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 use crate::audit::ErrorCodeExt;
 use crate::auth::Principal;
 use crate::config::{AuthMode, Config, DatasetConfig, EntityConfig, FilterOp};
+use crate::entity::EntityRegistry;
 use crate::error::{AuthError, Error};
 // Reads the local `CatalogDocument`, not `registry-manifest-core`'s
 // `CompiledMetadata`, because the OpenAPI synthesizer below depends on
@@ -48,6 +49,15 @@ where
     S: Clone + Send + Sync + 'static,
 {
     Router::new().route("/openapi.json", get(openapi))
+}
+
+/// Generate the full OpenAPI release artifact for a representative config.
+pub fn release_artifact_document(config: &Config, registry: &EntityRegistry) -> Value {
+    let visible_entity_ids = all_metadata_entity_ids(config);
+    let catalog = catalog_document_for_entity_ids(config, registry, &visible_entity_ids);
+    let mut document = openapi_document(&catalog, config);
+    reduce_release_artifact_to_static_contract(&mut document, config);
+    document
 }
 
 async fn openapi(runtime: RuntimeSnapshot, principal: Option<Extension<Principal>>) -> Response {
@@ -960,6 +970,234 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
             "securitySchemes": security_schemes(config),
         },
     })
+}
+
+fn reduce_release_artifact_to_static_contract(document: &mut Value, config: &Config) {
+    if let Some(paths) = document.get_mut("paths").and_then(Value::as_object_mut) {
+        abstract_release_paths(paths, config);
+        ensure_static_release_paths(paths);
+    }
+
+    if let Some(schemas) = document
+        .get_mut("components")
+        .and_then(Value::as_object_mut)
+        .and_then(|components| components.get_mut("schemas"))
+        .and_then(Value::as_object_mut)
+    {
+        schemas
+            .entry("DidDocument".to_string())
+            .or_insert_with(|| generic_object_schema("DID Document."));
+        schemas
+            .entry("JsonSchemaDocument".to_string())
+            .or_insert_with(|| generic_object_schema("Published JSON Schema document."));
+        schemas
+            .entry("JsonLdContext".to_string())
+            .or_insert_with(|| generic_object_schema("Published JSON-LD context document."));
+    }
+}
+
+fn abstract_release_paths(paths: &mut Map<String, Value>, config: &Config) {
+    let concrete_paths = std::mem::take(paths);
+    for (path, item) in concrete_paths {
+        paths
+            .entry(abstract_release_path(&path, config))
+            .or_insert(item);
+    }
+}
+
+fn abstract_release_path(path: &str, config: &Config) -> String {
+    let mut path = path.to_string();
+    for dataset in &config.datasets {
+        path = path.replace(
+            &format!("/v1/datasets/{}", dataset.id),
+            "/v1/datasets/{dataset_id}",
+        );
+        for entity in &dataset.entities {
+            path = path.replace(
+                &format!("/entities/{}/", entity.name),
+                "/entities/{entity}/",
+            );
+            if path.ends_with(&format!("/entities/{}", entity.name)) {
+                path = path.replace(&format!("/entities/{}", entity.name), "/entities/{entity}");
+            }
+            for relationship in &entity.relationships {
+                let relationship_path = format!("/relationships/{}", relationship.name);
+                if path.ends_with(&relationship_path) {
+                    let prefix_len = path.len() - relationship_path.len();
+                    path.replace_range(prefix_len.., "/relationships/{relationship}");
+                }
+            }
+        }
+    }
+    path.replace("/metadata/dcat/bregdcat-ap", "/metadata/dcat/{profile}")
+}
+
+fn ensure_static_release_paths(paths: &mut Map<String, Value>) {
+    paths.entry("/openapi.json".to_string()).or_insert_with(|| {
+        public_resource_path_item(
+            "get_openapi",
+            "Instance-specific OpenAPI document",
+            "Returns the OpenAPI document for the running instance.",
+            "application/json",
+            "JsonSchemaDocument",
+            Vec::new(),
+        )
+    });
+    paths.entry("/docs".to_string()).or_insert_with(|| {
+        public_resource_path_item(
+            "get_docs",
+            "Scalar API reference",
+            "Serves the browser API reference shell.",
+            "text/html",
+            "JsonLdContext",
+            Vec::new(),
+        )
+    });
+    paths
+        .entry("/docs/scalar.js".to_string())
+        .or_insert_with(|| {
+            public_resource_path_item(
+                "get_docs_scalar_bundle",
+                "Scalar JavaScript bundle",
+                "Serves the vendored Scalar browser bundle.",
+                "application/javascript",
+                "JsonLdContext",
+                Vec::new(),
+            )
+        });
+    paths
+        .entry("/metadata/dcat/{profile}".to_string())
+        .or_insert_with(|| {
+            jsonld_path_item_with_params(
+                "get_metadata_dcat_profile",
+                "Profiled DCAT catalog (JSON-LD)",
+                "Returns the visible metadata catalog in a supported DCAT application profile.",
+                "Profiled DCAT JSON-LD catalog",
+                vec![path_parameter(
+                    "profile",
+                    "DCAT application profile identifier",
+                )],
+            )
+        });
+    paths
+        .entry("/metadata/datasets/{dataset_id}/entities".to_string())
+        .or_insert_with(|| {
+            path_item_with_params(
+                "get",
+                "List dataset entities",
+                "MetadataDataset",
+                vec![path_parameter("dataset_id", "Dataset identifier")],
+            )
+        });
+    paths
+        .entry("/metadata/datasets/{dataset_id}/entities/{entity}".to_string())
+        .or_insert_with(|| {
+            path_item_with_params(
+                "get",
+                "Metadata entity",
+                "MetadataDataset",
+                vec![
+                    path_parameter("dataset_id", "Dataset identifier"),
+                    path_parameter("entity", "Entity identifier"),
+                ],
+            )
+        });
+    paths
+        .entry("/metadata/datasets/{dataset_id}/entities/{entity}/schema".to_string())
+        .or_insert_with(|| {
+            path_item_with_params(
+                "get",
+                "Metadata entity schema",
+                "JsonSchemaDocument",
+                vec![
+                    path_parameter("dataset_id", "Dataset identifier"),
+                    path_parameter("entity", "Entity identifier"),
+                ],
+            )
+        });
+    paths
+        .entry("/metadata/datasets/{dataset_id}/entities/{entity}/shacl".to_string())
+        .or_insert_with(|| {
+            public_resource_path_item(
+                "get_metadata_entity_shacl",
+                "Metadata entity SHACL",
+                "Returns the SHACL shape for one metadata entity.",
+                "text/turtle",
+                "JsonLdContext",
+                vec![
+                    path_parameter("dataset_id", "Dataset identifier"),
+                    path_parameter("entity", "Entity identifier"),
+                ],
+            )
+        });
+    paths
+        .entry("/metadata/schema/{dataset_id}/{entity}/schema.json".to_string())
+        .or_insert_with(|| {
+            public_resource_path_item(
+                "get_metadata_entity_schema_json",
+                "Entity JSON Schema",
+                "Returns a URL-stable JSON Schema for one entity.",
+                "application/schema+json",
+                "JsonSchemaDocument",
+                vec![
+                    path_parameter("dataset_id", "Dataset identifier"),
+                    path_parameter("entity", "Entity identifier"),
+                ],
+            )
+        });
+    paths
+        .entry("/metadata/shacl".to_string())
+        .or_insert_with(|| {
+            public_resource_path_item(
+                "get_metadata_shacl",
+                "Metadata SHACL shapes",
+                "Returns the visible metadata SHACL bundle.",
+                "text/turtle",
+                "JsonLdContext",
+                Vec::new(),
+            )
+        });
+    paths
+        .entry("/metadata/profiles".to_string())
+        .or_insert_with(|| {
+            path_item_with_params(
+                "get",
+                "List metadata profiles",
+                "MetadataDatasetList",
+                Vec::new(),
+            )
+        });
+    paths
+        .entry("/metadata/profiles/{profile}".to_string())
+        .or_insert_with(|| {
+            path_item_with_params(
+                "get",
+                "Metadata profile",
+                "MetadataDataset",
+                vec![path_parameter("profile", "Profile identifier")],
+            )
+        });
+    paths
+        .entry("/metadata/ogc/records".to_string())
+        .or_insert_with(|| {
+            path_item_with_params(
+                "get",
+                "Metadata OGC records",
+                "MetadataCatalogDocument",
+                Vec::new(),
+            )
+        });
+    paths
+        .entry("/metadata/ogc/records/{record_id}".to_string())
+        .or_insert_with(|| {
+            path_item_with_params(
+                "get",
+                "Metadata OGC record",
+                "MetadataDataset",
+                vec![path_parameter("record_id", "Record identifier")],
+            )
+        });
+    insert_provenance_paths(paths);
 }
 
 fn provenance_enabled(config: &Config) -> bool {
@@ -2513,7 +2751,7 @@ fn aggregate_list_schema() -> Value {
                 "temporal_field": null,
                 "dimensions": [{ "id": "region", "label": "Region", "field": "region" }],
                 "measures": [{ "id": "household_count", "label": "Households", "aggregation_method": "count", "column": "id", "unit_measure": "households" }],
-                "disclosure_control": { "method": ["k-anonymity"], "min_cell_size": 2, "suppression": "omit", "suppressed_rows": null, "query_budget": { "tracked": false, "scope": "none" } },
+                "disclosure_control": { "method": ["k-anonymity"], "min_cell_size": 2, "suppression": "omit", "suppressed_observations": null, "query_budget": { "tracked": false, "scope": "none" } },
                 "links": [],
             }],
             "links": [],
@@ -2569,7 +2807,7 @@ fn aggregate_result_schema() -> Value {
                 "measures": [{ "id": "household_count", "label": "Households", "aggregation_method": "count", "column": "id", "unit_measure": "households" }]
             },
             "completeness": { "complete": true, "truncated": false },
-            "disclosure_control": { "method": ["k-anonymity"], "min_cell_size": 2, "suppression": "omit", "suppressed_rows": 1, "query_budget": { "tracked": false, "scope": "none" } },
+            "disclosure_control": { "method": ["k-anonymity"], "min_cell_size": 2, "suppression": "omit", "suppressed_observations": 1, "query_budget": { "tracked": false, "scope": "none" } },
             "freshness": { "computed_at": "2026-05-16T08:00:00Z", "as_of": "2026-05-16T07:55:00Z" },
             "links": [],
         }],
@@ -2605,7 +2843,7 @@ fn aggregate_measure_discovery_schema() -> Value {
             "aggregation_method": { "type": "string" },
             "column": { "type": "string" },
             "unit_measure": { "type": "string" },
-            "unit_mult": { "type": ["number", "null"] },
+            "unit_multiplier": { "type": ["number", "null"] },
             "decimals": { "type": ["integer", "null"] },
             "frequency": { "type": ["string", "null"] },
             "definition_uri": { "type": ["string", "null"], "format": "uri" },
@@ -2751,12 +2989,12 @@ fn aggregate_schema_measure_array() -> Value {
 fn aggregate_disclosure_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["method", "min_cell_size", "suppression", "suppressed_rows", "query_budget"],
+        "required": ["method", "min_cell_size", "suppression", "suppressed_observations", "query_budget"],
         "properties": {
             "method": { "type": "array", "items": { "type": "string" } },
             "min_cell_size": { "type": "integer", "minimum": 1 },
             "suppression": { "type": "string", "enum": ["omit", "mask", "null"] },
-            "suppressed_rows": { "type": ["integer", "null"], "minimum": 0 },
+            "suppressed_observations": { "type": ["integer", "null"], "minimum": 0 },
             "query_budget": {
                 "type": "object",
                 "required": ["tracked", "scope"],
@@ -4453,6 +4691,29 @@ mod tests {
             doc["paths"]["/v1/datasets/social_registry/aggregates/{aggregate_id}/query"]["post"]
                 .is_object(),
             "POST must stay documented on the /query path"
+        );
+    }
+
+    #[test]
+    fn release_path_abstraction_only_replaces_terminal_relationship_segment() {
+        let mut config = load_example_config();
+        let household = config.datasets[0]
+            .entities
+            .iter_mut()
+            .find(|entity| entity.name == "household")
+            .expect("household entity");
+        let mut prefix_relationship = household.relationships[0].clone();
+        prefix_relationship.name = "member".to_string();
+        household.relationships.push(prefix_relationship);
+
+        let path = abstract_release_path(
+            "/v1/datasets/social_registry/entities/household/records/{id}/relationships/members",
+            &config,
+        );
+
+        assert_eq!(
+            path,
+            "/v1/datasets/{dataset_id}/entities/{entity}/records/{id}/relationships/{relationship}"
         );
     }
 

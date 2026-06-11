@@ -2692,14 +2692,17 @@ fn validate_dataset_aggregates(dataset: &DatasetConfig) -> Result<(), ConfigErro
             .access
             .as_ref()
             .is_some_and(|access| access.aggregate_only_execution)
-            && dataset.sensitivity == Sensitivity::Personal
+            && matches!(
+                dataset.sensitivity,
+                Sensitivity::Personal | Sensitivity::Confidential | Sensitivity::Secret
+            )
             && aggregate.disclosure_control.effective_min_cell_size() < 2
         {
             tracing::error!(
                 code = "config.validation_error",
                 dataset_id = %dataset.id,
                 aggregate_id = %aggregate.id,
-                "aggregate_only_execution on personal datasets requires disclosure_control.min_cell_size >= 2"
+                "aggregate_only_execution on personal, confidential, or secret datasets requires disclosure_control.min_cell_size >= 2"
             );
             return Err(ConfigError::ValidationError);
         }

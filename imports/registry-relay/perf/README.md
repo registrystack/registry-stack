@@ -109,8 +109,10 @@ set -a; . target/perf/perf.env; set +a
 k6 run perf/k6/cached_304.js
 ```
 
-Set `REGISTRY_RELAY_NO_THRESHOLD=1` only for CI smoke or wiring checks where
+Set `REGISTRY_RELAY_NO_THRESHOLD=1` only for manual smoke or wiring checks where
 the goal is to verify that the scenario runs, not to enforce capacity targets.
+The perf CI workflow leaves this unset so k6 latency thresholds are regression
+gates.
 
 ---
 

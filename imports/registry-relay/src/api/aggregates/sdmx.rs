@@ -263,14 +263,134 @@ fn sdmx_display_token(value: &str) -> String {
     token
 }
 
+/// Resolve a single observation-level status token for a row that may carry
+/// per-measure `*$status` attributes.
+///
+/// A row can suppress more than one measure, and the measures can in principle
+/// carry different status tokens. The SDMX observation array exposes one
+/// `OBS_STATUS` slot per row, so the per-measure tokens are reconciled with a
+/// fixed, measure-order-independent precedence:
+///
+/// 1. `S` (suppressed) wins whenever any measure is suppressed, so a row that
+///    hides any value is always reported as suppressed.
+/// 2. Otherwise the lexicographically smallest non-empty token is chosen, which
+///    keeps the output deterministic regardless of measure ordering.
 fn row_status(result: &AggregateResult, row: &Value) -> Option<String> {
     let attributes = row.get("attributes").and_then(Value::as_object)?;
-    result.indicators.iter().find_map(|indicator| {
+    let mut selected: Option<String> = None;
+    for indicator in &result.indicators {
         let status_key = format!("{indicator}$status");
-        attributes
+        let Some(status) = attributes
             .get(&status_key)
             .and_then(Value::as_str)
             .filter(|status| !status.is_empty())
-            .map(str::to_string)
-    })
+        else {
+            continue;
+        };
+        if status == "S" {
+            return Some(status.to_string());
+        }
+        match &selected {
+            Some(current) if current.as_str() <= status => {}
+            _ => selected = Some(status.to_string()),
+        }
+    }
+    selected
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::query::aggregates::{
+        AggregateDimensionItem, AggregateDisclosure, AggregateIndicatorItem, AggregateSchema,
+    };
+
+    fn indicator(id: &str) -> AggregateIndicatorItem {
+        AggregateIndicatorItem {
+            id: id.to_string(),
+            label: id.to_string(),
+            function: "count",
+            column: id.to_string(),
+            unit_measure: "units".to_string(),
+            unit_mult: None,
+            decimals: None,
+            frequency: None,
+            definition_uri: None,
+        }
+    }
+
+    fn result_with_two_measures(row: Value) -> AggregateResult {
+        AggregateResult {
+            dataset_id: "social_registry".to_string(),
+            aggregate_id: "by_region".to_string(),
+            computed_at: "2026-06-11T00:00:00Z".to_string(),
+            data: vec![row],
+            truncated: false,
+            schema: AggregateSchema {
+                dimensions: vec![AggregateDimensionItem {
+                    id: "region".to_string(),
+                    label: "Region".to_string(),
+                    field: "region".to_string(),
+                    codelist: None,
+                }],
+                indicators: vec![indicator("first_count"), indicator("second_count")],
+            },
+            disclosure_control: AggregateDisclosure {
+                method: vec!["k-anonymity".to_string()],
+                min_cell_size: 2,
+                suppression: "omit",
+                suppressed_rows: Some(0),
+                tracked_query_budget: false,
+                query_budget_scope: "none",
+            },
+            group_by: vec!["region".to_string()],
+            indicators: vec!["first_count".to_string(), "second_count".to_string()],
+            source_tables: vec!["households_table".to_string()],
+        }
+    }
+
+    #[test]
+    fn row_status_reports_suppression_when_only_the_second_measure_is_suppressed() {
+        // The first measure carries a non-suppression token and the second is
+        // suppressed. A naive first-match scan would surface the first token and
+        // miss the suppression; the row must report "S" instead.
+        let row = json!({
+            "region": "north",
+            "first_count": 42,
+            "second_count": null,
+            "attributes": {
+                "first_count$status": "A",
+                "second_count$status": "S",
+            }
+        });
+        let result = result_with_two_measures(row);
+
+        assert_eq!(row_status(&result, &result.data[0]).as_deref(), Some("S"));
+    }
+
+    #[test]
+    fn sdmx_observation_carries_suppressed_status_for_second_measure() {
+        let row = json!({
+            "region": "north",
+            "first_count": 42,
+            "second_count": null,
+            "attributes": {
+                "first_count$status": "A",
+                "second_count$status": "S",
+            }
+        });
+        let result = result_with_two_measures(row);
+        let message = sdmx_result_json(&result, None);
+
+        let observations = message["data"]["dataSets"][0]["observations"]
+            .as_object()
+            .expect("observations object");
+        let values = observations
+            .values()
+            .next()
+            .and_then(Value::as_array)
+            .expect("observation values array");
+        // [first_count, second_count, OBS_STATUS]
+        assert_eq!(values.last(), Some(&json!("S")));
+    }
 }

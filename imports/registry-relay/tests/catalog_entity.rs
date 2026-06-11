@@ -977,21 +977,25 @@ fn dcat_spatial_aggregate_includes_ogc_edr_distribution_and_service() {
     let distributions = dcat["dcat:dataset"][0]["dcat:distribution"]
         .as_array()
         .expect("dcat distributions");
-    let edr = aggregate_distribution_by_access_url(
-        distributions,
-        "https://data.example.test/ogc/edr/v1/collections/regional_counts_area/area",
-    );
+
+    // The distribution's accessURL is the area query endpoint (the actual data access URL).
+    let area_url = "https://data.example.test/ogc/edr/v1/collections/regional_counts_area/area";
+    let collection_url = "https://data.example.test/ogc/edr/v1/collections/regional_counts_area";
+
+    let edr = aggregate_distribution_by_access_url(distributions, area_url);
 
     assert_eq!(edr["@type"], "dcat:Distribution");
+    assert_eq!(edr["dcat:accessURL"], area_url);
     assert_eq!(edr["dcterms:title"], "Regional counts OGC EDR area");
     assert_eq!(edr["dcterms:format"]["rdfs:label"], "application/geo+json");
+    // The accessService endpointURL must point at the collection root, not the area query.
     assert_eq!(
         edr["dcat:accessService"]["@id"],
-        "https://data.example.test/ogc/edr/v1/collections/regional_counts_area/area#aggregate-query-service"
+        format!("{collection_url}#aggregate-query-service")
     );
     assert_eq!(
         edr["dcat:accessService"]["dcat:endpointURL"],
-        "https://data.example.test/ogc/edr/v1/collections/regional_counts_area/area"
+        collection_url
     );
     assert!(edr["dcat:accessService"]["dcterms:conformsTo"]
         .as_array()
@@ -1004,6 +1008,15 @@ fn dcat_spatial_aggregate_includes_ogc_edr_distribution_and_service() {
         .iter()
         .any(|value| value
             == "https://data.example.test/v1/datasets/social_registry/aggregates/regional_counts/structure"));
+
+    // The same collection-scoped endpointURL must appear in the SHACL/JSON-LD document.
+    // (dcat is the SHACL rendering; we verify the distribution's service node carries the
+    // collection URL, not the area query URL.)
+    let shacl_edr = aggregate_distribution_by_access_url(distributions, area_url);
+    assert_eq!(
+        shacl_edr["dcat:accessService"]["dcat:endpointURL"],
+        collection_url
+    );
 }
 
 #[tokio::test]
@@ -2373,4 +2386,54 @@ async fn single_entity_schema_returns_not_found_for_unknown_entity() {
     resp.assert_status(StatusCode::NOT_FOUND);
     let body: Value = resp.json();
     assert_eq!(body["code"], "schema.unknown_resource");
+}
+
+#[tokio::test]
+async fn entity_scoped_catalog_includes_aggregates_of_visible_entities() {
+    use registry_relay::metadata::catalog::catalog_document_for_entity_ids;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let path = write_config(&tmp);
+    let cfg = config::load(&path).expect("config loads");
+    let registry = EntityRegistry::from_config(&cfg).expect("registry compiles");
+
+    // The household entity is the source_entity of households_by_region, so an
+    // entity-scoped catalog for it must surface that aggregate distribution.
+    let household_ids: std::collections::BTreeSet<(String, String)> =
+        [("social_registry".to_string(), "household".to_string())]
+            .into_iter()
+            .collect();
+    let doc = catalog_document_for_entity_ids(&cfg, &registry, &household_ids);
+    let social_registry = doc
+        .datasets
+        .iter()
+        .find(|dataset| dataset.dataset_id == "social_registry")
+        .expect("social_registry dataset is visible");
+    assert!(
+        social_registry
+            .aggregate_distributions
+            .iter()
+            .any(|distribution| distribution.aggregate_id == "households_by_region"),
+        "household-scoped catalog must include the household aggregate distribution"
+    );
+
+    // The individual entity does not own households_by_region, so scoping to it
+    // must not surface that aggregate.
+    let individual_ids: std::collections::BTreeSet<(String, String)> =
+        [("social_registry".to_string(), "individual".to_string())]
+            .into_iter()
+            .collect();
+    let individual_doc = catalog_document_for_entity_ids(&cfg, &registry, &individual_ids);
+    let individual_dataset = individual_doc
+        .datasets
+        .iter()
+        .find(|dataset| dataset.dataset_id == "social_registry")
+        .expect("social_registry dataset is visible for individual scope");
+    assert!(
+        !individual_dataset
+            .aggregate_distributions
+            .iter()
+            .any(|distribution| distribution.aggregate_id == "households_by_region"),
+        "individual-scoped catalog must not include the household aggregate"
+    );
 }

@@ -107,6 +107,11 @@ security:
 exposure-check:
     python3 scripts/check_security_assurance.py manifest
 
+# Validate the committed OpenAPI artifact and, when a base ref is supplied,
+# fail on breaking API diffs while allowing additive changes.
+openapi-contract base_ref="":
+    scripts/check-openapi-contract.sh "{{base_ref}}"
+
 # Validate Dockerfiles for obvious secret-copy hazards.
 container-security:
     python3 scripts/check_security_assurance.py dockerfile-secrets
@@ -117,7 +122,7 @@ ci-preflight:
 
 # Run the full CI gate locally: pinned-ref preflight, Docker build contract,
 # fmt-check, default/all-feature lint, default/all-feature tests, and cargo-deny.
-ci: ci-preflight docker-build-contract fmt-check lint-default lint test-default test deny
+ci: ci-preflight docker-build-contract fmt-check lint-default lint test-default test deny openapi-contract
 
 # Run the development server with a config file.
 # Usage: just run              (uses config/example.yaml)
@@ -201,4 +206,5 @@ perf-smoke:
     uv run perf/scripts/generate_perf_data.py --profile small --out-dir target/perf/smoke-fixtures
     cargo bench --no-run
     for f in perf/k6/*.js perf/k6/lib/*.js; do node --check "$f" || exit 1; done
+    python3 scripts/check_perf_threshold_gate.py
     @echo "perf-smoke OK"

@@ -30,6 +30,18 @@
   `measures` as the public vocabulary. `/metadata` remains a deprecated alias
   for aggregate `/structure`, and `indicators` remains a deprecated request
   alias where accepted.
+- BREAKING: Measure discovery responses now spell the unit-multiplier field
+  `unit_multiplier`, matching the aggregate list and structure responses. The
+  previous `unit_mult` key on `/v1/datasets/{dataset_id}/measures` and
+  `/v1/datasets/{dataset_id}/measures/{measure_id}` is removed.
+- BREAKING: The aggregate `disclosure_control` block now reports suppression
+  counts only under `suppressed_observations`. The duplicate `suppressed_rows`
+  key is removed from both the native aggregate JSON responses and the OGC EDR
+  GeoJSON responses.
+- BREAKING: Aggregate JSON responses now include an `alternate` link pointing
+  at the SDMX representation (`?f=sdmx-json`, type
+  `application/vnd.sdmx.data+json;version=2.1`) alongside the existing `self`
+  and `describedby` links.
 - Aggregate queries now support CSV and SDMX JSON 2.1 representations, including
   `Accept: text/csv` and `Accept: application/vnd.sdmx.data+json;version=2.1`.
   Truncated aggregate results carry an explicit completeness signal.
