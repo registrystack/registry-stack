@@ -317,7 +317,10 @@ async fn cross_source_cel_claim_reads_dependencies_with_distinct_tokens() {
     response.assert_status_ok();
     let body: Value = response.json();
     assert_eq!(body["results"][0]["value"], json!(true));
-    assert_eq!(body["results"][0]["provenance"]["source_count"], json!(2));
+    assert_eq!(
+        body["results"][0]["provenance"]["used"]["source_count"],
+        json!(2)
+    );
 }
 
 #[test]

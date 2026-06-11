@@ -1048,6 +1048,23 @@ async fn openfn_sidecar_batch_by_identifier_posts_one_batch_match_request() {
     assert_eq!(items.len(), 3);
     for (idx, item) in items.iter().enumerate() {
         assert_eq!(item["status"], "succeeded", "item {idx} should succeed");
+        // The batch claim result carries the frozen v1 provenance shape on the
+        // wire, with computed_by gone.
+        let provenance = &item["claim_results"][0]["provenance"];
+        assert_eq!(
+            provenance["schema_version"],
+            json!("registry-notary-claim-provenance/v1"),
+            "item {idx} provenance must be v1"
+        );
+        assert_eq!(
+            provenance["generated_by"]["type"],
+            json!("claim_evaluation")
+        );
+        assert!(provenance["used"]["source_count"].is_number());
+        assert!(
+            !provenance.to_string().contains("computed_by"),
+            "computed_by must not appear in batch provenance"
+        );
     }
 }
 

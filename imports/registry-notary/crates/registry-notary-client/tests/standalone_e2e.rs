@@ -70,7 +70,7 @@ async fn client_evaluates_against_real_standalone_server() {
     let result = evaluation.body.first_result().expect("one result");
     assert_eq!(result.claim_id, "farmed-land-size");
     assert_eq!(result.value, Some(json!(3.5)));
-    assert_eq!(result.provenance.source_count, 1);
+    assert_eq!(result.provenance.used.source_count, 1);
 
     let audit = std::fs::read_to_string(&audit_path).expect("audit was written");
     assert!(audit.contains("\"decision\":\"evaluate\""));

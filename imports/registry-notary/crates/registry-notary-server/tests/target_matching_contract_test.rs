@@ -1337,7 +1337,14 @@ async fn unsupported_profile_context_is_rejected_before_source_read() {
         person_target("Amina", "Diallo", Some("1984-02-10")),
         "person-is-alive",
     );
-    delegated.on_behalf_of = Some(json!({"type": "Person", "id": "represented-1"}));
+    delegated.on_behalf_of = Some(registry_notary_core::EvidenceOnBehalfOf {
+        actor: registry_notary_core::EvidenceActor {
+            actor_type: "operator".to_string(),
+            id_hash: "hmac-sha256:represented-1".to_string(),
+            assurance: None,
+        },
+        delegation_ref: None,
+    });
     let delegated_error = runtime
         .evaluate(
             evidence_config(vec![person_claim()]),

@@ -112,11 +112,17 @@ fn build_claim_result_view() -> ClaimResultView {
         format: "json".to_string(),
         issued_at: "2026-05-24T12:00:00Z".to_string(),
         expires_at: None,
-        provenance: ClaimProvenance {
-            source_count: 1,
-            source_versions,
-            computed_by: "registry-notary-server".to_string(),
-        },
+        provenance: ClaimProvenance::new(
+            "registry-notary-server".to_string(),
+            "eval-bench".to_string(),
+            "date-of-birth".to_string(),
+            "1".to_string(),
+            registry_notary_core::ProvenanceUsed {
+                source_count: 1,
+                source_versions,
+                source_runtimes: Vec::new(),
+            },
+        ),
     }
 }
 

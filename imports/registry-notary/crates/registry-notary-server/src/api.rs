@@ -10102,11 +10102,17 @@ mod tests {
             format: FORMAT_SD_JWT_VC.to_string(),
             issued_at: "2026-05-23T00:00:00Z".to_string(),
             expires_at: None,
-            provenance: registry_notary_core::ClaimProvenance {
-                source_count: 0,
-                source_versions: std::collections::BTreeMap::new(),
-                computed_by: "test".to_string(),
-            },
+            provenance: registry_notary_core::ClaimProvenance::new(
+                "test".to_string(),
+                "eval-test".to_string(),
+                "claim".to_string(),
+                "1".to_string(),
+                registry_notary_core::ProvenanceUsed {
+                    source_count: 0,
+                    source_versions: std::collections::BTreeMap::new(),
+                    source_runtimes: Vec::new(),
+                },
+            ),
         }
     }
 

@@ -874,6 +874,7 @@ fn build_openapi_document() -> Value {
         ("EvidenceAssurance", evidence_assurance_schema()),
         ("EvidenceRelationship", evidence_relationship_schema()),
         ("EvidenceOnBehalfOf", evidence_on_behalf_of_schema()),
+        ("EvidenceActor", evidence_actor_schema()),
         ("EvaluationResponse", evaluation_response_schema()),
         ("ClaimResultView", claim_result_view_schema()),
         ("BatchEvaluateResponse", batch_evaluate_response_schema()),
@@ -882,6 +883,10 @@ fn build_openapi_document() -> Value {
         ("BatchItemError", batch_item_error_schema()),
         ("BatchSummary", batch_summary_schema()),
         ("ClaimProvenance", claim_provenance_schema()),
+        ("ProvenanceGeneratedBy", provenance_generated_by_schema()),
+        ("ProvenanceUsed", provenance_used_schema()),
+        ("SourceRuntimeSummary", source_runtime_summary_schema()),
+        ("SourceRuntimeAssurance", source_runtime_assurance_schema()),
         ("TargetRefView", target_ref_view_schema()),
         ("EvidenceEntityRef", evidence_entity_ref_schema()),
         ("MatchingMetadata", matching_metadata_schema()),
@@ -1898,7 +1903,35 @@ fn evidence_relationship_schema() -> Value {
 fn evidence_on_behalf_of_schema() -> Value {
     json!({
         "type": "object",
-        "additionalProperties": true
+        "description": "Frozen minimal actor/delegation envelope. Replaces the previous free-form object; free-form payloads are rejected. Simple deployments omit on_behalf_of entirely. Production-grade delegation (OAuth token exchange / RAR / CIBA) arrives post-1.0 as an additive profile that maps the actor onto OAuth act-claim semantics via the opaque delegation_ref; the shape does not bake in a single-actor assumption.",
+        "required": ["actor"],
+        "properties": {
+            "actor": { "$ref": "#/components/schemas/EvidenceActor" },
+            "delegation_ref": {
+                "type": "string",
+                "description": "Opaque reference to an out-of-band delegation record. Not interpreted by the envelope; the indirection point through which a later OAuth profile resolves an actor chain."
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn evidence_actor_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["type", "id_hash"],
+        "properties": {
+            "type": { "type": "string" },
+            "id_hash": {
+                "type": "string",
+                "description": "Keyed-hash identifier of the actor in hmac-sha256:<hex> format. Never a raw principal value."
+            },
+            "assurance": {
+                "type": "string",
+                "description": "Optional assurance level of the actor (for example an acr value)."
+            }
+        },
+        "additionalProperties": false
     })
 }
 
@@ -2058,14 +2091,103 @@ fn batch_summary_schema() -> Value {
 fn claim_provenance_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["source_count", "source_versions", "computed_by"],
+        "description": "Versioned claim provenance (registry-notary-claim-provenance/v1). PROV-mappable but not PROV-O. Requester-side identity (client, actor, subject) is deliberately absent; it lives in restricted audit only.",
+        "required": ["schema_version", "generated_by", "used", "derived_from"],
+        "properties": {
+            "schema_version": {
+                "type": "string",
+                "enum": ["registry-notary-claim-provenance/v1"]
+            },
+            "generated_by": { "$ref": "#/components/schemas/ProvenanceGeneratedBy" },
+            "used": { "$ref": "#/components/schemas/ProvenanceUsed" },
+            "derived_from": {
+                "type": "array",
+                "description": "Upstream provenance records this result was derived from. Always empty in v1; reserved for additive cross-evaluation linking.",
+                "items": { "type": "object" }
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn provenance_generated_by_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["type", "service_id", "evaluation_id", "claim_id", "claim_version"],
+        "properties": {
+            "type": {
+                "type": "string",
+                "enum": ["claim_evaluation"]
+            },
+            "service_id": {
+                "type": "string",
+                "description": "Identifier of the service that produced the result. Replaces the dropped computed_by field; the CCCEV renderer maps its provider agent from here."
+            },
+            "evaluation_id": { "type": "string" },
+            "claim_id": { "type": "string" },
+            "claim_version": { "type": "string" },
+            "policy_id": {
+                "type": "string",
+                "description": "Evaluation policy identifier: the policy under which this result was produced. Distinct from matching.policy_id, which names the target-matching policy for a source binding. Present for flows evaluated under a named policy (e.g. self-attestation); omitted for machine-client flows with no evaluation policy."
+            },
+            "policy_version": { "type": "string" },
+            "policy_hash": {
+                "type": "string",
+                "description": "sha256:<hex> digest of the evaluation policy. Public in v1: a hash revealing no policy content, used to correlate the result with a policy evidence-pack."
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn provenance_used_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["source_count", "source_versions", "source_runtimes"],
         "properties": {
             "source_count": { "type": "integer", "minimum": 0 },
             "source_versions": {
                 "type": "object",
                 "additionalProperties": { "type": "string" }
             },
-            "computed_by": { "type": "string" }
+            "source_runtimes": {
+                "type": "array",
+                "description": "Minimized summaries for connectors that cross an external execution boundary (the OpenFn sidecar). The full assurance document stays in restricted audit.",
+                "items": { "$ref": "#/components/schemas/SourceRuntimeSummary" }
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn source_runtime_summary_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["kind", "config_hash", "assurance"],
+        "properties": {
+            "kind": {
+                "type": "string",
+                "enum": ["openfn_sidecar"]
+            },
+            "config_hash": {
+                "type": "string",
+                "description": "sha256:<hex> digest of the runtime configuration."
+            },
+            "assurance": { "$ref": "#/components/schemas/SourceRuntimeAssurance" }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn source_runtime_assurance_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["pinned", "expression_hashes_verified", "runtime_verified", "smoke_verified"],
+        "properties": {
+            "pinned": { "type": "boolean" },
+            "expression_hashes_verified": { "type": "boolean" },
+            "runtime_verified": { "type": "boolean" },
+            "smoke_verified": { "type": "boolean" }
         },
         "additionalProperties": false
     })
@@ -2111,7 +2233,7 @@ fn matching_metadata_schema() -> Value {
         "properties": {
             "policy_id": {
                 "type": "string",
-                "description": "Configured matching policy identifier for the source binding."
+                "description": "Target-matching policy identifier for the source binding: the policy that governs how the request target is matched to a source record. Distinct from generated_by.policy_id in claim provenance, which names the evaluation policy under which the result was produced."
             },
             "method": {
                 "type": "string",
@@ -3261,9 +3383,23 @@ fn matching_example() -> Value {
 
 fn provenance_example() -> Value {
     json!({
-        "source_count": 1,
-        "source_versions": {},
-        "computed_by": "demo.registry-notary"
+        "schema_version": "registry-notary-claim-provenance/v1",
+        "generated_by": {
+            "type": "claim_evaluation",
+            "service_id": "demo.registry-notary",
+            "evaluation_id": "01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
+            "claim_id": "person_is_alive",
+            "claim_version": "1",
+            "policy_id": "self-attestation",
+            "policy_version": "v1",
+            "policy_hash": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+        },
+        "used": {
+            "source_count": 1,
+            "source_versions": {},
+            "source_runtimes": []
+        },
+        "derived_from": []
     })
 }
 
@@ -3284,6 +3420,119 @@ fn credential_issue_example() -> Value {
 mod tests {
     use super::{openapi_document, set_response_example};
     use serde_json::json;
+
+    #[test]
+    fn claim_provenance_schema_is_frozen_v1_contract() {
+        let doc = openapi_document();
+        let schemas = &doc["components"]["schemas"];
+
+        let provenance = &schemas["ClaimProvenance"];
+        let required: Vec<&str> = provenance["required"]
+            .as_array()
+            .expect("required array")
+            .iter()
+            .map(|value| value.as_str().expect("required entry is string"))
+            .collect();
+        assert_eq!(
+            required,
+            vec!["schema_version", "generated_by", "used", "derived_from"]
+        );
+        assert_eq!(provenance["additionalProperties"], json!(false));
+        assert_eq!(
+            provenance["properties"]["schema_version"]["enum"],
+            json!(["registry-notary-claim-provenance/v1"])
+        );
+
+        let generated_by = &schemas["ProvenanceGeneratedBy"];
+        assert_eq!(generated_by["additionalProperties"], json!(false));
+        // computed_by is dropped entirely; service_id replaces it.
+        assert!(generated_by["properties"].get("computed_by").is_none());
+        assert!(generated_by["properties"]["service_id"].is_object());
+        assert_eq!(
+            generated_by["properties"]["type"]["enum"],
+            json!(["claim_evaluation"])
+        );
+
+        let used = &schemas["ProvenanceUsed"];
+        assert_eq!(used["additionalProperties"], json!(false));
+        let used_required: Vec<&str> = used["required"]
+            .as_array()
+            .expect("required array")
+            .iter()
+            .map(|value| value.as_str().expect("string"))
+            .collect();
+        assert_eq!(
+            used_required,
+            vec!["source_count", "source_versions", "source_runtimes"]
+        );
+
+        let assurance = &schemas["SourceRuntimeAssurance"];
+        assert_eq!(assurance["additionalProperties"], json!(false));
+        for boolean in [
+            "pinned",
+            "expression_hashes_verified",
+            "runtime_verified",
+            "smoke_verified",
+        ] {
+            assert_eq!(assurance["properties"][boolean]["type"], json!("boolean"));
+        }
+    }
+
+    #[test]
+    fn both_policy_id_descriptions_disambiguate_evaluation_vs_matching() {
+        let doc = openapi_document();
+        let schemas = &doc["components"]["schemas"];
+
+        let generated_by_policy = schemas["ProvenanceGeneratedBy"]["properties"]["policy_id"]
+            ["description"]
+            .as_str()
+            .expect("generated_by.policy_id has a description");
+        assert!(
+            generated_by_policy.contains("Evaluation policy"),
+            "generated_by.policy_id must name the evaluation policy: {generated_by_policy}"
+        );
+
+        let matching_policy = schemas["MatchingMetadata"]["properties"]["policy_id"]["description"]
+            .as_str()
+            .expect("matching.policy_id has a description");
+        assert!(
+            matching_policy.contains("Target-matching policy"),
+            "matching.policy_id must name the target-matching policy: {matching_policy}"
+        );
+    }
+
+    #[test]
+    fn on_behalf_of_schema_is_frozen_envelope_rejecting_free_form() {
+        let doc = openapi_document();
+        let schemas = &doc["components"]["schemas"];
+
+        let envelope = &schemas["EvidenceOnBehalfOf"];
+        assert_eq!(
+            envelope["additionalProperties"],
+            json!(false),
+            "envelope must reject free-form payloads"
+        );
+        assert_eq!(envelope["required"], json!(["actor"]));
+        assert_eq!(
+            envelope["properties"]["actor"]["$ref"],
+            json!("#/components/schemas/EvidenceActor")
+        );
+        assert!(envelope["properties"]["delegation_ref"].is_object());
+
+        let actor = &schemas["EvidenceActor"];
+        assert_eq!(actor["additionalProperties"], json!(false));
+        let actor_required: Vec<&str> = actor["required"]
+            .as_array()
+            .expect("required array")
+            .iter()
+            .map(|value| value.as_str().expect("string"))
+            .collect();
+        assert_eq!(actor_required, vec!["type", "id_hash"]);
+        assert!(actor["properties"]["id_hash"]["description"]
+            .as_str()
+            .expect("id_hash description")
+            .contains("hmac-sha256"));
+    }
 
     #[test]
     fn documents_split_registry_notary_routes() {

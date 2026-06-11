@@ -224,11 +224,12 @@ use registry_notary_core::{
     ClaimDefinition, ClaimProvenance, ClaimRef, ClaimResultView, CredentialProfileConfig,
     DisclosureDowngrade, DisclosureProfile, EvaluateRequest, EvidenceConfig, EvidenceEntity,
     EvidenceEntityRef, EvidenceError, EvidenceFormat, EvidencePrincipal, EvidenceRequestContext,
-    MatchingMetadata, RegistryNotaryCelConfig, RenderRequest, RuleConfig, SelfAttestationConfig,
-    SelfAttestationDenialCode, SourceBindingConfig, SourceCapability,
-    StoredSelfAttestationMetadata, SubjectRequest, TargetRefView, FORMAT_CCCEV_JSONLD,
-    FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC, SD_JWT_VC_HOLDER_BINDING_METHOD,
-    SD_JWT_VC_ISSUER_KEY_TYPE, SD_JWT_VC_JWT_TYP, SD_JWT_VC_SIGNING_ALG,
+    MatchingMetadata, ProvenanceUsed, RegistryNotaryCelConfig, RenderRequest, RuleConfig,
+    SelfAttestationConfig, SelfAttestationDenialCode, SourceBindingConfig, SourceCapability,
+    SourceRuntimeSummary, StoredSelfAttestationMetadata, SubjectRequest, TargetRefView,
+    FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
+    SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_ISSUER_KEY_TYPE, SD_JWT_VC_JWT_TYP,
+    SD_JWT_VC_SIGNING_ALG,
 };
 use registry_platform_audit::AuditKeyHasher;
 #[cfg(feature = "registry-notary-cel")]
@@ -263,6 +264,18 @@ pub trait SourceReader: Send + Sync {
         _evidence: &'a EvidenceConfig,
         _claim_ids: &'a [String],
     ) -> Pin<Box<dyn Future<Output = Vec<String>> + Send + 'a>> {
+        Box::pin(async move { Vec::new() })
+    }
+
+    /// Minimized public summaries of any source runtimes a claim crosses that
+    /// represent an external execution boundary (the OpenFn sidecar). Returned
+    /// per claim so each claim's provenance reports only the runtimes it used.
+    /// The default is empty; only the standalone reader observes real sidecars.
+    fn observed_source_runtimes<'a>(
+        &'a self,
+        _evidence: &'a EvidenceConfig,
+        _claim_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Vec<SourceRuntimeSummary>> + Send + 'a>> {
         Box::pin(async move { Vec::new() })
     }
 
@@ -731,6 +744,17 @@ pub struct BatchEvaluateOptions<'a> {
     pub memo_observer: Option<&'a Arc<MemoState>>,
 }
 
+/// Evaluation policy identity threaded into per-claim provenance
+/// (`generated_by.policy_id` / `policy_version` / `policy_hash`). All optional:
+/// machine-client flows evaluate under no named policy and leave these unset,
+/// while self-attestation flows carry the policy that authorized the result.
+#[derive(Clone, Default)]
+struct EvaluationPolicy {
+    policy_id: Option<String>,
+    policy_version: Option<String>,
+    policy_hash: Option<String>,
+}
+
 struct ClaimEvaluationContext {
     evidence: Arc<EvidenceConfig>,
     source: Arc<dyn SourceReader>,
@@ -739,6 +763,7 @@ struct ClaimEvaluationContext {
     purpose: String,
     correlation_id: Option<BoundedCorrelationId>,
     evaluation_id: String,
+    policy: EvaluationPolicy,
     now: OffsetDateTime,
     // Per-request cap on parallel source bindings. Acquired only inside
     // `load_sources`, never at the claim level: sibling claims fan out
@@ -1152,6 +1177,7 @@ impl RegistryNotaryRuntime {
         let evaluation_id = Ulid::new().to_string();
         let now = OffsetDateTime::now_utc();
         let binding_concurrency = Arc::new(Semaphore::new(evidence.concurrency.bindings));
+        let policy = evaluation_policy_from_self_attestation(self_attestation.as_ref());
         let internal = self
             .evaluate_claims_dag(
                 Arc::clone(&evidence),
@@ -1168,6 +1194,7 @@ impl RegistryNotaryRuntime {
                 source_capability,
                 None, // single-subject evaluate: no cross-subject memo needed
                 correlation_id,
+                policy,
             )
             .await?;
         let views = request
@@ -1532,6 +1559,9 @@ impl RegistryNotaryRuntime {
                 source_capability,
                 Some(fetch_memo),
                 None,
+                // Batch evaluation is a machine-client flow with no named
+                // evaluation policy; the policy fields stay unset.
+                EvaluationPolicy::default(),
             )
             .await?;
         request
@@ -1571,6 +1601,7 @@ impl RegistryNotaryRuntime {
         source_capability: SourceCapability,
         fetch_memo: Option<FetchMemo>,
         correlation_id: Option<BoundedCorrelationId>,
+        policy: EvaluationPolicy,
     ) -> Result<BTreeMap<String, ClaimResultInternal>, EvidenceError> {
         let levels = build_claim_levels(&evidence, &requested, &claim_versions)?;
         let prior: Arc<Mutex<BTreeMap<String, ClaimResultInternal>>> =
@@ -1596,6 +1627,7 @@ impl RegistryNotaryRuntime {
                     purpose: purpose.clone(),
                     correlation_id: correlation_id.clone(),
                     evaluation_id: evaluation_id.clone(),
+                    policy: policy.clone(),
                     now,
                     binding_concurrency: Arc::clone(&binding_concurrency),
                     fetch_memo: fetch_memo.as_ref().map(Arc::clone),
@@ -1688,6 +1720,33 @@ impl RegistryNotaryRuntime {
     }
 }
 
+/// Derive the evaluation policy identity for provenance from stored
+/// self-attestation metadata. Self-attestation results are produced under the
+/// canonical `self-attestation` evaluation policy; the version and hash come
+/// from the metadata when present. Non-self-attestation flows pass `None` and
+/// receive an empty policy.
+fn evaluation_policy_from_self_attestation(
+    self_attestation: Option<&StoredSelfAttestationMetadata>,
+) -> EvaluationPolicy {
+    match self_attestation {
+        Some(metadata) => EvaluationPolicy {
+            policy_id: Some(SELF_ATTESTATION_POLICY_ID.to_string()),
+            policy_version: metadata
+                .policy_version
+                .as_ref()
+                .map(|version| version.as_str().to_string()),
+            policy_hash: metadata
+                .policy_hash
+                .as_ref()
+                .map(|hash| hash.as_str().to_string()),
+        },
+        None => EvaluationPolicy::default(),
+    }
+}
+
+/// Canonical evaluation `policy_id` for self-attestation flows (D3).
+const SELF_ATTESTATION_POLICY_ID: &str = "self-attestation";
+
 fn stored_evaluation_client_id(
     principal: &EvidencePrincipal,
     self_attestation: Option<&StoredSelfAttestationMetadata>,
@@ -1778,9 +1837,27 @@ async fn evaluate_claim_task(
             .depends_on
             .iter()
             .filter_map(|dep_id| snapshot.get(dep_id))
-            .map(|dep| dep.provenance.source_count)
+            .map(|dep| dep.provenance.used.source_count)
             .sum()
     };
+    let source_runtimes = ctx
+        .source
+        .observed_source_runtimes(&ctx.evidence, &claim.id)
+        .await;
+    let mut provenance = ClaimProvenance::new(
+        ctx.evidence.service_id.clone(),
+        ctx.evaluation_id.clone(),
+        claim.id.clone(),
+        claim.version.clone(),
+        ProvenanceUsed {
+            source_count: sources.len() + dep_source_count,
+            source_versions: BTreeMap::new(),
+            source_runtimes,
+        },
+    );
+    provenance.generated_by.policy_id = ctx.policy.policy_id.clone();
+    provenance.generated_by.policy_version = ctx.policy.policy_version.clone();
+    provenance.generated_by.policy_hash = ctx.policy.policy_hash.clone();
     Ok(ClaimResultInternal {
         evaluation_id: ctx.evaluation_id.clone(),
         claim_id: claim.id.clone(),
@@ -1792,11 +1869,7 @@ async fn evaluate_claim_task(
         value,
         issued_at,
         expires_at: None,
-        provenance: ClaimProvenance {
-            source_count: sources.len() + dep_source_count,
-            source_versions: BTreeMap::new(),
-            computed_by: ctx.evidence.service_id.clone(),
-        },
+        provenance,
     })
 }
 
@@ -3474,10 +3547,11 @@ fn render_cccev_evidence_node(config: &EvidenceConfig, result: &ClaimResultView)
         .map(|iri| json!({ "@id": iri }))
         .unwrap_or_else(|| json!({ "@id": format!("urn:claim:{}", result.claim_id) }));
 
-    // Build the issuing authority as an Agent node using the service_id.
+    // Build the issuing authority as an Agent node using the service_id from
+    // the provenance `generated_by` block (which replaced `computed_by`).
     let provided_by = json!({
         "@type": "foaf:Agent",
-        "dcterms:identifier": result.provenance.computed_by,
+        "dcterms:identifier": result.provenance.generated_by.service_id,
     });
 
     // Build the validity period from issued_at / expires_at.
@@ -4542,11 +4616,17 @@ mod tests {
             format: FORMAT_CCCEV_JSONLD.to_string(),
             issued_at: "2026-06-08T00:00:00Z".to_string(),
             expires_at: None,
-            provenance: ClaimProvenance {
-                source_count: 0,
-                source_versions: BTreeMap::new(),
-                computed_by: "runtime.test".to_string(),
-            },
+            provenance: ClaimProvenance::new(
+                "runtime.test".to_string(),
+                "eval-test".to_string(),
+                "selected".to_string(),
+                "2.0".to_string(),
+                ProvenanceUsed {
+                    source_count: 0,
+                    source_versions: BTreeMap::new(),
+                    source_runtimes: Vec::new(),
+                },
+            ),
         };
 
         let rendered =
@@ -4555,6 +4635,51 @@ mod tests {
         assert_eq!(
             rendered["@graph"][0]["cccev:supportsRequirement"]["@id"],
             json!("https://requirements.example/v2")
+        );
+    }
+
+    #[test]
+    fn render_cccev_maps_provider_agent_from_generated_by_service_id() {
+        let evidence = test_evidence(vec![test_claim("selected", Vec::new(), true)]);
+        let result = ClaimResultView {
+            evaluation_id: "eval-test".to_string(),
+            claim_id: "selected".to_string(),
+            claim_version: "1".to_string(),
+            subject_type: "Person".to_string(),
+            requester_ref: None,
+            target_ref: TargetRefView {
+                entity_type: "Person".to_string(),
+                handle: "rnref:v1:test".to_string(),
+                identifier_schemes: Vec::new(),
+                profile: None,
+            },
+            matching: None,
+            value: Some(json!(true)),
+            satisfied: Some(true),
+            disclosure: "predicate".to_string(),
+            format: FORMAT_CCCEV_JSONLD.to_string(),
+            issued_at: "2026-06-08T00:00:00Z".to_string(),
+            expires_at: None,
+            provenance: ClaimProvenance::new(
+                "registry-notary".to_string(),
+                "eval-test".to_string(),
+                "selected".to_string(),
+                "1".to_string(),
+                ProvenanceUsed {
+                    source_count: 0,
+                    source_versions: BTreeMap::new(),
+                    source_runtimes: Vec::new(),
+                },
+            ),
+        };
+
+        let rendered =
+            render_results(&evidence, &[result], FORMAT_CCCEV_JSONLD).expect("CCCEV renders");
+
+        assert_eq!(
+            rendered["@graph"][0]["cccev:isProvidedBy"]["dcterms:identifier"],
+            json!("registry-notary"),
+            "CCCEV provider agent must map from generated_by.service_id"
         );
     }
 

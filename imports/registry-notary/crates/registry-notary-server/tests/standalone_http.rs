@@ -7266,6 +7266,17 @@ async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
     evaluate.assert_status_ok();
     let evaluate_body: Value = evaluate.json();
     assert_eq!(evaluate_body["results"][0]["value"], json!(true));
+    // Self-attestation flows produce results under the canonical evaluation
+    // policy, so generated_by carries the policy triple.
+    let generated_by = &evaluate_body["results"][0]["provenance"]["generated_by"];
+    assert_eq!(generated_by["policy_id"], json!("self-attestation"));
+    assert!(
+        generated_by["policy_hash"]
+            .as_str()
+            .expect("self-attestation provenance carries policy_hash")
+            .starts_with("sha256:"),
+        "policy_hash must use the sha256:<hex> prefixed format"
+    );
     let evaluation_id = evaluate_body["results"][0]["evaluation_id"]
         .as_str()
         .expect("evaluation id returned")
@@ -9435,7 +9446,42 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
     response.assert_status_ok();
     let body: Value = response.json();
     assert_eq!(body["results"][0]["value"], json!(3.5));
-    assert_eq!(body["results"][0]["provenance"]["source_count"], json!(1));
+    let provenance = &body["results"][0]["provenance"];
+    assert_eq!(
+        provenance["schema_version"],
+        json!("registry-notary-claim-provenance/v1")
+    );
+    assert_eq!(
+        provenance["generated_by"]["type"],
+        json!("claim_evaluation")
+    );
+    assert_eq!(
+        provenance["generated_by"]["service_id"],
+        body["results"][0]["provenance"]["generated_by"]["service_id"]
+    );
+    assert!(provenance["generated_by"]["service_id"].is_string());
+    assert_eq!(
+        provenance["generated_by"]["claim_id"],
+        json!("farmed-land-size")
+    );
+    assert_eq!(provenance["used"]["source_count"], json!(1));
+    assert_eq!(provenance["derived_from"], json!([]));
+    // computed_by must be gone from the wire entirely.
+    assert!(
+        !provenance.to_string().contains("computed_by"),
+        "computed_by must not appear in claim provenance on the wire"
+    );
+    // Machine-client flow evaluates under no named policy: policy_* omitted.
+    assert!(provenance["generated_by"].get("policy_id").is_none());
+    // Requester-side identity must never appear in claim provenance.
+    for forbidden in ["client", "actor", "subject"] {
+        assert!(
+            provenance.get(forbidden).is_none()
+                && provenance["generated_by"].get(forbidden).is_none()
+                && provenance["used"].get(forbidden).is_none(),
+            "requester-side field {forbidden} must not appear in claim provenance"
+        );
+    }
 
     #[cfg(feature = "registry-notary-cel")]
     {
@@ -9453,7 +9499,7 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
         let cel_body: Value = cel_response.json();
         assert_eq!(cel_body["results"][0]["value"], json!(true));
         assert_eq!(
-            cel_body["results"][0]["provenance"]["source_count"],
+            cel_body["results"][0]["provenance"]["used"]["source_count"],
             json!(1)
         );
     }
@@ -10055,7 +10101,10 @@ async fn standalone_server_reads_dci_source_and_evaluates_cel_claim() {
     response.assert_status_ok();
     let body: Value = response.json();
     assert_eq!(body["results"][0]["value"], json!(true));
-    assert_eq!(body["results"][0]["provenance"]["source_count"], json!(1));
+    assert_eq!(
+        body["results"][0]["provenance"]["used"]["source_count"],
+        json!(1)
+    );
 
     let observed = observed
         .lock()

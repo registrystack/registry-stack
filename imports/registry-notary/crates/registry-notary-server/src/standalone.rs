@@ -32,8 +32,9 @@ use registry_notary_core::{
     RegistryNotaryAdminListenerMode, RequestIdentifier, SelfAttestationAssuranceClaimSource,
     SelfAttestationClaimSource, SelfAttestationDenialCode, SigningKeyConfig,
     SigningKeyProviderConfig, SourceAuthConfig, SourceBindingConfig, SourceConnectionConfig,
-    SourceConnectorKind, StandaloneRegistryNotaryConfig, SubjectRequest, VerifiedClaimName,
-    VerifiedClaimValue,
+    SourceConnectorKind, SourceRuntimeAssurance, SourceRuntimeSummary,
+    StandaloneRegistryNotaryConfig, SubjectRequest, VerifiedClaimName, VerifiedClaimValue,
+    SOURCE_RUNTIME_KIND_OPENFN_SIDECAR,
 };
 use registry_platform_audit::{
     AuditError, AuditKeyHasher, AuditProfile, AuditSink as PlatformAuditSink, ChainState,
@@ -1132,6 +1133,30 @@ fn cached_openfn_sidecar_config_hash(
     Some(cached.assurance.config_hash.clone())
 }
 
+/// Minimized public summary of a validated OpenFn sidecar runtime, for claim
+/// provenance. Only returns `Some` when a cached assurance exists and validates
+/// against the pinned expected config; `pinned` is therefore always `true` here
+/// (the entry could not validate against a non-pinned config). The full
+/// assurance document stays in restricted audit.
+fn cached_openfn_sidecar_runtime_summary(
+    connection: &ResolvedEvidenceSourceConnection,
+) -> Option<SourceRuntimeSummary> {
+    let runtime = connection.expected_sidecar.as_ref()?;
+    let cache = runtime.cache.lock().ok()?;
+    let cached = cache.as_ref()?;
+    validate_openfn_sidecar_assurance(&runtime.expected, &cached.assurance).ok()?;
+    Some(SourceRuntimeSummary {
+        kind: SOURCE_RUNTIME_KIND_OPENFN_SIDECAR.to_string(),
+        config_hash: cached.assurance.config_hash.clone(),
+        assurance: SourceRuntimeAssurance {
+            pinned: true,
+            expression_hashes_verified: cached.assurance.expression_hashes_verified,
+            runtime_verified: cached.assurance.runtime_verified,
+            smoke_verified: cached.assurance.smoke_verified,
+        },
+    })
+}
+
 fn validate_openfn_sidecar_assurance(
     expected: &ExpectedSidecarConfig,
     observed: &ObservedSidecarAssurance,
@@ -1213,6 +1238,32 @@ impl SourceReader for HttpEvidenceSources {
                 }
             }
             hashes.into_iter().collect()
+        })
+    }
+
+    fn observed_source_runtimes<'a>(
+        &'a self,
+        evidence: &'a EvidenceConfig,
+        claim_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Vec<SourceRuntimeSummary>> + Send + 'a>> {
+        Box::pin(async move {
+            let Some(claim) = evidence.claims.iter().find(|claim| claim.id == claim_id) else {
+                return Vec::new();
+            };
+            // Deduplicate on config_hash: two bindings can share one sidecar.
+            let mut summaries: BTreeMap<String, SourceRuntimeSummary> = BTreeMap::new();
+            for binding in claim.source_bindings.values() {
+                if binding.connector != SourceConnectorKind::OpenFnSidecar {
+                    continue;
+                }
+                let Some(connection) = self.source_connection(binding) else {
+                    continue;
+                };
+                if let Some(summary) = cached_openfn_sidecar_runtime_summary(connection) {
+                    summaries.insert(summary.config_hash.clone(), summary);
+                }
+            }
+            summaries.into_values().collect()
         })
     }
 
@@ -7588,11 +7639,17 @@ credential_profiles:
             format: FORMAT_CLAIM_RESULT_JSON.to_string(),
             issued_at: "2026-05-23T00:00:00Z".to_string(),
             expires_at: None,
-            provenance: ClaimProvenance {
-                source_count: 0,
-                source_versions: BTreeMap::new(),
-                computed_by: "softhsm-test".to_string(),
-            },
+            provenance: ClaimProvenance::new(
+                "softhsm-test".to_string(),
+                "eval-test".to_string(),
+                "claim".to_string(),
+                "1".to_string(),
+                registry_notary_core::ProvenanceUsed {
+                    source_count: 0,
+                    source_versions: BTreeMap::new(),
+                    source_runtimes: Vec::new(),
+                },
+            ),
         }];
         let signed = registry_notary_core::sd_jwt::issue(
             profile,
@@ -8692,7 +8749,7 @@ config_trust:
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].claim_id, "date-of-birth");
         assert_eq!(results[0].value, Some(json!("1990-01-01")));
-        assert_eq!(results[0].provenance.source_count, 1);
+        assert_eq!(results[0].provenance.used.source_count, 1);
     }
 
     #[tokio::test]
@@ -8787,8 +8844,19 @@ config_trust:
             source
                 .observed_sidecar_config_hashes(&evidence, &["date-of-birth".to_string()])
                 .await,
-            vec![repo.config_hash]
+            vec![repo.config_hash.clone()]
         );
+        // The minimized sidecar summary appears in the public claim provenance
+        // for a connector that crossed an external execution boundary.
+        let runtimes = &results[0].provenance.used.source_runtimes;
+        assert_eq!(runtimes.len(), 1, "one sidecar runtime summary expected");
+        assert_eq!(runtimes[0].kind, SOURCE_RUNTIME_KIND_OPENFN_SIDECAR);
+        assert_eq!(runtimes[0].config_hash, repo.config_hash);
+        assert!(runtimes[0].config_hash.starts_with("sha256:"));
+        assert!(runtimes[0].assurance.pinned);
+        assert!(runtimes[0].assurance.expression_hashes_verified);
+        assert!(runtimes[0].assurance.runtime_verified);
+        assert!(runtimes[0].assurance.smoke_verified);
     }
 
     #[tokio::test]
