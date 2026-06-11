@@ -376,6 +376,14 @@ async fn area_get_wkt_returns_grouped_admin_features() {
     assert_eq!(body["dataset_id"], "social_registry");
     assert_eq!(body["aggregate_id"], "beneficiaries_by_municipality");
     assert!(body.get("crs").is_none());
+    assert!(
+        body["disclosure_control"].get("suppressed_rows").is_none(),
+        "legacy suppressed_rows key must be absent from the EDR disclosure block"
+    );
+    assert!(
+        body["disclosure_control"].get("suppressed_observations").is_some(),
+        "suppressed_observations must be present in the EDR disclosure block"
+    );
     let features = body["features"].as_array().expect("features");
     assert_eq!(features.len(), 1);
     assert_eq!(features[0]["properties"]["municipality"], "mun-1");

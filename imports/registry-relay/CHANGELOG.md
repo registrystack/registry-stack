@@ -36,7 +36,8 @@
   `/v1/datasets/{dataset_id}/measures/{measure_id}` is removed.
 - BREAKING: The aggregate `disclosure_control` block now reports suppression
   counts only under `suppressed_observations`. The duplicate `suppressed_rows`
-  key on aggregate JSON responses is removed.
+  key is removed from both the native aggregate JSON responses and the OGC EDR
+  GeoJSON responses.
 - BREAKING: Aggregate JSON responses now include an `alternate` link pointing
   at the SDMX representation (`?f=sdmx-json`, type
   `application/vnd.sdmx.data+json;version=2.1`) alongside the existing `self`
