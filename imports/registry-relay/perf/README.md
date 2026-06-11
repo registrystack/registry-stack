@@ -73,12 +73,15 @@ op run --env-file=target/perf/perf.env -- \
   target/release/registry-relay --config perf/config/medium.yaml
 ```
 
-Without 1Password (source the env file directly):
+Without 1Password (export the env file lines literally; do not shell-source
+the file, quote removal corrupts the JSON `REGISTRY_RELAY_PROVENANCE_JWK`
+value):
 
 ```bash
-set -a
-. target/perf/perf.env
-set +a
+while IFS= read -r line; do
+  case "$line" in ''|'#'*) continue ;; esac
+  export "$line"
+done < target/perf/perf.env
 target/release/registry-relay --config perf/config/medium.yaml
 ```
 
@@ -102,10 +105,14 @@ op run --env-file=target/perf/perf.env -- k6 run perf/k6/mixed_read.js
 op run --env-file=target/perf/perf.env -- k6 run perf/k6/evidence verification scenario
 ```
 
-Or source the env file and run k6 directly:
+Or export the env file (same literal-export loop as above) and run k6
+directly:
 
 ```bash
-set -a; . target/perf/perf.env; set +a
+while IFS= read -r line; do
+  case "$line" in ''|'#'*) continue ;; esac
+  export "$line"
+done < target/perf/perf.env
 k6 run perf/k6/cached_304.js
 ```
 
