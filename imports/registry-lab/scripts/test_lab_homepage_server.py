@@ -1087,5 +1087,33 @@ class InternalRequestSourceTest(unittest.TestCase):
         self.assertIn("Copy as curl", html)
 
 
+class ScenarioPageUxTest(unittest.TestCase):
+    """Post-run flow cues, screen-reader announcements, and locked-step UX."""
+
+    def setUp(self) -> None:
+        self.html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+
+    def test_status_pill_has_role_status(self) -> None:
+        self.assertIn('role="status"', self.html, "status pill must have role='status' for screen-reader announcements")
+
+    def test_friendly_response_has_aria_live_polite(self) -> None:
+        self.assertIn('aria-live="polite"', self.html, "friendly-response container must have aria-live='polite'")
+
+    def test_aria_disabled_present_for_locked_steps(self) -> None:
+        self.assertIn("aria-disabled", self.html, "locked step buttons must use aria-disabled instead of (or in addition to) disabled")
+
+    def test_locked_step_hint_copy_present(self) -> None:
+        self.assertIn("Locked until step", self.html, "locked steps must display a 'Locked until step N completes.' hint")
+
+    def test_try_again_retry_label_logic_present(self) -> None:
+        self.assertIn("Try again", self.html, "needs_attention status must offer a 'Try again' label on the retry button")
+
+    def test_prefers_reduced_motion_in_css(self) -> None:
+        self.assertIn("prefers-reduced-motion", self.html, "spinner animation must be wrapped in prefers-reduced-motion media query")
+
+    def test_scroll_into_view_usage_present(self) -> None:
+        self.assertIn("scrollIntoView", self.html, "next step or receipt must be scrolled into view after a step completes")
+
+
 if __name__ == "__main__":
     unittest.main()

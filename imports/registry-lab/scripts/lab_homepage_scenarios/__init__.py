@@ -193,6 +193,10 @@ def scenario_page_html(title: str = "Registry Lab Scenarios", scenario_id: str |
     .status-pill {{ border: 1px solid var(--registry-rule); color: var(--registry-muted); display: inline-flex; font-family: var(--registry-mono); font-size: 12px; min-height: 30px; padding: 5px 8px; white-space: nowrap; }}
     .status-pill.done, .status-pill.denied_as_expected {{ background: var(--registry-ok-bg); border-color: #b7ddc9; color: var(--registry-teal); }}
     .status-pill.running {{ background: var(--registry-warn-bg); border-color: #e2b66c; color: var(--registry-amber); }}
+    @media (prefers-reduced-motion: no-preference) {{
+      .status-pill.running::before {{ animation: pill-spin .7s linear infinite; border: 2px solid var(--registry-amber); border-top-color: transparent; border-radius: 50%; content: ""; display: inline-block; height: 10px; margin-right: 6px; width: 10px; }}
+      @keyframes pill-spin {{ to {{ transform: rotate(360deg); }} }}
+    }}
     .status-pill.local_only {{ background: var(--registry-warn-bg); border-color: #e2b66c; color: var(--registry-amber); }}
     .status-pill.needs_attention {{ background: var(--registry-bad-bg); border-color: #d9a1a1; color: #a22d2d; }}
     .step-body {{ display: grid; gap: 14px; padding: 18px; }}
@@ -206,7 +210,7 @@ def scenario_page_html(title: str = "Registry Lab Scenarios", scenario_id: str |
     .actions {{ display: flex; gap: 10px; flex-wrap: wrap; }}
     button, .button {{ align-items: center; background: #fff; border: 1px solid var(--registry-blue); color: var(--registry-blue); cursor: pointer; display: inline-flex; font-weight: 700; justify-content: center; min-height: 38px; padding: 8px 12px; white-space: nowrap; }}
     button:hover, .button:hover {{ background: var(--registry-active); text-decoration: none; }}
-    button:disabled {{ border-color: var(--registry-rule); color: var(--registry-muted); cursor: not-allowed; }}
+    button:disabled, button[aria-disabled="true"] {{ border-color: var(--registry-rule); color: var(--registry-muted); cursor: not-allowed; }}
     .primary {{ background: var(--registry-blue); border-color: var(--registry-blue); color: #fff; }}
     .primary:hover {{ background: var(--registry-blue-dark); }}
     details {{ border-top: 1px solid var(--registry-rule); }}
@@ -463,17 +467,20 @@ def scenario_page_html(title: str = "Registry Lab Scenarios", scenario_id: str |
         </article>`;
       }}
       const runnable = canRun(index);
+      const ariaDisabled = runnable ? "" : `aria-disabled="true"`;
+      const lockedHint = !runnable && index > 0 ? `<p class="meta" data-locked-hint-for="${{escapeHtml(step.id)}}">Locked until step ${{index}} completes.</p>` : "";
       return `<article class="step ${{runnable ? "" : "locked"}}" id="step-${{escapeHtml(step.id)}}">
         <div class="step-head">
           <span class="step-number">${{index + 1}}</span>
           <div><h3>${{escapeHtml(step.label)}}</h3><p>${{escapeHtml(step.prompt)}}</p></div>
-          <span class="status-pill" data-status-for="${{escapeHtml(step.id)}}">Not run</span>
+          <span class="status-pill" role="status" data-status-for="${{escapeHtml(step.id)}}">Not run</span>
         </div>
         <div class="step-body">
           <div class="request-text"><strong>What this request will do:</strong> ${{escapeHtml(step.request_summary)}}</div>
           ${{renderReuse(step.reuses || [])}}
-          <div class="actions"><button class="primary" type="button" data-run-step="${{escapeHtml(step.id)}}" ${{runnable ? "" : "disabled"}}>${{escapeHtml(step.button)}}</button></div>
-          <div class="friendly-response" data-friendly-for="${{escapeHtml(step.id)}}"></div>
+          ${{lockedHint}}
+          <div class="actions"><button class="primary" type="button" data-run-step="${{escapeHtml(step.id)}}" data-run-label="${{escapeHtml(step.button)}}" ${{ariaDisabled}}>${{escapeHtml(step.button)}}</button></div>
+          <div class="friendly-response" aria-live="polite" data-friendly-for="${{escapeHtml(step.id)}}"></div>
           <details><summary>Show technical request</summary><div data-request-source-for="${{escapeHtml(step.id)}}">${{sourceBlock({{ note: "Run this step to capture the request source." }})}}</div></details>
           <details><summary>Show technical response</summary><div data-response-source-for="${{escapeHtml(step.id)}}">${{sourceBlock({{ note: "Run this step to capture the response source." }})}}</div></details>
         </div>
@@ -482,7 +489,10 @@ def scenario_page_html(title: str = "Registry Lab Scenarios", scenario_id: str |
 
     function wireStepButtons() {{
       document.querySelectorAll("[data-run-step]").forEach((button) => {{
-        button.addEventListener("click", () => runStep(button.getAttribute("data-run-step") || "", button));
+        button.addEventListener("click", () => {{
+          if (button.getAttribute("aria-disabled") === "true") return;
+          runStep(button.getAttribute("data-run-step") || "", button);
+        }});
       }});
     }}
 
@@ -541,19 +551,36 @@ def scenario_page_html(title: str = "Registry Lab Scenarios", scenario_id: str |
       if (node) node.innerHTML = sourceBlock(value);
     }}
 
-    function unlockNextSteps() {{
+    function unlockNextSteps(completedStepId) {{
       const story = state.story;
+      let firstUnlocked = null;
       for (const button of document.querySelectorAll("[data-run-step]")) {{
         const stepId = button.getAttribute("data-run-step") || "";
         const stepIndex = story.steps.findIndex((step) => step.id === stepId);
-        button.disabled = !canRun(stepIndex);
-        button.closest(".step")?.classList.toggle("locked", !canRun(stepIndex));
+        const runnable = canRun(stepIndex);
+        if (runnable) {{
+          button.removeAttribute("aria-disabled");
+          const hint = document.querySelector(`[data-locked-hint-for="${{CSS.escape(stepId)}}"]`);
+          if (hint) hint.remove();
+          if (!firstUnlocked && !state.completed.has(stepId)) firstUnlocked = button;
+        }} else {{
+          button.setAttribute("aria-disabled", "true");
+        }}
+        button.closest(".step")?.classList.toggle("locked", !runnable);
       }}
-      if (story.steps.every((step) => state.completed.has(step.id))) byId("receipt")?.classList.add("visible");
+      const allDone = story.steps.every((step) => state.completed.has(step.id));
+      if (allDone) {{
+        const receipt = byId("receipt");
+        receipt?.classList.add("visible");
+        receipt?.scrollIntoView({{ block: "start" }});
+      }} else if (firstUnlocked) {{
+        firstUnlocked.focus({{ preventScroll: true }});
+        firstUnlocked.closest(".step")?.scrollIntoView({{ block: "start" }});
+      }}
     }}
 
     async function runStep(stepId, button) {{
-      button.disabled = true;
+      button.setAttribute("aria-disabled", "true");
       updateStatus(stepId, "running");
       const response = await fetch(`/api/scenarios/${{encodeURIComponent(state.story.id)}}/${{encodeURIComponent(stepId)}}`, {{method: "POST"}});
       const data = await response.json();
@@ -564,9 +591,10 @@ def scenario_page_html(title: str = "Registry Lab Scenarios", scenario_id: str |
       updateStatus(stepId, status);
       if (status === "done" || status === "denied_as_expected") {{
         state.completed.add(stepId);
-        setTimeout(unlockNextSteps, 80);
+        setTimeout(() => unlockNextSteps(stepId), 80);
       }} else {{
-        button.disabled = false;
+        button.removeAttribute("aria-disabled");
+        if (status === "needs_attention") button.textContent = "Try again";
       }}
     }}
 
