@@ -110,7 +110,7 @@ exposure-check:
 # Validate the committed OpenAPI artifact and, when a base ref is supplied,
 # fail on breaking API diffs while allowing additive changes.
 openapi-contract base_ref="":
-    if [ -n "{{base_ref}}" ]; then scripts/check-openapi-contract.sh "{{base_ref}}"; else scripts/check-openapi-contract.sh; fi
+    scripts/check-openapi-contract.sh "{{base_ref}}"
 
 # Validate Dockerfiles for obvious secret-copy hazards.
 container-security:
