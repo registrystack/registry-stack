@@ -27,12 +27,12 @@ defaults:
   run:
     working-directory: registry-notary
 
-# Smoke-checks the perf scaffolding with a short CI-sized k6 run.
+# Smoke-checks the perf scaffolding and enforces CI-sized k6 latency thresholds.
 # It verifies:
 #   1. The Criterion benches compile (`cargo bench --no-run`).
 #   2. Every k6 scenario and shared lib passes `node --check`.
 #   3. Perf Python scripts, source stub, and tests pass.
-#   4. A short small-profile k6 smoke runs against the release server and stub.
+#   4. A short small-profile k6 run gates latency thresholds against the release server and stub.
 # Use perf/README.md for the longer baseline capture workflow.
 
 jobs:
@@ -122,7 +122,7 @@ jobs:
           done
           docker pull "$K6_DOCKER_IMAGE"
 
-      - name: Run small k6 smoke
+      - name: Run small k6 threshold gate
         run: |
           set -euo pipefail
           mkdir -p target/perf/reports target/perf/results
@@ -155,7 +155,6 @@ jobs:
               -e REGISTRY_NOTARY_VUS=2 \
               -e REGISTRY_NOTARY_PROFILE=small \
               -e REGISTRY_NOTARY_SUBJECT_COUNT=1000 \
-              -e REGISTRY_NOTARY_NO_THRESHOLD=1 \
               -e K6_SUMMARY_TREND_STATS=min,med,avg,max,p\(90\),p\(95\),p\(99\) \
               -v "$PWD:/workspace" \
               -w /workspace \
