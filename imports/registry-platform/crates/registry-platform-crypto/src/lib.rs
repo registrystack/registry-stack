@@ -43,6 +43,7 @@ pub enum KeyProviderKind {
     Pkcs11,
     LocalPkcs12File,
     Kms,
+    WorkloadIdentity,
 }
 
 impl KeyProviderKind {
@@ -54,6 +55,7 @@ impl KeyProviderKind {
             Self::Pkcs11 => "pkcs11",
             Self::LocalPkcs12File => "local_pkcs12_file",
             Self::Kms => "kms",
+            Self::WorkloadIdentity => "workload_identity",
         }
     }
 }
@@ -114,6 +116,27 @@ impl KeyReadiness {
     #[must_use]
     pub const fn is_ready(self) -> bool {
         matches!(self, Self::Ready)
+    }
+}
+
+/// Posture-safe readiness input for readiness-gated live apply.
+///
+/// This intentionally carries only shared public vocabulary. Product-specific
+/// provider identifiers, local paths, slots, labels, trust domains, and
+/// diagnostics stay in product-local config or private logs and must not be
+/// copied into this shared snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeyReadinessSnapshot {
+    pub provider_kind: KeyProviderKind,
+    pub status: KeyStatus,
+    pub readiness: KeyReadiness,
+}
+
+impl KeyReadinessSnapshot {
+    #[must_use]
+    pub const fn allows_live_apply(self) -> bool {
+        self.status.may_sign() && self.readiness.is_ready()
     }
 }
 
@@ -1504,6 +1527,7 @@ mod tests {
             (KeyProviderKind::Pkcs11, "pkcs11"),
             (KeyProviderKind::LocalPkcs12File, "local_pkcs12_file"),
             (KeyProviderKind::Kms, "kms"),
+            (KeyProviderKind::WorkloadIdentity, "workload_identity"),
         ];
 
         for (kind, expected) in cases {
@@ -1554,6 +1578,52 @@ mod tests {
             assert_eq!(decoded.as_str(), expected);
             assert_eq!(decoded.is_ready(), is_ready);
         }
+    }
+
+    #[test]
+    fn unknown_provider_status_and_readiness_values_fail_closed() {
+        assert!(serde_json::from_str::<KeyProviderKind>("\"provider_plugin\"").is_err());
+        assert!(serde_json::from_str::<KeyStatus>("\"retired\"").is_err());
+        assert!(serde_json::from_str::<KeyReadiness>("\"warming_up\"").is_err());
+    }
+
+    #[test]
+    fn readiness_gate_snapshot_distinguishes_apply_states_without_secret_material() {
+        let cases = [
+            (KeyReadiness::Ready, "ready", true),
+            (KeyReadiness::Degraded, "degraded", false),
+            (KeyReadiness::NotReady, "not_ready", false),
+            (KeyReadiness::Unknown, "unknown", false),
+        ];
+
+        for (readiness, expected_label, allows_apply) in cases {
+            let snapshot = KeyReadinessSnapshot {
+                provider_kind: KeyProviderKind::WorkloadIdentity,
+                status: KeyStatus::Active,
+                readiness,
+            };
+            assert_eq!(snapshot.allows_live_apply(), allows_apply);
+            let value = serde_json::to_value(snapshot).expect("snapshot serializes");
+            assert_eq!(value["provider_kind"], "workload_identity");
+            assert_eq!(value["status"], "active");
+            assert_eq!(value["readiness"], expected_label);
+            assert_eq!(
+                value
+                    .as_object()
+                    .expect("snapshot is object")
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                vec!["provider_kind", "readiness", "status"]
+            );
+        }
+
+        let disabled_ready = KeyReadinessSnapshot {
+            provider_kind: KeyProviderKind::Kms,
+            status: KeyStatus::Disabled,
+            readiness: KeyReadiness::Ready,
+        };
+        assert!(!disabled_ready.allows_live_apply());
     }
 
     #[test]

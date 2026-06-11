@@ -121,6 +121,10 @@ Governed runtime configuration integrations should follow the public
 verification, Registry trust roots, anti-rollback state, approval semantics, and
 apply result vocabulary.
 
+Secret-provider integrations should follow the
+[`secret-provider-readiness`](docs/secret-provider-readiness.md) contract for
+provider labels, readiness-gated apply, and posture-safe redaction.
+
 The in-memory cache and replay stores are for tests and single-process
 development. Services that require replay protection across restarts or
 active-active deployments need a durable shared backend such as Redis.

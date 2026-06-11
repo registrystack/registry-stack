@@ -8,6 +8,8 @@ Crypto primitives shared by registry services.
 - EdDSA signing and verification helpers.
 - `SigningProvider` and `LocalJwkSigner` for code that should sign without
   depending directly on in-process private JWK ownership.
+- `KeyProviderKind`, `KeyStatus`, `KeyReadiness`, and `KeyReadinessSnapshot`
+  for provider-neutral readiness reporting and live-apply gates.
 - Public JWK thumbprints through `PublicJwk::jkt`.
 - DID validation for allowed `did:web` and `did:key` inputs.
 - JSON Canonicalization Scheme style byte output for `serde_json::Value`.
@@ -74,6 +76,13 @@ consumer needs them and can define the interoperability and security policy.
   KMS. Adapters must bound timeouts and error messages, avoid secret-bearing
   logs, and provide configured public JWK metadata when the backing service
   cannot export it directly.
+- Readiness-gated live apply should use `KeyReadinessSnapshot`; only
+  `status = active` plus `readiness = ready` is accepted. Degraded,
+  not-ready, unknown, publish-only, and disabled keys fail closed before
+  anti-rollback state changes.
+- Provider posture should use the shared provider/readiness labels and follow
+  the product-neutral redaction contract in
+  [`docs/secret-provider-readiness.md`](../../docs/secret-provider-readiness.md).
 - `did:web` validation rejects IP literals, localhost, obvious metadata hosts,
   empty labels, and path traversal.
 - Signing helpers validate key material before use.
