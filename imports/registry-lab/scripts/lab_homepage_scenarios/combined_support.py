@@ -48,7 +48,7 @@ def story() -> dict[str, Any]:
         "short_title": "Combined support eligibility",
         "proves": "A Notary can compose subclaims from multiple authorities into one decision-ready evidence result.",
         "availability": "local-only",
-        "availability_note": "Requires the local shared eligibility Notary on port 4323 and SHARED_EVIDENCE_CLIENT_BEARER.",
+        "availability_note": "Runs on the local lab profile with the shared eligibility Notary on port 4323 (SHARED_EVIDENCE_CLIENT_BEARER).",
         "intro": (
             "A caseworker reviews Miguel's support application. The final answer depends on civil status, an active social program, "
             "and district service availability, but the caseworker should not receive source rows from every registry."

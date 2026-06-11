@@ -527,7 +527,7 @@ class ScenarioPayloadTest(unittest.TestCase):
 
     def test_local_only_scenarios_report_required_token_before_execution(self) -> None:
         os.environ.pop("SHARED_EVIDENCE_CLIENT_BEARER", None)
-        result = server.run_scenario_step(server.enrich_config({"credentials": []}), "combined-support", "discover")
+        result = server.run_scenario_step(server.enrich_config({"credentials": []}), "combined-support", "discover", lab_mode="local")
         self.assertEqual(result["friendly"]["status"], "needs_attention")
         self.assertIn("SHARED_EVIDENCE_CLIENT_BEARER", str(result["friendly"]["facts"]))
         self.assertIn("[runtime demo token missing]", str(result["request_source"]))
@@ -553,7 +553,7 @@ class ScenarioPayloadTest(unittest.TestCase):
             return Resp()
 
         with mock.patch.object(server.urllib.request, "urlopen", fake):
-            result = server.run_scenario_step(self._payload_config(), "social-aggregate", "read-aggregate")
+            result = server.run_scenario_step(self._payload_config(), "social-aggregate", "read-aggregate", lab_mode="local")
 
         self.assertEqual(result["friendly"]["status"], "done")
         self.assertEqual(
@@ -696,6 +696,203 @@ class ScenarioPageHtmlTest(unittest.TestCase):
         self.assertIn("/api/scenarios/${encodeURIComponent(state.story.id)}/", self.html)
         self.assertIn('const ACTIVE_SCENARIO = "alive-proof"', story_html)
         self.assertNotIn("Cell 1", self.html)
+
+
+class LabModePayloadTest(unittest.TestCase):
+    """lab_mode and runnable fields in scenario_payload, and guard in run_scenario_step."""
+
+    def setUp(self) -> None:
+        self._saved = dict(os.environ)
+        os.environ["CIVIL_RAW"] = "civil-token"
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._saved)
+
+    def _config(self) -> dict:
+        return server.enrich_config({"credentials": []})
+
+    # ---- scenario_payload catalogue ----
+
+    def test_catalogue_has_lab_mode_hosted(self) -> None:
+        payload = server.scenario_payload(self._config(), lab_mode="hosted")
+        self.assertEqual(payload["lab_mode"], "hosted")
+
+    def test_catalogue_has_lab_mode_local(self) -> None:
+        payload = server.scenario_payload(self._config(), lab_mode="local")
+        self.assertEqual(payload["lab_mode"], "local")
+
+    def test_catalogue_lab_mode_defaults_to_hosted(self) -> None:
+        payload = server.scenario_payload(self._config())
+        self.assertEqual(payload["lab_mode"], "hosted")
+
+    def test_catalogue_hosted_scenario_is_runnable_in_hosted_mode(self) -> None:
+        payload = server.scenario_payload(self._config(), lab_mode="hosted")
+        item = next(s for s in payload["scenarios"] if s["id"] == "alive-proof")
+        self.assertTrue(item["runnable"])
+
+    def test_catalogue_local_only_scenario_not_runnable_in_hosted_mode(self) -> None:
+        payload = server.scenario_payload(self._config(), lab_mode="hosted")
+        for sid in ("social-aggregate", "combined-support", "agriculture-voucher"):
+            item = next(s for s in payload["scenarios"] if s["id"] == sid)
+            self.assertFalse(item["runnable"], f"{sid} should not be runnable in hosted mode")
+
+    def test_catalogue_local_only_scenario_is_runnable_in_local_mode(self) -> None:
+        payload = server.scenario_payload(self._config(), lab_mode="local")
+        for sid in ("social-aggregate", "combined-support", "agriculture-voucher"):
+            item = next(s for s in payload["scenarios"] if s["id"] == sid)
+            self.assertTrue(item["runnable"], f"{sid} should be runnable in local mode")
+
+    # ---- scenario_payload single story ----
+
+    def test_story_payload_has_lab_mode_and_runnable_hosted(self) -> None:
+        payload = server.scenario_payload(self._config(), "alive-proof", lab_mode="hosted")
+        self.assertEqual(payload["lab_mode"], "hosted")
+        self.assertTrue(payload["runnable"])
+
+    def test_story_payload_local_only_not_runnable_in_hosted_mode(self) -> None:
+        payload = server.scenario_payload(self._config(), "social-aggregate", lab_mode="hosted")
+        self.assertEqual(payload["lab_mode"], "hosted")
+        self.assertFalse(payload["runnable"])
+
+    def test_story_payload_local_only_runnable_in_local_mode(self) -> None:
+        payload = server.scenario_payload(self._config(), "social-aggregate", lab_mode="local")
+        self.assertEqual(payload["lab_mode"], "local")
+        self.assertTrue(payload["runnable"])
+
+    # ---- run_scenario_step guard in hosted mode ----
+
+    def test_run_step_hosted_local_only_returns_local_only_status(self) -> None:
+        result = server.run_scenario_step(self._config(), "social-aggregate", "read-aggregate", lab_mode="hosted")
+        self.assertEqual(result["friendly"]["status"], "local_only")
+
+    def test_run_step_hosted_local_only_has_correct_title(self) -> None:
+        result = server.run_scenario_step(self._config(), "social-aggregate", "read-aggregate", lab_mode="hosted")
+        self.assertIn("Aggregate versus row access", result["friendly"]["title"])
+        self.assertIn("local lab profile", result["friendly"]["title"])
+
+    def test_run_step_hosted_local_only_has_message_and_facts(self) -> None:
+        result = server.run_scenario_step(self._config(), "combined-support", "discover", lab_mode="hosted")
+        self.assertEqual(result["friendly"]["status"], "local_only")
+        self.assertIn("hosted lab does not run", result["friendly"]["message"].lower())
+        facts = {f["label"]: f["value"] for f in result["friendly"]["facts"]}
+        self.assertEqual(facts["Availability"], "Local only")
+        self.assertIn("github.com/jeremi/registry-lab", facts["Run it locally"])
+
+    def test_run_step_hosted_local_only_has_note_sources(self) -> None:
+        result = server.run_scenario_step(self._config(), "agriculture-voucher", "discover", lab_mode="hosted")
+        self.assertIn("note", result["request_source"])
+        self.assertIn("local lab profile", result["request_source"]["note"])
+        self.assertIn("note", result["response_source"])
+        self.assertIn("local lab profile", result["response_source"]["note"])
+
+    def test_run_step_hosted_local_only_makes_no_http_call(self) -> None:
+        """urllib.request.urlopen must not be called for a local-only step in hosted mode."""
+        def fail_if_called(*_args, **_kwargs):
+            raise AssertionError("urlopen must not be called in hosted mode for local-only scenario")
+
+        import lab_homepage_scenarios.common as _common
+        with mock.patch.object(_common, "http_json", side_effect=fail_if_called):
+            # Should NOT raise; if it does, the guard is missing.
+            result = server.run_scenario_step(self._config(), "social-aggregate", "read-aggregate", lab_mode="hosted")
+        self.assertEqual(result["friendly"]["status"], "local_only")
+
+    def test_run_step_local_mode_local_only_still_executes(self) -> None:
+        """In local mode, a local-only scenario must follow its normal execution path."""
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b'{"data":[{"eligibility_band":"priority","household_count":3}]}'
+
+        called = []
+
+        def fake(req, timeout=None):
+            called.append(req)
+            return Resp()
+
+        os.environ["CIVIL_RAW"] = "civil-token"
+        config = server.enrich_config({
+            "credentials": [
+                {"id": "social-aggregate-reader", "env": "CIVIL_RAW", "service_url": "https://social.example",
+                 "example": {"path": "/v1/datasets/social_protection_registry/aggregates/households_by_eligibility_band"}},
+            ]
+        })
+        with mock.patch.object(server.urllib.request, "urlopen", fake):
+            result = server.run_scenario_step(config, "social-aggregate", "read-aggregate", lab_mode="local")
+        self.assertNotEqual(result["friendly"]["status"], "local_only")
+        self.assertTrue(len(called) > 0, "Expected an HTTP call in local mode")
+
+    # ---- availability_note copy ----
+
+    def test_availability_notes_contain_no_http_status_codes(self) -> None:
+        import re
+        for module in ("social_aggregate", "combined_support", "agriculture_voucher"):
+            from importlib import import_module
+            mod = import_module(f"lab_homepage_scenarios.{module}")
+            note = mod.story().get("availability_note", "")
+            self.assertNotRegex(
+                note, r"\b4\d\d\b",
+                f"{module}.availability_note contains an HTTP status code: {note!r}",
+            )
+
+    def test_availability_notes_contain_no_hosted_validation_phrasing(self) -> None:
+        for module in ("social_aggregate", "combined_support", "agriculture_voucher"):
+            from importlib import import_module
+            mod = import_module(f"lab_homepage_scenarios.{module}")
+            note = mod.story().get("availability_note", "")
+            self.assertNotIn(
+                "Hosted validation",
+                note,
+                f"{module}.availability_note contains 'Hosted validation': {note!r}",
+            )
+
+    # ---- scenario_page_html walkthrough rendering ----
+
+    def test_scenario_page_html_renders_for_chooser(self) -> None:
+        html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+        self.assertIn('id="chooser"', html)
+
+    def test_scenario_page_html_renders_for_story_route(self) -> None:
+        html = server.scenario_page_html("Registry Lab Scenarios", "alive-proof").decode("utf-8")
+        self.assertIn('const ACTIVE_SCENARIO = "alive-proof"', html)
+
+    def test_chooser_cta_reads_walkthrough_when_not_runnable(self) -> None:
+        html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+        self.assertIn("Read the walkthrough", html)
+
+    def test_chooser_cta_reads_open_story_when_runnable(self) -> None:
+        html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+        self.assertIn("Open story", html)
+
+    def test_story_local_only_pill_style_present(self) -> None:
+        html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+        self.assertIn("status-pill.local_only", html)
+
+    def test_story_local_only_no_run_button(self) -> None:
+        html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+        self.assertIn("This step runs on the local lab profile", html)
+
+    def test_story_run_it_locally_block_present(self) -> None:
+        html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+        self.assertIn("Run this story on your machine", html)
+        self.assertIn("git clone https://github.com/jeremi/registry-lab", html)
+
+    def test_story_drawers_note_when_not_runnable(self) -> None:
+        html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+        self.assertIn("Available when the story runs on the local lab profile", html)
+
+    def test_status_label_maps_local_only(self) -> None:
+        html = server.scenario_page_html("Registry Lab Scenarios").decode("utf-8")
+        self.assertIn('"local_only"', html)
+        self.assertIn('"Local only"', html)
 
 
 if __name__ == "__main__":

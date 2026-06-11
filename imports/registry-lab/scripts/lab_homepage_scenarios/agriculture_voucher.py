@@ -42,7 +42,7 @@ def story() -> dict[str, Any]:
         "short_title": "Agriculture voucher evidence",
         "proves": "Workbook-backed registries can become governed evidence APIs with positive and negative controls.",
         "availability": "local-only",
-        "availability_note": "Requires the local agriculture profile and AGRI_EVIDENCE_CLIENT_BEARER.",
+        "availability_note": "Runs on the local lab profile with the agriculture services started (AGRI_EVIDENCE_CLIENT_BEARER).",
         "intro": (
             "Amina Kone wants to redeem a climate-smart input voucher. The supplier needs eligibility evidence, "
             "not copies of farmer, parcel, entitlement, and redemption rows."

@@ -25,13 +25,19 @@ def all_stories() -> list[dict[str, Any]]:
     return [module.story() for module in SCENARIOS]
 
 
-def scenario_payload(config: dict[str, Any], scenario_id: str | None = None) -> dict[str, Any]:
+def _is_runnable(story: dict[str, Any], lab_mode: str) -> bool:
+    return story.get("availability", "hosted") == "hosted" or lab_mode == "local"
+
+
+def scenario_payload(config: dict[str, Any], scenario_id: str | None = None, lab_mode: str = "hosted") -> dict[str, Any]:
     if scenario_id:
         module = STORY_BY_ID.get(scenario_id)
         if not module:
             return {"error": "unknown_scenario", "scenario_id": scenario_id}
-        return {"story": module.story()}
+        story = module.story()
+        return {"story": story, "lab_mode": lab_mode, "runnable": _is_runnable(story, lab_mode)}
     return {
+        "lab_mode": lab_mode,
         "default_scenario_id": civil_alive.SCENARIO_ID,
         "scenarios": [
             {
@@ -42,13 +48,17 @@ def scenario_payload(config: dict[str, Any], scenario_id: str | None = None) -> 
                 "availability": story.get("availability", "hosted"),
                 "availability_note": story.get("availability_note", ""),
                 "steps": len(story.get("steps", [])),
+                "runnable": _is_runnable(story, lab_mode),
             }
             for story in all_stories()
         ],
     }
 
 
-def run_scenario_step(config: dict[str, Any], scenario_id: str, step_id: str) -> dict[str, Any]:
+_LOCAL_ONLY_NOTE = "Available when the story runs on the local lab profile."
+
+
+def run_scenario_step(config: dict[str, Any], scenario_id: str, step_id: str, lab_mode: str = "hosted") -> dict[str, Any]:
     module = STORY_BY_ID.get(scenario_id)
     if not module:
         return {
@@ -62,11 +72,31 @@ def run_scenario_step(config: dict[str, Any], scenario_id: str, step_id: str) ->
             "request_source": {},
             "response_source": {},
         }
+    story = module.story()
+    if lab_mode == "hosted" and story.get("availability") == "local-only":
+        short_title = story.get("short_title") or story.get("title", scenario_id)
+        return {
+            "step_id": step_id,
+            "friendly": {
+                "status": "local_only",
+                "title": f"{short_title} runs on the local lab profile.",
+                "message": (
+                    "The hosted lab does not run the services this story needs, so this step cannot execute here. "
+                    "Clone registry-lab and start the local profile to run it for real."
+                ),
+                "facts": [
+                    {"label": "Availability", "value": "Local only"},
+                    {"label": "Run it locally", "value": "https://github.com/jeremi/registry-lab"},
+                ],
+            },
+            "request_source": {"note": _LOCAL_ONLY_NOTE},
+            "response_source": {"note": _LOCAL_ONLY_NOTE},
+        }
     return module.run_step(config, step_id)
 
 
-def run_alive_proof_step(config: dict[str, Any], step_id: str) -> dict[str, Any]:
-    return run_scenario_step(config, civil_alive.SCENARIO_ID, step_id)
+def run_alive_proof_step(config: dict[str, Any], step_id: str, lab_mode: str = "hosted") -> dict[str, Any]:
+    return run_scenario_step(config, civil_alive.SCENARIO_ID, step_id, lab_mode=lab_mode)
 
 
 def scenario_nav_link() -> str:
@@ -148,6 +178,10 @@ def scenario_page_html(title: str = "Registry Lab Scenarios", scenario_id: str |
     .availability.hosted {{ background: var(--registry-ok-bg); border-color: #b7ddc9; color: var(--registry-teal); }}
     .availability.local-only {{ background: var(--registry-warn-bg); border-color: #e2b66c; color: var(--registry-amber); }}
     .story-setup {{ display: grid; gap: 14px; margin-bottom: 18px; padding: 18px; }}
+    .local-run {{ border-top: 2px solid var(--registry-amber); }}
+    .local-run .eyebrow {{ color: var(--registry-amber); }}
+    .local-run pre {{ margin-top: 10px; }}
+    .local-run .meta {{ margin-top: 8px; }}
     .setup-grid {{ display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }}
     .setup-item, .fact {{ border: 1px solid var(--registry-rule); display: grid; gap: 4px; padding: 12px; }}
     .setup-item span, .fact span {{ color: var(--registry-muted); font-family: var(--registry-mono); font-size: 12px; text-transform: uppercase; }}
@@ -159,6 +193,7 @@ def scenario_page_html(title: str = "Registry Lab Scenarios", scenario_id: str |
     .status-pill {{ border: 1px solid var(--registry-rule); color: var(--registry-muted); display: inline-flex; font-family: var(--registry-mono); font-size: 12px; min-height: 30px; padding: 5px 8px; white-space: nowrap; }}
     .status-pill.done, .status-pill.denied_as_expected {{ background: var(--registry-ok-bg); border-color: #b7ddc9; color: var(--registry-teal); }}
     .status-pill.running {{ background: var(--registry-warn-bg); border-color: #e2b66c; color: var(--registry-amber); }}
+    .status-pill.local_only {{ background: var(--registry-warn-bg); border-color: #e2b66c; color: var(--registry-amber); }}
     .status-pill.needs_attention {{ background: var(--registry-bad-bg); border-color: #d9a1a1; color: #a22d2d; }}
     .step-body {{ display: grid; gap: 14px; padding: 18px; }}
     .request-text {{ background: var(--registry-code-bg); border: 1px solid var(--registry-rule); color: var(--registry-ink); padding: 12px; }}
@@ -244,7 +279,7 @@ def scenario_page_html(title: str = "Registry Lab Scenarios", scenario_id: str |
     const ACTIVE_SCENARIO = {active_scenario};
     const text = (value) => value == null ? "" : String(value);
     const byId = (id) => document.getElementById(id);
-    const state = {{ completed: new Set(), story: null }};
+    const state = {{ completed: new Set(), story: null, runnable: true }};
 
     function escapeHtml(value) {{
       return text(value).replace(/[&<>"']/g, (char) => ({{
@@ -342,7 +377,7 @@ def scenario_page_html(title: str = "Registry Lab Scenarios", scenario_id: str |
           <div><h2>${{escapeHtml(item.title)}}</h2><p>${{escapeHtml(item.proves)}}</p></div>
           ${{item.availability_note ? `<p class="card-meta">${{escapeHtml(item.availability_note)}}</p>` : ""}}
           <p class="card-meta">${{escapeHtml(item.steps)}} steps</p>
-          <div class="actions"><a class="button primary" href="/scenarios/${{encodeURIComponent(item.id)}}">Open story</a></div>
+          <div class="actions"><a class="button primary" href="/scenarios/${{encodeURIComponent(item.id)}}">${{item.runnable ? "Open story" : "Read the walkthrough"}}</a></div>
         </article>`).join("")}}
       </section>`;
     }}
@@ -362,11 +397,26 @@ def scenario_page_html(title: str = "Registry Lab Scenarios", scenario_id: str |
       if (status === "running") return "Running";
       if (status === "denied_as_expected") return "Denied as expected";
       if (status === "needs_attention") return "Needs attention";
+      if (status === "local_only") return "Local only";
       return "Not run";
     }}
 
-    function renderStory(story) {{
+    function renderLocalOnlyBlock(story) {{
+      return `
+        <div class="story-setup local-run">
+          <div>
+            <p class="eyebrow">Run this story on your machine</p>
+            <p>The hosted lab does not run the services this story needs. Clone the repository, start the local lab profile, then open this page from your local homepage.</p>
+            <pre>git clone https://github.com/jeremi/registry-lab</pre>
+            ${{story.availability_note ? `<p class="meta">${{escapeHtml(story.availability_note)}}</p>` : ""}}
+          </div>
+        </div>
+      `;
+    }}
+
+    function renderStory(story, runnable) {{
       state.story = story;
+      state.runnable = runnable !== false;
       byId("chooser").innerHTML = "";
       byId("eyebrow").textContent = story.availability === "local-only" ? "Guided demo · local only" : "Guided demo";
       byId("title").textContent = story.title;
@@ -377,7 +427,7 @@ def scenario_page_html(title: str = "Registry Lab Scenarios", scenario_id: str |
             <p class="eyebrow">User story</p>
             <h2>${{escapeHtml(story.short_title || story.title)}}</h2>
             <p>${{escapeHtml(story.proves)}}</p>
-            ${{story.availability_note ? `<p class="meta">${{escapeHtml(story.availability_note)}}</p>` : ""}}
+            ${{story.availability_note && state.runnable ? `<p class="meta">${{escapeHtml(story.availability_note)}}</p>` : ""}}
           </div>
           <div class="setup-grid">
             <div class="setup-item"><span>Actor</span><strong>${{escapeHtml(story.actor || "")}}</strong></div>
@@ -386,12 +436,31 @@ def scenario_page_html(title: str = "Registry Lab Scenarios", scenario_id: str |
             <div class="setup-item"><span>Not allowed</span><strong>${{escapeHtml(story.boundary.not_allowed)}}</strong></div>
           </div>
         </section>
+        ${{!state.runnable ? renderLocalOnlyBlock(story) : ""}}
         <section class="step-list">${{story.steps.map(renderStep).join("")}}</section>
         <section class="receipt" id="receipt"><div><p class="eyebrow">Final receipt</p><h2>What the demo proved</h2></div><div class="facts">${{renderFacts(story.receipt || [])}}</div></section>
       `;
     }}
 
+    const LOCAL_ONLY_NOTE = "Available when the story runs on the local lab profile.";
+
     function renderStep(step, index) {{
+      if (!state.runnable) {{
+        return `<article class="step" id="step-${{escapeHtml(step.id)}}">
+          <div class="step-head">
+            <span class="step-number">${{index + 1}}</span>
+            <div><h3>${{escapeHtml(step.label)}}</h3><p>${{escapeHtml(step.prompt)}}</p></div>
+            <span class="status-pill local_only">Local only</span>
+          </div>
+          <div class="step-body">
+            <div class="request-text"><strong>What this request will do:</strong> ${{escapeHtml(step.request_summary)}}</div>
+            ${{renderReuse(step.reuses || [])}}
+            <p class="meta">This step runs on the local lab profile.</p>
+            <details><summary>Show technical request</summary><div data-request-source-for="${{escapeHtml(step.id)}}">${{sourceBlock({{ note: LOCAL_ONLY_NOTE }})}}</div></details>
+            <details><summary>Show technical response</summary><div data-response-source-for="${{escapeHtml(step.id)}}">${{sourceBlock({{ note: LOCAL_ONLY_NOTE }})}}</div></details>
+          </div>
+        </article>`;
+      }}
       const runnable = canRun(index);
       return `<article class="step ${{runnable ? "" : "locked"}}" id="step-${{escapeHtml(step.id)}}">
         <div class="step-head">
@@ -512,7 +581,7 @@ def scenario_page_html(title: str = "Registry Lab Scenarios", scenario_id: str |
         byId("story").innerHTML = `<div class="story-setup"><h2>Scenario not found</h2><p>${{escapeHtml(ACTIVE_SCENARIO)}}</p></div>`;
         return;
       }}
-      renderStory(data.story);
+      renderStory(data.story, data.runnable !== false);
       wireStepButtons();
       wireCurlCopyButtons();
     }}

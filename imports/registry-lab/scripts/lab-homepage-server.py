@@ -765,6 +765,7 @@ def homepage_html(title: str) -> bytes:
 class LabHomepageHandler(BaseHTTPRequestHandler):
     config: dict[str, Any] = {}
     status_timeout: float = 2.0
+    lab_mode: str = "hosted"
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
@@ -789,11 +790,11 @@ class LabHomepageHandler(BaseHTTPRequestHandler):
             self.send_json(enrich_config(self.config))
             return
         if path == "/api/scenarios.json":
-            self.send_json(scenario_payload(enrich_config(self.config)))
+            self.send_json(scenario_payload(enrich_config(self.config), lab_mode=self.lab_mode))
             return
         if path.startswith("/api/scenarios/") and path.endswith(".json"):
             scenario_id = path.removeprefix("/api/scenarios/").removesuffix(".json")
-            self.send_json(scenario_payload(enrich_config(self.config), scenario_id))
+            self.send_json(scenario_payload(enrich_config(self.config), scenario_id, lab_mode=self.lab_mode))
             return
         if path == "/api/status.json":
             self.send_json(status_checks(self.config, self.status_timeout))
@@ -805,14 +806,14 @@ class LabHomepageHandler(BaseHTTPRequestHandler):
         prefix = "/api/scenarios/alive-proof/"
         if path.startswith(prefix):
             step_id = path.removeprefix(prefix)
-            self.send_json(run_alive_proof_step(enrich_config(self.config), step_id))
+            self.send_json(run_alive_proof_step(enrich_config(self.config), step_id, lab_mode=self.lab_mode))
             return
         scenario_prefix = "/api/scenarios/"
         if path.startswith(scenario_prefix):
             rest = path.removeprefix(scenario_prefix)
             scenario_id, sep, step_id = rest.partition("/")
             if sep and scenario_id and step_id:
-                self.send_json(run_scenario_step(enrich_config(self.config), scenario_id, step_id))
+                self.send_json(run_scenario_step(enrich_config(self.config), scenario_id, step_id, lab_mode=self.lab_mode))
                 return
         self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -839,6 +840,11 @@ def main() -> int:
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--status-timeout", type=float, default=2.0)
+    parser.add_argument(
+        "--lab-mode",
+        choices=("hosted", "local"),
+        default=os.environ.get("LAB_HOMEPAGE_MODE", "hosted"),
+    )
     args = parser.parse_args()
 
     env_file = args.env_file
@@ -853,6 +859,7 @@ def main() -> int:
     config = load_config(args.config)
     LabHomepageHandler.config = config
     LabHomepageHandler.status_timeout = args.status_timeout
+    LabHomepageHandler.lab_mode = args.lab_mode
     server = ThreadingHTTPServer((args.host, args.port), LabHomepageHandler)
     print(f"serving Registry Lab homepage on {args.host}:{args.port}", flush=True)
     server.serve_forever()

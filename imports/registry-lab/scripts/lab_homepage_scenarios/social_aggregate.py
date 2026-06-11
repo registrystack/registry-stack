@@ -31,10 +31,7 @@ def story() -> dict[str, Any]:
         "short_title": "Aggregate versus row access",
         "proves": "Aggregate credentials can answer planning questions while row data remains separately governed.",
         "availability": "local-only",
-        "availability_note": (
-            "Requires a local social Relay on port 4312. Hosted validation currently returns 403 because the live "
-            "aggregate route still performs an internal row-scoped read."
-        ),
+        "availability_note": "Runs on the local lab profile with the social Relay on port 4312.",
         "intro": (
             "A policy analyst needs district-level eligibility counts for planning. They do not need names, household rows, "
             "or benefit records for individual families."
