@@ -8,15 +8,14 @@
 // Auth requirement (require_admin_scope in admin.rs):
 //   scope: "admin"
 //
-// GAP: The perf key generator (generate_perf_keys.py) emits five scopes:
+// The perf key generator (generate_perf_keys.py) emits scoped credentials for:
 //   clinic_capacity:rows, clinic_capacity:metadata, clinic_capacity:aggregate,
-//   other:metadata (no-scope), and an invalid token.
-// None of these carry the "admin" scope required by POST /admin/v1/reload.
+//   clinic_capacity:evidence_verification, other:metadata (deny path), admin,
+//   and an invalid token.
 //
-// This script expects an additional env var REGISTRY_RELAY_TOKEN_ADMIN carrying
-// a key with scope "admin". If it is absent, the reload trigger step is
-// skipped and a warning is logged. The read load portion still runs and
-// measures p99 stability.
+// This script expects REGISTRY_RELAY_TOKEN_ADMIN. If an older env file lacks
+// that variable, the reload trigger step is skipped and a warning is logged.
+// The read load portion still runs and measures p99 stability.
 //
 // Table id from the perf config: facility_table
 // Override via REGISTRY_RELAY_TABLE_ID.
@@ -61,8 +60,7 @@ export function setup() {
     console.warn(
       'refresh_under_read_load: REGISTRY_RELAY_TOKEN_ADMIN is not set. ' +
       'The admin reload step will be skipped. To test reload under load, ' +
-      'generate a key with scope "admin" and set REGISTRY_RELAY_TOKEN_ADMIN. ' +
-      'Note: the perf key generator does not currently emit an admin-scoped key.'
+      'regenerate target/perf/perf.env with perf/scripts/generate_perf_keys.py.'
     );
   } else {
     console.log('refresh_under_read_load: admin token present: yes');

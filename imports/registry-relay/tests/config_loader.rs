@@ -311,6 +311,7 @@ fn perf_api_key_scopes_are_explicit_lists() {
                 "perf_aggregate" => vec!["clinic_capacity:aggregate"],
                 "perf_no_scope" => Vec::new(),
                 "perf_evidence_verification" => vec!["clinic_capacity:evidence_verification"],
+                "perf_admin" => vec!["admin"],
                 other => panic!("{} unexpected perf API key {other}", path.display()),
             };
             assert_eq!(
@@ -328,7 +329,8 @@ fn perf_api_key_scopes_are_explicit_lists() {
                 "perf_metadata",
                 "perf_aggregate",
                 "perf_no_scope",
-                "perf_evidence_verification"
+                "perf_evidence_verification",
+                "perf_admin"
             ],
             "{} perf API key order changed",
             path.display()

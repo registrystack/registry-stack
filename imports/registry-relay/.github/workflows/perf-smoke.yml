@@ -3,8 +3,7 @@ name: perf-smoke
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: ["**"]
+  workflow_dispatch:
 
 # See ci.yml for the rationale; cancel superseded runs on branches, keep main.
 concurrency:
@@ -14,6 +13,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  K6_DOCKER_IMAGE: grafana/k6:0.57.0
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
   REGISTRY_PLATFORM_REF: 05a03973c3048b4d98d22cb29a55837f62594c12
   REGISTRY_MANIFEST_REPOSITORY: jeremi/registry-manifest
@@ -21,12 +21,13 @@ env:
   CEL_MAPPING_REPOSITORY: PublicSchema/crosswalk
   CROSSWALK_REF: 54e0f537830837fcd0c9efa87990987b1846931c
 
-# Smoke-checks the perf scaffolding without running any actual load.
+# Smoke-checks the perf scaffolding with a short CI-sized k6 run.
 # It verifies:
 #   1. The Criterion benches compile (`cargo bench --no-run`).
 #   2. The fixture generator runs end-to-end at the small profile.
 #   3. Every k6 scenario passes `node --check` for basic syntax.
-# It does NOT install k6 or execute scenarios. Scheduled perf jobs do that.
+#   4. A short small-profile k6 smoke runs against the release server.
+# Scheduled perf jobs should still run medium, large, soak, and breakpoint profiles.
 
 # Default the GITHUB_TOKEN to read-only on contents; this workflow only reads.
 permissions:
@@ -94,8 +95,14 @@ jobs:
       - name: Compile Criterion benches
         run: cargo bench --no-run
 
+      - name: Build release binary for k6 smoke
+        run: cargo build --release
+
       - name: Generate small fixture profile
-        run: uv run perf/scripts/generate_perf_data.py --profile small --out-dir target/perf/smoke-fixtures
+        run: uv run perf/scripts/generate_perf_data.py --profile small
+
+      - name: Generate perf credentials
+        run: uv run perf/scripts/generate_perf_keys.py --env-file target/perf/perf.env --force
 
       - name: Syntax-check every k6 scenario
         run: |
@@ -114,4 +121,33 @@ jobs:
           set -euo pipefail
           for f in perf/scripts/*.py; do
             python -c "import ast, sys; ast.parse(open('$f').read())"
+          done
+
+      - name: Run small k6 smoke
+        run: |
+          set -euo pipefail
+          mkdir -p target/perf/reports
+          set -a
+          . target/perf/perf.env
+          set +a
+          target/release/registry-relay --config perf/config/small.yaml >target/perf/relay-smoke.log 2>&1 &
+          relay_pid="$!"
+          trap 'status=$?; if [ "$status" -ne 0 ]; then cat target/perf/relay-smoke.log || true; fi; kill "$relay_pid" 2>/dev/null || true; exit "$status"' EXIT
+          for _ in $(seq 1 150); do
+            if curl -fsS http://127.0.0.1:18080/ready >/dev/null; then
+              break
+            fi
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18080/ready >/dev/null
+          for scenario in cached_304 hot_200; do
+            docker run --rm --network host \
+              --env-file target/perf/perf.env \
+              -e REGISTRY_RELAY_DURATION=5s \
+              -e REGISTRY_RELAY_VUS=2 \
+              -e REGISTRY_RELAY_NO_THRESHOLD=1 \
+              -e K6_SUMMARY_TREND_STATS=min,med,avg,max,p\(90\),p\(95\),p\(99\) \
+              -v "$PWD:/workspace" \
+              -w /workspace \
+              "$K6_DOCKER_IMAGE" run "perf/k6/${scenario}.js"
           done
