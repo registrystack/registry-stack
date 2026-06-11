@@ -76,6 +76,13 @@ jobs:
             [[allowlists]]
             description = "Ignore generated Rust build output."
             paths = ["(^|/)target/"]
+
+            [[allowlists]]
+            description = "Allow published tough test signing keys vendored as fixtures."
+            paths = [
+              "^crates/registry-platform-config/tests/fixtures/tough-data/snakeoil\\.pem$",
+              "^crates/registry-platform-config/tests/fixtures/tough-data/snakeoil_2\\.pem$",
+            ]
         run: |
           "$RUNNER_TEMP/bin/gitleaks" dir --no-banner --redact --verbose --timeout 120 .
 

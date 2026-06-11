@@ -22,9 +22,6 @@ use registry_platform_config::{
     sha256_uri, LocalTufRepositoryInput, RegistryAcceptedTrustRoots, RegistryTrustRoot,
     TrustRootRole, TrustRootSigner, TufConfigVerifier,
 };
-use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
-use rsa::rand_core::OsRng;
-use rsa::RsaPrivateKey;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tough::editor::signed::{PathExists, SignedRole};
@@ -119,7 +116,7 @@ async fn generate_signed_repo_with_key(
 
 async fn generated_key_pair(
     repo: &TempDir,
-    _data: &Path,
+    data: &Path,
     algorithm: SigningAlgorithm,
 ) -> (PathBuf, PathBuf) {
     let key_dir = repo.path().join("keys").join(algorithm.label());
@@ -128,8 +125,9 @@ async fn generated_key_pair(
         SigningAlgorithm::Rsa => {
             let primary = key_dir.join("snakeoil.pem");
             let secondary = key_dir.join("snakeoil_2.pem");
-            write_generated_rsa_key(&primary);
-            write_generated_rsa_key(&secondary);
+            std::fs::copy(data.join("snakeoil.pem"), &primary).expect("primary RSA key copies");
+            std::fs::copy(data.join("snakeoil_2.pem"), &secondary)
+                .expect("secondary RSA key copies");
             (primary, secondary)
         }
         SigningAlgorithm::Ed25519 => {
@@ -158,15 +156,6 @@ async fn generated_key_pair(
             (primary, secondary)
         }
     }
-}
-
-fn write_generated_rsa_key(path: &Path) {
-    let mut rng = OsRng;
-    let key = RsaPrivateKey::new(&mut rng, 2048).expect("RSA key generates");
-    let pem = key
-        .to_pkcs1_pem(LineEnding::LF)
-        .expect("RSA key encodes as PKCS#1 PEM");
-    std::fs::write(path, pem.as_bytes()).expect("RSA key writes");
 }
 
 async fn key_id_and_tuf_key(key_path: &Path) -> (Vec<u8>, tough::schema::key::Key) {

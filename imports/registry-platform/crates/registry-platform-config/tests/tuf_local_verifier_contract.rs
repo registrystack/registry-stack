@@ -9,15 +9,12 @@ use registry_platform_config::{
     RegistryTrustRoot, RemoteTufRepositoryInput, TrustRootRole, TrustRootSigner, TufConfigVerifier,
     VerificationContext,
 };
-use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
-use rsa::rand_core::OsRng;
-use rsa::RsaPrivateKey;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tough::editor::signed::{PathExists, SignedRole};
 use tough::editor::RepositoryEditor;
 use tough::key_source::{KeySource, LocalKeySource};
-use tough::schema::{KeyHolder, RoleKeys, RoleType, Root, Signed, Target};
+use tough::schema::{KeyHolder, Root, Signed, Target};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -107,80 +104,6 @@ fn copy_directory_files(src: &Path, dst: &Path) {
     }
 }
 
-fn generated_rsa_key_path(repo: &TempDir) -> PathBuf {
-    repo.path().join("generated-rsa-key.pem")
-}
-
-fn write_generated_rsa_key(path: &Path) {
-    let mut rng = OsRng;
-    let key = RsaPrivateKey::new(&mut rng, 2048).expect("RSA key generates");
-    let pem = key
-        .to_pkcs1_pem(LineEnding::LF)
-        .expect("RSA key encodes as PKCS#1 PEM");
-    std::fs::write(path, pem.as_bytes()).expect("RSA key writes");
-}
-
-async fn key_id_and_tuf_key(key_path: &Path) -> (Vec<u8>, tough::schema::key::Key) {
-    let source = LocalKeySource {
-        path: key_path.to_path_buf(),
-    };
-    let signer = source.as_sign().await.expect("key source loads signer");
-    let key = signer.tuf_key();
-    let key_id = key.key_id().expect("key id calculates").to_vec();
-    (key_id, key)
-}
-
-async fn write_generated_single_key_root(repo: &TempDir, key_path: &Path) -> PathBuf {
-    let root_dir = repo.path().join("root");
-    std::fs::create_dir_all(&root_dir).expect("root directory exists");
-    let (key_id, key) = key_id_and_tuf_key(key_path).await;
-    let expiry = Utc::now()
-        .checked_add_signed(TimeDelta::try_days(30).expect("duration"))
-        .expect("future root expiration");
-    let role = RoleKeys {
-        keyids: vec![key_id.clone().into()],
-        threshold: NonZeroU64::new(1).expect("non-zero threshold"),
-        _extra: HashMap::new(),
-    };
-    let root = Root {
-        spec_version: "1.0.0".to_string(),
-        consistent_snapshot: true,
-        version: NonZeroU64::new(1).expect("non-zero root version"),
-        expires: expiry,
-        keys: HashMap::from([(key_id.into(), key)]),
-        roles: HashMap::from([
-            (RoleType::Root, role.clone()),
-            (RoleType::Snapshot, role.clone()),
-            (RoleType::Timestamp, role.clone()),
-            (RoleType::Targets, role),
-        ]),
-        _extra: HashMap::new(),
-    };
-    let keys: Vec<Box<dyn KeySource>> = vec![Box::new(LocalKeySource {
-        path: key_path.to_path_buf(),
-    })];
-    let signed_root = SignedRole::new(
-        root.clone(),
-        &KeyHolder::Root(root),
-        &keys,
-        &SystemRandom::new(),
-    )
-    .await
-    .expect("generated root signs");
-    signed_root
-        .write(&root_dir, true)
-        .await
-        .expect("generated root writes");
-    root_dir.join("1.root.json")
-}
-
-async fn generated_rsa_root_and_key(repo: &TempDir) -> (PathBuf, PathBuf) {
-    let key_path = generated_rsa_key_path(repo);
-    write_generated_rsa_key(&key_path);
-    let root_path = write_generated_single_key_root(repo, &key_path).await;
-    (root_path, key_path)
-}
-
 async fn generated_repository_input(
     repo: &TempDir,
     datastore: &TempDir,
@@ -197,29 +120,9 @@ async fn generated_repository_input_with_custom(
     version: u64,
     custom: Option<Value>,
 ) -> LocalTufRepositoryInput {
-    let (root_path, key_path) = generated_rsa_root_and_key(repo).await;
-    generated_repository_input_with_custom_and_keys(
-        repo,
-        datastore,
-        target_name,
-        version,
-        custom,
-        &root_path,
-        &key_path,
-    )
-    .await
-}
-
-async fn generated_repository_input_with_custom_and_keys(
-    repo: &TempDir,
-    datastore: &TempDir,
-    target_name: &str,
-    version: u64,
-    custom: Option<Value>,
-    root_path: &Path,
-    key_path: &Path,
-) -> LocalTufRepositoryInput {
     let data = tough_fixture_dir("");
+    let root_path = data.join("simple-rsa").join("root.json");
+    let key_path = data.join("snakeoil.pem");
     let target_path = data.join("targets").join(target_name);
     let metadata_dir = repo.path().join("metadata");
     let targets_dir = repo.path().join("targets");
@@ -228,7 +131,7 @@ async fn generated_repository_input_with_custom_and_keys(
         .expect("future expiration");
     let version = NonZeroU64::new(version).expect("non-zero version");
 
-    let mut editor = RepositoryEditor::new(root_path)
+    let mut editor = RepositoryEditor::new(&root_path)
         .await
         .expect("editor loads fixture root");
     editor.targets_expires(expiry).expect("targets expiration");
@@ -251,9 +154,7 @@ async fn generated_repository_input_with_custom_and_keys(
             .await
             .expect("target path");
     }
-    let keys: Vec<Box<dyn KeySource>> = vec![Box::new(LocalKeySource {
-        path: key_path.to_path_buf(),
-    })];
+    let keys: Vec<Box<dyn KeySource>> = vec![Box::new(LocalKeySource { path: key_path })];
     let signed = editor.sign(&keys).await.expect("repository signs");
     signed.write(&metadata_dir).await.expect("metadata writes");
     signed
@@ -262,7 +163,7 @@ async fn generated_repository_input_with_custom_and_keys(
         .expect("targets link");
 
     LocalTufRepositoryInput {
-        root_path: root_path.to_path_buf(),
+        root_path,
         metadata_dir,
         targets_dir,
         datastore_dir: datastore.path().to_path_buf(),
@@ -271,11 +172,9 @@ async fn generated_repository_input_with_custom_and_keys(
 }
 
 async fn write_rotated_root_with_same_keys(metadata_dir: &Path) -> PathBuf {
-    let root_path = metadata_dir.join("1.root.json");
-    let repo_dir = metadata_dir
-        .parent()
-        .expect("generated metadata dir has repo parent");
-    let key_path = repo_dir.join("generated-rsa-key.pem");
+    let data = tough_fixture_dir("");
+    let root_path = data.join("simple-rsa").join("root.json");
+    let key_path = data.join("snakeoil.pem");
     let root_bytes = std::fs::read(&root_path).expect("root fixture reads");
     let mut root: Signed<Root> = serde_json::from_slice(&root_bytes).expect("root fixture parses");
     root.signed.version = NonZeroU64::new(2).expect("non-zero root version");
@@ -626,31 +525,11 @@ async fn expired_timestamp_fails_closed_with_safe_expiration_enforcement() {
 #[tokio::test]
 async fn rollback_rejected_with_same_tough_datastore() {
     let datastore = TempDir::new().expect("datastore tempdir");
-    let key_repo = TempDir::new().expect("key repo tempdir");
     let newer_repo = TempDir::new().expect("newer repo tempdir");
     let older_repo = TempDir::new().expect("older repo tempdir");
     let target_name = "file4.txt";
-    let (root_path, key_path) = generated_rsa_root_and_key(&key_repo).await;
-    let newer_input = generated_repository_input_with_custom_and_keys(
-        &newer_repo,
-        &datastore,
-        target_name,
-        2,
-        None,
-        &root_path,
-        &key_path,
-    )
-    .await;
-    let older_input = generated_repository_input_with_custom_and_keys(
-        &older_repo,
-        &datastore,
-        target_name,
-        1,
-        None,
-        &root_path,
-        &key_path,
-    )
-    .await;
+    let newer_input = generated_repository_input(&newer_repo, &datastore, target_name, 2).await;
+    let older_input = generated_repository_input(&older_repo, &datastore, target_name, 1).await;
 
     let newer_target = TufConfigVerifier::verify_local_target(&newer_input)
         .await
