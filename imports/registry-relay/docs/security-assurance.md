@@ -1,14 +1,18 @@
 # Security Assurance
 
-Registry Relay's container workflow publishes stable images only from
-`vX.Y.Z` tags to `ghcr.io/jeremi/registry-relay`. Release tags also update
-`vX.Y`, `vX`, and `latest`; `latest` means latest stable release. Pull requests
-and `main` pushes build a local validation image for smoke, SBOM, and Grype
-evidence, but do not push a GHCR tag. Nightly or manual development snapshots
-publish `snapshot`, `snapshot-YYYYMMDD`, and `snapshot-<shortsha>` only when
-the existing `snapshot` image's `org.opencontainers.image.revision` label does
-not already match the current `main` revision. Final deployments should pin the
-selected image by digest.
+Registry Relay's container workflow publishes release images from stable
+`vX.Y.Z` tags and `registry-stack-technical-preview-<date-or-version>` tags to
+`ghcr.io/jeremi/registry-relay`. Every release publishes
+`sha-<commit-sha>` as the immutable image tag. Stable releases also update
+`vX.Y.Z`, `vX.Y`, `vX`, and `latest`; `latest` means latest stable release.
+Technical-preview releases publish the matching
+`registry-stack-technical-preview-<date-or-version>` alias and do not move
+`latest`. Pull requests and `main` pushes build a local validation image for
+smoke, SBOM, and Grype evidence, but do not push a GHCR tag. Nightly or manual
+development snapshots publish `snapshot`, `snapshot-YYYYMMDD`, and
+`snapshot-<shortsha>` only when the existing `snapshot` image's
+`org.opencontainers.image.revision` label does not already match the current
+`main` revision. Final deployments should pin the selected image by digest.
 
 Security waivers live in `security/waivers.yml` when needed. Each waiver must
 name an owner, rationale, review trigger, and expiration. The default owner is
@@ -52,12 +56,41 @@ losing security scheme or route semantics.
 
 ## Image signing status
 
-Registry Relay release images are not signed with `cosign` or another image
-signature workflow yet. The current release evidence relies on immutable
-`vX.Y.Z` tags, digest pinning, SBOM generation, and Grype image vulnerability
-reports.
-Operators should pin the selected image by digest and treat image-signature
-verification as not available for this release.
+Published Registry Relay image tags are signed with keyless `cosign` from the
+container workflow after they are pushed to GHCR. The workflow verifies that
+each pushed alias resolves to the same digest as `sha-<commit-sha>` and verifies
+the signature for every pushed ref before it completes.
+
+Verify a release alias and its immutable SHA tag resolve to the same digest:
+
+```sh
+docker buildx imagetools inspect ghcr.io/jeremi/registry-relay:sha-<commit-sha>
+docker buildx imagetools inspect ghcr.io/jeremi/registry-relay:<release-alias>
+```
+
+Verify the cosign signature for a tag using the triggering Git release tag:
+
+```sh
+cosign verify \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "https://github.com/jeremi/registry-relay/.github/workflows/container.yml@refs/tags/<git-tag>" \
+  ghcr.io/jeremi/registry-relay:<tag>
+```
+
+The certificate identity is the Git tag that triggered the workflow, not
+necessarily the GHCR tag being verified. When verifying moving aliases such as
+`latest`, `vX`, `vX.Y`, or the immutable `sha-<commit-sha>` tag, set
+`<git-tag>` to the stable `vX.Y.Z` tag or
+`registry-stack-technical-preview-<date-or-version>` tag that produced the
+alias. To verify a moving alias without preselecting one release tag, constrain
+the signing workflow with a release-tag regexp:
+
+```sh
+cosign verify \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github.com/jeremi/registry-relay/\.github/workflows/container\.yml@refs/tags/(v[0-9]+\.[0-9]+\.[0-9]+|registry-stack-technical-preview-[0-9A-Za-z][0-9A-Za-z._-]*)$' \
+  ghcr.io/jeremi/registry-relay:<moving-tag>
+```
 
 ## Local security command
 

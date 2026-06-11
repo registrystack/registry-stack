@@ -300,16 +300,17 @@ API-key config stores only:
 
 - a stable key id;
 - an environment variable name holding the SHA-256 fingerprint of the raw key;
+- the governed commitment for that key id and fingerprint;
 - the key's scopes.
 
 Recommended rotation procedure:
 
-1. Generate a new random API key outside the gateway.
-2. Store `sha256:<sha256(raw key)>` in the deployment secret store.
-3. Add a new `auth.api_keys[]` entry or update the existing entry's `fingerprint` reference and commitment.
+1. Run `registry-relay generate-api-key --id <key_id>`.
+2. Store the emitted `fingerprint` in the deployment secret store.
+3. Add a new `auth.api_keys[]` entry or update the existing entry's `fingerprint` reference with the emitted `commitment`.
 4. Apply the signed `client_credential_rotation` or `client_access_change` governed config bundle.
 5. Confirm the new key can call the intended lowest-privilege endpoint.
-6. Update the consumer to use the new raw key.
+6. Update the consumer to use the emitted raw `api_key`.
 7. Remove the old key entry or old secret and restart or roll again.
 
 Live keyring reload is not wired in V1. Treat key rotation as a rolling restart operation.
@@ -637,7 +638,7 @@ Config fails at startup:
 
 - Check YAML shape against [config/example.yaml](../config/example.yaml).
 - Confirm every env-backed `fingerprint.name` variable is set.
-- Confirm each referenced fingerprint value is a `sha256:<64 lowercase hex chars>` fingerprint and matches the signed commitment.
+- Confirm each referenced fingerprint value is a `sha256:<64 lowercase hex chars>` fingerprint and matches the signed commitment. For API keys, regenerate the tuple with `registry-relay generate-api-key --id <key_id>` and paste the emitted `commitment` into the config entry with the same `id`.
 - Confirm ids are lower-snake and unique.
 - Check vocabulary prefixes used by `concept_uri` and `conforms_to`.
 - For `metadata.manifest.*` errors, validate the portable metadata manifest.
