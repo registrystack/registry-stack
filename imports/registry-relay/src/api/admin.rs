@@ -73,7 +73,7 @@ impl<S> FromRequestParts<S> for AdminPrincipal
 where
     S: Send + Sync,
 {
-    type Rejection = Response;
+    type Rejection = AdminAuthRejection;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         require_scope_from_parts(parts, state, ADMIN_SCOPE)
@@ -88,7 +88,7 @@ impl<S> FromRequestParts<S> for OpsReadPrincipal
 where
     S: Send + Sync,
 {
-    type Rejection = Response;
+    type Rejection = AdminAuthRejection;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         require_scope_from_parts(parts, state, OPS_READ_SCOPE)
@@ -104,15 +104,29 @@ where
     S: Send + Sync,
     T: DeserializeOwned,
 {
-    type Rejection = Response;
+    type Rejection = AdminAuthRejection;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
         let principal = req.extensions().get::<Principal>().cloned();
+        require_scope_from_principal(principal, ADMIN_SCOPE)?;
         let Json(value) = Json::<T>::from_request(req, state)
             .await
-            .map_err(IntoResponse::into_response)?;
-        require_scope_from_principal(principal, ADMIN_SCOPE)?;
+            .map_err(|rejection| AdminAuthRejection::new(rejection.into_response()))?;
         Ok(Self(value))
+    }
+}
+
+struct AdminAuthRejection(Box<Response>);
+
+impl AdminAuthRejection {
+    fn new(response: Response) -> Self {
+        Self(Box::new(response))
+    }
+}
+
+impl IntoResponse for AdminAuthRejection {
+    fn into_response(self) -> Response {
+        *self.0
     }
 }
 
@@ -2333,7 +2347,7 @@ async fn require_scope_from_parts<S>(
     parts: &mut Parts,
     state: &S,
     required: &'static str,
-) -> Result<(), Response>
+) -> Result<(), AdminAuthRejection>
 where
     S: Send + Sync,
 {
@@ -2347,11 +2361,14 @@ where
 fn require_scope_from_principal(
     principal: Option<Principal>,
     required: &'static str,
-) -> Result<(), Response> {
+) -> Result<(), AdminAuthRejection> {
     let Some(principal) = principal else {
-        return Err(Error::from(AuthError::MissingCredential).into_response());
+        return Err(AdminAuthRejection::new(
+            Error::from(AuthError::MissingCredential).into_response(),
+        ));
     };
-    require_scope(&principal, required).map_err(IntoResponse::into_response)
+    require_scope(&principal, required)
+        .map_err(|error| AdminAuthRejection::new(error.into_response()))
 }
 
 #[derive(Debug, Serialize)]

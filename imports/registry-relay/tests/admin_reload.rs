@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use aws_lc_rs::rand::SystemRandom;
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode};
 use axum_test::TestServer;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -1718,6 +1718,46 @@ async fn config_apply_routes_are_admin_only_and_not_public() {
 
         let ops = post_admin_config(&fixture, route, body.clone(), OPS_KEY).await;
         let body = assert_problem(ops, StatusCode::FORBIDDEN, "auth.scope_denied").await;
+        assert_eq!(
+            body["detail"], "required scope: registry_relay:admin",
+            "route: {route}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn config_apply_routes_reject_missing_admin_scope_before_json_parsing() {
+    let fixture = build_fixture();
+
+    for route in [
+        "/admin/v1/config/verify",
+        "/admin/v1/config/dry-run",
+        "/admin/v1/config/apply",
+    ] {
+        assert_problem(
+            fixture
+                .server
+                .post(route)
+                .add_header(header::CONTENT_TYPE, "application/json")
+                .text("{")
+                .await,
+            StatusCode::UNAUTHORIZED,
+            "auth.missing_credential",
+        )
+        .await;
+
+        let body = assert_problem(
+            fixture
+                .server
+                .post(route)
+                .add_header(header::CONTENT_TYPE, "application/json")
+                .add_header("Authorization", format!("Bearer {OPS_KEY}"))
+                .text("{")
+                .await,
+            StatusCode::FORBIDDEN,
+            "auth.scope_denied",
+        )
+        .await;
         assert_eq!(
             body["detail"], "required scope: registry_relay:admin",
             "route: {route}"
