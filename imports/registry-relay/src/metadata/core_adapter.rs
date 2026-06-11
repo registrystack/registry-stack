@@ -398,6 +398,9 @@ impl CodelistIds {
             .map(|(scheme_iri, id)| core::CodelistManifest {
                 id,
                 scheme_iri,
+                version: None,
+                valid_from: None,
+                valid_to: None,
                 external_ref: None,
                 concepts: Vec::new(),
             })
@@ -519,5 +522,14 @@ audit:
         assert!(json.contains("https://example.test/vocab/codelists/Region"));
         assert!(!json.contains("households_table"));
         assert!(!json.contains("region_code"));
+
+        let manifest = manifest_from_runtime(&config, &registry);
+
+        assert_eq!(manifest.codelists.len(), 1);
+        let cl = &manifest.codelists[0];
+        assert_eq!(cl.scheme_iri, "ex:codelists/Region");
+        assert!(cl.version.is_none(), "version must default to None");
+        assert!(cl.valid_from.is_none(), "valid_from must default to None");
+        assert!(cl.valid_to.is_none(), "valid_to must default to None");
     }
 }
