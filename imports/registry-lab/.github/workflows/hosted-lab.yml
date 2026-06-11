@@ -168,7 +168,7 @@ jobs:
         run: python3 scripts/test_hosted_smoke.py
 
       - name: Validate hosted deploy artifacts
-        run: python3 scripts/validate-hosted-deploy.py
+        run: python3 scripts/validate-hosted-deploy.py --reject-interim-product-images
 
       - name: Run public API workspace validator tests
         run: python3 scripts/test_validate_public_api_workspace.py
