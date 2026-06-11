@@ -38,7 +38,9 @@ The table is generated from `src/data/openapi-sources.yaml`.
 ## Provenance and freshness
 
 [Registry Relay](../../../products/registry-relay/) ships a hand-authored abstract OpenAPI contract.
-It documents the full route surface using templated paths (`/v1/datasets/{dataset_id}/entities/{entity}/...`) and capability tags, rather than enumerating one deployment's datasets and entities.
+It documents the full route surface using templated paths
+(`/v1/datasets/{dataset_id}/entities/{entity}/records/...`) and capability tags, rather than
+enumerating one deployment's datasets and entities.
 The contract lives in `registry-relay/openapi/registry-relay.openapi.json` and is cross-checked against `registry-relay/docs/api.md` and the runtime route table.
 Feature-gated surfaces (OGC API Features, OGC API Records, OGC API EDR, SP DCI, provenance, VC-JWT) are included with notes in each tag description explaining the build feature that mounts them.
 For the instance-specific shape of `{dataset_id}` and `{entity}` in a given deployment, fetch `GET /openapi.json` from that gateway. Runtime deployments gate that route by default unless `openapi_requires_auth` is disabled for demos or controlled tooling.
