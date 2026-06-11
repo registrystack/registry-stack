@@ -152,8 +152,8 @@ REGISTRY_PLATFORM_SOURCE_DIR=../registry-platform scripts/check-platform-compat.
 ```
 
 The script validates the all-feature server build and the Platform security API
-integration tests. Set `CEL_MAPPING_SOURCE_DIR` when Crosswalk is not at
-`../cel-mapping`. CEL is disabled by default; enable with `registry-notary-cel`.
+integration tests. Set `CROSSWALK_SOURCE_DIR` when Crosswalk is not at
+`../crosswalk`. CEL is disabled by default; enable with `registry-notary-cel`.
 
 ## Docker
 
@@ -163,7 +163,7 @@ with Docker BuildKit and pass both named contexts:
 ```bash
 docker build \
   --build-context registry-platform=../registry-platform \
-  --build-context cel-mapping=../cel-mapping \
+  --build-context crosswalk=../crosswalk \
   -t registry-notary .
 ```
 

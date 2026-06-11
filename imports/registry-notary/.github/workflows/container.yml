@@ -141,7 +141,7 @@ jobs:
         with:
           repository: ${{ env.CROSSWALK_REPOSITORY }}
           ref: ${{ env.CROSSWALK_REF }}
-          path: cel-mapping
+          path: crosswalk
           persist-credentials: false
       - name: Build registry-notary image
         if: steps.channel.outputs.build == 'true'
@@ -155,7 +155,7 @@ jobs:
 
           docker build \
             --build-context registry-platform=registry-platform \
-            --build-context cel-mapping=cel-mapping \
+            --build-context crosswalk=crosswalk \
             --build-arg REGISTRY_NOTARY_FEATURES=registry-notary-cel,pkcs11 \
             --file registry-notary/Dockerfile \
             --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
@@ -195,7 +195,7 @@ jobs:
 
           docker build \
             --build-context registry-platform=registry-platform \
-            --build-context cel-mapping=cel-mapping \
+            --build-context crosswalk=crosswalk \
             --file registry-notary/Dockerfile.openfn-sidecar \
             --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
             --label "org.opencontainers.image.revision=${GITHUB_SHA}" \

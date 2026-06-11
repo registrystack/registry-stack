@@ -75,7 +75,7 @@ jobs:
         with:
           repository: ${{ env.CROSSWALK_REPOSITORY }}
           ref: ${{ env.CROSSWALK_REF }}
-          path: cel-mapping
+          path: crosswalk
           persist-credentials: false
 
       - name: Install Rust stable

@@ -33,9 +33,11 @@ if [[ "${platform_dir}" != "${cargo_platform_dir}" ]]; then
     exit 2
   fi
 
-  cel_input="${CEL_MAPPING_SOURCE_DIR:-${repo_root}/../cel-mapping}"
+  # CEL_MAPPING_SOURCE_DIR is the deprecated name for CROSSWALK_SOURCE_DIR;
+  # remove the fallback once operators have migrated.
+  cel_input="${CROSSWALK_SOURCE_DIR:-${CEL_MAPPING_SOURCE_DIR:-${repo_root}/../crosswalk}}"
   if [[ ! -f "${cel_input}/Cargo.toml" ]]; then
-    echo "registry-notary platform compatibility check failed: CEL_MAPPING_SOURCE_DIR does not point to cel-mapping: ${cel_input}" >&2
+    echo "registry-notary platform compatibility check failed: CROSSWALK_SOURCE_DIR does not point to crosswalk: ${cel_input}" >&2
     exit 2
   fi
   cel_dir="$(absolute_dir "${cel_input}")"
@@ -45,7 +47,7 @@ if [[ "${platform_dir}" != "${cargo_platform_dir}" ]]; then
   mkdir -p "${work_root}"
   rsync -a --exclude '/.git' --exclude '/target' "${repo_root}/" "${work_root}/"
   ln -s "${platform_dir}" "${tmp_root}/registry-platform"
-  ln -s "${cel_dir}" "${tmp_root}/cel-mapping"
+  ln -s "${cel_dir}" "${tmp_root}/crosswalk"
   echo "==> registry-notary: using temporary compatibility workspace with registry-platform -> ${platform_dir}"
 fi
 
