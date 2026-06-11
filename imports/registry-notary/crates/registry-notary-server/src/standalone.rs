@@ -254,7 +254,13 @@ pub fn compile_notary_runtime(
     cors_policy.validate()?;
     let wallet_cors_policy = SelfAttestationWalletCorsPolicy::from_config(&config);
     let auth_state = Arc::new(AuthAuditState::from_config(&config, Arc::clone(&metrics))?);
-    let posture_context = PostureContext::from_config(&config, &auth_state.audit);
+    let posture_context =
+        PostureContext::from_config(&config, &auth_state.audit).map_err(|_| {
+            StandaloneServerError::InvalidSigningKey {
+                key: "<unknown>".to_string(),
+                reason: "unsupported signing key status".to_string(),
+            }
+        })?;
     #[cfg(feature = "registry-notary-cel")]
     let cel_worker = build_cel_worker(&config, Arc::clone(&metrics))?;
     let preauth_runtime =

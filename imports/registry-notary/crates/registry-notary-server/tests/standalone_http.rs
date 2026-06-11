@@ -6064,6 +6064,16 @@ async fn admin_posture_requires_ops_read_not_admin_and_ops_cannot_reload() {
         .add_header("x-api-key", "ops-token")
         .await
         .assert_status(StatusCode::FORBIDDEN);
+    let unsupported_reload = server
+        .post("/admin/v1/reload")
+        .add_header("x-api-key", "admin-token")
+        .await;
+    unsupported_reload.assert_status(StatusCode::NOT_IMPLEMENTED);
+    let unsupported_reload_body: Value = unsupported_reload.json();
+    assert_eq!(
+        unsupported_reload_body["code"],
+        json!("registry.admin.capability.not_supported")
+    );
     server
         .post("/admin/v1/credentials/urn:ulid:01HX0000000000000000000000/status")
         .add_header("x-api-key", "ops-token")

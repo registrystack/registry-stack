@@ -437,4 +437,6 @@ async fn config_verify_bundle_cli_rejects_unauthorized_local_trust_root() {
         "stderr did not explain authorization failure:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert!(!tmp.path().join("antirollback.json").exists());
+    assert!(!tmp.path().join("local-approvals.json").exists());
 }
