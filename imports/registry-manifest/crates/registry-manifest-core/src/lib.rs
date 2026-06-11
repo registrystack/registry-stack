@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use oxiri::Iri;
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -174,8 +174,7 @@ fn write_canonical_object(
     Ok(())
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct MetadataManifest {
     pub schema_version: String,
     pub catalog: CatalogManifest,
@@ -205,8 +204,98 @@ pub struct MetadataManifest {
     pub codelists: Vec<CodelistManifest>,
 }
 
+impl<'de> Deserialize<'de> for MetadataManifest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let mut runtime_keys = Vec::new();
+        collect_runtime_only_json_keys(&value, &mut runtime_keys);
+        if !runtime_keys.is_empty() {
+            runtime_keys.sort();
+            runtime_keys.dedup();
+            return Err(de::Error::custom(format!(
+                "runtime-only keys are not allowed in metadata manifests: {}",
+                runtime_keys.join(", ")
+            )));
+        }
+        let fields = MetadataManifestFields::deserialize(value).map_err(de::Error::custom)?;
+        Ok(fields.into())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct MetadataManifestFields {
+    schema_version: String,
+    catalog: CatalogManifest,
+    #[serde(default)]
+    vocabularies: BTreeMap<String, String>,
+    #[serde(default)]
+    profiles: Vec<ProfileClaim>,
+    #[serde(default)]
+    federation: Option<FederationManifest>,
+    #[serde(default)]
+    evaluation_profiles: Vec<EvaluationProfileManifest>,
+    #[serde(default)]
+    requirements: Vec<RequirementManifest>,
+    #[serde(default)]
+    evidence_types: Vec<EvidenceTypeManifest>,
+    #[serde(default)]
+    authorities: Vec<AuthorityManifest>,
+    #[serde(default)]
+    public_services: Vec<ServiceManifest>,
+    #[serde(default)]
+    data_services: Vec<DataServiceManifest>,
+    #[serde(default)]
+    forms: Vec<FormManifest>,
+    #[serde(default)]
+    datasets: Vec<DatasetManifest>,
+    #[serde(default)]
+    codelists: Vec<CodelistManifest>,
+}
+
+impl From<MetadataManifestFields> for MetadataManifest {
+    fn from(fields: MetadataManifestFields) -> Self {
+        Self {
+            schema_version: fields.schema_version,
+            catalog: fields.catalog,
+            vocabularies: fields.vocabularies,
+            profiles: fields.profiles,
+            federation: fields.federation,
+            evaluation_profiles: fields.evaluation_profiles,
+            requirements: fields.requirements,
+            evidence_types: fields.evidence_types,
+            authorities: fields.authorities,
+            public_services: fields.public_services,
+            data_services: fields.data_services,
+            forms: fields.forms,
+            datasets: fields.datasets,
+            codelists: fields.codelists,
+        }
+    }
+}
+
+fn collect_runtime_only_json_keys(value: &Value, keys: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map {
+                if is_runtime_only_key(key) {
+                    keys.push(key.clone());
+                }
+                collect_runtime_only_json_keys(child, keys);
+            }
+        }
+        Value::Array(values) => {
+            for child in values {
+                collect_runtime_only_json_keys(child, keys);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct CatalogManifest {
     pub id: String,
     pub base_url: String,
@@ -225,7 +314,6 @@ pub struct CatalogManifest {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct StandardsManifest {
     #[serde(default)]
     pub dcat: Option<String>,
@@ -236,21 +324,18 @@ pub struct StandardsManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ApplicationProfile {
     pub id: String,
     pub version: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ProfileClaim {
     pub id: String,
     pub version: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct FederationManifest {
     pub node_id: String,
     pub issuer: String,
@@ -261,7 +346,6 @@ pub struct FederationManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct EvaluationProfileManifest {
     pub id: String,
     pub ruleset: String,
@@ -292,7 +376,6 @@ impl LocalizedText {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct PublisherManifest {
     pub name: String,
     #[serde(default)]
@@ -302,7 +385,6 @@ pub struct PublisherManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct AuthorityManifest {
     pub id: String,
     #[serde(default)]
@@ -315,7 +397,6 @@ pub struct AuthorityManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ServiceManifest {
     pub id: String,
     #[serde(default)]
@@ -340,7 +421,6 @@ pub struct ServiceManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ChannelManifest {
     pub id: String,
     #[serde(default)]
@@ -356,7 +436,6 @@ pub struct ChannelManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct DataServiceManifest {
     pub id: String,
     #[serde(default)]
@@ -375,7 +454,6 @@ pub struct DataServiceManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct FormManifest {
     pub id: String,
     #[serde(default)]
@@ -395,7 +473,6 @@ pub struct FormManifest {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct FormValidationManifest {
     #[serde(default)]
     pub json_schema: Option<String>,
@@ -404,7 +481,6 @@ pub struct FormValidationManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct FormSectionManifest {
     pub id: String,
     #[serde(default)]
@@ -422,7 +498,6 @@ pub struct FormSectionManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct FormFieldManifest {
     pub id: String,
     #[serde(default)]
@@ -449,14 +524,12 @@ pub struct FormFieldManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct FormVisibilityManifest {
     pub field: String,
     pub equals: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct FormFulfillmentManifest {
     #[serde(default)]
     pub modes: Vec<String>,
@@ -465,7 +538,6 @@ pub struct FormFulfillmentManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct DatasetManifest {
     pub id: String,
     pub title: LocalizedText,
@@ -505,7 +577,6 @@ pub struct DatasetManifest {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct DatasetPolicyManifest {
     #[serde(default)]
     pub uid: Option<String>,
@@ -522,7 +593,6 @@ pub struct DatasetPolicyManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct PolicyRuleManifest {
     pub action: String,
     #[serde(default)]
@@ -536,7 +606,6 @@ pub struct PolicyRuleManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct PolicyDutyManifest {
     pub action: String,
     #[serde(default)]
@@ -548,7 +617,6 @@ pub struct PolicyDutyManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct PolicyConstraintManifest {
     pub left_operand: String,
     pub operator: String,
@@ -560,7 +628,6 @@ pub struct PolicyConstraintManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct PolicyOperandValue {
     #[serde(default)]
     pub iri: Option<String>,
@@ -569,7 +636,6 @@ pub struct PolicyOperandValue {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct PublicServiceManifest {
     #[serde(default)]
     pub id: Option<String>,
@@ -579,7 +645,6 @@ pub struct PublicServiceManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct RequirementManifest {
     pub id: String,
     #[serde(default)]
@@ -598,7 +663,6 @@ pub struct RequirementManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct EvidenceTypeListManifest {
     #[serde(default)]
     pub id: Option<String>,
@@ -611,14 +675,12 @@ pub struct EvidenceTypeListManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ReferenceFrameworkManifest {
     pub iri: String,
     pub identifier: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct EvidenceTypeManifest {
     pub id: String,
     #[serde(default)]
@@ -633,7 +695,6 @@ pub struct EvidenceTypeManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct EvidenceOfferingManifest {
     pub id: String,
     #[serde(default)]
@@ -658,7 +719,6 @@ pub struct EvidenceOfferingManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct IssuingAuthorityManifest {
     pub id: String,
     #[serde(default)]
@@ -669,7 +729,6 @@ pub struct IssuingAuthorityManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct JurisdictionManifest {
     #[serde(default)]
     pub country: Option<String>,
@@ -678,7 +737,6 @@ pub struct JurisdictionManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct EvidenceOfferingAccessManifest {
     pub kind: String,
     #[serde(default)]
@@ -691,14 +749,12 @@ pub struct EvidenceOfferingAccessManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct EvidenceOfferingPolicyManifest {
     #[serde(default)]
     pub purpose: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct EntityManifest {
     pub name: String,
     #[serde(default)]
@@ -716,14 +772,12 @@ pub struct EntityManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct IdentifierManifest {
     pub name: String,
     pub kind: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct FieldManifest {
     pub name: String,
     #[serde(rename = "type")]
@@ -743,7 +797,6 @@ pub struct FieldManifest {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct FieldConstraints {
     #[serde(default)]
     pub min_length: Option<u64>,
@@ -756,7 +809,6 @@ pub struct FieldConstraints {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct RelationshipManifest {
     pub name: String,
     #[serde(default)]
@@ -778,7 +830,6 @@ impl RelationshipManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct CodelistManifest {
     pub id: String,
     pub scheme_iri: String,
@@ -795,7 +846,6 @@ pub struct CodelistManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct CodelistConcept {
     pub code: String,
     #[serde(default)]

@@ -6,6 +6,8 @@ use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use serde::Deserialize;
+
 fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_registry-manifest")
 }
@@ -324,6 +326,83 @@ fn publish_writes_stable_package_digest_and_artifact_digests() {
     assert!(!artifacts.iter().any(|artifact| artifact["path"]
         .as_str()
         .is_some_and(|path| path.starts_with(".well-known/"))));
+}
+
+#[derive(Debug, Deserialize)]
+struct BetaPublishIndexReader {
+    schema_version: String,
+    artifacts: Vec<BetaArtifactReader>,
+    manifest: String,
+    catalog: String,
+    evidence_offerings: String,
+    policies: String,
+    dcat: String,
+    shacl: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct BetaArtifactReader {
+    path: String,
+    media_type: String,
+    sha256: String,
+}
+
+#[test]
+fn publish_bundle_readers_tolerate_additive_artifacts() {
+    let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
+    let out = temp_dir("publish-additive-artifact");
+    let output = Command::new(bin())
+        .args([
+            "publish",
+            manifest.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run cli");
+    assert!(
+        output.status.success(),
+        "publish failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    fs::write(
+        out.join("provenance.jsonld"),
+        br#"{"@context": {}, "@graph": []}"#,
+    )
+    .expect("write additive artifact");
+    let mut index: serde_json::Value =
+        serde_json::from_slice(&fs::read(out.join("index.json")).expect("index reads"))
+            .expect("index parses");
+    index["artifacts"]
+        .as_array_mut()
+        .expect("artifacts")
+        .push(serde_json::json!({
+            "path": "provenance.jsonld",
+            "media_type": "application/ld+json",
+            "sha256": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "profile": "https://www.w3.org/TR/prov-o/"
+        }));
+    index["provenance"] = serde_json::json!("/metadata/provenance.jsonld");
+
+    let parsed: BetaPublishIndexReader =
+        serde_json::from_value(index.clone()).expect("beta reader parses additive bundle index");
+    assert_eq!(parsed.schema_version, "registry-manifest-index/v1");
+    assert_eq!(parsed.manifest, "/metadata/metadata.yaml");
+    assert_eq!(parsed.catalog, "/metadata/catalog.json");
+    assert_eq!(
+        parsed.evidence_offerings,
+        "/metadata/evidence-offerings.json"
+    );
+    assert_eq!(parsed.policies, "/metadata/policies.jsonld");
+    assert_eq!(parsed.dcat, "/metadata/dcat.jsonld");
+    assert_eq!(parsed.shacl, "/metadata/shacl.jsonld");
+    assert!(parsed.artifacts.iter().any(|artifact| {
+        artifact.path == "provenance.jsonld"
+            && artifact.media_type == "application/ld+json"
+            && artifact.sha256.starts_with("sha256:")
+    }));
+    assert_index_urls_exist(&out, &index);
 }
 
 #[test]

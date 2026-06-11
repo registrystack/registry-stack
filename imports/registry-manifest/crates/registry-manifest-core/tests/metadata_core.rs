@@ -82,6 +82,96 @@ codelists: []
     .expect("minimal manifest parses")
 }
 
+#[test]
+fn post_beta_unknown_manifest_fields_parse_and_validate() {
+    let raw = r#"
+schema_version: registry-manifest/v1
+x_post_beta_manifest_note: ignored by beta readers
+catalog:
+  id: extension-policy
+  base_url: https://registry.example.test
+  title: Extension Policy
+  x_post_beta_catalog_hint: optional future catalog metadata
+  publisher:
+    name: Publisher
+    x_post_beta_publisher_hint: optional future publisher metadata
+requirements:
+  - id: proof-of-eligibility
+    title: Proof of eligibility
+evidence_types:
+  - id: eligibility-evidence
+    title: Eligibility Evidence
+    proves: [proof-of-eligibility]
+datasets:
+  - id: dataset
+    title: Dataset
+    x_post_beta_dataset_hint: optional future dataset metadata
+    entities:
+      - name: person
+        x_post_beta_entity_hint: optional future entity metadata
+        fields:
+          - name: id
+            type: string
+            x_post_beta_field_hint: optional future field metadata
+    evidence_offerings:
+      - id: eligibility
+        title: Eligibility
+        evidence_type: eligibility-evidence
+        supported_modes: [online, assisted]
+        required_subject_binding: strong
+        result_format: application/json
+        disclosure_profile: minimal
+        risk_tier: low
+        issuing_authority:
+          id: authority
+          name: Authority
+          country: ZZ
+          x_post_beta_authority_hint: optional future authority metadata
+        entity: person
+        lookup_keys: [id]
+        access:
+          kind: registry-relay-verification
+          ruleset: exact
+          x_post_beta_access_hint: optional future access metadata
+codelists: []
+"#;
+    let manifest: MetadataManifest =
+        serde_yaml_ng::from_str(raw).expect("unknown optional fields are ignored");
+
+    validate_manifest(&manifest).expect("manifest with unknown optional fields validates");
+}
+
+#[test]
+fn runtime_only_manifest_fields_are_rejected_before_unknown_fields_are_ignored() {
+    let raw = r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: runtime-only-direct-parse
+  base_url: https://registry.example.test
+  title: Runtime-only Direct Parse
+  publisher:
+    name: Publisher
+datasets:
+  - id: dataset
+    title: Dataset
+    entities:
+      - name: person
+        source: people_table
+codelists: []
+"#;
+    let error = serde_yaml_ng::from_str::<MetadataManifest>(raw)
+        .expect_err("runtime-only keys are rejected during manifest parsing");
+
+    assert!(
+        error.to_string().contains("runtime-only keys"),
+        "unexpected parse error: {error}"
+    );
+    assert!(
+        error.to_string().contains("source"),
+        "runtime key should be named in parse error: {error}"
+    );
+}
+
 fn manifest_with_body(body: &str) -> MetadataManifest {
     serde_yaml_ng::from_str(&format!(
         r#"
