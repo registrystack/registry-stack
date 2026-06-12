@@ -118,6 +118,11 @@ and timeout fields), see the
 Operational gates:
 
 - In-memory replay makes `/ready` return HTTP 503 with `status: degraded`.
+- Under a declared deployment profile, in-memory replay combined with a
+  high-risk mode (federation, OID4VCI pre-authorized code, holder proof,
+  wallet-facing traffic, or declared multi-instance) is gated by
+  `notary.replay.in_memory_high_risk`. See
+  [Deployment Profile and Gates](operator-config-reference.md#deployment-profile-and-gates).
 - The service fails readiness when Redis is unavailable.
 - Redis keys are scoped and hashed, but the Redis database is still operational
   security material.

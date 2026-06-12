@@ -16,7 +16,10 @@ use serde_json::{json, Map, Value};
 use time::OffsetDateTime;
 
 use crate::{
-    format_time, replay::ReplayReadiness, standalone::AuditPipeline, RegistryNotaryApiState,
+    format_time,
+    replay::ReplayReadiness,
+    standalone::{AuditPipeline, DeploymentGateState},
+    RegistryNotaryApiState,
 };
 
 #[derive(Clone, Debug)]
@@ -227,6 +230,9 @@ pub(crate) async fn posture_document(
         instance.insert("public_base_url".to_string(), json!(public_base_url));
     }
 
+    let deployment = deployment_object(&state.deployment_gates);
+    let audit_assurance = audit_assurance_object(state.runtime_config().as_deref());
+
     let posture = json!({
         "schema": "registry.ops.posture.v1",
         "observed_at": format_time(OffsetDateTime::now_utc()),
@@ -242,6 +248,8 @@ pub(crate) async fn posture_document(
             "admin_enabled": true,
             "readiness": readiness,
         },
+        "deployment": deployment,
+        "audit": audit_assurance,
         "configuration": {
             "source": config_apply.source.as_posture_str(),
             "dynamic_reload_supported": false,
@@ -387,6 +395,77 @@ fn audit_posture(config: &EvidenceAuditConfig) -> AuditPosture {
         },
         configured: config.hash_secret_env.is_some(),
     }
+}
+
+/// Render the operator-declared deployment profile, gate findings, and active
+/// waivers as the posture `deployment` object. The default tier strips waiver
+/// reasons via the allowlist; this object carries them so the restricted tier
+/// can surface them to Trust Operations.
+fn deployment_object(gates: &DeploymentGateState) -> Value {
+    let mut object = Map::new();
+    if let Some(profile) = gates.profile {
+        object.insert("profile".to_string(), json!(profile));
+    }
+    let findings = gates
+        .findings
+        .iter()
+        .map(|finding| {
+            let mut entry = Map::new();
+            entry.insert("id".to_string(), json!(finding.id));
+            entry.insert("severity".to_string(), json!(finding.severity.as_str()));
+            entry.insert("status".to_string(), json!(finding.status.as_str()));
+            if let Some(waiver) = &finding.waiver {
+                entry.insert(
+                    "waiver".to_string(),
+                    json!({
+                        "reason": waiver.reason,
+                        "expires": waiver.expires,
+                    }),
+                );
+            }
+            Value::Object(entry)
+        })
+        .collect::<Vec<_>>();
+    object.insert("findings".to_string(), Value::Array(findings));
+    let waivers = gates
+        .active_waivers
+        .iter()
+        .map(|waiver| {
+            json!({
+                "finding": waiver.finding,
+                "reason": waiver.reason,
+                "expires": waiver.expires,
+            })
+        })
+        .collect::<Vec<_>>();
+    object.insert("waivers".to_string(), Value::Array(waivers));
+    Value::Object(object)
+}
+
+/// Render the audit assurance object: eight separate facts so "audit exists"
+/// cannot be overclaimed. Protected routes fail closed once a hash secret is
+/// configured; the keyed integrity is HMAC whenever that secret is present.
+fn audit_assurance_object(config: Option<&StandaloneRegistryNotaryConfig>) -> Value {
+    let audit = config.map(|config| &config.audit);
+    let keyed = audit.is_some_and(|audit| audit.hash_secret_env.is_some());
+    let sink_class = match audit.map(|audit| audit.sink.as_str()) {
+        Some("file" | "jsonl") => "file",
+        Some("syslog") => "external",
+        Some("stdout") => "stdout",
+        Some("none") => "none",
+        Some(_) | None => "none",
+    };
+    let durable = matches!(sink_class, "file" | "external");
+    json!({
+        "write_policy": if keyed { "fail_closed_route_families" } else { "availability_first" },
+        "redaction_mode": "redacted",
+        "hash_chain": if keyed { "process_local" } else { "none" },
+        "keyed_integrity": if keyed { "hmac" } else { "none" },
+        "sink_class": sink_class,
+        "retention_owner": if durable { "operator" } else { "unspecified" },
+        "checkpoints": "unsupported",
+        "anchoring": "none",
+    })
 }
 
 fn source_connection_counts_by_kind(

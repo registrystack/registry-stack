@@ -2270,6 +2270,14 @@ async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Respons
                     failed += 1;
                 }
             }
+            if state.deployment_gates.is_bound() {
+                total += 1;
+                if state.deployment_gates.has_readiness_failure() {
+                    failed += 1;
+                } else {
+                    ok += 1;
+                }
+            }
         }
         (total, ok, failed)
     };
@@ -2285,6 +2293,14 @@ async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Respons
                     ok += 1;
                 } else {
                     failed += 1;
+                }
+            }
+            if state.deployment_gates.is_bound() {
+                total += 1;
+                if state.deployment_gates.has_readiness_failure() {
+                    failed += 1;
+                } else {
+                    ok += 1;
                 }
             }
         }
@@ -2758,6 +2774,7 @@ pub struct RegistryNotaryApiState {
     runtime: Arc<RwLock<Arc<ApiRuntimeSnapshot>>>,
     auth_state: Option<Arc<AuthAuditState>>,
     pub(crate) posture: Option<Arc<PostureContext>>,
+    pub(crate) deployment_gates: Arc<crate::standalone::DeploymentGateState>,
     config_apply_posture: Arc<RwLock<ConfigApplyPosture>>,
     #[cfg(feature = "registry-notary-cel")]
     pub(crate) cel_worker: Option<Arc<CelWorker>>,
@@ -2985,6 +3002,7 @@ impl RegistryNotaryApiState {
             runtime: Arc::new(RwLock::new(runtime)),
             auth_state: None,
             posture: None,
+            deployment_gates: Arc::new(crate::standalone::DeploymentGateState::default()),
             config_apply_posture: Arc::new(RwLock::new(ConfigApplyPosture::default())),
             #[cfg(feature = "registry-notary-cel")]
             cel_worker: None,
@@ -3020,6 +3038,14 @@ impl RegistryNotaryApiState {
 
     pub(crate) fn with_posture_context(mut self, posture: PostureContext) -> Self {
         self.posture = Some(Arc::new(posture));
+        self
+    }
+
+    pub(crate) fn with_deployment_gates(
+        mut self,
+        gates: crate::standalone::DeploymentGateState,
+    ) -> Self {
+        self.deployment_gates = Arc::new(gates);
         self
     }
 
