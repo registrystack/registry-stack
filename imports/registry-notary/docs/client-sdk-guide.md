@@ -494,12 +494,15 @@ downstream applications. Its public names for application integrations are:
 
 ### Install
 
-The package is not currently published to PyPI. Install it from a checkout of
-this repository pinned to a release tag or commit:
+The package is not currently published to PyPI. Install it directly from the
+git repository pinned to a release tag or commit (for example `v0.3.1`):
 
 ```bash
-python -m pip install -e bindings/python
+python -m pip install "git+https://github.com/jeremi/registry-notary.git@vX.Y.Z#subdirectory=bindings/python"
 ```
+
+From a local checkout, `python -m pip install -e bindings/python` works as
+well.
 
 ### Create A Client
 
@@ -668,8 +671,16 @@ Problem detail strings are not exposed.
 
 ### Install
 
-The package is not currently published to the npm registry. Install it from a
-checkout of this repository pinned to a release tag or commit:
+The package is not currently published to the npm registry. With pnpm you can
+install it directly from the git repository pinned to a release tag or commit
+(for example `v0.3.1`):
+
+```bash
+pnpm add "github:jeremi/registry-notary#vX.Y.Z&path:bindings/node"
+```
+
+npm does not support installing from a subdirectory of a git repository, so
+with npm install it from a checkout pinned to a release tag or commit:
 
 ```bash
 npm install ./bindings/node
