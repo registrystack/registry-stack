@@ -15,7 +15,7 @@ config_trust:
 metadata:
   source:
     path: civil-registry-relay.metadata.yaml
-    digest: sha256:3891fcc186d637c3b3db790c1592b7a426c4998e73e600e40b8e58fddd10539a
+    digest: sha256:715fa7e3ab817123b43b84f9941271fc0b92b8c3fa88133603d25eaeda35cda9
 
 catalog:
   title: Civil Registry Relay (Decentralized Demo)
@@ -34,14 +34,14 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_METADATA_CLIENT_HASH
-        commitment: sha256:0ee709fd4e9146ab5d9ddb74b572b71f61f74e7be6ba0b631fcea1b93667ebf9
+        commitment: sha256:7ca2ea1fd42ece201135d5c83e4993973dd82b6f1204df1f29f4499507b8960e
       scopes:
         - civil_registry:metadata
     - id: evidence_source
       fingerprint:
         provider: env
         name: CIVIL_EVIDENCE_SOURCE_HASH
-        commitment: sha256:515cae5faa4c9fc08345c3b693836925cad8b18755c4298091938c448d8a917b
+        commitment: sha256:5bf199b9c27d4340c34af1e324e67a0f4ae69d049940a2226042596373b9c653
       scopes:
         - civil_registry:metadata
         - civil_registry:rows
@@ -50,7 +50,7 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_EVIDENCE_ONLY_HASH
-        commitment: sha256:0ae33716cf10538915d5778a06614d69845b1ea38860cf0e2d1beb3c956ad4f8
+        commitment: sha256:66a323a33169a35224e00330be684498e85db8d502899c77cffe8ca5bd6d6468
       scopes:
         - civil_registry:metadata
         - civil_registry:evidence_verification
@@ -58,7 +58,7 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_ROW_READER_HASH
-        commitment: sha256:dfb965359fcb07a9ec72443ce267084249b5e8741c6ec6f21e17ea8931213ef2
+        commitment: sha256:935fd68f1cd82bfc7019dd73d6b903851e8b0d2053722e4dd0ad412250b4f9c0
       scopes:
         - civil_registry:metadata
         - civil_registry:rows
@@ -66,7 +66,7 @@ auth:
       fingerprint:
         provider: env
         name: SHARED_CIVIL_EVIDENCE_SOURCE_HASH
-        commitment: sha256:3008556ab48e894b5bd98e05284281f5b8a267f6a2f3c88604e6e3287061e620
+        commitment: sha256:8d6493ee42cd49c661b99eb194f7177d0157513dc3f541d2b1e43b0ee6c4c5bc
       scopes:
         - civil_registry:metadata
         - civil_registry:rows

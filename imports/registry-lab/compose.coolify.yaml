@@ -66,7 +66,7 @@ x-coolify-required-env:
   - SOCIAL_ROW_READER_RAW
 
 x-relay-common: &relay-common
-  image: ${REGISTRY_RELAY_IMAGE:-ghcr.io/jeremi/registry-relay@sha256:14082cc7b63796d3de22fe8546526983efc16a91dc6f7731e2397002aed5cbe5}
+  image: ${REGISTRY_RELAY_IMAGE:-ghcr.io/jeremi/registry-relay@sha256:f63ce341baff37f1d4ef2c4cc8d794269c3f166f2500238fef490574fb83092d}
   environment: &relay-env
     RUST_LOG: ${RUST_LOG:-info}
   restart: unless-stopped
@@ -80,7 +80,7 @@ x-relay-common: &relay-common
     start_period: 10s
 
 x-notary-common: &notary-common
-  image: ${REGISTRY_NOTARY_IMAGE:-ghcr.io/jeremi/registry-notary@sha256:965a4e2d7d487e7cb8d95b5ad6ed35ed3977be21962a2cffa0f57116c9c34da8}
+  image: ${REGISTRY_NOTARY_IMAGE:-ghcr.io/jeremi/registry-notary@sha256:2d6f79dafcc858aae1736e19386ad8add2b5ae43da2831af5bca360ff73b49ad}
   environment: &notary-env
     RUST_LOG: ${RUST_LOG:-info}
     REGISTRY_NOTARY_REPLAY_REDIS_URL: ${REGISTRY_NOTARY_REPLAY_REDIS_URL:-redis://redis:6379/0}
@@ -397,7 +397,7 @@ services:
         condition: service_healthy
 
   openfn-dhis2-sidecar:
-    image: ${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE:-ghcr.io/jeremi/registry-notary-openfn-sidecar@sha256:a6015dd3c11644af3f0cf52d44fb2aa895a0d5c955a6cdc46db491ab5334273f}
+    image: ${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE:-ghcr.io/jeremi/registry-notary-openfn-sidecar@sha256:90f3609c139599800cec9b32acef83b5020f4fd7af3e4999847f1f0227108055}
     command:
       - --config
       - /etc/registry-notary-openfn/openfn-dhis2-sidecar.bootstrap.yaml
