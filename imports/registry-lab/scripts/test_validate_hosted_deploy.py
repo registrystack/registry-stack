@@ -227,6 +227,18 @@ class HostedDeployValidationTest(unittest.TestCase):
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "lab-homepage-scenarios-not-copied")
 
+    def test_rejects_config_loader_that_does_not_copy_lab_homepage_static(self) -> None:
+        compose = self._valid_registry_lab()
+        compose["services"]["config-loader"]["command"] = [
+            command.replace(
+                "cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/",
+                "",
+            )
+            for command in compose["services"]["config-loader"]["command"]
+        ]
+        issues = self._validate(compose, self._valid_esignet())
+        self.assertIssue(issues, "lab-homepage-static-not-copied")
+
     def test_rejects_config_loader_that_does_not_copy_civil_notary_config(self) -> None:
         compose = self._valid_registry_lab()
         compose["services"]["config-loader"]["command"] = [
@@ -1052,6 +1064,7 @@ if [ ! -s "$openfn_antirollback" ]; then
 fi
 cp -a /tmp/repo/config/coolify/notary/civil-notary.yaml /out/notary/
 cp -a /tmp/repo/scripts/lab_homepage_scenarios /out/static-scripts/
+cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
 """
                     ],
                     "volumes": [

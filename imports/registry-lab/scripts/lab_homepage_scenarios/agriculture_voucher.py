@@ -41,8 +41,9 @@ def story() -> dict[str, Any]:
         "title": "Can a supplier check voucher evidence without exporting the agriculture workbook?",
         "short_title": "Agriculture voucher evidence",
         "proves": "Workbook-backed registries can become governed evidence APIs with positive and negative controls.",
+        "domain": "Agriculture",
         "availability": "local-only",
-        "availability_note": "Requires the local agriculture profile and AGRI_EVIDENCE_CLIENT_BEARER.",
+        "availability_note": "Runs on the local lab profile with the agriculture services started (AGRI_EVIDENCE_CLIENT_BEARER).",
         "intro": (
             "Amina Kone wants to redeem a climate-smart input voucher. The supplier needs eligibility evidence, "
             "not copies of farmer, parcel, entitlement, and redemption rows."
@@ -100,6 +101,32 @@ def story() -> dict[str, Any]:
     }
 
 
+def _preview_evaluate(claim_id: str, subject: str, disclosure: str) -> dict[str, Any]:
+    credential = runtime_bearer_credential("agri-evidence", TOKEN_ENV)
+    _, display_headers = _headers(credential)
+    url = env_url(URL_ENV, DEFAULT_URL, "/v1/evaluations")
+    display_headers["Content-Type"] = "application/json"
+    body = evaluation_body(subject, claim_id, id_scheme="farmer_id", disclosure=disclosure)
+    return request_source("POST", url, display_headers, body, internal=True)
+
+
+def preview_step(config: dict[str, Any], step_id: str) -> dict[str, Any]:
+    if step_id == "discover":
+        credential = runtime_bearer_credential("agri-evidence", TOKEN_ENV)
+        _, display_headers = _headers(credential)
+        url = env_url(URL_ENV, DEFAULT_URL, "/v1/claims")
+        return request_source("GET", url, display_headers, internal=True)
+    if step_id == "positive-voucher":
+        return _preview_evaluate(CLAIM_ID, POSITIVE_SUBJECT, "predicate")
+    if step_id == "inactive-parcel-control":
+        return _preview_evaluate(CLAIM_ID, PARCEL_CONTROL, "predicate")
+    if step_id == "redeemed-control":
+        return _preview_evaluate(CLAIM_ID, REDEEMED_CONTROL, "predicate")
+    if step_id == "reason-code":
+        return _preview_evaluate(REASON_CLAIM_ID, REDEEMED_CONTROL, "value")
+    return {}
+
+
 def run_step(config: dict[str, Any], step_id: str) -> dict[str, Any]:
     if step_id == "discover":
         return _discover(step_id)
@@ -131,7 +158,7 @@ def _discover(step_id: str) -> dict[str, Any]:
         return {
             "step_id": step_id,
             "friendly": friendly_unavailable(SERVICE_NAME, TOKEN_ENV, url),
-            "request_source": request_source("GET", url, display_headers),
+            "request_source": request_source("GET", url, display_headers, internal=True),
             "response_source": {"note": "No local agriculture token configured, so the request was not sent."},
         }
     result = http_json("GET", url, real_headers)
@@ -148,7 +175,7 @@ def _discover(step_id: str) -> dict[str, Any]:
                 {"label": "Availability", "value": "Local-only"},
             ],
         },
-        "request_source": request_source("GET", url, display_headers),
+        "request_source": request_source("GET", url, display_headers, internal=True),
         "response_source": source_response(result),
     }
 
@@ -164,7 +191,7 @@ def _evaluate(step_id: str, claim_id: str, subject: str, label: str, disclosure:
         return {
             "step_id": step_id,
             "friendly": friendly_unavailable(SERVICE_NAME, TOKEN_ENV, url),
-            "request_source": request_source("POST", url, display_headers, body),
+            "request_source": request_source("POST", url, display_headers, body, internal=True),
             "response_source": {"note": "No local agriculture token configured, so the request was not sent."},
         }
     result = http_json("POST", url, real_headers, body)
@@ -184,7 +211,7 @@ def _evaluate(step_id: str, claim_id: str, subject: str, label: str, disclosure:
                 {"label": "Workbook rows exported", "value": "No"},
             ],
         },
-        "request_source": request_source("POST", url, display_headers, body),
+        "request_source": request_source("POST", url, display_headers, body, internal=True),
         "response_source": source_response(result),
     }
 

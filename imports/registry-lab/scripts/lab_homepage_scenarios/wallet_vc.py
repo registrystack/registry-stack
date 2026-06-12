@@ -31,6 +31,7 @@ def story() -> dict[str, Any]:
         "title": "What would Maria see when an alive-status proof lands in her wallet?",
         "short_title": "Wallet credential explorer",
         "proves": "A non-developer can inspect a credential as a wallet card, while developers can inspect issuer metadata and holder binding.",
+        "domain": "Credentials",
         "availability": "hosted",
         "intro": (
             "Maria is an adult demo citizen. This scenario simulates the wallet client so the demo stays easy to run, "
@@ -95,6 +96,36 @@ def story() -> dict[str, Any]:
             {"label": "Private wallet key exposed", "value": "No"},
         ],
     }
+
+
+def preview_step(config: dict[str, Any], step_id: str) -> dict[str, Any]:
+    wallet = config.get("wallet", {})
+    issuer = str(wallet.get("issuer", "https://citizen-notary.lab.registrystack.org")).rstrip("/")
+    credential_config = str(wallet.get("credential_configuration_id", "person_is_alive_sd_jwt"))
+    if step_id == "issuer-metadata":
+        url = joined_url(issuer, "/.well-known/openid-credential-issuer")
+        return request_source("GET", url, {})
+    if step_id == "credential-offer":
+        url = wallet.get("offer_url") or joined_url(
+            issuer,
+            f"/oid4vci/credential-offer?credential_configuration_id={credential_config}",
+        )
+        return request_source("GET", str(url), {})
+    if step_id == "holder-key":
+        return simulated_request_source("wallet://holder-key", {"operation": "create holder key"})
+    if step_id == "nonce":
+        body = {
+            "credential_configuration_id": credential_config,
+            "holder_did": HOLDER_DID,
+            "issuer_session": "[authenticated issuance session simulated]",
+        }
+        return simulated_request_source("wallet://issuer-session/nonce", body)
+    if step_id == "credential-preview":
+        return simulated_request_source(
+            "wallet://credential-request",
+            {"credential_configuration_id": credential_config, "holder_did": HOLDER_DID, "proof": "[wallet proof hidden]"},
+        )
+    return {}
 
 
 def run_step(config: dict[str, Any], step_id: str) -> dict[str, Any]:

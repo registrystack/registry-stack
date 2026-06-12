@@ -47,8 +47,9 @@ def story() -> dict[str, Any]:
         "title": "Can a caseworker ask one eligibility question across civil, social, and health evidence?",
         "short_title": "Combined support eligibility",
         "proves": "A Notary can compose subclaims from multiple authorities into one decision-ready evidence result.",
+        "domain": "Social protection",
         "availability": "local-only",
-        "availability_note": "Requires the local shared eligibility Notary on port 4323 and SHARED_EVIDENCE_CLIENT_BEARER.",
+        "availability_note": "Runs on the local lab profile with the shared eligibility Notary on port 4323 (SHARED_EVIDENCE_CLIENT_BEARER).",
         "intro": (
             "A caseworker reviews Miguel's support application. The final answer depends on civil status, an active social program, "
             "and district service availability, but the caseworker should not receive source rows from every registry."
@@ -118,6 +119,21 @@ def story() -> dict[str, Any]:
     }
 
 
+def preview_step(config: dict[str, Any], step_id: str) -> dict[str, Any]:
+    credential = runtime_bearer_credential("shared-evidence", TOKEN_ENV)
+    _, display_headers = _headers(credential)
+    if step_id == "discover":
+        url = env_url(URL_ENV, DEFAULT_URL, "/v1/claims")
+        return request_source("GET", url, display_headers, internal=True)
+    if step_id in CLAIMS:
+        claim_id, subject, _label = CLAIMS[step_id]
+        url = env_url(URL_ENV, DEFAULT_URL, "/v1/evaluations")
+        body = evaluation_body(subject, claim_id)
+        display_headers["Content-Type"] = "application/json"
+        return request_source("POST", url, display_headers, body, internal=True)
+    return {}
+
+
 def run_step(config: dict[str, Any], step_id: str) -> dict[str, Any]:
     if step_id == "discover":
         return _discover(step_id)
@@ -144,7 +160,7 @@ def _discover(step_id: str) -> dict[str, Any]:
         return {
             "step_id": step_id,
             "friendly": friendly_unavailable(SERVICE_NAME, TOKEN_ENV, url),
-            "request_source": request_source("GET", url, display_headers),
+            "request_source": request_source("GET", url, display_headers, internal=True),
             "response_source": {"note": "No local token configured, so the request was not sent."},
         }
     result = http_json("GET", url, real_headers)
@@ -161,7 +177,7 @@ def _discover(step_id: str) -> dict[str, Any]:
                 {"label": "Availability", "value": "Local-only"},
             ],
         },
-        "request_source": request_source("GET", url, display_headers),
+        "request_source": request_source("GET", url, display_headers, internal=True),
         "response_source": source_response(result),
     }
 
@@ -177,7 +193,7 @@ def _evaluate(step_id: str, claim_id: str, subject: str, label: str) -> dict[str
         return {
             "step_id": step_id,
             "friendly": friendly_unavailable(SERVICE_NAME, TOKEN_ENV, url),
-            "request_source": request_source("POST", url, display_headers, body),
+            "request_source": request_source("POST", url, display_headers, body, internal=True),
             "response_source": {"note": "No local token configured, so the request was not sent."},
         }
     result = http_json("POST", url, real_headers, body)
@@ -199,6 +215,6 @@ def _evaluate(step_id: str, claim_id: str, subject: str, label: str) -> dict[str
                 {"label": "Raw source rows included", "value": "No"},
             ],
         },
-        "request_source": request_source("POST", url, display_headers, body),
+        "request_source": request_source("POST", url, display_headers, body, internal=True),
         "response_source": source_response(result),
     }

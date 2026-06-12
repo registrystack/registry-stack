@@ -30,6 +30,43 @@ DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "config/lab-homepage/publ
 DEFAULT_ENV_FILE = Path(__file__).resolve().parents[1] / "config/lab-homepage/public-demo-credentials.env"
 TOKEN_SUFFIXES = ("_RAW", "_TOKEN", "_BEARER")
 
+FAVICON_CONTENT_TYPE = "image/svg+xml"
+
+# Static assets (CSS/JS extracted from the page templates) live beside this script so they
+# travel with it when the deploy copies scripts/ into the runtime image. Resolve relative to
+# the script, never the CWD, so the path is correct regardless of where the server is launched.
+STATIC_DIR = Path(__file__).resolve().parent / "lab_homepage_static"
+
+# Strict allowlist: only these exact basenames may be served, each with a fixed content type.
+# A request name is matched against this dict; anything else is a 404. We never build a
+# filesystem path from a raw request path, which keeps traversal (../, %2e%2e) impossible.
+STATIC_ASSETS: dict[str, str] = {
+    "shared.css": "text/css; charset=utf-8",
+    "homepage.css": "text/css; charset=utf-8",
+    "scenarios.css": "text/css; charset=utf-8",
+    "homepage.js": "application/javascript; charset=utf-8",
+    "scenarios.js": "application/javascript; charset=utf-8",
+}
+
+
+def static_asset_bytes(name: str) -> bytes:
+    """Read an allowlisted static asset by basename. Raises KeyError if not allowlisted."""
+    if name not in STATIC_ASSETS:
+        raise KeyError(name)
+    # name is a known-good basename from STATIC_ASSETS, so this join cannot escape STATIC_DIR.
+    return (STATIC_DIR / name).read_bytes()
+
+
+def favicon_svg() -> bytes:
+    # Minimal on-brand monogram: "RS" in the registry blue on a white square.
+    return (
+        b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">'
+        b'<rect width="32" height="32" fill="#173b7a"/>'
+        b'<text x="16" y="22" font-family="monospace" font-size="14" font-weight="700"'
+        b' text-anchor="middle" fill="#ffffff">RS</text>'
+        b"</svg>"
+    )
+
 
 def parse_env_file(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
@@ -229,315 +266,9 @@ def homepage_html(title: str) -> bytes:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{safe_title}</title>
-  <style>
-    :root {{
-      color-scheme: light;
-      --registry-blue: #173b7a;
-      --registry-blue-dark: #102a56;
-      --registry-teal: #0f766e;
-      --registry-amber: #855b00;
-      --registry-ink: #161616;
-      --registry-body: #3a3a3a;
-      --registry-muted: #6a6a6a;
-      --registry-rule: #e5e5e5;
-      --registry-sidebar: #fafafa;
-      --registry-active: #eef3ff;
-      --registry-code-bg: #f3f4f6;
-      --registry-ok-bg: #edf7f2;
-      --registry-bad-bg: #fff1f1;
-      --registry-max: 1120px;
-      --registry-font: "Public Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --registry-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    }}
-    * {{ box-sizing: border-box; letter-spacing: 0; }}
-    html {{ background: #ffffff; color: var(--registry-body); font-family: var(--registry-font); scroll-behavior: smooth; }}
-    body {{
-      margin: 0;
-      background: #ffffff;
-      color: var(--registry-body);
-      font: 14px/1.5 var(--registry-font);
-    }}
-    body, button, input, textarea {{ font: inherit; }}
-    a {{ color: var(--registry-blue); text-decoration: none; }}
-    a:hover {{ text-decoration: underline; }}
-    :focus-visible {{ outline: 2px solid var(--registry-blue); outline-offset: 3px; }}
-    .site-header {{
-      align-items: center;
-      background: rgba(255, 255, 255, 0.98);
-      border-bottom: 1px solid var(--registry-rule);
-      display: flex;
-      gap: 24px;
-      justify-content: space-between;
-      padding: 14px clamp(16px, 4vw, 42px);
-      position: sticky;
-      top: 0;
-      z-index: 10;
-    }}
-    .brand {{
-      align-items: center;
-      color: var(--registry-ink);
-      display: inline-flex;
-      font-size: 17px;
-      font-weight: 700;
-      gap: 12px;
-      white-space: nowrap;
-    }}
-    .brand:hover {{ text-decoration: none; }}
-    .brand-mark {{
-      align-items: center;
-      background: var(--registry-blue);
-      color: #ffffff;
-      display: inline-flex;
-      font-family: var(--registry-mono);
-      font-size: 13px;
-      height: 34px;
-      justify-content: center;
-      width: 34px;
-    }}
-    .top-nav {{
-      align-items: center;
-      display: flex;
-      flex-wrap: wrap;
-      gap: clamp(12px, 2vw, 24px);
-      justify-content: flex-end;
-    }}
-    .top-nav a {{
-      align-items: center;
-      color: var(--registry-muted);
-      display: inline-flex;
-      font-size: 14px;
-      font-weight: 600;
-      min-height: 36px;
-    }}
-    .top-nav .nav-emphasis {{ color: var(--registry-blue); }}
-    .hero {{
-      background: #ffffff;
-      border-bottom: 1px solid var(--registry-rule);
-    }}
-    .hero-inner {{
-      display: grid;
-      gap: clamp(24px, 4vw, 44px);
-      grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
-      margin: 0 auto;
-      max-width: var(--registry-max);
-      padding: clamp(48px, 7vw, 86px) clamp(16px, 4vw, 42px) clamp(34px, 5vw, 58px);
-    }}
-    .eyebrow {{
-      color: var(--registry-teal);
-      font-family: var(--registry-mono);
-      font-size: 12px;
-      margin: 0 0 14px;
-      text-transform: uppercase;
-    }}
-    h1, h2, h3, p {{ margin-top: 0; }}
-    h1 {{
-      color: var(--registry-ink);
-      font-size: clamp(40px, 6vw, 70px);
-      line-height: 1.02;
-      margin: 0 0 22px;
-      max-width: 820px;
-    }}
-    h2 {{
-      color: var(--registry-ink);
-      font-size: clamp(24px, 3vw, 36px);
-      line-height: 1.05;
-      margin: 0 0 18px;
-    }}
-    h3 {{
-      color: var(--registry-ink);
-      font-size: 18px;
-      line-height: 1.2;
-      margin: 0 0 10px;
-    }}
-    p {{ line-height: 1.58; margin: 0; }}
-    .subtitle {{
-      color: var(--registry-body);
-      font-size: clamp(17px, 2vw, 22px);
-      line-height: 1.42;
-      max-width: 760px;
-    }}
-    .badge-row {{ display: flex; flex-wrap: wrap; gap: 10px; margin-top: 28px; }}
-    .badge {{
-      border: 1px solid var(--registry-rule);
-      color: var(--registry-ink);
-      display: inline-flex;
-      align-items: center;
-      font-size: 14px;
-      font-weight: 700;
-      min-height: 38px;
-      padding: 8px 10px;
-      white-space: nowrap;
-    }}
-    .hero-note {{ color: var(--registry-body); font-size: 15px; margin-top: 18px; max-width: 620px; }}
-    .hero-links {{ display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }}
-    .status-summary {{
-      background: var(--registry-sidebar);
-      border: 1px solid var(--registry-rule);
-      min-width: 0;
-      padding: 20px;
-    }}
-    .status-summary h2 {{ font-size: 22px; margin-bottom: 8px; }}
-    .status-counts {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; margin-top: 18px; border: 1px solid var(--registry-rule); }}
-    .count {{ background: #ffffff; border-left: 1px solid var(--registry-rule); padding: 12px 8px; text-align: center; }}
-    .count:first-child {{ border-left: 0; }}
-    .count strong {{ color: var(--registry-ink); display: block; font-size: 24px; line-height: 1; }}
-    main {{ display: block; }}
-    .band {{
-      background: #ffffff;
-      border-bottom: 1px solid var(--registry-rule);
-    }}
-    .band-muted {{ background: var(--registry-sidebar); }}
-    .band-inner {{
-      margin: 0 auto;
-      max-width: var(--registry-max);
-      padding: clamp(42px, 6vw, 70px) clamp(16px, 4vw, 42px);
-    }}
-    .section-heading {{
-      margin-bottom: 28px;
-      max-width: 800px;
-    }}
-    .section-heading p:not(.eyebrow) {{ color: var(--registry-body); font-size: 17px; max-width: 760px; }}
-    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }}
-    .pill {{
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-width: 88px;
-      min-height: 32px;
-      padding: 6px 9px;
-      border: 1px solid var(--registry-rule);
-      color: var(--registry-muted);
-      background: #ffffff;
-      font-family: var(--registry-mono);
-      font-size: 12px;
-    }}
-    .pill.ok {{ color: var(--registry-teal); border-color: var(--registry-teal); background: var(--registry-ok-bg); }}
-    .pill.bad {{ color: #a22d2d; border-color: #d9a1a1; background: var(--registry-bad-bg); }}
-    .credential {{
-      display: grid;
-      gap: 14px;
-      padding: 20px;
-      border: 1px solid var(--registry-rule);
-      background: #fff;
-      min-width: 0;
-    }}
-    .credential h3::before {{
-      background: var(--registry-blue);
-      content: "";
-      display: block;
-      height: 3px;
-      margin-bottom: 16px;
-      width: 28px;
-    }}
-    .meta {{ color: var(--registry-muted); font-size: 13px; }}
-    .token-box {{
-      display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 8px;
-      align-items: center;
-      min-width: 0;
-    }}
-    code, pre {{
-      font-family: var(--registry-mono);
-      font-size: 12px;
-      letter-spacing: 0;
-    }}
-    code.token {{
-      display: block;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      border: 1px solid var(--registry-rule);
-      color: var(--registry-ink);
-      padding: 10px;
-      background: var(--registry-code-bg);
-    }}
-    pre {{
-      overflow: auto;
-      margin: 0;
-      border: 1px solid var(--registry-rule);
-      color: var(--registry-ink);
-      padding: 12px;
-      background: var(--registry-code-bg);
-      max-height: 140px;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }}
-    button, .button {{
-      align-items: center;
-      border: 1px solid var(--registry-blue);
-      display: inline-flex;
-      font-weight: 700;
-      justify-content: center;
-      min-height: 36px;
-      padding: 7px 12px;
-      background: #fff;
-      color: var(--registry-blue);
-      cursor: pointer;
-      font: inherit;
-      white-space: nowrap;
-    }}
-    button:hover, .button:hover {{ background: var(--registry-active); text-decoration: none; }}
-    .primary {{ background: var(--registry-blue); border-color: var(--registry-blue); color: #fff; }}
-    .primary:hover {{ background: var(--registry-blue-dark); }}
-    .wallet-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }}
-    .kv {{ display: grid; gap: 6px; padding: 18px; border: 1px solid var(--registry-rule); background: #ffffff; }}
-    .kv span {{ color: var(--registry-teal); font-family: var(--registry-mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0; }}
-    .kv strong {{ color: var(--registry-ink); overflow-wrap: anywhere; }}
-    .actions {{ display: flex; gap: 10px; flex-wrap: wrap; }}
-    .step-list {{ display: grid; gap: 12px; grid-column: 1 / -1; }}
-    .step-card {{
-      align-items: start;
-      background: #ffffff;
-      border: 1px solid var(--registry-rule);
-      display: grid;
-      gap: 14px;
-      grid-template-columns: 34px minmax(0, 1fr);
-      padding: 18px;
-    }}
-    .step-number {{
-      align-items: center;
-      background: var(--registry-blue);
-      color: #ffffff;
-      display: inline-flex;
-      font-family: var(--registry-mono);
-      font-size: 13px;
-      font-weight: 700;
-      height: 34px;
-      justify-content: center;
-      width: 34px;
-    }}
-    .step-card p {{ color: var(--registry-muted); }}
-    /* One service per row; its credentials tile inside so wide services use the space. */
-    #services-grid {{ grid-template-columns: 1fr; }}
-    .status-row {{ display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }}
-    .cred-list {{
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-      gap: 18px;
-      align-items: start;
-      border-top: 1px solid var(--registry-rule);
-      padding-top: 18px;
-    }}
-    .cred-block {{ display: grid; gap: 10px; min-width: 0; align-content: start; }}
-    .cred-name {{ color: var(--registry-ink); font-weight: 700; }}
-    .hidden {{ display: none; }}
-    .site-footer {{
-      align-items: start;
-      display: flex;
-      gap: 24px;
-      justify-content: space-between;
-      margin: 0 auto;
-      max-width: var(--registry-max);
-      padding: 32px clamp(16px, 4vw, 42px);
-    }}
-    @media (max-width: 760px) {{
-      .site-header {{ align-items: flex-start; flex-direction: column; }}
-      .top-nav {{ justify-content: flex-start; }}
-      .hero-inner {{ grid-template-columns: 1fr; }}
-      .token-box {{ grid-template-columns: 1fr; }}
-    }}
-  </style>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/static/shared.css">
+  <link rel="stylesheet" href="/static/homepage.css">
 </head>
 <body>
   <header class="site-header">
@@ -611,174 +342,49 @@ def homepage_html(title: str) -> bytes:
       <p class="meta">Public demo environment for governed registry services.</p>
     </div>
   </footer>
-  <script>
-    const text = (value) => value == null ? "" : String(value);
-    const byId = (id) => document.getElementById(id);
-
-    function escapeHtml(value) {{
-      return text(value).replace(/[&<>"']/g, (char) => ({{
-        "&": "&amp;", "<": "&lt;", ">": "&gt;", "\\"": "&quot;", "'": "&#39;"
-      }}[char]));
-    }}
-
-    async function copyValue(value, button) {{
-      await navigator.clipboard.writeText(value);
-      const previous = button.textContent;
-      button.textContent = "Copied";
-      setTimeout(() => button.textContent = previous, 1200);
-    }}
-
-    function renderWallet(wallet) {{
-      const issuer = wallet.issuer || "";
-      const credentialConfigurationId = wallet.credential_configuration_id || "";
-      const offerStart = wallet.offer_start_url || (
-        issuer && credentialConfigurationId
-          ? `${{issuer.replace(/\\/$/, "")}}/oid4vci/offer/start?credential_configuration_id=${{encodeURIComponent(credentialConfigurationId)}}`
-          : wallet.offer_url || ""
-      );
-      const walletUrl = wallet.wallet_url || "https://wallet.lab.registrystack.org/signup";
-      const identity = wallet.demo_identity || {{}};
-      const negative = wallet.negative_control || {{}};
-      byId("wallet-grid").innerHTML = `
-        <div class="step-list" aria-label="Wallet issuance steps">
-          <div class="step-card"><span class="step-number">1</span><div><strong>Open the hosted wallet.</strong><p>Create or open a demo wallet, then use its scan or import-offer screen.</p><div class="actions"><a class="button" href="${{escapeHtml(walletUrl)}}" target="_blank" rel="noreferrer">Open wallet</a><button type="button" data-copy="${{escapeHtml(walletUrl)}}">Copy wallet URL</button></div></div></div>
-          <div class="step-card"><span class="step-number">2</span><div><strong>Start credential issuance.</strong><p>The Notary will redirect to eSignet before it renders the wallet offer.</p><div class="actions"><a class="button primary" href="${{escapeHtml(offerStart)}}" target="_blank" rel="noreferrer">Start issuance</a><button type="button" data-copy="${{escapeHtml(offerStart)}}">Copy start URL</button></div></div></div>
-          <div class="step-card"><span class="step-number">3</span><div><strong>Copy the generated offer into the wallet.</strong><p>After login, copy the <code>openid-credential-offer://</code> URI from the Notary page and paste it into the wallet scan/import screen within 300 seconds. The hosted demo no longer requires a separate issuer PIN.</p></div></div>
-        </div>
-        <div class="kv"><span>Sign in as</span><strong>${{escapeHtml(identity.name)}}</strong><div class="meta">Use ID ${{escapeHtml(identity.identifier)}}, OTP ${{escapeHtml(identity.generated_code)}}, and PIN ${{escapeHtml(identity.pin)}} if eSignet asks.</div></div>
-        <div class="kv"><span>Your wallet should receive</span><strong>${{escapeHtml(wallet.credential_name || wallet.credential_configuration_id)}}</strong><div class="meta">${{escapeHtml(identity.expected_result || wallet.user_story || "")}}</div></div>
-        <div class="kv"><span>Why this matters</span><strong>A service gets a yes/no proof, not the full civil record.</strong><div class="meta">${{escapeHtml(wallet.user_story || "")}}</div></div>
-        <div class="kv"><span>Test a rejected case</span><strong>${{escapeHtml(negative.identifier)}}</strong><div class="meta">${{escapeHtml(negative.expected_result)}}</div></div>
-        <div class="kv"><span>For developers</span><strong>Issuer and credential type</strong><div class="meta">${{escapeHtml(issuer)}} &middot; ${{escapeHtml(credentialConfigurationId)}}</div></div>
-      `;
-    }}
-
-    function credentialBlock(credential) {{
-      const scopes = (credential.scopes || []).join(", ");
-      const token = credential.token || "";
-      const curl = credential.curl || "";
-      const headerRows = Object.entries(credential.required_headers || {{}})
-        .map(([key, value]) => `<div class="meta">${{escapeHtml(key)}}: ${{escapeHtml(value)}}</div>`)
-        .join("");
-      return `
-        <div class="cred-block">
-          <div>
-            <div class="cred-name">${{escapeHtml(credential.label)}}</div>
-            <div class="meta">${{escapeHtml(scopes)}}</div>
-            ${{headerRows}}
-          </div>
-          <div class="token-box">
-            <code class="token" title="${{escapeHtml(token)}}">${{escapeHtml(token || "Missing env value")}}</code>
-            <button type="button" data-copy="${{escapeHtml(token)}}" ${{token ? "" : "disabled"}}>Copy token</button>
-          </div>
-          <pre>${{escapeHtml(curl)}}</pre>
-          <div class="actions">
-            <button type="button" data-copy="${{escapeHtml(curl)}}">Copy curl</button>
-          </div>
-        </div>
-      `;
-    }}
-
-    function renderServices(services) {{
-      byId("services-grid").innerHTML = services.map((service) => {{
-        const creds = (service.credentials || []).map(credentialBlock).join("");
-        // The Open link starts hidden; loadStatus reveals it only when the service is
-        // reachable and not auth-gated, so we never link to a 401 page or a dead host.
-        return `
-          <article class="credential">
-            <div>
-              <h3>${{escapeHtml(service.label)}}</h3>
-              <div class="meta">${{escapeHtml(service.purpose || "")}}</div>
-            </div>
-            <div class="status-row">
-              <span class="pill" data-status-for="${{escapeHtml(service.id)}}">checking</span>
-              <a class="button hidden" data-open-for="${{escapeHtml(service.id)}}" href="${{escapeHtml(service.url)}}" target="_blank" rel="noreferrer">Open</a>
-            </div>
-            ${{creds ? `<div class="cred-list">${{creds}}</div>` : ""}}
-          </article>
-        `;
-      }}).join("");
-    }}
-
-    function wireCopyButtons() {{
-      document.querySelectorAll("[data-copy]").forEach((button) => {{
-        if (button.dataset.copyWired === "true") return;
-        button.dataset.copyWired = "true";
-        button.addEventListener("click", () => copyValue(button.getAttribute("data-copy") || "", button));
-      }});
-    }}
-
-    async function loadStatus() {{
-      try {{
-        const response = await fetch("/api/status.json", {{cache: "no-store"}});
-        const status = await response.json();
-        let ok = 0;
-        let bad = 0;
-        for (const check of status.checks || []) {{
-          const node = document.querySelector(`[data-status-for="${{CSS.escape(check.id)}}"]`);
-          const openNode = document.querySelector(`[data-open-for="${{CSS.escape(check.id)}}"]`);
-          // Only offer the Open link when there is something to see: the service is up and its
-          // base URL is browsable unauthenticated. A token-gated API or a down host shows nothing.
-          if (openNode) openNode.classList.toggle("hidden", !(check.ok && check.browsable));
-          if (check.ok) {{
-            ok += 1;
-            if (node) {{
-              node.textContent = check.auth_gated ? "up - auth required" : `up - ${{check.status_code}}`;
-              node.className = "pill ok";
-            }}
-          }} else {{
-            bad += 1;
-            if (node) {{
-              node.textContent = check.status_code ? `down - ${{check.status_code}}` : `down`;
-              node.className = "pill bad";
-            }}
-          }}
-        }}
-        byId("ok-count").textContent = ok;
-        byId("bad-count").textContent = bad;
-        byId("status-time").textContent = "Checked just now";
-      }} catch (error) {{
-        byId("status-time").textContent = "Status unavailable";
-      }}
-    }}
-
-    async function start() {{
-      const response = await fetch("/api/lab.json", {{cache: "no-store"}});
-      const data = await response.json();
-      byId("title").textContent = data.title || "Registry Lab";
-      byId("subtitle").textContent = data.subtitle || "";
-      byId("domain").textContent = data.environment?.domain || "";
-      byId("notice").textContent = data.environment?.notice || "";
-      byId("missing-count").textContent = (data.credentials || []).filter((credential) => !credential.configured).length;
-      renderServices(data.services || []);
-      renderWallet(data.wallet || {{}});
-      wireCopyButtons();
-      loadStatus();
-    }}
-    start();
-  </script>
+  <script src="/static/homepage.js"></script>
 </body>
 </html>
 """.encode("utf-8")
 
 
+
+
 class LabHomepageHandler(BaseHTTPRequestHandler):
     config: dict[str, Any] = {}
     status_timeout: float = 2.0
+    lab_mode: str = "hosted"
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
         if path == "/":
             self.send_bytes(homepage_html(self.config.get("title", "Registry Lab")), "text/html; charset=utf-8")
             return
+        if path == "/favicon.svg":
+            self.send_bytes(favicon_svg(), FAVICON_CONTENT_TYPE)
+            return
+        if path == "/favicon.ico":
+            self.send_redirect("/favicon.svg")
+            return
+        if path.startswith("/static/"):
+            # Match the requested name against the allowlist only. We never join the raw
+            # request path onto the filesystem, so traversal attempts (../, %2e%2e) just
+            # fail the allowlist check and fall through to a 404.
+            name = path.removeprefix("/static/")
+            content_type = STATIC_ASSETS.get(name)
+            if content_type is not None:
+                self.send_bytes(static_asset_bytes(name), content_type)
+                return
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
         if path == "/scenarios":
-            self.send_bytes(scenario_page_html("Registry Lab Scenarios"), "text/html; charset=utf-8")
+            self.send_bytes(scenario_page_html(), "text/html; charset=utf-8")
             return
         if path.startswith("/scenarios/"):
             scenario_id = path.removeprefix("/scenarios/").strip("/")
             if scenario_id:
                 self.send_bytes(
-                    scenario_page_html("Registry Lab Scenarios", scenario_id),
+                    scenario_page_html(scenario_id=scenario_id),
                     "text/html; charset=utf-8",
                 )
                 return
@@ -789,11 +395,11 @@ class LabHomepageHandler(BaseHTTPRequestHandler):
             self.send_json(enrich_config(self.config))
             return
         if path == "/api/scenarios.json":
-            self.send_json(scenario_payload(enrich_config(self.config)))
+            self.send_json(scenario_payload(enrich_config(self.config), lab_mode=self.lab_mode))
             return
         if path.startswith("/api/scenarios/") and path.endswith(".json"):
             scenario_id = path.removeprefix("/api/scenarios/").removesuffix(".json")
-            self.send_json(scenario_payload(enrich_config(self.config), scenario_id))
+            self.send_json(scenario_payload(enrich_config(self.config), scenario_id, lab_mode=self.lab_mode))
             return
         if path == "/api/status.json":
             self.send_json(status_checks(self.config, self.status_timeout))
@@ -805,14 +411,14 @@ class LabHomepageHandler(BaseHTTPRequestHandler):
         prefix = "/api/scenarios/alive-proof/"
         if path.startswith(prefix):
             step_id = path.removeprefix(prefix)
-            self.send_json(run_alive_proof_step(enrich_config(self.config), step_id))
+            self.send_json(run_alive_proof_step(enrich_config(self.config), step_id, lab_mode=self.lab_mode))
             return
         scenario_prefix = "/api/scenarios/"
         if path.startswith(scenario_prefix):
             rest = path.removeprefix(scenario_prefix)
             scenario_id, sep, step_id = rest.partition("/")
             if sep and scenario_id and step_id:
-                self.send_json(run_scenario_step(enrich_config(self.config), scenario_id, step_id))
+                self.send_json(run_scenario_step(enrich_config(self.config), scenario_id, step_id, lab_mode=self.lab_mode))
                 return
         self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -828,17 +434,50 @@ class LabHomepageHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def send_redirect(self, location: str) -> None:
+        self.send_response(HTTPStatus.MOVED_PERMANENTLY)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def log_message(self, fmt: str, *args: object) -> None:
         print(f"{self.address_string()} - {fmt % args}", flush=True)
 
 
+def verify_static_assets() -> None:
+    """Fail loudly at startup if the static asset directory or any asset is missing.
+
+    The pages link /static/*.css and /static/*.js; without those files the site renders
+    unstyled and non-interactive. We refuse to start rather than serve broken pages.
+    """
+    if not STATIC_DIR.is_dir():
+        raise SystemExit(
+            f"static asset directory is missing: {STATIC_DIR}\n"
+            "The homepage and scenario pages link /static/*.css and /static/*.js from this "
+            "directory. It must sit beside lab-homepage-server.py (the deploy copies "
+            "scripts/lab_homepage_static alongside the server). Aborting."
+        )
+    missing = [name for name in STATIC_ASSETS if not (STATIC_DIR / name).is_file()]
+    if missing:
+        raise SystemExit(
+            f"static assets missing from {STATIC_DIR}: {', '.join(sorted(missing))}\n"
+            "Aborting rather than serving broken pages."
+        )
+
+
 def main() -> int:
+    verify_static_assets()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--env-file", type=Path, default=None)
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--status-timeout", type=float, default=2.0)
+    parser.add_argument(
+        "--lab-mode",
+        choices=("hosted", "local"),
+        default=os.environ.get("LAB_HOMEPAGE_MODE", "hosted"),
+    )
     args = parser.parse_args()
 
     env_file = args.env_file
@@ -853,6 +492,7 @@ def main() -> int:
     config = load_config(args.config)
     LabHomepageHandler.config = config
     LabHomepageHandler.status_timeout = args.status_timeout
+    LabHomepageHandler.lab_mode = args.lab_mode
     server = ThreadingHTTPServer((args.host, args.port), LabHomepageHandler)
     print(f"serving Registry Lab homepage on {args.host}:{args.port}", flush=True)
     server.serve_forever()

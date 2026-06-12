@@ -30,11 +30,9 @@ def story() -> dict[str, Any]:
         "title": "Can a planner see eligibility counts without seeing household rows?",
         "short_title": "Aggregate versus row access",
         "proves": "Aggregate credentials can answer planning questions while row data remains separately governed.",
+        "domain": "Social protection",
         "availability": "local-only",
-        "availability_note": (
-            "Requires a local social Relay on port 4312. Hosted validation currently returns 403 because the live "
-            "aggregate route still performs an internal row-scoped read."
-        ),
+        "availability_note": "Runs on the local lab profile with the social Relay on port 4312.",
         "intro": (
             "A policy analyst needs district-level eligibility counts for planning. They do not need names, household rows, "
             "or benefit records for individual families."
@@ -83,6 +81,25 @@ def story() -> dict[str, Any]:
             {"label": "Purpose header used", "value": "Yes"},
         ],
     }
+
+
+def _preview_get(config: dict[str, Any], credential_id: str, path: str, extra_headers: dict[str, str] | None = None) -> dict[str, Any]:
+    credential = configured_credential(config, credential_id)
+    display_name, display_value = display_auth_header_pair(credential)
+    url = env_url("SOCIAL_RELAY_URL", "http://127.0.0.1:4312", path)
+    return request_source("GET", url, {display_name: display_value, **(extra_headers or {})})
+
+
+def preview_step(config: dict[str, Any], step_id: str) -> dict[str, Any]:
+    if step_id == "discover":
+        return _preview_get(config, "social-metadata", "/v1/datasets", {"Data-Purpose": PURPOSE})
+    if step_id == "read-aggregate":
+        return _preview_get(config, "social-aggregate-reader", AGGREGATE_PATH, {"Data-Purpose": PURPOSE})
+    if step_id == "deny-row-with-aggregate":
+        return _preview_get(config, "social-aggregate-reader", ROW_PATH, {"Data-Purpose": PURPOSE})
+    if step_id == "read-row-with-row-token":
+        return _preview_get(config, "social-row-reader", ROW_PATH, {"Data-Purpose": PURPOSE})
+    return {}
 
 
 def run_step(config: dict[str, Any], step_id: str) -> dict[str, Any]:

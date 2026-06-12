@@ -42,6 +42,7 @@ def story() -> dict[str, Any]:
         "title": "Can a benefits service verify Miguel is alive without reading his civil registry record?",
         "short_title": "Evidence without row access",
         "proves": "A service can request a decision-ready fact while the raw civil record stays protected.",
+        "domain": "Civil registry",
         "availability": "hosted",
         "intro": (
             "You are a benefits service reviewing Miguel's application. You need one fact: whether Miguel is alive. "
@@ -90,6 +91,32 @@ def story() -> dict[str, Any]:
     }
 
 
+def preview_step(config: dict[str, Any], step_id: str) -> dict[str, Any]:
+    if step_id == "discover":
+        credential = configured_credential(config, "civil-evidence-only")
+        display_name, display_value = display_auth_header_pair(credential)
+        url = service_url(config, "civil-evidence-only", "/metadata/evidence-offerings")
+        return request_source("GET", url, {display_name: display_value})
+    if step_id == "prepare-evidence":
+        credential = runtime_bearer_credential("civil-notary-evidence", "CIVIL_EVIDENCE_CLIENT_BEARER")
+        display_name, display_value = display_auth_header_pair(credential)
+        url = env_url("CIVIL_EVIDENCE_URL", "http://127.0.0.1:4321", "/v1/evaluations")
+        body = evaluation_body(SUBJECT_ID, CLAIM_ID)
+        return request_source(
+            "POST",
+            url,
+            {display_name: display_value, "Content-Type": "application/json", "Data-Purpose": PURPOSE},
+            body,
+            internal=True,
+        )
+    if step_id == "deny-row":
+        credential = configured_credential(config, "civil-evidence-only")
+        display_name, display_value = display_auth_header_pair(credential)
+        url = service_url(config, "civil-evidence-only", "/v1/datasets/civil_registry/entities/civil_person/records?limit=1")
+        return request_source("GET", url, {display_name: display_value, "Data-Purpose": PURPOSE})
+    return {}
+
+
 def run_step(config: dict[str, Any], step_id: str) -> dict[str, Any]:
     if step_id == "discover":
         return _run_discovery(config, step_id)
@@ -130,6 +157,7 @@ def _run_evaluation(step_id: str) -> dict[str, Any]:
             url,
             {display_name: display_value, "Content-Type": "application/json", "Data-Purpose": PURPOSE},
             body,
+            internal=True,
         ),
         "response_source": {
             "reused_from_discovery": DISCOVERY_REUSED,

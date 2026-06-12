@@ -77,10 +77,12 @@ def env_url(env_name: str, default: str, path: str) -> str:
     return joined_url(os.environ.get(env_name, default), path)
 
 
-def request_source(method: str, url: str, headers: dict[str, str], body: Any | None = None) -> dict[str, Any]:
+def request_source(method: str, url: str, headers: dict[str, str], body: Any | None = None, *, internal: bool = False) -> dict[str, Any]:
     source: dict[str, Any] = {"method": method, "url": url, "headers": headers}
     if body is not None:
         source["body"] = body
+    if internal:
+        source["internal"] = True
     return source
 
 
