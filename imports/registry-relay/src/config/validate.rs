@@ -87,11 +87,12 @@ pub fn run_with_source(config: &Config, source: ConfigSource) -> Result<(), Erro
 
 /// Validate the deployment block and evaluate startup gates.
 ///
-/// Waiver dates must be well-formed `YYYY-MM-DD`, reasons must be non-empty,
-/// and the deployment must not declare a profile under which any unwaived
-/// `startup_fail` gate triggers. An invalid profile value is rejected earlier
-/// by `serde` (the parse error path); this check covers the conditions that
-/// only hold once the whole config is deserialised.
+/// Waiver finding ids must match the finding id pattern, waiver dates must be
+/// well-formed `YYYY-MM-DD`, reasons must be non-empty, and the deployment must
+/// not declare a profile under which any unwaived `startup_fail` gate triggers.
+/// An invalid profile value is rejected earlier by `serde` (the parse error
+/// path); this check covers the conditions that only hold once the whole config
+/// is deserialised.
 ///
 /// `source` is the config's real provenance source. The startup path passes
 /// [`ConfigSource::LocalFile`]; the signed governed apply path threads the
@@ -103,6 +104,14 @@ fn validate_deployment(config: &Config, source: ConfigSource) -> Result<(), Conf
             tracing::error!(
                 code = "config.validation_error",
                 "deployment waiver is missing a finding id"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        if !is_valid_finding_id(&waiver.finding) {
+            tracing::error!(
+                code = "config.validation_error",
+                finding = %waiver.finding,
+                "deployment waiver finding id does not match ^[a-z][a-z0-9]*(?:\\.[a-z][a-z0-9_-]*)*$"
             );
             return Err(ConfigError::ValidationError);
         }
@@ -1198,6 +1207,42 @@ fn is_valid_id(s: &str) -> bool {
         _ => return false,
     }
     chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Match the deployment finding id pattern
+/// `^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9_-]*)*$` without pulling in a regex crate.
+///
+/// The first dot-separated segment is `[a-z][a-z0-9]*` (no underscore or dash);
+/// every following segment is `[a-z][a-z0-9_-]*`. This matches the ids the gate
+/// catalog emits (for example `relay.config.unsigned`,
+/// `relay.auth.api_key_no_rotation_evidence`, `deployment.profile_undeclared`).
+/// A waiver naming a malformed id would otherwise pass non-empty validation and
+/// only surface later as restricted-tier posture schema invalidity.
+fn is_valid_finding_id(s: &str) -> bool {
+    let mut segments = s.split('.');
+    let Some(first) = segments.next() else {
+        return false;
+    };
+    if !is_valid_finding_segment(first, false) {
+        return false;
+    }
+    segments.all(|segment| is_valid_finding_segment(segment, true))
+}
+
+/// One dot-separated finding id segment. The leading character must be
+/// `[a-z]`; trailing characters are `[a-z0-9]`, plus `_` and `-` when
+/// `allow_underscore_dash` is set (every segment after the first).
+fn is_valid_finding_segment(segment: &str, allow_underscore_dash: bool) -> bool {
+    let mut chars = segment.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_lowercase() => {}
+        _ => return false,
+    }
+    chars.all(|c| {
+        c.is_ascii_lowercase()
+            || c.is_ascii_digit()
+            || (allow_underscore_dash && (c == '_' || c == '-'))
+    })
 }
 
 fn validate_server(config: &Config) -> Result<(), ConfigError> {
@@ -3852,5 +3897,64 @@ datasets: []
             run_with_source(&config, ConfigSource::LocalFile).is_err(),
             "evidence_grade from a local file must refuse startup"
         );
+    }
+
+    #[test]
+    fn evidence_grade_via_unknown_source_refuses_startup() {
+        // Unknown provenance must fail closed: it counts as unsigned, so the
+        // `relay.config.unsigned` startup gate fires under evidence_grade.
+        let config = parse_deployment_config(
+            "deployment:\n  profile: evidence_grade\n  evidence:\n    ingress_rate_limit: true\n    api_key_rotation: true",
+        );
+        assert!(
+            run_with_source(&config, ConfigSource::Unknown).is_err(),
+            "evidence_grade with unknown provenance must refuse startup (fail closed)"
+        );
+    }
+
+    #[test]
+    fn waiver_finding_id_must_match_finding_id_pattern() {
+        // A malformed finding id is rejected at config load, before it could
+        // surface later as restricted-tier posture schema invalidity.
+        let config = parse_deployment_config(
+            "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: \"Relay.Config.Unsigned\"\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"",
+        );
+        assert!(
+            run(&config).is_err(),
+            "a waiver with a malformed finding id must fail validation"
+        );
+    }
+
+    #[test]
+    fn waiver_finding_id_accepts_canonical_dotted_id() {
+        let config = parse_deployment_config(
+            "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: \"relay.config.unsigned\"\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"",
+        );
+        run(&config).expect("a canonical dotted finding id must pass validation");
+    }
+
+    #[test]
+    fn finding_id_pattern_matches_catalog_ids() {
+        // The pattern must admit every id the catalog can emit, including the
+        // framework findings with their dotted segments.
+        assert!(is_valid_finding_id("relay.config.unsigned"));
+        assert!(is_valid_finding_id("relay.admin.public_exposure"));
+        assert!(is_valid_finding_id("deployment.profile_undeclared"));
+        assert!(is_valid_finding_id("deployment.waiver_expired"));
+        assert!(is_valid_finding_id(
+            "relay.auth.api_key_no_rotation_evidence"
+        ));
+    }
+
+    #[test]
+    fn finding_id_pattern_rejects_malformed_ids() {
+        assert!(!is_valid_finding_id(""));
+        assert!(!is_valid_finding_id("Relay.config.unsigned"));
+        assert!(!is_valid_finding_id("1relay.config"));
+        assert!(!is_valid_finding_id(".relay.config"));
+        assert!(!is_valid_finding_id("relay..config"));
+        assert!(!is_valid_finding_id("relay.config."));
+        assert!(!is_valid_finding_id("relay.Config"));
+        assert!(!is_valid_finding_id("relay config"));
     }
 }

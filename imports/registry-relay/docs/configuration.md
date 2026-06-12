@@ -531,6 +531,8 @@ audit:
 
 Audit output uses `registry-platform-audit` envelopes with `prev_hash` and `record_hash` on every record. These fields detect ordering gaps and accidental corruption in retained logs, but they do not protect against an actor who can rewrite the audit sink. Use an append-only external sink or independent tail-hash anchoring when stronger integrity is required. `chain` is retained in config for compatibility with older deployments, but platform audit envelopes are always chained.
 
+A normally booted relay always reports keyed integrity `hmac` in its posture because startup requires the audit hash secret (`hash_secret_env`); the `none` value appears only in dev or test configurations that build the posture without that secret.
+
 Audit records are separate from operational logs, which go to stderr as readable text by default. Set `REGISTRY_RELAY_LOG_FORMAT=json` or `REGISTRY_RELAY_LOG_FORMAT=jsonl` when operational logs are emitted as JSON Lines for collection or redirected files.
 
 ### Write policy

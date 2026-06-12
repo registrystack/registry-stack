@@ -158,6 +158,12 @@ const GATES: &[Gate] = &[
     Gate {
         id: "relay.audit.best_effort",
         condition: |facts| facts.audit_best_effort,
+        // The natural hosted_lab binding for a best-effort audit policy is an
+        // info-level finding, but the shared `GateSeverity` vocabulary has no
+        // `info` level. Binding it at `finding_warn` here would overstate the
+        // concern for a lab, so the hosted_lab binding is intentionally omitted
+        // until the shared severity vocabulary gains an info level (a cross-repo
+        // vocabulary decision tracked outside this catalog).
         hosted_lab: None,
         production: Some(FindingWarn),
         evidence_grade: Some(ReadinessFail),
@@ -307,8 +313,9 @@ fn is_expired(waiver: &WaiverInput, today: &str) -> bool {
 /// Project the runtime config into the profile-independent facts the gates
 /// read.
 ///
-/// `config_source` is the provenance source of the loaded config: a local
-/// YAML file counts as unsigned, a signed governed bundle does not. Relay
+/// `config_source` is the provenance source of the loaded config: a signed
+/// governed bundle clears `relay.config.unsigned`; a local YAML file does not,
+/// and neither does unknown provenance (which fails closed as unsigned). Relay
 /// always configures an audit sink, so `audit_sink_missing` is always false
 /// here; the gate remains in the catalog for completeness.
 pub fn facts_from_config(config: &Config, config_source: ConfigSource) -> DeploymentFacts {
@@ -325,7 +332,13 @@ pub fn facts_from_config(config: &Config, config_source: ConfigSource) -> Deploy
             .unwrap_or(true),
         api_key_mode: config.auth.mode == AuthMode::ApiKey,
         api_key_rotation_evidence_missing: !config.deployment.evidence.api_key_rotation,
-        config_unsigned: matches!(config_source, ConfigSource::LocalFile),
+        // Only a genuine signed bundle clears `relay.config.unsigned`. A local
+        // file is unsigned, and so is unknown provenance: an unrecognized source
+        // must fail closed rather than silently clear the gate.
+        config_unsigned: !matches!(
+            config_source,
+            ConfigSource::SignedBundleFile | ConfigSource::SignedBundleEndpoint
+        ),
         audit_sink_missing: false,
         audit_best_effort: config.audit.write_policy == AuditWritePolicy::AvailabilityFirst,
     }
@@ -822,5 +835,38 @@ mod tests {
             finding(&evaluation, "relay.openapi.public").status,
             DeploymentFindingStatus::Waived
         );
+    }
+
+    fn minimal_config() -> Config {
+        serde_saphyr::from_str(
+            r#"
+server:
+  bind: "127.0.0.1:8080"
+catalog:
+  title: "Test Registry"
+  base_url: "https://data.example.test"
+  publisher: "Test Ministry"
+auth:
+  mode: api_key
+  api_keys: []
+audit:
+  sink: stdout
+datasets: []
+"#,
+        )
+        .expect("config parses")
+    }
+
+    #[test]
+    fn config_unsigned_fact_classifies_sources_fail_closed() {
+        let config = minimal_config();
+        // A local file is unsigned.
+        assert!(facts_from_config(&config, ConfigSource::LocalFile).config_unsigned);
+        // Unknown provenance fails closed: it counts as unsigned, so the
+        // `relay.config.unsigned` gate fires rather than silently clearing.
+        assert!(facts_from_config(&config, ConfigSource::Unknown).config_unsigned);
+        // Only a genuine signed bundle clears the gate.
+        assert!(!facts_from_config(&config, ConfigSource::SignedBundleFile).config_unsigned);
+        assert!(!facts_from_config(&config, ConfigSource::SignedBundleEndpoint).config_unsigned);
     }
 }
