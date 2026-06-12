@@ -88,6 +88,8 @@ def base_routes() -> dict[tuple[str, str], Any]:
                 "default_scenario_id": "alive-proof",
                 "scenarios": [
                     {"id": "alive-proof", "steps": 3},
+                    {"id": "social-aggregate", "steps": 4},
+                    {"id": "combined-support", "steps": 6},
                     {"id": "dhis2-programme-vc", "steps": 6},
                 ],
             },
@@ -118,6 +120,34 @@ def base_routes() -> dict[tuple[str, str], Any]:
                         {"id": "reconcile"},
                         {"id": "negative-control"},
                         {"id": "render-cccev"},
+                    ]
+                }
+            },
+        ),
+        ("GET", "/api/scenarios/social-aggregate.json"): (
+            200,
+            {
+                "story": {
+                    "steps": [
+                        {"id": "discover"},
+                        {"id": "read-aggregate"},
+                        {"id": "deny-row-with-aggregate"},
+                        {"id": "read-row-with-row-token"},
+                    ]
+                }
+            },
+        ),
+        ("GET", "/api/scenarios/combined-support.json"): (
+            200,
+            {
+                "story": {
+                    "steps": [
+                        {"id": "discover"},
+                        {"id": "civil-subclaim"},
+                        {"id": "social-subclaim"},
+                        {"id": "health-subclaim"},
+                        {"id": "final-positive"},
+                        {"id": "negative-control"},
                     ]
                 }
             },
@@ -159,8 +189,12 @@ class HostedSmokeTest(unittest.TestCase):
 
         self.assertEqual(summary["credential_smoke"], "skipped")
         self.assertEqual(summary["scenarios"]["alive-proof"]["deny-row"], "denied_as_expected")
+        self.assertEqual(summary["scenarios"]["social-aggregate"]["deny-row-with-aggregate"], "denied_as_expected")
+        self.assertEqual(summary["scenarios"]["combined-support"]["final-positive"], "done")
         requested_paths = [path for _, path, _ in server.requests]
         self.assertIn("/api/scenarios/alive-proof/discover", requested_paths)
+        self.assertIn("/api/scenarios/social-aggregate/read-aggregate", requested_paths)
+        self.assertIn("/api/scenarios/combined-support/final-positive", requested_paths)
         self.assertIn("/api/scenarios/dhis2-programme-vc/render-cccev", requested_paths)
         self.assertIn("/.well-known/openid-credential-issuer", requested_paths)
 
