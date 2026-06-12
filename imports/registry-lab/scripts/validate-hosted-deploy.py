@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -241,6 +242,8 @@ def validate_artifacts(
     *,
     require_secret_values: bool = False,
     reject_interim_product_images: bool = False,
+    check_metadata_digest_pins: bool = False,
+    manifest_cli: list[str] | None = None,
     env: dict[str, str] | None = None,
 ) -> list[Issue]:
     issues: list[Issue] = []
@@ -302,6 +305,10 @@ def validate_artifacts(
         issues.extend(validate_dhis2_programme_vc_contract(artifact, root))
         if require_secret_values:
             issues.extend(validate_credential_commitments(artifact, root, env))
+        if check_metadata_digest_pins:
+            issues.extend(
+                validate_metadata_digest_pins(artifact, root, env, manifest_cli=manifest_cli)
+            )
         issues.extend(
             validate_static_metadata_publisher(
                 artifact,
@@ -1245,6 +1252,147 @@ def credential_commitment(
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
+MANIFEST_DIGEST_RE = re.compile(r"^source_manifest_digest:\s*(sha256:[0-9a-f]{64})\s*$", re.MULTILINE)
+MANIFEST_CLI_REMEDIATION = (
+    "set REGISTRY_MANIFEST_CLI or pass --manifest-cli to a registry-manifest binary, "
+    "or initialise the vendor/registry-manifest submodule so the check can cargo-run it"
+)
+
+
+def validate_metadata_digest_pins(
+    artifact: str,
+    root: Path,
+    env: dict[str, str],
+    *,
+    manifest_cli: list[str] | None = None,
+    skip: bool = False,
+) -> list[Issue]:
+    """Verify metadata.source.digest pins against the registry-manifest oracle.
+
+    The digest is computed by registry-manifest-cli over the canonical JSON of
+    the typed manifest, so the CLI is the only trustworthy oracle. A missing
+    oracle is a failure, not a skip: a silently skipped check is what let the
+    2026-06-12 digest-pin outage through preflight.
+    """
+    if artifact != "registry-lab" or skip:
+        return []
+    pinned: list[tuple[Path, str, str]] = []
+    for relative_dir in HOSTED_CONFIG_DIRS:
+        directory = root / relative_dir
+        if not directory.exists():
+            continue
+        for path in sorted(directory.glob("*.yaml")):
+            try:
+                config = load_yaml_mapping_strict(path)
+            except Exception:
+                continue
+            source = config.get("metadata")
+            source = source.get("source") if isinstance(source, dict) else None
+            if not isinstance(source, dict):
+                continue
+            source_path = source.get("path")
+            digest = source.get("digest")
+            if isinstance(source_path, str) and isinstance(digest, str):
+                pinned.append((path, source_path, digest))
+    if not pinned:
+        return []
+
+    command = manifest_cli or resolve_manifest_cli(root, env)
+    if command is None:
+        return [
+            Issue(
+                "metadata-digest-oracle-missing",
+                artifact,
+                "config/coolify",
+                f"metadata.source.digest pins exist but no registry-manifest oracle is available; {MANIFEST_CLI_REMEDIATION}",
+            )
+        ]
+
+    issues: list[Issue] = []
+    for config_path, source_path, pinned_digest in pinned:
+        issue_path = str(config_path.relative_to(root))
+        manifest_path = config_path.parent / source_path
+        if not manifest_path.is_file():
+            issues.append(
+                Issue(
+                    "metadata-manifest-missing",
+                    artifact,
+                    issue_path,
+                    f"metadata.source.path {source_path} does not exist next to the config",
+                )
+            )
+            continue
+        try:
+            result = subprocess.run(
+                [*command, "validate", str(manifest_path)],
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            issues.append(
+                Issue(
+                    "metadata-digest-oracle-missing",
+                    artifact,
+                    issue_path,
+                    f"could not run registry-manifest oracle ({exc}); {MANIFEST_CLI_REMEDIATION}",
+                )
+            )
+            continue
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip().splitlines()
+            issues.append(
+                Issue(
+                    "metadata-manifest-invalid",
+                    artifact,
+                    issue_path,
+                    f"registry-manifest rejected {source_path}: {detail[-1] if detail else 'no output'}",
+                )
+            )
+            continue
+        match = MANIFEST_DIGEST_RE.search(result.stdout)
+        if not match:
+            issues.append(
+                Issue(
+                    "metadata-digest-oracle-missing",
+                    artifact,
+                    issue_path,
+                    "registry-manifest output did not include source_manifest_digest",
+                )
+            )
+            continue
+        if match.group(1) != pinned_digest:
+            issues.append(
+                Issue(
+                    "metadata-digest-mismatch",
+                    artifact,
+                    issue_path,
+                    f"metadata.source.digest pin {pinned_digest} does not match computed {match.group(1)}; "
+                    f"repin from `registry-manifest validate {source_path}`",
+                )
+            )
+    return issues
+
+
+def resolve_manifest_cli(root: Path, env: dict[str, str]) -> list[str] | None:
+    configured = env.get("REGISTRY_MANIFEST_CLI")
+    if configured:
+        return shlex.split(configured)
+    cargo_manifest = root / "vendor" / "registry-manifest" / "Cargo.toml"
+    if cargo_manifest.is_file():
+        return [
+            "cargo",
+            "run",
+            "--quiet",
+            "--manifest-path",
+            str(cargo_manifest),
+            "-p",
+            "registry-manifest-cli",
+            "--",
+        ]
+    return None
+
+
 def validate_static_metadata_publisher(
     artifact: str,
     services: dict[str, Any],
@@ -2112,6 +2260,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="reject interim local :hosted tags for Registry product images",
     )
+    parser.add_argument(
+        "--manifest-cli",
+        type=Path,
+        help="registry-manifest binary used to verify metadata.source.digest pins "
+        "(default: $REGISTRY_MANIFEST_CLI, else cargo-run from vendor/registry-manifest)",
+    )
+    parser.add_argument(
+        "--skip-metadata-digest-pins",
+        action="store_true",
+        help="skip metadata.source.digest pin verification (escape hatch; the check fails "
+        "rather than skips when the registry-manifest oracle is unavailable)",
+    )
     return parser.parse_args(argv)
 
 
@@ -2161,6 +2321,8 @@ def main(argv: list[str]) -> int:
                 args.reject_interim_product_images
                 or truthy_env(os.environ.get("REGISTRY_LAB_REJECT_INTERIM_PRODUCT_IMAGES"))
             ),
+            check_metadata_digest_pins=not args.skip_metadata_digest_pins,
+            manifest_cli=[str(args.manifest_cli)] if args.manifest_cli else None,
         )
     )
     issues = sorted(dedupe_issues(issues), key=lambda issue: (issue.artifact, issue.path, issue.code))
