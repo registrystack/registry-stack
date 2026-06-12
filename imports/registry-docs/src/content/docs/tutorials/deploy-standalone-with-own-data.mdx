@@ -95,9 +95,9 @@ Start from the canonical
 and the
 [configuration guide](https://github.com/jeremi/registry-relay/blob/main/docs/configuration.md),
 which is the authoritative reference for every block.
-A minimal deployment needs four blocks: `server` (a listener), `catalog` (public metadata
-base), `auth` (one auth mode), and at least one entry in `datasets`.
-Every other root block is optional.
+A minimal deployment needs five blocks: `server` (a listener), `catalog` (public metadata
+base), `auth` (one auth mode), `audit` (a sink and hash secret), and at least one
+entry in `datasets`. Every other root block is optional.
 
 The example below exposes one dataset backed by a CSV file with a `person` entity.
 Adapt the ids, fields, and scopes to your data.
