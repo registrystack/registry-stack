@@ -200,6 +200,9 @@ fn missing_cnf_when_holder_binding_required_fails_with_holder_binding_required()
 
 #[test]
 fn malformed_disclosure_fails_with_disclosure_digest_mismatch() {
+    // The fixture has a corrupted base64url disclosure. The verifier fails at
+    // the base64 decode step and maps that parse failure to
+    // disclosure.digest_mismatch. The hash-comparison branch is not reached.
     let compact = read_fixture("malformed-disclosure.sd-jwt");
     let err = verify_sd_jwt_vc(&compact, &jwks(), &base_options())
         .expect_err("malformed-disclosure fixture must fail");
@@ -208,6 +211,24 @@ fn malformed_disclosure_fails_with_disclosure_digest_mismatch() {
         err.code(),
         "disclosure.digest_mismatch",
         "malformed disclosure must fail with disclosure.digest_mismatch, got {err:?}"
+    );
+}
+
+#[test]
+fn tampered_disclosure_fails_with_disclosure_digest_mismatch() {
+    // The fixture disclosure is valid base64url-encoded JSON with three elements
+    // (salt, claim name, value), so it passes the parse and structure checks.
+    // The claim value has been altered, making its SHA-256 digest different from
+    // every entry in the payload _sd array. The verifier reaches the
+    // hash-comparison branch and returns disclosure.digest_mismatch.
+    let compact = read_fixture("tampered-disclosure.sd-jwt");
+    let err = verify_sd_jwt_vc(&compact, &jwks(), &base_options())
+        .expect_err("tampered-disclosure fixture must fail");
+
+    assert_eq!(
+        err.code(),
+        "disclosure.digest_mismatch",
+        "tampered disclosure must fail with disclosure.digest_mismatch, got {err:?}"
     );
 }
 

@@ -4,7 +4,12 @@
 //! Run with:
 //!   cargo run -p xtask -- gen-sd-jwt-vc-fixtures
 //!
-//! Writes deterministic synthetic fixtures to tests/fixtures/sd_jwt_vc/.
+//! Writes synthetic fixtures to tests/fixtures/sd_jwt_vc/.
+//! Keys and timestamps are fixed so the JWTs are reproducible, but
+//! SdJwtIssuer generates random disclosure salts on each call, so re-running
+//! this command will produce byte-for-byte different fixture files even though
+//! the decoded credential content is functionally equivalent. Commit only when
+//! the fixture content has materially changed.
 //! All key material is throwaway and clearly marked as test-only.
 //! Do not use any of the keys or tokens produced here outside of tests.
 
@@ -169,13 +174,25 @@ async fn generate_fixtures() {
         &valid,
     );
 
-    // 8. Malformed disclosure: corrupt the last disclosure segment.
+    // 8. Malformed disclosure: corrupt the last disclosure segment so that
+    //    base64url decoding fails. The verifier maps this parse failure to
+    //    disclosure.digest_mismatch (the hash-comparison branch is never
+    //    reached because the disclosure cannot even be decoded).
     let malformed_disc = tamper_last_disclosure(&valid_raw);
     write_fixture(&fixture_dir, "malformed-disclosure.sd-jwt", &malformed_disc);
 
-    // 9. Holder proof mismatch: valid holder-bound credential but the
-    //    key-binding JWT is signed by the wrong key (the issuer key instead of
-    //    the holder key). The harness expects holder_binding.proof_invalid.
+    // 9. Tampered disclosure: the disclosure is valid base64url-encoded JSON
+    //    with three elements (salt, claim name, value), so it passes the parse
+    //    checks, but the claim value has been altered so its SHA-256 digest is
+    //    not present in the payload _sd array. This exercises the actual
+    //    hash-comparison branch in the verifier, which is distinct from the
+    //    parse-failure path covered by malformed-disclosure.sd-jwt.
+    let tampered_disc = tamper_disclosure_value(&valid_raw);
+    write_fixture(&fixture_dir, "tampered-disclosure.sd-jwt", &tampered_disc);
+
+    // 10. Holder proof mismatch: valid holder-bound credential but the
+    //     key-binding JWT is signed by the wrong key (the issuer key instead of
+    //     the holder key). The harness expects holder_binding.proof_invalid.
     let bad_kb = format!(
         "{valid_holder_bound}{}",
         bad_key_binding_jwt(&issuer_jwk, IAT)
@@ -261,6 +278,42 @@ fn tamper_last_disclosure(compact: &str) -> String {
     let disc_owned = disc.clone();
     parts[last_disc_idx] = &disc_owned;
     parts.join("~")
+}
+
+/// Re-encode the first disclosure in an SD-JWT compact form with an altered
+/// claim value. The resulting disclosure is valid base64url-encoded JSON with
+/// three elements, so the verifier passes the parse checks and reaches the
+/// hash-comparison step, where it discovers the disclosure digest is not in
+/// the payload _sd array and returns disclosure.digest_mismatch.
+fn tamper_disclosure_value(compact: &str) -> String {
+    let parts: Vec<&str> = compact.split('~').collect();
+    // parts[0] is the issuer JWT; parts[1..] are disclosures (last may be empty).
+    let first_disc_raw = parts
+        .iter()
+        .skip(1)
+        .find(|p| !p.is_empty() && !p.contains('.'))
+        .expect("at least one disclosure");
+
+    // Decode, mutate the value (third element), and re-encode.
+    let decoded = URL_SAFE_NO_PAD
+        .decode(first_disc_raw)
+        .expect("disclosure base64 decodes");
+    let mut arr: Vec<serde_json::Value> =
+        serde_json::from_slice(&decoded).expect("disclosure json decodes");
+    // arr[0] = salt (keep), arr[1] = claim name (keep), arr[2] = value (tamper).
+    arr[2] = json!({"satisfied": false, "value": "tampered"});
+    let new_bytes = serde_json::to_vec(&arr).expect("tampered disclosure serialises");
+    let new_disc = URL_SAFE_NO_PAD.encode(&new_bytes);
+
+    // Rebuild the compact form with the tampered first disclosure.
+    let mut new_parts: Vec<String> = parts.iter().map(|p| p.to_string()).collect();
+    for p in new_parts.iter_mut().skip(1) {
+        if !p.is_empty() && !p.contains('.') {
+            *p = new_disc.clone();
+            break;
+        }
+    }
+    new_parts.join("~")
 }
 
 /// Produce a key-binding JWT signed with the wrong key (issuer key instead of
