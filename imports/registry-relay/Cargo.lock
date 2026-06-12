@@ -4887,7 +4887,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "registry-manifest-core"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "oxiri",
  "serde",
@@ -4898,7 +4898,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-audit"
-version = "0.1.2"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "hmac 0.13.0",
@@ -4915,7 +4915,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-authcommon"
-version = "0.1.2"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4927,7 +4927,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-cache"
-version = "0.1.2"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "sha2 0.11.0",
@@ -4938,7 +4938,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-config"
-version = "0.1.2"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -4957,7 +4957,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-crypto"
-version = "0.1.2"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "base64",
@@ -4975,7 +4975,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httpsec"
-version = "0.1.2"
+version = "0.2.1"
 dependencies = [
  "axum",
  "http",
@@ -4989,7 +4989,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httputil"
-version = "0.1.2"
+version = "0.2.1"
 dependencies = [
  "bytes",
  "http",
@@ -5001,7 +5001,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-oid4vci"
-version = "0.1.2"
+version = "0.2.1"
 dependencies = [
  "base64",
  "registry-platform-crypto",
@@ -5014,7 +5014,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-oidc"
-version = "0.1.2"
+version = "0.2.1"
 dependencies = [
  "base64",
  "jsonwebtoken",
@@ -5029,7 +5029,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-ops"
-version = "0.1.2"
+version = "0.2.1"
 dependencies = [
  "fs2",
  "registry-platform-crypto",
@@ -5040,7 +5040,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-replay"
-version = "0.1.2"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "registry-platform-cache",
@@ -5050,7 +5050,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-sdjwt"
-version = "0.1.2"
+version = "0.2.1"
 dependencies = [
  "base64",
  "getrandom 0.4.2",
@@ -5065,7 +5065,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-testing"
-version = "0.1.2"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "axum",
