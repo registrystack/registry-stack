@@ -904,6 +904,15 @@ async fn admin_config_apply(
         } else {
             None
         };
+        // Record the rejection so operators can observe the last attempted apply.
+        // Preserve source and last_config_hash from the previous state because
+        // the running configuration was not changed by this rejected attempt.
+        let mut rejected_posture = state.config_apply_posture();
+        rejected_posture.last_bundle_id = Some(candidate.bundle_id.clone());
+        rejected_posture.last_bundle_sequence = Some(candidate.sequence);
+        rejected_posture.last_apply_result = Some(result.as_posture_result());
+        rejected_posture.last_apply_at = Some(format_time(OffsetDateTime::now_utc()));
+        state.record_config_apply(rejected_posture);
         return config_apply_response(
             ConfigApplyResponse {
                 bundle_id: candidate.bundle_id.clone(),
