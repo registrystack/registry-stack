@@ -504,7 +504,11 @@ fn endpoint_kind_from_pattern(pattern: &str) -> EndpointKind {
         "/v1/datasets" | "/metadata" | "/metadata/catalog" | "/metadata/dcat" => {
             EndpointKind::Catalog
         }
-        "/v1/datasets/{dataset_id}" => EndpointKind::Dataset,
+        "/v1/datasets/{dataset_id}"
+        | "/v1/datasets/{dataset_id}/measures"
+        | "/v1/datasets/{dataset_id}/measures/{item_id}"
+        | "/v1/datasets/{dataset_id}/dimensions"
+        | "/v1/datasets/{dataset_id}/dimensions/{item_id}" => EndpointKind::Dataset,
         "/v1/datasets/{dataset_id}/entities/{entity}/schema" => EndpointKind::Schema,
         "/v1/datasets/{dataset_id}/entities/{entity}/records" => EndpointKind::Rows,
         "/v1/datasets/{dataset_id}/entities/{entity}/records/{id}" => EndpointKind::Rows,
@@ -638,6 +642,48 @@ mod tests {
         assert_eq!(
             endpoint_kind_from_pattern("/v1/datasets/{dataset_id}/entities/{entity}/verify"),
             EndpointKind::Other
+        );
+    }
+
+    #[test]
+    fn measures_and_dimensions_routes_classify_as_dataset_not_other() {
+        // measures/dimensions have no dedicated EndpointKind variant. Both
+        // classifiers must land them in Dataset: the path-based classifier via
+        // classify_dataset_endpoint's wildcard arm, the pattern-based
+        // classifier via explicit arms. Pin both so a refactor cannot silently
+        // drop live-traffic metrics for these routes into Other (the pattern
+        // classifier is the primary one whenever axum provides a MatchedPath).
+        assert_eq!(
+            endpoint_kind_from_path("/v1/datasets/hdx/measures"),
+            EndpointKind::Dataset
+        );
+        assert_eq!(
+            endpoint_kind_from_path("/v1/datasets/hdx/measures/population"),
+            EndpointKind::Dataset
+        );
+        assert_eq!(
+            endpoint_kind_from_path("/v1/datasets/hdx/dimensions"),
+            EndpointKind::Dataset
+        );
+        assert_eq!(
+            endpoint_kind_from_path("/v1/datasets/hdx/dimensions/region"),
+            EndpointKind::Dataset
+        );
+        assert_eq!(
+            endpoint_kind_from_pattern("/v1/datasets/{dataset_id}/measures"),
+            EndpointKind::Dataset
+        );
+        assert_eq!(
+            endpoint_kind_from_pattern("/v1/datasets/{dataset_id}/measures/{item_id}"),
+            EndpointKind::Dataset
+        );
+        assert_eq!(
+            endpoint_kind_from_pattern("/v1/datasets/{dataset_id}/dimensions"),
+            EndpointKind::Dataset
+        );
+        assert_eq!(
+            endpoint_kind_from_pattern("/v1/datasets/{dataset_id}/dimensions/{item_id}"),
+            EndpointKind::Dataset
         );
     }
 }

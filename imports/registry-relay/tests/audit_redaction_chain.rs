@@ -17,7 +17,7 @@ fn sample_record(request_id: usize) -> AuditRecord {
         auth_mode: Some("api_key".to_string()),
         remote_addr: "127.0.0.1".to_string(),
         method: "GET".to_string(),
-        path: "/datasets/social_registry/individuals".to_string(),
+        path: "/v1/datasets/social_registry/entities/individuals/records".to_string(),
         endpoint_kind: EndpointKind::Rows,
         dataset_id: Some("social_registry".to_string()),
         entity_name: Some("individuals".to_string()),
