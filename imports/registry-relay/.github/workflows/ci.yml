@@ -47,6 +47,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # The hosted runner's 14 GB free disk is not enough for three sibling
+      # checkouts plus debug, all-features, and test artifacts; drop the
+      # preinstalled toolchains we never use (~25 GB) before building.
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
