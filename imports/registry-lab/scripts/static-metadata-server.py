@@ -13,8 +13,23 @@ API_CATALOG_LINK = (
 )
 LINKSET_JSON = 'application/linkset+json; profile="https://www.rfc-editor.org/info/rfc9727"'
 
+# Browser-hardening headers on every response (registry-relay#88). All served
+# files are machine-readable API documents (JSON, JSON-LD, YAML), never HTML,
+# so the CSP can deny everything.
+SECURITY_HEADERS = (
+    ("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'"),
+    ("X-Content-Type-Options", "nosniff"),
+    ("X-Frame-Options", "DENY"),
+    ("Referrer-Policy", "no-referrer"),
+)
+
 
 class StaticMetadataHandler(SimpleHTTPRequestHandler):
+    # Mask the SimpleHTTP/Python banner; version details do not belong on a
+    # public surface.
+    server_version = "registry-lab-static"
+    sys_version = ""
+
     def guess_type(self, path: str) -> str:
         request_path = self.path.split("?", 1)[0]
         if request_path == "/.well-known/api-catalog":
@@ -31,6 +46,8 @@ class StaticMetadataHandler(SimpleHTTPRequestHandler):
         request_path = self.path.split("?", 1)[0]
         if request_path == "/.well-known/api-catalog":
             self.send_header("Link", API_CATALOG_LINK)
+        for name, value in SECURITY_HEADERS:
+            self.send_header(name, value)
         super().end_headers()
 
 

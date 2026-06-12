@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import html
-import json
 from typing import Any
 
 from . import agriculture_voucher, civil_alive, combined_support, dhis2_programme, social_aggregate, wallet_vc
@@ -115,7 +114,10 @@ def scenario_nav_link() -> str:
 
 
 def scenario_page_html(scenario_id: str | None = None) -> bytes:
-    active_scenario = json.dumps(scenario_id or "")
+    # The active scenario travels as a body data attribute (read by
+    # scenarios.js) instead of an inline <script>, so the strict
+    # script-src 'self' CSP holds.
+    active_scenario = html.escape(scenario_id or "", quote=True)
     # Build page-level metadata: per-story when scenario_id is given, generic otherwise.
     if scenario_id and scenario_id in STORY_BY_ID:
         _story = STORY_BY_ID[scenario_id].story()
@@ -143,7 +145,7 @@ def scenario_page_html(scenario_id: str | None = None) -> bytes:
 {_head_extra}  <link rel="stylesheet" href="/static/shared.css">
   <link rel="stylesheet" href="/static/scenarios.css">
 </head>
-<body>
+<body data-active-scenario="{active_scenario}">
   <header class="site-header">
     <a class="brand" href="/" aria-label="Registry Lab home">
       <span class="brand-mark" aria-hidden="true">RS</span>
@@ -178,9 +180,6 @@ def scenario_page_html(scenario_id: str | None = None) -> bytes:
     </a>
     <p class="meta">Public demo environment for governed registry services.</p>
   </footer>
-  <script>
-    const ACTIVE_SCENARIO = {active_scenario};
-  </script>
   <script src="/static/scenarios.js"></script>
 </body>
 </html>
