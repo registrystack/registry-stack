@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-relay
   - registry-notary
-last_reviewed: "2026-06-12"
+last_reviewed: "2026-06-13"
 doc_type: how-to
 locale: en
 standards_referenced:
@@ -50,7 +50,11 @@ Registry Relay release images publish to `ghcr.io/jeremi/registry-relay` from st
 tags.
 Consume a version tag or an image digest, not `latest`, so your deployment is reproducible and
 you can roll back.
-For the current published tags and the image signing policy, see the Relay
+The published versions are listed on the
+[Relay releases page](https://github.com/jeremi/registry-relay/releases); at the time of writing
+the current stable is `v0.2.1`, so replace `vX.Y.Z` with that (or a newer release) throughout
+this page.
+For the image signing policy, see the Relay
 [security assurance notes](https://github.com/jeremi/registry-relay/blob/main/docs/security-assurance.md)
 and the [build and release section](https://github.com/jeremi/registry-relay/blob/main/docs/ops.md#build-and-release)
 of the operations runbook.
@@ -91,9 +95,9 @@ Start from the canonical
 and the
 [configuration guide](https://github.com/jeremi/registry-relay/blob/main/docs/configuration.md),
 which is the authoritative reference for every block.
-A minimal deployment needs four blocks: `server` (a listener), `catalog` (public metadata
-base), `auth` (one auth mode), and at least one entry in `datasets`.
-Every other root block is optional.
+A minimal deployment needs five blocks: `server` (a listener), `catalog` (public metadata
+base), `auth` (one auth mode), `audit` (a sink and hash secret), and at least one
+entry in `datasets`. Every other root block is optional.
 
 The example below exposes one dataset backed by a CSV file with a `person` entity.
 Adapt the ids, fields, and scopes to your data.
@@ -101,6 +105,7 @@ Adapt the ids, fields, and scopes to your data.
 ```yaml
 server:
   bind: 0.0.0.0:8080
+  cache_dir: /var/lib/registry-relay/cache
 
 catalog:
   title: Example Registry Relay
@@ -183,6 +188,12 @@ audit:
   hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
 ```
 
+:::caution
+The `commitment` value above is an all-zero placeholder. Relay fails closed at startup until you
+replace it with the real commitment emitted by `generate-api-key` in the
+[next section](#provision-the-api-key-fingerprint-and-commitment).
+:::
+
 Key points the configuration guide spells out in full:
 
 - **Storage stays private.** `tables[].id` (`individuals_table`) never appears in a public URL.
@@ -206,7 +217,9 @@ Key points the configuration guide spells out in full:
 
 - **`audit.hash_secret_env`** must name an environment variable holding at least 32 bytes of
   deployment-specific random secret material. Relay fails closed at startup if it is missing or
-  weak.
+  weak. Generate it once with `openssl rand -hex 32` (see [Run the container](#run-the-container))
+  and keep it stable in your secret store, so audit subject hashes stay comparable across
+  restarts.
 
 For aggregates, relationships, OIDC auth, Postgres sources, live materialization, and provenance
 signing, follow the corresponding sections of the
@@ -261,16 +274,28 @@ of the configuration guide documents the underlying contract.
 
 ## Run the container
 
+First generate the audit hash secret. Any source of 32 or more random bytes works; with OpenSSL:
+
+```sh
+export REGISTRY_RELAY_AUDIT_HASH_SECRET="$(openssl rand -hex 32)"
+```
+
+Store it in your secret store and reuse the same value across restarts: audit subject hashes are
+derived from it, so rotating it breaks the linkage between older and newer audit records.
+
 Run Relay with your config and data mounted, the fingerprint and audit secret supplied as
 environment variables, and a writable cache:
 
 ```sh
+mkdir -p cache
+
 docker run --rm \
   -p 127.0.0.1:8080:8080 \
   -v "$(pwd)/config.yaml:/etc/registry-relay/config.yaml:ro" \
   -v "$(pwd)/data:/var/lib/registry-relay/data:ro" \
+  -v "$(pwd)/cache:/var/lib/registry-relay/cache" \
   -e PROGRAM_SYSTEM_API_KEY_HASH="sha256:<your fingerprint>" \
-  -e REGISTRY_RELAY_AUDIT_HASH_SECRET="<32+ bytes of random secret>" \
+  -e REGISTRY_RELAY_AUDIT_HASH_SECRET="$REGISTRY_RELAY_AUDIT_HASH_SECRET" \
   ghcr.io/jeremi/registry-relay:vX.Y.Z
 ```
 
@@ -278,6 +303,10 @@ Relay exits non-zero if config parsing or validation fails, if a required API-ke
 environment variable is missing, or if a listener cannot bind.
 The container's recommended source-data mount is `/var/lib/registry-relay/data`; match the
 `path` values in your config to wherever you mount the data.
+The cache mount matches `server.cache_dir` in the config above; without it, ingestion fails on
+the first cache write because the source mount is read-only.
+Operational logs go to stderr as readable text; set `-e REGISTRY_RELAY_LOG_FORMAT=json` to emit
+JSON Lines for a log collector.
 
 ## Verify the deployment
 
@@ -323,6 +352,12 @@ curl -sS -G \
   http://127.0.0.1:8080/v1/datasets/social_registry/entities/person/records
 ```
 
+The `Data-Purpose` value is free-form for Relay: it is recorded verbatim in the audit log, not
+validated against a vocabulary. Mint stable purpose URIs under a namespace you control (the
+example uses `https://example.gov/purpose/eligibility`) and agree the purpose set with your
+clients as part of the data-sharing agreement, since the audit trail is only as reviewable as
+the purposes are consistent.
+
 Relay also serves a DCAT catalog document at `/metadata/catalog`.
 It requires the same metadata scope as `/v1/datasets` and returns a standards-shaped
 catalog description (rather than the dataset id list) that catalog tooling can consume:
@@ -332,6 +367,9 @@ curl -sS \
   -H "Authorization: Bearer $RAW_KEY" \
   http://127.0.0.1:8080/metadata/catalog
 ```
+
+If you point API tooling at the deployment, note that `/openapi.json` is auth-gated by default
+(`openapi_requires_auth: true`), so Swagger-style clients need a credential too.
 
 If `/ready` returns `503`, the source failed to ingest; check the container logs for the failing
 table and the declared schema. The
@@ -345,33 +383,251 @@ evaluation, credential issuance, and attestation service.
 Relay does not verify claims.
 When a claim profile needs registry data, Notary calls Relay as an HTTP source.
 
-A full own-data Notary deployment involves its own configuration surface (caller auth, source
-connections, signing keys, replay and credential-status storage) that is deeper than this guide.
-Rather than duplicate it, use Notary's own operator documentation, which is the authoritative
-own-keys path:
+This section runs a minimal claim-evaluation Notary next to the Relay deployed above: one caller
+key, one source connection pointed at the Relay, and one boolean claim.
+Credential issuance (signing keys, credential profiles, OID4VCI) is a further configuration
+layer; the reference pages at the [end of this section](#go-deeper-on-notary) cover it.
+
+### Get the Registry Notary image
+
+Registry Notary release images publish to `ghcr.io/jeremi/registry-notary` from stable `vX.Y.Z`
+tags.
+As with Relay, consume a version tag or an image digest, not `latest`.
+The published versions are listed on the
+[Notary releases page](https://github.com/jeremi/registry-notary/releases); at the time of
+writing the current stable is `v0.3.1`, so replace `vX.Y.Z` with that (or a newer release) in
+the commands below.
+
+```sh
+docker pull ghcr.io/jeremi/registry-notary:vX.Y.Z
+```
+
+The container listens on port 8080 and runs
+`registry-notary --config /etc/registry-notary/config.yaml` by default.
+The image is distroless: there is no shell, and you run CLI subcommands by appending them to
+`docker run`, as below.
+
+### Register a Relay key for Notary
+
+On the Relay side, Notary is an ordinary API client, so it gets its own credential, scoped to
+only what its claims need.
+Add a second entry to `auth.api_keys` in the Relay `config.yaml`, granting only the entity's
+read scope:
+
+```yaml
+    - id: notary_source
+      fingerprint:
+        provider: env
+        name: NOTARY_SOURCE_API_KEY_HASH
+        commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
+      scopes:
+        - social_registry:rows
+```
+
+Generate the key material the same way as before, with the matching `--id`:
+
+```sh
+docker run --rm ghcr.io/jeremi/registry-relay:vX.Y.Z generate-api-key --id notary_source
+```
+
+Replace the placeholder `commitment` with the emitted one, store the emitted `fingerprint` for
+the Relay container's `NOTARY_SOURCE_API_KEY_HASH` environment variable, and keep the raw
+`api_key`: it becomes Notary's source token below.
+
+```sh
+export RELAY_SOURCE_TOKEN=<api_key value from the generate-api-key output>
+```
+
+### Restart Relay on a shared network
+
+The Notary container must reach the Relay container directly; the host-loopback port publish
+from [Run the container](#run-the-container) is not visible from inside another container.
+Create a user-defined Docker network and re-run Relay with a name on that network, keeping
+everything else from the earlier command and adding the new fingerprint variable:
+
+```sh
+docker network create registry-net
+```
+
+```sh
+docker run --rm \
+  --name relay \
+  --network registry-net \
+  -p 127.0.0.1:8080:8080 \
+  -v "$(pwd)/config.yaml:/etc/registry-relay/config.yaml:ro" \
+  -v "$(pwd)/data:/var/lib/registry-relay/data:ro" \
+  -v "$(pwd)/cache:/var/lib/registry-relay/cache" \
+  -e PROGRAM_SYSTEM_API_KEY_HASH="sha256:<your fingerprint>" \
+  -e NOTARY_SOURCE_API_KEY_HASH="sha256:<notary_source fingerprint>" \
+  -e REGISTRY_RELAY_AUDIT_HASH_SECRET="$REGISTRY_RELAY_AUDIT_HASH_SECRET" \
+  ghcr.io/jeremi/registry-relay:vX.Y.Z
+```
+
+On this network, Notary reaches Relay at `http://relay:8080`; the host keeps using
+`http://127.0.0.1:8080`.
+
+### Provision the Notary caller key and audit secret
+
+Notary authenticates its own callers (the program systems or verifier services that ask it to
+evaluate claims) with the same fingerprint pattern as Relay.
+Generate a caller key with the Notary CLI:
+
+```sh
+docker run --rm ghcr.io/jeremi/registry-notary:vX.Y.Z hash-api-key --print-secret
+```
+
+The command prints two lines: `api_key=<raw key for the calling system>` and
+`hash=sha256:<fingerprint>`.
+Store the hash for the `REGISTRY_NOTARY_API_KEY_HASH` environment variable and give the raw key
+only to the authorized caller.
+Unlike Relay's `generate-api-key`, `hash-api-key` does not emit a commitment; the Notary
+operator configuration reference uses the all-zero commitment value shown in the config below.
+
+Notary also needs its own audit hash secret, with the same generation and stability rules as
+Relay's:
+
+```sh
+export REGISTRY_NOTARY_AUDIT_HASH_SECRET="$(openssl rand -hex 32)"
+```
+
+### Write the minimal Notary config
+
+Save this as `notary-config.yaml` next to the Relay config.
+It follows the minimal machine config in the
+[operator configuration reference](../../products/registry-notary/operator-config-reference/),
+with the source connection pointed at the Relay above through its `registry_data_api` contract:
+
+```yaml
+server:
+  bind: 0.0.0.0:8080
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: verifier_service
+      fingerprint:
+        provider: env
+        name: REGISTRY_NOTARY_API_KEY_HASH
+        commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
+      scopes:
+        - social_registry:evidence_verification
+
+audit:
+  sink: stdout
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+
+evidence:
+  enabled: true
+  service_id: example.registry-notary
+  api_base_url: https://notary.example.gov
+  source_connections:
+    relay_instance:
+      base_url: http://relay:8080
+      token_env: RELAY_SOURCE_TOKEN
+  claims:
+    - id: person-is-registered
+      title: Person is registered
+      version: 2026-06
+      subject_type: person
+      value:
+        type: boolean
+      inputs:
+        - name: target.identifiers.individual_id
+          type: string
+      source_bindings:
+        social_registry:
+          connector: registry_data_api
+          connection: relay_instance
+          required_scope: social_registry:evidence_verification
+          dataset: social_registry
+          entity: person
+          lookup:
+            input: target.identifiers.individual_id
+            field: id
+            op: eq
+            cardinality: one
+      rule:
+        type: exists
+        source: social_registry
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+```
+
+How the two services connect:
+
+- **The source connection is the Relay client.** `base_url` is the Relay address on the shared
+  network, and `token_env` names the environment variable holding the raw `notary_source` key.
+  Raw tokens never go in the YAML.
+- **The lookup maps claim inputs to Relay filters.** The binding queries the `person` entity of
+  the `social_registry` dataset with `id=<caller-supplied individual_id>`, so the lookup `field`
+  must be one of the entity's `allowed_filters` in the Relay config.
+- **Scopes are checked on both sides, separately.** `required_scope` and the caller's `scopes`
+  list are Notary scopes (operator-defined `<namespace>:<operation>` strings); the
+  `social_registry:rows` scope on the `notary_source` key is a Relay scope. The Notary caller
+  never holds Relay credentials.
+- **Purpose propagates.** The caller declares a purpose when it asks Notary to evaluate the
+  claim, and Notary forwards it to Relay as the `Data-Purpose` header, which satisfies the
+  entity's `require_purpose_header: true` and lands in both audit logs.
+
+### Run and verify Notary
+
+Run the container on the same network, publishing it on a different host port:
+
+```sh
+docker run --rm \
+  --network registry-net \
+  -p 127.0.0.1:8081:8080 \
+  -v "$(pwd)/notary-config.yaml:/etc/registry-notary/config.yaml:ro" \
+  -e REGISTRY_NOTARY_API_KEY_HASH="sha256:<hash from hash-api-key>" \
+  -e REGISTRY_NOTARY_AUDIT_HASH_SECRET="$REGISTRY_NOTARY_AUDIT_HASH_SECRET" \
+  -e RELAY_SOURCE_TOKEN="$RELAY_SOURCE_TOKEN" \
+  ghcr.io/jeremi/registry-notary:vX.Y.Z
+```
+
+Check liveness:
+
+```sh
+curl -i http://127.0.0.1:8081/healthz
+```
+
+Then validate the configuration, env-backed secrets, and source wiring with Notary's built-in
+diagnostic:
+
+```sh
+docker run --rm \
+  --network registry-net \
+  -v "$(pwd)/notary-config.yaml:/etc/registry-notary/config.yaml:ro" \
+  -e REGISTRY_NOTARY_API_KEY_HASH="sha256:<hash from hash-api-key>" \
+  -e REGISTRY_NOTARY_AUDIT_HASH_SECRET="$REGISTRY_NOTARY_AUDIT_HASH_SECRET" \
+  -e RELAY_SOURCE_TOKEN="$RELAY_SOURCE_TOKEN" \
+  ghcr.io/jeremi/registry-notary:vX.Y.Z \
+  doctor --config /etc/registry-notary/config.yaml
+```
+
+`doctor` reports missing environment variables, malformed fingerprints, and broken source
+references; `explain-config` prints the resolved configuration and the env vars it requires.
+For exercising the claim end to end (request shapes, outcomes, and credential issuance on top),
+work through [Verify a claim with Registry Notary](../verify-claim-registry-api/), which runs
+the same claim lifecycle against a `registryctl` sample project.
+
+### Go deeper on Notary
+
+The full Notary configuration surface (replay protection, credential status, self-attestation,
+OID4VCI, federation) is deeper than this guide.
+Notary's own operator documentation is the authoritative own-keys path:
 
 - [Registry Notary operator configuration reference](../../products/registry-notary/operator-config-reference/):
-  the config blocks for auth, evidence, sources, replay, status, self-attestation, OID4VCI, and
-  federation. Start with one narrow claim, one source connection, and one signing key.
+  every config block, the secrets inventory, and the rollout checklist.
 - [Signing key provider](../../products/registry-notary/signing-key-provider/): SD-JWT VC
-  signing-key configuration, rotation, and PKCS#11 setup.
+  signing-key configuration, rotation, and PKCS#11 setup, for when you add credential issuance.
 - [Source and claim modeling](../../products/registry-notary/source-claim-modeling-guide/):
-  designing source connectors and claim boundaries.
+  designing source connectors and claim boundaries beyond the single claim above.
 
-To wire a standalone Notary to the Relay deployed above, the
+The
 [Operating with Registry Notary section](https://github.com/jeremi/registry-relay/blob/main/docs/ops.md#operating-with-registry-notary)
-of the Relay runbook describes the credential handshake:
-
-- On Relay, register a separate API key for the Notary source caller, scoped to only the dataset
-  scopes the Notary claim profiles need.
-- On Notary, register the caller token that programs or wallets use against Notary routes, and
-  point its source connector at the raw Relay token through an environment-backed `token_env`.
-- Keep raw tokens and signing material out of YAML; use the `_env` secret-indirection fields on
-  both sides.
-
-For a runnable, sample-based version of the Relay-plus-Notary flow before you hand-assemble your
-own, work through
-[Verify a claim with Registry Notary](../verify-claim-registry-api/).
+of the Relay runbook documents the credential handshake the two services use, which the steps
+above followed: a narrowly scoped Relay key for the Notary source caller, a separate Notary
+caller key, and `_env` secret indirection on both sides so raw tokens stay out of YAML.
 
 ## Next
 

@@ -1,11 +1,11 @@
 ---
 title: See it live
-description: In about two minutes and with zero install, read a protected registry API and get a privacy-preserving credential from the public hosted lab.
+description: With zero install, read a protected registry API from your terminal and receive a privacy-preserving credential in a hosted demo wallet, all against the public hosted lab.
 status: current
 owner: registry-docs
 source_repos:
   - registry-lab
-last_reviewed: "2026-06-12"
+last_reviewed: "2026-06-13"
 doc_type: tutorial
 locale: en
 standards_referenced:
@@ -13,11 +13,12 @@ standards_referenced:
   - sd-jwt-vc
 ---
 
-In about two minutes you can see the core of Registry Stack working against a public hosted lab. You
+In about ten minutes you can see the core of Registry Stack working against a public hosted lab. You
 will read a protected registry API from your terminal (**Registry Relay**, which returns records to
-authorized callers), then watch **Registry Notary** issue a signed credential that answers a question
-without exposing the record. The Relay reads are pure `curl` with zero install; the credential step is
-a guided browser flow; only the optional developer round-trip at the end also uses `jq` and
+authorized callers), then have **Registry Notary** issue a signed credential, delivered to a hosted
+demo wallet, that answers a question without exposing the record. The Relay reads are pure `curl`
+with zero install; the credential step is a guided browser flow using the lab's hosted wallet, so it
+needs no install either; only the optional developer round-trip at the end also uses `jq` and
 `node`. Everything runs in the hosted lab at
 [lab.registrystack.org](https://lab.registrystack.org), so there is no setup on your machine.
 
@@ -43,8 +44,9 @@ credentials, identities, and ready-made requests, open the lab homepage at
 
 :::note
 Lab tokens are public demo-only values that rotate, so this page shows placeholders, never live
-tokens. Get the current tokens and identities from the lab homepage, which shows every demo
-credential with a copy button and a prebuilt curl example. The same data is available
+tokens. Get the current tokens and identities from the **For developers** section near the bottom
+of the lab homepage, which shows every demo credential with a copy button and a prebuilt curl
+example. The same data is available
 unauthenticated as JSON at
 [lab.registrystack.org/api/lab.json](https://lab.registrystack.org/api/lab.json).
 :::
@@ -58,9 +60,10 @@ This is the part you can run right now from a terminal. The civil Relay authenti
 `Authorization: Bearer <token>`. Each token carries a scope, so the same API answers some requests
 and refuses others.
 
-Open [lab.registrystack.org](https://lab.registrystack.org) and copy two bearer tokens from the demo
-credential cards: a metadata-scope token and a row-reader token. Set them in your shell. The
-placeholders below stand in for the live tokens.
+Open [lab.registrystack.org](https://lab.registrystack.org), scroll to the **For developers**
+section near the bottom, and copy two bearer tokens from the demo credential cards: a
+metadata-scope token and a row-reader token. Set them in your shell. The placeholders below stand
+in for the live tokens.
 
 ```sh
 export CIVIL_METADATA_TOKEN="<metadata token from lab.registrystack.org>"
@@ -142,23 +145,24 @@ wallet identity `NID-2001` / Maria Santos.
 
 Unlike the Relay reads above, this part is a guided browser flow, not a curl sequence: a real
 [OID4VCI](../../reference/glossary/#oid4vci) issuance needs a holder key and a sign-in, which is wallet
-territory. To receive the credential you need an OID4VCI-compatible wallet; if you do not have one,
-you can still follow the flow on the lab homepage and watch the sign-in and issuance without
-installing anything.
+territory. You do not need to install a wallet: the lab hosts a demo wallet at
+[wallet.lab.registrystack.org](https://wallet.lab.registrystack.org), so you can receive the
+credential end to end in the browser.
 
-Start at [lab.registrystack.org](https://lab.registrystack.org), which links the credential flow end
-to end. The Notary requires you to sign in before it issues. The sign-in runs through eSignet, the
-lab's hosted demo identity provider; you do not need an account, and the values below are synthetic
-demo identities:
+Start in the **Wallet test** section of [lab.registrystack.org](https://lab.registrystack.org),
+which links the credential flow end to end: start the citizen Notary flow, sign in, then paste the
+generated credential offer into the hosted wallet. The Notary requires you to sign in before it
+issues. The sign-in runs through eSignet, the lab's hosted demo identity provider; you do not need
+an account, and the values below are synthetic demo identities:
 
 - National ID: `NID-2001`
 - Name: Maria Santos
 - Login and OTP code: `111111`
 - PIN: `545411`
 
-After sign-in, the wallet receives the signed `person_is_alive_sd_jwt` credential, with the alive
-predicate set to true. If you already have a wallet, you can open the credential offer directly
-instead:
+After sign-in, the hosted wallet receives the signed `person_is_alive_sd_jwt` credential, with the
+alive predicate set to true. If you prefer your own OID4VCI-compatible wallet, you can open the
+credential offer directly instead:
 
 ```text
 https://citizen-notary.lab.registrystack.org/oid4vci/credential-offer?credential_configuration_id=person_is_alive_sd_jwt
@@ -182,7 +186,9 @@ not use the browser wallet sign-in, and unlike the curl-only reads above it also
 credential, fetches the issuer JWKS, verifies the Ed25519 signature, and checks that each disclosure
 hash is listed in the issuer-signed JWT.
 
-Set the hosted Notary URL and load the current demo bearer token from the lab JSON:
+Set the hosted Notary URL and load the current demo bearer token from the lab JSON. (`lab.json`
+carries a `credentials` array whose entries have an `id` and a `token`, plus the service list; the
+`dhis2-bearer` entry is the demo evidence-client token for this Notary.)
 
 ```sh
 export DHIS2_NOTARY_URL="https://dhis2-notary.lab.registrystack.org"
@@ -326,4 +332,7 @@ start with the local single-node tutorials:
   tutorial ends with a
   [standalone Notary path](../../tutorials/verify-claim-registry-api/#run-notary-standalone-for-an-api-you-operate).
 
-Not sure which path fits your problem? See [When to use Registry Stack](../when-to-use/).
+Only assessing fit? You do not need to install anything:
+[When to use Registry Stack](../when-to-use/) covers fit and non-goals, and
+[DPI safeguards alignment](../../explanation/dpi-safeguards-alignment/) maps the stack to
+safeguards language for review programs.
