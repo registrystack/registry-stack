@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## v0.2.1 — 2026-06-12
+
+### Fixed
+
+- (Issue #50) `authcommon::parse_bearer_token` now byte-compares the `Bearer `
+  scheme prefix before calling `split_at(6)`, preventing a panic when a
+  multibyte UTF-8 character straddles the scheme boundary.
+
 ## v0.2.0
 
 ### Security
