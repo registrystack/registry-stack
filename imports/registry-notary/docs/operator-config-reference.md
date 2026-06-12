@@ -329,8 +329,7 @@ and credential status mutation, require `registry_notary:admin`.
 `auth.mode: oidc` is for citizen and wallet flows. When OIDC is selected,
 `auth.api_keys` and `auth.bearer_tokens` must be empty. Configure:
 
-OIDC field names follow the shared Registry service runtime configuration
-conventions maintained in `registry-internal/principles/configuration-and-artifact-design-principles.md`.
+OIDC field names follow the shared Registry service runtime configuration conventions.
 Removed pre-convention names are rejected before deserialization with an error
 naming the replacement field.
 
@@ -570,7 +569,7 @@ For OpenFn sidecar connections:
   connection. Local demos may omit it only when the assurance boundary is not
   part of the test.
 
-See [deployment-hardening-runbook.md](deployment-hardening-runbook.md) for
+See the [deployment hardening runbook](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/deployment-hardening-runbook.md) for
 network isolation requirements, responsibility boundaries between Notary and
 the sidecar, and deployment security expectations.
 
@@ -795,7 +794,7 @@ The config keys unique to this page are: `subject_binding.token_claim`,
 `credential_profiles`, `scope_policy`, `required_scopes`,
 `allowed_wallet_origins`, and `rate_limits`.
 
-See [`self-attestation-operator-guide.md`](self-attestation-operator-guide.md)
+See the [self-attestation operator guide](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/self-attestation-operator-guide.md)
 for the full config blocks, identity-provider requirements, scope policy,
 wallet origin controls, rate-limit fields, and rollout checklist.
 
@@ -882,7 +881,7 @@ and the credential profile it references:
 - `format` is `dc+sd-jwt`.
 - `vct` matches the credential profile `vct`.
 
-See [`oid4vci-wallet-interop.md`](oid4vci-wallet-interop.md) for the wallet
+See the [OID4VCI wallet interop guide](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/oid4vci-wallet-interop.md) for the wallet
 flow sequence, authenticated pre-authorized-code flow details, nonce policy,
 Type Metadata serving, compatibility checklist, and troubleshooting.
 

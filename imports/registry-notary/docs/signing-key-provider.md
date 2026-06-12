@@ -166,7 +166,7 @@ stateDiagram-v2
 ```
 
 *Signing key status through a rotation. The notes restate the runtime contract
-for each status; the numbered steps above walk the same transitions.*
+for each status; the numbered steps in the rotation procedure walk the same transitions.*
 
 ## PKCS#11 Active Key
 

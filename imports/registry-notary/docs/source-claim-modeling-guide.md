@@ -1,4 +1,4 @@
-# Source And Claim Modeling Guide
+# Source and claim modeling guide
 
 > **Page type:** How-to · **Product:** Registry Notary · **Layer:** evaluation · **Audience:** operator
 
@@ -200,8 +200,7 @@ the request contains multiple subjects. The contract is semantically equivalent
 to running the same source binding as single reads for each item. For the full
 request and response shapes, field rules, cardinality semantics, and HTTP error
 codes, see the
-[OpenFn Sidecar Source API](api-reference.md#openfn-sidecar-source-api)
-section in the API reference.
+[OpenFn Sidecar Source API section of the API reference](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/api-reference.md#openfn-sidecar-source-api).
 
 ### OpenFn Batch Config
 
