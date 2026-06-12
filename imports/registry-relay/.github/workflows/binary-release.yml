@@ -92,6 +92,11 @@ jobs:
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
       - name: Build release binary
+        # .cargo/config.toml routes the aarch64-apple-darwin linker through
+        # Homebrew's ld64.lld for fast local dev links; hosted macOS runners
+        # do not ship it, so neutralize the override here.
+        env:
+          CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS: ""
         run: cargo build --release --locked
 
       - name: Smoke binary startup
