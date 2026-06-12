@@ -2,7 +2,7 @@
   color-scheme: light;
   --registry-blue: #173b7a;
   --registry-blue-dark: #102a56;
-  --registry-teal: #0f766e;
+  --registry-ok: #1a7f37;
   --registry-amber: #855b00;
   --registry-ink: #161616;
   --registry-body: #3a3a3a;
@@ -105,7 +105,7 @@ main { display: block; }
   font-family: var(--registry-mono);
   font-size: 12px;
 }
-.pill.ok { color: var(--registry-teal); border-color: var(--registry-teal); background: var(--registry-ok-bg); }
+.pill.ok { color: var(--registry-ok); border-color: var(--registry-ok); background: var(--registry-ok-bg); }
 .pill.bad { color: #a22d2d; border-color: #d9a1a1; background: var(--registry-bad-bg); }
 .credential {
   display: grid;
@@ -174,7 +174,7 @@ button, .button {
 }
 .wallet-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
 .kv { display: grid; gap: 6px; padding: 18px; border: 1px solid var(--registry-rule); background: #ffffff; }
-.kv span { color: var(--registry-teal); font-family: var(--registry-mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0; }
+.kv span { color: var(--registry-ok); font-family: var(--registry-mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0; }
 .kv strong { color: var(--registry-ink); overflow-wrap: anywhere; }
 .step-list { display: grid; gap: 12px; grid-column: 1 / -1; }
 .step-card {

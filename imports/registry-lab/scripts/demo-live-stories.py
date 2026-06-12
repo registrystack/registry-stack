@@ -2408,7 +2408,7 @@ WALKTHROUGH_CSS = """\
       --muted: #6a6a6a;
       --line: #e5e5e5;
       --blue: #173b7a;
-      --green: #0f766e;
+      --green: #1a7f37;
       --amber: #855b00;
       --stamp: #9d2c1d;
       --band: #161616;

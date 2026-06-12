@@ -2,7 +2,7 @@
   color-scheme: light;
   --registry-blue: #173b7a;
   --registry-blue-dark: #102a56;
-  --registry-teal: #0f766e;
+  --registry-ok: #1a7f37;
   --registry-amber: #855b00;
   --registry-ink: #161616;
   --registry-body: #3a3a3a;
@@ -52,7 +52,7 @@ h4 { color: var(--registry-ink); font-size: 16px; margin: 0 0 6px; }
 .step-head { align-items: start; border-bottom: 1px solid var(--registry-rule); display: grid; gap: 14px; grid-template-columns: 42px minmax(0, 1fr) auto; padding: 18px; }
 .step-number { align-items: center; background: var(--registry-blue); color: #ffffff; display: inline-flex; font-family: var(--registry-mono); font-weight: 700; height: 36px; justify-content: center; width: 36px; }
 .status-pill { border: 1px solid var(--registry-rule); color: var(--registry-muted); display: inline-flex; font-family: var(--registry-mono); font-size: 12px; min-height: 30px; padding: 5px 8px; white-space: nowrap; }
-.status-pill.done, .status-pill.denied_as_expected { background: var(--registry-ok-bg); border-color: #b7ddc9; color: var(--registry-teal); }
+.status-pill.done, .status-pill.denied_as_expected { background: var(--registry-ok-bg); border-color: #b7ddc9; color: var(--registry-ok); }
 .status-pill.running { background: var(--registry-warn-bg); border-color: #e2b66c; color: var(--registry-amber); }
 @media (prefers-reduced-motion: no-preference) {
   .status-pill.running::before { animation: pill-spin .7s linear infinite; border: 2px solid var(--registry-amber); border-top-color: transparent; border-radius: 50%; content: ""; display: inline-block; height: 10px; margin-right: 6px; width: 10px; }

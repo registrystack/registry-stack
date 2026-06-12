@@ -126,7 +126,7 @@ button:active, .button:active {
 .scenario-card--default { border-color: var(--registry-blue); }
 .start-here-badge { background: var(--registry-blue); color: #ffffff; display: inline-flex; font-family: var(--registry-mono); font-size: 11px; padding: 3px 7px; width: fit-content; }
 .availability { border: 1px solid var(--registry-rule); color: var(--registry-muted); display: inline-flex; font-family: var(--registry-mono); font-size: 12px; min-height: 30px; padding: 5px 8px; width: fit-content; }
-.availability.hosted { background: var(--registry-ok-bg); border-color: #b7ddc9; color: var(--registry-teal); }
+.availability.hosted { background: var(--registry-ok-bg); border-color: #b7ddc9; color: var(--registry-ok); }
 .availability.local-only { background: var(--registry-warn-bg); border-color: #e2b66c; color: var(--registry-amber); }
 .domain-tag { background: var(--registry-active); border: 1px solid #b7c7dd; color: var(--registry-blue); display: inline-flex; font-family: var(--registry-mono); font-size: 11px; padding: 3px 7px; width: fit-content; }
 .card-meta { color: var(--registry-muted); font-size: 13px; }
