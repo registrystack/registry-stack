@@ -757,6 +757,12 @@ Atlas-backed live stories are opt-in for the first release through
 matching SHA-256 fingerprints for Relay, Notary, and OpenFn sidecar auth. The
 committed `.env.example` contains inert examples only.
 
+By default, the script updates only local demo configs under `config/relay/` and
+`config/notary/`. It intentionally leaves hosted Coolify configs byte-identical
+because those commitments must match the live Coolify credential fingerprints.
+Use `--include-hosted` only when rotating hosted credentials and installing the
+matching raw values and fingerprints in Coolify in the same deployment change.
+
 Credential classes:
 
 - metadata client tokens for each Relay;
