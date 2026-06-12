@@ -159,6 +159,14 @@ def main() -> int:
     binary_release = WORKFLOWS / "binary-release.yml"
     binary_release_text = read(binary_release)
     failures.extend(require_binary_release_powershell_hardening(binary_release_text, binary_release))
+    failures.extend(
+        require(
+            binary_release_text,
+            'RUSTFLAGS: ""',
+            binary_release,
+            "macOS build must neutralize the local-dev ld64.lld override with a set-but-empty RUSTFLAGS",
+        )
+    )
 
     failures.extend(
         require(
