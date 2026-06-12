@@ -7,7 +7,7 @@ owner: registry-relay
 source_repos:
   - registry-relay
   - registry-platform
-last_reviewed: "2026-06-10"
+last_reviewed: "2026-06-12"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -45,6 +45,10 @@ Binding maps each logical dataset and entity from the manifest to physical sourc
 physical table columns, declared filters, and scopes.
 If a dataset in the manifest has no matching `config.yaml` entry, startup fails with
 `runtime.binding.dataset_missing` and the process exits non-zero.
+API-key auth has its own startup prerequisite: each `api_keys` entry needs a pre-generated
+fingerprint and commitment (emitted together by `registry-relay generate-api-key`), and
+Relay fails closed at startup if they are missing or malformed; see the
+[deployment guide](../../tutorials/deploy-standalone-with-own-data/#provision-the-api-key-fingerprint-and-commitment).
 Bind runs once per process; the per-request path assumes the bound state is valid.
 
 ### Per request: four phases in sequence
@@ -68,7 +72,7 @@ The record carries the `principal_id`, `request_id` (a ULID also returned in the
 `x-request-id` response header), `dataset_id`, `entity_name`, `scopes_used`, `query_params`
 (names and operators, never values), `status_code`, and `duration_ms`.
 Registry Platform wraps the record with `prev_hash` and `record_hash` for tamper evidence.
-For the full field list, see the [Relay operations runbook](https://github.com/jeremi/registry-relay/blob/main/docs/ops.md).
+For the full field list, see the [Relay operations runbook](https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/docs/ops.md).
 
 **4. Respond.** Relay returns the entity-shaped response.
 The response body contains only projected fields for the authenticated caller's visible
@@ -94,11 +98,13 @@ The full route inventory is in the [Registry Relay API reference](../../referenc
 
 ## Scope model
 
-Scopes follow the pattern `<dataset_id>:<suffix>`, where the six suffix values are
-`metadata`, `rows`, `aggregate`, `verify`, `evidence_verification`, and `admin`.
-A scope is always bound to a specific dataset; a principal holding
+Data-plane scopes follow the pattern `<dataset_id>:<suffix>`, where the five suffix values
+are `metadata`, `rows`, `aggregate`, `verify`, and `evidence_verification`.
+A data-plane scope is always bound to a specific dataset; a principal holding
 `social_registry:metadata` cannot access `vital_events:metadata` unless that scope is
 also assigned.
+One scope sits outside the pattern: `registry_relay:admin` is service-level, grants the
+administrative surface rather than any dataset, and is never implied by a dataset scope.
 Full scope configuration, API-key provisioning, and example principal assignments are in
 [Client integration](../../products/registry-relay/client-integration/).
 
