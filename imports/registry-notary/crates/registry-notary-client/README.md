@@ -52,6 +52,10 @@ if let Some(result) = response.body.first_result() {
   lifecycle status.
 - `oid4vci_*` methods are available with the `oid4vci` feature.
 - `federation_evaluate_jws` is available with the `federation` feature.
+- `verify_sd_jwt_vc`, `verify_credential_response`, and
+  `verify_oid4vci_credential` are available with the `verifier` feature. These
+  methods are explicit and opt-in; response decoding never verifies
+  credentials implicitly.
 - `facade::NotaryClientHandle` is available with the `json-facade` feature for
   binding authors.
 
@@ -63,7 +67,40 @@ Rust, Python, and Node.js.
 - `oid4vci`: OpenID4VCI endpoint helpers.
 - `federation`: delegated evaluation JWS submission.
 - `json-facade`: canonical wire-shape JSON facade.
+- `verifier`: explicit SD-JWT VC verification against trusted issuer JWKS.
 - `test-support`: test-only HTTP client override and loopback HTTP allowance.
+
+## Explicit SD-JWT VC Verification
+
+Enable the `verifier` feature to verify credential material after a caller has
+chosen the trust policy:
+
+```rust
+use registry_notary_client::{HolderBindingPolicy, VerifyOptions};
+
+let options = VerifyOptions::new("did:web:notary.example")
+    .expected_vct("https://credentials.example/vct/person-is-alive")
+    .holder_binding(HolderBindingPolicy::Required);
+
+let verified = client
+    .verify_credential_response(&credential.body, options)
+    .await?;
+```
+
+Verification resolves the JWS `kid` against the client's trusted issuer JWKS,
+uses the normal JWKS TTL cache, forces one refresh on `key.unknown`, and then
+stops. It checks the allowed algorithm list, header type, issuer, `vct`,
+`exp`/`nbf`/`iat` with bounded skew, disclosure digests, and required
+holder-binding confirmation. When an SD-JWT VC presentation includes a
+key-binding JWT, the verifier separates it from disclosures and verifies its
+holder proof signature against `cnf.jwk`. Verifier errors expose stable
+redacted codes such as `signature.invalid`, `key.unknown`, `algorithm.disallowed`,
+`claim.issuer_mismatch`, `claim.time_invalid`,
+`disclosure.digest_mismatch`, and `holder_binding.required`.
+
+Python and Node wrappers do not expose verifier wrappers in this first phase;
+use the Rust verifier or perform verification in application-specific wallet
+code.
 
 ## Safety Contract
 
@@ -94,6 +131,6 @@ not as compatibility workarounds.
 
 ```bash
 cargo test -p registry-notary-client
-cargo test -p registry-notary-client --features json-facade,oid4vci,federation
+cargo test -p registry-notary-client --features json-facade,oid4vci,federation,verifier
 cargo doc -p registry-notary-client --no-deps --all-features
 ```
