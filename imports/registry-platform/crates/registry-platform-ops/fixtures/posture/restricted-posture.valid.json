@@ -42,6 +42,42 @@
       }
     ]
   },
+  "deployment": {
+    "profile": "evidence_grade",
+    "findings": [
+      {
+        "id": "audit.checkpoints.disabled",
+        "severity": "finding_error",
+        "status": "active"
+      },
+      {
+        "id": "readiness.cache.degraded",
+        "severity": "finding_warn",
+        "status": "waived",
+        "waiver": {
+          "reason": "temporary maintenance window approved by operations",
+          "expires": "2026-07-01"
+        }
+      }
+    ],
+    "waivers": [
+      {
+        "finding": "readiness.cache.degraded",
+        "reason": "temporary maintenance window approved by operations",
+        "expires": "2026-07-01"
+      }
+    ]
+  },
+  "audit": {
+    "write_policy": "fail_closed_route_families",
+    "redaction_mode": "redacted",
+    "hash_chain": "retained",
+    "keyed_integrity": "hmac",
+    "sink_class": "file",
+    "retention_owner": "operator",
+    "checkpoints": "enabled",
+    "anchoring": "external"
+  },
   "standards_artifacts": {
     "jwks": {
       "url": "https://civil-notary.example.gov/.well-known/jwks.json",

@@ -28,6 +28,26 @@
     "last_apply_at": null,
     "restart_required": false
   },
+  "deployment": {
+    "profile": "production",
+    "findings": [
+      {
+        "id": "audit.sink.configured",
+        "severity": "finding_warn",
+        "status": "active"
+      }
+    ]
+  },
+  "audit": {
+    "write_policy": "availability_first",
+    "redaction_mode": "redacted",
+    "hash_chain": "process_local",
+    "keyed_integrity": "hmac",
+    "sink_class": "file",
+    "retention_owner": "operator",
+    "checkpoints": "supported",
+    "anchoring": "none"
+  },
   "standards_artifacts": {
     "metadata_index": {
       "media_type": "application/json",
