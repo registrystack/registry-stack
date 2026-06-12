@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-lab
-last_reviewed: "2026-06-10"
+last_reviewed: "2026-06-12"
 doc_type: tutorial
 locale: en
 standards_referenced:
@@ -242,12 +242,11 @@ curl -fsS -X POST "$DHIS2_NOTARY_URL/v1/credentials" \
 jq '{credential_id, credential_profile, issuer, format, disclosure_count: (.disclosures | length)}' credential.json
 ```
 
-Fetch the issuer keys and verify the credential:
+Fetch the issuer keys and verify the credential.
+The JWKS endpoint is public: any verifier can fetch the issuer keys without a credential.
 
 ```sh
-curl -fsS "$DHIS2_NOTARY_URL/.well-known/evidence/jwks.json" \
-  -H "Authorization: Bearer $DHIS2_EVIDENCE_CLIENT_BEARER" \
-  -o jwks.json
+curl -fsS "$DHIS2_NOTARY_URL/.well-known/evidence/jwks.json" -o jwks.json
 
 node <<'NODE'
 const { createHash, createPublicKey, verify } = require('node:crypto');
@@ -314,8 +313,9 @@ start with the local single-node tutorials:
 
 - [Publish a spreadsheet as a secured registry API](../../tutorials/publish-spreadsheet-secured-registry-api/):
   stand up your own protected Relay from a sample workbook.
-- [Verify a claim from your registry API](../../tutorials/verify-claim-registry-api/): run a Notary
-  against the Relay you published and evaluate a claim. Already have your own API? Use
-  [Verify a claim from your own API](../../tutorials/verify-claim-own-api/) instead.
+- [Verify a claim with Registry Notary](../../tutorials/verify-claim-registry-api/): run a Notary
+  against the Relay you published and evaluate a claim. Already have your own API? The same
+  tutorial ends with a
+  [standalone Notary path](../../tutorials/verify-claim-registry-api/#run-notary-standalone-for-an-api-you-operate).
 
 Not sure which path fits your problem? See [When to use Registry Stack](../when-to-use/).

@@ -10,7 +10,7 @@ Core pages:
 - /explanation/architecture/
 - /reference/apis/
 - /tutorials/publish-spreadsheet-secured-registry-api/
-- /tutorials/verify-claim-own-api/
+- /tutorials/verify-claim-registry-api/
 
 Machine-readable companion:
 - /llms-full.txt
