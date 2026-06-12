@@ -2257,7 +2257,7 @@
     },
     "summary": "Read-only data gateway exposing entity records, catalog metadata, and SHACL/DCAT-AP shapes for governed datasets.",
     "title": "Registry Relay API",
-    "version": "0.2.0"
+    "version": "0.2.1"
   },
   "openapi": "3.1.0",
   "paths": {
