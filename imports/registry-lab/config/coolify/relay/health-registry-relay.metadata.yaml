@@ -67,8 +67,8 @@ datasets:
         access:
           kind: registry-notary
           conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://metadata.lab.registrystack.org/local-only/shared-eligibility-notary
-          discovery_url: https://metadata.lab.registrystack.org/local-only/shared-eligibility-notary/.well-known/evidence-service
+          endpoint_url: https://shared-notary.lab.registrystack.org
+          discovery_url: https://shared-notary.lab.registrystack.org/.well-known/evidence-service
           ruleset: health-service-availability-v1
         policy:
           purpose:

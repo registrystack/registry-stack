@@ -190,6 +190,7 @@ hosted-preflight:
     python3 scripts/test_static_metadata_server.py
     python3 scripts/test_dhis2_programme_vc_config.py
     python3 scripts/test_credential_commitment.py
+    python3 scripts/test_generate_demo_secrets.py
     python3 scripts/test_hosted_smoke.py
     python3 scripts/test_validate_public_api_workspace.py
     python3 scripts/validate-public-api-workspace.py

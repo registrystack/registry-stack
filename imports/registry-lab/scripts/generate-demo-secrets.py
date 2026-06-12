@@ -66,10 +66,13 @@ EVIDENCE_CLIENT_NAMES = [
     "AGRI_EVIDENCE_CLIENT",
 ]
 
-CONFIG_FINGERPRINT_PATHS = [
+LOCAL_CONFIG_FINGERPRINT_PATHS = [
     ("registry-relay", "config/relay/*.yaml"),
-    ("registry-relay", "config/coolify/relay/*.yaml"),
     ("registry-notary", "config/notary/*.yaml"),
+]
+
+HOSTED_CONFIG_FINGERPRINT_PATHS = [
+    ("registry-relay", "config/coolify/relay/*.yaml"),
     ("registry-notary", "config/coolify/notary/*.yaml"),
 ]
 
@@ -190,9 +193,16 @@ def write_env_file(path: Path, values: dict[str, str]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def write_config_fingerprint_commitments(values: dict[str, str]) -> int:
+def write_config_fingerprint_commitments(
+    values: dict[str, str],
+    *,
+    include_hosted: bool = False,
+) -> int:
     updated = 0
-    for product, pattern in CONFIG_FINGERPRINT_PATHS:
+    paths = list(LOCAL_CONFIG_FINGERPRINT_PATHS)
+    if include_hosted:
+        paths.extend(HOSTED_CONFIG_FINGERPRINT_PATHS)
+    for product, pattern in paths:
         for path in sorted(DEMO_ROOT.glob(pattern)):
             if update_config_fingerprint_commitments(path, product, values):
                 updated += 1
@@ -357,15 +367,32 @@ def main() -> int:
         action="store_true",
         help="print generated variable names without raw secret values",
     )
+    parser.add_argument(
+        "--include-hosted",
+        action="store_true",
+        help=(
+            "also update config/coolify commitments; only use with the matching "
+            "hosted credentials installed in Coolify"
+        ),
+    )
     args = parser.parse_args()
 
     values = generate_env()
     write_env_file(args.env_file, values)
-    updated_configs = write_config_fingerprint_commitments(values)
+    updated_configs = write_config_fingerprint_commitments(
+        values,
+        include_hosted=args.include_hosted,
+    )
     print(
         f"wrote local demo credentials to {args.env_file}; raw values are for this machine only",
         file=sys.stderr,
     )
+    if args.include_hosted:
+        print(
+            "WARNING: updated hosted Coolify credential commitments; install the "
+            "matching raw credentials and fingerprints in Coolify before deploy",
+            file=sys.stderr,
+        )
     if updated_configs:
         print(
             f"updated fingerprint commitments in {updated_configs} demo config files",

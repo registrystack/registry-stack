@@ -619,6 +619,61 @@ metadata:
         self.assertIssue(issues, "missing-civil-alive-notary-bearer")
         self.assertIssue(issues, "missing-civil-notary-bearer-hash")
 
+    def test_rejects_missing_hosted_social_combined_wiring(self) -> None:
+        compose = self._valid_registry_lab()
+        del compose["services"]["lab-homepage"]["environment"]["SOCIAL_RELAY_URL"]
+        del compose["services"]["lab-homepage"]["environment"]["SHARED_EVIDENCE_URL"]
+        del compose["services"]["lab-homepage"]["environment"]["SHARED_EVIDENCE_CLIENT_BEARER"]
+        del compose["services"]["shared-eligibility-notary"]["environment"]["SHARED_EVIDENCE_CLIENT_BEARER_HASH"]
+        del compose["services"]["shared-eligibility-notary"]["environment"]["SHARED_SOCIAL_EVIDENCE_SOURCE_RAW"]
+
+        issues = self._validate(compose, self._valid_esignet())
+
+        self.assertIssue(issues, "missing-hosted-scenario-url")
+        self.assertIssue(issues, "missing-combined-support-bearer")
+        self.assertIssue(issues, "missing-shared-notary-client-hash")
+        self.assertIssue(issues, "missing-shared-notary-source-token")
+
+    def test_rejects_shared_notary_config_with_wrong_public_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_dir = root / "config/coolify/notary"
+            config_dir.mkdir(parents=True)
+            (config_dir / "shared-eligibility-notary.yaml").write_text(
+                """
+evidence:
+  api_base_url: http://shared-eligibility-notary:8080
+  source_connections:
+    civil:
+      base_url: http://civil-registry-relay:8080
+      token_env: SHARED_CIVIL_EVIDENCE_SOURCE_RAW
+    social_protection:
+      base_url: http://social-protection-registry-relay:8080
+      token_env: SHARED_SOCIAL_EVIDENCE_SOURCE_RAW
+    health:
+      base_url: http://health-registry-relay:8080
+      token_env: SHARED_HEALTH_EVIDENCE_SOURCE_RAW
+  credential_profiles:
+    combined_support_sd_jwt:
+      issuer: did:web:shared-notary.lab.registrystack.org
+""",
+                encoding="utf-8",
+            )
+            issues = self.validator.validate_shared_notary_hosted_config(root)
+        self.assertIssue(issues, "shared-notary-public-url-mismatch")
+
+    def test_rejects_shared_notary_metadata_with_local_only_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata_dir = root / "config/coolify/relay"
+            metadata_dir.mkdir(parents=True)
+            (metadata_dir / "health-registry-relay.metadata.yaml").write_text(
+                "discovery_url: https://metadata.lab.registrystack.org/local-only/shared-eligibility-notary/.well-known/evidence-service\n",
+                encoding="utf-8",
+            )
+            issues = self.validator.validate_shared_notary_hosted_metadata(root)
+        self.assertIssue(issues, "shared-notary-metadata-url-mismatch")
+
     def test_rejects_missing_civil_notary_config(self) -> None:
         compose = self._valid_registry_lab()
         compose["services"]["civil-notary"]["command"] = [
@@ -1187,17 +1242,23 @@ evidence:
             "CIVIL_EVIDENCE_ONLY_HASH": "${CIVIL_EVIDENCE_ONLY_HASH:-}",
             "CIVIL_ROW_READER_HASH": "${CIVIL_ROW_READER_HASH:-}",
             "SHARED_CIVIL_EVIDENCE_SOURCE_HASH": "${SHARED_CIVIL_EVIDENCE_SOURCE_HASH:-}",
+            "SHARED_CIVIL_EVIDENCE_SOURCE_RAW": "${SHARED_CIVIL_EVIDENCE_SOURCE_RAW:-}",
+            "SHARED_EVIDENCE_CLIENT_BEARER": "${SHARED_EVIDENCE_CLIENT_BEARER:-}",
+            "SHARED_EVIDENCE_CLIENT_BEARER_HASH": "${SHARED_EVIDENCE_CLIENT_BEARER_HASH:-}",
+            "SHARED_EVIDENCE_CLIENT_TOKEN_HASH": "${SHARED_EVIDENCE_CLIENT_TOKEN_HASH:-}",
             "SOCIAL_METADATA_CLIENT_HASH": "${SOCIAL_METADATA_CLIENT_HASH:-}",
             "SOCIAL_EVIDENCE_SOURCE_HASH": "${SOCIAL_EVIDENCE_SOURCE_HASH:-}",
             "SOCIAL_EVIDENCE_ONLY_HASH": "${SOCIAL_EVIDENCE_ONLY_HASH:-}",
             "SOCIAL_ROW_READER_HASH": "${SOCIAL_ROW_READER_HASH:-}",
             "SOCIAL_AGGREGATE_READER_HASH": "${SOCIAL_AGGREGATE_READER_HASH:-}",
             "SHARED_SOCIAL_EVIDENCE_SOURCE_HASH": "${SHARED_SOCIAL_EVIDENCE_SOURCE_HASH:-}",
+            "SHARED_SOCIAL_EVIDENCE_SOURCE_RAW": "${SHARED_SOCIAL_EVIDENCE_SOURCE_RAW:-}",
             "HEALTH_METADATA_CLIENT_HASH": "${HEALTH_METADATA_CLIENT_HASH:-}",
             "HEALTH_EVIDENCE_SOURCE_HASH": "${HEALTH_EVIDENCE_SOURCE_HASH:-}",
             "HEALTH_EVIDENCE_ONLY_HASH": "${HEALTH_EVIDENCE_ONLY_HASH:-}",
             "HEALTH_ROW_READER_HASH": "${HEALTH_ROW_READER_HASH:-}",
             "SHARED_HEALTH_EVIDENCE_SOURCE_HASH": "${SHARED_HEALTH_EVIDENCE_SOURCE_HASH:-}",
+            "SHARED_HEALTH_EVIDENCE_SOURCE_RAW": "${SHARED_HEALTH_EVIDENCE_SOURCE_RAW:-}",
         }
         return {
             "services": {
@@ -1221,6 +1282,7 @@ if [ ! -s "$openfn_antirollback" ]; then
   printf '%s\n' '{"key":{"product":"registry-notary-openfn-sidecar","instance_id":"hosted-dhis2-openfn-sidecar","environment":"hosted-lab","stream_id":"dhis2-openfn-sidecar-runtime"},"last_sequence":0,"last_config_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","root_version":1,"break_glass":{"accepted":[]},"local_approvals":{"accepted":[]}}' > "$openfn_antirollback"
 fi
 cp -a /tmp/repo/config/coolify/notary/civil-notary.yaml /out/notary/
+cp -a /tmp/repo/config/coolify/notary/shared-eligibility-notary.yaml /out/notary/
 cp -a /tmp/repo/scripts/lab_homepage_scenarios /out/static-scripts/
 cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
 """
@@ -1306,6 +1368,28 @@ cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
                     "environment": {
                         "CIVIL_EVIDENCE_URL": "http://civil-notary:8080",
                         "CIVIL_EVIDENCE_CLIENT_BEARER": "${CIVIL_EVIDENCE_CLIENT_BEARER:-}",
+                        "SOCIAL_RELAY_URL": "http://social-protection-registry-relay:8080",
+                        "SHARED_EVIDENCE_URL": "http://shared-eligibility-notary:8080",
+                        "SHARED_EVIDENCE_CLIENT_BEARER": "${SHARED_EVIDENCE_CLIENT_BEARER:-}",
+                    },
+                },
+                "shared-eligibility-notary": {
+                    "image": "${REGISTRY_NOTARY_IMAGE:-ghcr.io/registrystack/registry-notary@sha256:abc}",
+                    "command": [
+                        "--config",
+                        "/etc/registry-notary/shared-eligibility-notary.yaml",
+                    ],
+                    "expose": ["8080"],
+                    "environment": {
+                        "SHARED_EVIDENCE_CLIENT_TOKEN_HASH": "${SHARED_EVIDENCE_CLIENT_TOKEN_HASH:-}",
+                        "SHARED_EVIDENCE_CLIENT_BEARER_HASH": "${SHARED_EVIDENCE_CLIENT_BEARER_HASH:-}",
+                        "SHARED_CIVIL_EVIDENCE_SOURCE_RAW": "${SHARED_CIVIL_EVIDENCE_SOURCE_RAW:-}",
+                        "SHARED_SOCIAL_EVIDENCE_SOURCE_RAW": "${SHARED_SOCIAL_EVIDENCE_SOURCE_RAW:-}",
+                        "SHARED_HEALTH_EVIDENCE_SOURCE_RAW": "${SHARED_HEALTH_EVIDENCE_SOURCE_RAW:-}",
+                    },
+                    "volumes": ["cfg-notary:/etc/registry-notary:ro"],
+                    "healthcheck": {
+                        "test": ["CMD", "registry-notary", "healthcheck"]
                     },
                 },
                 "zitadel": {
@@ -1365,6 +1449,7 @@ cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
                 "static-metadata-publisher": f"metadata.{lab}",
                 "lab-homepage": lab,
                 "zitadel": f"zitadel.{lab}",
+                "shared-eligibility-notary": f"shared-notary.{lab}",
                 "dhis2-health-notary": f"dhis2-notary.{lab}",
                 "opencrvs-dci-notary": f"opencrvs-notary.{lab}",
             },
