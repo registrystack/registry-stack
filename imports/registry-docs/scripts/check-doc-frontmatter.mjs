@@ -17,6 +17,10 @@ const required = [
 const validStatus = new Set(['draft', 'current', 'historical', 'deprecated']);
 const validDocTypes = new Set(['tutorial', 'how-to', 'explanation', 'reference', 'decision']);
 const standardsRegister = YAML.parse(await readFile('src/data/standards.yaml', 'utf8'));
+if (!Array.isArray(standardsRegister) || standardsRegister.length === 0) {
+  console.error('src/data/standards.yaml did not parse to a non-empty list; cannot validate standards_referenced ids.');
+  process.exit(1);
+}
 const knownStandards = new Set(standardsRegister.map((entry) => entry.id));
 
 async function files(dir) {
