@@ -80,9 +80,12 @@ jobs:
       - name: Build release binaries
         # .cargo/config.toml routes the aarch64-apple-darwin linker through
         # Homebrew's ld64.lld for fast local dev links; hosted macOS runners
-        # do not ship it, so neutralize the override here.
+        # do not ship it. A set-but-empty RUSTFLAGS suppresses all config
+        # rustflags (cargo's extra-flags sources are mutually exclusive and
+        # env wins); an empty CARGO_TARGET_*_RUSTFLAGS does NOT work because
+        # env values for list-type config keys merge with config.toml.
         env:
-          CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS: ""
+          RUSTFLAGS: ""
         run: |
           cargo build --release --locked -p registry-notary-bin --features "$REGISTRY_NOTARY_FEATURES"
           cargo build --release --locked -p registry-notary-server --bin registry-notary-cel-worker --features "$REGISTRY_NOTARY_FEATURES"
