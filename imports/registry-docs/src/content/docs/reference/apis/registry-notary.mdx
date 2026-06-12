@@ -32,10 +32,12 @@ For exact routes and schemas, read the Redoc reference. For setup and operations
 ## What the API is
 
 Registry Notary is a standalone service for claim evaluation, disclosure policy, credential
-issuance, and audit. It runs independently and does not require Registry Relay. Callers discover its
-capabilities and claim catalog at `GET /.well-known/evidence-service` and fetch the issuer JWKS at
-`GET /.well-known/evidence/jwks.json`; the evaluation, rendering, credential, and OID4VCI routes are
-documented in the Redoc reference.
+issuance, and audit. It runs independently and does not require Registry Relay.
+Callers discover its capabilities and claim catalog at `GET /.well-known/evidence-service`.
+This route requires authentication (the same `x-api-key` or `Authorization: Bearer` token as other
+evaluation routes); it is not a public discovery endpoint.
+The issuer JWKS at `GET /.well-known/evidence/jwks.json` is public and requires no credentials.
+The evaluation, rendering, credential, and OID4VCI routes are documented in the Redoc reference.
 
 ## Authentication
 

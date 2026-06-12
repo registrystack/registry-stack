@@ -50,11 +50,14 @@ Product names are always in English, including on future translated pages.
   <dt>CPSV-AP</dt>
   <dd>Core Public Service Vocabulary Application Profile. Registry Manifest emits CPSV-AP service catalogue JSON-LD. Registry Atlas uses it as the public-service entry point for service-first discovery.</dd>
 
+  <dt>crosswalk</dt>
+  <dd>The Relay feature that maps source field names and values to canonical domain terms using configured CEL expressions. Replaces the former `cel-mapping` name. Enabled by the `crosswalk-runtime` Cargo feature and the `standards-cel-mapping` feature alias. Config key: `crosswalk`.</dd>
+
   <dt>DPI</dt>
   <dd>Digital Public Infrastructure. Shared, interoperable digital systems (identity, payments, data exchange) deployed at population scale to support public service delivery. These projects cover the registry-consultation slice of a DPI deployment.</dd>
 
   <dt>DID</dt>
-  <dd>Decentralized Identifier. W3C DID Core 1.0. Registry Relay publishes a `did:web` document at `/.well-known/did.json` when provenance is enabled. Registry Notary parses `did:jwk` values for credential subjects.</dd>
+  <dd>Decentralized Identifier. W3C DID Core 1.0. Registry Relay publishes a `did:web` document at `/.well-known/did.json` when signed response credentials are enabled (config key: `provenance`). Registry Notary parses `did:jwk` values for credential subjects.</dd>
 
   <dt>disclosure profile</dt>
   <dd>Registry Notary control over what the caller receives: `Value` (full value disclosed), `Predicate` (only true/false satisfaction), or `Redacted` (value fully hidden).</dd>
@@ -90,10 +93,13 @@ Product names are always in English, including on future translated pages.
   <dd>Commitment that every registry in the stack publishes its catalog, schemas, services, and policies in standards-shaped form (DCAT, BRegDCAT-AP, CPSV-AP, CCCEV, SHACL, JSON Schema, ODRL, OpenAPI, SD-JWT VC), so downstream systems integrate against stable contracts rather than per-deployment ones.</dd>
 
   <dt>JSON-LD</dt>
-  <dd>JSON-based linked data format. W3C recommendation (JSON-LD 1.1). Used for catalog, policy, CCCEV render output, and provenance contexts.</dd>
+  <dd>JSON-based linked data format. W3C recommendation (JSON-LD 1.1). Used for catalog, policy, CCCEV render output, and signed response credential contexts.</dd>
 
   <dt>metadata manifest</dt>
   <dd>Portable `metadata.yaml` document (schema version `registry-manifest/v1`) that describes datasets, entities, fields, public services, forms, requirements, policies, and evidence offerings. Must not include Relay runtime bindings such as source paths, table names, or scopes.</dd>
+
+  <dt>measures</dt>
+  <dd>The configured numeric computations in a Registry Relay aggregate definition (renamed from `indicators`). Each measure has an `id`, a label, an aggregation method (`count`, `sum`, `average`, among others), and a source column. Returned in the `AggregateResult.measures` field alongside `observations`. See also: `observations`.</dd>
 
   <dt>minimized evidence</dt>
   <dd>Registry Stack product term for an evidence response shaped by data minimization, selective disclosure, or verifiable attestation. The response can be narrower than the full source record when the configured use case supports that pattern.</dd>
@@ -101,11 +107,14 @@ Product names are always in English, including on future translated pages.
   <dt>ODRL</dt>
   <dd>Open Digital Rights Language. W3C recommendation. Relay and Manifest emit ODRL Offer documents for dataset-scoped policies.</dd>
 
+  <dt>observations</dt>
+  <dd>The array of data rows returned in the `AggregateResult.observations` field for a Registry Relay aggregate query. Each observation is an object keyed by dimension and measure identifiers. The field replaces the former `data` name from the SDMX-refactor rename.</dd>
+
   <dt>OGC API Records</dt>
   <dd>Open Geospatial Consortium API specification for records. Relay exposes records endpoints behind the `ogcapi-records` feature flag. Manifest renders OGC Records item bodies.</dd>
 
   <dt>OID4VCI</dt>
-  <dd>OpenID for Verifiable Credential Issuance. The protocol a wallet uses to obtain a credential from an issuer. Registry Notary implements an OID4VCI issuance flow: a credential offer, issuer metadata at `/.well-known/openid-credential-issuer`, a nonce, and a holder proof.</dd>
+  <dd>OpenID for Verifiable Credential Issuance. The protocol a wallet uses to obtain a credential from an issuer. Registry Notary emits an OID4VCI issuance flow: a credential offer, issuer metadata at `/.well-known/openid-credential-issuer`, a nonce, and a holder proof. The issuer metadata advertises `dc+sd-jwt` format; full OID4VCI Draft 13 `vc+sd-jwt` conformance is not asserted.</dd>
 
   <dt>PROV-O</dt>
   <dd>W3C Provenance Ontology. Currently listed as design influence (`inspired_by`). Provenance-shaped concepts appear in audit fields and the claim provenance struct, but no PROV-O vocabulary terms are emitted as JSON-LD at reviewed commits.</dd>
@@ -151,6 +160,9 @@ Product names are always in English, including on future translated pages.
 
   <dt>self-attestation</dt>
   <dd>Credential issuance pattern where the credential subject is bound to the identity the requester authenticated as. The hosted lab issues a `person_is_alive` self-attestation: Registry Notary will not issue a credential for a subject the caller did not sign in as.</dd>
+
+  <dt>signed response credentials</dt>
+  <dd>Opt-in Registry Relay feature that attaches a W3C VCDM 2.0 VC-JWT signed credential to entity record and aggregate responses when the caller requests `Accept: application/vc+jwt`. The config key is `provenance` for backward compatibility. The DID document, JSON Schemas, and JSON-LD contexts for this feature are served under `/.well-known/`. Enabled by the `crosswalk-runtime` Cargo feature group.</dd>
 
   <dt>SHACL</dt>
   <dd>Shapes Constraint Language. W3C recommendation. Relay and Manifest emit SHACL node shapes for entity validation.</dd>

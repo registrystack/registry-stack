@@ -11,7 +11,7 @@
   name: Registry Relay OpenAPI
   owner: registry-relay
   status: hand-authored-abstract-contract
-  surface: Protected Registry Data API, metadata API, evidence offering verification, aggregates, health and readiness, plus optional standards adapters (OGC API Features, OGC API Records, OGC API EDR, SP DCI) and provenance routes.
+  surface: "Protected Registry Data API, metadata API, evidence offering discovery, aggregates, health and readiness, plus optional standards adapters (OGC API Features, OGC API Records, OGC API EDR, SP DCI) and signed response credential routes (config key: provenance)."
   source_of_truth:
     label: Registry Relay abstract OpenAPI contract
     url: https://github.com/jeremi/registry-relay/blob/main/openapi/registry-relay.openapi.json
@@ -33,7 +33,7 @@
   source_of_truth:
     label: Registry Notary OID4VCI routes
     url: https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-server/src/api.rs
-  consumer_note: Wallet-compatible Draft 13 flow. Registry Lab exercises the full path through the `just citizen-oid4vci-*` recipes. Conformance to the full OID4VCI profile is not asserted at this version.
+  consumer_note: OID4VCI flow advertising `dc+sd-jwt` credential format. Registry Lab exercises the full path through the `just citizen-oid4vci-*` recipes. Full OID4VCI Draft 13 `vc+sd-jwt` wallet conformance is not asserted at this version.
 - id: registry-notary.federated-evaluation
   name: Registry Notary Federated Evaluation MVP
   owner: registry-notary

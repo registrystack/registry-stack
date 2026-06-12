@@ -57,11 +57,14 @@ For setup steps, scope strings, and credential configuration, see
   `api.require_purpose_header: true` on an entity or aggregate source makes the header mandatory for
   that operation. Calls that omit it are rejected with `400 auth.purpose_required`.
 - **Feature-gated surfaces.** OGC API Features, Records, and EDR adapters, SP-DCI sync routes, and
-  the provenance routes (DID document, JSON Schemas, JSON-LD contexts, VC-JWT serialization) only
-  mount when the gateway is built and configured with the matching Cargo feature.
+  the signed response credential routes (DID document, JSON Schemas, JSON-LD contexts, VC-JWT
+  serialization; config key: `provenance`) only mount when the gateway is built and configured with
+  the matching Cargo feature.
 - **Admin routes.** Reload and metrics routes are mounted on a separate, optional admin listener,
   require `admin` scope, and do not appear in the public OpenAPI document.
-- **Evidence-offering verification** is a Relay-native check that returns a receipt (or a VC-JWT
-  when provenance is enabled), not an authority credential or an eligibility decision.
+- **Evidence-offering discovery.** Relay publishes evidence-offering metadata at
+  `GET /metadata/evidence-offerings` and `GET /metadata/evidence-offerings/{offering_id}`.
+  These routes describe where to reach a Notary for verification; Relay does not execute the
+  verification itself.
 - **Read-only, no streaming.** Relay performs no writes. Sources are read as batch snapshots or
   table scans; there is no event-stream backend.
