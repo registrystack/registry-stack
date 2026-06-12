@@ -4052,6 +4052,32 @@ fn validate_source_matching_config(
         );
     }
     if matching
+        .relationship_purpose_scopes
+        .iter()
+        .any(|(relationship, purposes)| {
+            relationship.trim().is_empty()
+                || purposes.is_empty()
+                || purposes.iter().any(|purpose| purpose.trim().is_empty())
+        })
+    {
+        return invalid_matching_config(
+            claim,
+            binding,
+            "relationship_purpose_scopes must contain non-empty relationships and purposes",
+        );
+    }
+    if matching
+        .relationship_purpose_scopes
+        .keys()
+        .any(|relationship| !matching.allowed_relationships.contains(relationship))
+    {
+        return invalid_matching_config(
+            claim,
+            binding,
+            "relationship_purpose_scopes entries must also appear in allowed_relationships",
+        );
+    }
+    if matching
         .sufficient_target_inputs
         .iter()
         .any(|group| group.is_empty() || group.iter().any(|path| path.trim().is_empty()))
@@ -4215,6 +4241,10 @@ pub struct SourceMatchingConfig {
     pub allowed_purposes: Vec<String>,
     #[serde(default)]
     pub allowed_relationships: Vec<String>,
+    /// Relationship-specific purpose allow-lists. Empty means relationships
+    /// accepted by `allowed_relationships` are not purpose-scoped.
+    #[serde(default)]
+    pub relationship_purpose_scopes: BTreeMap<String, Vec<String>>,
     /// OR-of-AND groups of request paths. Example:
     /// `[["target.attributes.given_name", "target.attributes.family_name"]]`.
     #[serde(default)]
@@ -4244,6 +4274,7 @@ impl Default for SourceMatchingConfig {
             requester_type: None,
             allowed_purposes: Vec::new(),
             allowed_relationships: Vec::new(),
+            relationship_purpose_scopes: BTreeMap::new(),
             sufficient_target_inputs: Vec::new(),
             allowed_target_inputs: Vec::new(),
             allowed_requester_inputs: Vec::new(),
@@ -8060,6 +8091,97 @@ allowed_claims: ["", "   "]
             .expect_err("blank evidence allowed_purposes must fail validation");
 
         assert!(matches!(err, EvidenceConfigError::InvalidPurpose));
+    }
+
+    #[test]
+    fn blank_relationship_purpose_scope_entries_are_rejected() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "crvs".to_string(),
+            SourceConnectionConfig {
+                base_url: "https://upstream.example".to_string(),
+                allow_insecure_localhost: false,
+                allow_insecure_private_network: false,
+                token_env: "SRC_TOKEN".to_string(),
+                source_auth: None,
+                expected_sidecar: None,
+                dci: DciSourceConnectionConfig::default(),
+                max_in_flight: 8,
+                retry_on_5xx: true,
+                bulk_mode: BulkMode::None,
+                bulk_mode_lookup_unique: false,
+                bulk_timeout_max_ms: 30_000,
+            },
+        );
+        let mut claim = minimal_claim("date-of-birth");
+        let binding = rda_binding("crvs", "one");
+        claim.source_bindings.insert("src".to_string(), binding);
+        claim
+            .source_bindings
+            .get_mut("src")
+            .expect("source binding exists")
+            .matching
+            .relationship_purpose_scopes
+            .insert("guardian".to_string(), vec![" ".to_string()]);
+        config.evidence.claims = vec![claim];
+
+        let err = config
+            .validate()
+            .expect_err("blank relationship purpose scope must fail validation");
+
+        match err {
+            EvidenceConfigError::InvalidMatchingConfig { reason, .. } => {
+                assert_eq!(
+                    reason,
+                    "relationship_purpose_scopes must contain non-empty relationships and purposes",
+                );
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn relationship_purpose_scope_must_reference_allowed_relationship() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "crvs".to_string(),
+            SourceConnectionConfig {
+                base_url: "https://upstream.example".to_string(),
+                allow_insecure_localhost: false,
+                allow_insecure_private_network: false,
+                token_env: "SRC_TOKEN".to_string(),
+                source_auth: None,
+                expected_sidecar: None,
+                dci: DciSourceConnectionConfig::default(),
+                max_in_flight: 8,
+                retry_on_5xx: true,
+                bulk_mode: BulkMode::None,
+                bulk_mode_lookup_unique: false,
+                bulk_timeout_max_ms: 30_000,
+            },
+        );
+        let mut claim = minimal_claim("date-of-birth");
+        let mut binding = rda_binding("crvs", "one");
+        binding
+            .matching
+            .relationship_purpose_scopes
+            .insert("guardian".to_string(), vec!["benefits".to_string()]);
+        claim.source_bindings.insert("src".to_string(), binding);
+        config.evidence.claims = vec![claim];
+
+        let err = config
+            .validate()
+            .expect_err("scope relationship must be in the flat allow-list");
+
+        match err {
+            EvidenceConfigError::InvalidMatchingConfig { reason, .. } => {
+                assert_eq!(
+                    reason,
+                    "relationship_purpose_scopes entries must also appear in allowed_relationships",
+                );
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
     }
 
     #[test]

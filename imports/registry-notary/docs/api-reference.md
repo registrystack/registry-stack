@@ -175,6 +175,7 @@ for policy mapping. Map on `code`, not on prose. Safe fields for logs are
 | `relationship.match_ambiguous` | Relationship |
 | `relationship.attributes_insufficient` | Relationship |
 | `relationship.policy_rejected` | Relationship |
+| `relationship.purpose_not_allowed` | Relationship |
 | `source.unavailable` | Source |
 | `claim.not_found` | Claim |
 | `claim.version_not_found` | Claim |
@@ -209,9 +210,11 @@ The `requester` codes (`requester.not_found`, `requester.match_ambiguous`,
 `requester.identifier_missing`, `requester.attributes_insufficient`,
 `requester.matching_policy_rejected`, `requester.reauthentication_required`) and the
 `relationship` codes (`relationship.not_established`, `relationship.match_ambiguous`,
-`relationship.attributes_insufficient`, `relationship.policy_rejected`) report the
-same outcomes for the requester and relationship contexts. A successful match
-returns `target_ref` and `matching` metadata instead of a problem code.
+`relationship.attributes_insufficient`, `relationship.policy_rejected`,
+`relationship.purpose_not_allowed`) report the same outcomes for the requester and
+relationship contexts. `relationship.purpose_not_allowed` means the relationship
+type is valid but not for the declared purpose. A successful match returns
+`target_ref` and `matching` metadata instead of a problem code.
 
 `matching.confidence` is a policy-asserted label configured for the source
 binding and matching method. It is returned verbatim for successful matches

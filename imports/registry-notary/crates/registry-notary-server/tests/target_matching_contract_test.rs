@@ -1313,6 +1313,163 @@ async fn profile_gate_covers_requester_relationship_and_state_outcomes() {
 }
 
 #[tokio::test]
+async fn unscoped_relationship_policy_allows_any_allowed_purpose() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    let matching = &mut claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching;
+    matching
+        .allowed_purposes
+        .push("benefits_renewal".to_string());
+
+    let mut request = evaluate_request(
+        person_target("Amina", "Diallo", Some("1984-02-10")),
+        "person-is-alive",
+    );
+    request.purpose = Some("benefits_renewal".to_string());
+
+    runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            request,
+            None,
+        )
+        .await
+        .expect("flat relationship allow-list remains unscoped by default");
+
+    assert_eq!(source.reads(), 1);
+}
+
+#[tokio::test]
+async fn scoped_relationship_policy_allows_configured_purpose() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    let matching = &mut claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching;
+    matching
+        .allowed_purposes
+        .push("school_enrollment".to_string());
+    matching.allowed_relationships.push("guardian".to_string());
+    matching.relationship_purpose_scopes =
+        BTreeMap::from([("guardian".to_string(), vec!["benefits".to_string()])]);
+
+    let mut request = evaluate_request(
+        person_target("Amina", "Diallo", Some("1984-02-10")),
+        "person-is-alive",
+    );
+    request.relationship = Some(EvidenceRelationship {
+        relationship_type: "guardian".to_string(),
+        attributes: BTreeMap::new(),
+    });
+
+    runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            request,
+            None,
+        )
+        .await
+        .expect("guardian relationship is allowed for the scoped purpose");
+
+    assert_eq!(source.reads(), 1);
+}
+
+#[tokio::test]
+async fn scoped_relationship_policy_rejects_unconfigured_purpose_before_source_read() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    let matching = &mut claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching;
+    matching
+        .allowed_purposes
+        .push("school_enrollment".to_string());
+    matching.allowed_relationships.push("guardian".to_string());
+    matching.relationship_purpose_scopes =
+        BTreeMap::from([("guardian".to_string(), vec!["benefits".to_string()])]);
+
+    let mut request = evaluate_request(
+        person_target("Amina", "Diallo", Some("1984-02-10")),
+        "person-is-alive",
+    );
+    request.purpose = Some("school_enrollment".to_string());
+    request.relationship = Some(EvidenceRelationship {
+        relationship_type: "guardian".to_string(),
+        attributes: BTreeMap::new(),
+    });
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            request,
+            None,
+        )
+        .await
+        .expect_err("guardian relationship is not allowed for school enrollment");
+
+    assert_eq!(error.code(), "relationship.purpose_not_allowed");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
+async fn scoped_relationship_policy_requires_flat_relationship_allowlist() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    let matching = &mut claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching;
+    matching.relationship_purpose_scopes =
+        BTreeMap::from([("guardian".to_string(), vec!["benefits".to_string()])]);
+
+    let mut request = evaluate_request(
+        person_target("Amina", "Diallo", Some("1984-02-10")),
+        "person-is-alive",
+    );
+    request.relationship = Some(EvidenceRelationship {
+        relationship_type: "guardian".to_string(),
+        attributes: BTreeMap::new(),
+    });
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            request,
+            None,
+        )
+        .await
+        .expect_err("scopes narrow the flat relationship allow-list");
+
+    assert_eq!(error.code(), "relationship.policy_rejected");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
 async fn unsupported_profile_context_is_rejected_before_source_read() {
     let runtime = RegistryNotaryRuntime::new();
     let source = Arc::new(MatchingSource::new());
@@ -1389,6 +1546,44 @@ async fn profile_can_collapse_matching_oracle_errors() {
 
     assert_eq!(error.code(), "evidence.not_available");
     assert_eq!(error.audit_code(), "target.not_found");
+
+    let mut claim = person_claim();
+    let matching = &mut claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching;
+    matching.collapse_matching_errors = true;
+    matching
+        .allowed_purposes
+        .push("school_enrollment".to_string());
+    matching.allowed_relationships.push("guardian".to_string());
+    matching.relationship_purpose_scopes =
+        BTreeMap::from([("guardian".to_string(), vec!["benefits".to_string()])]);
+    let mut request = evaluate_request(
+        person_target("Amina", "Diallo", Some("1984-02-10")),
+        "person-is-alive",
+    );
+    request.purpose = Some("school_enrollment".to_string());
+    request.relationship = Some(EvidenceRelationship {
+        relationship_type: "guardian".to_string(),
+        attributes: BTreeMap::new(),
+    });
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            Arc::new(MatchingSource::new()),
+            &EvidenceStore::default(),
+            &principal(),
+            request,
+            None,
+        )
+        .await
+        .expect_err("relationship purpose failure is collapsed");
+
+    assert_eq!(error.code(), "evidence.not_available");
+    assert_eq!(error.audit_code(), "relationship.purpose_not_allowed");
 }
 
 #[tokio::test]

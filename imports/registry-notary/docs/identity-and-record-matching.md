@@ -262,12 +262,18 @@ Matching is designed to disclose as little as possible:
 A claim can also match the `requester` and a `relationship` when the decision
 depends on who is asking and how they relate to the target, such as a guardian
 acting for a dependent. The binding's policy controls which relationship types are
-allowed and which request paths each may carry, and the requester and relationship
-produce their own outcomes.
+allowed, which purposes a scoped relationship may carry, and which request paths
+each may use. The requester and relationship produce their own outcomes.
+
+Use `relationship_purpose_scopes` when a relationship is valid only for a subset
+of the binding's allowed purposes. A request with a valid relationship type but a
+purpose outside that relationship's scope fails with
+granular code `relationship.purpose_not_allowed` before Notary reads the source.
+With default error collapsing, callers see `evidence.not_available` and operators
+can inspect the granular audit code.
 
 The `profile` and `on_behalf_of` fields are accepted by the request model but
-are not evaluated. Binding delegation scope to purpose and minimum-assurance
-gating for target inputs are not implemented.
+are not evaluated. Minimum-assurance gating for target inputs is not implemented.
 
 ## Operator checklist
 
@@ -329,6 +335,7 @@ Notary conformance statement says so.
 | `target.match_ambiguous` | The lookup matched more than one record | Add attributes to the lookup so it lands on one record, or tighten the source query |
 | `target.attributes_insufficient` | The request did not satisfy any required input group | Supply one full group from the binding's `sufficient_target_inputs`; check for an extra attribute the allow-list rejects |
 | `target.matching_policy_rejected` | The request shape is outside the binding's policy | Check entity type, purpose, relationship, and the allowed input paths against the binding |
+| `relationship.purpose_not_allowed` | The relationship is valid but not for the declared purpose; this is an audit code when matching errors are collapsed | Check `relationship_purpose_scopes` for the relationship and purpose |
 | `target.not_found` | The source returned no record for the target | Confirm the lookup value and that the record exists in the source |
 
 ## Related
