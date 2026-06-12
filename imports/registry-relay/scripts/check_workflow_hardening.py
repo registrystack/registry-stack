@@ -179,7 +179,7 @@ def main() -> int:
     failures.extend(
         require(
             container_text,
-            'git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main',
+            'gh api "repos/${GITHUB_REPOSITORY}/compare/${GITHUB_SHA}...main"',
             container,
             "tag commit reachability check before release image publish",
         )

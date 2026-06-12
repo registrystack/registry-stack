@@ -130,10 +130,14 @@ jobs:
             exit 1
           fi
 
-          git -c "http.https://github.com/.extraheader=AUTHORIZATION: bearer ${GH_TOKEN}" \
-            fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
-            echo "Official release image aliases require tag commit $GITHUB_SHA to be reachable from protected main." >&2
+          # Ancestry via the compare API: the checkout has no persisted
+          # credentials (persist-credentials: false), so a git fetch here
+          # cannot authenticate, while the job token works against the
+          # REST API. "ahead" or "identical" means the tag commit is
+          # reachable from main.
+          status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${GITHUB_SHA}...main" --jq '.status')"
+          if [[ "$status" != "ahead" && "$status" != "identical" ]]; then
+            echo "Official release image aliases require tag commit $GITHUB_SHA to be reachable from protected main (compare status: ${status})." >&2
             exit 1
           fi
 
