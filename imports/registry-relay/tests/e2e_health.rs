@@ -17,6 +17,9 @@
 //!   `TimeoutLayer`.
 //! * `server.admin_bind` produces a second reachable listener that
 //!   serves `/healthz`.
+//! * Security headers (`Content-Security-Policy`, `X-Content-Type-Options`,
+//!   `X-Frame-Options`, `Referrer-Policy`) are present on all responses
+//!   served through the full `build_app` middleware stack. Fixes #87.
 //!
 //! These tests use `axum_test::TestServer` so the full middleware stack
 //! (request id, tracing, audit, CORS, body size limit, timeout) runs in
@@ -679,6 +682,224 @@ async fn assert_incomplete_header_closes(addr: SocketAddr) {
     }
 }
 
+/// Assert that the full relay stack sends the required browser-hardening
+/// security headers on every response. Covers issue #87: `/healthz` must
+/// carry `Content-Security-Policy` (and the other baseline headers) in
+/// addition to the `X-Content-Type-Options` and `X-Frame-Options` that
+/// were already present before the CSP layer was added.
+#[tokio::test]
+async fn healthz_response_carries_required_security_headers() {
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
+    let app = build_test_app(sink);
+    let server = TestServer::new(app);
+
+    let resp = server.get("/healthz").await;
+    resp.assert_status(StatusCode::OK);
+
+    assert_eq!(
+        resp.header("x-content-type-options"),
+        "nosniff",
+        "x-content-type-options must be set on /healthz"
+    );
+    assert_eq!(
+        resp.header("x-frame-options"),
+        "DENY",
+        "x-frame-options must be set on /healthz"
+    );
+    assert_eq!(
+        resp.header("referrer-policy"),
+        "no-referrer",
+        "referrer-policy must be set on /healthz"
+    );
+    let csp = resp
+        .maybe_header("content-security-policy")
+        .expect("content-security-policy must be set on /healthz");
+    let csp = csp.to_str().expect("CSP header is ASCII");
+    assert!(
+        csp.contains("default-src"),
+        "CSP on /healthz must include a default-src directive, got: {csp}"
+    );
+    assert!(
+        csp.contains("frame-ancestors 'none'"),
+        "CSP on /healthz must include frame-ancestors 'none', got: {csp}"
+    );
+}
+
+/// `/.well-known/api-catalog` is the RFC 9727 linkset discovery document.
+/// It is fully static (no principal, no runtime state) and must be served
+/// publicly so unauthenticated clients can bootstrap into the API surface.
+/// `build_test_app` configures zero API keys, so any auth-gated route would
+/// answer 401; reaching 200 here proves the route sits on the public
+/// sub-router. The baseline security headers must still be present.
+#[tokio::test]
+async fn api_catalog_is_public_and_carries_security_headers() {
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
+    let app = build_test_app(sink);
+    let server = TestServer::new(app);
+
+    let resp = server.get("/.well-known/api-catalog").await;
+    resp.assert_status(StatusCode::OK);
+    assert_eq!(
+        resp.header("content-type"),
+        "application/linkset+json; profile=\"https://www.rfc-editor.org/info/rfc9727\"",
+        "api-catalog must answer with the RFC 9727 linkset media type"
+    );
+
+    assert_eq!(
+        resp.header("x-content-type-options"),
+        "nosniff",
+        "x-content-type-options must be set on /.well-known/api-catalog"
+    );
+    assert_eq!(
+        resp.header("x-frame-options"),
+        "DENY",
+        "x-frame-options must be set on /.well-known/api-catalog"
+    );
+    assert_eq!(
+        resp.header("referrer-policy"),
+        "no-referrer",
+        "referrer-policy must be set on /.well-known/api-catalog"
+    );
+    let csp = resp
+        .maybe_header("content-security-policy")
+        .expect("content-security-policy must be set on /.well-known/api-catalog");
+    let csp = csp.to_str().expect("CSP header is ASCII");
+    assert!(
+        csp.contains("default-src"),
+        "CSP on /.well-known/api-catalog must include a default-src directive, got: {csp}"
+    );
+    assert!(
+        csp.contains("frame-ancestors 'none'"),
+        "CSP on /.well-known/api-catalog must include frame-ancestors 'none', got: {csp}"
+    );
+}
+
+/// HEAD on the same route must also be public and carry the security
+/// headers; the discovery `Link` header is the load-bearing payload for a
+/// HEAD probe.
+#[tokio::test]
+async fn api_catalog_head_is_public_and_carries_security_headers() {
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
+    let app = build_test_app(sink);
+    let server = TestServer::new(app);
+
+    let resp = server
+        .method(axum::http::Method::HEAD, "/.well-known/api-catalog")
+        .await;
+    resp.assert_status(StatusCode::OK);
+    assert_eq!(
+        resp.header("content-type"),
+        "application/linkset+json; profile=\"https://www.rfc-editor.org/info/rfc9727\"",
+        "HEAD api-catalog must echo the RFC 9727 linkset media type"
+    );
+
+    assert_eq!(
+        resp.header("x-content-type-options"),
+        "nosniff",
+        "x-content-type-options must be set on HEAD /.well-known/api-catalog"
+    );
+    assert_eq!(
+        resp.header("x-frame-options"),
+        "DENY",
+        "x-frame-options must be set on HEAD /.well-known/api-catalog"
+    );
+    let csp = resp
+        .maybe_header("content-security-policy")
+        .expect("content-security-policy must be set on HEAD /.well-known/api-catalog");
+    let csp = csp.to_str().expect("CSP header is ASCII");
+    assert!(
+        csp.contains("frame-ancestors 'none'"),
+        "CSP on HEAD /.well-known/api-catalog must include frame-ancestors 'none', got: {csp}"
+    );
+}
+
+/// The admin listener carries its own `build_admin_app` stack; confirm
+/// it also sends the same baseline security headers.
+#[tokio::test]
+async fn admin_healthz_response_carries_required_security_headers() {
+    let main_listener = TcpListener::bind("127.0.0.1:0").await.expect("bind main");
+    let admin_listener = TcpListener::bind("127.0.0.1:0").await.expect("bind admin");
+    let main_addr: SocketAddr = main_listener.local_addr().expect("main addr");
+    let admin_addr: SocketAddr = admin_listener.local_addr().expect("admin addr");
+
+    let mut cfg = load_example_config();
+    cfg.server.bind = main_addr;
+    cfg.server.admin_bind = Some(admin_addr);
+    cfg.datasets.clear();
+    let config = Arc::new(cfg);
+
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
+    let auth: Arc<dyn AuthProvider> = Arc::new(ApiKeyAuth::new(Vec::new()));
+    let ingest = Arc::new(
+        IngestRegistry::from_config(
+            &config,
+            Arc::new(FormatRegistry::with_v1_defaults()),
+            Arc::from(config.server.cache_dir.as_path()),
+            Arc::new(SessionContext::new()),
+        )
+        .expect("empty ingest registry builds"),
+    );
+    let (readiness_tx, readiness_rx) = watch::channel(ingest.snapshot());
+    let admin_app = build_admin_app(
+        Arc::clone(&config),
+        Arc::clone(&auth),
+        Arc::clone(&sink),
+        readiness_rx,
+        readiness_tx,
+        ingest,
+    )
+    .expect("admin app builds");
+
+    let admin_handle = tokio::spawn(async move {
+        axum::serve(
+            admin_listener,
+            admin_app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+    });
+
+    let headers = reqwest_lite_get_response_headers(admin_addr, "/healthz").await;
+
+    assert_security_headers_present(&headers, "admin /healthz");
+
+    admin_handle.abort();
+}
+
+fn assert_security_headers_present(headers: &[(String, String)], context: &str) {
+    let find = |name: &str| -> Option<String> {
+        headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.clone())
+    };
+
+    assert_eq!(
+        find("x-content-type-options").as_deref(),
+        Some("nosniff"),
+        "x-content-type-options missing or wrong on {context}"
+    );
+    assert_eq!(
+        find("x-frame-options").as_deref(),
+        Some("DENY"),
+        "x-frame-options missing or wrong on {context}"
+    );
+    assert_eq!(
+        find("referrer-policy").as_deref(),
+        Some("no-referrer"),
+        "referrer-policy missing or wrong on {context}"
+    );
+    let csp = find("content-security-policy")
+        .unwrap_or_else(|| panic!("content-security-policy missing on {context}"));
+    assert!(
+        csp.contains("default-src"),
+        "CSP on {context} must include default-src, got: {csp}"
+    );
+    assert!(
+        csp.contains("frame-ancestors 'none'"),
+        "CSP on {context} must include frame-ancestors 'none', got: {csp}"
+    );
+}
+
 fn audit_record_from_platform_envelope(line: &str) -> Value {
     let envelope: Value =
         serde_json::from_str(line.trim_end()).expect("valid platform audit envelope");
@@ -729,4 +950,35 @@ async fn reqwest_lite_get_with_headers(
         .map(|(_, b)| b.to_string())
         .unwrap_or_default();
     (status, body)
+}
+
+/// Minimal HTTP/1.1 GET client that returns parsed response headers as
+/// `(name, value)` pairs. Used for the admin-listener security-header
+/// integration tests that drive a real TCP listener.
+async fn reqwest_lite_get_response_headers(addr: SocketAddr, path: &str) -> Vec<(String, String)> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    let mut stream = TcpStream::connect(addr).await.expect("connect");
+    let req = format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+    stream
+        .write_all(req.as_bytes())
+        .await
+        .expect("write request");
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).await.expect("read response");
+    let raw = String::from_utf8_lossy(&buf).to_string();
+
+    // The header section is everything before the first blank line.
+    let header_section = raw.split_once("\r\n\r\n").map(|(h, _)| h).unwrap_or(&raw);
+
+    // Skip the status line; each subsequent line is a `name: value` pair.
+    header_section
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            Some((name.trim().to_lowercase(), value.trim().to_string()))
+        })
+        .collect()
 }

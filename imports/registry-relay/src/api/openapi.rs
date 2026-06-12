@@ -185,6 +185,36 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
     );
     tag(&mut paths, "/metadata", "get", TAG_CATALOG);
 
+    // `/.well-known/api-catalog` is the RFC 9727 discovery linkset. The
+    // handler is static and lives on the public sub-router (relay#86), so
+    // it advertises `security: []` like `/docs` and `/.well-known/did.json`.
+    paths.insert(
+        "/.well-known/api-catalog".to_string(),
+        json!({
+            "get": {
+                "operationId": "get_api_catalog",
+                "summary": "RFC 9727 API catalog",
+                "description": "Returns the RFC 9727 linkset of API discovery links. \
+                                Served publicly: the document is static and reveals no \
+                                principal-scoped content.",
+                "parameters": [],
+                "security": [],
+                "responses": {
+                    "200": {
+                        "description": "API catalog linkset.",
+                        "content": {
+                            "application/linkset+json": {
+                                "schema": { "$ref": "#/components/schemas/ApiCatalogLinkset" }
+                            }
+                        }
+                    },
+                    "default": problem_response("Problem Details error response."),
+                }
+            }
+        }),
+    );
+    tag(&mut paths, "/.well-known/api-catalog", "get", TAG_CATALOG);
+
     insert_json_path(
         &mut paths,
         "/metadata/catalog",
@@ -2226,6 +2256,10 @@ fn schemas(catalog: &CatalogDocument, config: &Config) -> Value {
     schemas.insert("HealthResponse".to_string(), health_schema());
     schemas.insert("ReadinessResponse".to_string(), readiness_schema());
     schemas.insert("MetadataLanding".to_string(), metadata_landing_schema());
+    schemas.insert(
+        "ApiCatalogLinkset".to_string(),
+        generic_object_schema("RFC 9727 API catalog linkset document."),
+    );
     schemas.insert(
         "MetadataCatalogDocument".to_string(),
         catalog_document_schema(),
@@ -4893,6 +4927,24 @@ mod tests {
                 "{path} should advertise security: []"
             );
         }
+    }
+
+    #[test]
+    fn api_catalog_route_advertises_public_security() {
+        let config = load_example_config();
+        let mut doc = openapi_document(&catalog_with_individual(), &config);
+        reduce_release_artifact_to_static_contract(&mut doc, &config);
+        let op = &doc["paths"]["/.well-known/api-catalog"]["get"];
+        assert_eq!(
+            op["security"],
+            json!([]),
+            "/.well-known/api-catalog should advertise security: []"
+        );
+        assert_eq!(
+            op["responses"]["200"]["content"]["application/linkset+json"]["schema"]["$ref"],
+            "#/components/schemas/ApiCatalogLinkset",
+            "api-catalog must document the RFC 9727 linkset media type"
+        );
     }
 
     #[test]

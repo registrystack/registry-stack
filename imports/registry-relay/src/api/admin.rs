@@ -1478,7 +1478,7 @@ fn is_client_access_change(current: &Config, candidate: &Config) -> bool {
 fn api_key_auth_changed(current: &Config, candidate: &Config) -> bool {
     current.auth.mode == AuthMode::ApiKey
         && candidate.auth.mode == AuthMode::ApiKey
-        && format!("{:?}", current.auth.oidc) == format!("{:?}", candidate.auth.oidc)
+        && current.auth.oidc == candidate.auth.oidc
         && current.auth.api_keys != candidate.auth.api_keys
 }
 
@@ -1639,32 +1639,32 @@ fn equivalent_except_config_trust_accepted_roots(current: &Config, candidate: &C
     };
     current.instance.id == candidate.instance.id
         && current.instance.environment == candidate.instance.environment
-        && format!("{:?}", current.server) == format!("{:?}", candidate.server)
+        && current.server == candidate.server
         && current_trust.antirollback_state_path == candidate_trust.antirollback_state_path
         && current_trust.local_approval_state_path == candidate_trust.local_approval_state_path
         && current_trust.break_glass_rate_limit == candidate_trust.break_glass_rate_limit
-        && format!("{:?}", current.metadata) == format!("{:?}", candidate.metadata)
-        && format!("{:?}", current.catalog) == format!("{:?}", candidate.catalog)
+        && current.metadata == candidate.metadata
+        && current.catalog == candidate.catalog
         && current.vocabularies == candidate.vocabularies
-        && format!("{:?}", current.auth) == format!("{:?}", candidate.auth)
-        && format!("{:?}", current.audit) == format!("{:?}", candidate.audit)
-        && format!("{:?}", current.datasets) == format!("{:?}", candidate.datasets)
-        && format!("{:?}", current.provenance) == format!("{:?}", candidate.provenance)
-        && format!("{:?}", current.standards) == format!("{:?}", candidate.standards)
+        && current.auth == candidate.auth
+        && current.audit == candidate.audit
+        && current.datasets == candidate.datasets
+        && current.provenance == candidate.provenance
+        && current.standards == candidate.standards
 }
 
 fn equivalent_except_public_metadata(current: &Config, candidate: &Config) -> bool {
     current.instance.id == candidate.instance.id
         && current.instance.environment == candidate.instance.environment
-        && format!("{:?}", current.server) == format!("{:?}", candidate.server)
-        && format!("{:?}", current.config_trust) == format!("{:?}", candidate.config_trust)
-        && format!("{:?}", current.metadata) == format!("{:?}", candidate.metadata)
+        && current.server == candidate.server
+        && current.config_trust == candidate.config_trust
+        && current.metadata == candidate.metadata
         && current.vocabularies == candidate.vocabularies
-        && format!("{:?}", current.auth) == format!("{:?}", candidate.auth)
-        && format!("{:?}", current.audit) == format!("{:?}", candidate.audit)
-        && format!("{:?}", current.datasets) == format!("{:?}", candidate.datasets)
-        && format!("{:?}", current.provenance) == format!("{:?}", candidate.provenance)
-        && format!("{:?}", current.standards) == format!("{:?}", candidate.standards)
+        && current.auth == candidate.auth
+        && current.audit == candidate.audit
+        && current.datasets == candidate.datasets
+        && current.provenance == candidate.provenance
+        && current.standards == candidate.standards
         && current.catalog.title == candidate.catalog.title
         && current.catalog.base_url == candidate.catalog.base_url
         && current.catalog.publisher == candidate.catalog.publisher
@@ -1677,28 +1677,28 @@ fn equivalent_except_public_metadata(current: &Config, candidate: &Config) -> bo
 fn equivalent_except_auth(current: &Config, candidate: &Config) -> bool {
     current.instance.id == candidate.instance.id
         && current.instance.environment == candidate.instance.environment
-        && format!("{:?}", current.server) == format!("{:?}", candidate.server)
-        && format!("{:?}", current.config_trust) == format!("{:?}", candidate.config_trust)
-        && format!("{:?}", current.metadata) == format!("{:?}", candidate.metadata)
-        && format!("{:?}", current.catalog) == format!("{:?}", candidate.catalog)
+        && current.server == candidate.server
+        && current.config_trust == candidate.config_trust
+        && current.metadata == candidate.metadata
+        && current.catalog == candidate.catalog
         && current.vocabularies == candidate.vocabularies
-        && format!("{:?}", current.audit) == format!("{:?}", candidate.audit)
-        && format!("{:?}", current.datasets) == format!("{:?}", candidate.datasets)
-        && format!("{:?}", current.provenance) == format!("{:?}", candidate.provenance)
-        && format!("{:?}", current.standards) == format!("{:?}", candidate.standards)
+        && current.audit == candidate.audit
+        && current.datasets == candidate.datasets
+        && current.provenance == candidate.provenance
+        && current.standards == candidate.standards
 }
 
 fn equivalent_except_public_metadata_and_provenance(current: &Config, candidate: &Config) -> bool {
     current.instance.id == candidate.instance.id
         && current.instance.environment == candidate.instance.environment
-        && format!("{:?}", current.server) == format!("{:?}", candidate.server)
-        && format!("{:?}", current.config_trust) == format!("{:?}", candidate.config_trust)
-        && format!("{:?}", current.metadata) == format!("{:?}", candidate.metadata)
+        && current.server == candidate.server
+        && current.config_trust == candidate.config_trust
+        && current.metadata == candidate.metadata
         && current.vocabularies == candidate.vocabularies
-        && format!("{:?}", current.auth) == format!("{:?}", candidate.auth)
-        && format!("{:?}", current.audit) == format!("{:?}", candidate.audit)
-        && format!("{:?}", current.datasets) == format!("{:?}", candidate.datasets)
-        && format!("{:?}", current.standards) == format!("{:?}", candidate.standards)
+        && current.auth == candidate.auth
+        && current.audit == candidate.audit
+        && current.datasets == candidate.datasets
+        && current.standards == candidate.standards
         && current.catalog.title == candidate.catalog.title
         && current.catalog.base_url == candidate.catalog.base_url
         && current.catalog.publisher == candidate.catalog.publisher
@@ -2453,7 +2453,34 @@ fn posture_filter_failed(error: PostureFilterError) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::OidcConfig;
     use crate::provenance::SigningAlgorithm;
+
+    /// Minimal valid config used by equivalence classifier tests.
+    ///
+    /// Note: `serde_saphyr::from_str` parses YAML. Each call returns an
+    /// independent value so callers can mutate one field and compare.
+    fn parse_minimal_config(yaml: &str) -> Config {
+        serde_saphyr::from_str(yaml).expect("test config parses")
+    }
+
+    fn minimal_config_yaml() -> String {
+        r#"
+server:
+  bind: "127.0.0.1:8080"
+catalog:
+  title: "Test Registry"
+  base_url: "https://data.example.test"
+  publisher: "Test Ministry"
+auth:
+  mode: api_key
+  api_keys: []
+audit:
+  sink: stdout
+datasets: []
+"#
+        .to_string()
+    }
 
     struct ReadinessTestSigner {
         readiness: KeyReadiness,
@@ -2488,6 +2515,86 @@ mod tests {
         fn readiness(&self) -> KeyReadiness {
             self.readiness
         }
+    }
+
+    // --- equivalence classifier tests ---
+
+    #[test]
+    fn equivalent_except_public_metadata_equal_configs_are_equivalent() {
+        let a = parse_minimal_config(&minimal_config_yaml());
+        let b = parse_minimal_config(&minimal_config_yaml());
+        assert!(
+            equivalent_except_public_metadata(&a, &b),
+            "identical configs must be equivalent"
+        );
+    }
+
+    #[test]
+    fn equivalent_except_public_metadata_server_bind_change_is_not_equivalent() {
+        let a = parse_minimal_config(&minimal_config_yaml());
+        let b = parse_minimal_config(
+            &minimal_config_yaml().replace("bind: \"127.0.0.1:8080\"", "bind: \"127.0.0.1:9090\""),
+        );
+        assert!(
+            !equivalent_except_public_metadata(&a, &b),
+            "server bind change must not be equivalent"
+        );
+    }
+
+    #[test]
+    fn equivalent_except_auth_catalog_change_is_not_equivalent() {
+        let a = parse_minimal_config(&minimal_config_yaml());
+        let b = parse_minimal_config(&minimal_config_yaml().replace(
+            "base_url: \"https://data.example.test\"",
+            "base_url: \"https://other.example.test\"",
+        ));
+        assert!(
+            !equivalent_except_auth(&a, &b),
+            "catalog base_url change must not be equivalent"
+        );
+    }
+
+    /// Verifies that the OIDC config comparison uses semantic equality: two
+    /// configs with identical OIDC settings are treated as equivalent, and two
+    /// with differing OIDC issuers are not.
+    ///
+    /// The classifier must compare via `PartialEq`, never via Debug-string
+    /// equality: a custom Debug impl that omitted a field would silently make
+    /// semantically different configs compare equal.
+    #[test]
+    fn api_key_auth_changed_treats_oidc_field_semantically() {
+        let oidc_a = OidcConfig {
+            issuer: "https://idp-a.example.test".to_string(),
+            audiences: vec!["relay".to_string()],
+            jwks_url: Some("https://idp-a.example.test/.well-known/jwks.json".to_string()),
+            discovery_url: None,
+            allow_dev_insecure_fetch_urls: false,
+            allowed_algorithms: vec![crate::config::OidcAlgorithm::Rs256],
+            jwks_cache_ttl: std::time::Duration::from_secs(600),
+            leeway: std::time::Duration::from_secs(60),
+            scope_claim: "scope".to_string(),
+            scope_map: Default::default(),
+            scope_object_required_keys: vec![],
+            allowed_clients: vec![],
+            allowed_token_types: vec!["JWT".to_string(), "at+jwt".to_string()],
+        };
+        let oidc_b = OidcConfig {
+            issuer: "https://idp-b.example.test".to_string(),
+            ..oidc_a.clone()
+        };
+
+        // Same OIDC config: the field should compare equal.
+        assert_eq!(
+            Some(&oidc_a),
+            Some(&oidc_a),
+            "identical OidcConfig values must be PartialEq-equal"
+        );
+        // Different OIDC issuer: must not compare equal.
+        assert_ne!(
+            Some(&oidc_a),
+            Some(&oidc_b),
+            "OidcConfig with different issuers must not compare equal"
+        );
     }
 
     #[test]

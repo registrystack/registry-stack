@@ -108,7 +108,7 @@ fn default_instance_id() -> String {
 ///
 /// Simple local deployments omit this block. Signed/governed apply requires it
 /// so anti-rollback state lives in an explicit durable location.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigTrustConfig {
     pub antirollback_state_path: PathBuf,
@@ -125,7 +125,7 @@ pub struct ConfigTrustConfig {
 ///
 /// HTTP admin requests may name one of these sources, but cannot introduce new
 /// repository URLs or opt the server into insecure dev fetching.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RemoteTufRepositoryConfig {
     pub root_path: PathBuf,
@@ -144,13 +144,13 @@ fn default_break_glass_rate_limit() -> BreakGlassRateLimit {
 }
 
 /// Optional split metadata manifest loaded alongside the runtime config.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct MetadataConfig {
     pub source: MetadataSourceConfig,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct MetadataSourceConfig {
     pub path: PathBuf,
@@ -159,7 +159,7 @@ pub struct MetadataSourceConfig {
 }
 
 /// External standards adapters layered over configured entities.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct StandardsConfig {
     #[serde(default)]
@@ -168,7 +168,7 @@ pub struct StandardsConfig {
 
 /// Social Protection Digital Convergence Initiative (SP DCI) adapter
 /// configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SpdciStandardsConfig {
     #[serde(default)]
@@ -179,7 +179,7 @@ pub struct SpdciStandardsConfig {
 
 /// Runtime binding from a DCI registry sync search API to one configured
 /// Registry Relay entity.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SpdciRegistryConfig {
     pub dataset: DatasetId,
@@ -210,7 +210,7 @@ pub struct SpdciRegistryConfig {
 
 /// Runtime binding from SP DCI Disability Registry sync APIs to one
 /// configured Registry Relay entity.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SpdciDisabilityRegistryConfig {
     pub dataset: DatasetId,
@@ -261,7 +261,7 @@ fn default_spdci_search_limit() -> u32 {
 }
 
 /// HTTP listener and adjacent server-wide knobs.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     pub bind: SocketAddr,
@@ -327,7 +327,7 @@ fn default_max_source_file_bytes() -> u64 {
 /// `X-Forwarded-For` policy. Until the `ipnet` crate lands in deps we
 /// keep CIDR specs as strings and validate format in
 /// [`validate::run`].
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct TrustProxyConfig {
     #[serde(default)]
@@ -337,7 +337,7 @@ pub struct TrustProxyConfig {
 }
 
 /// CORS allowlist; default-deny per Section 17 item 7.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CorsConfig {
     #[serde(default)]
@@ -345,7 +345,7 @@ pub struct CorsConfig {
 }
 
 /// Catalog-level metadata surfaced by `/metadata/*` and DCAT outputs.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogConfig {
     pub title: String,
@@ -377,7 +377,7 @@ pub struct CatalogConfig {
 /// Authentication configuration. Exactly one of `api_keys` and `oidc`
 /// is consumed at startup, gated by `mode`; cross-field validation in
 /// [`validate`] enforces that only the active block is populated.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AuthConfig {
     pub mode: AuthMode,
@@ -414,7 +414,7 @@ pub struct ApiKeyConfig {
 /// OIDC / OAuth2 resource-server configuration. The relay validates
 /// incoming bearer JWTs against a configured external IdP. No tokens
 /// are minted here.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct OidcConfig {
     /// Issuer URL. Compared verbatim against the JWT `iss` claim.
@@ -533,7 +533,7 @@ fn default_oidc_token_types() -> Vec<String> {
 /// not support combining it with `#[serde(flatten)]` on an internally
 /// tagged enum (unknown keys in `audit` are caught by the enum's own
 /// `deny_unknown_fields`).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct AuditConfig {
     #[serde(flatten)]
     pub sink: AuditSinkConfig,
@@ -568,7 +568,7 @@ pub enum AuditFormat {
 
 /// Audit sink tagged on `sink:` per the YAML example. `file` carries
 /// the rotation policy inline.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(tag = "sink", rename_all = "snake_case", deny_unknown_fields)]
 #[non_exhaustive]
 pub enum AuditSinkConfig {
@@ -582,7 +582,7 @@ pub enum AuditSinkConfig {
 }
 
 /// In-process rotation for the `file` audit sink.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RotateConfig {
     pub max_size_mb: u64,
@@ -611,7 +611,7 @@ pub enum AdmsStatus {
 }
 
 /// A single dataset declaration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DatasetConfig {
     pub id: DatasetId,
@@ -652,7 +652,7 @@ pub struct DatasetConfig {
     pub aggregates: Vec<AggregateConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct PublicServiceConfig {
     #[serde(default)]
@@ -663,7 +663,7 @@ pub struct PublicServiceConfig {
 }
 
 /// Optional table defaults for reducing repetition within one dataset.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DatasetDefaultsConfig {
     #[serde(default)]
@@ -681,7 +681,7 @@ impl DatasetConfig {
 
 /// Source plugin selection. Tagged on `type:` so HTTP, S3, or additional
 /// database variants can land additively later.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[non_exhaustive]
 pub enum SourceConfig {
@@ -720,7 +720,7 @@ impl SourceConfig {
 
 /// Structured database table reference. Keeping schema/name separate
 /// avoids parsing dotted identifiers and leaves quoting to connectors.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct PostgresTableConfig {
     pub schema: String,
@@ -744,7 +744,7 @@ fn default_postgres_live_max_rows() -> usize {
 }
 
 /// Refresh policy. Tagged on `mode:`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 #[non_exhaustive]
 pub enum RefreshConfig {
@@ -780,7 +780,7 @@ pub enum MaterializationMode {
 /// The public API should not expose these ids. Entity config maps one
 /// resource into one domain resource, with optional field renaming and
 /// relationship declarations.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceConfig {
     pub id: ResourceId,
@@ -802,7 +802,7 @@ pub struct ResourceConfig {
 
 /// Storage table format override. If omitted, ingest infers the format
 /// from the source file extension.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceFormatConfig {
     #[serde(default)]
@@ -813,7 +813,7 @@ pub struct ResourceFormatConfig {
     pub parquet: Option<ParquetFormatConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CsvFormatConfig {
     #[serde(default)]
@@ -824,7 +824,7 @@ pub struct CsvFormatConfig {
     pub quote: Option<u8>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct XlsxFormatConfig {
     #[serde(default)]
@@ -835,7 +835,7 @@ pub struct XlsxFormatConfig {
     pub data_range: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ParquetFormatConfig {}
 
@@ -911,7 +911,7 @@ impl ResourceConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct EntityConfig {
     pub name: String,
@@ -938,7 +938,7 @@ pub struct EntityConfig {
 
 pub const CRS84: &str = "http://www.opengis.net/def/crs/OGC/1.3/CRS84";
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct EntitySpatialConfig {
     #[serde(default)]
@@ -958,7 +958,7 @@ pub struct EntitySpatialConfig {
     pub max_geometry_vertices: u32,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SpatialGeometryConfig {
     Point {
@@ -980,7 +980,7 @@ pub enum SpatialGeometryConfig {
     },
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SpatialBboxFieldsConfig {
     pub min_x: String,
@@ -997,7 +997,7 @@ fn default_max_geometry_vertices() -> u32 {
     10_000
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct EntityPublicSchemaConfig {
     /// PublicSchema concept name, for example `Person`.
@@ -1022,7 +1022,7 @@ pub struct EntityPublicSchemaConfig {
     pub credential_type: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct EntityFieldConfig {
     pub name: String,
@@ -1040,7 +1040,7 @@ pub struct EntityFieldConfig {
     pub language: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct EntityRelationshipConfig {
     pub name: String,
@@ -1059,7 +1059,7 @@ pub enum RelationshipKind {
     HasOne,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct EntityAccessConfig {
     pub metadata_scope: String,
@@ -1069,7 +1069,7 @@ pub struct EntityAccessConfig {
     pub evidence_verification_scope: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct EntityApiConfig {
     pub default_limit: u32,
@@ -1086,7 +1086,7 @@ pub struct EntityApiConfig {
 
 /// Declared resource schema. `strict` is the spec's `strict_schema`
 /// flag; on mismatch ingestion refuses to register the resource.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SchemaConfig {
     #[serde(default)]
@@ -1096,7 +1096,7 @@ pub struct SchemaConfig {
 
 /// One column in a resource schema. Physical type and optional
 /// semantic annotations used by catalog and schema metadata.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FieldConfig {
     pub name: String,
@@ -1130,7 +1130,7 @@ pub enum FieldType {
 
 /// Resource-level scope assignments. Private tables are not exposed as row
 /// resources in beta; row access is configured on public entities.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceAccessConfig {
     pub metadata_scope: String,
@@ -1139,7 +1139,7 @@ pub struct ResourceAccessConfig {
 
 /// Resource-level API knobs: per-field filter allowlist, limit caps,
 /// and the `Data-Purpose` requirement.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceApiConfig {
     pub default_limit: u32,
@@ -1162,7 +1162,7 @@ impl Default for ResourceApiConfig {
 }
 
 /// A single allowed filter: field name + permitted operators.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AllowedFilter {
     pub field: String,
@@ -1182,7 +1182,7 @@ pub enum FilterOp {
 
 /// Aggregate declaration: group-by columns, measures, disclosure
 /// control.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AggregateConfig {
     pub id: AggregateId,
@@ -1218,7 +1218,7 @@ pub struct AggregateConfig {
     pub disclosure_control: DisclosureControlConfig,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AggregateAccessConfig {
     #[serde(default)]
@@ -1229,7 +1229,7 @@ pub struct AggregateAccessConfig {
     pub aggregate_only_execution: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AggregateDimensionConfig {
     pub id: String,
@@ -1239,7 +1239,7 @@ pub struct AggregateDimensionConfig {
     pub codelist: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AggregateIndicatorConfig {
     pub id: String,
@@ -1257,7 +1257,7 @@ pub struct AggregateIndicatorConfig {
     pub definition_uri: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AggregateSpatialConfig {
     AdminArea {
@@ -1274,14 +1274,14 @@ pub enum AggregateSpatialConfig {
     },
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AggregateJoinConfig {
     pub relationship: String,
 }
 
 /// One measure inside an aggregate.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AggregateMeasure {
     pub name: String,
@@ -1306,7 +1306,7 @@ pub enum AggregateFunction {
 
 /// Disclosure control settings per aggregate. Defaults to
 /// `min_group_size: 5`, `suppression: omit`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DisclosureControlConfig {
     #[serde(default = "default_disclosure_methods")]

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use axum::Extension;
 use axum_test::TestServer;
-use registry_relay::api::metadata_router;
+use registry_relay::api::{metadata_router, well_known_router};
 use registry_relay::auth::{AuthMode, Principal, ScopeSet};
 use registry_relay::config;
 use registry_relay::entity::EntityRegistry;
@@ -470,8 +470,8 @@ async fn metadata_routes_prefer_split_manifest_extension() {
 }
 
 #[tokio::test]
-async fn metadata_router_exposes_api_catalog_discovery() {
-    let server = TestServer::new(metadata_router());
+async fn well_known_router_exposes_api_catalog_discovery() {
+    let server = TestServer::new(well_known_router());
 
     let resp = server.get("/.well-known/api-catalog").await;
     resp.assert_status_ok();

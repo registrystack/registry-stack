@@ -191,7 +191,12 @@ fn build_app_with_provenance_metadata_and_metrics(
     // can load it directly. By default the OpenAPI document it renders
     // (`/openapi.json`) stays auth-gated below; local testing can opt
     // into serving it publicly with `server.openapi_requires_auth: false`.
-    let mut public = api::health_router().merge(api::docs_router());
+    // `/.well-known/api-catalog` is the RFC 9727 discovery linkset. Its
+    // handlers are static (no principal, no runtime state), so the route
+    // sits on the public surface alongside `/docs` per relay#86.
+    let mut public = api::health_router()
+        .merge(api::docs_router())
+        .merge(api::well_known_router());
     if !config.server.openapi_requires_auth {
         public = public.merge(api::openapi_router());
     }

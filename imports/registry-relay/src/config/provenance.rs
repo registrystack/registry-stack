@@ -16,7 +16,7 @@ use time::OffsetDateTime;
 /// Top-level provenance block. When `enabled = false` (the default),
 /// no provenance routes are mounted, no Accept negotiation runs, and
 /// no provenance audit events fire.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ProvenanceConfig {
     #[serde(default)]
@@ -37,7 +37,7 @@ fn default_accepted_media_types() -> Vec<String> {
 }
 
 /// Validity windows per claim type. Operators tune these via config.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ClaimValidity {
     #[serde(with = "humantime_serde")]
@@ -49,7 +49,7 @@ pub struct ClaimValidity {
 /// Issuer identity mode. `gateway` self-issues under the gateway's DID;
 /// `delegated` signs under a ministry's DID using a key the gateway
 /// controls. Tagged on `mode:` per spec §6.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 #[non_exhaustive]
 pub enum IssuerConfig {
@@ -59,7 +59,7 @@ pub enum IssuerConfig {
 
 /// Gateway-mode issuer: registry-relay hosts `/.well-known/did.json` and
 /// signs every VC with its own key.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct GatewayIssuerConfig {
     pub did: String,
@@ -72,7 +72,7 @@ pub struct GatewayIssuerConfig {
 /// Delegated-mode issuer: signs under a ministry DID; the ministry
 /// hosts its own DID Document including the gateway's `kid`. registry-relay
 /// does NOT host `/.well-known/did.json` in this mode.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DelegatedIssuerConfig {
     pub ministry_did: String,
@@ -86,7 +86,7 @@ pub struct DelegatedIssuerConfig {
 /// `file_watch` material reloaded from a local JWK file. Other variants
 /// are reserved so future remote signers can plug into the provenance
 /// signer boundary without changing the issuer model.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[non_exhaustive]
 pub enum SignerConfig {
@@ -98,7 +98,7 @@ pub enum SignerConfig {
     Kms(KmsSignerConfig),
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SoftwareSignerConfig {
     /// Environment variable name carrying the private JWK (JSON).
@@ -107,7 +107,7 @@ pub struct SoftwareSignerConfig {
     pub signing_algorithm: ProvenanceAlgorithm,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FileWatchSignerConfig {
     /// Local file path carrying the private JWK (JSON).
@@ -116,7 +116,7 @@ pub struct FileWatchSignerConfig {
     pub signing_algorithm: ProvenanceAlgorithm,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct KmsSignerConfig {
     pub provider: KmsProvider,
@@ -154,7 +154,7 @@ impl ProvenanceAlgorithm {
 
 /// One retired signing key. Stays in the DID Document until every VC
 /// it signed has expired, then is fully removed.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RetiredKeyConfig {
     pub verification_method_id: String,

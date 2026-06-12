@@ -558,21 +558,18 @@
       "path": "/.well-known/api-catalog",
       "feature": null,
       "audience": "external",
-      "auth": "api_key_or_oidc",
-      "scopes": [
-        "metadata"
-      ],
+      "auth": "none",
+      "scopes": [],
       "rate_limit": null,
       "audit": "required",
-      "openapi": false,
+      "openapi": true,
       "stability": "stable",
       "data_classification": "metadata",
-      "notes": "Protected Registry Relay route.",
+      "notes": "Intentionally unauthenticated public RFC 9727 discovery linkset; static handler with no principal input.",
       "source": "manual",
       "enforcement_tests": [
-        "tests/auth_flow.rs::missing_header_returns_missing_credential",
-        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
-        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+        "tests/e2e_health.rs::api_catalog_is_public_and_carries_security_headers",
+        "tests/api_docs.rs::docs_routes_are_public_but_openapi_json_stays_auth_gated"
       ],
       "waiver": null
     },
@@ -583,21 +580,17 @@
       "path": "/.well-known/api-catalog",
       "feature": null,
       "audience": "external",
-      "auth": "api_key_or_oidc",
-      "scopes": [
-        "metadata"
-      ],
+      "auth": "none",
+      "scopes": [],
       "rate_limit": null,
       "audit": "required",
       "openapi": false,
       "stability": "stable",
       "data_classification": "metadata",
-      "notes": "Protected Registry Relay route.",
+      "notes": "Intentionally unauthenticated public RFC 9727 discovery linkset; static handler with no principal input.",
       "source": "manual",
       "enforcement_tests": [
-        "tests/auth_flow.rs::missing_header_returns_missing_credential",
-        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
-        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+        "tests/e2e_health.rs::api_catalog_head_is_public_and_carries_security_headers"
       ],
       "waiver": null
     },
