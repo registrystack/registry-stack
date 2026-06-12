@@ -71,6 +71,10 @@ fn build_openapi_document() -> Value {
                     "summary": "Report unsupported runtime reload",
                     "description": "Standalone mode does not support runtime configuration reload. Operators should call /admin/v1/capabilities before invoking product-specific reload operations.",
                     "operationId": "adminReload",
+                    "security": [
+                        { "apiKeyAuth": [] },
+                        { "bearerAuth": [] }
+                    ],
                     "responses": {
                         "501": { "description": "Runtime configuration reload is not supported" },
                         "401": { "description": "Missing or invalid credential" },
@@ -83,6 +87,10 @@ fn build_openapi_document() -> Value {
                     "summary": "Discover authenticated admin capabilities",
                     "description": "Returns redacted product capability metadata for governed configuration, posture, and reload operations.",
                     "operationId": "adminCapabilities",
+                    "security": [
+                        { "apiKeyAuth": [] },
+                        { "bearerAuth": [] }
+                    ],
                     "responses": {
                         "200": { "description": "Admin capabilities for this product runtime" },
                         "401": { "description": "Missing or invalid credential" },
@@ -95,6 +103,10 @@ fn build_openapi_document() -> Value {
                     "summary": "Validate a candidate runtime config",
                     "description": "Standalone mode parses and validates an inline candidate config or verifies a local or remote signed TUF config target. Governed signed credential issuer key rotations may be hot-applied when anti-rollback state accepts the bundle.",
                     "operationId": "adminConfigVerify",
+                    "security": [
+                        { "apiKeyAuth": [] },
+                        { "bearerAuth": [] }
+                    ],
                     "requestBody": config_apply_request_body_schema(),
                     "responses": {
                         "200": { "description": "Candidate config parsed and validated" },
@@ -109,6 +121,10 @@ fn build_openapi_document() -> Value {
                     "summary": "Dry-run a candidate runtime config",
                     "description": "Standalone mode validates an inline candidate config or verifies a local or remote signed TUF config target. Inline candidates and non-swappable changes report rejected_restart_required without mutating runtime state.",
                     "operationId": "adminConfigDryRun",
+                    "security": [
+                        { "apiKeyAuth": [] },
+                        { "bearerAuth": [] }
+                    ],
                     "requestBody": config_apply_request_body_schema(),
                     "responses": {
                         "200": { "description": "Candidate config was evaluated without applying" },
@@ -123,6 +139,10 @@ fn build_openapi_document() -> Value {
                     "summary": "Attempt to apply a candidate runtime config",
                     "description": "Standalone mode applies only signed local TUF config targets. Governed signed credential issuer key rotations can swap the issuer runtime after anti-rollback acceptance. Break-glass apply additionally requires approval details, a locally configured rate-limit policy, and a signed emergency change class. Inline config candidates are rejected with registry.admin.config.inline_apply_rejected. Other signed changes remain restart-required.",
                     "operationId": "adminConfigApply",
+                    "security": [
+                        { "apiKeyAuth": [] },
+                        { "bearerAuth": [] }
+                    ],
                     "requestBody": config_apply_request_body_schema(),
                     "responses": {
                         "200": { "description": "Compatible signed config was applied without restart" },
@@ -772,6 +792,10 @@ fn build_openapi_document() -> Value {
                 "post": {
                     "summary": "Update credential lifecycle status",
                     "operationId": "updateCredentialStatus",
+                    "security": [
+                        { "apiKeyAuth": [] },
+                        { "bearerAuth": [] }
+                    ],
                     "parameters": [
                         {
                             "name": "credential_id",
@@ -4138,6 +4162,29 @@ mod tests {
             doc["paths"]["/demo"]["get"]["responses"]["400"]["content"]["application/problem+json"],
             json!("not an object")
         );
+    }
+
+    #[test]
+    fn admin_routes_carry_explicit_per_route_security() {
+        // Admin routes must declare security explicitly so OpenAPI consumers do not
+        // treat them as equivalent to data routes that merely inherit the doc-level
+        // default. The declared schemes must match what the runtime enforces: an API
+        // key (X-Api-Key header) or an OIDC bearer token.
+        let doc = serde_json::to_value(openapi_document()).expect("document serializes");
+        let expected = json!([{ "apiKeyAuth": [] }, { "bearerAuth": [] }]);
+        for (path, method) in [
+            ("/admin/v1/reload", "post"),
+            ("/admin/v1/capabilities", "get"),
+            ("/admin/v1/config/verify", "post"),
+            ("/admin/v1/config/dry-run", "post"),
+            ("/admin/v1/config/apply", "post"),
+            ("/admin/v1/credentials/{credential_id}/status", "post"),
+        ] {
+            assert_eq!(
+                doc["paths"][path][method]["security"], expected,
+                "admin route {method} {path} must carry explicit per-route security"
+            );
+        }
     }
 
     fn assert_json_example(doc: &serde_json::Value, path: &str, method: &str, status: &str) {
