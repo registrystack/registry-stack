@@ -51,6 +51,11 @@ openapi-generate:
 openapi-check:
     python3 scripts/check_security_assurance.py openapi-baseline
 
+# Validate the committed OpenAPI artifact and, when a base ref is supplied,
+# fail on breaking API diffs while allowing additive changes.
+openapi-contract base_ref="":
+    scripts/check-openapi-contract.sh "{{base_ref}}"
+
 # Validate exposure manifest, route inventory, and Dockerfile secret-copy guardrails.
 exposure-check:
     python3 scripts/check_security_assurance.py manifest
@@ -68,7 +73,7 @@ ci-preflight:
     ./scripts/ci-preflight.sh
 
 # Run the full local CI gate.
-ci: ci-preflight fmt-check lint-default lint test-default test deny openapi-check exposure-check security
+ci: ci-preflight fmt-check lint-default lint test-default test deny openapi-check openapi-contract exposure-check security
 
 # Run the development server with a config file.
 # Usage: just run

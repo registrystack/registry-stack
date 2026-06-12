@@ -182,8 +182,9 @@ docker build \
 
 Default builds compile CEL and PKCS#11 into one release-capable image; runtime
 behavior remains config-gated. Release images publish to
-`ghcr.io/jeremi/registry-notary` on stable `vX.Y.Z` tags; deployments should
-consume version tags or immutable digests. The OpenFn sidecar image builds from
+`ghcr.io/jeremi/registry-notary` from stable `vX.Y.Z` tags and
+`registry-stack-technical-preview-<date-or-version>` tags; deployments should
+consume release tags or immutable digests. The OpenFn sidecar image builds from
 `Dockerfile.openfn-sidecar` with the same named contexts.
 
 See [`docs/deployment-hardening-runbook.md`](docs/deployment-hardening-runbook.md)
