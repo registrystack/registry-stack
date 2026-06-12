@@ -168,6 +168,54 @@ fn undeclared_profile_validates_like_before() {
     );
 }
 
+#[test]
+fn evidence_grade_via_signed_bundle_source_validates_and_boots() {
+    // The same evidence_grade config that an unsigned local file rejects must
+    // validate and boot when the candidate carries a signed-bundle source: the
+    // `relay.config.unsigned` startup gate does not fire for a signed bundle.
+    let yaml = format!(
+        "{}\ndeployment:\n  profile: evidence_grade\n  evidence:\n    ingress_rate_limit: true\n    api_key_rotation: true\n",
+        minimal_config_yaml()
+    );
+    let config = parse_config(&yaml).expect("config parses");
+    // Sanity: the very same config is rejected when treated as a local file.
+    assert!(
+        config::validate::run_with_source(&config, registry_platform_ops::ConfigSource::LocalFile)
+            .is_err(),
+        "evidence_grade from a local file must still refuse startup"
+    );
+    for source in [
+        registry_platform_ops::ConfigSource::SignedBundleFile,
+        registry_platform_ops::ConfigSource::SignedBundleEndpoint,
+    ] {
+        config::validate::run_with_source(&config, source).unwrap_or_else(|err| {
+            panic!("evidence_grade via {source:?} must validate and boot, got {err:?}")
+        });
+    }
+}
+
+#[test]
+fn governed_candidate_apply_accepts_evidence_grade_with_signed_provenance() {
+    // The governed apply path threads the candidate's real source into gate
+    // evaluation, so an evidence_grade candidate delivered as a signed bundle is
+    // accepted (its `relay.config.unsigned` startup gate does not fire).
+    let yaml = format!(
+        "{}\ndeployment:\n  profile: evidence_grade\n  evidence:\n    ingress_rate_limit: true\n    api_key_rotation: true\n",
+        minimal_config_yaml()
+    );
+    let (_config, provenance) = config::governed::parse_candidate_config_with_provenance(
+        &yaml,
+        "bundle-evidence-grade",
+        1,
+        registry_platform_ops::ConfigSource::SignedBundleFile,
+    )
+    .expect("evidence_grade candidate with signed provenance must apply");
+    assert_eq!(
+        provenance.source,
+        registry_platform_ops::ConfigSource::SignedBundleFile
+    );
+}
+
 // --- audit write policy (end to end) ----------------------------------------
 
 /// Under the default `availability_first` policy an audit write failure is
