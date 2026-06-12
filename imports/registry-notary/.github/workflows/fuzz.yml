@@ -1,0 +1,111 @@
+name: Fuzz
+
+on:
+  pull_request:
+    branches: ["**"]
+    paths:
+      - ".github/workflows/fuzz.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/registry-notary-core/**"
+      - "crates/registry-notary-server/**"
+      - "crates/registry-notary-openfn-sidecar/**"
+      - "fuzz/**"
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: true
+  REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
+  REGISTRY_PLATFORM_REF: 80777207269099bc2e257827d71259abd383335b
+  CROSSWALK_REPOSITORY: PublicSchema/crosswalk
+  CROSSWALK_REF: 54e0f537830837fcd0c9efa87990987b1846931c
+
+defaults:
+  run:
+    working-directory: registry-notary
+
+jobs:
+  core-request-bodies:
+    name: core request body parsers
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout registry-notary
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          path: registry-notary
+
+      - name: Checkout registry-platform
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          path: registry-platform
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+
+      - name: Checkout crosswalk
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          repository: ${{ env.CROSSWALK_REPOSITORY }}
+          ref: ${{ env.CROSSWALK_REF }}
+          path: crosswalk
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@5b842231ba77f5c045dba54ac5560fed2db780e2 # nightly
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: registry-notary -> target
+
+      - name: Restore nightly fuzz corpus
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: registry-notary/fuzz/corpus
+          key: registry-notary-fuzz-corpus-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            registry-notary-fuzz-corpus-${{ github.ref_name }}-
+            registry-notary-fuzz-corpus-
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --version 0.13.2 --locked
+
+      - name: Build fuzz targets
+        run: cargo +nightly fuzz build
+
+      - name: Run PR fuzz smoke
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          mkdir -p fuzz/artifacts/core_request_bodies
+          cargo +nightly fuzz run core_request_bodies -- \
+            -max_total_time=60 \
+            -rss_limit_mb=1024 \
+            -print_final_stats=1
+
+      - name: Run scheduled fuzz
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          mkdir -p fuzz/artifacts/core_request_bodies
+          cargo +nightly fuzz run core_request_bodies -- \
+            -max_total_time=600 \
+            -rss_limit_mb=2048 \
+            -print_final_stats=1
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: registry-notary-fuzz-artifacts
+          path: registry-notary/fuzz/artifacts
+          if-no-files-found: ignore
