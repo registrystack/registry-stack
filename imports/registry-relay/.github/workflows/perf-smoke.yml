@@ -3,6 +3,8 @@ name: perf-smoke
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: ["**"]
   workflow_dispatch:
 
 # See ci.yml for the rationale; cancel superseded runs on branches, keep main.
