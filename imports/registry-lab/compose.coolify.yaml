@@ -8,6 +8,7 @@ x-hosted-domains:
   health-registry-relay: health-relay.lab.registrystack.org
   static-metadata-publisher: metadata.lab.registrystack.org
   zitadel: zitadel.lab.registrystack.org
+  shared-eligibility-notary: shared-notary.lab.registrystack.org
   dhis2-health-notary: dhis2-notary.lab.registrystack.org
   opencrvs-dci-notary: opencrvs-notary.lab.registrystack.org
 
@@ -46,8 +47,14 @@ x-coolify-required-env:
   - REGISTRY_NOTARY_ISSUER_JWK
   - REGISTRY_RELAY_AUDIT_HASH_SECRET
   - SHARED_CIVIL_EVIDENCE_SOURCE_HASH
+  - SHARED_CIVIL_EVIDENCE_SOURCE_RAW
+  - SHARED_EVIDENCE_CLIENT_BEARER
+  - SHARED_EVIDENCE_CLIENT_BEARER_HASH
+  - SHARED_EVIDENCE_CLIENT_TOKEN_HASH
   - SHARED_HEALTH_EVIDENCE_SOURCE_HASH
+  - SHARED_HEALTH_EVIDENCE_SOURCE_RAW
   - SHARED_SOCIAL_EVIDENCE_SOURCE_HASH
+  - SHARED_SOCIAL_EVIDENCE_SOURCE_RAW
   - SOCIAL_AGGREGATE_READER_HASH
   - SOCIAL_AGGREGATE_READER_RAW
   - SOCIAL_EVIDENCE_ONLY_HASH
@@ -117,6 +124,7 @@ services:
         cp -a /tmp/repo/config/coolify/relay/. /out/relay/
         cp -a /tmp/repo/config/coolify/notary/civil-notary.yaml /out/notary/
         cp -a /tmp/repo/config/coolify/notary/citizen-civil-notary.yaml /out/notary/
+        cp -a /tmp/repo/config/coolify/notary/shared-eligibility-notary.yaml /out/notary/
         cp -a /tmp/repo/config/coolify/notary/dhis2-health-notary.yaml /out/notary/
         cp -a /tmp/repo/config/coolify/notary/opencrvs-dci-notary.yaml /out/notary/opencrvs-dci-notary.yaml.template
         cp -a /tmp/repo/data/. /out/data/
@@ -307,10 +315,17 @@ services:
     environment:
       CIVIL_EVIDENCE_URL: http://civil-notary:8080
       CIVIL_EVIDENCE_CLIENT_BEARER: ${CIVIL_EVIDENCE_CLIENT_BEARER:-}
+      SOCIAL_RELAY_URL: http://social-protection-registry-relay:8080
+      SHARED_EVIDENCE_URL: http://shared-eligibility-notary:8080
+      SHARED_EVIDENCE_CLIENT_BEARER: ${SHARED_EVIDENCE_CLIENT_BEARER:-}
     depends_on:
       config-loader:
         condition: service_completed_successfully
+      social-protection-registry-relay:
+        condition: service_healthy
       civil-notary:
+        condition: service_healthy
+      shared-eligibility-notary:
         condition: service_healthy
     volumes:
       - cfg-static-scripts:/opt/lab-scripts:ro
@@ -354,6 +369,31 @@ services:
       redis:
         condition: service_healthy
       civil-registry-relay:
+        condition: service_healthy
+
+  shared-eligibility-notary:
+    <<: *notary-common
+    command: ["--config", "/etc/registry-notary/shared-eligibility-notary.yaml"]
+    environment:
+      <<: *notary-env
+      SHARED_EVIDENCE_CLIENT_TOKEN_HASH: ${SHARED_EVIDENCE_CLIENT_TOKEN_HASH:-}
+      SHARED_EVIDENCE_CLIENT_BEARER_HASH: ${SHARED_EVIDENCE_CLIENT_BEARER_HASH:-}
+      SHARED_CIVIL_EVIDENCE_SOURCE_RAW: ${SHARED_CIVIL_EVIDENCE_SOURCE_RAW:-}
+      SHARED_SOCIAL_EVIDENCE_SOURCE_RAW: ${SHARED_SOCIAL_EVIDENCE_SOURCE_RAW:-}
+      SHARED_HEALTH_EVIDENCE_SOURCE_RAW: ${SHARED_HEALTH_EVIDENCE_SOURCE_RAW:-}
+    volumes:
+      - cfg-notary:/etc/registry-notary:ro
+      - notary-config-state:/var/lib/registry-notary/config-state
+    depends_on:
+      config-loader:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      civil-registry-relay:
+        condition: service_healthy
+      social-protection-registry-relay:
+        condition: service_healthy
+      health-registry-relay:
         condition: service_healthy
 
   openfn-dhis2-sidecar:

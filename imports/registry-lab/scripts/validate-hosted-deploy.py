@@ -33,6 +33,7 @@ REQUIRED_SERVICES = {
         "static-metadata-publisher",
         "lab-homepage",
         "zitadel",
+        "shared-eligibility-notary",
         "openfn-dhis2-sidecar",
         "dhis2-health-notary",
         "opencrvs-dci-notary",
@@ -61,6 +62,7 @@ REQUIRED_DOMAINS = {
         "static-metadata-publisher": f"metadata.{LAB_DOMAIN}",
         "lab-homepage": LAB_DOMAIN,
         "zitadel": f"zitadel.{LAB_DOMAIN}",
+        "shared-eligibility-notary": f"shared-notary.{LAB_DOMAIN}",
         "dhis2-health-notary": f"dhis2-notary.{LAB_DOMAIN}",
         "opencrvs-dci-notary": f"opencrvs-notary.{LAB_DOMAIN}",
     },
@@ -115,17 +117,23 @@ REQUIRED_HOSTED_VARIABLES = {
         "CIVIL_EVIDENCE_ONLY_HASH",
         "CIVIL_ROW_READER_HASH",
         "SHARED_CIVIL_EVIDENCE_SOURCE_HASH",
+        "SHARED_CIVIL_EVIDENCE_SOURCE_RAW",
+        "SHARED_EVIDENCE_CLIENT_BEARER",
+        "SHARED_EVIDENCE_CLIENT_BEARER_HASH",
+        "SHARED_EVIDENCE_CLIENT_TOKEN_HASH",
         "SOCIAL_METADATA_CLIENT_HASH",
         "SOCIAL_EVIDENCE_SOURCE_HASH",
         "SOCIAL_EVIDENCE_ONLY_HASH",
         "SOCIAL_ROW_READER_HASH",
         "SOCIAL_AGGREGATE_READER_HASH",
         "SHARED_SOCIAL_EVIDENCE_SOURCE_HASH",
+        "SHARED_SOCIAL_EVIDENCE_SOURCE_RAW",
         "HEALTH_METADATA_CLIENT_HASH",
         "HEALTH_EVIDENCE_SOURCE_HASH",
         "HEALTH_EVIDENCE_ONLY_HASH",
         "HEALTH_ROW_READER_HASH",
         "SHARED_HEALTH_EVIDENCE_SOURCE_HASH",
+        "SHARED_HEALTH_EVIDENCE_SOURCE_RAW",
     },
     "esignet": {
         "REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD",
@@ -289,6 +297,15 @@ def validate_artifacts(
         issues.extend(validate_hosted_openapi_policy(artifact, services, root))
         issues.extend(
             validate_civil_alive_scenario_contract(
+                artifact,
+                compose,
+                services,
+                root,
+                artifact_texts.get(artifact, ""),
+            )
+        )
+        issues.extend(
+            validate_hosted_social_combined_scenario_contract(
                 artifact,
                 compose,
                 services,
@@ -849,6 +866,105 @@ def validate_civil_alive_scenario_contract(
                     artifact,
                     "services.civil-notary.command",
                     "hosted civil-notary must start with config/coolify/notary/civil-notary.yaml",
+                )
+            )
+    return issues
+
+
+def validate_hosted_social_combined_scenario_contract(
+    artifact: str,
+    compose: dict[str, Any],
+    services: dict[str, Any],
+    root: Path,
+    raw_text: str = "",
+) -> list[Issue]:
+    del compose
+    if artifact != "registry-lab":
+        return []
+
+    issues: list[Issue] = []
+    lab_homepage = services.get("lab-homepage")
+    shared_notary = services.get("shared-eligibility-notary")
+
+    if isinstance(lab_homepage, dict):
+        env = normalize_environment(lab_homepage.get("environment"))
+        expected_homepage_env = {
+            "SOCIAL_RELAY_URL": "http://social-protection-registry-relay:8080",
+            "SHARED_EVIDENCE_URL": "http://shared-eligibility-notary:8080",
+        }
+        for variable, expected in sorted(expected_homepage_env.items()):
+            if env.get(variable) != expected:
+                issues.append(
+                    Issue(
+                        "missing-hosted-scenario-url",
+                        artifact,
+                        f"services.lab-homepage.environment.{variable}",
+                        f"hosted scenario runner must set {variable} to {expected}",
+                    )
+                )
+        if not environment_uses_rendered_or_referenced_secret(
+            raw_text,
+            "lab-homepage",
+            env,
+            "SHARED_EVIDENCE_CLIENT_BEARER",
+        ):
+            issues.append(
+                Issue(
+                    "missing-combined-support-bearer",
+                    artifact,
+                    "services.lab-homepage.environment.SHARED_EVIDENCE_CLIENT_BEARER",
+                    "combined-support must receive the hosted shared Notary bearer token",
+                )
+            )
+
+    if isinstance(shared_notary, dict):
+        env = normalize_environment(shared_notary.get("environment"))
+        expected_hashes = (
+            "SHARED_EVIDENCE_CLIENT_TOKEN_HASH",
+            "SHARED_EVIDENCE_CLIENT_BEARER_HASH",
+        )
+        for variable in expected_hashes:
+            if not environment_uses_rendered_or_referenced_secret(
+                raw_text,
+                "shared-eligibility-notary",
+                env,
+                variable,
+                required_prefix="sha256:",
+            ):
+                issues.append(
+                    Issue(
+                        "missing-shared-notary-client-hash",
+                        artifact,
+                        f"services.shared-eligibility-notary.environment.{variable}",
+                        f"hosted shared Notary must verify {variable}",
+                    )
+                )
+        for variable in (
+            "SHARED_CIVIL_EVIDENCE_SOURCE_RAW",
+            "SHARED_SOCIAL_EVIDENCE_SOURCE_RAW",
+            "SHARED_HEALTH_EVIDENCE_SOURCE_RAW",
+        ):
+            if not environment_uses_rendered_or_referenced_secret(
+                raw_text,
+                "shared-eligibility-notary",
+                env,
+                variable,
+            ):
+                issues.append(
+                    Issue(
+                        "missing-shared-notary-source-token",
+                        artifact,
+                        f"services.shared-eligibility-notary.environment.{variable}",
+                        f"hosted shared Notary must receive {variable}",
+                    )
+                )
+        if hosted_notary_config_path(root, shared_notary) != root / "config/coolify/notary/shared-eligibility-notary.yaml":
+            issues.append(
+                Issue(
+                    "missing-shared-notary-config",
+                    artifact,
+                    "services.shared-eligibility-notary.command",
+                    "hosted shared-eligibility-notary must start with config/coolify/notary/shared-eligibility-notary.yaml",
                 )
             )
     return issues

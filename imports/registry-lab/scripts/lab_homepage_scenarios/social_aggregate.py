@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from .common import (
@@ -10,10 +11,11 @@ from .common import (
     auth_header_pair,
     configured_credential,
     display_auth_header_pair,
-    env_url,
     http_json,
+    joined_url,
     ok_status,
     request_source,
+    service_url,
     source_response,
     standard_error_result,
 )
@@ -31,8 +33,8 @@ def story() -> dict[str, Any]:
         "short_title": "Aggregate versus row access",
         "proves": "Aggregate credentials can answer planning questions while row data remains separately governed.",
         "domain": "Social protection",
-        "availability": "local-only",
-        "availability_note": "Runs on the local lab profile with the social Relay on port 4312.",
+        "availability": "hosted",
+        "availability_note": "",
         "intro": (
             "A policy analyst needs district-level eligibility counts for planning. They do not need names, household rows, "
             "or benefit records for individual families."
@@ -86,7 +88,7 @@ def story() -> dict[str, Any]:
 def _preview_get(config: dict[str, Any], credential_id: str, path: str, extra_headers: dict[str, str] | None = None) -> dict[str, Any]:
     credential = configured_credential(config, credential_id)
     display_name, display_value = display_auth_header_pair(credential)
-    url = env_url("SOCIAL_RELAY_URL", "http://127.0.0.1:4312", path)
+    url = _display_url(config, credential_id, path)
     return request_source("GET", url, {display_name: display_value, **(extra_headers or {})})
 
 
@@ -118,15 +120,32 @@ def _run_get(config: dict[str, Any], step_id: str, credential_id: str, path: str
     credential = configured_credential(config, credential_id)
     auth_name, auth_value = auth_header_pair(credential)
     display_name, display_value = display_auth_header_pair(credential)
-    url = env_url("SOCIAL_RELAY_URL", "http://127.0.0.1:4312", path)
+    url = _request_url(config, credential_id, path)
+    display_url = _display_url(config, credential_id, path)
     headers = {auth_name: auth_value, **(extra_headers or {})}
     result = http_json("GET", url, headers)
     return {
         "step_id": step_id,
         "friendly": summarize(result.body, result.status, result.error),
-        "request_source": request_source("GET", url, {display_name: display_value, **(extra_headers or {})}),
+        "request_source": request_source("GET", display_url, {display_name: display_value, **(extra_headers or {})}),
         "response_source": source_response(result),
     }
+
+
+def _request_url(config: dict[str, Any], credential_id: str, path: str) -> str:
+    if base_url := os.environ.get("SOCIAL_RELAY_URL"):
+        return joined_url(base_url, path)
+    credential = configured_credential(config, credential_id)
+    if credential.get("service_url"):
+        return service_url(config, credential_id, path)
+    return joined_url("http://127.0.0.1:4312", path)
+
+
+def _display_url(config: dict[str, Any], credential_id: str, path: str) -> str:
+    credential = configured_credential(config, credential_id)
+    if credential.get("service_url"):
+        return service_url(config, credential_id, path)
+    return joined_url("http://127.0.0.1:4312", path)
 
 
 def _summarize_discovery(body: Any, status: int | None, error: str) -> dict[str, Any]:
