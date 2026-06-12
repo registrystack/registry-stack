@@ -20,6 +20,7 @@ use registry_platform_authcommon::{
 };
 use registry_platform_crypto::{validate_did, DidMethod};
 use registry_platform_httpsec::CorsPolicy;
+use registry_platform_ops::ConfigSource;
 
 use super::capabilities::source_capabilities;
 use super::{
@@ -59,7 +60,74 @@ pub fn run(config: &Config) -> Result<(), Error> {
     }
     validate_publicschema_feature(config).map_err(Error::from)?;
     validate_spdci_feature(config).map_err(Error::from)?;
+    validate_deployment(config).map_err(Error::from)?;
     Ok(())
+}
+
+/// Validate the deployment block and evaluate startup gates.
+///
+/// Waiver dates must be well-formed `YYYY-MM-DD`, reasons must be non-empty,
+/// and the deployment must not declare a profile under which any unwaived
+/// `startup_fail` gate triggers. An invalid profile value is rejected earlier
+/// by `serde` (the parse error path); this check covers the conditions that
+/// only hold once the whole config is deserialised.
+///
+/// At load time the config is always a local YAML file, so `relay.config.unsigned`
+/// is evaluated against `ConfigSource::LocalFile` here. Signed governed applies
+/// run their own gate evaluation on the candidate config.
+fn validate_deployment(config: &Config) -> Result<(), ConfigError> {
+    for waiver in &config.deployment.waivers {
+        if waiver.finding.trim().is_empty() {
+            tracing::error!(
+                code = "config.validation_error",
+                "deployment waiver is missing a finding id"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        if waiver.reason.trim().is_empty() {
+            tracing::error!(
+                code = "config.validation_error",
+                finding = %waiver.finding,
+                "deployment waiver is missing a reason"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        if !is_iso8601_date(&waiver.expires) {
+            tracing::error!(
+                code = "config.validation_error",
+                finding = %waiver.finding,
+                "deployment waiver expiry must be an ISO 8601 YYYY-MM-DD date"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
+
+    let facts = crate::deployment::facts_from_config(config, ConfigSource::LocalFile);
+    let waivers = crate::deployment::waivers_from_config(config);
+    let evaluation = crate::deployment::evaluate(
+        config.deployment.profile,
+        &facts,
+        &waivers,
+        &crate::deployment::today_utc(),
+    );
+    if evaluation.has_startup_failure() {
+        tracing::error!(
+            code = "config.validation_error",
+            gates = ?evaluation.startup_failures,
+            "deployment profile gates refuse startup"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    Ok(())
+}
+
+/// Lenient `YYYY-MM-DD` shape check: four digits, dash, two digits, dash, two
+/// digits, with calendar parsing to reject impossible dates.
+fn is_iso8601_date(value: &str) -> bool {
+    use time::format_description::well_known::Iso8601;
+    use time::Date;
+
+    Date::parse(value, &Iso8601::DATE).is_ok()
 }
 
 fn validate_config_trust(config: &Config) -> Result<(), ConfigError> {

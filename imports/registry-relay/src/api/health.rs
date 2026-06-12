@@ -41,9 +41,31 @@ async fn health() -> Json<Value> {
 }
 
 /// Readiness probe. With a runtime readiness receiver installed,
-/// returns 200 only when every configured resource has ingested. When
-/// no runtime is installed, it returns a trivial ready response.
+/// returns 200 only when every configured resource has ingested and no
+/// declared deployment gate demands `readiness_fail`. When no runtime is
+/// installed, it returns a trivial ready response.
 async fn ready(runtime: RuntimeSnapshot) -> Response {
+    // Deployment gates evaluated at `readiness_fail` keep the process running
+    // but report not-ready. This is checked first so that adopting a profile
+    // surfaces a posture problem even before ingest state is consulted.
+    if let Some(config) = runtime.config() {
+        let source = runtime
+            .config_provenance()
+            .map(|provenance| provenance.source)
+            .unwrap_or(registry_platform_ops::ConfigSource::LocalFile);
+        let facts = crate::deployment::facts_from_config(&config, source);
+        let waivers = crate::deployment::waivers_from_config(&config);
+        let evaluation = crate::deployment::evaluate(
+            config.deployment.profile,
+            &facts,
+            &waivers,
+            &crate::deployment::today_utc(),
+        );
+        if evaluation.has_readiness_failure() {
+            return deployment_not_ready_response(&evaluation.readiness_failures);
+        }
+    }
+
     let Some(readiness) = runtime.readiness_rx() else {
         return Json(ok_health_body(1, 1, 0)).into_response();
     };
@@ -67,6 +89,28 @@ async fn ready(runtime: RuntimeSnapshot) -> Response {
         "failed_count": failed_count,
         "not_ready_count": not_ready_count,
         "unresolved_count": unresolved_count,
+    }));
+    let mut response = (StatusCode::SERVICE_UNAVAILABLE, body).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        "application/problem+json"
+            .parse()
+            .expect("static content type is valid"),
+    );
+    response
+}
+
+/// 503 problem response raised when one or more declared deployment gates
+/// evaluate to `readiness_fail`. The triggering finding ids are reported so
+/// operators can see which gates hold the deployment not-ready.
+fn deployment_not_ready_response(findings: &[String]) -> Response {
+    let body = Json(json!({
+        "type": format!("{}deployment/not_ready", crate::error::PROBLEM_TYPE_BASE),
+        "title": "Deployment not ready",
+        "status": 503,
+        "detail": "one or more declared deployment profile gates report not-ready",
+        "code": "deployment.not_ready",
+        "findings": findings,
     }));
     let mut response = (StatusCode::SERVICE_UNAVAILABLE, body).into_response();
     response.headers_mut().insert(
