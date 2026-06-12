@@ -598,6 +598,15 @@ pub struct AuditConfig {
     pub chain: bool,
     #[serde(default)]
     pub include_health: bool,
+    /// Behavior when an audit record fails to write.
+    ///
+    /// `availability_first` (default) logs the failure and lets the request
+    /// succeed, exactly as the relay has always behaved. `fail_closed` instead
+    /// fails the request with a stable error code so that no request outcome is
+    /// returned without a durable audit record. Per-route-family selection is
+    /// out of scope; this is a single deployment-wide policy.
+    #[serde(default = "default_audit_write_policy")]
+    pub write_policy: AuditWritePolicy,
     /// Name of the environment variable holding the per-deploy secret
     /// used to HMAC sensitive audit values (single-record primary keys,
     /// sensitive query parameters). Runtime startup fails closed when
@@ -610,6 +619,10 @@ pub struct AuditConfig {
 
 fn default_audit_format() -> AuditFormat {
     AuditFormat::Jsonl
+}
+
+fn default_audit_write_policy() -> AuditWritePolicy {
+    AuditWritePolicy::AvailabilityFirst
 }
 
 /// Audit serialisation format. JSONL is the only V1 format.

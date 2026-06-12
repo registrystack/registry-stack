@@ -481,6 +481,7 @@ fn apply_cross_cutting_layers_with_metrics(
         trusted_proxies: config.server.trust_proxy.trusted_proxies.clone(),
         sensitive_fields: audit_sensitive_fields(config),
         hash_hasher: load_audit_hash_secret(config.audit.hash_secret_env.as_deref())?,
+        write_policy: config.audit.write_policy,
     };
 
     let with_operational_layers = router

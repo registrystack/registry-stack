@@ -23,9 +23,11 @@ use std::time::Instant;
 
 use axum::body::Body;
 use axum::extract::{ConnectInfo, Extension};
-use axum::http::{HeaderMap, Request, StatusCode};
+use axum::http::{header, HeaderMap, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use axum::Json;
+use registry_platform_ops::AuditWritePolicy;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use time::format_description::FormatItem;
@@ -74,6 +76,10 @@ pub struct AuditSettings {
     pub trusted_proxies: Vec<String>,
     pub sensitive_fields: Vec<String>,
     pub hash_hasher: AuditKeyHasher,
+    /// Behavior when the audit record write fails. `availability_first`
+    /// (default) logs and continues; `fail_closed` fails the request with a
+    /// stable error code.
+    pub write_policy: AuditWritePolicy,
 }
 
 impl Default for AuditSettings {
@@ -84,9 +90,14 @@ impl Default for AuditSettings {
             trusted_proxies: Vec::new(),
             sensitive_fields: Vec::new(),
             hash_hasher: AuditKeyHasher::unkeyed_dev_only(),
+            write_policy: AuditWritePolicy::AvailabilityFirst,
         }
     }
 }
+
+/// Stable error code returned when `audit.write_policy` is `fail_closed` and
+/// an audit record cannot be written. Documented in `docs/configuration.md`.
+pub const AUDIT_WRITE_FAILED_CODE: &str = "audit.write_failed";
 
 /// Optional structured context projected by handlers that have
 /// resolved entity-layer state. The middleware falls back to path
@@ -806,10 +817,40 @@ pub async fn audit_layer(
     // this cheap. We do NOT wrap in `tokio::spawn` so that ordering
     // is preserved within a single client's traffic.
     if let Err(e) = sink.write_record(record).await {
-        // Audit failures never fail the request: log and continue.
         error!(error = %e, "audit.write_failed");
+        // Under the default `availability_first` policy, audit failures never
+        // fail the request: the error is logged and the original response is
+        // returned unchanged. Under `fail_closed`, the request fails with a
+        // stable error code so no outcome is returned without a durable audit
+        // record.
+        if settings.write_policy == AuditWritePolicy::FailClosed {
+            return audit_write_failed_response();
+        }
     }
 
+    response
+}
+
+/// Stable `fail_closed` response: a 503 problem+json carrying the
+/// [`AUDIT_WRITE_FAILED_CODE`] error code. The code is also attached as a
+/// response extension so downstream layers (and operational logging) see the
+/// same stable value.
+fn audit_write_failed_response() -> Response {
+    let body = json!({
+        "type": format!("{}audit/write_failed", crate::error::PROBLEM_TYPE_BASE),
+        "title": "Audit record write failed",
+        "status": 503,
+        "code": AUDIT_WRITE_FAILED_CODE,
+        "detail": "the request was not completed because its audit record could not be written",
+    });
+    let mut response = (StatusCode::SERVICE_UNAVAILABLE, Json(body)).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/problem+json"),
+    );
+    response
+        .extensions_mut()
+        .insert(ErrorCodeExt(AUDIT_WRITE_FAILED_CODE.to_string()));
     response
 }
 
