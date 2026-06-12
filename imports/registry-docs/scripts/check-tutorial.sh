@@ -7,8 +7,8 @@
 # "## Verify" sections and executing them, in order, against a sibling
 # registry-lab checkout.
 #
-# Also drift-checks the three registryctl tutorials (publish-spreadsheet,
-# verify-claim-registry-api, verify-claim-own-api) by extracting every `sh`
+# Also drift-checks the registryctl tutorials (publish-spreadsheet,
+# verify-claim-registry-api) by extracting every `sh`
 # fence and asserting the command-line count. Those tutorials are
 # execution-verified manually (they need registryctl and a workstation); the
 # count assertion makes silent command additions or removals fail CI.
@@ -151,8 +151,7 @@ done
 # remove a documented command.
 REGISTRYCTL_TUTORIALS=(
 	"publish-spreadsheet-secured-registry-api:30"
-	"verify-claim-registry-api:60"
-	"verify-claim-own-api:44"
+	"verify-claim-registry-api:72"
 )
 
 count_sh_command_lines() {

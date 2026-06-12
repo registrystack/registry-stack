@@ -42,6 +42,8 @@ export default defineConfig({
   redirects: {
     '/start/': '/start/quickstart/',
     '/start/your-first-call/': '/tutorials/first-run-with-registry-lab/',
+    // verify-claim-own-api merged into the claim-verification tutorial (2026-06).
+    '/tutorials/verify-claim-own-api/': '/tutorials/verify-claim-registry-api/',
     // Problems -> marketing /why
     '/problems/': `${marketing}/why/`,
     '/problems/existing-data-not-service-ready/': `${marketing}/why/`,

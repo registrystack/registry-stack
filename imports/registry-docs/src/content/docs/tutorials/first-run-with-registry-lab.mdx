@@ -5,15 +5,13 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-lab
-  - registry-platform
   - registry-relay
   - registry-notary
-last_reviewed: "2026-06-07"
+last_reviewed: "2026-06-12"
 doc_type: tutorial
 locale: en
 standards_referenced:
   - cpsv-ap
-  - cccev
   - openapi
   - sd-jwt-vc
 ---
@@ -111,7 +109,8 @@ than 100 checks, including:
 - Positive row-read and aggregate-read responses on the social protection Relay.
 - Evidence evaluation (`POST /v1/evaluations`) on the civil, social protection, and shared
   eligibility Notary instances.
-- A cross-authority claim result with `source_count >= 2` on the shared eligibility Notary.
+- A cross-authority claim result with `provenance.used.source_count >= 2` on the shared
+  eligibility Notary.
 - A stable `409` with `evidence.not_available` for an unknown subject.
 - Credential-bound evaluation returning `application/dc+sd-jwt`.
 - Audit-log assertions, including a check that generated raw secrets are never emitted in service
@@ -203,7 +202,7 @@ This scenario exercises the static metadata publisher (port `4331`), the shared 
 What this proves: the Notary fans out to all three Relay services using per-source bearer tokens
 configured in
 [`config/notary/shared-eligibility-notary.yaml`](https://github.com/jeremi/registry-lab/blob/main/config/notary/shared-eligibility-notary.yaml).
-The result carries `source_count >= 2` once at least two sources contribute. A single Notary
+The result carries `provenance.used.source_count >= 2` once at least two sources contribute. A single Notary
 aggregates evidence across independently operated registries and reports how many authorities
 contributed, without merging or exposing the underlying rows.
 
@@ -266,7 +265,9 @@ curl -fsS -X POST \
 
 The `eligible-for-combined-support` claim depends on three sub-claims, `civil-record-present`,
 `social-program-active`, and `health-service-available`, each sourced from a different Relay. The
-response carries `provenance.source_count`, the number of distinct sources that contributed.
+response reports the number of distinct sources that contributed in
+`provenance.used.source_count`, alongside `provenance.generated_by` (which service evaluated the
+claim) and `provenance.schema_version` (`registry-notary-claim-provenance/v1`).
 
 For an unknown subject, the Notary returns a stable error rather than a false negative. Change
 `NID-1001` to `NID-9999` and the shared eligibility Notary responds with `409` and the code

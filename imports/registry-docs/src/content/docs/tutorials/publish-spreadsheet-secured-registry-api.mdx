@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-registryctl
   - registry-relay
-last_reviewed: "2026-06-10"
+last_reviewed: "2026-06-12"
 doc_type: tutorial
 locale: en
 standards_referenced:
@@ -28,10 +28,10 @@ Install:
 - `curl`, `tar`, and `uname`
 - `shasum` or `sha256sum` for release checksum verification
 - Docker Desktop, OrbStack, Colima, Podman, or another Docker Compose provider
+- `~/.local/bin` on your `PATH` (the installer writes there by default; a new shell cannot find
+  `registryctl` otherwise)
 
 Use `registryctl` 0.1.0 or newer.
-The installer writes to `~/.local/bin` by default, so make sure that directory is on your
-`PATH` before you confirm the install.
 
 The release installer publishes binaries for Linux x86_64, Linux aarch64, and macOS aarch64.
 Intel macOS does not have a published binary yet.
@@ -51,10 +51,10 @@ them under emulation and prints a platform warning, which is harmless here.
 
 If the installer reports that the release asset is unavailable, or if you are on Intel macOS, use
 the source install path until the next pinned release is available.
-Install Rust with `rustup`, then run:
+Install Rust with [`rustup`](https://rustup.rs), then build the pinned release tag:
 
 ```sh
-cargo install --git https://github.com/jeremi/registry-registryctl --branch main --locked
+cargo install --git https://github.com/jeremi/registry-registryctl --tag v0.1.0 --locked
 ```
 
 Confirm the CLI is available:
@@ -282,10 +282,9 @@ It does not delete your workbook, generated config, local keys, or smoke results
 
 ## Next
 
-- [Verify a claim from your registry API](../verify-claim-registry-api/): add Registry Notary to
-  the project and evaluate a claim without exposing the source row.
-- [Verify a claim from your own API](../verify-claim-own-api/): create a separate Notary project
-  for an API you operate.
+- [Verify a claim with Registry Notary](../verify-claim-registry-api/): add Registry Notary to
+  the project and evaluate a claim without exposing the source row, or run Notary standalone
+  against an API you operate.
 - [See it live](../../start/see-it-live/): explore the hosted demo to see the full stack in action.
 
 ## Troubleshooting
@@ -295,7 +294,7 @@ It does not delete your workbook, generated config, local keys, or smoke results
 | `registryctl` is not found | The install directory is not on `PATH`. | Add the directory printed by the installer, usually `~/.local/bin`, to `PATH`. |
 | The installer reports an unsupported platform | No binary is published for that OS or CPU yet. | Use a supported Linux or macOS aarch64 machine, or install from source with Cargo. |
 | `registryctl start` cannot find Docker | Docker or another Compose provider is not installed or running. | Start Docker Desktop, OrbStack, Colima, Podman, or your supported provider, then run `registryctl start` again. |
-| `registryctl start` fails and the container log shows `failed to parse config YAML ... unknown field` | A locally cached `snapshot` container image is older or newer than the config `registryctl` generates. | Run `docker pull ghcr.io/jeremi/registry-relay:snapshot` (and `docker pull ghcr.io/jeremi/registry-notary:snapshot` if Notary is in the project), then `registryctl start` again. |
+| `registryctl start` fails and the container log shows `failed to parse config YAML ... unknown field` | The locally cached container image does not match the digest-pinned image in the generated `compose.yaml`. | Run `docker compose pull` in the project directory to refresh the pinned images, or re-run `registryctl init relay` to regenerate the compose file, then `registryctl start` again. |
 | A row read returns `403 Forbidden` | The key is valid but lacks the row-read scope. | Use `ROW_READER_RAW` for row reads. |
 | A row read returns `400 auth.purpose_required` | The entity requires a `Data-Purpose` header. | Send `Data-Purpose: https://example.local/purpose/tutorial` or another purpose URI. |
 | A collection row read returns a filter error | The entity requires at least one configured filter. | Add a filter such as `household_id=hh-1001`. |

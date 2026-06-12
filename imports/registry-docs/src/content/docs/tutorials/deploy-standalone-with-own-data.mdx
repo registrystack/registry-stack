@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-relay
   - registry-notary
-last_reviewed: "2026-06-11"
+last_reviewed: "2026-06-12"
 doc_type: how-to
 locale: en
 standards_referenced:
@@ -40,7 +40,6 @@ You will need:
   can run the Registry Relay binary.
 - Your registry data as a CSV, XLSX, or Parquet file, with a stable primary-key column.
 - `curl` for verification.
-- `openssl` for generating an API-key fingerprint.
 
 This guide uses synthetic placeholders.
 Replace every `example.gov` value, dataset id, field name, and credential with your own.
@@ -223,25 +222,35 @@ For each `api_keys` entry you supply two things at runtime:
 2. The `fingerprint.commitment` field in the YAML, a governed commitment over the product,
    credential type, credential id, and fingerprint.
 
-Generate a raw key and its fingerprint without printing the raw key (from the configuration
-guide):
+The Relay binary generates all of these together.
+Run it through the same container image, passing the `id` from your `api_keys` entry:
 
 ```sh
-RAW_KEY="$(openssl rand -base64 32)"
-printf 'sha256:%s\n' "$(printf '%s' "$RAW_KEY" | openssl dgst -sha256 -r | awk '{print $1}')"
+docker run --rm ghcr.io/jeremi/registry-relay:vX.Y.Z generate-api-key --id program_system
 ```
 
-Store the resulting `sha256:...` fingerprint in your secret store under the configured
-`fingerprint.name`, and give `$RAW_KEY` only to the authorized client.
+The command emits four shell-friendly lines:
 
-The `commitment` field is shown as an all-zero placeholder in the example.
-There is no tooling to generate the governed commitment yet; it must currently be produced out of
-band, and the gap is tracked in
-[registry-relay#80](https://github.com/jeremi/registry-relay/issues/80).
-Keep the placeholder pattern from the
-[API keys section](https://github.com/jeremi/registry-relay/blob/main/docs/configuration.md#api-keys)
-of the configuration guide and follow that reference for the commitment value your deployment
-requires.
+```text
+api_key_id=program_system
+api_key=<send-this-raw-key-to-the-client>
+fingerprint=sha256:<store-this-in-the-secret-store>
+commitment=sha256:<paste-this-into-config>
+```
+
+Use the values as follows:
+
+- Store the emitted `fingerprint` in your secret store under the configured `fingerprint.name`
+  (here `PROGRAM_SYSTEM_API_KEY_HASH`).
+- Replace the all-zero `commitment` placeholder in the YAML with the emitted `commitment`.
+- Give the raw `api_key` only to the authorized client. Relay never stores it.
+
+The commitment binds the key's fingerprint to the product, the credential type, and the
+credential id, so the `--id` you pass must match the `api_keys` entry's `id` exactly.
+If you later rotate the key or rename the entry, rerun the command and update both the secret
+and the YAML commitment together.
+The [API keys section](https://github.com/jeremi/registry-relay/blob/main/docs/configuration.md#api-keys)
+of the configuration guide documents the underlying contract.
 
 ## Run the container
 
