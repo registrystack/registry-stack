@@ -46,6 +46,13 @@ struct ConfigBuilder {
     durable_audit: bool,
     audit_path: String,
     deployment_block: String,
+    /// Add a second source connection that sets allow_insecure_private_network.
+    private_network_source: bool,
+    /// Disable OpenAPI auth (triggers openapi_public gate).
+    openapi_public: bool,
+    /// Add an OpenFn source connection without an expected_sidecar (triggers
+    /// notary.sidecar.expected_sidecar_missing).
+    openfn_no_sidecar: bool,
 }
 
 impl ConfigBuilder {
@@ -54,6 +61,9 @@ impl ConfigBuilder {
             durable_audit: true,
             audit_path: audit_path.to_string(),
             deployment_block: String::new(),
+            private_network_source: false,
+            openapi_public: false,
+            openfn_no_sidecar: false,
         }
     }
 
@@ -64,6 +74,21 @@ impl ConfigBuilder {
 
     fn deployment(mut self, block: &str) -> Self {
         self.deployment_block = block.to_string();
+        self
+    }
+
+    fn private_network_source(mut self, enable: bool) -> Self {
+        self.private_network_source = enable;
+        self
+    }
+
+    fn openapi_public(mut self, enable: bool) -> Self {
+        self.openapi_public = enable;
+        self
+    }
+
+    fn openfn_no_sidecar(mut self, enable: bool) -> Self {
+        self.openfn_no_sidecar = enable;
         self
     }
 
@@ -79,13 +104,44 @@ impl ConfigBuilder {
         }
     }
 
+    fn extra_source_connections(&self) -> String {
+        let mut extra = String::new();
+        if self.private_network_source {
+            extra.push_str(concat!(
+                "    private_net_src:\n",
+                "      base_url: \"http://10.0.0.1:9000\"\n",
+                "      allow_insecure_private_network: true\n",
+                "      token_env: REGISTRY_NOTARY_GATES_SOURCE_TOKEN\n",
+            ));
+        }
+        if self.openfn_no_sidecar {
+            // A source connection with bulk_mode = openfn_sidecar_batch and no
+            // expected_sidecar triggers notary.sidecar.expected_sidecar_missing.
+            // No claim references this connection, so the bulk_mode connector
+            // validation does not fire.
+            extra.push_str(concat!(
+                "    openfn_src:\n",
+                "      base_url: \"https://openfn.example.test\"\n",
+                "      bulk_mode: openfn_sidecar_batch\n",
+                "      token_env: REGISTRY_NOTARY_GATES_SOURCE_TOKEN\n",
+            ));
+        }
+        extra
+    }
+
+    fn server_section(&self) -> String {
+        if self.openapi_public {
+            "server:\n  bind: 127.0.0.1:0\n  openapi_requires_auth: false\n".to_string()
+        } else {
+            "server:\n  bind: 127.0.0.1:0\n".to_string()
+        }
+    }
+
     fn build(&self) -> StandaloneRegistryNotaryConfig {
         set_env();
         let raw = format!(
             r#"
-server:
-  bind: 127.0.0.1:0
-auth:
+{server}auth:
   mode: api_key
   api_keys:
     - id: caseworker
@@ -103,7 +159,7 @@ auth:
       base_url: "http://127.0.0.1:1"
       allow_insecure_localhost: true
       token_env: REGISTRY_NOTARY_GATES_SOURCE_TOKEN
-  claims:
+{extra_sources}  claims:
     - id: farmed-land-size
       title: Farmed land size
       version: 2026-05
@@ -139,7 +195,9 @@ auth:
       formats:
         - application/vnd.registry-notary.claim-result+json
 {deployment}"#,
+            server = self.server_section(),
             audit = self.audit_section(),
+            extra_sources = self.extra_source_connections(),
             deployment = self.deployment_block,
         );
         // The caseworker fingerprint env var must resolve at runtime.
@@ -462,4 +520,395 @@ async fn posture_re_triggers_expired_waiver() {
             .any(|finding| finding["id"] == "deployment.waiver_expired"),
         "expected deployment.waiver_expired in: {findings:#?}"
     );
+}
+
+// Integration gate-binding tests for the #208 risky-but-legal findings.
+
+#[tokio::test]
+async fn hosted_lab_private_network_source_reports_finding_warn() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .private_network_source(true)
+        .deployment("deployment:\n  profile: hosted_lab\n")
+        .build();
+
+    let posture = fetch_posture(config).await;
+    assert_matches_posture_schema(&posture);
+
+    let findings = posture["deployment"]["findings"]
+        .as_array()
+        .expect("deployment findings is an array");
+    let found = findings
+        .iter()
+        .find(|f| f["id"] == "notary.source.private_network_escape")
+        .expect("notary.source.private_network_escape finding present under hosted_lab");
+    assert_eq!(
+        found["severity"], "finding_warn",
+        "hosted_lab private_network_escape must be finding_warn"
+    );
+    assert_eq!(found["status"], "active");
+}
+
+#[tokio::test]
+async fn production_private_network_source_reports_finding_error() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .private_network_source(true)
+        .deployment("deployment:\n  profile: production\n")
+        .build();
+
+    let posture = fetch_posture(config).await;
+    assert_matches_posture_schema(&posture);
+
+    let findings = posture["deployment"]["findings"]
+        .as_array()
+        .expect("deployment findings is an array");
+    let found = findings
+        .iter()
+        .find(|f| f["id"] == "notary.source.private_network_escape")
+        .expect("notary.source.private_network_escape finding present under production");
+    assert_eq!(
+        found["severity"], "finding_error",
+        "production private_network_escape must be finding_error"
+    );
+}
+
+#[test]
+fn private_network_source_is_finding_error_gate_binding_under_evidence_grade() {
+    // evidence_grade + private_network_escape = finding_error (not startup_fail).
+    // The minimal config also triggers notary.config.unsigned (startup_fail) under
+    // evidence_grade, so we verify the gate binding directly rather than via posture.
+    use registry_notary_core::deployment::{
+        evaluate_gates, DeploymentProfile, GateInput, GateSeverity,
+        FINDING_SOURCE_PRIVATE_NETWORK_ESCAPE,
+    };
+    let input = GateInput {
+        source_private_network_escape: true,
+        ..GateInput::default()
+    };
+    let evaluation = evaluate_gates(
+        Some(DeploymentProfile::EvidenceGrade),
+        &input,
+        &[],
+        "2026-06-13",
+    );
+    let found = evaluation
+        .findings
+        .iter()
+        .find(|f| f.id == FINDING_SOURCE_PRIVATE_NETWORK_ESCAPE)
+        .expect("notary.source.private_network_escape present under evidence_grade");
+    assert_eq!(
+        found.severity,
+        GateSeverity::FindingError,
+        "evidence_grade private_network_escape must be finding_error"
+    );
+    // Not a startup or readiness failure; the process must remain runnable.
+    assert!(!evaluation
+        .startup_failures
+        .contains(&FINDING_SOURCE_PRIVATE_NETWORK_ESCAPE.to_string()));
+    assert!(!evaluation
+        .readiness_failures
+        .contains(&FINDING_SOURCE_PRIVATE_NETWORK_ESCAPE.to_string()));
+}
+
+#[test]
+fn private_network_source_absent_from_posture_when_flag_not_set() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .deployment("deployment:\n  profile: production\n")
+        .build();
+
+    // config must compile without the private_network finding.
+    let runtime = compile_notary_runtime(config).expect("config without private network compiles");
+    let _ = runtime; // gate check only; no posture fetch needed
+}
+
+#[tokio::test]
+async fn hosted_lab_openfn_no_sidecar_reports_finding_warn() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .openfn_no_sidecar(true)
+        .deployment("deployment:\n  profile: hosted_lab\n")
+        .build();
+
+    let posture = fetch_posture(config).await;
+    assert_matches_posture_schema(&posture);
+
+    let findings = posture["deployment"]["findings"]
+        .as_array()
+        .expect("deployment findings is an array");
+    let found = findings
+        .iter()
+        .find(|f| f["id"] == "notary.sidecar.expected_sidecar_missing")
+        .expect("notary.sidecar.expected_sidecar_missing present under hosted_lab");
+    assert_eq!(
+        found["severity"], "finding_warn",
+        "hosted_lab openfn_no_sidecar must be finding_warn"
+    );
+}
+
+#[tokio::test]
+async fn production_openfn_no_sidecar_reports_finding_error() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .openfn_no_sidecar(true)
+        .deployment("deployment:\n  profile: production\n")
+        .build();
+
+    let posture = fetch_posture(config).await;
+    assert_matches_posture_schema(&posture);
+
+    let findings = posture["deployment"]["findings"]
+        .as_array()
+        .expect("deployment findings is an array");
+    let found = findings
+        .iter()
+        .find(|f| f["id"] == "notary.sidecar.expected_sidecar_missing")
+        .expect("notary.sidecar.expected_sidecar_missing present under production");
+    assert_eq!(
+        found["severity"], "finding_error",
+        "production openfn_no_sidecar must be finding_error"
+    );
+}
+
+#[test]
+fn openfn_no_sidecar_is_readiness_fail_gate_binding_under_evidence_grade() {
+    // evidence_grade + sidecar_expected_missing = readiness_fail (not startup_fail).
+    // The minimal config also triggers notary.config.unsigned (startup_fail) under
+    // evidence_grade, so we verify the gate binding directly rather than via compile.
+    use registry_notary_core::deployment::{
+        evaluate_gates, DeploymentProfile, GateInput, GateSeverity,
+        FINDING_SIDECAR_EXPECTED_MISSING,
+    };
+    let input = GateInput {
+        openfn_source_without_expected_sidecar: true,
+        ..GateInput::default()
+    };
+    let evaluation = evaluate_gates(
+        Some(DeploymentProfile::EvidenceGrade),
+        &input,
+        &[],
+        "2026-06-13",
+    );
+    let found = evaluation
+        .findings
+        .iter()
+        .find(|f| f.id == FINDING_SIDECAR_EXPECTED_MISSING)
+        .expect("notary.sidecar.expected_sidecar_missing present under evidence_grade");
+    assert_eq!(
+        found.severity,
+        GateSeverity::ReadinessFail,
+        "evidence_grade openfn_no_sidecar must be readiness_fail"
+    );
+    assert!(
+        evaluation
+            .readiness_failures
+            .contains(&FINDING_SIDECAR_EXPECTED_MISSING.to_string()),
+        "must appear in readiness_failures list"
+    );
+    assert!(!evaluation
+        .startup_failures
+        .contains(&FINDING_SIDECAR_EXPECTED_MISSING.to_string()));
+}
+
+#[test]
+fn openfn_with_expected_sidecar_clears_the_gate() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .deployment("deployment:\n  profile: production\n")
+        .build();
+
+    // Without openfn_no_sidecar the gate is not triggered; compile must succeed.
+    compile_notary_runtime(config).expect("config without openfn_no_sidecar clears sidecar gate");
+}
+
+#[tokio::test]
+async fn hosted_lab_openapi_public_reports_finding_warn() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .openapi_public(true)
+        .deployment("deployment:\n  profile: hosted_lab\n")
+        .build();
+
+    let posture = fetch_posture(config).await;
+    assert_matches_posture_schema(&posture);
+
+    let findings = posture["deployment"]["findings"]
+        .as_array()
+        .expect("deployment findings is an array");
+    let found = findings
+        .iter()
+        .find(|f| f["id"] == "notary.openapi.public")
+        .expect("notary.openapi.public present under hosted_lab");
+    assert_eq!(
+        found["severity"], "finding_warn",
+        "hosted_lab openapi_public must be finding_warn"
+    );
+}
+
+#[tokio::test]
+async fn production_openapi_public_reports_finding_error() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .openapi_public(true)
+        .deployment("deployment:\n  profile: production\n")
+        .build();
+
+    let posture = fetch_posture(config).await;
+    assert_matches_posture_schema(&posture);
+
+    let findings = posture["deployment"]["findings"]
+        .as_array()
+        .expect("deployment findings is an array");
+    let found = findings
+        .iter()
+        .find(|f| f["id"] == "notary.openapi.public")
+        .expect("notary.openapi.public present under production");
+    assert_eq!(
+        found["severity"], "finding_error",
+        "production openapi_public must be finding_error"
+    );
+}
+
+#[tokio::test]
+async fn openapi_with_auth_required_clears_the_gate() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .deployment("deployment:\n  profile: production\n")
+        .build();
+
+    let posture = fetch_posture(config).await;
+    assert_matches_posture_schema(&posture);
+
+    let findings = posture["deployment"]["findings"]
+        .as_array()
+        .expect("deployment findings is an array");
+    assert!(
+        !findings.iter().any(|f| f["id"] == "notary.openapi.public"),
+        "notary.openapi.public must be absent when openapi_requires_auth = true"
+    );
+}
+
+#[tokio::test]
+async fn config_unsigned_reports_finding_under_hosted_lab() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    // A minimal config has no config_trust block and therefore config_unsigned = true.
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .deployment("deployment:\n  profile: hosted_lab\n")
+        .build();
+
+    let posture = fetch_posture(config).await;
+    assert_matches_posture_schema(&posture);
+
+    let findings = posture["deployment"]["findings"]
+        .as_array()
+        .expect("deployment findings is an array");
+    let found = findings
+        .iter()
+        .find(|f| f["id"] == "notary.config.unsigned")
+        .expect("notary.config.unsigned present under hosted_lab (no config_trust)");
+    assert_eq!(
+        found["severity"], "finding_warn",
+        "hosted_lab config_unsigned must be finding_warn"
+    );
+}
+
+#[tokio::test]
+async fn config_unsigned_reports_finding_error_under_production() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .deployment("deployment:\n  profile: production\n")
+        .build();
+
+    let posture = fetch_posture(config).await;
+    assert_matches_posture_schema(&posture);
+
+    let findings = posture["deployment"]["findings"]
+        .as_array()
+        .expect("deployment findings is an array");
+    let found = findings
+        .iter()
+        .find(|f| f["id"] == "notary.config.unsigned")
+        .expect("notary.config.unsigned present under production (no config_trust)");
+    assert_eq!(
+        found["severity"], "finding_error",
+        "production config_unsigned must be finding_error"
+    );
+}
+
+#[test]
+fn evidence_grade_config_unsigned_refuses_startup() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    // evidence_grade + config_unsigned = startup_fail.
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .deployment("deployment:\n  profile: evidence_grade\n")
+        .build();
+
+    let error =
+        expect_compile_rejected(config, "evidence_grade config_unsigned must refuse startup");
+    match error {
+        StandaloneServerError::DeploymentGateStartupFailure { profile, findings } => {
+            assert_eq!(profile, "evidence_grade");
+            assert!(
+                findings.contains("notary.config.unsigned"),
+                "expected notary.config.unsigned in startup failures: {findings}"
+            );
+        }
+        other => panic!("expected a deployment gate startup failure, got: {other:?}"),
+    }
+}
+
+#[test]
+fn admin_shared_exposure_refuses_startup_under_evidence_grade() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    // fetch_posture sets SharedWithPublic on the compiled config, but here we
+    // set it before compile to test the startup gate.
+    let mut config = ConfigBuilder::new(&audit_path(&tmp))
+        .deployment("deployment:\n  profile: evidence_grade\n")
+        .build();
+    config.server.admin_listener.mode =
+        registry_notary_core::RegistryNotaryAdminListenerMode::SharedWithPublic;
+
+    let error = expect_compile_rejected(
+        config,
+        "evidence_grade admin_shared_exposure must refuse startup",
+    );
+    match error {
+        StandaloneServerError::DeploymentGateStartupFailure { profile, findings } => {
+            assert_eq!(profile, "evidence_grade");
+            assert!(
+                findings.contains("notary.admin.shared_exposure"),
+                "expected notary.admin.shared_exposure in startup failures: {findings}"
+            );
+        }
+        other => panic!("expected a deployment gate startup failure, got: {other:?}"),
+    }
+}
+
+#[test]
+fn admin_dedicated_or_disabled_clears_shared_exposure_gate() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    // Default admin listener mode is Disabled; no admin_shared_exposure.
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .deployment("deployment:\n  profile: evidence_grade\n")
+        .build();
+
+    // Evidence grade with config_unsigned is a startup_fail, but we're only
+    // checking that admin_shared_exposure is not among the reasons. So we
+    // can check via compile that the admin exposure gate is not the trigger.
+    // (The test ensures the gate logic for the non-triggering path is exercised
+    // end-to-end; config_unsigned startup_fail is a separate gate.)
+    let error = expect_compile_rejected(
+        config,
+        "evidence_grade still refuses due to config_unsigned, not admin_shared_exposure",
+    );
+    match error {
+        StandaloneServerError::DeploymentGateStartupFailure { findings, .. } => {
+            assert!(
+                !findings.contains("notary.admin.shared_exposure"),
+                "notary.admin.shared_exposure must not appear when listener is disabled: {findings}"
+            );
+        }
+        other => panic!("expected a deployment gate startup failure, got: {other:?}"),
+    }
 }

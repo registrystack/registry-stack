@@ -165,6 +165,12 @@ block.
 | `checkpoints` | `unsupported` | Periodic signed checkpoints over the audit chain are not produced by this build. |
 | `anchoring` | `none` | Audit state is not anchored to an external transparency log or ledger. |
 
+Note: a running notary always reports `keyed_integrity = hmac` and
+`write_policy = fail_closed_route_families` because startup refuses any
+configuration that omits the `hash_secret_env` HMAC key; the `hmac` and
+`none` rows in the table reflect the vocabulary, not states a live process can
+reach.
+
 Keyed integrity is the pivot. Supplying an HMAC key through the audit
 `hash_secret_env` setting moves `keyed_integrity` to `hmac`, `hash_chain` to
 `process_local`, and `write_policy` to `fail_closed_route_families` together,

@@ -5359,6 +5359,157 @@ token_env: SRC_TOKEN
     }
 
     #[test]
+    fn gate_input_reports_source_private_network_escape() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "src".to_string(),
+            serde_norway::from_str(
+                r#"
+base_url: http://10.0.0.1:9000
+allow_insecure_private_network: true
+token_env: SRC_TOKEN
+"#,
+            )
+            .expect("source connection parses"),
+        );
+        assert!(config.gate_input().source_private_network_escape);
+    }
+
+    #[test]
+    fn gate_input_clears_source_private_network_escape_without_flag() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "src".to_string(),
+            serde_norway::from_str(
+                r#"
+base_url: https://upstream.example
+token_env: SRC_TOKEN
+"#,
+            )
+            .expect("source connection parses"),
+        );
+        assert!(!config.gate_input().source_private_network_escape);
+    }
+
+    #[test]
+    fn gate_input_reports_openfn_source_without_expected_sidecar() {
+        let mut config = minimal_config();
+        // Insert a source connection with bulk_mode = openfn_sidecar_batch and
+        // no expected_sidecar. We call gate_input() directly without validate()
+        // because this projection test only checks the GateInput field.
+        let mut conn: SourceConnectionConfig = serde_norway::from_str(
+            r#"
+base_url: https://openfn.example
+token_env: SRC_TOKEN
+"#,
+        )
+        .expect("source connection parses");
+        conn.bulk_mode = BulkMode::OpenFnSidecarBatch;
+        // expected_sidecar remains None by default.
+        config
+            .evidence
+            .source_connections
+            .insert("openfn-src".to_string(), conn);
+        assert!(config.gate_input().openfn_source_without_expected_sidecar);
+    }
+
+    #[test]
+    fn gate_input_clears_openfn_source_with_expected_sidecar() {
+        let mut config = minimal_config();
+        let mut conn: SourceConnectionConfig = serde_norway::from_str(
+            r#"
+base_url: https://openfn.example
+token_env: SRC_TOKEN
+expected_sidecar:
+  product: openfn-notary-bridge
+  instance_id: bridge-1
+  environment: lab
+  stream_id: stream-a
+  config_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+"#,
+        )
+        .expect("source connection with expected_sidecar parses");
+        conn.bulk_mode = BulkMode::OpenFnSidecarBatch;
+        config
+            .evidence
+            .source_connections
+            .insert("openfn-src".to_string(), conn);
+        assert!(!config.gate_input().openfn_source_without_expected_sidecar);
+    }
+
+    #[test]
+    fn gate_input_reports_admin_shared_exposure() {
+        let mut config = minimal_config();
+        config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
+        assert!(config.gate_input().admin_shared_exposure);
+    }
+
+    #[test]
+    fn gate_input_clears_admin_shared_exposure_when_listener_disabled() {
+        let config = minimal_config();
+        // Default admin listener mode is Disabled; shared exposure must be false.
+        assert!(!config.gate_input().admin_shared_exposure);
+    }
+
+    #[test]
+    fn gate_input_reports_openapi_public() {
+        let mut config = minimal_config();
+        config.server.openapi_requires_auth = false;
+        assert!(config.gate_input().openapi_public);
+    }
+
+    #[test]
+    fn gate_input_clears_openapi_public_when_auth_required() {
+        let config = minimal_config();
+        // Default requires auth; openapi_public must be false.
+        assert!(!config.gate_input().openapi_public);
+    }
+
+    #[test]
+    fn gate_input_clears_config_unsigned_when_trust_configured() {
+        let mut config = minimal_config();
+        // Setting config_trust to Some makes config_unsigned false. We set the
+        // admin listener to dedicated because validate() requires it; this test
+        // only calls gate_input(), which is pure projection and does not validate.
+        config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::Dedicated;
+        config.config_trust = Some(ConfigTrustConfig {
+            antirollback_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-antirollback.json",
+            ),
+            local_approval_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-local-approvals.json",
+            ),
+            break_glass_rate_limit: default_break_glass_rate_limit(),
+            accepted_roots: Vec::new(),
+            remote_tuf_repositories: Vec::new(),
+        });
+        assert!(!config.gate_input().config_unsigned);
+    }
+
+    #[test]
+    fn gate_input_reports_config_unsigned_without_trust() {
+        let config = minimal_config();
+        // Minimal config has no config_trust block; must project as unsigned.
+        assert!(config.gate_input().config_unsigned);
+    }
+
+    #[test]
+    fn gate_input_reports_insecure_source_url_non_triggering_with_https() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "src".to_string(),
+            serde_norway::from_str(
+                r#"
+base_url: https://upstream.example
+token_env: SRC_TOKEN
+"#,
+            )
+            .expect("source connection parses"),
+        );
+        assert!(!config.gate_input().source_insecure_url);
+    }
+
+    #[test]
     fn deployment_block_round_trips_through_yaml() {
         let mut config = minimal_config();
         config.deployment = serde_norway::from_str(

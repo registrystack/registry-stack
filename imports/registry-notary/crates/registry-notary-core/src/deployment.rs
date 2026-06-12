@@ -690,6 +690,204 @@ mod tests {
         assert!(evaluation.findings.is_empty());
     }
 
+    // Gate-binding tests for the #208 risky-but-legal findings.
+    //
+    // Each case pairs a triggering GateInput with the expected severity per
+    // profile, and a non-triggering GateInput that must produce no finding.
+    // All three bound profiles (hosted_lab, production, evidence_grade) are
+    // checked; local is skipped because it binds no gates.
+
+    struct GateCase {
+        id: &'static str,
+        triggering: GateInput,
+        non_triggering: GateInput,
+        hosted_lab: GateSeverity,
+        production: GateSeverity,
+        evidence_grade: GateSeverity,
+    }
+
+    fn gate_cases() -> Vec<GateCase> {
+        vec![
+            GateCase {
+                id: FINDING_SOURCE_INSECURE_URL,
+                triggering: GateInput {
+                    source_insecure_url: true,
+                    ..GateInput::default()
+                },
+                non_triggering: GateInput {
+                    source_insecure_url: false,
+                    ..GateInput::default()
+                },
+                hosted_lab: GateSeverity::FindingError,
+                production: GateSeverity::ReadinessFail,
+                evidence_grade: GateSeverity::StartupFail,
+            },
+            GateCase {
+                id: FINDING_SOURCE_PRIVATE_NETWORK_ESCAPE,
+                triggering: GateInput {
+                    source_private_network_escape: true,
+                    ..GateInput::default()
+                },
+                non_triggering: GateInput {
+                    source_private_network_escape: false,
+                    ..GateInput::default()
+                },
+                hosted_lab: GateSeverity::FindingWarn,
+                production: GateSeverity::FindingError,
+                evidence_grade: GateSeverity::FindingError,
+            },
+            GateCase {
+                id: FINDING_SIDECAR_EXPECTED_MISSING,
+                triggering: GateInput {
+                    openfn_source_without_expected_sidecar: true,
+                    ..GateInput::default()
+                },
+                non_triggering: GateInput {
+                    openfn_source_without_expected_sidecar: false,
+                    ..GateInput::default()
+                },
+                hosted_lab: GateSeverity::FindingWarn,
+                production: GateSeverity::FindingError,
+                evidence_grade: GateSeverity::ReadinessFail,
+            },
+            GateCase {
+                id: FINDING_ADMIN_SHARED_EXPOSURE,
+                triggering: GateInput {
+                    admin_shared_exposure: true,
+                    ..GateInput::default()
+                },
+                non_triggering: GateInput {
+                    admin_shared_exposure: false,
+                    ..GateInput::default()
+                },
+                hosted_lab: GateSeverity::FindingError,
+                production: GateSeverity::ReadinessFail,
+                evidence_grade: GateSeverity::StartupFail,
+            },
+            GateCase {
+                id: FINDING_OPENAPI_PUBLIC,
+                triggering: GateInput {
+                    openapi_public: true,
+                    ..GateInput::default()
+                },
+                non_triggering: GateInput {
+                    openapi_public: false,
+                    ..GateInput::default()
+                },
+                hosted_lab: GateSeverity::FindingWarn,
+                production: GateSeverity::FindingError,
+                evidence_grade: GateSeverity::FindingError,
+            },
+            GateCase {
+                id: FINDING_CONFIG_UNSIGNED,
+                triggering: GateInput {
+                    config_unsigned: true,
+                    ..GateInput::default()
+                },
+                non_triggering: GateInput {
+                    config_unsigned: false,
+                    ..GateInput::default()
+                },
+                hosted_lab: GateSeverity::FindingWarn,
+                production: GateSeverity::FindingError,
+                evidence_grade: GateSeverity::StartupFail,
+            },
+        ]
+    }
+
+    #[test]
+    fn risky_default_findings_bind_correct_severity_per_profile() {
+        for case in gate_cases() {
+            for (profile, expected_severity) in [
+                (DeploymentProfile::HostedLab, case.hosted_lab),
+                (DeploymentProfile::Production, case.production),
+                (DeploymentProfile::EvidenceGrade, case.evidence_grade),
+            ] {
+                let evaluation = evaluate_gates(Some(profile), &case.triggering, &[], "2026-06-13");
+
+                // For startup_fail findings the finding also lands in
+                // startup_failures; for readiness_fail it lands in
+                // readiness_failures. Both paths still push into findings.
+                let found = evaluation
+                    .findings
+                    .iter()
+                    .find(|f| f.id == case.id)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "expected finding '{}' under profile '{}' (triggering input)",
+                            case.id,
+                            profile.as_str()
+                        )
+                    });
+                assert_eq!(
+                    found.severity,
+                    expected_severity,
+                    "finding '{}' under profile '{}': expected severity {:?}, got {:?}",
+                    case.id,
+                    profile.as_str(),
+                    expected_severity,
+                    found.severity
+                );
+
+                // startup_fail and readiness_fail findings must also appear
+                // in their respective hard-gate lists.
+                match expected_severity {
+                    GateSeverity::StartupFail => {
+                        assert!(
+                            evaluation.startup_failures.contains(&case.id.to_string()),
+                            "finding '{}' under profile '{}' must be in startup_failures",
+                            case.id,
+                            profile.as_str()
+                        );
+                    }
+                    GateSeverity::ReadinessFail => {
+                        assert!(
+                            evaluation.readiness_failures.contains(&case.id.to_string()),
+                            "finding '{}' under profile '{}' must be in readiness_failures",
+                            case.id,
+                            profile.as_str()
+                        );
+                    }
+                    GateSeverity::FindingError | GateSeverity::FindingWarn => {}
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn risky_default_findings_absent_when_condition_not_met() {
+        for case in gate_cases() {
+            for profile in [
+                DeploymentProfile::HostedLab,
+                DeploymentProfile::Production,
+                DeploymentProfile::EvidenceGrade,
+            ] {
+                let evaluation =
+                    evaluate_gates(Some(profile), &case.non_triggering, &[], "2026-06-13");
+
+                // The non-triggering input must not produce the finding.
+                assert!(
+                    !evaluation.findings.iter().any(|f| f.id == case.id),
+                    "finding '{}' must be absent under profile '{}' with non-triggering input",
+                    case.id,
+                    profile.as_str()
+                );
+                assert!(
+                    !evaluation.startup_failures.contains(&case.id.to_string()),
+                    "finding '{}' must not be in startup_failures under profile '{}' (non-triggering)",
+                    case.id,
+                    profile.as_str()
+                );
+                assert!(
+                    !evaluation.readiness_failures.contains(&case.id.to_string()),
+                    "finding '{}' must not be in readiness_failures under profile '{}' (non-triggering)",
+                    case.id,
+                    profile.as_str()
+                );
+            }
+        }
+    }
+
     #[test]
     fn invalid_profile_string_fails_deserialization() {
         let result: Result<DeploymentConfig, _> = serde_json::from_str(r#"{ "profile": "prod" }"#);
