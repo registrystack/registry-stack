@@ -162,9 +162,9 @@ def main() -> int:
     failures.extend(
         require(
             binary_release_text,
-            'CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS: ""',
+            'RUSTFLAGS: ""',
             binary_release,
-            "macOS build must neutralize the local-dev ld64.lld override from .cargo/config.toml",
+            "macOS build must neutralize the local-dev ld64.lld override with a set-but-empty RUSTFLAGS",
         )
     )
 
