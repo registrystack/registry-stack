@@ -21,8 +21,9 @@ use registry_notary_core::FEDERATION_RESPONSE_JWT_TYP;
 use registry_notary_core::{
     BulkMode, ConfigTrustConfig, ConfigTrustRateLimit, EvidenceAuthMode, EvidenceCredentialConfig,
     EvidenceOidcAuthConfig, Oid4vciConfig, RegistryNotaryAdminListenerMode,
-    SelfAttestationClaimSource, SigningKeyConfig, SigningKeyProviderConfig, SigningKeyStatus,
-    StandaloneRegistryNotaryConfig, SD_JWT_VC_SIGNING_ALG,
+    RemoteTufRepositoryConfig, SelfAttestationClaimSource, SigningKeyConfig,
+    SigningKeyProviderConfig, SigningKeyStatus, StandaloneRegistryNotaryConfig,
+    SD_JWT_VC_SIGNING_ALG,
 };
 #[cfg(feature = "registry-notary-cel")]
 use registry_notary_server::cel_worker::{CelWorker, CelWorkerConfig};
@@ -307,18 +308,6 @@ fn remote_signed_tuf_apply_request(signed: &SignedConfigFixture, server: &MockSe
     })
 }
 
-async fn serve_signed_tuf_fixture(signed: &SignedConfigFixture) -> MockServer {
-    let server = MockServer::start().await;
-    mount_directory_files(&server, "/metadata", &signed.metadata_dir).await;
-    mount_directory_files(&server, "/targets", &signed.targets_dir).await;
-    Mock::given(method("GET"))
-        .and(path("/metadata/2.root.json"))
-        .respond_with(ResponseTemplate::new(404))
-        .mount(&server)
-        .await;
-    server
-}
-
 async fn mount_directory_files(server: &MockServer, url_prefix: &str, dir: &std::path::Path) {
     for entry in std::fs::read_dir(dir).expect("directory reads") {
         let entry = entry.expect("directory entry reads");
@@ -561,6 +550,7 @@ fn add_config_trust_with_local_approval_path(
                 ]),
             }],
         }],
+        remote_tuf_repositories: Vec::new(),
     });
 }
 
@@ -4700,7 +4690,30 @@ async fn admin_config_apply_remote_signed_credential_issuer_rotation_swaps_witho
         .expect("person-is-alive claim exists")
         .formats
         .push("application/dc+sd-jwt".to_string());
+    // Start the TUF server and pre-compute fixture paths before the config hash
+    // is locked so the remote_tuf_repositories allowlist entry can be included
+    // in the initial config serialization.
+    let tuf_server = MockServer::start().await;
+    // The signed fixture for sequence 2 always lands in this deterministic path.
+    let fixture_sequence: u64 = 2;
+    let fixture_repo_dir = tmp
+        .path()
+        .join(format!("signed-notary-config-{fixture_sequence}"));
+    let fixture_root_path = fixture_repo_dir.join("metadata").join("1.root.json");
+    let fixture_datastore_dir = fixture_repo_dir.join("datastore");
     add_config_trust(&mut config, antirollback_path.clone());
+    config
+        .config_trust
+        .as_mut()
+        .expect("config_trust is set")
+        .remote_tuf_repositories
+        .push(RemoteTufRepositoryConfig {
+            root_path: fixture_root_path,
+            metadata_base_url: format!("{}/metadata", tuf_server.uri()),
+            targets_base_url: format!("{}/targets", tuf_server.uri()),
+            datastore_dir: fixture_datastore_dir,
+            allow_dev_insecure_fetch_urls: true,
+        });
     let current_config_yaml = serde_norway::to_string(&config).expect("current config serializes");
     initialize_notary_antirollback_state(&antirollback_path, &current_config_yaml, 1);
     let current_config_hash = internal_config_hash(current_config_yaml.as_bytes());
@@ -4718,13 +4731,20 @@ async fn admin_config_apply_remote_signed_credential_issuer_rotation_swaps_witho
         &tmp,
         &current_config_hash,
         &candidate_yaml,
-        2,
+        fixture_sequence,
         "registry-notary-standalone",
         &["kid-a", "kid-b"],
         &["signing_key_rotation"],
     )
     .await;
-    let tuf_server = serve_signed_tuf_fixture(&signed).await;
+    // Mount the signed fixture files on the already-running server.
+    mount_directory_files(&tuf_server, "/metadata", &signed.metadata_dir).await;
+    mount_directory_files(&tuf_server, "/targets", &signed.targets_dir).await;
+    Mock::given(method("GET"))
+        .and(path("/metadata/2.root.json"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&tuf_server)
+        .await;
 
     let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
@@ -6291,6 +6311,7 @@ async fn governed_config_rejects_shared_admin_listener_topology() {
             window_seconds: 3600,
         },
         accepted_roots: Vec::new(),
+        remote_tuf_repositories: Vec::new(),
     });
 
     let error = match compile_notary_runtime(config) {

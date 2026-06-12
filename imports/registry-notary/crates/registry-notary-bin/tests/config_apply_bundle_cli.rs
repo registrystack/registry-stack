@@ -351,16 +351,30 @@ async fn write_signed_root_transition_fixture(
     }
 }
 
-async fn serve_signed_tuf_fixture(signed: &SignedConfigFixture) -> MockServer {
-    let server = MockServer::start().await;
-    mount_directory_files(&server, "/metadata", &signed.metadata_dir).await;
-    mount_directory_files(&server, "/targets", &signed.targets_dir).await;
-    Mock::given(method("GET"))
-        .and(path("/metadata/2.root.json"))
-        .respond_with(ResponseTemplate::new(404))
-        .mount(&server)
-        .await;
-    server
+/// Inject a `config_trust.remote_tuf_repositories` entry into a YAML config
+/// string, returning the updated YAML.
+///
+/// The `signed` paths and `server` URI are used to build the entry so the
+/// admin allowlist exactly matches the apply request that will be sent.
+fn with_remote_tuf_repository(
+    yaml: &str,
+    signed: &SignedConfigFixture,
+    server: &MockServer,
+) -> String {
+    let entry = format!(
+        r#"  remote_tuf_repositories:
+    - root_path: "{}"
+      metadata_base_url: "{}/metadata"
+      targets_base_url: "{}/targets"
+      datastore_dir: "{}"
+      allow_dev_insecure_fetch_urls: true
+"#,
+        signed.root_path.display(),
+        server.uri(),
+        server.uri(),
+        signed.datastore_dir.display()
+    );
+    yaml.replace("  accepted_roots:\n", &(entry + "  accepted_roots:\n"))
 }
 
 async fn mount_directory_files(server: &MockServer, url_prefix: &str, dir: &Path) {
@@ -710,19 +724,46 @@ async fn config_apply_bundle_cli_drives_live_admin_remote_root_transition_with_l
     let tmp = TempDir::new().expect("tempdir");
     let bind = allocate_loopback_addr();
     let admin_bind = allocate_loopback_addr();
-    let current_yaml = root_transition_config_yaml(&tmp, bind, admin_bind, false);
-    let current_config = write_current_config(&tmp, &current_yaml);
     let antirollback_path = tmp.path().join("antirollback.json");
     let local_approval_path = tmp.path().join("local-approvals.json");
     let audit_path = tmp.path().join("audit.jsonl");
+
+    // Pre-compute the fixture paths (write_signed_root_transition_fixture uses
+    // a deterministic "signed-root-transition" directory) and start the mock TUF
+    // server before building the current config so the remote_tuf_repositories
+    // allowlist entry can be part of the initial config hash.
+    let remote = MockServer::start().await;
+    let fixture_repo_dir = tmp.path().join("signed-root-transition");
+    let fixture = SignedConfigFixture {
+        root_path: fixture_repo_dir.join("metadata/1.root.json"),
+        metadata_dir: fixture_repo_dir.join("metadata"),
+        targets_dir: fixture_repo_dir.join("targets"),
+        datastore_dir: fixture_repo_dir.join("datastore"),
+        target_name: "registry-notary.yaml".to_string(),
+    };
+
+    let base_yaml = root_transition_config_yaml(&tmp, bind, admin_bind, false);
+    let current_yaml = with_remote_tuf_repository(&base_yaml, &fixture, &remote);
+    let current_config = write_current_config(&tmp, &current_yaml);
     initialize_antirollback_state(&antirollback_path, &current_yaml);
     let current_config_hash = internal_config_hash(current_yaml.as_bytes());
 
-    let candidate_yaml = root_transition_config_yaml(&tmp, bind, admin_bind, true);
+    let candidate_base_yaml = root_transition_config_yaml(&tmp, bind, admin_bind, true);
+    // The candidate must also carry the remote_tuf_repositories entry so that
+    // `equivalent_except_config_trust_accepted_roots` sees equal configs
+    // (a root transition is only the accepted_roots change, nothing else).
+    let candidate_yaml = with_remote_tuf_repository(&candidate_base_yaml, &fixture, &remote);
     write_local_approval_state(&local_approval_path, &candidate_yaml, &current_config_hash);
     let signed =
         write_signed_root_transition_fixture(&tmp, &current_config_hash, &candidate_yaml).await;
-    let remote = serve_signed_tuf_fixture(&signed).await;
+    // Mount the signed fixture files on the already-running server.
+    mount_directory_files(&remote, "/metadata", &signed.metadata_dir).await;
+    mount_directory_files(&remote, "/targets", &signed.targets_dir).await;
+    Mock::given(method("GET"))
+        .and(path("/metadata/2.root.json"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&remote)
+        .await;
     let server = start_live_notary_server(&current_config, bind, admin_bind).await;
 
     let output = remote_live_apply_bundle_command(&server, &signed, &remote)

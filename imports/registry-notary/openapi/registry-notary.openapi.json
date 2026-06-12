@@ -1213,16 +1213,18 @@
       },
       "RemoteTufConfigTargetRequest": {
         "additionalProperties": false,
+        "description": "Remote TUF config source. The source must exactly match an entry in the operator-configured config_trust.remote_tuf_repositories allowlist (comparing root_path, metadata_base_url, targets_base_url, and datastore_dir); unlisted sources are rejected before any fetch.",
         "properties": {
           "allow_dev_insecure_fetch_urls": {
             "default": false,
+            "description": "Deprecated and ignored. Fetch policy is taken from the matching config_trust.remote_tuf_repositories allowlist entry.",
             "type": "boolean"
           },
           "datastore_dir": {
             "type": "string"
           },
           "metadata_base_url": {
-            "description": "HTTPS TUF metadata base URL. HTTP loopback is accepted only when allow_dev_insecure_fetch_urls is true.",
+            "description": "HTTPS TUF metadata base URL. HTTP loopback is accepted only when the matching allowlist entry sets allow_dev_insecure_fetch_urls.",
             "format": "uri",
             "type": "string"
           },
@@ -1233,7 +1235,7 @@
             "type": "string"
           },
           "targets_base_url": {
-            "description": "HTTPS TUF targets base URL. HTTP loopback is accepted only when allow_dev_insecure_fetch_urls is true.",
+            "description": "HTTPS TUF targets base URL. HTTP loopback is accepted only when the matching allowlist entry sets allow_dev_insecure_fetch_urls.",
             "format": "uri",
             "type": "string"
           }

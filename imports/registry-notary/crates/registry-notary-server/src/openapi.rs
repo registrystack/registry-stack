@@ -2846,6 +2846,7 @@ fn local_tuf_config_target_request_schema() -> Value {
 fn remote_tuf_config_target_request_schema() -> Value {
     json!({
         "type": "object",
+        "description": "Remote TUF config source. The source must exactly match an entry in the operator-configured config_trust.remote_tuf_repositories allowlist (comparing root_path, metadata_base_url, targets_base_url, and datastore_dir); unlisted sources are rejected before any fetch.",
         "required": [
             "root_path",
             "metadata_base_url",
@@ -2858,18 +2859,19 @@ fn remote_tuf_config_target_request_schema() -> Value {
             "metadata_base_url": {
                 "type": "string",
                 "format": "uri",
-                "description": "HTTPS TUF metadata base URL. HTTP loopback is accepted only when allow_dev_insecure_fetch_urls is true."
+                "description": "HTTPS TUF metadata base URL. HTTP loopback is accepted only when the matching allowlist entry sets allow_dev_insecure_fetch_urls."
             },
             "targets_base_url": {
                 "type": "string",
                 "format": "uri",
-                "description": "HTTPS TUF targets base URL. HTTP loopback is accepted only when allow_dev_insecure_fetch_urls is true."
+                "description": "HTTPS TUF targets base URL. HTTP loopback is accepted only when the matching allowlist entry sets allow_dev_insecure_fetch_urls."
             },
             "datastore_dir": { "type": "string" },
             "target_name": { "type": "string" },
             "allow_dev_insecure_fetch_urls": {
                 "type": "boolean",
-                "default": false
+                "default": false,
+                "description": "Deprecated and ignored. Fetch policy is taken from the matching config_trust.remote_tuf_repositories allowlist entry."
             }
         },
         "additionalProperties": false
