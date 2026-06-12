@@ -1,0 +1,1 @@
+{"iss":"did:web:issuer.test","sub_ref":"did:example:subject","iat":1700000000,"exp":1700000600,"vct":"https://vct.example/test","status":{"type":"RegistryNotaryCredentialStatus","statusUrl":"https://issuer.example/credentials/status/01HX7Y5F2WAJ7ZP0Q4M5K9E8NC"},"disclosures":[{"name":"email","value":"holder@example.test"}]}
