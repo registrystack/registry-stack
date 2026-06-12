@@ -3674,6 +3674,13 @@ impl RequestCredentials {
         usize::from(self.api_key.is_some())
             + usize::from(self.authorization_present || self.bearer_token.is_some())
     }
+
+    fn are_absent(&self) -> bool {
+        self.api_key.is_none()
+            && !self.authorization_present
+            && self.bearer_token.is_none()
+            && self.id_token.is_none()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -4157,7 +4164,7 @@ async fn auth_audit_middleware(
     let credentials = request_credentials(&request);
     let client_address = client_address_identifier(&request);
     if let Err(rate_error) =
-        maybe_rate_limit_invalid_token_before_auth(&state, &credentials, client_address.as_str())
+        maybe_rate_limit_auth_rejection_before_auth(&state, &credentials, client_address.as_str())
     {
         let mut response = crate::api::evidence_error_response_with_request_id(
             rate_error.evidence_error(),
@@ -4204,11 +4211,9 @@ async fn auth_audit_middleware(
     let principal = match state.authenticate(credentials.clone()).await {
         Ok(principal) => principal,
         Err(error) => {
-            if let Err(rate_error) = consume_invalid_token_after_auth_failure(
-                &state,
-                &credentials,
-                client_address.as_str(),
-            ) {
+            if let Err(rate_error) =
+                consume_auth_rejection_after_auth_failure(&state, client_address.as_str())
+            {
                 let mut response = crate::api::evidence_error_response_with_request_id(
                     rate_error.evidence_error(),
                     Some(&correlation_id),
@@ -4311,12 +4316,12 @@ fn client_address_identifier(request: &Request) -> String {
         .unwrap_or_else(|| "unknown-client-address".to_string())
 }
 
-fn maybe_rate_limit_invalid_token_before_auth(
+fn maybe_rate_limit_auth_rejection_before_auth(
     state: &AuthAuditState,
     credentials: &RequestCredentials,
     client_address: &str,
 ) -> Result<(), crate::SelfAttestationRateLimitError> {
-    if credentials.bearer_token.is_none() {
+    if credentials.bearer_token.is_none() && !credentials.are_absent() {
         return Ok(());
     }
     let (Some(limiter), Some(keys)) = (
@@ -4329,14 +4334,10 @@ fn maybe_rate_limit_invalid_token_before_auth(
     limiter.check_invalid_token_for_client_address_available(&client_address)
 }
 
-fn consume_invalid_token_after_auth_failure(
+fn consume_auth_rejection_after_auth_failure(
     state: &AuthAuditState,
-    credentials: &RequestCredentials,
     client_address: &str,
 ) -> Result<(), crate::SelfAttestationRateLimitError> {
-    if credentials.bearer_token.is_none() {
-        return Ok(());
-    }
     let (Some(limiter), Some(keys)) = (
         state.self_attestation_invalid_token_limiter.as_ref(),
         state.self_attestation_rate_keys.as_ref(),
@@ -9251,6 +9252,46 @@ config_trust:
             .get("/ok")
             .add_header(header::AUTHORIZATION, "Bearer invalid-token")
             .await;
+        second.assert_status(StatusCode::TOO_MANY_REQUESTS);
+        let body: Value = second.json();
+        assert_eq!(body["code"], json!("self_attestation.rate_limited"));
+    }
+
+    #[tokio::test]
+    async fn missing_credentials_are_rate_limited_when_self_attestation_is_enabled() {
+        let rate_limits = SelfAttestationRateLimitsConfig {
+            invalid_token_per_client_address_per_minute: 1,
+            per_principal_per_minute: 1,
+            subject_mismatch_per_principal_per_hour: 1,
+            per_holder_per_hour: 1,
+            credential_issuance_per_principal_per_hour: 1,
+            ..SelfAttestationRateLimitsConfig::default()
+        };
+        let audit = AuditPipeline::for_sink_dev_only(Arc::new(JsonlStdoutSink::new()));
+        let state = Arc::new(AuthAuditState {
+            authenticator: RwLock::new(Arc::new(Authenticator::Static {
+                api_keys: Vec::new(),
+                bearer_tokens: Vec::new(),
+            })),
+            audit: audit.clone(),
+            metrics: Arc::new(AppMetrics::default()),
+            openapi_requires_auth: AtomicBool::new(true),
+            self_attestation_invalid_token_limiter: Some(Arc::new(
+                SelfAttestationRateLimiter::new(rate_limits),
+            )),
+            self_attestation_rate_keys: Some(Arc::new(SelfAttestationRateLimitKeys::new(
+                audit.profile.key_hasher(),
+            ))),
+        });
+        let app = Router::new()
+            .route("/ok", get(|| async { StatusCode::OK }))
+            .layer(from_fn_with_state(state, auth_audit_middleware));
+        let server = TestServer::builder().http_transport().build(app);
+
+        let first = server.get("/ok").await;
+        first.assert_status(StatusCode::UNAUTHORIZED);
+
+        let second = server.get("/ok").await;
         second.assert_status(StatusCode::TOO_MANY_REQUESTS);
         let body: Value = second.json();
         assert_eq!(body["code"], json!("self_attestation.rate_limited"));
