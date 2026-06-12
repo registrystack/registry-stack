@@ -48,6 +48,19 @@ Configure exactly one auth mode:
 Supplying more than one auth mode is a build-time error. Debug output redacts
 configured auth material.
 
+### Scopes
+
+The credential behind your auth mode carries a `scopes` list, and every claim
+declares a `required_scope` on its source bindings that is enforced before
+evaluation. Scope strings are operator-defined `<namespace>:<operation>` values
+(for example `civil_registry:evidence_verification` or
+`registry_notary:credential_issue`); there is no fixed global registry of scope
+names. When you connect to a deployment you do not operate, ask the operator
+which scopes the claims you need require and request a credential carrying
+exactly those scopes. `GET /v1/claims` (`list_claims` in every SDK) confirms
+which claims your credential can see before the first evaluation; a `403` on
+evaluation means the credential lacks that claim's `required_scope`.
+
 ### Purpose
 
 Evaluation routes can carry a data purpose in the `Data-Purpose` header and in
@@ -119,8 +132,16 @@ The stable application problem `code` values for policy mapping live in the
 ### Install
 
 > Note: the `path = "crates/..."` dependencies below assume you are building
-> inside the Registry Notary workspace checkout. An external integrator without
-> that checkout should depend on the published crate versions instead.
+> inside the Registry Notary workspace checkout. The workspace crates are not
+> published to crates.io. An external integrator without the checkout should
+> use a `git` dependency pinned to a release tag (for example `v0.3.1`) or a
+> commit:
+>
+> ```toml
+> [dependencies]
+> registry-notary-client = { git = "https://github.com/jeremi/registry-notary", tag = "vX.Y.Z" }
+> registry-notary-core = { git = "https://github.com/jeremi/registry-notary", tag = "vX.Y.Z" }
+> ```
 
 ```toml
 [dependencies]
@@ -471,7 +492,10 @@ downstream applications. Its public names for application integrations are:
 `issuer_jwks`, `raw_issuer_jwks`, `render_request`,
 `issue_credential_request`, and `credential_status`.
 
-### Install For Local Development
+### Install
+
+The package is not currently published to PyPI. Install it from a checkout of
+this repository pinned to a release tag or commit:
 
 ```bash
 python -m pip install -e bindings/python
@@ -642,7 +666,10 @@ Problem detail strings are not exposed.
 
 ## Node.js
 
-### Install For Local Development
+### Install
+
+The package is not currently published to the npm registry. Install it from a
+checkout of this repository pinned to a release tag or commit:
 
 ```bash
 npm install ./bindings/node
