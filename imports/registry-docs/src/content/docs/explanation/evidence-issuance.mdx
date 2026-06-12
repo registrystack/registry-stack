@@ -6,7 +6,7 @@ owner: registry-notary
 source_repos:
   - registry-notary
   - registry-platform
-last_reviewed: "2026-05-25"
+last_reviewed: "2026-06-13"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -101,8 +101,12 @@ access token, and a wallet completes the OID4VCI flow.
 
 ## Selective disclosure properties
 
-Selective disclosure is the property that distinguishes an SD-JWT VC from a plain JWT. Three
-mechanics make it work.
+Selective disclosure is the property that distinguishes an SD-JWT VC from a plain JWT.
+The credential format is the IETF SD-JWT VC draft's `application/dc+sd-jwt` media type, with
+`dc+sd-jwt` as the JWT `typ` header; the implementation tracks the draft family's current media
+type rather than pinning a numbered draft revision, and the
+[standards register](../../reference/standards/) records the claim as a profiled subset.
+Three mechanics make selective disclosure work.
 
 - Per-field disclosures. Registry Notary wraps each claim field in its own SD-JWT disclosure
   blob. The signed credential body carries the SHA-256 digest of every disclosure, not the

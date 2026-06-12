@@ -7,7 +7,7 @@ source_repos:
   - registry-registryctl
   - registry-relay
   - registry-notary
-last_reviewed: "2026-06-12"
+last_reviewed: "2026-06-13"
 doc_type: tutorial
 locale: en
 standards_referenced: []
@@ -173,6 +173,10 @@ The Notary tutorial adds these local values:
 The Notary evaluator key is for you calling Notary.
 The Relay source token is for Notary calling Relay.
 They are intentionally separate.
+
+The same `secrets/local.env` still carries the keys from the Relay tutorial, including the
+row-reader key `ROW_READER_RAW`, which this page uses later to compare a row read with a claim
+result.
 
 ## Prove anonymous claim access is denied
 

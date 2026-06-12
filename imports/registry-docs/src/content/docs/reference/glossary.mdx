@@ -10,7 +10,7 @@ source_repos:
   - registry-notary
   - registry-atlas
   - registry-lab
-last_reviewed: "2026-05-26"
+last_reviewed: "2026-06-13"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -114,7 +114,7 @@ Product names are always in English, including on future translated pages.
   <dd>Open Geospatial Consortium API specification for records. Relay exposes records endpoints behind the `ogcapi-records` feature flag. Manifest renders OGC Records item bodies.</dd>
 
   <dt id="oid4vci">OID4VCI</dt>
-  <dd>OpenID for Verifiable Credential Issuance. The protocol a wallet uses to obtain a credential from an issuer. Registry Notary emits an OID4VCI issuance flow: a credential offer, issuer metadata at `/.well-known/openid-credential-issuer`, a nonce, and a holder proof. The issuer metadata advertises `dc+sd-jwt` format; full OID4VCI Draft 13 `vc+sd-jwt` conformance is not asserted.</dd>
+  <dd>OpenID for Verifiable Credential Issuance. The protocol a wallet uses to obtain a credential from an issuer. Registry Notary emits an OID4VCI issuance flow: a credential offer, issuer metadata at `/.well-known/openid-credential-issuer`, a nonce, and a holder proof. The surface is a profiled subset of OID4VCI Draft 13 advertising the `dc+sd-jwt` format; full issuer conformance is not asserted (`openid4vci.support: not_full_issuer`).</dd>
 
   <dt>PROV-O</dt>
   <dd>W3C Provenance Ontology. Currently listed as design influence (`inspired_by`). Provenance-shaped concepts appear in audit fields and the claim provenance struct, but no PROV-O vocabulary terms are emitted as JSON-LD at reviewed commits.</dd>
