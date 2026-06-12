@@ -21,8 +21,9 @@ use registry_notary_core::FEDERATION_RESPONSE_JWT_TYP;
 use registry_notary_core::{
     BulkMode, ConfigTrustConfig, ConfigTrustRateLimit, EvidenceAuthMode, EvidenceCredentialConfig,
     EvidenceOidcAuthConfig, Oid4vciConfig, RegistryNotaryAdminListenerMode,
-    SelfAttestationClaimSource, SigningKeyConfig, SigningKeyProviderConfig, SigningKeyStatus,
-    StandaloneRegistryNotaryConfig, SD_JWT_VC_SIGNING_ALG,
+    RemoteTufRepositoryConfig, SelfAttestationClaimSource, SigningKeyConfig,
+    SigningKeyProviderConfig, SigningKeyStatus, StandaloneRegistryNotaryConfig,
+    SD_JWT_VC_SIGNING_ALG,
 };
 #[cfg(feature = "registry-notary-cel")]
 use registry_notary_server::cel_worker::{CelWorker, CelWorkerConfig};
@@ -307,18 +308,6 @@ fn remote_signed_tuf_apply_request(signed: &SignedConfigFixture, server: &MockSe
     })
 }
 
-async fn serve_signed_tuf_fixture(signed: &SignedConfigFixture) -> MockServer {
-    let server = MockServer::start().await;
-    mount_directory_files(&server, "/metadata", &signed.metadata_dir).await;
-    mount_directory_files(&server, "/targets", &signed.targets_dir).await;
-    Mock::given(method("GET"))
-        .and(path("/metadata/2.root.json"))
-        .respond_with(ResponseTemplate::new(404))
-        .mount(&server)
-        .await;
-    server
-}
-
 async fn mount_directory_files(server: &MockServer, url_prefix: &str, dir: &std::path::Path) {
     for entry in std::fs::read_dir(dir).expect("directory reads") {
         let entry = entry.expect("directory entry reads");
@@ -561,6 +550,7 @@ fn add_config_trust_with_local_approval_path(
                 ]),
             }],
         }],
+        remote_tuf_repositories: Vec::new(),
     });
 }
 
@@ -3883,6 +3873,124 @@ async fn admin_config_apply_signed_root_transition_missing_approval_rejects_befo
 }
 
 #[tokio::test]
+async fn admin_config_apply_antirollback_rejected_records_outcome_in_posture() {
+    // Verifies that a governed apply rejected by the anti-rollback store records
+    // the rejection in posture so operators can observe the last attempted apply.
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    const ROTATED_ADMIN_KEY: &str = "rotated-admin-token-136";
+    const ROTATED_ADMIN_HASH_ENV: &str = "TEST_EVIDENCE_ROTATED_ADMIN_136_KEY_HASH";
+    let rotated_fingerprint = sha256_uri(ROTATED_ADMIN_KEY.as_bytes());
+    std::env::set_var(ROTATED_ADMIN_HASH_ENV, &rotated_fingerprint);
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let antirollback_path = tmp.path().join("config-antirollback.json");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    add_admin_api_key(&mut config);
+    add_ops_read_api_key(&mut config);
+    add_config_trust(&mut config, antirollback_path.clone());
+    let current_config_yaml = serde_norway::to_string(&config).expect("current config serializes");
+    // Pre-initialize anti-rollback state at sequence 3 so that sequence 2 is stale.
+    initialize_notary_antirollback_state(&antirollback_path, &current_config_yaml, 3);
+    let current_config_hash = internal_config_hash(current_config_yaml.as_bytes());
+
+    // Prepare a client-access-change candidate so the apply reaches the anti-rollback check.
+    let mut candidate = config.clone();
+    candidate.auth.api_keys.clear();
+    candidate.auth.api_keys.push(EvidenceCredentialConfig {
+        id: "rotated_admin".to_string(),
+        fingerprint: env_fingerprint_ref(
+            "rotated_admin",
+            ROTATED_ADMIN_HASH_ENV,
+            &rotated_fingerprint,
+        ),
+        scopes: vec![
+            "registry_notary:admin".to_string(),
+            "registry_notary:ops_read".to_string(),
+        ],
+    });
+    let candidate_yaml = serde_norway::to_string(&candidate).expect("candidate serializes");
+    let local_approval_path = config
+        .config_trust
+        .as_ref()
+        .expect("config trust exists")
+        .local_approval_state_path
+        .clone();
+    write_local_approval_state(
+        &local_approval_path,
+        local_operator_approval_for_change_class(
+            &candidate_yaml,
+            &current_config_hash,
+            "client_access_change",
+            "CLIENT-ACCESS-136",
+        ),
+    );
+    // Sign the candidate at sequence 2, which is stale relative to anti-rollback sequence 3.
+    let signed = write_signed_notary_config_tuf_fixture_with_change_classes(
+        &tmp,
+        &current_config_hash,
+        &candidate_yaml,
+        2,
+        "registry-notary-standalone",
+        &["kid-a", "kid-b"],
+        &["client_access_change"],
+    )
+    .await;
+
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let mut request = signed_tuf_apply_request(&signed);
+    request["local_approval_reference"] = json!("CLIENT-ACCESS-136");
+
+    let response = server
+        .post("/admin/v1/config/apply")
+        .add_header("x-api-key", "admin-token")
+        .json(&request)
+        .await;
+
+    response.assert_status(StatusCode::CONFLICT);
+    let body: Value = response.json();
+    assert_eq!(body["result"], "rejected_rollback");
+    assert_eq!(body["posture_result"], "rejected");
+    assert_eq!(body["applied"], false);
+
+    // The rejection outcome must appear in posture so operators can observe it.
+    let posture = server
+        .get("/admin/v1/posture")
+        .add_header("x-api-key", "ops-token")
+        .await;
+    posture.assert_status_ok();
+    let posture: Value = posture.json();
+    assert_matches_posture_schema(&posture);
+    assert_eq!(
+        posture["configuration"]["last_apply_result"], "rejected",
+        "anti-rollback rejection must be recorded in posture"
+    );
+    assert_eq!(
+        posture["configuration"]["last_bundle_id"], "notary-test-bundle",
+        "last_bundle_id must reflect the rejected attempt"
+    );
+    assert_eq!(
+        posture["configuration"]["last_bundle_sequence"], 2,
+        "last_bundle_sequence must reflect the rejected sequence"
+    );
+    assert!(
+        posture["configuration"]["last_apply_at"]
+            .as_str()
+            .is_some_and(|s| !s.is_empty()),
+        "last_apply_at must be set after a rejection"
+    );
+}
+
+#[tokio::test]
 async fn admin_config_apply_signed_root_transition_without_change_class_is_restart_required() {
     set_audit_secret();
     std::env::set_var(
@@ -4633,8 +4741,10 @@ async fn admin_config_apply_signed_credential_issuer_rotation_rejects_stale_sequ
         .await;
     posture.assert_status_ok();
     let posture: Value = posture.json();
-    assert_eq!(posture["configuration"]["last_bundle_sequence"], 2);
-    assert_eq!(posture["configuration"]["last_apply_result"], "accepted");
+    // The last attempted bundle was seq 3 (mismatch rejection); posture records it.
+    assert_eq!(posture["configuration"]["last_bundle_sequence"], 3);
+    assert_eq!(posture["configuration"]["last_apply_result"], "rejected");
+    // The running config is still the accepted rotation from seq 2.
     assert_eq!(
         posture["notary"]["signing_keys"]["active"],
         json!(["issuer-key-2"])
@@ -4700,7 +4810,30 @@ async fn admin_config_apply_remote_signed_credential_issuer_rotation_swaps_witho
         .expect("person-is-alive claim exists")
         .formats
         .push("application/dc+sd-jwt".to_string());
+    // Start the TUF server and pre-compute fixture paths before the config hash
+    // is locked so the remote_tuf_repositories allowlist entry can be included
+    // in the initial config serialization.
+    let tuf_server = MockServer::start().await;
+    // The signed fixture for sequence 2 always lands in this deterministic path.
+    let fixture_sequence: u64 = 2;
+    let fixture_repo_dir = tmp
+        .path()
+        .join(format!("signed-notary-config-{fixture_sequence}"));
+    let fixture_root_path = fixture_repo_dir.join("metadata").join("1.root.json");
+    let fixture_datastore_dir = fixture_repo_dir.join("datastore");
     add_config_trust(&mut config, antirollback_path.clone());
+    config
+        .config_trust
+        .as_mut()
+        .expect("config_trust is set")
+        .remote_tuf_repositories
+        .push(RemoteTufRepositoryConfig {
+            root_path: fixture_root_path,
+            metadata_base_url: format!("{}/metadata", tuf_server.uri()),
+            targets_base_url: format!("{}/targets", tuf_server.uri()),
+            datastore_dir: fixture_datastore_dir,
+            allow_dev_insecure_fetch_urls: true,
+        });
     let current_config_yaml = serde_norway::to_string(&config).expect("current config serializes");
     initialize_notary_antirollback_state(&antirollback_path, &current_config_yaml, 1);
     let current_config_hash = internal_config_hash(current_config_yaml.as_bytes());
@@ -4718,13 +4851,20 @@ async fn admin_config_apply_remote_signed_credential_issuer_rotation_swaps_witho
         &tmp,
         &current_config_hash,
         &candidate_yaml,
-        2,
+        fixture_sequence,
         "registry-notary-standalone",
         &["kid-a", "kid-b"],
         &["signing_key_rotation"],
     )
     .await;
-    let tuf_server = serve_signed_tuf_fixture(&signed).await;
+    // Mount the signed fixture files on the already-running server.
+    mount_directory_files(&tuf_server, "/metadata", &signed.metadata_dir).await;
+    mount_directory_files(&tuf_server, "/targets", &signed.targets_dir).await;
+    Mock::given(method("GET"))
+        .and(path("/metadata/2.root.json"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&tuf_server)
+        .await;
 
     let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
@@ -6291,6 +6431,7 @@ async fn governed_config_rejects_shared_admin_listener_topology() {
             window_seconds: 3600,
         },
         accepted_roots: Vec::new(),
+        remote_tuf_repositories: Vec::new(),
     });
 
     let error = match compile_notary_runtime(config) {

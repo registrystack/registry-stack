@@ -213,6 +213,36 @@ async fn serve_signed_tuf_fixture(signed: &SignedConfigFixture) -> MockServer {
     server
 }
 
+/// Patch a config YAML file to add the remote TUF repository to the
+/// `config_trust.remote_tuf_repositories` allowlist.
+///
+/// Called after `serve_signed_tuf_fixture` so we have the server URI.
+fn insert_remote_tuf_repository(
+    config_path: &Path,
+    signed: &SignedConfigFixture,
+    server: &MockServer,
+) {
+    let yaml = std::fs::read_to_string(config_path).expect("config reads");
+    let entry = format!(
+        r#"  remote_tuf_repositories:
+    - root_path: "{}"
+      metadata_base_url: "{}/metadata"
+      targets_base_url: "{}/targets"
+      datastore_dir: "{}"
+      allow_dev_insecure_fetch_urls: true
+"#,
+        signed.root_path.display(),
+        server.uri(),
+        server.uri(),
+        signed.datastore_dir.display()
+    );
+    std::fs::write(
+        config_path,
+        yaml.replace("  accepted_roots:\n", &(entry + "  accepted_roots:\n")),
+    )
+    .expect("config writes");
+}
+
 async fn mount_directory_files(server: &MockServer, url_prefix: &str, dir: &Path) {
     for entry in std::fs::read_dir(dir).expect("directory reads") {
         let entry = entry.expect("directory entry reads");
@@ -356,6 +386,7 @@ async fn config_verify_bundle_cli_reports_verified_remote_signed_bundle() {
     let current_hash = internal_config_hash(std::fs::read(&current_config).unwrap().as_slice());
     let signed = write_signed_notary_config_tuf_fixture(&tmp, &current_hash, &candidate_yaml).await;
     let server = serve_signed_tuf_fixture(&signed).await;
+    insert_remote_tuf_repository(&current_config, &signed, &server);
 
     let output = remote_verify_bundle_command(&current_config, &signed, &server)
         .output()

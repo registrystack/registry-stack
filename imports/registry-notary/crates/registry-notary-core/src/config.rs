@@ -90,6 +90,35 @@ pub struct ConfigTrustConfig {
     pub break_glass_rate_limit: ConfigTrustRateLimit,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub accepted_roots: Vec<RegistryTrustRoot>,
+    /// Operator-owned allowlist of remote TUF config sources.
+    ///
+    /// Admin requests may name one of these pre-configured sources but cannot
+    /// introduce new repository URLs or override the per-entry
+    /// `allow_dev_insecure_fetch_urls` flag. Omit the list (or leave it empty)
+    /// when all remote TUF apply flows use local repository sources.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remote_tuf_repositories: Vec<RemoteTufRepositoryConfig>,
+}
+
+/// One entry in the `config_trust.remote_tuf_repositories` operator allowlist.
+///
+/// An admin request that names a remote TUF source must match an entry here
+/// exactly (by `root_path`, `metadata_base_url`, `targets_base_url`, and
+/// `datastore_dir`). The `allow_dev_insecure_fetch_urls` flag is always taken
+/// from this entry, never from the request, so operators control the fetch
+/// policy.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteTufRepositoryConfig {
+    pub root_path: PathBuf,
+    pub metadata_base_url: String,
+    pub targets_base_url: String,
+    pub datastore_dir: PathBuf,
+    /// Permit `http://` URLs to loopback addresses (localhost, 127.0.0.1, ::1).
+    /// Intended for local development and tests only; must be `false` in
+    /// production.
+    #[serde(default)]
+    pub allow_dev_insecure_fetch_urls: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -178,6 +207,28 @@ impl StandaloneRegistryNotaryConfig {
                             "config_trust.accepted_roots contains an invalid trust root: {error}"
                         ),
                     })?;
+            }
+            for repo in &config_trust.remote_tuf_repositories {
+                if repo.root_path.as_os_str().is_empty()
+                    || repo.datastore_dir.as_os_str().is_empty()
+                {
+                    return Err(EvidenceConfigError::InvalidConfigTrustConfig {
+                        reason: "config_trust.remote_tuf_repositories paths must not be empty"
+                            .to_string(),
+                    });
+                }
+                if !is_allowed_remote_tuf_url(
+                    &repo.metadata_base_url,
+                    repo.allow_dev_insecure_fetch_urls,
+                ) || !is_allowed_remote_tuf_url(
+                    &repo.targets_base_url,
+                    repo.allow_dev_insecure_fetch_urls,
+                ) {
+                    return Err(EvidenceConfigError::InvalidConfigTrustConfig {
+                        reason: "config_trust.remote_tuf_repositories URLs must be https:// unless allow_dev_insecure_fetch_urls is true for loopback dev"
+                            .to_string(),
+                    });
+                }
             }
         }
         self.replay.validate()?;
@@ -3573,6 +3624,13 @@ fn is_insecure_localhost_url(url: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
+fn is_allowed_remote_tuf_url(url: &str, allow_dev_insecure_fetch_urls: bool) -> bool {
+    if url.starts_with("https://") {
+        return true;
+    }
+    allow_dev_insecure_fetch_urls && is_insecure_localhost_url(url)
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceAuditConfig {
@@ -5073,6 +5131,7 @@ rule:
             ),
             break_glass_rate_limit: default_break_glass_rate_limit(),
             accepted_roots: Vec::new(),
+            remote_tuf_repositories: Vec::new(),
         });
         let error = config
             .validate()
@@ -5089,6 +5148,7 @@ rule:
             local_approval_state_path: PathBuf::from(""),
             break_glass_rate_limit: default_break_glass_rate_limit(),
             accepted_roots: Vec::new(),
+            remote_tuf_repositories: Vec::new(),
         });
         let error = config
             .validate()
@@ -5107,6 +5167,7 @@ rule:
             ),
             break_glass_rate_limit: default_break_glass_rate_limit(),
             accepted_roots: Vec::new(),
+            remote_tuf_repositories: Vec::new(),
         });
         config
             .validate()
@@ -5148,6 +5209,7 @@ rule:
                     allowed_change_classes: BTreeSet::from(["public_metadata".to_string()]),
                 }],
             }],
+            remote_tuf_repositories: Vec::new(),
         });
         config
             .validate()
@@ -5158,6 +5220,118 @@ rule:
         let error = config
             .validate()
             .expect_err("invalid shared trust root must fail validation");
+        assert!(matches!(
+            error,
+            EvidenceConfigError::InvalidConfigTrustConfig { .. }
+        ));
+    }
+
+    #[test]
+    fn config_trust_remote_tuf_repositories_accepts_https_urls() {
+        let mut config = minimal_config();
+        use_dedicated_admin_listener(&mut config);
+        config.config_trust = Some(ConfigTrustConfig {
+            antirollback_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-antirollback.json",
+            ),
+            local_approval_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-local-approvals.json",
+            ),
+            break_glass_rate_limit: default_break_glass_rate_limit(),
+            accepted_roots: Vec::new(),
+            remote_tuf_repositories: vec![RemoteTufRepositoryConfig {
+                root_path: PathBuf::from("/etc/registry-notary/tuf/root.json"),
+                metadata_base_url: "https://config.example.test/metadata".to_string(),
+                targets_base_url: "https://config.example.test/targets".to_string(),
+                datastore_dir: PathBuf::from("/var/lib/registry-notary/tuf"),
+                allow_dev_insecure_fetch_urls: false,
+            }],
+        });
+        config
+            .validate()
+            .expect("https remote_tuf_repositories entry validates");
+    }
+
+    #[test]
+    fn config_trust_remote_tuf_repositories_rejects_http_without_dev_flag() {
+        let mut config = minimal_config();
+        use_dedicated_admin_listener(&mut config);
+        config.config_trust = Some(ConfigTrustConfig {
+            antirollback_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-antirollback.json",
+            ),
+            local_approval_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-local-approvals.json",
+            ),
+            break_glass_rate_limit: default_break_glass_rate_limit(),
+            accepted_roots: Vec::new(),
+            remote_tuf_repositories: vec![RemoteTufRepositoryConfig {
+                root_path: PathBuf::from("/etc/registry-notary/tuf/root.json"),
+                metadata_base_url: "http://config.example.test/metadata".to_string(),
+                targets_base_url: "https://config.example.test/targets".to_string(),
+                datastore_dir: PathBuf::from("/var/lib/registry-notary/tuf"),
+                allow_dev_insecure_fetch_urls: false,
+            }],
+        });
+        let error = config
+            .validate()
+            .expect_err("http without allow_dev_insecure_fetch_urls must fail");
+        assert!(matches!(
+            error,
+            EvidenceConfigError::InvalidConfigTrustConfig { .. }
+        ));
+    }
+
+    #[test]
+    fn config_trust_remote_tuf_repositories_allows_http_loopback_in_dev() {
+        let mut config = minimal_config();
+        use_dedicated_admin_listener(&mut config);
+        config.config_trust = Some(ConfigTrustConfig {
+            antirollback_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-antirollback.json",
+            ),
+            local_approval_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-local-approvals.json",
+            ),
+            break_glass_rate_limit: default_break_glass_rate_limit(),
+            accepted_roots: Vec::new(),
+            remote_tuf_repositories: vec![RemoteTufRepositoryConfig {
+                root_path: PathBuf::from("/etc/registry-notary/tuf/root.json"),
+                metadata_base_url: "http://localhost:9000/metadata".to_string(),
+                targets_base_url: "http://127.0.0.1:9000/targets".to_string(),
+                datastore_dir: PathBuf::from("/var/lib/registry-notary/tuf"),
+                allow_dev_insecure_fetch_urls: true,
+            }],
+        });
+        config
+            .validate()
+            .expect("http loopback with allow_dev_insecure_fetch_urls validates");
+    }
+
+    #[test]
+    fn config_trust_remote_tuf_repositories_rejects_empty_paths() {
+        let mut config = minimal_config();
+        use_dedicated_admin_listener(&mut config);
+        config.config_trust = Some(ConfigTrustConfig {
+            antirollback_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-antirollback.json",
+            ),
+            local_approval_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-local-approvals.json",
+            ),
+            break_glass_rate_limit: default_break_glass_rate_limit(),
+            accepted_roots: Vec::new(),
+            remote_tuf_repositories: vec![RemoteTufRepositoryConfig {
+                root_path: PathBuf::from(""),
+                metadata_base_url: "https://config.example.test/metadata".to_string(),
+                targets_base_url: "https://config.example.test/targets".to_string(),
+                datastore_dir: PathBuf::from("/var/lib/registry-notary/tuf"),
+                allow_dev_insecure_fetch_urls: false,
+            }],
+        });
+        let error = config
+            .validate()
+            .expect_err("empty root_path must fail validation");
         assert!(matches!(
             error,
             EvidenceConfigError::InvalidConfigTrustConfig { .. }
@@ -5569,6 +5743,7 @@ credential_configurations:
             ),
             break_glass_rate_limit: default_break_glass_rate_limit(),
             accepted_roots: Vec::new(),
+            remote_tuf_repositories: Vec::new(),
         });
 
         let error = config
