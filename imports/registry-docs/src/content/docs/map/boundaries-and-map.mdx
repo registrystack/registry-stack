@@ -109,7 +109,7 @@ Registry Notary evaluates claims and issues SD-JWT VC credentials. It does not o
 - Registry Relay source code or runtime internals. Registry Notary calls Registry Relay over HTTP using a source connector; it does not import or link Registry Relay libraries. Both services can depend on Registry Platform. {/* Evidence: registry-notary README lines 5-9, commit b4128a3; platform dependency in current Cargo.toml. */}
 - Portable metadata renderers owned by Registry Manifest. Registry Notary does not produce DCAT, SHACL, BRegDCAT-AP, or OGC Records artifacts. {/* Evidence: registry-notary evidence packet, standards not found in code section: "DCAT: no data.europa.eu/r8g references", "OGC API Records: no OGC references". */}
 - Shared auth, OIDC, audit, HTTP security, outbound HTTP, crypto, SD-JWT, and testing primitives owned by Registry Platform. Registry Notary owns the claim service behavior that composes those primitives.
-- Open federation, dynamic trust-chain discovery, shared replay storage, audit checkpoint exchange, or federated credential issuance. The current federation implementation is static-peer delegated evaluation only.
+- Open federation, dynamic trust-chain discovery, shared replay storage, audit checkpoint exchange, or federated credential issuance. The current federation implementation is static-peer delegated evaluation only. {/* Evidence: registry-notary federation runtime loads peers from config at startup (FederationRuntime::new iterates config.peers); no dynamic discovery path exists at commit 01ee90a. */}
 - Browser inspection workflows owned by Registry Atlas. Inspecting published discovery artifacts, parsing DCAT catalogs, and running capability queries are Atlas responsibilities.
 
 Registry Notary credentials are SD-JWT VC format (`application/dc+sd-jwt`), not W3C Verifiable
@@ -121,7 +121,7 @@ in the issued credential. {/* Evidence: registry-notary evidence packet, credent
 Registry Atlas is a browser workbench for inspecting published discovery artifacts. It does not own:
 
 - Registry runtime APIs. Atlas inspects artifacts that are already published; it does not own the APIs that serve them.
-- Natural-language inference in v0.1 capability discovery. The v0.1 capability matcher is strict: no fuzzy matching, synonym expansion, or AI inference. Every match requires exact label, IRI, or field name correspondence after documented canonicalization. Natural-language query assist is explicitly deferred. {/* Evidence: registry-atlas SYSTEM_CAPABILITY_DISCOVERY_SPEC.md lines 84-88, commit e4092a1. */}
+- Natural-language inference in v0.1 capability discovery. The v0.1 capability matcher is strict: no fuzzy matching, synonym expansion, or AI inference. Every match requires exact label, IRI, or field name correspondence after documented canonicalization. Natural-language query assist is explicitly deferred. {/* Evidence: registry-atlas SYSTEM_CAPABILITY_DISCOVERY_SPEC.md lines 84-88, commit e4092a1 (file confirmed at that commit). */}
 - Persistent token storage in browser or proxy logs. Bearer tokens are session-only and are never written to browser storage or server logs. {/* Evidence: registry-atlas README lines 31-32. */}
 
 Atlas-derived hypotheses such as `candidate_route` and gap flags are not standards predicates and must

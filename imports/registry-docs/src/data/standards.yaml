@@ -14,9 +14,9 @@
     - access service metadata
   evidence_docs:
     - label: Registry Relay README
-      url: https://github.com/jeremi/registry-relay/blob/main/README.md
+      url: https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md
     - label: Registry Manifest README
-      url: https://github.com/jeremi/registry-manifest/blob/main/README.md
+      url: https://github.com/jeremi/registry-manifest/blob/81eb005f1808415199d79e02e24e84a6649be318/README.md
   last_checked: 2026-05-23
   notes: Relay and Manifest emit DCAT-shaped metadata. Conformance claims require profile-specific validation evidence.
 - id: bregdcat-ap
@@ -34,9 +34,9 @@
     - embedded SHACL entity shapes
   evidence_docs:
     - label: Registry Relay README
-      url: https://github.com/jeremi/registry-relay/blob/main/README.md
+      url: https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md
     - label: Registry Manifest README
-      url: https://github.com/jeremi/registry-manifest/blob/main/README.md
+      url: https://github.com/jeremi/registry-manifest/blob/81eb005f1808415199d79e02e24e84a6649be318/README.md
   last_checked: 2026-05-25
   notes: Manifest and Relay emit BRegDCAT-shaped registry and data-service metadata. CPSV-AP is now the service-discovery layer; BRegDCAT-AP remains the registry and data-service discovery layer. Later BRegDCAT-AP releases require a separate renderer review.
 - id: cpsv-ap
@@ -57,11 +57,11 @@
     - competent authority and requirement links
   evidence_docs:
     - label: Registry Manifest CPSV-AP fixture
-      url: https://github.com/jeremi/registry-manifest/tree/main/fixtures/cpsv-ap
+      url: https://github.com/jeremi/registry-manifest/tree/81eb005f1808415199d79e02e24e84a6649be318/fixtures/cpsv-ap
     - label: Registry Atlas service-first spec
-      url: https://github.com/jeremi/registry-atlas/blob/main/SERVICE_FIRST_DISCOVERY_SPEC.md
+      url: https://github.com/jeremi/registry-atlas/blob/d46f943b9fdcbab787d1d4eed114058aa43980be/SERVICE_FIRST_DISCOVERY_SPEC.md
     - label: Registry Lab service-first discovery docs
-      url: https://github.com/jeremi/registry-lab/blob/main/docs/service-first-discovery.md
+      url: https://github.com/jeremi/registry-lab/blob/5bb84d5b2500a8d37b989e0959e22287250d1e40/docs/service-first-discovery.md
   last_checked: 2026-05-25
   notes: Registry Manifest emits CPSV-AP service catalogues. Registry Atlas consumes them for service-first discovery; Registry Lab demonstrates the flow with static metadata.
 - id: ogc-api-records
@@ -79,9 +79,9 @@
     - OGC records item bodies
   evidence_docs:
     - label: Registry Relay README
-      url: https://github.com/jeremi/registry-relay/blob/main/README.md
+      url: https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md
     - label: Registry Manifest README
-      url: https://github.com/jeremi/registry-manifest/blob/main/README.md
+      url: https://github.com/jeremi/registry-manifest/blob/81eb005f1808415199d79e02e24e84a6649be318/README.md
   last_checked: 2026-05-23
   notes: Relay exposes records routes behind the ogcapi-records feature, and Manifest renders OGC records artifacts.
 - id: ogc-api-features
@@ -97,7 +97,7 @@
     - standards adapter discussion
   evidence_docs:
     - label: Registry Relay README
-      url: https://github.com/jeremi/registry-relay/blob/main/README.md
+      url: https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md
   last_checked: 2026-05-23
   notes: Listed as an optional standards integration. Keep the claim below implementation until route evidence is pinned.
 - id: openapi
@@ -115,9 +115,9 @@
     - Redoc publication
   evidence_docs:
     - label: Registry Relay README
-      url: https://github.com/jeremi/registry-relay/blob/main/README.md
+      url: https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md
     - label: Registry Notary README
-      url: https://github.com/jeremi/registry-notary/blob/main/README.md
+      url: https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/README.md
   last_checked: 2026-05-23
   notes: Relay and Notary generate OpenAPI. These docs publish pinned artifacts through Redoc.
 - id: shacl
@@ -135,9 +135,9 @@
     - entity node shapes
   evidence_docs:
     - label: Registry Relay README
-      url: https://github.com/jeremi/registry-relay/blob/main/README.md
+      url: https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md
     - label: Registry Manifest README
-      url: https://github.com/jeremi/registry-manifest/blob/main/README.md
+      url: https://github.com/jeremi/registry-manifest/blob/81eb005f1808415199d79e02e24e84a6649be318/README.md
   last_checked: 2026-05-23
   notes: Relay docs describe SHACL validation and Manifest renders SHACL.
 - id: json-schema
@@ -155,9 +155,9 @@
     - static publication bundle
   evidence_docs:
     - label: Registry Relay README
-      url: https://github.com/jeremi/registry-relay/blob/main/README.md
+      url: https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md
     - label: Registry Manifest README
-      url: https://github.com/jeremi/registry-manifest/blob/main/README.md
+      url: https://github.com/jeremi/registry-manifest/blob/81eb005f1808415199d79e02e24e84a6649be318/README.md
   last_checked: 2026-05-23
   notes: Manifest renders entity JSON Schemas and Relay exposes entity schema endpoints.
 - id: json-ld
@@ -179,9 +179,9 @@
     - provenance contexts
   evidence_docs:
     - label: Registry Relay JSON-LD renderers
-      url: https://github.com/jeremi/registry-relay/blob/main/src/metadata/shacl.rs
+      url: https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/src/metadata/shacl.rs
     - label: Registry Notary CCCEV renderer
-      url: https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-server/src/runtime.rs
+      url: https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/crates/registry-notary-server/src/runtime.rs
   last_checked: 2026-05-23
   notes: The projects emit JSON-LD artifacts and contexts. No broad RDF dataset conformance claim is made here.
 - id: sd-jwt-vc
@@ -200,9 +200,9 @@
     - shared SD-JWT VC issuance and holder-proof helpers
   evidence_docs:
     - label: Registry Notary README
-      url: https://github.com/jeremi/registry-notary/blob/main/README.md
+      url: https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/README.md
     - label: Registry Platform SD-JWT crate
-      url: https://github.com/jeremi/registry-platform/tree/main/crates/registry-platform-sdjwt
+      url: https://github.com/jeremi/registry-platform/tree/80777207269099bc2e257827d71259abd383335b/crates/registry-platform-sdjwt
   last_checked: 2026-05-24
   notes: Registry Platform owns reusable SD-JWT VC issuance and holder-proof helpers. Registry Notary owns the claim-to-credential workflow and service routes that use them.
 - id: verifiable-credentials
@@ -221,11 +221,11 @@
     - credential issuance positioning
   evidence_docs:
     - label: Registry Relay provenance context tests
-      url: https://github.com/jeremi/registry-relay/blob/main/tests/provenance_contexts_endpoint.rs
+      url: https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/tests/provenance_contexts_endpoint.rs
     - label: Registry Relay VC fixtures
-      url: https://github.com/jeremi/registry-relay/tree/main/tests/fixtures/vc
+      url: https://github.com/jeremi/registry-relay/tree/3938fdf3930e134d6dca97360baf64ac3a16bed2/tests/fixtures/vc
     - label: Registry Notary README
-      url: https://github.com/jeremi/registry-notary/blob/main/README.md
+      url: https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/README.md
   last_checked: 2026-05-23
   notes: Relay has VC-oriented provenance fixtures and contexts, and Notary issues SD-JWT VC. Keep this below an emits claim until a reviewed VC profile and validation fixtures are pinned.
 - id: cccev
@@ -248,13 +248,13 @@
     - evidence node JSON-LD
   evidence_docs:
     - label: Registry Manifest grouped evidence fixture
-      url: https://github.com/jeremi/registry-manifest/tree/main/fixtures/cpsv-ap
+      url: https://github.com/jeremi/registry-manifest/tree/81eb005f1808415199d79e02e24e84a6649be318/fixtures/cpsv-ap
     - label: Registry Atlas service-first navigation API
-      url: https://github.com/jeremi/registry-atlas/blob/main/crates/semantic-asset-discovery-core/src/navigation.rs
+      url: https://github.com/jeremi/registry-atlas/blob/d46f943b9fdcbab787d1d4eed114058aa43980be/crates/semantic-asset-discovery-core/src/navigation.rs
     - label: Registry Notary CCCEV renderer
-      url: https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-server/src/runtime.rs
+      url: https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/crates/registry-notary-server/src/runtime.rs
     - label: Registry Notary media type constants
-      url: https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-core/src/model.rs
+      url: https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/crates/registry-notary-core/src/model.rs
   last_checked: 2026-05-25
   notes: Manifest emits CCCEV requirement and evidence type list metadata. Atlas treats each EvidenceTypeList as one grouped option and multiple lists as alternatives. Notary renders CCCEV-shaped claim results. Profile conformance is not claimed.
 - id: odrl
@@ -272,9 +272,9 @@
     - policy documents
   evidence_docs:
     - label: Registry Relay README
-      url: https://github.com/jeremi/registry-relay/blob/main/README.md
+      url: https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md
     - label: Registry Manifest README
-      url: https://github.com/jeremi/registry-manifest/blob/main/README.md
+      url: https://github.com/jeremi/registry-manifest/blob/81eb005f1808415199d79e02e24e84a6649be318/README.md
   last_checked: 2026-05-23
   notes: Relay catalog JSON-LD can include dataset-scoped ODRL Offers; Manifest renders policies. Policies are published as metadata; Relay does not evaluate or enforce them at runtime.
 - id: sdmx
@@ -291,7 +291,7 @@
     - content negotiation delivery
   evidence_docs:
     - label: Registry Relay client integration guide
-      url: https://github.com/jeremi/registry-relay/blob/main/docs/client-integration.md
+      url: https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/docs/client-integration.md
   last_checked: 2026-06-11
   notes: >-
     Relay serves configured aggregates as SDMX-JSON 2.1 data messages via
@@ -317,9 +317,9 @@
     - provenance-shaped audit and claim fields
   evidence_docs:
     - label: Registry Relay provenance configuration
-      url: https://github.com/jeremi/registry-relay/blob/main/src/config/provenance.rs
+      url: https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/src/config/provenance.rs
     - label: Registry Notary claim model
-      url: https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-core/src/model.rs
+      url: https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/crates/registry-notary-core/src/model.rs
   last_checked: 2026-05-23
   notes: The code uses provenance concepts, but current evidence does not show a PROV-O vocabulary emission surface. Keep this as design influence until PROV-O terms are emitted or mapped.
 - id: govstack-digital-registries
@@ -336,7 +336,7 @@
     - capability boundary
   evidence_docs:
     - label: Registry Relay README
-      url: https://github.com/jeremi/registry-relay/blob/main/README.md
+      url: https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md
   last_checked: 2026-05-23
   notes: Relay explores a protected consultation gateway model rather than the current single uniform CRUD platform.
 - id: sp-dci
@@ -354,9 +354,9 @@
     - HTTP source connector
   evidence_docs:
     - label: Registry Relay README
-      url: https://github.com/jeremi/registry-relay/blob/main/README.md
+      url: https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md
     - label: Registry Notary source connector
-      url: https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-core/src/config.rs
+      url: https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/crates/registry-notary-core/src/config.rs
   last_checked: 2026-05-23
   notes: Relay exposes an SP-DCI sync adapter behind `spdci-api-standards`. Notary ships an HTTP source connector that maps SP-DCI search and sync responses into claim evaluation inputs.
 - id: oid4vci
@@ -378,11 +378,11 @@
     - wallet-facing citizen self-attestation flow
   evidence_docs:
     - label: Registry Notary OID4VCI routes
-      url: https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-server/src/api.rs
+      url: https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/crates/registry-notary-server/src/api.rs
     - label: Registry Platform OID4VCI crate
-      url: https://github.com/jeremi/registry-platform/tree/main/crates/registry-platform-oid4vci
+      url: https://github.com/jeremi/registry-platform/tree/80777207269099bc2e257827d71259abd383335b/crates/registry-platform-oid4vci
     - label: Registry Lab citizen OID4VCI smoke script
-      url: https://github.com/jeremi/registry-lab/blob/main/scripts/smoke-citizen-oid4vci.sh
+      url: https://github.com/jeremi/registry-lab/blob/5bb84d5b2500a8d37b989e0959e22287250d1e40/scripts/smoke-citizen-oid4vci.sh
     - label: Hosted lab issuer metadata
       url: https://citizen-notary.lab.registrystack.org/.well-known/openid-credential-issuer
   last_checked: 2026-06-11
@@ -413,12 +413,12 @@
     - shared DID validation and Ed25519 JWK helpers
   evidence_docs:
     - label: Registry Relay did:web document builder
-      url: https://github.com/jeremi/registry-relay/blob/main/src/provenance/did_web.rs
+      url: https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/src/provenance/did_web.rs
     - label: Registry Relay DID route
-      url: https://github.com/jeremi/registry-relay/blob/main/src/api/did.rs
+      url: https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/src/api/did.rs
     - label: Registry Notary did:jwk handling
-      url: https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-server/src/api.rs
+      url: https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/crates/registry-notary-server/src/api.rs
     - label: Registry Platform crypto crate
-      url: https://github.com/jeremi/registry-platform/tree/main/crates/registry-platform-crypto
+      url: https://github.com/jeremi/registry-platform/tree/80777207269099bc2e257827d71259abd383335b/crates/registry-platform-crypto
   last_checked: 2026-05-24
   notes: Relay publishes a did:web document, Notary parses did:jwk values for credential subjects, and Platform owns shared DID and Ed25519 JWK helpers. The site does not claim conformance to the wider DID method registry beyond did:web and did:jwk.

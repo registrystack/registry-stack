@@ -19,11 +19,11 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/jeremi/registry-relay/blob/main/README.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md"
       },
       {
         "label": "Registry Manifest README",
-        "url": "https://github.com/jeremi/registry-manifest/blob/main/README.md"
+        "url": "https://github.com/jeremi/registry-manifest/blob/81eb005f1808415199d79e02e24e84a6649be318/README.md"
       }
     ],
     "last_checked": "2026-05-23",
@@ -48,11 +48,11 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/jeremi/registry-relay/blob/main/README.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md"
       },
       {
         "label": "Registry Manifest README",
-        "url": "https://github.com/jeremi/registry-manifest/blob/main/README.md"
+        "url": "https://github.com/jeremi/registry-manifest/blob/81eb005f1808415199d79e02e24e84a6649be318/README.md"
       }
     ],
     "last_checked": "2026-05-25",
@@ -80,15 +80,15 @@
     "evidence_docs": [
       {
         "label": "Registry Manifest CPSV-AP fixture",
-        "url": "https://github.com/jeremi/registry-manifest/tree/main/fixtures/cpsv-ap"
+        "url": "https://github.com/jeremi/registry-manifest/tree/81eb005f1808415199d79e02e24e84a6649be318/fixtures/cpsv-ap"
       },
       {
         "label": "Registry Atlas service-first spec",
-        "url": "https://github.com/jeremi/registry-atlas/blob/main/SERVICE_FIRST_DISCOVERY_SPEC.md"
+        "url": "https://github.com/jeremi/registry-atlas/blob/d46f943b9fdcbab787d1d4eed114058aa43980be/SERVICE_FIRST_DISCOVERY_SPEC.md"
       },
       {
         "label": "Registry Lab service-first discovery docs",
-        "url": "https://github.com/jeremi/registry-lab/blob/main/docs/service-first-discovery.md"
+        "url": "https://github.com/jeremi/registry-lab/blob/5bb84d5b2500a8d37b989e0959e22287250d1e40/docs/service-first-discovery.md"
       }
     ],
     "last_checked": "2026-05-25",
@@ -113,11 +113,11 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/jeremi/registry-relay/blob/main/README.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md"
       },
       {
         "label": "Registry Manifest README",
-        "url": "https://github.com/jeremi/registry-manifest/blob/main/README.md"
+        "url": "https://github.com/jeremi/registry-manifest/blob/81eb005f1808415199d79e02e24e84a6649be318/README.md"
       }
     ],
     "last_checked": "2026-05-23",
@@ -140,7 +140,7 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/jeremi/registry-relay/blob/main/README.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md"
       }
     ],
     "last_checked": "2026-05-23",
@@ -165,11 +165,11 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/jeremi/registry-relay/blob/main/README.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md"
       },
       {
         "label": "Registry Notary README",
-        "url": "https://github.com/jeremi/registry-notary/blob/main/README.md"
+        "url": "https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/README.md"
       }
     ],
     "last_checked": "2026-05-23",
@@ -194,11 +194,11 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/jeremi/registry-relay/blob/main/README.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md"
       },
       {
         "label": "Registry Manifest README",
-        "url": "https://github.com/jeremi/registry-manifest/blob/main/README.md"
+        "url": "https://github.com/jeremi/registry-manifest/blob/81eb005f1808415199d79e02e24e84a6649be318/README.md"
       }
     ],
     "last_checked": "2026-05-23",
@@ -223,11 +223,11 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/jeremi/registry-relay/blob/main/README.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md"
       },
       {
         "label": "Registry Manifest README",
-        "url": "https://github.com/jeremi/registry-manifest/blob/main/README.md"
+        "url": "https://github.com/jeremi/registry-manifest/blob/81eb005f1808415199d79e02e24e84a6649be318/README.md"
       }
     ],
     "last_checked": "2026-05-23",
@@ -256,11 +256,11 @@
     "evidence_docs": [
       {
         "label": "Registry Relay JSON-LD renderers",
-        "url": "https://github.com/jeremi/registry-relay/blob/main/src/metadata/shacl.rs"
+        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/src/metadata/shacl.rs"
       },
       {
         "label": "Registry Notary CCCEV renderer",
-        "url": "https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-server/src/runtime.rs"
+        "url": "https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/crates/registry-notary-server/src/runtime.rs"
       }
     ],
     "last_checked": "2026-05-23",
@@ -286,11 +286,11 @@
     "evidence_docs": [
       {
         "label": "Registry Notary README",
-        "url": "https://github.com/jeremi/registry-notary/blob/main/README.md"
+        "url": "https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/README.md"
       },
       {
         "label": "Registry Platform SD-JWT crate",
-        "url": "https://github.com/jeremi/registry-platform/tree/main/crates/registry-platform-sdjwt"
+        "url": "https://github.com/jeremi/registry-platform/tree/80777207269099bc2e257827d71259abd383335b/crates/registry-platform-sdjwt"
       }
     ],
     "last_checked": "2026-05-24",
@@ -316,15 +316,15 @@
     "evidence_docs": [
       {
         "label": "Registry Relay provenance context tests",
-        "url": "https://github.com/jeremi/registry-relay/blob/main/tests/provenance_contexts_endpoint.rs"
+        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/tests/provenance_contexts_endpoint.rs"
       },
       {
         "label": "Registry Relay VC fixtures",
-        "url": "https://github.com/jeremi/registry-relay/tree/main/tests/fixtures/vc"
+        "url": "https://github.com/jeremi/registry-relay/tree/3938fdf3930e134d6dca97360baf64ac3a16bed2/tests/fixtures/vc"
       },
       {
         "label": "Registry Notary README",
-        "url": "https://github.com/jeremi/registry-notary/blob/main/README.md"
+        "url": "https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/README.md"
       }
     ],
     "last_checked": "2026-05-23",
@@ -354,19 +354,19 @@
     "evidence_docs": [
       {
         "label": "Registry Manifest grouped evidence fixture",
-        "url": "https://github.com/jeremi/registry-manifest/tree/main/fixtures/cpsv-ap"
+        "url": "https://github.com/jeremi/registry-manifest/tree/81eb005f1808415199d79e02e24e84a6649be318/fixtures/cpsv-ap"
       },
       {
         "label": "Registry Atlas service-first navigation API",
-        "url": "https://github.com/jeremi/registry-atlas/blob/main/crates/semantic-asset-discovery-core/src/navigation.rs"
+        "url": "https://github.com/jeremi/registry-atlas/blob/d46f943b9fdcbab787d1d4eed114058aa43980be/crates/semantic-asset-discovery-core/src/navigation.rs"
       },
       {
         "label": "Registry Notary CCCEV renderer",
-        "url": "https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-server/src/runtime.rs"
+        "url": "https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/crates/registry-notary-server/src/runtime.rs"
       },
       {
         "label": "Registry Notary media type constants",
-        "url": "https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-core/src/model.rs"
+        "url": "https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/crates/registry-notary-core/src/model.rs"
       }
     ],
     "last_checked": "2026-05-25",
@@ -391,11 +391,11 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/jeremi/registry-relay/blob/main/README.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md"
       },
       {
         "label": "Registry Manifest README",
-        "url": "https://github.com/jeremi/registry-manifest/blob/main/README.md"
+        "url": "https://github.com/jeremi/registry-manifest/blob/81eb005f1808415199d79e02e24e84a6649be318/README.md"
       }
     ],
     "last_checked": "2026-05-23",
@@ -419,7 +419,7 @@
     "evidence_docs": [
       {
         "label": "Registry Relay client integration guide",
-        "url": "https://github.com/jeremi/registry-relay/blob/main/docs/client-integration.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/docs/client-integration.md"
       }
     ],
     "last_checked": "2026-06-11",
@@ -444,11 +444,11 @@
     "evidence_docs": [
       {
         "label": "Registry Relay provenance configuration",
-        "url": "https://github.com/jeremi/registry-relay/blob/main/src/config/provenance.rs"
+        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/src/config/provenance.rs"
       },
       {
         "label": "Registry Notary claim model",
-        "url": "https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-core/src/model.rs"
+        "url": "https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/crates/registry-notary-core/src/model.rs"
       }
     ],
     "last_checked": "2026-05-23",
@@ -472,7 +472,7 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/jeremi/registry-relay/blob/main/README.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md"
       }
     ],
     "last_checked": "2026-05-23",
@@ -497,11 +497,11 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/jeremi/registry-relay/blob/main/README.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md"
       },
       {
         "label": "Registry Notary source connector",
-        "url": "https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-core/src/config.rs"
+        "url": "https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/crates/registry-notary-core/src/config.rs"
       }
     ],
     "last_checked": "2026-05-23",
@@ -530,15 +530,15 @@
     "evidence_docs": [
       {
         "label": "Registry Notary OID4VCI routes",
-        "url": "https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-server/src/api.rs"
+        "url": "https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/crates/registry-notary-server/src/api.rs"
       },
       {
         "label": "Registry Platform OID4VCI crate",
-        "url": "https://github.com/jeremi/registry-platform/tree/main/crates/registry-platform-oid4vci"
+        "url": "https://github.com/jeremi/registry-platform/tree/80777207269099bc2e257827d71259abd383335b/crates/registry-platform-oid4vci"
       },
       {
         "label": "Registry Lab citizen OID4VCI smoke script",
-        "url": "https://github.com/jeremi/registry-lab/blob/main/scripts/smoke-citizen-oid4vci.sh"
+        "url": "https://github.com/jeremi/registry-lab/blob/5bb84d5b2500a8d37b989e0959e22287250d1e40/scripts/smoke-citizen-oid4vci.sh"
       },
       {
         "label": "Hosted lab issuer metadata",
@@ -570,19 +570,19 @@
     "evidence_docs": [
       {
         "label": "Registry Relay did:web document builder",
-        "url": "https://github.com/jeremi/registry-relay/blob/main/src/provenance/did_web.rs"
+        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/src/provenance/did_web.rs"
       },
       {
         "label": "Registry Relay DID route",
-        "url": "https://github.com/jeremi/registry-relay/blob/main/src/api/did.rs"
+        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/src/api/did.rs"
       },
       {
         "label": "Registry Notary did:jwk handling",
-        "url": "https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-server/src/api.rs"
+        "url": "https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/crates/registry-notary-server/src/api.rs"
       },
       {
         "label": "Registry Platform crypto crate",
-        "url": "https://github.com/jeremi/registry-platform/tree/main/crates/registry-platform-crypto"
+        "url": "https://github.com/jeremi/registry-platform/tree/80777207269099bc2e257827d71259abd383335b/crates/registry-platform-crypto"
       }
     ],
     "last_checked": "2026-05-24",
