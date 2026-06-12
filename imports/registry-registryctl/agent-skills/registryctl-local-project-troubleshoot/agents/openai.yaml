@@ -1,0 +1,7 @@
+interface:
+  display_name: "registryctl Local Troubleshoot"
+  short_description: "Troubleshoot registryctl doctor, smoke, and logs"
+  default_prompt: "Use $registryctl-local-project-troubleshoot to diagnose this registryctl local project."
+
+policy:
+  allow_implicit_invocation: true

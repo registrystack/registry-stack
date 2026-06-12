@@ -4,8 +4,8 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 use registryctl::{
-    NotaryInitOptions, NotarySource, OpenFnBatchMode, OpenFnConvertOptions, OpenFnImportOptions,
-    Sample,
+    DeploymentProfile, DoctorFormat, NotaryInitOptions, NotarySource, OpenFnBatchMode,
+    OpenFnConvertOptions, OpenFnImportOptions, Sample,
 };
 
 fn main() -> Result<()> {
@@ -56,6 +56,9 @@ fn main() -> Result<()> {
         Commands::Status => registryctl::status_project(&std::env::current_dir()?)?,
         Commands::Open => registryctl::open_project(&std::env::current_dir()?)?,
         Commands::Smoke => registryctl::smoke_project(&std::env::current_dir()?)?,
+        Commands::Doctor { format, profile } => {
+            registryctl::doctor_project(&std::env::current_dir()?, format, profile)?
+        }
         Commands::Logs => registryctl::logs_project(&std::env::current_dir()?)?,
         Commands::Notary { command } => match command {
             NotaryCommand::Smoke => registryctl::notary_smoke_project(&std::env::current_dir()?)?,
@@ -248,6 +251,15 @@ enum Commands {
     Open,
     /// Run built-in local smoke checks.
     Smoke,
+    /// Run product doctor validation and print a JSON report.
+    Doctor {
+        /// Deployment profile override to pass through to product doctor commands.
+        #[arg(long, value_enum)]
+        profile: Option<DeploymentProfile>,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = DoctorFormat::Json)]
+        format: DoctorFormat,
+    },
     /// Stream Compose logs for the local project.
     Logs,
     /// Work with the local Registry Notary product.
@@ -265,6 +277,32 @@ enum Commands {
         #[command(subcommand)]
         command: BrunoCommand,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser as _;
+
+    use super::*;
+
+    #[test]
+    fn doctor_cli_accepts_profile_and_json_format() {
+        let cli = Cli::try_parse_from([
+            "registryctl",
+            "doctor",
+            "--profile",
+            "local",
+            "--format",
+            "json",
+        ])
+        .unwrap();
+
+        let Commands::Doctor { format, profile } = cli.command else {
+            panic!("expected doctor command");
+        };
+        assert_eq!(format, DoctorFormat::Json);
+        assert_eq!(profile, Some(DeploymentProfile::Local));
+    }
 }
 
 #[derive(Debug, Subcommand)]
