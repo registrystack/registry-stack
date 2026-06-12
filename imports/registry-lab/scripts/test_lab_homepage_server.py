@@ -679,7 +679,7 @@ class HomepageHtmlTest(unittest.TestCase):
 
     def test_homepage_links_to_dedicated_scenario_runner(self) -> None:
         self.assertIn('href="/scenarios"', self.html)
-        self.assertIn("Try a scenario", self.html)
+        self.assertIn("Run a guided scenario", self.html)
         self.assertNotIn('id="scenario-grid"', self.html)
 
 
@@ -1151,7 +1151,8 @@ class ChooserAndMetadataTest(unittest.TestCase):
         self.assertIn("Start here", SCENARIOS_JS)
 
     def test_chooser_default_card_has_css_class(self) -> None:
-        self.assertIn("scenario-card--default", SCENARIOS_CSS)
+        # Chooser card styles live in shared.css: the homepage renders the same cards.
+        self.assertIn("scenario-card--default", SHARED_CSS)
 
     def test_chooser_default_card_alive_proof_is_first(self) -> None:
         # The JS sort logic places the default story first; verify the sort is in the template.
@@ -1204,12 +1205,12 @@ class ChooserAndMetadataTest(unittest.TestCase):
     def test_chooser_renders_domain_tag(self) -> None:
         # domain-tag class must be defined in CSS and referenced in the renderChooser template.
         self.assertIn("domain-tag", SCENARIOS_JS)
-        self.assertIn(".domain-tag", SCENARIOS_CSS)
+        self.assertIn(".domain-tag", SHARED_CSS)
         # The JS template must reference item.domain so the value is rendered at runtime.
         self.assertIn("item.domain", SCENARIOS_JS)
 
     def test_chooser_domain_tag_has_css_class(self) -> None:
-        self.assertIn(".domain-tag", SCENARIOS_CSS)
+        self.assertIn(".domain-tag", SHARED_CSS)
 
     # ---- 4. Per-story head metadata ----
 
@@ -1893,6 +1894,100 @@ class StrictCspCompatibilityTest(unittest.TestCase):
 
     def test_scenarios_js_reads_active_scenario_from_body_dataset(self) -> None:
         self.assertIn("document.body.dataset.activeScenario", SCENARIOS_JS)
+
+
+class CivicPrintDesignTest(unittest.TestCase):
+    """The lab pages share registrystack.org's civic-print design language."""
+
+    def test_civic_print_tokens_are_defined_on_both_pages(self) -> None:
+        # Each page declares its own :root, so the palette must exist in both.
+        for token in ("--registry-paper", "--registry-ink-band-deep", "--registry-stamp", "--registry-brass", "--registry-ease"):
+            self.assertIn(token, HOMEPAGE_CSS)
+            self.assertIn(token, SCENARIOS_CSS)
+
+    def test_shared_css_disables_motion_for_reduced_motion_users(self) -> None:
+        self.assertIn("prefers-reduced-motion", SHARED_CSS)
+
+    def test_footer_is_an_ink_band_with_inner_wrapper(self) -> None:
+        self.assertIn("var(--registry-ink-band-deep)", SHARED_CSS)
+        for page in (
+            server.homepage_html("Registry Lab").decode("utf-8"),
+            server.scenario_page_html().decode("utf-8"),
+        ):
+            self.assertIn('class="site-footer-inner"', page)
+
+    def test_scenario_page_marks_current_nav_entry(self) -> None:
+        page = server.scenario_page_html().decode("utf-8")
+        self.assertIn('aria-current="page"', page)
+        self.assertIn("aria-current", SHARED_CSS)
+
+
+class HomepageHierarchyTest(unittest.TestCase):
+    """Scenarios lead the homepage; services and credentials close it as the advanced section."""
+
+    def setUp(self) -> None:
+        self.page = server.homepage_html("Registry Lab").decode("utf-8")
+
+    def test_sections_run_scenarios_then_wallet_then_services(self) -> None:
+        order = [
+            self.page.index('id="scenarios"'),
+            self.page.index('id="wallet"'),
+            self.page.index('id="services"'),
+        ]
+        self.assertEqual(order, sorted(order))
+
+    def test_every_story_has_a_card_linking_to_its_runner(self) -> None:
+        catalogue = server.scenario_payload({}, lab_mode="hosted")["scenarios"]
+        self.assertTrue(catalogue)
+        for item in catalogue:
+            self.assertIn(f'href="/scenarios/{item["id"]}"', self.page)
+
+    def test_default_story_card_is_first_and_badged_start_here(self) -> None:
+        self.assertIn("Start here", self.page)
+        first_card = self.page.index('class="scenario-card')
+        self.assertIn("scenario-card--default", self.page[first_card : first_card + 60])
+
+    def test_hero_has_one_primary_cta_and_a_status_line(self) -> None:
+        hero = self.page.split('id="scenarios"', 1)[0]
+        self.assertIn("Run a guided scenario", hero)
+        self.assertEqual(hero.count('class="button'), 1)
+        self.assertIn('id="status-line"', hero)
+        self.assertNotIn("status-counts", self.page)
+
+    def test_status_line_is_written_by_the_status_loader(self) -> None:
+        self.assertIn("status-line", HOMEPAGE_JS)
+        self.assertNotIn("ok-count", HOMEPAGE_JS)
+        self.assertNotIn("missing-count", HOMEPAGE_JS)
+
+    def test_nav_demotes_services_to_for_developers(self) -> None:
+        nav = self.page.split("</nav>", 1)[0]
+        self.assertIn(">For developers</a>", nav)
+        self.assertNotIn("Services &amp; credentials", nav)
+        self.assertLess(nav.index("Scenario demos"), nav.index("Wallet test"))
+        self.assertLess(nav.index("Wallet test"), nav.index("For developers"))
+
+    def test_local_only_cards_read_as_walkthroughs_in_hosted_mode(self) -> None:
+        self.assertIn("Read the walkthrough", self.page)
+        local_page = server.homepage_html("Registry Lab", lab_mode="local").decode("utf-8")
+        self.assertNotIn("Read the walkthrough", local_page)
+
+    def test_service_credentials_collapse_behind_a_disclosure(self) -> None:
+        self.assertIn("cred-disclosure", HOMEPAGE_JS)
+        self.assertIn("<details", HOMEPAGE_JS)
+
+    def test_top_nav_is_identical_on_every_page(self) -> None:
+        # Same entries, same hrefs, same order; only the aria-current marker moves.
+        def nav(page: str) -> str:
+            inner = page.split('<nav class="top-nav"', 1)[1].split("</nav>", 1)[0]
+            return inner.replace(' aria-current="page"', "")
+
+        scenarios_page = server.scenario_page_html().decode("utf-8")
+        self.assertEqual(nav(self.page), nav(scenarios_page))
+
+    def test_each_page_marks_its_own_nav_entry_current(self) -> None:
+        self.assertIn('<a href="/" aria-current="page">Home</a>', self.page)
+        scenarios_page = server.scenario_page_html().decode("utf-8")
+        self.assertIn('<a href="/scenarios" aria-current="page">Scenario demos</a>', scenarios_page)
 
 
 if __name__ == "__main__":

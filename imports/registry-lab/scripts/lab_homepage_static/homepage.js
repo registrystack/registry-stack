@@ -80,7 +80,7 @@ function renderServices(services) {
           <span class="pill" data-status-for="${escapeHtml(service.id)}">checking</span>
           <a class="button hidden" data-open-for="${escapeHtml(service.id)}" href="${escapeHtml(service.url)}" target="_blank" rel="noreferrer">Open</a>
         </div>
-        ${creds ? `<div class="cred-list">${creds}</div>` : ""}
+        ${creds ? `<details class="cred-disclosure"><summary>Demo credentials &amp; curl</summary><div class="cred-list">${creds}</div></details>` : ""}
       </article>
     `;
   }).join("");
@@ -120,11 +120,12 @@ async function loadStatus() {
         }
       }
     }
-    byId("ok-count").textContent = ok;
-    byId("bad-count").textContent = bad;
-    byId("status-time").textContent = "Checked just now";
+    const total = ok + bad;
+    byId("status-line").textContent = bad === 0
+      ? `All ${total} services up · synthetic data only`
+      : `${ok} of ${total} services up · synthetic data only`;
   } catch (error) {
-    byId("status-time").textContent = "Status unavailable";
+    byId("status-line").textContent = "Status unavailable";
   }
 }
 
@@ -132,11 +133,7 @@ async function start() {
   try {
     const response = await fetch("/api/lab.json", {cache: "no-store"});
     const data = await response.json();
-    byId("title").textContent = data.title || "Registry Lab";
     byId("subtitle").textContent = data.subtitle || "";
-    byId("domain").textContent = data.environment?.domain || "";
-    byId("notice").textContent = data.environment?.notice || "";
-    byId("missing-count").textContent = (data.credentials || []).filter((credential) => !credential.configured).length;
     renderServices(data.services || []);
     renderWallet(data.wallet || {});
     wireCopyButtons();
