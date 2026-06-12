@@ -1212,6 +1212,7 @@ fn build_posture(
     if let Some(digest) = metadata.package_digest {
         metadata_manifest.insert("package_digest".to_string(), json!(digest));
     }
+    let deployment = deployment_summary(config, provenance.source);
     let posture = json!({
         "schema": "registry.ops.posture.v1",
         "observed_at": OffsetDateTime::now_utc()
@@ -1239,6 +1240,8 @@ fn build_posture(
             "last_apply_at": provenance.last_apply_at,
             "restart_required": provenance.restart_required,
         },
+        "deployment": deployment,
+        "audit": audit_assurance(config),
         "standards_artifacts": standards_artifacts(config),
         "relay": {
             "dataset_count": config.datasets.len(),
@@ -2265,6 +2268,107 @@ fn audit_summary(config: &Config) -> Value {
     })
 }
 
+/// Build the `deployment` posture object: declared profile, gate findings, and
+/// active waivers. Findings carry only `{id, severity, status}` plus an
+/// optional waiver block; the default-tier posture filter strips waiver
+/// reasons. `findings` and `waivers` are always present (possibly empty).
+fn deployment_summary(config: &Config, config_source: ConfigSource) -> Value {
+    let facts = crate::deployment::facts_from_config(config, config_source);
+    let waivers = crate::deployment::waivers_from_config(config);
+    let evaluation = crate::deployment::evaluate(
+        config.deployment.profile,
+        &facts,
+        &waivers,
+        &crate::deployment::today_utc(),
+    );
+    let mut summary = Map::new();
+    if let Some(profile) = config.deployment.profile {
+        summary.insert("profile".to_string(), json!(profile.as_str()));
+    }
+    summary.insert(
+        "findings".to_string(),
+        json!(evaluation
+            .findings
+            .iter()
+            .map(deployment_finding_json)
+            .collect::<Vec<_>>()),
+    );
+    summary.insert(
+        "waivers".to_string(),
+        json!(evaluation
+            .active_waivers
+            .iter()
+            .map(|waiver| json!({
+                "finding": waiver.finding,
+                "reason": waiver.reason,
+                "expires": waiver.expires,
+            }))
+            .collect::<Vec<_>>()),
+    );
+    Value::Object(summary)
+}
+
+fn deployment_finding_json(finding: &registry_platform_ops::DeploymentFinding) -> Value {
+    let mut object = Map::new();
+    object.insert("id".to_string(), json!(finding.id));
+    object.insert("severity".to_string(), json!(finding.severity.as_str()));
+    object.insert("status".to_string(), json!(finding.status.as_str()));
+    if let Some(waiver) = &finding.waiver {
+        object.insert(
+            "waiver".to_string(),
+            json!({
+                "reason": waiver.reason,
+                "expires": waiver.expires,
+            }),
+        );
+    }
+    Value::Object(object)
+}
+
+/// Build the top-level `audit` assurance object: eight separately named facts
+/// describing what the audit trail does and does not guarantee. Each is
+/// reported truthfully from config so "audit exists" cannot be overclaimed.
+fn audit_assurance(config: &Config) -> Value {
+    use registry_platform_ops::{
+        AuditAnchoring, AuditCheckpoints, AuditHashChain, AuditKeyedIntegrity, AuditRedactionMode,
+        AuditRetentionOwner, AuditSinkClass,
+    };
+
+    let write_policy = config.audit.write_policy;
+    let keyed_integrity = if config.audit.hash_secret_env.is_some() {
+        AuditKeyedIntegrity::Hmac
+    } else {
+        AuditKeyedIntegrity::None
+    };
+    // Platform audit envelopes always chain `prev_hash`/`record_hash` in
+    // process; the chain is not independently retained or anchored.
+    let hash_chain = AuditHashChain::ProcessLocal;
+    let sink_class = match &config.audit.sink {
+        crate::config::AuditSinkConfig::Stdout { .. } => AuditSinkClass::Stdout,
+        crate::config::AuditSinkConfig::File { .. } => AuditSinkClass::File,
+        crate::config::AuditSinkConfig::Syslog { .. } => AuditSinkClass::External,
+    };
+    let checkpoints = if config.audit.chain {
+        AuditCheckpoints::Enabled
+    } else {
+        AuditCheckpoints::Supported
+    };
+
+    // The ops assurance enums serialize to their snake_case wire strings, the
+    // canonical posture vocabulary. `to_value` cannot fail for these unit
+    // enums.
+    json!({
+        "write_policy": json!(write_policy),
+        "redaction_mode": json!(AuditRedactionMode::Redacted),
+        "hash_chain": json!(hash_chain),
+        "keyed_integrity": json!(keyed_integrity),
+        "sink_class": json!(sink_class),
+        "retention_owner": json!(AuditRetentionOwner::Operator),
+        "checkpoints": json!(checkpoints),
+        "anchoring": json!(AuditAnchoring::None),
+    })
+}
+
 fn fallback_config_provenance(config: &Config) -> ConfigProvenance {
     let public_shape = json!({
         "instance": {
@@ -2642,6 +2746,295 @@ datasets: []
         assert_eq!(
             signing_readiness_for_apply(Some(&not_ready)),
             KeyReadiness::NotReady
+        );
+    }
+
+    // --- deployment posture surface tests ---
+
+    use registry_platform_ops::{AuditWritePolicy, DeploymentProfile};
+
+    /// Compile the shared posture schema once per call. Validation here proves
+    /// the posture document relay emits, including the `deployment` and `audit`
+    /// blocks, matches `registry.ops.posture.v1`.
+    fn assert_posture_schema_valid(body: &Value) {
+        let schema: Value = serde_json::from_str(registry_platform_ops::POSTURE_SCHEMA_V1)
+            .expect("posture schema parses");
+        let compiled = jsonschema::JSONSchema::compile(&schema).expect("posture schema compiles");
+        let errors = compiled
+            .validate(body)
+            .err()
+            .map(|errors| errors.map(|error| error.to_string()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        assert!(
+            errors.is_empty(),
+            "posture did not match registry.ops.posture.v1: {errors:?}\n{body:#}"
+        );
+    }
+
+    fn empty_posture_metadata() -> PostureMetadata<'static> {
+        PostureMetadata {
+            compiled: None,
+            source_digest: None,
+            package_digest: None,
+            provenance_state: None,
+        }
+    }
+
+    fn build_default_tier_posture(config: &Config) -> Value {
+        build_posture(
+            config,
+            None,
+            None,
+            empty_posture_metadata(),
+            PostureTier::Default,
+        )
+        .expect("default-tier posture builds")
+    }
+
+    /// The eight audit assurance facts are always present and named, so "audit
+    /// exists" cannot be overclaimed: each fact is reported on its own.
+    #[test]
+    fn audit_assurance_reports_eight_named_facts() {
+        let config = parse_minimal_config(&minimal_config_yaml());
+        let audit = audit_assurance(&config);
+        for field in [
+            "write_policy",
+            "redaction_mode",
+            "hash_chain",
+            "keyed_integrity",
+            "sink_class",
+            "retention_owner",
+            "checkpoints",
+            "anchoring",
+        ] {
+            assert!(
+                audit.get(field).is_some(),
+                "audit assurance must report the `{field}` fact"
+            );
+        }
+        // Default config: availability-first, stdout sink, no keyed integrity.
+        assert_eq!(audit["write_policy"], "availability_first");
+        assert_eq!(audit["sink_class"], "stdout");
+        assert_eq!(audit["keyed_integrity"], "none");
+        assert_eq!(audit["hash_chain"], "process_local");
+        assert_eq!(audit["anchoring"], "none");
+    }
+
+    /// `write_policy` is reported truthfully from config, not assumed.
+    #[test]
+    fn audit_assurance_write_policy_follows_config() {
+        let mut config = parse_minimal_config(&minimal_config_yaml());
+        config.audit.write_policy = AuditWritePolicy::FailClosed;
+        let audit = audit_assurance(&config);
+        assert_eq!(audit["write_policy"], "fail_closed");
+    }
+
+    /// An undeclared profile (the minimal config default) omits `profile`,
+    /// reports the single `deployment.profile_undeclared` warn finding, and
+    /// carries no waivers.
+    #[test]
+    fn deployment_summary_undeclared_profile_nags_only() {
+        let config = parse_minimal_config(&minimal_config_yaml());
+        assert!(config.deployment.profile.is_none());
+        let summary = deployment_summary(&config, ConfigSource::LocalFile);
+        assert!(
+            summary.get("profile").is_none(),
+            "undeclared profile must not be reported"
+        );
+        let findings = summary["findings"].as_array().expect("findings array");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0]["id"], crate::deployment::PROFILE_UNDECLARED);
+        assert_eq!(findings[0]["severity"], "finding_warn");
+        assert_eq!(findings[0]["status"], "active");
+        assert!(summary["waivers"].as_array().expect("waivers").is_empty());
+    }
+
+    /// A declared profile is echoed in the summary. `hosted_lab` here triggers
+    /// the api-key-no-rotation and config-unsigned findings (no evidence
+    /// declared, local file), all at finding-level severity.
+    #[test]
+    fn deployment_summary_declared_profile_reports_findings() {
+        let mut config = parse_minimal_config(&minimal_config_yaml());
+        config.deployment.profile = Some(DeploymentProfile::HostedLab);
+        let summary = deployment_summary(&config, ConfigSource::LocalFile);
+        assert_eq!(summary["profile"], "hosted_lab");
+        let ids: Vec<&str> = summary["findings"]
+            .as_array()
+            .expect("findings array")
+            .iter()
+            .map(|finding| finding["id"].as_str().expect("finding id"))
+            .collect();
+        assert!(ids.contains(&"relay.config.unsigned"));
+        assert!(ids.contains(&"relay.auth.api_key_no_rotation_evidence"));
+        assert!(ids.contains(&"relay.ingress.rate_limit_missing"));
+    }
+
+    /// The full posture document is schema-valid for every declared profile and
+    /// for the undeclared default. `evidence_grade` from a local file would
+    /// trip a startup gate at load time, so its posture is exercised with a
+    /// signed (governed-bundle) source where no startup gate fires.
+    #[test]
+    fn posture_document_is_schema_valid_across_profiles() {
+        let config = parse_minimal_config(&minimal_config_yaml());
+        assert_posture_schema_valid(&build_default_tier_posture(&config));
+
+        for profile in [
+            DeploymentProfile::Local,
+            DeploymentProfile::HostedLab,
+            DeploymentProfile::Production,
+        ] {
+            let mut config = parse_minimal_config(&minimal_config_yaml());
+            config.deployment.profile = Some(profile);
+            assert_posture_schema_valid(&build_default_tier_posture(&config));
+        }
+
+        // Evidence-grade: declare the operator evidence and use a signed source
+        // so no startup gate fires, then confirm the posture validates.
+        let mut config = parse_minimal_config(&minimal_config_yaml());
+        config.deployment.profile = Some(DeploymentProfile::EvidenceGrade);
+        config.deployment.evidence.ingress_rate_limit = true;
+        config.deployment.evidence.api_key_rotation = true;
+        let posture = build_posture(
+            &config,
+            None,
+            None,
+            empty_posture_metadata(),
+            PostureTier::Default,
+        )
+        .expect("evidence-grade posture builds");
+        assert_posture_schema_valid(&posture);
+    }
+
+    /// The default-tier allowlist exposes only finding id/severity/status; the
+    /// whole deployment `waivers` block (finding, reason, expires) is dropped.
+    /// The restricted tier returns the unfiltered document, so the waiver and
+    /// its reason appear there. This pins the allowlist contract for the new
+    /// deployment block, including that synthetic waiver reasons never leak at
+    /// the default tier.
+    #[test]
+    fn posture_default_tier_drops_waivers_restricted_keeps_them() {
+        let mut config = parse_minimal_config(&minimal_config_yaml());
+        config.deployment.profile = Some(DeploymentProfile::HostedLab);
+        config.deployment.waivers = vec![crate::config::DeploymentWaiverConfig {
+            finding: "relay.config.unsigned".to_string(),
+            reason: "synthetic-waiver-reason-not-a-secret".to_string(),
+            expires: "2999-01-01".to_string(),
+        }];
+
+        // Default tier: waivers array filtered away entirely, and the waived
+        // finding carries no `waiver` sub-object.
+        let default_tier = build_default_tier_posture(&config);
+        assert!(
+            default_tier["deployment"].get("waivers").is_none(),
+            "default tier must not expose the deployment waivers array"
+        );
+        let waived = default_tier["deployment"]["findings"]
+            .as_array()
+            .expect("findings array")
+            .iter()
+            .find(|finding| finding["id"] == "relay.config.unsigned")
+            .expect("config.unsigned finding present");
+        assert_eq!(waived["status"], "waived");
+        assert!(
+            waived.get("waiver").is_none(),
+            "default tier must strip the per-finding waiver block"
+        );
+        let serialized = default_tier.to_string();
+        assert!(
+            !serialized.contains("synthetic-waiver-reason-not-a-secret"),
+            "default-tier posture must never leak a waiver reason"
+        );
+
+        // Restricted tier: full document, waiver and reason present.
+        let restricted = build_posture(
+            &config,
+            None,
+            None,
+            empty_posture_metadata(),
+            PostureTier::Restricted,
+        )
+        .expect("restricted posture builds");
+        let restricted_waivers = restricted["deployment"]["waivers"]
+            .as_array()
+            .expect("restricted waivers array");
+        assert_eq!(restricted_waivers.len(), 1);
+        assert_eq!(restricted_waivers[0]["finding"], "relay.config.unsigned");
+        assert_eq!(restricted_waivers[0]["expires"], "2999-01-01");
+        assert_eq!(
+            restricted_waivers[0]["reason"],
+            "synthetic-waiver-reason-not-a-secret"
+        );
+    }
+
+    /// Default-config posture regression: the gate train adds exactly the
+    /// `deployment` and `audit` top-level blocks and nothing else. The default
+    /// config declares no profile, so `deployment` is exactly the single
+    /// `profile_undeclared` finding, and `audit` is the eight assurance facts at
+    /// their default values. This pins that the additions did not perturb the
+    /// rest of the posture document for an unchanged config.
+    #[test]
+    fn default_config_posture_regression() {
+        let config = parse_minimal_config(&minimal_config_yaml());
+        let posture = build_default_tier_posture(&config);
+
+        // Top-level shape is stable. `observed_at` is volatile, so we pin the
+        // key set rather than the whole document.
+        let mut keys: Vec<&str> = posture
+            .as_object()
+            .expect("posture is an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![
+                "audit",
+                "build",
+                "component",
+                "configuration",
+                "deployment",
+                "instance",
+                "observed_at",
+                "posture",
+                "relay",
+                "runtime",
+                "schema",
+                "standards_artifacts",
+                "tier",
+            ],
+            "default-config posture top-level keys changed"
+        );
+
+        // `deployment`: undeclared profile, single nag finding, no waivers.
+        assert_eq!(
+            posture["deployment"],
+            json!({
+                "findings": [
+                    {
+                        "id": crate::deployment::PROFILE_UNDECLARED,
+                        "severity": "finding_warn",
+                        "status": "active",
+                    }
+                ],
+            }),
+            "default-config deployment block changed"
+        );
+
+        // `audit`: the eight assurance facts at their default-config values.
+        assert_eq!(
+            posture["audit"],
+            json!({
+                "write_policy": "availability_first",
+                "redaction_mode": "redacted",
+                "hash_chain": "process_local",
+                "keyed_integrity": "none",
+                "sink_class": "stdout",
+                "retention_owner": "operator",
+                "checkpoints": "supported",
+                "anchoring": "none",
+            }),
+            "default-config audit assurance block changed"
         );
     }
 }
