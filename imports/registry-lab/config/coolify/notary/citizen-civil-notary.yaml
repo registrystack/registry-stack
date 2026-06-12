@@ -62,6 +62,7 @@ evidence:
   service_id: citizen-civil-notary
   api_base_url: https://citizen-notary.lab.registrystack.org
   inline_batch_limit: 20
+  max_credential_validity_seconds: 31536000
   source_connections:
     civil:
       base_url: http://civil-registry-relay:8080
