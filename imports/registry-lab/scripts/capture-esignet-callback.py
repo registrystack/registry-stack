@@ -41,6 +41,38 @@ class ReusableTCPServer(socketserver.TCPServer):
     allow_reuse_address = True
 
 
+def page_html(title: str, detail: str, next_step: str) -> str:
+    """Post-login result page, in the lab's civic-print identity.
+
+    `detail` is trusted pre-escaped HTML from the call sites; title and
+    next_step are escaped here.
+    """
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{html.escape(title)}</title>
+  <style>
+    body {{ margin: 0; border-top: 2px solid #161616; background: #ffffff; color: #3a3a3a; font-family: "Public Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.55; }}
+    main {{ margin: 0 auto; max-width: 42rem; padding: 3rem 1.5rem; }}
+    .eyebrow {{ color: #173b7a; font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; letter-spacing: 0.08em; margin: 0 0 14px; text-transform: uppercase; }}
+    h1 {{ color: #161616; letter-spacing: -0.01em; margin: 0 0 12px; }}
+    code {{ background: #f3f4f6; border: 1px solid #e5e5e5; font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.9em; padding: 0.125rem 0.25rem; }}
+  </style>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">Registry Lab</p>
+    <h1>{html.escape(title)}</h1>
+    <p>{detail}</p>
+    <p>{html.escape(next_step)}</p>
+  </main>
+</body>
+</html>
+"""
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Capture one eSignet OIDC callback.")
     parser.add_argument("--host", default="127.0.0.1")
@@ -113,27 +145,7 @@ def main() -> int:
             self.server.should_stop = True  # type: ignore[attr-defined]
 
         def _send_page(self, status: int, title: str, detail: str, next_step: str) -> None:
-            body = f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>{html.escape(title)}</title>
-  <style>
-    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 3rem; line-height: 1.5; }}
-    main {{ max-width: 42rem; }}
-    code {{ background: #f3f4f6; padding: 0.125rem 0.25rem; border-radius: 4px; }}
-  </style>
-</head>
-<body>
-  <main>
-    <h1>{html.escape(title)}</h1>
-    <p>{detail}</p>
-    <p>{html.escape(next_step)}</p>
-  </main>
-</body>
-</html>
-"""
-            encoded = body.encode("utf-8")
+            encoded = page_html(title, detail, next_step).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(encoded)))

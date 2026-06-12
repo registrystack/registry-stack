@@ -20,9 +20,10 @@ from urllib.parse import urljoin
 from lab_homepage_scenarios import (
     run_alive_proof_step,
     run_scenario_step,
-    scenario_nav_link,
+    scenario_cards_html,
     scenario_page_html,
     scenario_payload,
+    top_nav_html,
 )
 
 
@@ -258,7 +259,7 @@ def status_checks(config: dict[str, Any], timeout: float) -> dict[str, Any]:
     return {"generated_at_unix_ms": int(time.time() * 1000), "checks": checks}
 
 
-def homepage_html(title: str) -> bytes:
+def homepage_html(title: str, lab_mode: str = "hosted") -> bytes:
     safe_title = html.escape(title)
     return f"""<!doctype html>
 <html lang="en">
@@ -277,69 +278,63 @@ def homepage_html(title: str) -> bytes:
       <span>Registry Lab</span>
     </a>
     <nav class="top-nav" aria-label="Lab navigation">
-      {scenario_nav_link()}
-      <a href="#services">Services &amp; credentials</a>
-      <a href="#wallet">Wallet test</a>
-      <a class="nav-emphasis" href="https://registrystack.org/">Registry Stack</a>
+      {top_nav_html("home")}
     </nav>
   </header>
   <main>
     <section class="hero" aria-labelledby="title">
       <div class="hero-inner">
-        <div>
-          <p class="eyebrow">Public demo lab</p>
-          <h1 id="title">Registry Lab</h1>
-          <p class="subtitle" id="subtitle"></p>
-          <p class="hero-note">Everything here runs on synthetic demo data. The credentials below are public on purpose, and none of them reach a real or production system. Poke around freely.</p>
-          <div class="hero-links">
-            <a class="button primary" href="/scenarios">Try a scenario</a>
-            <a class="button" href="#wallet">Try the wallet test</a>
-            <a class="button" href="#services">See what is running</a>
-          </div>
-          <div class="badge-row">
-            <span class="badge" id="domain"></span>
-            <span class="badge" id="notice"></span>
-          </div>
+        <p class="eyebrow">Public demo lab</p>
+        <h1 id="title">See governed registry services prove facts, step by step.</h1>
+        <p class="subtitle" id="subtitle"></p>
+        <p class="hero-note">Everything here runs on synthetic demo data, and the demo credentials are public on purpose. Poke around freely.</p>
+        <div class="hero-links">
+          <a class="button primary" href="#scenarios">Run a guided scenario</a>
         </div>
-        <aside class="status-summary">
-          <h2>Status</h2>
-          <p class="meta" id="status-time">Checking services</p>
-          <div class="status-counts">
-            <div class="count"><strong id="ok-count">0</strong><span class="meta">up</span></div>
-            <div class="count"><strong id="bad-count">0</strong><span class="meta">down</span></div>
-            <div class="count"><strong id="missing-count">0</strong><span class="meta">missing token</span></div>
-          </div>
-        </aside>
+        <p class="status-line" id="status-line">Checking services</p>
       </div>
     </section>
-    <section class="band" id="services">
+    <section class="band" id="scenarios">
       <div class="band-inner">
         <div class="section-heading">
-          <p class="eyebrow">What is running</p>
-          <h2>The services in this lab, and how to call them.</h2>
-          <p>Each card is a live Registry Stack service running on seeded demo data. The pill shows whether it is responding right now. Where a service needs a token, its public demo credentials and a ready-made curl command sit right here. They only reach seeded demo data, never a real or production system.</p>
+          <p class="eyebrow">Guided scenarios</p>
+          <h2>Pick a story and run it step by step.</h2>
+          <p>Each story starts in plain language, runs one request at a time against the live services, and keeps the JSON out of the way until you ask for the source.</p>
         </div>
-        <div class="grid" id="services-grid"></div>
+        {scenario_cards_html(lab_mode)}
       </div>
     </section>
     <section class="band band-muted" id="wallet">
       <div class="band-inner">
         <div class="section-heading">
-          <p class="eyebrow">Wallet test</p>
-          <h2>Issue a proof to the hosted wallet.</h2>
+          <p class="eyebrow">Take it further</p>
+          <h2>Put a signed proof in a real wallet.</h2>
           <p>Start the citizen Notary flow, sign in as the demo citizen, then paste the generated credential offer into the hosted wallet. The wallet should receive a signed proof that the civil registry says the person is alive.</p>
         </div>
         <div class="wallet-grid" id="wallet-grid"></div>
       </div>
     </section>
+    <section class="band" id="services">
+      <div class="band-inner">
+        <div class="section-heading">
+          <p class="eyebrow">For developers</p>
+          <h2>Call the services yourself.</h2>
+          <p>Every scenario above is plain HTTP underneath. Each card is a live Registry Stack service running on seeded demo data; the pill shows whether it is responding right now. Expand a card for its public demo credentials and a ready-made curl command. They only reach seeded demo data, never a real or production system.</p>
+        </div>
+        <div class="grid" id="services-grid"></div>
+      </div>
+    </section>
   </main>
   <footer class="site-footer">
-    <div>
-      <a class="brand" href="https://registrystack.org/">
-        <span class="brand-mark" aria-hidden="true">RS</span>
-        <span>Registry Stack</span>
-      </a>
-      <p class="meta">Public demo environment for governed registry services.</p>
+    <div class="site-footer-inner">
+      <div>
+        <strong>Registry Stack</strong>
+        <p class="meta">Public demo environment for governed registry services.</p>
+      </div>
+      <nav aria-label="Footer links">
+        <a href="https://registrystack.org/">Registry Stack</a>
+        <a href="https://docs.registrystack.org/">Docs</a>
+      </nav>
     </div>
   </footer>
   <script src="/static/homepage.js"></script>
@@ -384,7 +379,10 @@ class LabHomepageHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
         if path == "/":
-            self.send_bytes(homepage_html(self.config.get("title", "Registry Lab")), "text/html; charset=utf-8")
+            self.send_bytes(
+                homepage_html(self.config.get("title", "Registry Lab"), lab_mode=self.lab_mode),
+                "text/html; charset=utf-8",
+            )
             return
         if path == "/favicon.svg":
             self.send_bytes(favicon_svg(), FAVICON_CONTENT_TYPE)

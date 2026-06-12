@@ -2396,6 +2396,82 @@ def html_step(
 """
 
 
+# Civic-print styling shared with registrystack.org and the lab homepage: ledger
+# tones, ink-black band, square corners, mono eyebrows. Brass is text-only.
+WALKTHROUGH_CSS = """\
+    :root {
+      color-scheme: light;
+      --bg: #fafafa;
+      --panel: #ffffff;
+      --ink: #161616;
+      --body: #3a3a3a;
+      --muted: #6a6a6a;
+      --line: #e5e5e5;
+      --blue: #173b7a;
+      --green: #0f766e;
+      --amber: #855b00;
+      --stamp: #9d2c1d;
+      --band: #161616;
+      --brass: #d4af4e;
+      --code-bg: #f3f4f6;
+      --font: "Public Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--body); font-family: var(--font); line-height: 1.5; }
+    ::selection { background: var(--blue); color: #ffffff; }
+    h1, h2, h3, h4 { color: var(--ink); }
+    /* The report opens on an ink band, like the lab footer closes on one. */
+    header { background: var(--band); color: #ffffff; padding: 36px clamp(18px, 4vw, 52px); }
+    .eyebrow { color: var(--brass); font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; margin: 0 0 14px; text-transform: uppercase; }
+    header h1 { margin: 0; color: #ffffff; font-size: clamp(2rem, 4vw, 3.4rem); letter-spacing: -0.01em; line-height: 1.05; }
+    header p { max-width: 980px; margin: 12px 0 0; color: rgba(255, 255, 255, 0.78); font-size: 1.05rem; }
+    header code { color: var(--brass); font-family: var(--mono); }
+    .layout { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 24px; max-width: 1440px; margin: 0 auto; padding: 24px; }
+    nav { position: sticky; top: 16px; align-self: start; background: var(--panel); border: 1px solid var(--line); padding: 12px; }
+    nav h2 { font-size: .86rem; margin: 4px 4px 10px; color: var(--muted); font-family: var(--mono); text-transform: uppercase; }
+    nav button { display: flex; width: 100%; align-items: center; gap: 8px; border: 0; border-left: 2px solid transparent; background: transparent; color: var(--body); padding: 9px 8px; text-align: left; cursor: pointer; font: inherit; }
+    nav button:hover { background: var(--code-bg); color: var(--ink); }
+    /* The step in view is ticked in the register: ink text, stamp-red rule. */
+    nav button.active { background: #eef3ff; border-left-color: var(--stamp); color: var(--ink); }
+    main { min-width: 0; }
+    .summary { background: var(--panel); border: 1px solid var(--line); padding: 18px; margin-bottom: 18px; }
+    .summary h2, .step-card h3, .step-card h4 { margin-top: 0; }
+    .step-card { background: var(--panel); border: 1px solid var(--line); border-left: 6px solid var(--blue); margin-bottom: 18px; padding: 18px; scroll-margin-top: 16px; }
+    .step-card[data-accent="green"] { border-left-color: var(--green); }
+    .step-card[data-accent="amber"] { border-left-color: var(--amber); }
+    .step-card[data-accent="rose"] { border-left-color: var(--stamp); }
+    .step-head { display: flex; gap: 12px; align-items: flex-start; }
+    .step-number { flex: 0 0 auto; display: inline-grid; place-items: center; width: 32px; height: 32px; background: var(--blue); color: #ffffff; font-family: var(--mono); font-weight: 700; }
+    .step-head h3 { margin-bottom: 4px; }
+    .step-head p { margin: 0; color: var(--muted); }
+    .request-line { margin: 16px 0; padding: 10px 12px; border: 1px solid var(--line); background: var(--code-bg); color: var(--ink); font-family: var(--mono); overflow-x: auto; white-space: nowrap; }
+    .step-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, .8fr); gap: 18px; }
+    .result-list { padding-left: 20px; }
+    .result-list li { margin: 10px 0; }
+    .chip { display: inline-flex; max-width: 100%; align-items: center; gap: 6px; margin-right: 6px; padding: 3px 8px; border: 1px solid var(--line); background: var(--bg); vertical-align: middle; font-size: .92rem; }
+    .chip strong { overflow-wrap: anywhere; font-family: var(--mono); font-size: .84rem; }
+    .headers-box { margin-top: 16px; padding: 12px; border: 1px solid var(--line); background: var(--bg); }
+    .headers-box h4 { margin: 0 0 8px; color: var(--muted); }
+    .chip-blue { border-color: #b7c7dd; background: #eef3ff; }
+    .chip-green { border-color: #b7ddc9; background: #edf7f2; }
+    .chip-amber { border-color: #e2b66c; background: #fff7e8; }
+    .chip-rose { border-color: #d9a1a1; background: #fff1f1; }
+    details { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
+    summary { cursor: pointer; color: var(--blue); font-weight: 700; }
+    pre { max-height: 420px; overflow: auto; background: var(--code-bg); border: 1px solid var(--line); color: var(--ink); padding: 14px; font-size: .84rem; }
+    code { font-family: var(--mono); }
+    .chain { display: grid; grid-template-columns: repeat(6, minmax(120px, 1fr)); gap: 8px; margin-top: 14px; }
+    .chain span { border: 1px solid var(--line); padding: 10px; background: var(--bg); font-family: var(--mono); font-size: .84rem; font-weight: 700; text-align: center; }
+    .standards li { margin: 8px 0; }
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; padding: 14px; }
+      nav { position: static; }
+      .step-grid, .chain { grid-template-columns: 1fr; }
+    }
+"""
+
+
 def write_interactive_story_html(out: Path, case_file: dict[str, Any], conformance: dict[str, Any]) -> None:
     service_api_catalog = artifact_json(out, "service-api-catalog", {})
     service_api_catalog_headers = artifact_json(out, "service-api-catalog-headers", {})
@@ -2892,190 +2968,12 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Registry Lab Live-Service Walkthrough</title>
   <style>
-    :root {{
-      color-scheme: light;
-      --bg: #f7f8fa;
-      --panel: #ffffff;
-      --ink: #17202a;
-      --muted: #5a6573;
-      --line: #d9dee7;
-      --blue: #1f6feb;
-      --green: #13795b;
-      --amber: #a45f00;
-      --rose: #b42318;
-      --code: #101828;
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{
-      margin: 0;
-      background: var(--bg);
-      color: var(--ink);
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      line-height: 1.45;
-    }}
-    header {{
-      background: linear-gradient(135deg, #102030, #204b57 52%, #6e4a13);
-      color: #fff;
-      padding: 32px clamp(18px, 4vw, 52px);
-    }}
-    header h1 {{
-      margin: 0;
-      font-size: clamp(2rem, 4vw, 4.25rem);
-      letter-spacing: 0;
-    }}
-    header p {{ max-width: 980px; margin: 12px 0 0; color: #e4edf2; font-size: 1.05rem; }}
-    .layout {{
-      display: grid;
-      grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
-      gap: 24px;
-      max-width: 1440px;
-      margin: 0 auto;
-      padding: 24px;
-    }}
-    nav {{
-      position: sticky;
-      top: 16px;
-      align-self: start;
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 12px;
-    }}
-    nav h2 {{ font-size: .86rem; margin: 4px 4px 10px; color: var(--muted); text-transform: uppercase; }}
-    nav button {{
-      display: flex;
-      width: 100%;
-      align-items: center;
-      gap: 8px;
-      border: 0;
-      border-radius: 6px;
-      background: transparent;
-      color: var(--ink);
-      padding: 9px 8px;
-      text-align: left;
-      cursor: pointer;
-      font: inherit;
-    }}
-    nav button:hover, nav button.active {{ background: #eef2f7; }}
-    main {{ min-width: 0; }}
-    .summary {{
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 18px;
-      margin-bottom: 18px;
-    }}
-    .summary h2, .step-card h3, .step-card h4 {{ margin-top: 0; }}
-    .step-card {{
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-left: 6px solid var(--blue);
-      border-radius: 8px;
-      margin-bottom: 18px;
-      padding: 18px;
-      scroll-margin-top: 16px;
-      box-shadow: 0 12px 30px rgba(16, 24, 40, .05);
-    }}
-    .step-card[data-accent="green"] {{ border-left-color: var(--green); }}
-    .step-card[data-accent="amber"] {{ border-left-color: var(--amber); }}
-    .step-card[data-accent="rose"] {{ border-left-color: var(--rose); }}
-    .step-head {{ display: flex; gap: 12px; align-items: flex-start; }}
-    .step-number {{
-      flex: 0 0 auto;
-      display: inline-grid;
-      place-items: center;
-      width: 32px;
-      height: 32px;
-      border-radius: 50%;
-      background: #17202a;
-      color: #fff;
-      font-weight: 700;
-    }}
-    .step-head h3 {{ margin-bottom: 4px; }}
-    .step-head p {{ margin: 0; color: var(--muted); }}
-    .request-line {{
-      margin: 16px 0;
-      padding: 10px 12px;
-      border-radius: 6px;
-      background: #101828;
-      color: #eff8ff;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      overflow-x: auto;
-      white-space: nowrap;
-    }}
-    .step-grid {{ display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, .8fr); gap: 18px; }}
-    .result-list {{ padding-left: 20px; }}
-    .result-list li {{ margin: 10px 0; }}
-    .chip {{
-      display: inline-flex;
-      max-width: 100%;
-      align-items: center;
-      gap: 6px;
-      margin-right: 6px;
-      padding: 3px 8px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      background: #f6f8fb;
-      vertical-align: middle;
-      font-size: .92rem;
-    }}
-    .chip strong {{
-      overflow-wrap: anywhere;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: .84rem;
-    }}
-    .headers-box {{
-      margin-top: 16px;
-      padding: 12px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: #fbfcfe;
-    }}
-    .headers-box h4 {{ margin: 0 0 8px; color: var(--muted); }}
-    .headers-box .chip {{
-      border-radius: 6px;
-    }}
-    .chip-blue {{ border-color: #8bb8ff; background: #eef5ff; }}
-    .chip-green {{ border-color: #88cbb8; background: #edf8f4; }}
-    .chip-amber {{ border-color: #e2b66c; background: #fff7e8; }}
-    .chip-rose {{ border-color: #ef9a93; background: #fff1f0; }}
-    details {{ margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }}
-    summary {{ cursor: pointer; color: var(--muted); font-weight: 700; }}
-    pre {{
-      max-height: 420px;
-      overflow: auto;
-      background: var(--code);
-      color: #e6edf3;
-      border-radius: 6px;
-      padding: 14px;
-      font-size: .84rem;
-    }}
-    code {{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }}
-    .chain {{
-      display: grid;
-      grid-template-columns: repeat(6, minmax(120px, 1fr));
-      gap: 8px;
-      margin-top: 14px;
-    }}
-    .chain span {{
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 10px;
-      background: #fbfcfe;
-      font-weight: 700;
-      text-align: center;
-    }}
-    .standards li {{ margin: 8px 0; }}
-    @media (max-width: 900px) {{
-      .layout {{ grid-template-columns: 1fr; padding: 14px; }}
-      nav {{ position: static; }}
-      .step-grid, .chain {{ grid-template-columns: 1fr; }}
-    }}
-  </style>
+{WALKTHROUGH_CSS}  </style>
 </head>
 <body>
   <header>
-    <h1>Registry Lab Live-Service Walkthrough</h1>
+    <p class="eyebrow">Registry Lab</p>
+    <h1>Live-Service Walkthrough</h1>
     <p>{html_escape(case_summary)}</p>
     <p>Correlation ID: <code>{html_escape(CORRELATION_ID)}</code></p>
   </header>
@@ -3111,10 +3009,11 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
   <script>
     const buttons = document.querySelectorAll('nav button[data-step]');
     const cards = [...document.querySelectorAll('.step-card')];
+    const scrollBehavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
     buttons.forEach((button) => {{
       button.addEventListener('click', () => {{
         const card = document.getElementById(`step-${{button.dataset.step}}`);
-        card?.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+        card?.scrollIntoView({{ behavior: scrollBehavior, block: 'start' }});
       }});
     }});
     const observer = new IntersectionObserver((entries) => {{

@@ -12,17 +12,24 @@
   --registry-active: #eef3ff;
   --registry-code-bg: #f3f4f6;
   --registry-ok-bg: #edf7f2;
+  --registry-warn-bg: #fff7e8;
   --registry-bad-bg: #fff1f1;
+  /* Civic-print palette shared with registrystack.org: ledger-green paper,
+     an ink-black band, stamp red, brass. */
+  --registry-paper: #eef2ec;
+  --registry-ink-band-deep: #161616;
+  --registry-stamp: #9d2c1d;
+  --registry-brass: #d4af4e;
   --registry-max: 1120px;
   --registry-font: "Public Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --registry-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* One shared timing for the whole interaction layer; reduced motion
+     disables it wholesale in shared.css. */
+  --registry-ease: 150ms ease;
 }
 body, button, input, textarea { font: inherit; }
 .top-nav .nav-emphasis { color: var(--registry-blue); }
 .hero-inner {
-  display: grid;
-  gap: clamp(24px, 4vw, 44px);
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
   margin: 0 auto;
   max-width: var(--registry-max);
   padding: clamp(48px, 7vw, 86px) clamp(16px, 4vw, 42px) clamp(34px, 5vw, 58px);
@@ -31,15 +38,19 @@ h1, h2, h3, p { margin-top: 0; }
 h1 {
   color: var(--registry-ink);
   font-size: clamp(40px, 6vw, 70px);
+  letter-spacing: -0.01em;
   line-height: 1.02;
   margin: 0 0 22px;
   max-width: 820px;
+  text-wrap: balance;
 }
 h2 {
   color: var(--registry-ink);
   font-size: clamp(24px, 3vw, 36px);
+  letter-spacing: -0.01em;
   line-height: 1.05;
   margin: 0 0 18px;
+  text-wrap: balance;
 }
 h3 {
   color: var(--registry-ink);
@@ -53,31 +64,17 @@ h3 {
   line-height: 1.42;
   max-width: 760px;
 }
-.badge-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 28px; }
-.badge {
-  border: 1px solid var(--registry-rule);
-  color: var(--registry-ink);
-  display: inline-flex;
-  align-items: center;
-  font-size: 14px;
-  font-weight: 700;
-  min-height: 38px;
-  padding: 8px 10px;
-  white-space: nowrap;
-}
 .hero-note { color: var(--registry-body); font-size: 15px; margin-top: 18px; max-width: 620px; }
 .hero-links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
-.status-summary {
-  background: var(--registry-sidebar);
-  border: 1px solid var(--registry-rule);
-  min-width: 0;
-  padding: 20px;
+/* The whole service fleet reduced to one ledger line under the CTA. */
+.status-line {
+  color: var(--registry-muted);
+  font-family: var(--registry-mono);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  margin: 26px 0 0;
+  text-transform: uppercase;
 }
-.status-summary h2 { font-size: 22px; margin-bottom: 8px; }
-.status-counts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; margin-top: 18px; border: 1px solid var(--registry-rule); }
-.count { background: #ffffff; border-left: 1px solid var(--registry-rule); padding: 12px 8px; text-align: center; }
-.count:first-child { border-left: 0; }
-.count strong { color: var(--registry-ink); display: block; font-size: 24px; line-height: 1; }
 main { display: block; }
 .band {
   background: #ffffff;
@@ -117,6 +114,12 @@ main { display: block; }
   border: 1px solid var(--registry-rule);
   background: #fff;
   min-width: 0;
+  transition: border-color var(--registry-ease), box-shadow var(--registry-ease);
+}
+/* Hovering a service card lifts it like a pulled record slip. */
+.credential:hover {
+  border-color: var(--registry-blue);
+  box-shadow: 4px 4px 0 rgba(23, 59, 122, 0.12);
 }
 .credential h3::before {
   background: var(--registry-blue);
@@ -207,21 +210,13 @@ button, .button {
   border-top: 1px solid var(--registry-rule);
   padding-top: 18px;
 }
+/* Tokens and curl are advanced material: closed by default, one click away. */
+.cred-disclosure { border-top: 1px solid var(--registry-rule); }
+.cred-disclosure summary { color: var(--registry-blue); cursor: pointer; font-weight: 700; padding: 12px 0 0; }
+.cred-disclosure .cred-list { border-top: 0; margin-top: 14px; padding-top: 0; }
 .cred-block { display: grid; gap: 10px; min-width: 0; align-content: start; }
 .cred-name { color: var(--registry-ink); font-weight: 700; }
 .hidden { display: none; }
-.site-footer {
-  align-items: start;
-  display: flex;
-  gap: 24px;
-  justify-content: space-between;
-  margin: 0 auto;
-  max-width: var(--registry-max);
-  padding: 32px clamp(16px, 4vw, 42px);
-}
 @media (max-width: 760px) {
-  .site-header { align-items: flex-start; flex-direction: column; }
-  .top-nav { justify-content: flex-start; }
-  .hero-inner { grid-template-columns: 1fr; }
   .token-box { grid-template-columns: 1fr; }
 }

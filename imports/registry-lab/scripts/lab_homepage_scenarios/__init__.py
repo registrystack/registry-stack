@@ -109,8 +109,58 @@ def run_alive_proof_step(config: dict[str, Any], step_id: str, lab_mode: str = "
     return run_scenario_step(config, civil_alive.SCENARIO_ID, step_id, lab_mode=lab_mode)
 
 
-def scenario_nav_link() -> str:
-    return '<a href="/scenarios">Scenario demos</a>'
+def top_nav_html(active: str = "") -> str:
+    """One nav for every lab page; `active` marks the current entry."""
+    entries = (
+        ("home", "/", "Home"),
+        ("scenarios", "/scenarios", "Scenario demos"),
+        ("wallet", "/#wallet", "Wallet test"),
+        ("services", "/#services", "For developers"),
+    )
+    links = []
+    for key, href, label in entries:
+        current = ' aria-current="page"' if key == active else ""
+        links.append(f'<a href="{href}"{current}>{label}</a>')
+    links.append('<a class="nav-emphasis" href="https://registrystack.org/">Registry Stack</a>')
+    return "\n      ".join(links)
+
+
+def scenario_cards_html(lab_mode: str = "hosted") -> str:
+    """Server-rendered chooser cards for the homepage.
+
+    Mirrors renderChooser in scenarios.js: the default story leads, then the
+    remaining hosted-runnable stories, then the local-only walkthroughs.
+    """
+    items = scenario_payload({}, lab_mode=lab_mode)["scenarios"]
+    default_id = civil_alive.SCENARIO_ID
+    ordered = (
+        [item for item in items if item["id"] == default_id]
+        + [item for item in items if item["id"] != default_id and item["runnable"]]
+        + [item for item in items if item["id"] != default_id and not item["runnable"]]
+    )
+    cards = []
+    for item in ordered:
+        is_default = item["id"] == default_id
+        card_class = "scenario-card scenario-card--default" if is_default else "scenario-card"
+        availability_label = "Local only" if item["availability"] == "local-only" else "Hosted"
+        note = html.escape(item["availability_note"])
+        cards.append(
+            f'<article class="{card_class}">'
+            + ('<span class="start-here-badge">Start here</span>' if is_default else "")
+            + f'<span class="availability {html.escape(item["availability"])}">{availability_label}</span>'
+            + (f'<span class="domain-tag">{html.escape(item["domain"])}</span>' if item["domain"] else "")
+            + f'<div><h3>{html.escape(item["title"])}</h3><p>{html.escape(item["proves"])}</p></div>'
+            + (f'<p class="card-meta">{note}</p>' if note else "")
+            + f'<p class="card-meta">{item["steps"]} steps</p>'
+            + f'<div class="actions"><a class="button primary" href="/scenarios/{html.escape(item["id"], quote=True)}">'
+            + ("Open story" if item["runnable"] else "Read the walkthrough")
+            + "</a></div></article>"
+        )
+    return (
+        '<p class="badge-explanation"><strong>Hosted</strong> stories run live in this lab from the browser. '
+        "<strong>Local-only</strong> stories are read-only walkthroughs here and runnable via the GitHub repo locally.</p>\n"
+        '        <div class="chooser-grid">' + "".join(cards) + "</div>"
+    )
 
 
 def scenario_page_html(scenario_id: str | None = None) -> bytes:
@@ -152,10 +202,7 @@ def scenario_page_html(scenario_id: str | None = None) -> bytes:
       <span>Registry Lab</span>
     </a>
     <nav class="top-nav" aria-label="Lab navigation">
-      <a href="/">Home</a>
-      <a href="/scenarios">Scenario demos</a>
-      <a href="/#services">Services &amp; credentials</a>
-      <a href="/#wallet">Wallet test</a>
+      {top_nav_html("scenarios")}
     </nav>
   </header>
   <main>
@@ -174,11 +221,16 @@ def scenario_page_html(scenario_id: str | None = None) -> bytes:
     </section>
   </main>
   <footer class="site-footer">
-    <a class="brand" href="https://registrystack.org/">
-      <span class="brand-mark" aria-hidden="true">RS</span>
-      <span>Registry Stack</span>
-    </a>
-    <p class="meta">Public demo environment for governed registry services.</p>
+    <div class="site-footer-inner">
+      <div>
+        <strong>Registry Stack</strong>
+        <p class="meta">Public demo environment for governed registry services.</p>
+      </div>
+      <nav aria-label="Footer links">
+        <a href="https://registrystack.org/">Registry Stack</a>
+        <a href="https://docs.registrystack.org/">Docs</a>
+      </nav>
+    </div>
   </footer>
   <script src="/static/scenarios.js"></script>
 </body>
