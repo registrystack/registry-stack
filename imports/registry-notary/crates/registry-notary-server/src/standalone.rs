@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Standalone Registry Notary assembly, auth, audit, and HTTP source connectors.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::env;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -123,12 +123,13 @@ pub fn standalone_router(
 }
 
 pub(crate) fn credential_issuer_runtime_from_config(
-    config: &EvidenceConfig,
+    config: &StandaloneRegistryNotaryConfig,
 ) -> Result<(Arc<dyn crate::api::EvidenceIssuerResolver>, SignerReadiness), StandaloneServerError> {
-    let signing_keys = SigningKeyRegistry::from_config(config)?;
+    let reuse_scoped_key_ids = config.reuse_scoped_signing_key_ids();
+    let signing_keys = SigningKeyRegistry::from_config(&config.evidence, &reuse_scoped_key_ids)?;
     let signer_readiness = signing_keys.signer_readiness();
     let issuers = Arc::new(EvidenceIssuerRegistry::from_signing_keys(
-        config,
+        &config.evidence,
         &signing_keys,
     )?);
     Ok((issuers, signer_readiness))
@@ -138,7 +139,8 @@ pub(crate) fn preauth_runtime_from_config_preserving_stores(
     config: &StandaloneRegistryNotaryConfig,
     previous: Option<&PreAuthRuntime>,
 ) -> Result<Option<Arc<PreAuthRuntime>>, StandaloneServerError> {
-    let signing_keys = SigningKeyRegistry::from_config(&config.evidence)?;
+    let reuse_scoped_key_ids = config.reuse_scoped_signing_key_ids();
+    let signing_keys = SigningKeyRegistry::from_config(&config.evidence, &reuse_scoped_key_ids)?;
     let audit = previous
         .map(|runtime| runtime.audit.clone())
         .map(Ok)
@@ -156,7 +158,8 @@ pub(crate) fn federation_runtime_from_config(
     if !config.federation.enabled {
         return Ok(None);
     }
-    let signing_keys = SigningKeyRegistry::from_config(&config.evidence)?;
+    let reuse_scoped_key_ids = config.reuse_scoped_signing_key_ids();
+    let signing_keys = SigningKeyRegistry::from_config(&config.evidence, &reuse_scoped_key_ids)?;
     let signing_provider = signing_keys
         .signing_provider(config.federation.signing.signing_key.as_str())
         .ok_or_else(|| {
@@ -226,7 +229,11 @@ pub fn compile_notary_runtime(
         Arc::clone(&metrics),
     )?);
     let store = Arc::new(EvidenceStore::default());
-    let signing_keys = Arc::new(SigningKeyRegistry::from_config(&config.evidence)?);
+    let reuse_scoped_key_ids = config.reuse_scoped_signing_key_ids();
+    let signing_keys = Arc::new(SigningKeyRegistry::from_config(
+        &config.evidence,
+        &reuse_scoped_key_ids,
+    )?);
     let signer_readiness = signing_keys.signer_readiness();
     let issuers = Arc::new(EvidenceIssuerRegistry::from_signing_keys(
         &config.evidence,
@@ -1629,7 +1636,18 @@ pub struct EvidenceIssuerRegistry {
 
 impl EvidenceIssuerRegistry {
     pub fn from_config(config: &EvidenceConfig) -> Result<Self, StandaloneServerError> {
-        let signing_keys = SigningKeyRegistry::from_config(config)?;
+        // Without the surrounding `StandaloneRegistryNotaryConfig` this builder
+        // only sees credential-profile signing roles, so the resolved-material
+        // reuse check (#173) is confined to those here. The access-token and
+        // federation roles are checked on the real startup/apply paths
+        // (`compile_notary_runtime`, signing-key rotation), which thread the
+        // full role set through `SigningKeyRegistry::from_config`.
+        let reuse_scoped_key_ids: HashSet<&str> = config
+            .credential_profiles
+            .values()
+            .map(|profile| profile.signing_key.as_str())
+            .collect();
+        let signing_keys = SigningKeyRegistry::from_config(config, &reuse_scoped_key_ids)?;
         Self::from_signing_keys(config, &signing_keys)
     }
 
@@ -1813,17 +1831,21 @@ struct SigningKeyRegistry {
 }
 
 impl SigningKeyRegistry {
-    fn from_config(config: &EvidenceConfig) -> Result<Self, StandaloneServerError> {
+    fn from_config(
+        config: &EvidenceConfig,
+        reuse_scoped_key_ids: &HashSet<&str>,
+    ) -> Result<Self, StandaloneServerError> {
         let mut issuers = BTreeMap::new();
         let mut providers = BTreeMap::new();
         let mut public_jwks_by_kid = BTreeMap::new();
+        let mut resolved_public_jwks = Vec::new();
         #[cfg_attr(not(feature = "pkcs11"), allow(unused_mut))]
         let mut readiness_entries = Vec::new();
         for (key_id, key) in &config.signing_keys {
             if !key.status.may_publish() {
                 continue;
             }
-            let public_jwk = match key.provider {
+            let (public_jwk, public_jwk_for_validation) = match key.provider {
                 SigningKeyProviderConfig::LocalJwkEnv => {
                     if key.status.may_sign() {
                         let provider: Arc<dyn SigningProvider> =
@@ -1838,16 +1860,22 @@ impl SigningKeyRegistry {
                             invalid_signing_key(key_id, "local signer failed self-test")
                         })?;
                         let public_jwk = issuer.public_jwk();
+                        let public_jwk_for_validation = provider.public_jwk();
                         issuers.insert(key_id.clone(), issuer);
                         providers.insert(key_id.clone(), provider);
-                        public_jwk
+                        (public_jwk, public_jwk_for_validation)
                     } else {
                         readiness_entries.push(static_key_readiness(
                             key.kid.clone(),
                             false,
                             KeyReadiness::Ready,
                         ));
-                        build_public_jwk_value(key_id, key)?
+                        let public_jwk_for_validation = build_public_jwk(key_id, key)?;
+                        let public_jwk = serde_json::to_value(public_jwk_for_validation.clone())
+                            .map_err(|_| {
+                                invalid_signing_key(key_id, "public JWK could not be serialized")
+                            })?;
+                        (public_jwk, public_jwk_for_validation)
                     }
                 }
                 SigningKeyProviderConfig::Pkcs11 => {
@@ -1870,9 +1898,10 @@ impl SigningKeyRegistry {
                                         )
                                     })?;
                             let public_jwk = issuer.public_jwk();
+                            let public_jwk_for_validation = provider.public_jwk();
                             issuers.insert(key_id.clone(), issuer);
                             providers.insert(key_id.clone(), provider);
-                            public_jwk
+                            (public_jwk, public_jwk_for_validation)
                         }
                         #[cfg(not(feature = "pkcs11"))]
                         {
@@ -1886,7 +1915,12 @@ impl SigningKeyRegistry {
                             false,
                             KeyReadiness::Ready,
                         ));
-                        build_public_jwk_value(key_id, key)?
+                        let public_jwk_for_validation = build_public_jwk(key_id, key)?;
+                        let public_jwk = serde_json::to_value(public_jwk_for_validation.clone())
+                            .map_err(|_| {
+                                invalid_signing_key(key_id, "public JWK could not be serialized")
+                            })?;
+                        (public_jwk, public_jwk_for_validation)
                     }
                 }
                 SigningKeyProviderConfig::FileWatch => {
@@ -1903,9 +1937,10 @@ impl SigningKeyRegistry {
                             invalid_signing_key(key_id, "file-watch signer failed self-test")
                         })?;
                         let public_jwk = issuer.public_jwk();
+                        let public_jwk_for_validation = provider.public_jwk();
                         issuers.insert(key_id.clone(), issuer);
                         providers.insert(key_id.clone(), provider);
-                        public_jwk
+                        (public_jwk, public_jwk_for_validation)
                     } else {
                         continue;
                     }
@@ -1921,6 +1956,7 @@ impl SigningKeyRegistry {
                     });
                 }
             };
+            resolved_public_jwks.push((key_id.clone(), public_jwk_for_validation));
             public_jwks_by_kid.insert(
                 key.kid.clone(),
                 PublishedJwk {
@@ -1929,6 +1965,12 @@ impl SigningKeyRegistry {
                 },
             );
         }
+        config.validate_resolved_signing_key_material(
+            resolved_public_jwks
+                .iter()
+                .map(|(key_id, public_jwk)| (key_id.as_str(), public_jwk)),
+            reuse_scoped_key_ids,
+        )?;
         Ok(Self {
             issuers,
             providers,
@@ -2313,6 +2355,15 @@ fn build_public_jwk_value(
     key_id: &str,
     key: &SigningKeyConfig,
 ) -> Result<Value, StandaloneServerError> {
+    let public = build_public_jwk(key_id, key)?;
+    serde_json::to_value(public)
+        .map_err(|_| invalid_signing_key(key_id, "public JWK could not be serialized"))
+}
+
+fn build_public_jwk(
+    key_id: &str,
+    key: &SigningKeyConfig,
+) -> Result<PublicJwk, StandaloneServerError> {
     let raw = env::var(&key.public_jwk_env)
         .ok()
         .filter(|value| !value.is_empty())
@@ -2332,8 +2383,7 @@ fn build_public_jwk_value(
             "public JWK alg does not match configured alg",
         ));
     }
-    serde_json::to_value(public)
-        .map_err(|_| invalid_signing_key(key_id, "public JWK could not be serialized"))
+    Ok(public)
 }
 
 fn invalid_signing_key(key: &str, reason: &str) -> StandaloneServerError {
@@ -7111,7 +7161,13 @@ credential_profiles:
 "#
         ))
         .expect("evidence config parses");
-        let registry = SigningKeyRegistry::from_config(&evidence).expect("registry builds");
+        let reuse_scoped_key_ids: HashSet<&str> = evidence
+            .credential_profiles
+            .values()
+            .map(|profile| profile.signing_key.as_str())
+            .collect();
+        let registry = SigningKeyRegistry::from_config(&evidence, &reuse_scoped_key_ids)
+            .expect("registry builds");
         let readiness = registry.signer_readiness();
         assert_eq!(
             readiness.by_kid()[0].readiness,
@@ -7600,6 +7656,7 @@ credential_profiles:
         );
 
         let key_path = tmp.path().join("issuer-ed25519.pem");
+        let secondary_key_path = tmp.path().join("issuer-ed25519-secondary.pem");
         run_command(
             std::process::Command::new("openssl")
                 .arg("genpkey")
@@ -7607,6 +7664,14 @@ credential_profiles:
                 .arg("ED25519")
                 .arg("-out")
                 .arg(&key_path),
+        );
+        run_command(
+            std::process::Command::new("openssl")
+                .arg("genpkey")
+                .arg("-algorithm")
+                .arg("ED25519")
+                .arg("-out")
+                .arg(&secondary_key_path),
         );
         run_command(
             std::process::Command::new("softhsm2-util")
@@ -7620,6 +7685,20 @@ credential_profiles:
                 .arg("issuer-signing-key")
                 .arg("--id")
                 .arg("01ab23cd")
+                .arg("--force"),
+        );
+        run_command(
+            std::process::Command::new("softhsm2-util")
+                .arg("--import")
+                .arg(&secondary_key_path)
+                .arg("--token")
+                .arg(&token_label)
+                .arg("--pin")
+                .arg(pin)
+                .arg("--label")
+                .arg("issuer-signing-key-secondary")
+                .arg("--id")
+                .arg("02ab23cd")
                 .arg("--force"),
         );
 
@@ -7638,6 +7717,22 @@ credential_profiles:
             "Ed25519 SubjectPublicKeyInfo has key bytes"
         );
         let x = URL_SAFE_NO_PAD.encode(&public_der[public_der.len() - 32..]);
+        let secondary_public_der = command_output(
+            std::process::Command::new("openssl")
+                .arg("pkey")
+                .arg("-in")
+                .arg(&secondary_key_path)
+                .arg("-pubout")
+                .arg("-outform")
+                .arg("DER"),
+        )
+        .expect("openssl exports secondary public key");
+        assert!(
+            secondary_public_der.len() >= 32,
+            "secondary Ed25519 SubjectPublicKeyInfo has key bytes"
+        );
+        let secondary_x =
+            URL_SAFE_NO_PAD.encode(&secondary_public_der[secondary_public_der.len() - 32..]);
         let public_jwk_primary = serde_json::json!({
             "kty": "OKP",
             "crv": "Ed25519",
@@ -7649,7 +7744,7 @@ credential_profiles:
         let public_jwk_secondary = serde_json::json!({
             "kty": "OKP",
             "crv": "Ed25519",
-            "x": x,
+            "x": secondary_x,
             "alg": "EdDSA",
             "kid": "did:web:issuer.example#softhsm-secondary"
         })
@@ -7680,8 +7775,8 @@ signing_keys:
     module_path: {module_path}
     token_label: {token_label}
     pin_env: TEST_SOFTHSM_PIN
-    key_label: issuer-signing-key
-    key_id_hex: 01ab23cd
+    key_label: issuer-signing-key-secondary
+    key_id_hex: 02ab23cd
     public_jwk_env: TEST_SOFTHSM_PUBLIC_JWK_SECONDARY
     alg: EdDSA
     kid: did:web:issuer.example#softhsm-secondary

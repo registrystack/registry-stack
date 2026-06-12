@@ -1467,7 +1467,7 @@ fn classify_credential_issuer_rotation(
     }
     old_referenced_keys_are_safe_for_rotation(&current, candidate)?;
     let (issuers, signer_readiness) =
-        crate::standalone::credential_issuer_runtime_from_config(&candidate.evidence)
+        crate::standalone::credential_issuer_runtime_from_config(candidate)
             .map_err(|_| CredentialIssuerRotationError::Readiness)?;
     let previous_preauth = preauth_runtime(state);
     let preauth = crate::standalone::preauth_runtime_from_config_preserving_stores(

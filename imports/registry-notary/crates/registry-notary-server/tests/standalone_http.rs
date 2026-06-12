@@ -11758,6 +11758,62 @@ async fn admin_config_apply_signed_preauth_signing_rotation_preserves_inflight_t
     idp.stop().await;
 }
 
+/// Issue #173: when the access-token signing key and a credential-profile
+/// signing key resolve to the same Ed25519 material under distinct ids and
+/// kids, server startup must fail through the real build path
+/// (`compile_notary_runtime` -> `SigningKeyRegistry::from_config`), not just the
+/// in-isolation helper. The eSignet RP client key is excluded from this scope by
+/// `admin_config_apply_signed_preauth_signing_rotation_preserves_inflight_tokens`.
+#[tokio::test]
+async fn compile_rejects_access_token_key_reusing_credential_key_material() {
+    set_preauth_env();
+    // A dedicated env var bound to the credential issuer's material. The
+    // credential `issuer-key` resolves from `TEST_SELF_ATTESTATION_ISSUER_JWK`,
+    // which `set_preauth_env` also sets to `TEST_ISSUER_JWK`, so the new
+    // access-token key reuses the credential key material under a distinct
+    // id/kid.
+    std::env::set_var("TEST_ACCESS_TOKEN_REUSES_CREDENTIAL_JWK", TEST_ISSUER_JWK);
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = preauth_test_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp,
+        &token_upstream,
+    );
+    config.evidence.signing_keys.insert(
+        "access-token-key-reuses-credential".to_string(),
+        local_jwk_signing_key(
+            "TEST_ACCESS_TOKEN_REUSES_CREDENTIAL_JWK",
+            "did:web:issuer.example#access-token-key-reuses-credential",
+        ),
+    );
+    config.auth.access_token_signing.signing_key_id =
+        "access-token-key-reuses-credential".to_string();
+
+    let error = match compile_notary_runtime(config) {
+        Ok(_) => panic!("reused signing key material must fail startup"),
+        Err(error) => error,
+    };
+    let message = error.to_string();
+    assert!(
+        message.contains("reuses public key material"),
+        "unexpected error: {message}"
+    );
+    assert!(
+        message.contains("access-token-key-reuses-credential") || message.contains("issuer-key"),
+        "error must name the colliding signing key ids: {message}"
+    );
+    // The error must never leak key material (thumbprint or raw JWK coordinate).
+    assert!(
+        !message.contains(TEST_ISSUER_JWK),
+        "error must not contain raw key material"
+    );
+    idp.stop().await;
+}
+
 #[tokio::test]
 async fn admin_config_apply_signed_preauth_signing_rotation_rejects_extra_esignet_settings() {
     set_preauth_env();
