@@ -19,7 +19,7 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/05a4b249c74bd8f3788eda249a53277d02b22f12/README.md"
       },
       {
         "label": "Registry Manifest README",
@@ -48,7 +48,7 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/05a4b249c74bd8f3788eda249a53277d02b22f12/README.md"
       },
       {
         "label": "Registry Manifest README",
@@ -113,7 +113,7 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/05a4b249c74bd8f3788eda249a53277d02b22f12/README.md"
       },
       {
         "label": "Registry Manifest README",
@@ -140,7 +140,7 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/05a4b249c74bd8f3788eda249a53277d02b22f12/README.md"
       }
     ],
     "last_checked": "2026-05-23",
@@ -165,11 +165,11 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/05a4b249c74bd8f3788eda249a53277d02b22f12/README.md"
       },
       {
         "label": "Registry Notary README",
-        "url": "https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/README.md"
+        "url": "https://github.com/jeremi/registry-notary/blob/2a866c1194f6f61db5680bb722c1da61c124252b/README.md"
       }
     ],
     "last_checked": "2026-05-23",
@@ -194,7 +194,7 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/05a4b249c74bd8f3788eda249a53277d02b22f12/README.md"
       },
       {
         "label": "Registry Manifest README",
@@ -223,7 +223,7 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/05a4b249c74bd8f3788eda249a53277d02b22f12/README.md"
       },
       {
         "label": "Registry Manifest README",
@@ -256,11 +256,11 @@
     "evidence_docs": [
       {
         "label": "Registry Relay JSON-LD renderers",
-        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/src/metadata/shacl.rs"
+        "url": "https://github.com/jeremi/registry-relay/blob/05a4b249c74bd8f3788eda249a53277d02b22f12/src/metadata/shacl.rs"
       },
       {
         "label": "Registry Notary CCCEV renderer",
-        "url": "https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/crates/registry-notary-server/src/runtime.rs"
+        "url": "https://github.com/jeremi/registry-notary/blob/2a866c1194f6f61db5680bb722c1da61c124252b/crates/registry-notary-server/src/runtime.rs"
       }
     ],
     "last_checked": "2026-05-23",
@@ -286,7 +286,7 @@
     "evidence_docs": [
       {
         "label": "Registry Notary README",
-        "url": "https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/README.md"
+        "url": "https://github.com/jeremi/registry-notary/blob/2a866c1194f6f61db5680bb722c1da61c124252b/README.md"
       },
       {
         "label": "Registry Platform SD-JWT crate",
@@ -316,15 +316,15 @@
     "evidence_docs": [
       {
         "label": "Registry Relay provenance context tests",
-        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/tests/provenance_contexts_endpoint.rs"
+        "url": "https://github.com/jeremi/registry-relay/blob/05a4b249c74bd8f3788eda249a53277d02b22f12/tests/provenance_contexts_endpoint.rs"
       },
       {
         "label": "Registry Relay VC fixtures",
-        "url": "https://github.com/jeremi/registry-relay/tree/3938fdf3930e134d6dca97360baf64ac3a16bed2/tests/fixtures/vc"
+        "url": "https://github.com/jeremi/registry-relay/tree/05a4b249c74bd8f3788eda249a53277d02b22f12/tests/fixtures/vc"
       },
       {
         "label": "Registry Notary README",
-        "url": "https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/README.md"
+        "url": "https://github.com/jeremi/registry-notary/blob/2a866c1194f6f61db5680bb722c1da61c124252b/README.md"
       }
     ],
     "last_checked": "2026-05-23",
@@ -362,11 +362,11 @@
       },
       {
         "label": "Registry Notary CCCEV renderer",
-        "url": "https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/crates/registry-notary-server/src/runtime.rs"
+        "url": "https://github.com/jeremi/registry-notary/blob/2a866c1194f6f61db5680bb722c1da61c124252b/crates/registry-notary-server/src/runtime.rs"
       },
       {
         "label": "Registry Notary media type constants",
-        "url": "https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/crates/registry-notary-core/src/model.rs"
+        "url": "https://github.com/jeremi/registry-notary/blob/2a866c1194f6f61db5680bb722c1da61c124252b/crates/registry-notary-core/src/model.rs"
       }
     ],
     "last_checked": "2026-05-25",
@@ -391,7 +391,7 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/05a4b249c74bd8f3788eda249a53277d02b22f12/README.md"
       },
       {
         "label": "Registry Manifest README",
@@ -419,7 +419,7 @@
     "evidence_docs": [
       {
         "label": "Registry Relay client integration guide",
-        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/docs/client-integration.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/05a4b249c74bd8f3788eda249a53277d02b22f12/docs/client-integration.md"
       }
     ],
     "last_checked": "2026-06-11",
@@ -444,11 +444,11 @@
     "evidence_docs": [
       {
         "label": "Registry Relay provenance configuration",
-        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/src/config/provenance.rs"
+        "url": "https://github.com/jeremi/registry-relay/blob/05a4b249c74bd8f3788eda249a53277d02b22f12/src/config/provenance.rs"
       },
       {
         "label": "Registry Notary claim model",
-        "url": "https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/crates/registry-notary-core/src/model.rs"
+        "url": "https://github.com/jeremi/registry-notary/blob/2a866c1194f6f61db5680bb722c1da61c124252b/crates/registry-notary-core/src/model.rs"
       }
     ],
     "last_checked": "2026-05-23",
@@ -472,7 +472,7 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/05a4b249c74bd8f3788eda249a53277d02b22f12/README.md"
       }
     ],
     "last_checked": "2026-05-23",
@@ -497,11 +497,11 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/README.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/05a4b249c74bd8f3788eda249a53277d02b22f12/README.md"
       },
       {
         "label": "Registry Notary source connector",
-        "url": "https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/crates/registry-notary-core/src/config.rs"
+        "url": "https://github.com/jeremi/registry-notary/blob/2a866c1194f6f61db5680bb722c1da61c124252b/crates/registry-notary-core/src/config.rs"
       }
     ],
     "last_checked": "2026-05-23",
@@ -530,7 +530,7 @@
     "evidence_docs": [
       {
         "label": "Registry Notary OID4VCI routes",
-        "url": "https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/crates/registry-notary-server/src/api.rs"
+        "url": "https://github.com/jeremi/registry-notary/blob/2a866c1194f6f61db5680bb722c1da61c124252b/crates/registry-notary-server/src/api.rs"
       },
       {
         "label": "Registry Platform OID4VCI crate",
@@ -570,15 +570,15 @@
     "evidence_docs": [
       {
         "label": "Registry Relay did:web document builder",
-        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/src/provenance/did_web.rs"
+        "url": "https://github.com/jeremi/registry-relay/blob/05a4b249c74bd8f3788eda249a53277d02b22f12/src/provenance/did_web.rs"
       },
       {
         "label": "Registry Relay DID route",
-        "url": "https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/src/api/did.rs"
+        "url": "https://github.com/jeremi/registry-relay/blob/05a4b249c74bd8f3788eda249a53277d02b22f12/src/api/did.rs"
       },
       {
         "label": "Registry Notary did:jwk handling",
-        "url": "https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/crates/registry-notary-server/src/api.rs"
+        "url": "https://github.com/jeremi/registry-notary/blob/2a866c1194f6f61db5680bb722c1da61c124252b/crates/registry-notary-server/src/api.rs"
       },
       {
         "label": "Registry Platform crypto crate",
