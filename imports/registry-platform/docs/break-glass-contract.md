@@ -132,6 +132,22 @@ durable record before the verifier accepts it. The verifier checks the count;
 the people, tickets, and routing are out of scope. The current single-operator
 `approved_by` field is the one-person case of this rule.
 
+The field shape and distinctness rule are part of the contract so the
+follow-ups do not re-litigate them:
+
+- The durable record carries an `approvers` array of approver identity strings.
+  The existing `approved_by` field remains and is treated as the first approver,
+  so a one-approver record stays valid unchanged.
+- Verifier-owned config carries a `required_approver_count` per emergency change
+  class, defaulting to 1 so existing deployments are unaffected until an
+  operator raises it.
+- Distinctness is enforced by the verifier over approver identity strings: after
+  trimming whitespace, entries must be pairwise unequal by exact byte
+  comparison, and a record containing duplicate entries is rejected outright
+  rather than deduplicated. Counting trivially renamed identities as distinct
+  people cannot be detected textually; organizational distinctness remains a
+  procedural control, which is the same limit trust-root signer thresholds have.
+
 ### Approval Expiry And Closure Semantics
 
 **Decision: keep absolute expiry, add explicit closure tied to acceptance and to
@@ -163,9 +179,12 @@ is derived from existing acceptance records.
 **Decision: confirm the current binding and require it for the durable path too.**
 A break-glass approval must name an `emergency_change_class`, and the bundle's
 declared `change_classes` must contain it. Relay and Notary already enforce this
-in `require_break_glass_emergency_change_class`: if the approval's
-`emergency_change_class` is not in the resolved bundle's change classes, the
-apply is rejected as `rejected_break_glass`.
+for the inline path in `require_break_glass_emergency_change_class`: if the
+approval's `emergency_change_class` is not in the resolved bundle's change
+classes, the apply is rejected as `rejected_break_glass`. Note that this check
+returns success when no inline approval is present, so it does not yet cover a
+reference-resolved approval; the follow-ups must apply the same binding check to
+the record loaded from the durable store, not only to the inline request field.
 
 The contract carries this binding into the durable record unchanged. A durable
 break-glass record names exactly one emergency change class, and the verifier
@@ -175,12 +194,23 @@ approval for one change class must never authorize a different change class.
 ### Rate-Limit Behavior Owned By Local Verifier Policy
 
 **Decision: verifier-owned policy is the contract; request-supplied policy is a
-compatibility artifact and stays disallowed in the admin path.** Rate-limit
-policy lives in operator config (`ConfigTrustConfig.break_glass_rate_limit`,
-default one acceptance per 3600 seconds) and is passed to
-`FileAntiRollbackStore::with_break_glass_rate_limit`. Both Relay and Notary
-already reject any apply request that carries `break_glass_rate_limit` inline,
-returning `rejected_break_glass`, so a request cannot loosen the limit.
+compatibility artifact and stays disallowed in the admin path.** The two
+approval kinds source their rate-limit policy from different verifier-owned
+locations today, and the contract keeps both:
+
+- Break-glass rate-limit policy lives in operator config
+  (`ConfigTrustConfig.break_glass_rate_limit`, default one acceptance per 3600
+  seconds) and is passed to
+  `FileAntiRollbackStore::with_break_glass_rate_limit`.
+- Local-approval rate-limit policy lives on the `LocalOperatorApproval` record
+  itself (`rate_limit` plus `rate_limit_identity`), inside the verifier-owned
+  approval file at `local_approval_state_path`, not in `ConfigTrustConfig`. The
+  runtime copies it into the proposal only after the record is loaded from the
+  store, so it is verifier-owned even though it travels with the record.
+
+Both Relay and Notary already reject any apply request that carries
+`break_glass_rate_limit` inline, returning `rejected_break_glass`, so a request
+cannot loosen the limit.
 
 The store's `AntiRollbackProposal.break_glass_rate_limit` compatibility field
 remains only for older non-admin callers and must stay empty on the admin path.
@@ -236,6 +266,19 @@ matching the existing `FileLocalApprovalStore` contract:
   and rate-limit identity fields; correct hashes; not expired) before the
   proposal is built. A request cannot inject approver identity, reason, expiry,
   or rate-limit policy that was not written to the verifier-owned store.
+- The current inline `BreakGlassApproval` type carries no `config_hash` or
+  `previous_config_hash`; those fields exist today only on
+  `LocalOperatorApproval`. The follow-ups add a target `config_hash` binding to
+  the durable break-glass record so a stored emergency approval authorizes one
+  specific candidate config, not any emergency apply.
+- `previous_config_hash` on a durable break-glass record is optional. Break-glass
+  exists precisely for the case where the chain is broken and the operator may
+  not know the node's current accepted hash. When the field is present it must
+  match the proposal; when absent the record authorizes the bound target
+  `config_hash` regardless of prior chain state, which is the same waiver the
+  inline form grants. Replay safety does not depend on it: the target
+  `config_hash` binding, single-use consumption, monotonic sequence, the
+  verifier's rate limit, and expiry all still apply.
 - Inline `BreakGlassApproval` in the request body remains supported for the
   single-operator local emergency path, because it is already shipped and is the
   simplest path for a lone on-call operator. It cannot satisfy a two-approver
@@ -302,7 +345,11 @@ object. It is omitted when the runtime has never accepted an emergency apply.
 }
 ```
 
-The `configuration` object gains one optional property:
+The existing `configuration` definition declares `additionalProperties: false`,
+so this is a patch to that definition, not a standalone addition: the
+`emergency` property must be added to `configuration.properties` in the schema
+itself, alongside the new `$defs` entry. The `configuration` object gains one
+optional property:
 
 ```json
 {
@@ -391,14 +438,13 @@ expiry. Everything else fails closed.
 These are flagged for review and do not block cutting the follow-up issues. The
 follow-ups can pick a default and note it.
 
-1. **Two-approver field shape.** The contract requires the durable record to
-   carry more than one approver and a verifier-owned minimum count, but it does
-   not fix the field name or whether the count lives on the record or in
-   `ConfigTrustConfig`. Proposed default: a `required_approver_count` in
-   verifier config per emergency change class, plus an `approvers` array on the
-   durable record, with the existing `approved_by` retained as the first
-   approver for the one-person case. To be confirmed when the durable break-glass
-   record type is added to `registry-platform-ops`.
+1. **Where `required_approver_count` lives in product config.** The contract
+   fixes the field names (`approvers` on the record, `required_approver_count`
+   per emergency change class in verifier config) and the distinctness rule
+   (trimmed, pairwise byte-unequal, duplicates rejected). What remains open is
+   whether the per-change-class count map sits inside `ConfigTrustConfig` or in
+   a sibling block, which is a product-config layout choice the follow-ups can
+   settle without changing the semantics.
 2. **Whether to keep inline `BreakGlassApproval` long term.** This note keeps it
    for the single-operator path. If every deployment that uses break-glass is
    expected to adopt the durable store, the inline form could be deprecated at
@@ -468,7 +514,9 @@ adding any central service.
   break-glass apply and clears it once all acceptances expire, with no reason
   text present in any tier.
 - The emergency change class in the approval must match the bundle's declared
-  change classes, unchanged from current behavior.
+  change classes for both the inline and the reference-resolved forms; the
+  existing inline-only check is extended to cover the record loaded from the
+  durable store.
 
 **Fail-closed checks preserved**
 
@@ -531,6 +579,10 @@ the break-glass contract.
 - Posture reports `configuration.emergency` with an open exception window after a
   break-glass apply and clears it once all acceptances expire, with no reason
   text present in any tier.
+- The emergency change class in the approval must match the bundle's declared
+  change classes for both the inline and the reference-resolved forms; the
+  existing inline-only check is extended to cover the record loaded from the
+  durable store.
 
 **Fail-closed checks preserved**
 
