@@ -46,6 +46,169 @@ pub const DEFAULT_REDACTED_POSTURE_FIXTURE_V1: &str =
 pub const RESTRICTED_POSTURE_FIXTURE_V1: &str =
     include_str!("../fixtures/posture/restricted-posture.valid.json");
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum DeploymentProfile {
+    Local,
+    HostedLab,
+    Production,
+    EvidenceGrade,
+}
+
+impl DeploymentProfile {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::HostedLab => "hosted_lab",
+            Self::Production => "production",
+            Self::EvidenceGrade => "evidence_grade",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum GateSeverity {
+    StartupFail,
+    ReadinessFail,
+    FindingError,
+    FindingWarn,
+}
+
+impl GateSeverity {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::StartupFail => "startup_fail",
+            Self::ReadinessFail => "readiness_fail",
+            Self::FindingError => "finding_error",
+            Self::FindingWarn => "finding_warn",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum DeploymentFindingStatus {
+    Active,
+    Waived,
+}
+
+impl DeploymentFindingStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Waived => "waived",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct DeploymentFindingWaiver {
+    pub reason: String,
+    pub expires: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct DeploymentFinding {
+    pub id: String,
+    pub severity: GateSeverity,
+    pub status: DeploymentFindingStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiver: Option<DeploymentFindingWaiver>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct DeploymentWaiver {
+    pub finding: String,
+    pub reason: String,
+    pub expires: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AuditWritePolicy {
+    AvailabilityFirst,
+    FailClosed,
+    FailClosedRouteFamilies,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AuditRedactionMode {
+    Redacted,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AuditHashChain {
+    None,
+    ProcessLocal,
+    Retained,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AuditKeyedIntegrity {
+    None,
+    Hmac,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AuditSinkClass {
+    None,
+    Stdout,
+    File,
+    Http,
+    External,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AuditRetentionOwner {
+    Unspecified,
+    Operator,
+    Host,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AuditCheckpoints {
+    Unsupported,
+    Supported,
+    Enabled,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AuditAnchoring {
+    None,
+    External,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct AuditAssurance {
+    pub write_policy: AuditWritePolicy,
+    pub redaction_mode: AuditRedactionMode,
+    pub hash_chain: AuditHashChain,
+    pub keyed_integrity: AuditKeyedIntegrity,
+    pub sink_class: AuditSinkClass,
+    pub retention_owner: AuditRetentionOwner,
+    pub checkpoints: AuditCheckpoints,
+    pub anchoring: AuditAnchoring,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ConfigSource {
