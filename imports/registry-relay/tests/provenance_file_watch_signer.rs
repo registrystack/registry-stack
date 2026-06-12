@@ -187,7 +187,8 @@ fn file_watch_signer_keeps_last_good_key_when_replacement_is_corrupt() {
     fs::write(&key_path, "{not valid jwk").expect("write corrupt replacement");
     set_file_mtime(&key_path, initial_mtime);
 
-    assert_eq!(signer.readiness(), KeyReadiness::Ready);
+    // Content-digest detection catches the corrupt replacement even though mtime is unchanged.
+    assert_eq!(signer.readiness(), KeyReadiness::Degraded);
     sign_and_verify(&signer, vk);
 
     bump_file_mtime(&key_path);
@@ -202,6 +203,88 @@ fn file_watch_signer_keeps_last_good_key_when_replacement_is_corrupt() {
 
     fs::remove_file(key_path).expect("remove replacement");
     assert_eq!(signer.readiness(), KeyReadiness::Degraded);
+    sign_and_verify(&signer, vk);
+}
+
+/// A same-mtime valid replacement (e.g. `cp -p` redeploy of the same public key)
+/// must be detected and the signer refreshed, even though the mtime is unchanged.
+#[test]
+fn file_watch_signer_detects_same_mtime_valid_replacement() {
+    let tmp = TempDir::new().expect("tempdir");
+    let key_path = tmp.path().join("active.jwk");
+    let sk = SigningKey::generate(&mut OsRng);
+    let vk = sk.verifying_key();
+    // Write one representation of the JWK. A second byte-distinct representation is produced by
+    // appending a trailing newline -- the JSON is still valid and encodes the same key, but the
+    // file bytes differ so a SHA-256 content digest will differ too.
+    let jwk_a = jwk_from_keypair(&sk, "did:web:example#fw-a");
+    let jwk_b = format!("{jwk_a}\n");
+    assert_ne!(
+        jwk_a.as_bytes(),
+        jwk_b.as_bytes(),
+        "test setup: byte representations must differ"
+    );
+
+    fs::write(&key_path, &jwk_a).expect("write initial key");
+    let initial_mtime = file_mtime(&key_path);
+
+    let signer = FileWatchSigner::from_config(
+        &FileWatchSignerConfig {
+            path: key_path.clone(),
+            signing_algorithm: ProvenanceAlgorithm::EdDSA,
+        },
+        "did:web:example#fw-a".to_string(),
+    )
+    .expect("file-watch signer builds");
+
+    assert_eq!(signer.readiness(), KeyReadiness::Ready);
+    sign_and_verify(&signer, vk);
+
+    // Replace with different bytes but identical mtime.
+    fs::write(&key_path, &jwk_b).expect("write same-mtime replacement");
+    set_file_mtime(&key_path, initial_mtime);
+
+    // Without content-identity detection the mtime guard would suppress the reload.
+    // After the fix the signer must detect the content change and remain Ready.
+    assert_eq!(
+        signer.readiness(),
+        KeyReadiness::Ready,
+        "valid same-key same-mtime replacement must keep signer Ready"
+    );
+    sign_and_verify(&signer, vk);
+}
+
+/// A same-mtime malformed replacement must degrade readiness and keep the last good signer.
+#[test]
+fn file_watch_signer_detects_same_mtime_malformed_replacement() {
+    let tmp = TempDir::new().expect("tempdir");
+    let key_path = tmp.path().join("active.jwk");
+    let sk = SigningKey::generate(&mut OsRng);
+    let vk = sk.verifying_key();
+    fs::write(&key_path, jwk_from_keypair(&sk, "did:web:example#fw-a")).expect("write key");
+    let initial_mtime = file_mtime(&key_path);
+
+    let signer = FileWatchSigner::from_config(
+        &FileWatchSignerConfig {
+            path: key_path.clone(),
+            signing_algorithm: ProvenanceAlgorithm::EdDSA,
+        },
+        "did:web:example#fw-a".to_string(),
+    )
+    .expect("file-watch signer builds");
+
+    // Replace with malformed bytes but restore mtime.
+    fs::write(&key_path, "{ not valid jwk }").expect("write malformed replacement");
+    set_file_mtime(&key_path, initial_mtime);
+
+    // Without content-identity detection the mtime guard would suppress the reload
+    // and the signer would appear Ready. After the fix it must degrade.
+    assert_eq!(
+        signer.readiness(),
+        KeyReadiness::Degraded,
+        "malformed same-mtime replacement must degrade readiness"
+    );
+    // Last good signer must still sign correctly.
     sign_and_verify(&signer, vk);
 }
 

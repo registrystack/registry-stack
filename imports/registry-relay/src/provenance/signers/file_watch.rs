@@ -7,6 +7,7 @@ use std::time::SystemTime;
 
 use registry_platform_crypto::KeyReadiness;
 use serde_json::Value;
+use sha2::Digest as _;
 use zeroize::Zeroizing;
 
 use crate::config::FileWatchSignerConfig;
@@ -18,6 +19,7 @@ struct FileWatchState {
     signer: SoftwareSigner,
     readiness: KeyReadiness,
     key_mtime: SystemTime,
+    last_content_digest: Option<[u8; 32]>,
 }
 
 /// Signer backed by a local private JWK file.
@@ -52,6 +54,7 @@ impl FileWatchSigner {
         let algorithm = cfg.signing_algorithm.into();
         let key_mtime = key_file_mtime(&cfg.path)?;
         let raw = read_key_file(&cfg.path)?;
+        let last_content_digest = key_file_content_digest(&cfg.path).ok();
         let signer = SoftwareSigner::from_jwk_str(&raw, algorithm, verification_method_id.clone())?;
         let expected_public_jwk = signer.public_jwk();
         Ok(Self {
@@ -63,6 +66,7 @@ impl FileWatchSigner {
                 signer,
                 readiness: KeyReadiness::Ready,
                 key_mtime,
+                last_content_digest,
             }),
         })
     }
@@ -83,10 +87,20 @@ impl FileWatchSigner {
             return;
         };
 
+        // Compute a content digest to detect same-mtime replacements (e.g. `cp -p`,
+        // snapshot restore, coarse filesystem timestamp resolution). This read happens
+        // at most once per call, and key files are small, so the cost is negligible.
+        let content_digest = key_file_content_digest(&self.path).ok();
+
         if self
             .state
             .read()
-            .map(|state| state.key_mtime == key_mtime)
+            .map(|state| {
+                let mtime_unchanged = state.key_mtime == key_mtime;
+                let digest_unchanged =
+                    content_digest.is_some() && state.last_content_digest == content_digest;
+                mtime_unchanged && digest_unchanged
+            })
             .unwrap_or(false)
         {
             return;
@@ -95,16 +109,24 @@ impl FileWatchSigner {
         let Ok(mut state) = self.state.write() else {
             return;
         };
-        if state.key_mtime == key_mtime {
+        // Re-check under the write lock.
+        let mtime_unchanged = state.key_mtime == key_mtime;
+        let digest_unchanged =
+            content_digest.is_some() && state.last_content_digest == content_digest;
+        if mtime_unchanged && digest_unchanged {
             return;
         }
+
+        // Update both mtime and digest whenever we attempt a reload, regardless of outcome.
+        state.key_mtime = key_mtime;
+        state.last_content_digest = content_digest;
 
         let Ok(raw) = read_key_file(&self.path) else {
             state.readiness = KeyReadiness::Degraded;
             tracing::warn!(
                 event = "provenance.file_watch_key_unreadable",
                 verification_method_id = %self.verification_method_id,
-                "file_watch signer key file could not be read after mtime change; keeping last good signer",
+                "file_watch signer key file could not be read after change detected; keeping last good signer",
             );
             return;
         };
@@ -116,10 +138,8 @@ impl FileWatchSigner {
             Ok(signer) if signer.public_jwk() == self.expected_public_jwk => {
                 state.signer = signer;
                 state.readiness = KeyReadiness::Ready;
-                state.key_mtime = key_mtime;
             }
             Ok(_) => {
-                state.key_mtime = key_mtime;
                 state.readiness = KeyReadiness::Degraded;
                 tracing::warn!(
                     event = "provenance.file_watch_key_mismatch",
@@ -128,7 +148,6 @@ impl FileWatchSigner {
                 );
             }
             Err(error) => {
-                state.key_mtime = key_mtime;
                 state.readiness = KeyReadiness::Degraded;
                 tracing::warn!(
                     event = "provenance.file_watch_key_invalid",
@@ -139,6 +158,13 @@ impl FileWatchSigner {
             }
         }
     }
+}
+
+fn key_file_content_digest(path: &std::path::Path) -> Result<[u8; 32], SignerError> {
+    let bytes = fs::read(path).map_err(|_| SignerError::KeyLoad {
+        reason: "file_watch key file could not be read",
+    })?;
+    Ok(sha2::Sha256::digest(&bytes).into())
 }
 
 fn key_file_mtime(path: &std::path::Path) -> Result<SystemTime, SignerError> {
