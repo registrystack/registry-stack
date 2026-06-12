@@ -715,8 +715,8 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-authcommon"
-version = "0.1.2"
-source = "git+https://github.com/jeremi/registry-platform?branch=main#ee298e00e76ad6b1e56373fe85d6c1e3a95ea238"
+version = "0.2.0"
+source = "git+https://github.com/jeremi/registry-platform?tag=v0.2.0#77f853a7794e0c5ad39af806c2249fff7a379392"
 dependencies = [
  "serde",
  "serde_json",
