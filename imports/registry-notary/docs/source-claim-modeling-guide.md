@@ -199,9 +199,8 @@ route when `bulk_mode: openfn_sidecar_batch` is set on a source connection and
 the request contains multiple subjects. The contract is semantically equivalent
 to running the same source binding as single reads for each item. For the full
 request and response shapes, field rules, cardinality semantics, and HTTP error
-codes, see the OpenFn Sidecar Source API section in the
-[API reference](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/api-reference.md)
-in the product repository.
+codes, see the
+[OpenFn Sidecar Source API section of the API reference](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/api-reference.md#openfn-sidecar-source-api).
 
 ### OpenFn Batch Config
 
