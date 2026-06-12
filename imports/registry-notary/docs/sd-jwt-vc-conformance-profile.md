@@ -1,4 +1,4 @@
-# Registry Notary SD-JWT VC Conformance Profile
+# Registry Notary SD-JWT VC conformance profile
 
 > **Page type:** Standards conformance · **Product:** Registry Notary · **Layer:** credential · **Audience:** integrator
 
@@ -121,7 +121,7 @@ Type Metadata convention, a consumer dereferences an HTTPS `vct` by inserting
   the candidate `vct` as `https://{host}/{vct_path}`, then matches it exactly
   against a configured credential configuration. The route uses a trailing-wildcard
   capture, so nested configured paths such as
-  `/.well-known/vct/credentials/dhis2/health-status/v1` are supported, not just two
+  `/.well-known/vct/credentials/dhis2/health-status/v1` are supported, not only two
   segments.
 - **Direct dereference.** The bare `GET /credentials/{vct_path}` route is also
   served for consumers that dereference the `vct` directly.
