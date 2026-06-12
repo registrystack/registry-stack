@@ -1,9 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-06-12
 
 ### Changed
 
+- BREAKING: Aggregate and StatDCAT responses adopt SDMX/StatDCAT-aligned
+  vocabulary throughout. The aggregate payload renames `data` -> `observations`,
+  `schema` -> `structure`, and `indicator` -> `measures`; aggregates negotiate an
+  SDMX-JSON 2.1 representation
+  (`Accept: application/vnd.sdmx.data+json;version=2.1` / `?f=sdmx-json`); and
+  DCAT advertises a separate distribution per visible aggregate representation
+  (#83).
 - BREAKING: `/metrics` on the admin listener now requires authentication with
   the `registry_relay:metrics_read` scope. Previously the route was served
   unauthenticated on the admin socket. Existing Prometheus scrapers must
@@ -48,6 +55,44 @@
 - DCAT aggregate distributions now advertise each visible aggregate
   representation separately, including OGC EDR `/area` links for configured
   spatial aggregates when the `ogcapi-edr` feature is enabled.
+- `/.well-known/api-catalog` is now served publicly, without authentication,
+  per RFC 9727 (#120, closes #86).
+- Live config apply now compares config sections semantically rather than by
+  byte-for-byte text, so equivalent reorderings no longer force a restart (#115,
+  #52).
+- The file-watch signer now derives content identity from a SHA-256 hash of the
+  key file, detecting same-mtime key replacements that the previous mtime check
+  missed (#116, #54).
+
+### Added
+
+- API-key commitment generator CLI for minting reviewed key commitments without
+  exposing raw keys (#103, #80).
+- OpenAPI contract gate: the runtime OpenAPI document is committed as an artifact
+  and CI fails on undocumented drift, with `oasdiff` breaking-change detection
+  and a `redocly lint` lint gate (#104, #112).
+- Performance gate: CI enforces relay perf thresholds and runs a k6 perf smoke,
+  with the `pull_request` perf-smoke trigger restored (#101, #109, #113).
+- Governed runtime configuration apply, Trust Ops posture endpoint, and listener
+  topology capability reporting (#51, #49, #61).
+
+### Security
+
+- Image supply-chain hardening: distroless release image, signed and verified
+  release publishing, SHA-pinned workflow actions, and reviewed advisory ratchet
+  gates (#100, #41, #44, #38).
+- Admin auth extractors tightened and admin route hygiene enforced (#102).
+- OpenAPI auth surface aligned: the docs shell now declares `security: []` and
+  the API-key header casing is normalized to lowercase `x-api-key` (#112, #65,
+  closes #110).
+- Security headers (including CSP) are emitted from both the demo static
+  metadata server and relay responses, with end-to-end pins (#118, #87, #88).
+
+### Fixed
+
+- Route-metrics classification corrected: `measures`/`dimensions` route patterns
+  classify as dataset routes, and the unmounted verify/aggregate-POST routes are
+  no longer classified or advertised (#117, #111, #79, #78).
 
 ## 0.1.0 - 2026-05-16
 
