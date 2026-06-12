@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
 import sys
 import tempfile
@@ -395,6 +396,163 @@ auth:
             )
 
         self.assertIssue(issues, "credential-commitment-mismatch")
+
+    @staticmethod
+    def _stub_manifest_oracle(root: Path) -> list[str]:
+        """A stand-in for registry-manifest-cli: digest = sha256 of file bytes."""
+        stub = root / "stub-manifest-oracle.py"
+        stub.write_text(
+            """
+import hashlib
+import sys
+
+path = sys.argv[2]
+data = open(path, "rb").read()
+if b"INVALID" in data:
+    sys.stderr.write("metadata manifest failed validation\\n")
+    raise SystemExit(1)
+print(f"metadata manifest valid: {path}")
+print("source_manifest_digest: sha256:" + hashlib.sha256(data).hexdigest())
+""",
+            encoding="utf-8",
+        )
+        return [sys.executable, str(stub)]
+
+    @staticmethod
+    def _write_pinned_relay_config(root: Path, manifest_text: str, digest: str) -> Path:
+        config_dir = root / "config" / "coolify" / "relay"
+        config_dir.mkdir(parents=True)
+        (config_dir / "civil.metadata.yaml").write_text(manifest_text, encoding="utf-8")
+        config_path = config_dir / "civil.yaml"
+        config_path.write_text(
+            f"""
+metadata:
+  source:
+    path: civil.metadata.yaml
+    digest: {digest}
+""",
+            encoding="utf-8",
+        )
+        return config_path
+
+    def test_metadata_digest_pins_pass_with_matching_oracle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_text = "title: Civil Registry Metadata\n"
+            digest = "sha256:" + hashlib.sha256(manifest_text.encode("utf-8")).hexdigest()
+            self._write_pinned_relay_config(root, manifest_text, digest)
+
+            issues = self.validator.validate_metadata_digest_pins(
+                "registry-lab", root, {}, manifest_cli=self._stub_manifest_oracle(root)
+            )
+
+        self.assertEqual([], issues)
+
+    def test_rejects_metadata_digest_pin_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stale = "sha256:" + "0" * 64
+            self._write_pinned_relay_config(root, "title: Civil Registry Metadata\n", stale)
+
+            issues = self.validator.validate_metadata_digest_pins(
+                "registry-lab", root, {}, manifest_cli=self._stub_manifest_oracle(root)
+            )
+
+        self.assertIssue(issues, "metadata-digest-mismatch")
+
+    def test_rejects_missing_metadata_manifest_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_pinned_relay_config(root, "title: x\n", "sha256:" + "0" * 64)
+            (root / "config" / "coolify" / "relay" / "civil.metadata.yaml").unlink()
+
+            issues = self.validator.validate_metadata_digest_pins(
+                "registry-lab", root, {}, manifest_cli=self._stub_manifest_oracle(root)
+            )
+
+        self.assertIssue(issues, "metadata-manifest-missing")
+
+    def test_rejects_invalid_metadata_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_pinned_relay_config(root, "INVALID\n", "sha256:" + "0" * 64)
+
+            issues = self.validator.validate_metadata_digest_pins(
+                "registry-lab", root, {}, manifest_cli=self._stub_manifest_oracle(root)
+            )
+
+        self.assertIssue(issues, "metadata-manifest-invalid")
+        self.assertNoIssue(issues, "metadata-digest-mismatch")
+
+    def test_metadata_digest_check_fails_without_oracle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_pinned_relay_config(root, "title: x\n", "sha256:" + "0" * 64)
+
+            issues = self.validator.validate_metadata_digest_pins("registry-lab", root, {})
+
+        self.assertIssue(issues, "metadata-digest-oracle-missing")
+
+    def test_metadata_digest_check_resolves_oracle_from_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_text = "title: Civil Registry Metadata\n"
+            digest = "sha256:" + hashlib.sha256(manifest_text.encode("utf-8")).hexdigest()
+            self._write_pinned_relay_config(root, manifest_text, digest)
+            oracle = " ".join(self._stub_manifest_oracle(root))
+
+            issues = self.validator.validate_metadata_digest_pins(
+                "registry-lab", root, {"REGISTRY_MANIFEST_CLI": oracle}
+            )
+
+        self.assertEqual([], issues)
+
+    def test_metadata_digest_check_honors_skip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_pinned_relay_config(root, "title: x\n", "sha256:" + "0" * 64)
+
+            issues = self.validator.validate_metadata_digest_pins(
+                "registry-lab", root, {}, skip=True
+            )
+
+        self.assertEqual([], issues)
+
+    def test_metadata_digest_check_ignores_configs_without_pins(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_dir = root / "config" / "coolify" / "relay"
+            config_dir.mkdir(parents=True)
+            (config_dir / "civil.yaml").write_text("server:\n  bind: 0.0.0.0:8080\n", encoding="utf-8")
+
+            issues = self.validator.validate_metadata_digest_pins("registry-lab", root, {})
+
+        self.assertEqual([], issues)
+
+    def test_repo_relay_configs_pin_metadata_digests(self) -> None:
+        relay_dir = SCRIPT_DIR.parent / "config" / "coolify" / "relay"
+        configs = [
+            path
+            for path in sorted(relay_dir.glob("*.yaml"))
+            if not path.name.endswith(".metadata.yaml")
+        ]
+        self.assertTrue(configs, f"no relay configs found in {relay_dir}")
+        for path in configs:
+            with self.subTest(path=path.name):
+                config = self.validator.load_yaml_mapping_strict(path)
+                source = config.get("metadata", {}).get("source", {})
+                self.assertRegex(source.get("digest", ""), r"^sha256:[0-9a-f]{64}$")
+                self.assertTrue((path.parent / source["path"]).is_file())
+
+    def test_hosted_workflow_does_not_skip_metadata_digest_pins(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        self.assertNotIn("--skip-metadata-digest-pins", workflow)
+
+    def test_parse_args_supports_metadata_digest_flags(self) -> None:
+        args = self.validator.parse_args(["--skip-metadata-digest-pins"])
+        self.assertTrue(args.skip_metadata_digest_pins)
+        args = self.validator.parse_args(["--manifest-cli", "/tmp/registry-manifest"])
+        self.assertEqual(Path("/tmp/registry-manifest"), args.manifest_cli)
 
     def test_rejects_localhost_public_urls(self) -> None:
         compose = self._valid_registry_lab()
