@@ -7,8 +7,7 @@ source_repos:
   - registry-manifest
   - registry-relay
   - registry-notary
-  - registry-platform
-last_reviewed: "2026-06-10"
+last_reviewed: "2026-06-12"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -67,7 +66,7 @@ Wire Registry Stack in alongside a workflow engine when:
 
 - A workflow step needs an authoritative registry fact (status, predicate, selected value).
 - A workflow step needs an evidence artifact or credential rather than an internal service result.
-- Generated workflow connectors should not depend on source schema details.
+- Generated workflow connectors must not depend on source schema details.
 
 ## Exchange layers
 
@@ -114,8 +113,16 @@ Wire Registry Stack in alongside a service platform when:
 
 ## Standards each surface speaks
 
-For the full list of standards, claim levels, and per-project evidence, see the
-[standards register](../../reference/standards/).
+Each integration surface involves a different set of standards.
+The claim level differs per standard (some surfaces emit a standard, others map to or
+compare against it); the [standards register](../../reference/standards/) is the
+authoritative list of claim levels and per-project evidence.
+
+| Integration surface | Relevant standards |
+| --- | --- |
+| Catalog and service discovery (Registry Manifest, Relay metadata routes) | DCAT, BRegDCAT-AP, CPSV-AP, OGC API Records, SHACL, JSON Schema, ODRL |
+| Protected data routes (Registry Relay) | OpenAPI, SP-DCI, GovStack Digital Registries, OGC API Features |
+| Evidence and credentials (Registry Notary) | OpenAPI, CCCEV, SD-JWT VC, OID4VCI, W3C DID |
 
 ## Next
 

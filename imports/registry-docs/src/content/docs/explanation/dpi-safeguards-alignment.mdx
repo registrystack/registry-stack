@@ -8,7 +8,7 @@ source_repos:
   - registry-manifest
   - registry-notary
   - registry-atlas
-last_reviewed: "2026-06-10"
+last_reviewed: "2026-06-12"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -66,7 +66,7 @@ The registry stack is most relevant where safeguards depend on:
 - **Purpose-bound exchange**: per-claim disclosure policy and per-caller metadata scoping.
 - **Auditability**: redacted audit events, signed evidence receipts.
 - **Reviewable metadata**: published DCAT, SHACL, JSON Schema, and policy documents.
-- **Verifiable provenance**: DID documents, SD-JWT VC credentials, provenance receipts.
+- **Verifiable provenance**: DID documents, SD-JWT VC credentials, signed response credentials.
 
 These are technical foundations that can support a DPI program's governance work. They are not a
 substitute for it.
@@ -84,7 +84,7 @@ listener, runs read-only against its sources, and applies body limits and timeou
 **Transparency and accountability.**
 [Registry Manifest](https://registrystack.org/) and Registry Relay publish what a registry
 exposes (OpenAPI, metadata routes, schemas, evidence offerings, policies, stable error codes, and
-provenance artifacts) so reviewers can inspect it before integration.
+signed response credentials) so reviewers can inspect it before integration.
 
 **Open assets and interoperability.**
 Registry Manifest, Registry Relay, and [Registry Notary](../../products/registry-notary/) produce
@@ -92,8 +92,8 @@ or reference standards-shaped artifacts (DCAT, SHACL, JSON Schema, ODRL, OpenAPI
 profiles) so downstream systems can consume them without bespoke contracts.
 
 **Evidence-based improvement.**
-Audit logs, aggregate disclosure records, validation reports, provenance receipts, and standards
-registers can provide material for review and impact assessment.
+Audit logs, aggregate disclosure records, validation reports, signed response credentials, and
+standards registers can provide material for review and impact assessment.
 
 This alignment is strongest at the implementation-evidence layer. It helps reviewers see what a
 registry system exposes, which project owns each surface, and which controls are available before
@@ -108,10 +108,6 @@ The registry stack's three commitments map to the framework's five pillars:
 | Interoperability | Open assets and interoperability |
 | Safeguards | Privacy by design; Data security by design |
 | Reviewability | Transparency and accountability; Evidence-based improvement |
-
-Distributed custody is the architectural premise of the stack rather than a pillar of its own.
-It supports every framework pillar by ensuring no single authority can compromise data flowing
-from another.
 
 ## Governance boundary
 
