@@ -63,7 +63,7 @@
         "label": "Explanation",
         "items": [
           {
-            "label": "Architecture overview",
+            "label": "Notary architecture",
             "slug": "products/registry-notary/architecture-overview"
           },
           {

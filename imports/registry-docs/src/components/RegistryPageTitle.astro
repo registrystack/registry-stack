@@ -7,7 +7,7 @@ const sectionLabels = new Map([
   ['start', 'Start'],
   ['projects', 'Projects'],
   ['map', 'Context'],
-  ['tutorials', 'Demo'],
+  ['tutorials', 'Tutorials'],
   ['explanation', 'Context'],
   ['reference', 'Reference'],
   ['decisions', 'Context'],
@@ -18,7 +18,6 @@ const sectionHref = new Map([
 ]);
 
 const currentLabels = new Map([
-  ['/start/quickstart/', 'Choose where to start'],
   ['/start/your-first-call/', 'Your first call'],
   ['/map/boundaries-and-map/', 'Boundaries and map'],
   ['/reference/apis/', 'API reference'],
@@ -55,4 +54,4 @@ const isWide = starlightRoute.entry.data.wide === true;
   </nav>
 )}
 
-{!isHome && <h1 id={PAGE_TITLE_ID}>{starlightRoute.entry.data.title}</h1>}
+<h1 id={PAGE_TITLE_ID}>{starlightRoute.entry.data.title}</h1>

@@ -70,7 +70,9 @@ repos:
         description: Integrator and operator documentation for Registry Notary, pulled from the product repository.
       - src: docs/architecture-overview.md
         dest: products/registry-notary/architecture-overview
-        label: Architecture overview
+        # "Notary architecture" (not the repo's "Architecture overview") so the
+        # sidebar entry does not collide with Explanation > Architecture.
+        label: Notary architecture
         nav_order: 10
         doc_type: explanation
       - src: docs/client-sdk-guide.md
