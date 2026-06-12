@@ -8,7 +8,7 @@ New here? Start with the hosted walkthrough, then the first-run tutorials in Reg
 - [Publish a spreadsheet as a secured registry API](https://docs.registrystack.org/tutorials/publish-spreadsheet-secured-registry-api/)
 - [Verify a claim from your registry API](https://docs.registrystack.org/tutorials/verify-claim-registry-api/)
 
-The references below describe supported behavior. Each fact has one home; pages link to the owning reference instead of restating it. Some links below open the source repository on GitHub.
+The references describe supported behavior. Each fact has one home; pages link to the owning reference instead of restating it. Some links open the source repository on GitHub.
 
 ## Integrate
 
@@ -30,7 +30,7 @@ The references below describe supported behavior. Each fact has one home; pages 
 - [Standards assumptions](../STANDARDS_ASSUMPTIONS.md): what Relay publishes versus what downstream tools may infer.
 - [Release notes](release-notes.md): versioned adopter-facing changes and known limits.
 
-## Build And Maintain
+## Build and maintain
 
 - [Development guide](development.md): local setup, verification commands, local IdP setup, project layout, OpenAPI release policy, platform compatibility gate, and contribution rules.
 - [Security assurance](security-assurance.md): CI security gates, image publication and signing policy, and advisory baselines.

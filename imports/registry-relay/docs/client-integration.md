@@ -23,7 +23,7 @@ sequenceDiagram
     Client->>Relay: Retry idempotent GET with jittered backoff
   end
   Relay-->>Client: Entity records (opaque next_cursor)
-  opt provenance enabled and requested
+  opt signed response credentials enabled and requested
     Client->>Relay: Read with Accept application/vc+jwt
     Relay-->>Client: Signed VC-JWT, verified against issuer DID and schema
   end
@@ -36,9 +36,9 @@ sequenceDiagram
 
 *The typical client lifecycle: authenticated discovery, scoped reads with
 conservative retries, optional response provenance, and handoff to Registry
-Notary for verification. Each step is detailed in the sections below.*
+Notary for verification. Each step is detailed in the sections that follow.*
 
-## Integration Checklist
+## Integration checklist
 
 Before a client is allowed to consume Relay data, confirm:
 
@@ -68,7 +68,7 @@ access, and the `evidence_verification` scope grants standards-adapter access
 only, not a Relay-local verification execution endpoint. For the full scope
 semantics see the [Registry Relay API reference](api.md#authentication).
 
-## Purpose Header
+## Purpose header
 
 Some entities require `Data-Purpose` for row or feature reads. Send a stable
 purpose URI or controlled string that the operator can audit:
@@ -97,7 +97,7 @@ Metadata responses may include `ETag`. If a client sends `If-None-Match`, an
 unchanged scoped view can return `304 Not Modified`. Shared caches must not
 reuse one caller's metadata for another caller.
 
-## Reading Records
+## Reading records
 
 Treat entity names and field names as deployment contract, not table names.
 Table ids and source column names are private operator configuration.
@@ -126,7 +126,7 @@ For JSON responses, handle suppression and masking as normal result states.
 Suppressed groups are not transport failures.
 
 CSV output is intended for operational exports and interoperability. When a
-deployment supports CSV aggregate output, clients should preserve:
+deployment supports CSV aggregate output, clients must preserve:
 
 - response headers describing disclosure and freshness;
 - the `Link: rel="describedby"` aggregate structure relation;
@@ -135,13 +135,13 @@ deployment supports CSV aggregate output, clients should preserve:
 SDMX JSON output is intended for statistical tooling. Request it with
 `?f=sdmx-json`, request body `"format": "sdmx-json"`, or
 `Accept: application/vnd.sdmx.data+json;version=2.1`. SDMX messages declare
-`https://json.sdmx.org/2.1/sdmx-json-data-schema.json`; clients should also
+`https://json.sdmx.org/2.1/sdmx-json-data-schema.json`; clients must also
 check the `meta.x-completeness` object before treating a cube as complete.
 
 ### Relay SDMX conventions
 
 Relay maps aggregate results onto SDMX JSON with a few relay-specific
-conventions that integrators should account for:
+conventions integrators must account for:
 
 - Measure descriptors carry relay extension keys alongside the standard SDMX
   fields: `x-unitMeasure` reports the measure unit, `x-unitMultiplier` reports
@@ -152,7 +152,7 @@ conventions that integrators should account for:
   deployment or dataset.
 - The measure `definition_uri` available in the native JSON and discovery
   responses is not mapped into the SDMX output. Clients that need a measure's
-  definition URI should read it from the native structure or measure-discovery
+  definition URI must read it from the native structure or measure-discovery
   responses.
 
 ## Errors
@@ -192,7 +192,7 @@ Use conservative retries:
 Relay is read-only for registry data, but retries still create extra audit
 events and may repeat costly source reads.
 
-## Signed Response Credentials
+## Signed response credentials
 
 When signed response credentials are enabled, clients can request W3C VCDM 2.0
 VC-JWT credentials with an accepted VC media type. Treat the returned compact
@@ -208,7 +208,7 @@ verification. Relay can sign selected data responses. Registry Notary owns
 claim evaluation, evidence verification, credential issuance workflows, and the
 verification semantics behind evidence offerings.
 
-## Registry Notary Handoff
+## Registry Notary handoff
 
 Relay publishes evidence offering metadata for discovery and delegates all claim
 and evidence verification to Registry Notary. The only evidence offering routes
