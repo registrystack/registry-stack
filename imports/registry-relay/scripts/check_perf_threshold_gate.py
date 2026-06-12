@@ -30,8 +30,8 @@ def main() -> int:
         raise SystemExit("REGISTRY_RELAY_NO_THRESHOLD bypass is missing from k6 common.js.")
     if "http_req_duration{expected_status:false}" not in common_js:
         raise SystemExit("k6 latency thresholds are missing from common.js.")
-    if "pull_request:" not in workflow:
-        raise SystemExit("perf-smoke.yml must run on pull_request to gate regressions before merge.")
+    if "push:" not in active_workflow or "branches: [main]" not in active_workflow:
+        raise SystemExit("perf-smoke.yml must run on pushes to main to gate regressions.")
 
     return 0
 
