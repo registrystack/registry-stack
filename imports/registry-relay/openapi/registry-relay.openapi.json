@@ -1135,6 +1135,11 @@
         ],
         "type": "object"
       },
+      "ApiCatalogLinkset": {
+        "additionalProperties": true,
+        "description": "RFC 9727 API catalog linkset document.",
+        "type": "object"
+      },
       "DatasetList": {
         "description": "Listing of datasets visible to the calling principal.",
         "type": "object"
@@ -2256,6 +2261,40 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/.well-known/api-catalog": {
+      "get": {
+        "description": "Returns the RFC 9727 linkset of API discovery links. Served publicly: the document is static and reveals no principal-scoped content.",
+        "operationId": "get_api_catalog",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/linkset+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiCatalogLinkset"
+                }
+              }
+            },
+            "description": "API catalog linkset."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "security": [],
+        "summary": "RFC 9727 API catalog",
+        "tags": [
+          "Catalog"
+        ]
+      }
+    },
     "/.well-known/did.json": {
       "get": {
         "description": "Returns the gateway-hosted DID Document in gateway issuer mode. Used by verifiers to resolve the signing key for signed response credentials (VC-JWT). Delegated issuer deployments mount the route but return `provenance.did_document_unavailable`.",

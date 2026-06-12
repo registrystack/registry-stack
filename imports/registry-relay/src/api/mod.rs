@@ -42,6 +42,7 @@ pub use docs::router as docs_router;
 pub use entity::router as entity_router;
 pub use health::router as health_router;
 pub use metadata::router as metadata_router;
+pub use metadata::well_known_router;
 #[cfg(feature = "ogcapi-edr")]
 pub use ogc::edr_router;
 #[cfg(feature = "ogcapi-features")]

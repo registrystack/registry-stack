@@ -31,15 +31,30 @@ const JSON_SCHEMA: HeaderValue = HeaderValue::from_static("application/schema+js
 const PROBLEM_JSON: HeaderValue = HeaderValue::from_static("application/problem+json");
 const METADATA_UNAVAILABLE_CODE: &str = "metadata.core_unavailable";
 
+/// Public RFC 9727 API catalog discovery route.
+///
+/// `GET`/`HEAD /.well-known/api-catalog` returns a fixed linkset of
+/// relative hrefs. The handlers are fully static: they take no
+/// [`Principal`], read no runtime state, and reveal nothing scoped to a
+/// caller, so the route is mounted on the public (auth-exempt)
+/// sub-router in [`crate::server::build_app_with_provenance`]. If either
+/// handler ever becomes dynamic (per-principal links, runtime state), its
+/// route placement must move back behind auth.
+pub fn well_known_router<S>() -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    Router::new().route(
+        "/.well-known/api-catalog",
+        get(api_catalog).head(api_catalog_head),
+    )
+}
+
 pub fn router<S>() -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route(
-            "/.well-known/api-catalog",
-            get(api_catalog).head(api_catalog_head),
-        )
         .route("/metadata", get(metadata_landing))
         .route("/metadata/catalog", get(catalog))
         .route("/metadata/evidence-offerings", get(evidence_offerings))
@@ -161,6 +176,12 @@ async fn metadata_landing(
     )
 }
 
+/// RFC 9727 API catalog linkset.
+///
+/// The body is a fixed linkset of relative hrefs with no principal input
+/// and no runtime state, which is why it is served publicly (see
+/// [`well_known_router`]). Keep it static: if it ever needs a
+/// [`Principal`] or runtime snapshot, move the route back behind auth.
 async fn api_catalog(headers: HeaderMap) -> Response {
     let mut response = typed_json_response(
         json!({

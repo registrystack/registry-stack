@@ -18,6 +18,14 @@ allowed:
     reason: Static Scalar asset.
   - listener: public
     method: GET
+    path: /.well-known/api-catalog
+    reason: Public RFC 9727 discovery linkset; static handler with no principal input.
+  - listener: public
+    method: HEAD
+    path: /.well-known/api-catalog
+    reason: Public RFC 9727 discovery linkset; static handler with no principal input.
+  - listener: public
+    method: GET
     path: /.well-known/did.json
     reason: Public DID document when provenance gateway mode is enabled.
   - listener: public

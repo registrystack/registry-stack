@@ -725,6 +725,94 @@ async fn healthz_response_carries_required_security_headers() {
     );
 }
 
+/// `/.well-known/api-catalog` is the RFC 9727 linkset discovery document.
+/// It is fully static (no principal, no runtime state) and must be served
+/// publicly so unauthenticated clients can bootstrap into the API surface.
+/// `build_test_app` configures zero API keys, so any auth-gated route would
+/// answer 401; reaching 200 here proves the route sits on the public
+/// sub-router. The baseline security headers must still be present.
+#[tokio::test]
+async fn api_catalog_is_public_and_carries_security_headers() {
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
+    let app = build_test_app(sink);
+    let server = TestServer::new(app);
+
+    let resp = server.get("/.well-known/api-catalog").await;
+    resp.assert_status(StatusCode::OK);
+    assert_eq!(
+        resp.header("content-type"),
+        "application/linkset+json; profile=\"https://www.rfc-editor.org/info/rfc9727\"",
+        "api-catalog must answer with the RFC 9727 linkset media type"
+    );
+
+    assert_eq!(
+        resp.header("x-content-type-options"),
+        "nosniff",
+        "x-content-type-options must be set on /.well-known/api-catalog"
+    );
+    assert_eq!(
+        resp.header("x-frame-options"),
+        "DENY",
+        "x-frame-options must be set on /.well-known/api-catalog"
+    );
+    assert_eq!(
+        resp.header("referrer-policy"),
+        "no-referrer",
+        "referrer-policy must be set on /.well-known/api-catalog"
+    );
+    let csp = resp
+        .maybe_header("content-security-policy")
+        .expect("content-security-policy must be set on /.well-known/api-catalog");
+    let csp = csp.to_str().expect("CSP header is ASCII");
+    assert!(
+        csp.contains("default-src"),
+        "CSP on /.well-known/api-catalog must include a default-src directive, got: {csp}"
+    );
+    assert!(
+        csp.contains("frame-ancestors 'none'"),
+        "CSP on /.well-known/api-catalog must include frame-ancestors 'none', got: {csp}"
+    );
+}
+
+/// HEAD on the same route must also be public and carry the security
+/// headers; the discovery `Link` header is the load-bearing payload for a
+/// HEAD probe.
+#[tokio::test]
+async fn api_catalog_head_is_public_and_carries_security_headers() {
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
+    let app = build_test_app(sink);
+    let server = TestServer::new(app);
+
+    let resp = server
+        .method(axum::http::Method::HEAD, "/.well-known/api-catalog")
+        .await;
+    resp.assert_status(StatusCode::OK);
+    assert_eq!(
+        resp.header("content-type"),
+        "application/linkset+json; profile=\"https://www.rfc-editor.org/info/rfc9727\"",
+        "HEAD api-catalog must echo the RFC 9727 linkset media type"
+    );
+
+    assert_eq!(
+        resp.header("x-content-type-options"),
+        "nosniff",
+        "x-content-type-options must be set on HEAD /.well-known/api-catalog"
+    );
+    assert_eq!(
+        resp.header("x-frame-options"),
+        "DENY",
+        "x-frame-options must be set on HEAD /.well-known/api-catalog"
+    );
+    let csp = resp
+        .maybe_header("content-security-policy")
+        .expect("content-security-policy must be set on HEAD /.well-known/api-catalog");
+    let csp = csp.to_str().expect("CSP header is ASCII");
+    assert!(
+        csp.contains("frame-ancestors 'none'"),
+        "CSP on HEAD /.well-known/api-catalog must include frame-ancestors 'none', got: {csp}"
+    );
+}
+
 /// The admin listener carries its own `build_admin_app` stack; confirm
 /// it also sends the same baseline security headers.
 #[tokio::test]
