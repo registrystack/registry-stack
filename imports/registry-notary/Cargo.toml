@@ -6,6 +6,7 @@ members = [
     "crates/registry-notary-bin",
     "crates/registry-notary-worker-harness",
     "crates/registry-notary-openfn-sidecar",
+    "xtask",
 ]
 resolver = "2"
 

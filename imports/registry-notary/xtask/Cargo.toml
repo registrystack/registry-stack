@@ -1,0 +1,14 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+# Internal workspace tooling; not published.
+publish = false
+
+[dependencies]
+base64 = { version = "0.22" }
+registry-platform-crypto = { version = "0.2.1", path = "../../registry-platform/crates/registry-platform-crypto" }
+registry-platform-sdjwt = { version = "0.2.1", path = "../../registry-platform/crates/registry-platform-sdjwt" }
+serde_json = { version = "1" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

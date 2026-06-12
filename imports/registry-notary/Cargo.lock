@@ -2950,6 +2950,7 @@ dependencies = [
  "hex",
  "jsonschema",
  "jsonwebtoken",
+ "registry-notary-client",
  "registry-notary-core",
  "registry-notary-openfn-sidecar",
  "registry-notary-worker-harness",
@@ -4772,6 +4773,17 @@ name = "writeable"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
+
+[[package]]
+name = "xtask"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "registry-platform-crypto",
+ "registry-platform-sdjwt",
+ "serde_json",
+ "tokio",
+]
 
 [[package]]
 name = "xxhash-rust"
