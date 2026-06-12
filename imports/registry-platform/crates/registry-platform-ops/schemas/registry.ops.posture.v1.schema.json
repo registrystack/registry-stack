@@ -46,6 +46,12 @@
     "configuration": {
       "$ref": "#/$defs/configuration"
     },
+    "deployment": {
+      "$ref": "#/$defs/deployment"
+    },
+    "audit": {
+      "$ref": "#/$defs/audit_assurance"
+    },
     "standards_artifacts": {
       "$ref": "#/$defs/standards_artifacts"
     },
@@ -292,6 +298,188 @@
         },
         "active_signer_kids": {
           "$ref": "#/$defs/string_array"
+        }
+      }
+    },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "$ref": "#/$defs/deployment_profile"
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/deployment_finding"
+          }
+        },
+        "waivers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/deployment_waiver"
+          }
+        }
+      }
+    },
+    "deployment_profile": {
+      "enum": [
+        "local",
+        "hosted_lab",
+        "production",
+        "evidence_grade"
+      ]
+    },
+    "finding_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:\\.[a-z][a-z0-9_-]*)*$"
+    },
+    "gate_severity": {
+      "enum": [
+        "startup_fail",
+        "readiness_fail",
+        "finding_error",
+        "finding_warn"
+      ]
+    },
+    "deployment_finding_status": {
+      "enum": [
+        "active",
+        "waived"
+      ]
+    },
+    "deployment_finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "severity",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/finding_id"
+        },
+        "severity": {
+          "$ref": "#/$defs/gate_severity"
+        },
+        "status": {
+          "$ref": "#/$defs/deployment_finding_status"
+        },
+        "waiver": {
+          "$ref": "#/$defs/deployment_finding_waiver"
+        }
+      }
+    },
+    "deployment_finding_waiver": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reason",
+        "expires"
+      ],
+      "properties": {
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expires": {
+          "type": "string",
+          "format": "date",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        }
+      }
+    },
+    "deployment_waiver": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "finding",
+        "reason",
+        "expires"
+      ],
+      "properties": {
+        "finding": {
+          "$ref": "#/$defs/finding_id"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expires": {
+          "type": "string",
+          "format": "date",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        }
+      }
+    },
+    "audit_assurance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "write_policy",
+        "redaction_mode",
+        "hash_chain",
+        "keyed_integrity",
+        "sink_class",
+        "retention_owner",
+        "checkpoints",
+        "anchoring"
+      ],
+      "properties": {
+        "write_policy": {
+          "enum": [
+            "availability_first",
+            "fail_closed",
+            "fail_closed_route_families"
+          ]
+        },
+        "redaction_mode": {
+          "enum": [
+            "redacted"
+          ]
+        },
+        "hash_chain": {
+          "enum": [
+            "none",
+            "process_local",
+            "retained"
+          ]
+        },
+        "keyed_integrity": {
+          "enum": [
+            "none",
+            "hmac"
+          ]
+        },
+        "sink_class": {
+          "enum": [
+            "none",
+            "stdout",
+            "file",
+            "http",
+            "external"
+          ]
+        },
+        "retention_owner": {
+          "enum": [
+            "unspecified",
+            "operator",
+            "host"
+          ]
+        },
+        "checkpoints": {
+          "enum": [
+            "unsupported",
+            "supported",
+            "enabled"
+          ]
+        },
+        "anchoring": {
+          "enum": [
+            "none",
+            "external"
+          ]
         }
       }
     },
