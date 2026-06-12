@@ -646,7 +646,7 @@ Config fails at startup:
 
 Protected endpoint returns 401:
 
-- Confirm the request has `Authorization: Bearer <key>` or `X-Api-Key`.
+- Confirm the request has `Authorization: Bearer <key>` or `x-api-key`.
 - Confirm the raw key hashes to one configured fingerprint.
 - Confirm the process was restarted after key changes.
 

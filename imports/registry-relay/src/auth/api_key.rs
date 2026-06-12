@@ -3,7 +3,7 @@
 //!
 //! ## Verification flow
 //!
-//! 1. Read `Authorization: Bearer <token>` or `X-Api-Key: <token>`.
+//! 1. Read `Authorization: Bearer <token>` or `x-api-key: <token>`.
 //! 2. Hash the presented high-entropy key with SHA-256.
 //! 3. Look up the fingerprint in the configured in-memory key map.
 //!    On no match, return `AuthError::InvalidCredential`.
@@ -184,7 +184,7 @@ impl AuthProvider for ApiKeyAuth {
     }
 }
 
-/// Pull the credential out of `Authorization` or `X-Api-Key`.
+/// Pull the credential out of `Authorization` or `x-api-key`.
 ///
 /// Returns:
 /// * `AuthError::MissingCredential` if neither header is present.

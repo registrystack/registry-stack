@@ -666,7 +666,7 @@ impl AuthError {
     fn detail(&self) -> String {
         match self {
             AuthError::MissingCredential => {
-                "no credential provided in Authorization or X-Api-Key header".to_string()
+                "no credential provided in Authorization or x-api-key header".to_string()
             }
             AuthError::InvalidCredential => {
                 "credential did not match any configured key".to_string()
