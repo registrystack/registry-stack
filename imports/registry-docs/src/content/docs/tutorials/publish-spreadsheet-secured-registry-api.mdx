@@ -92,6 +92,7 @@ my-first-api/
   secrets/
     local.env
   output/
+  .gitignore
 ```
 
 The `secrets/local.env` file contains local demo bearer keys and matching fingerprints.
@@ -106,7 +107,7 @@ registryctl start
 ```
 
 The command starts the published Registry Relay container, waits for health and readiness, and
-prints:
+after the Docker Compose progress lines prints:
 
 ```text
 Relay API:  http://127.0.0.1:4242
@@ -229,7 +230,8 @@ Open the local API docs:
 registryctl open
 ```
 
-The docs page opens at:
+The command opens the docs page in your default browser.
+In an environment that cannot launch one, such as a remote shell, it prints the URL instead:
 
 ```text
 http://127.0.0.1:4242/docs

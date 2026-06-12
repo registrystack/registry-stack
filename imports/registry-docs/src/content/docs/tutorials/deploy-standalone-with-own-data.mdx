@@ -245,6 +245,13 @@ Use the values as follows:
 - Replace the all-zero `commitment` placeholder in the YAML with the emitted `commitment`.
 - Give the raw `api_key` only to the authorized client. Relay never stores it.
 
+The verification commands later on this page send the raw key as `$RAW_KEY`.
+Keep it available in the shell you will verify from:
+
+```sh
+export RAW_KEY=<api_key value from the generate-api-key output>
+```
+
 The commitment binds the key's fingerprint to the product, the credential type, and the
 credential id, so the `--id` you pass must match the `api_keys` entry's `id` exactly.
 If you later rotate the key or rename the entry, rerun the command and update both the secret
@@ -316,7 +323,9 @@ curl -sS -G \
   http://127.0.0.1:8080/v1/datasets/social_registry/entities/person/records
 ```
 
-The metadata route is also available for catalog discovery:
+Relay also serves a DCAT catalog document at `/metadata/catalog`.
+It requires the same metadata scope as `/v1/datasets` and returns a standards-shaped
+catalog description (rather than the dataset id list) that catalog tooling can consume:
 
 ```sh
 curl -sS \

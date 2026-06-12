@@ -17,7 +17,8 @@ In about two minutes you can see the core of Registry Stack working against a pu
 will read a protected registry API from your terminal (**Registry Relay**, which returns records to
 authorized callers), then watch **Registry Notary** issue a signed credential that answers a question
 without exposing the record. The Relay reads are pure `curl` with zero install; the credential step is
-a guided browser flow. Everything runs in the hosted lab at
+a guided browser flow; only the optional developer round-trip at the end also uses `jq` and
+`node`. Everything runs in the hosted lab at
 [lab.registrystack.org](https://lab.registrystack.org), so there is no setup on your machine.
 
 This lab uses synthetic data and public demo-only credentials by design.
@@ -25,12 +26,15 @@ Do not reuse anything you copy here outside the lab.
 
 ## What is running
 
-The lab runs two services that you will touch directly:
+The lab runs three services that you will touch directly:
 
 - A civil-registry **Relay**: a protected, scoped, read-only HTTP API over a civil registry source,
   at [civil-relay.lab.registrystack.org](https://civil-relay.lab.registrystack.org).
 - A citizen **Notary**: an issuer that hands out a privacy-preserving credential instead of the raw
   record, at [citizen-notary.lab.registrystack.org](https://citizen-notary.lab.registrystack.org).
+- A health-program **Notary** in front of a demo DHIS2 health information system, used only by the
+  optional developer round-trip at the end of this page, at
+  [dhis2-notary.lab.registrystack.org](https://dhis2-notary.lab.registrystack.org).
 
 For how these connect to the rest of the stack, see the
 [architecture overview](../../explanation/architecture/). For the full set of live demo
@@ -73,8 +77,8 @@ curl -sS \
   https://civil-relay.lab.registrystack.org/v1/datasets
 ```
 
-The Relay returns `200 OK` with the catalog. Additional `DatasetSummary` fields are omitted here
-for brevity:
+The Relay returns `200 OK` with the catalog. Each dataset entry carries more fields than shown;
+they are omitted here for brevity:
 
 ```json
 { "data": [ { "dataset_id": "civil_registry" } ] }
@@ -129,14 +133,15 @@ different scope, different answer. For more on this service, see
 
 ## Get a signed credential
 
-Now see the issuance side. The citizen Notary issues an SD-JWT VC credential of type
-`person_is_alive_sd_jwt` (format `dc+sd-jwt`). The credential discloses a single predicate, whether
+Now see the issuance side. The citizen Notary issues a Selective Disclosure JWT Verifiable
+Credential ([SD-JWT VC](../../reference/glossary/#sd-jwt-vc)) of type `person_is_alive_sd_jwt`,
+media type `application/dc+sd-jwt`. The credential discloses a single predicate, whether
 the person is alive, as a true or false claim. It never hands over the underlying civil record.
 The Relay row-read example uses `NID-1001` / Miguel Santos, while this wallet flow uses the lab
 wallet identity `NID-2001` / Maria Santos.
 
 Unlike the Relay reads above, this part is a guided browser flow, not a curl sequence: a real
-[OID4VCI](../../reference/glossary/) issuance needs a holder key and a sign-in, which is wallet
+[OID4VCI](../../reference/glossary/#oid4vci) issuance needs a holder key and a sign-in, which is wallet
 territory. To receive the credential you need an OID4VCI-compatible wallet; if you do not have one,
 you can still follow the flow on the lab homepage and watch the sign-in and issuance without
 installing anything.
@@ -169,8 +174,11 @@ be talked into vouching for someone else. For more on this service, see
 
 ### Developer API round-trip
 
-For a pure API credential flow, use the hosted DHIS2 Notary. This path does not use the browser
-wallet sign-in. It evaluates DHIS2 child-program claims, issues an `application/dc+sd-jwt`
+For a pure API credential flow, use the hosted DHIS2 Notary: the lab runs a demo
+[DHIS2](https://dhis2.org/) health information system with a Notary in front of it, so the same
+issuance contract can be exercised against a second, independent source system. This path does
+not use the browser wallet sign-in, and unlike the curl-only reads above it also needs `jq` and
+`node` on your machine. It evaluates DHIS2 child-program claims, issues an `application/dc+sd-jwt`
 credential, fetches the issuer JWKS, verifies the Ed25519 signature, and checks that each disclosure
 hash is listed in the issuer-signed JWT.
 

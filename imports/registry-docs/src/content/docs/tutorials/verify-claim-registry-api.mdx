@@ -37,6 +37,11 @@ registryctl smoke
 
 The Relay smoke test must pass before you add Notary.
 
+If you already completed that tutorial and `my-first-api` is still on disk, do not rerun the
+`init` line: `registryctl init` refuses to overwrite a directory that is not empty.
+From `my-first-api`, run `registryctl start` and `registryctl smoke` to confirm the project is
+healthy, then continue.
+
 ## Add claim verification
 
 From the Relay project directory, add Notary:
@@ -64,6 +69,7 @@ my-first-api/
   secrets/
     local.env
   output/
+  .gitignore
 ```
 
 `registryctl` keeps Relay and Notary credentials in `secrets/local.env`.
@@ -79,6 +85,9 @@ Notary reads from Relay through the Compose network:
 http://registry-relay:8080
 ```
 
+`registry-relay` is the service name `registryctl` writes into the generated `compose.yaml`;
+it is fixed by the generator, not derived from your project directory name.
+
 Local browser and curl examples use the host URL:
 
 ```text
@@ -93,11 +102,14 @@ Start the project again:
 registryctl start
 ```
 
-The command starts both services and waits for both health and readiness checks:
+The command starts both services and, after the Docker Compose progress lines, waits for both
+health and readiness checks:
 
 ```text
-Relay API:   http://127.0.0.1:4242
-Notary API:  http://127.0.0.1:4255
+Relay API:  http://127.0.0.1:4242
+API docs:   http://127.0.0.1:4242/docs
+Notary API: http://127.0.0.1:4255
+API docs:   http://127.0.0.1:4255/docs
 ```
 
 Check the project status:
@@ -354,7 +366,8 @@ Open the Notary API surface:
 registryctl notary open
 ```
 
-The command prints the local API docs URL and raw OpenAPI JSON URL:
+The command opens the docs page in your default browser.
+In an environment that cannot launch one, such as a remote shell, it prints the URLs instead:
 
 ```text
 Notary API docs: http://127.0.0.1:4255/docs
@@ -367,6 +380,14 @@ Everything so far ran Notary inside the Relay project.
 When you already operate an API and only want claim verification, create a standalone Notary
 project instead and point it at your source API.
 The source must expose the Registry Data API-shaped record route Notary is configured to call.
+
+If you arrived here directly, for example from the quickstart routing table, note that the
+reproducible demo below uses the local registry API from the sections above as its stand-in
+source, so it needs that project on disk and running (the [Before you start](#before-you-start)
+block creates it in about two minutes).
+If you already have a live source API of your own, skim the demo for the shape of the flow,
+then start from [For an API you operate](#for-an-api-you-operate) below and substitute your own
+URL, dataset, and token.
 
 To keep the steps reproducible without external credentials, this section reuses the local
 registry API as the stand-in source.
@@ -385,7 +406,8 @@ registryctl init notary my-standalone-notary \
 cd my-standalone-notary
 ```
 
-`--source-token-from-env ROW_READER_RAW` reads the token from your current shell.
+`--source-token-from-env ROW_READER_RAW` reads the token value from your current shell once, at
+project-creation time, and writes it into the new project's `secrets/local.env`.
 `my-first-api_default` is the Compose network name Docker derives from the Relay project
 directory name; if you named that directory differently, use that name with the `_default`
 suffix.
@@ -393,24 +415,34 @@ The generated Notary config contains the source API URL, source dataset, entity,
 environment variable names, and credential commitments.
 The raw keys and tokens live only in this project's own `secrets/local.env`.
 
-For an API you operate, change the source options at project creation time:
+### For an API you operate
+
+Change the source options at project creation time.
+The three `<...>` values are placeholders for what your source API exposes; the demo values
+above (`benefits_casework`, `person`, `id`) are also the CLI defaults, so leaving these flags
+off wires Notary to a dataset that does not exist on your API:
 
 ```sh
 registryctl init notary my-notary \
   --source-url https://api.example.com \
   --source-token-env EVIDENCE_SOURCE_API_TOKEN \
-  --source-dataset benefits_casework \
-  --source-entity person \
-  --source-lookup-field id
+  --source-dataset <your-dataset-id> \
+  --source-entity <your-entity> \
+  --source-lookup-field <your-lookup-field>
 ```
 
-Then edit `secrets/local.env` and set `EVIDENCE_SOURCE_API_TOKEN` to the source token.
+`--source-token-env` differs from `--source-token-from-env` above: it does not read a value
+from your shell now, it names the environment variable the Notary container resolves at
+runtime.
+Supply the value afterwards by editing `secrets/local.env` and setting
+`EVIDENCE_SOURCE_API_TOKEN` to the source token.
 If the source API is another Compose service, pass `--source-network <compose-network>` so
 Notary can join that network.
 
-From the standalone project directory, the rest of the flow is the same as the sections you
-already ran: `registryctl start`, `registryctl notary smoke`, load this project's keys with the
-`set -a` block, and evaluate the claim against `http://127.0.0.1:4255/v1/evaluations`.
+From the standalone project directory, the rest of the flow is the same as the co-located
+sections earlier on this page: `registryctl start`, `registryctl notary smoke`, load this
+project's keys with the `set -a` block, and evaluate the claim against
+`http://127.0.0.1:4255/v1/evaluations`.
 The standalone project has its own `secrets/local.env`; load it from this directory, not the
 Relay project's.
 
@@ -436,6 +468,8 @@ source registry API from `my-first-api`.
   Relay from an application.
 - [See it live](../../start/see-it-live/): explore the hosted demo to see Relay, Notary, and
   cross-authority flows in action.
+- [First run with Registry Lab](../first-run-with-registry-lab/): run the full multi-service
+  topology locally, with three Relays, cross-authority Notaries, and an identity provider.
 
 ## Troubleshooting
 
