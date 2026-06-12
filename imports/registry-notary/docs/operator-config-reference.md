@@ -657,6 +657,10 @@ source_bindings:
         - benefit_eligibility_check
       allowed_relationships:
         - self
+        - guardian
+      relationship_purpose_scopes:
+        guardian:
+          - benefit_eligibility_check
       sufficient_target_inputs:
         - [target.attributes.given_name, target.attributes.family_name, target.attributes.birthdate]
       allowed_target_inputs:
@@ -676,6 +680,7 @@ Fields:
 | `requester_type` | If set, the request `requester.type` must equal this value | unenforced |
 | `allowed_purposes` | Purposes this binding may be used for; empty means no purpose restriction here | empty |
 | `allowed_relationships` | Relationship types this binding accepts | empty |
+| `relationship_purpose_scopes` | Per-relationship purpose allow-list; a scoped relationship used for any other purpose is rejected with granular code `relationship.purpose_not_allowed` | empty |
 | `sufficient_target_inputs` | OR-of-AND groups of target paths; the request must satisfy at least one full group | empty |
 | `allowed_target_inputs` | Allow-list of target paths the binding may read; empty means unrestricted | empty |
 | `allowed_requester_inputs` | Allow-list of requester paths the binding may read; empty means unrestricted | empty |
@@ -693,6 +698,12 @@ Notes:
   A request that supplies a path outside the allow-list is rejected, so a binding
   cannot over-collect by accident. Leave them empty only for identifier-only
   bindings that need no attribute minimization.
+- `relationship_purpose_scopes` narrows named relationships to specific
+  purposes after the flat `allowed_purposes` and `allowed_relationships` checks.
+  Each scoped relationship must also appear in `allowed_relationships`.
+  Relationships with no entry in the map keep the unscoped behavior. When
+  `collapse_matching_errors` is on, callers see `evidence.not_available` and the
+  granular code is retained for audit.
 - `collapse_matching_errors` defaults to on. Turn it off only in a controlled
   environment where exposing not-found versus ambiguous versus rejected to the
   caller is acceptable, because those differences can be used as an existence
@@ -701,7 +712,7 @@ Notes:
   on every successful match and does not measure how strong an individual match was.
 - Config validation rejects blank values: `policy_id`, `method`, `target_type`, and
   `requester_type` must be non-empty when present, and the purpose, relationship,
-  and input-path lists must not contain blank entries.
+  relationship purpose scope, and input-path lists must not contain blank entries.
 
 ## Credential Profiles
 

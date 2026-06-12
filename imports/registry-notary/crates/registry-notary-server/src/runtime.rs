@@ -2713,21 +2713,28 @@ fn validate_matching_policy(
     if matching.require_requester_reauthentication {
         return Err(EvidenceError::RequesterReauthenticationRequired);
     }
-    if !matching.allowed_relationships.is_empty() {
+    if !matching.allowed_relationships.is_empty()
+        || !matching.relationship_purpose_scopes.is_empty()
+    {
         let relationship_type = context
             .relationship
             .as_ref()
             .map(|relationship| relationship.relationship_type.as_str());
-        if relationship_type.is_none() {
+        let Some(relationship_type) = relationship_type else {
             return Err(EvidenceError::RelationshipNotEstablished);
-        }
-        if relationship_type.is_none_or(|relationship_type| {
-            !matching
-                .allowed_relationships
-                .iter()
-                .any(|allowed| allowed == relationship_type)
-        }) {
+        };
+        if !matching
+            .allowed_relationships
+            .iter()
+            .any(|allowed| allowed == relationship_type)
+        {
             return Err(EvidenceError::RelationshipPolicyRejected);
+        }
+        if let Some(allowed_purposes) = matching.relationship_purpose_scopes.get(relationship_type)
+        {
+            if !allowed_purposes.iter().any(|allowed| allowed == purpose) {
+                return Err(EvidenceError::RelationshipPurposeNotAllowed);
+            }
         }
     }
     if !matching.sufficient_target_inputs.is_empty()
@@ -2886,7 +2893,8 @@ fn collapse_matching_error(
         | EvidenceError::RelationshipNotEstablished
         | EvidenceError::RelationshipMatchAmbiguous
         | EvidenceError::RelationshipAttributesInsufficient
-        | EvidenceError::RelationshipPolicyRejected) => {
+        | EvidenceError::RelationshipPolicyRejected
+        | EvidenceError::RelationshipPurposeNotAllowed) => {
             EvidenceError::MatchingEvidenceNotAvailable {
                 audit_code: matching_error.audit_code(),
             }

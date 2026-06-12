@@ -7439,6 +7439,7 @@ pub(crate) fn evidence_status(error: &EvidenceError) -> StatusCode {
         | EvidenceError::RequesterMatchingPolicyRejected
         | EvidenceError::TargetMatchingPolicyRejected
         | EvidenceError::RelationshipNotEstablished
+        | EvidenceError::RelationshipPurposeNotAllowed
         | EvidenceError::RelationshipPolicyRejected
         | EvidenceError::ScopeDenied { .. }
         | EvidenceError::SelfAttestationDenied { .. }
@@ -7487,6 +7488,7 @@ pub(crate) fn evidence_title(error: &EvidenceError) -> &'static str {
         EvidenceError::RelationshipMatchAmbiguous => "Relationship match ambiguous",
         EvidenceError::RelationshipAttributesInsufficient => "Relationship attributes insufficient",
         EvidenceError::RelationshipPolicyRejected => "Relationship policy rejected",
+        EvidenceError::RelationshipPurposeNotAllowed => "Relationship purpose not allowed",
         EvidenceError::PurposeNotAllowed => "Purpose not allowed",
         EvidenceError::ProfileUnsupported => "Profile unsupported",
         EvidenceError::EvidenceNotAvailable
@@ -7562,6 +7564,9 @@ pub(crate) fn evidence_detail(error: &EvidenceError) -> &'static str {
         }
         EvidenceError::RelationshipPolicyRejected => {
             "the requester-target relationship is not allowed"
+        }
+        EvidenceError::RelationshipPurposeNotAllowed => {
+            "the requester-target relationship is not allowed for the declared purpose"
         }
         EvidenceError::PurposeNotAllowed => "the declared purpose is not allowed",
         EvidenceError::ProfileUnsupported => "the requested profile is not supported",

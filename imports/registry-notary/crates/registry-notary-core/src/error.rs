@@ -54,6 +54,8 @@ pub enum EvidenceError {
     RelationshipAttributesInsufficient,
     #[error("relationship policy rejected the request")]
     RelationshipPolicyRejected,
+    #[error("relationship is not allowed for the requested purpose")]
+    RelationshipPurposeNotAllowed,
     #[error("purpose is not allowed")]
     PurposeNotAllowed,
     #[error("evidence request profile is unsupported")]
@@ -129,6 +131,7 @@ impl EvidenceError {
             Self::RelationshipMatchAmbiguous => "relationship.match_ambiguous",
             Self::RelationshipAttributesInsufficient => "relationship.attributes_insufficient",
             Self::RelationshipPolicyRejected => "relationship.policy_rejected",
+            Self::RelationshipPurposeNotAllowed => "relationship.purpose_not_allowed",
             Self::PurposeNotAllowed => "purpose.not_allowed",
             Self::ProfileUnsupported => "profile.unsupported",
             Self::EvidenceNotAvailable | Self::MatchingEvidenceNotAvailable { .. } => {
@@ -254,6 +257,10 @@ mod tests {
         assert_eq!(
             EvidenceError::RelationshipPolicyRejected.code(),
             "relationship.policy_rejected"
+        );
+        assert_eq!(
+            EvidenceError::RelationshipPurposeNotAllowed.code(),
+            "relationship.purpose_not_allowed"
         );
         let collapsed = EvidenceError::MatchingEvidenceNotAvailable {
             audit_code: EvidenceError::SourceAmbiguous.audit_code(),
