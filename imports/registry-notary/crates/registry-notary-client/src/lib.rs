@@ -47,6 +47,7 @@
 //! - `federation` enables delegated evaluation JWS submission.
 //! - `json-facade` enables a binding-safe JSON facade for Python and Node
 //!   wrappers.
+//! - `verifier` enables explicit, opt-in SD-JWT VC verification helpers.
 //! - `test-support` exposes the test-only `reqwest::Client` override and
 //!   loopback HTTP allowance.
 //!
@@ -70,6 +71,8 @@ pub mod facade;
 pub mod federation;
 #[cfg(feature = "oid4vci")]
 pub mod oid4vci;
+#[cfg(feature = "verifier")]
+pub mod verifier;
 
 pub use client::{EvaluateBuilder, NotaryClientBuilder, RegistryNotaryClient};
 pub use error::{
@@ -82,3 +85,5 @@ pub use responses::{
     CredentialStatusUpdateRequest, EvaluateResponse, Evaluation, FormatsResponse, HealthResponse,
     ListClaimsResponse, NotaryResponse,
 };
+#[cfg(feature = "verifier")]
+pub use verifier::{HolderBindingPolicy, VerificationError, VerifiedCredential, VerifyOptions};

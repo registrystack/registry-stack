@@ -18,7 +18,7 @@ retry behavior, JWKS refresh behavior, and redacted error mapping.
 The Rust crate is the source of truth. Python and Node expose the main
 application, discovery, OID4VCI, and federation helpers, but keep JSON as
 dictionaries or plain objects. Rust additionally exposes operational, admin,
-and format helpers.
+format, and explicit SD-JWT VC verifier helpers.
 
 ## Common Concepts
 
@@ -344,6 +344,52 @@ let credential = client
 ```
 
 Credential bodies are present in `credential.body`, but redacted from `Debug`.
+
+### Explicit Credential Verification
+
+Enable the Rust `verifier` feature when relying-party or wallet code needs to
+verify SD-JWT VC credential material. Verification is explicit and opt-in:
+transport methods continue to return decoded response bodies without hidden
+network refreshes or trust-policy decisions.
+
+```toml
+registry-notary-client = {
+  path = "crates/registry-notary-client",
+  features = ["verifier"]
+}
+```
+
+```rust
+use registry_notary_client::{HolderBindingPolicy, VerifyOptions};
+
+let options = VerifyOptions::new("did:web:notary.example")
+    .expected_vct("https://credentials.example/vct/person-is-alive")
+    .holder_binding(HolderBindingPolicy::Required);
+
+let verified = client
+    .verify_credential_response(&credential.body, options)
+    .await?;
+```
+
+The verifier resolves the JWS `kid` only from trusted issuer JWKS, reuses the
+client's short JWKS TTL cache, and forces one refresh on `key.unknown`. It does
+not loop indefinitely. `VerifyOptions` lets callers set expected issuer,
+accepted algorithms, expected `vct`, clock skew, and holder-binding policy.
+Selective-disclosure presentations may include a subset of disclosures; each
+presented disclosure must hash to a digest in the credential. When a
+presentation includes a key-binding JWT, the verifier separates it from
+disclosures and verifies its holder proof signature against the credential
+`cnf.jwk`.
+
+Verifier errors are redacted and safe for policy mapping by code. Stable codes
+include `signature.invalid`, `key.unknown`, `algorithm.disallowed`,
+`claim.issuer_mismatch`, `claim.vct_mismatch`, `claim.time_invalid`,
+`disclosure.digest_mismatch`, `holder_binding.required`, and
+`holder_binding.kid_mismatch`, and `holder_binding.proof_invalid`.
+
+Python and Node do not expose verifier wrappers in this first phase. Callers in
+those runtimes should use the Rust verifier through their application boundary
+or perform verification in wallet-specific code.
 
 ### Credential Status
 

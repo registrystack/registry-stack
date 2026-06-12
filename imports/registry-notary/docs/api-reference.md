@@ -34,6 +34,7 @@ that route.
 | `GET /openapi.json` | `openapi_json` | not exposed | not exposed |
 | `GET /.well-known/evidence-service` | `service_document` | `service_document` | `serviceDocument` |
 | `GET /.well-known/evidence/jwks.json` | `issuer_jwks`, `refresh_jwks`, `raw_issuer_jwks` | `issuer_jwks`, `refresh_jwks`, `raw_issuer_jwks` | `issuerJwks`, `refreshJwks`, `rawIssuerJwks` |
+| local SD-JWT VC verification | `verify_sd_jwt_vc`, `verify_credential_response`, `verify_oid4vci_credential` with `verifier` | not exposed | not exposed |
 | `GET /metrics` | `metrics` | not exposed | not exposed |
 | `GET /v1/claims` | `list_claims` | `list_claims` | `listClaims` |
 | `GET /v1/claims/{id}` | `get_claim` | `get_claim` | `getClaim` |
@@ -183,6 +184,22 @@ for policy mapping. Map on `code`, not on prose. Safe fields for logs are
 | `auth.missing_credential` | Auth |
 | `idempotency.conflict` | Idempotency |
 | `batch.too_large` | Batch |
+| `jwks.unavailable` | Verifier |
+| `key.missing` | Verifier |
+| `key.unknown` | Verifier |
+| `algorithm.disallowed` | Verifier |
+| `algorithm.key_mismatch` | Verifier |
+| `header.typ_mismatch` | Verifier |
+| `header.untrusted_key_reference` | Verifier |
+| `signature.invalid` | Verifier |
+| `claim.issuer_mismatch` | Verifier |
+| `claim.vct_mismatch` | Verifier |
+| `claim.time_invalid` | Verifier |
+| `disclosure.digest_mismatch` | Verifier |
+| `holder_binding.required` | Verifier |
+| `holder_binding.invalid` | Verifier |
+| `holder_binding.kid_mismatch` | Verifier |
+| `holder_binding.proof_invalid` | Verifier |
 
 Profiles may collapse granular matching outcomes to public
 `evidence.not_available` when revealing cardinality, state, or relationship

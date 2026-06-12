@@ -27,6 +27,8 @@ use crate::responses::{
     CredentialStatusUpdateRequest, EvaluateResponse, Evaluation, FormatsResponse, HealthResponse,
     ListClaimsResponse, NotaryResponse,
 };
+#[cfg(feature = "verifier")]
+use crate::verifier::{VerificationError, VerifiedCredential, VerifyOptions};
 
 const LIMIT_SMALL: u64 = 64 * 1024;
 const LIMIT_DISCOVERY: u64 = 2 * 1024 * 1024;
@@ -296,6 +298,46 @@ impl RegistryNotaryClient {
         .await
     }
 
+    #[cfg(feature = "verifier")]
+    /// Explicitly verify an SD-JWT VC compact credential against issuer JWKS.
+    ///
+    /// This method is opt-in. Transport methods continue to decode response
+    /// bodies without performing verification. Verification reuses the
+    /// `issuer_jwks` TTL cache, forces one `refresh_jwks` on `key.unknown`,
+    /// and never performs an unbounded refresh loop.
+    pub async fn verify_sd_jwt_vc(
+        &self,
+        compact: &str,
+        options: VerifyOptions,
+    ) -> Result<VerifiedCredential, VerificationError> {
+        let jwks = self
+            .issuer_jwks(RequestOptions::default())
+            .await
+            .map_err(|_| VerificationError::jwks_unavailable())?
+            .body;
+        match crate::verifier::verify_sd_jwt_vc(compact, &jwks, &options) {
+            Err(error) if error.is_unknown_key() => {
+                let refreshed = self
+                    .refresh_jwks(RequestOptions::default())
+                    .await
+                    .map_err(|_| VerificationError::jwks_unavailable())?
+                    .body;
+                crate::verifier::verify_sd_jwt_vc(compact, &refreshed, &options)
+            }
+            result => result,
+        }
+    }
+
+    #[cfg(feature = "verifier")]
+    /// Explicitly verify a direct credential-issuance response.
+    pub async fn verify_credential_response(
+        &self,
+        response: &CredentialIssueResponse,
+        options: VerifyOptions,
+    ) -> Result<VerifiedCredential, VerificationError> {
+        self.verify_sd_jwt_vc(&response.credential, options).await
+    }
+
     #[cfg(feature = "oid4vci")]
     /// Fetch OpenID4VCI issuer metadata.
     ///
@@ -380,6 +422,16 @@ impl RegistryNotaryClient {
             ErrorKind::Oid4vci,
         )
         .await
+    }
+
+    #[cfg(all(feature = "oid4vci", feature = "verifier"))]
+    /// Explicitly verify an OpenID4VCI credential response.
+    pub async fn verify_oid4vci_credential(
+        &self,
+        response: &registry_platform_oid4vci::CredentialResponse,
+        options: VerifyOptions,
+    ) -> Result<VerifiedCredential, VerificationError> {
+        self.verify_sd_jwt_vc(&response.credential, options).await
     }
 
     /// List configured claim definitions with `GET /v1/claims`.
