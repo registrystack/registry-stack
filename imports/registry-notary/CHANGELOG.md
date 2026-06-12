@@ -1,0 +1,120 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.3.0] - 2026-06-12
+
+### Added
+
+- **Image signing and supply-chain hardening** (#121/#95, PR #183): release images are
+  signed via Cosign; published image aliases and signatures verified in CI;
+  stable and snapshot image channels defined (#124).
+- **Binary release workflow** (#123): automated binary build and release pipeline.
+- **OID4VCI pre-authorized-code flow** (PRs #98–#101, #107–#111): pre-auth config,
+  token-signing and rate-limit primitives; pre-auth endpoints and self-issuance trust
+  anchor; issuer metadata and OpenAPI docs; eSignet userinfo subject-binding resolution;
+  RS256 eSignet RP client-assertion key support; wallet display metadata; optional
+  preauth `tx_code`; eSignet `userinfo` without `exp` accepted.
+- **SD-JWT VC Type Metadata** (PRs #93–#94): served at `/.well-known/vct` and
+  VCT URL paths; CCCEV evidence type metadata exposed.
+- **OpenFn sidecar** (PRs #102, #150–#152, #159): batch matching; governed assurance
+  with antirollback; idempotent antirollback restarts; scalable batch controls;
+  Notary sidecar adaptor and perf smoke.
+- **Registry Notary client SDK** (#73): client SDK with documented API.
+- **Governed configuration apply and signing rotation** (#129, PRs #141–#144):
+  admin surface aligned; remote TUF apply config capabilities; credential rotation support.
+- **Atomic runtime governed-config snapshot** (#133, PR #186): governed apply now
+  publishes the runtime snapshot atomically from the locked base.
+- **Notary Trust Ops posture endpoint** (#125): posture endpoint with shared tier filter.
+- **Perf threshold gate** (#160, PR #184): CI now enforces notary perf thresholds;
+  aiohttp perf harness upgraded to 3.14.1 (PR #191, clears Dependabot moderates).
+- **OpenAPI contract gate** (#163, PR #185): committed OpenAPI artifact checked in;
+  CI rejects divergence between generated and committed spec; breaking-change diff
+  against base ref available via `OPENAPI_CONTRACT_BASE_REF`.
+- **Remote TUF config source operator allowlist, fail-closed** (#172, PR #193):
+  remote TUF sources are constrained to an explicit operator allowlist; requests
+  for unlisted sources are rejected.
+- **Claim provenance and `on_behalf_of` contracts frozen for beta** (#182).
+- **OpenSPP and OpenCRVS credential support** (#83, #87): stabilized client contract;
+  attribute credential queries.
+- **Evidence request subject model** (#85).
+- **Hosted lab product image support** (#89).
+- **PKCS#11 signing production-ready** (#113): CEL production runtime hardened (#115);
+  CEL worker boundary packaged (#116); published as single CEL PKCS#11 image (#120).
+- **Security assurance gates** (#96, #104): Grype advisory ratchet gates scoped by
+  image subject; reviewed advisory baselines.
+- **Signing key providers** (#61).
+
+### Changed
+
+- **Admin listener split topology** (#143): Notary admin listener separated from
+  public surface.
+- **Renamed cel-mapping to crosswalk** (#168): all internal references updated.
+- **Userinfo subject binding** (#147): `userinfo` subject-binding claims requested
+  in preauth redirects.
+- **OpenAPI auth surface aligned** (#146): auth declarations consistent across routes.
+- **Admin route security declarations** (#174, PR #190): explicit per-route security
+  declared on all admin routes in the frozen OpenAPI contract.
+- **VCT wildcard catch-all semantics** (#166): machine-visible in spec and check.
+- **Bare VCT routes frozen as deliberate exceptions** (#167): protocol rationale
+  documented.
+- **Dependency: aiohttp bumped to 3.14.1** (PR #191): clears Dependabot moderate
+  advisories in the perf harness lockfile.
+- Documentation overhaul (#158): persona-routed information architecture; admin API
+  client matrix corrected; release-readiness diagrams added.
+
+### Fixed
+
+- **file_watch signing provider SHA-256 content identity** (#130, PR #192):
+  same-mtime key-file replacement now detected via content hash; provider no longer
+  misses key rotations when mtime is unchanged.
+- **Rejected governed applies recorded in posture** (#136, PR #194): rejected
+  apply outcomes are now persisted to the posture store.
+- **Notary consistency surfaces** (#153): request IDs injected at early boundary;
+  sidecar accept loop hardened; API key header canonicalized; discovery API key
+  header canonicalized; problem details returned for readiness failures; HTTP
+  duration histogram emitted; request IDs minted server-side; metrics read scope
+  enforced and labels aligned; notary OIDC config canonicalized.
+- **Nonce throttling and credential validity edge cases** (#157): OID4VCI nonce
+  issuance throttled on public surface; overflowing credential validity rejected;
+  spoofable forwarding headers ignored for public throttles.
+- **OpenAPI nullable syntax** (#157): OpenAPI 3.1 `nullable` syntax corrected in
+  claim result schemas.
+- **CEL startup preflight** (#119): date helpers allowed in startup preflight.
+- **Governed posture config polish** (#138): `previous_config` hash normalization
+  (#137); JWKS discovery made public (#165); governed auth changes validated (#149).
+- **Beta security blockers** (#78): auth handling hardened (#72); metrics endpoint
+  hardened (#79).
+- **zlib1g CVE-2023-45853** (#122): reclassified as false positive in Grype advisory
+  baseline.
+- **eSignet id_token without `typ` header** (#105): accepted in pre-auth callback.
+- **CI lockfile and drift** (various): crosswalk lock refreshed; CI test tooling
+  aligned; lockfile graph restored.
+
+### Security
+
+- **Admin route security declarations** (#174, PR #190): all admin API routes in the
+  frozen OpenAPI contract now carry explicit security declarations, preventing
+  unauthenticated access through missing auth annotations.
+- **Remote TUF allowlist, fail-closed** (#172): operator allowlist gates remote TUF
+  config sources; missing allowlist entry is a hard rejection, not a fallback.
+- **Reject overflowing credential validity** (#157): prevents crafted validity windows
+  from bypassing expiry enforcement.
+- **Ignore spoofable forwarding headers for public throttles** (#157): `X-Forwarded-For`
+  and similar headers no longer influence rate-limit key derivation on the public
+  surface.
+- **Wildcard allowlist segment boundaries enforced** (#149): CEL frame limit aligned.
+- **Cross-origin redirect stripping** (#149): SDK auth stripped on cross-origin
+  redirects; body headers dropped on converted redirects.
+- **Governed auth change validation** (#149): mixed governed auth changes rejected.
+
+## [0.2.1]
+
+See [release tag v0.2.1](https://github.com/jeremi/registry-notary/releases/tag/v0.2.1).
+
+## [0.2.0]
+
+See [release tag v0.2.0](https://github.com/jeremi/registry-notary/releases/tag/v0.2.0).
