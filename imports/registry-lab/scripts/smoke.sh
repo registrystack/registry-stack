@@ -271,6 +271,13 @@ check "civil relay OpenAPI" curl_json GET http://127.0.0.1:4311/openapi.json "" 
 check "social relay OpenAPI" curl_json GET http://127.0.0.1:4312/openapi.json "" "${output_dir}/smoke-social-openapi.json"
 check "health relay OpenAPI" curl_json GET http://127.0.0.1:4313/openapi.json "" "${output_dir}/smoke-health-openapi.json"
 
+check "civil relay api-catalog" curl_json GET http://127.0.0.1:4311/.well-known/api-catalog "" "${output_dir}/smoke-civil-api-catalog.json"
+check "social relay api-catalog" curl_json GET http://127.0.0.1:4312/.well-known/api-catalog "" "${output_dir}/smoke-social-api-catalog.json"
+check "health relay api-catalog" curl_json GET http://127.0.0.1:4313/.well-known/api-catalog "" "${output_dir}/smoke-health-api-catalog.json"
+check "civil relay api-catalog media type" assert_head_contains http://127.0.0.1:4311/.well-known/api-catalog "content-type: application/linkset+json"
+check "social relay api-catalog media type" assert_head_contains http://127.0.0.1:4312/.well-known/api-catalog "content-type: application/linkset+json"
+check "health relay api-catalog media type" assert_head_contains http://127.0.0.1:4313/.well-known/api-catalog "content-type: application/linkset+json"
+
 check "civil Evidence Server OpenAPI" curl_json GET http://127.0.0.1:4321/openapi.json "" "${output_dir}/smoke-civil-evidence-openapi.json"
 check "social Evidence Server OpenAPI" curl_json GET http://127.0.0.1:4322/openapi.json "" "${output_dir}/smoke-social-evidence-openapi.json"
 check "shared Evidence Server OpenAPI" curl_json GET http://127.0.0.1:4323/openapi.json "" "${output_dir}/smoke-shared-evidence-openapi.json"
