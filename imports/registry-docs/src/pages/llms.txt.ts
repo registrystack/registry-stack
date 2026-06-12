@@ -5,8 +5,8 @@ export const GET: APIRoute = () => new Response(`# Registry stack docs
 Documentation for the registry stack: six projects that publish registry metadata, serve protected registry data, and issue evidence credentials.
 
 Core pages:
-- /start/quickstart/
 - /start/see-it-live/
+- /start/when-to-use/
 - /explanation/architecture/
 - /reference/apis/
 - /tutorials/publish-spreadsheet-secured-registry-api/

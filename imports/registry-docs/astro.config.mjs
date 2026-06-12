@@ -40,7 +40,9 @@ export default defineConfig({
   // internal redirects map the retired /projects/* and /capabilities/* routes
   // to their new homes so old links and search results keep resolving.
   redirects: {
-    '/start/': '/start/quickstart/',
+    '/start/': '/',
+    // quickstart's "Choose by question" router merged into the homepage (2026-06).
+    '/start/quickstart/': '/',
     '/start/your-first-call/': '/tutorials/first-run-with-registry-lab/',
     // verify-claim-own-api merged into the claim-verification tutorial (2026-06).
     '/tutorials/verify-claim-own-api/': '/tutorials/verify-claim-registry-api/',
@@ -124,8 +126,8 @@ export default defineConfig({
           href: 'https://github.com/jeremi/registry-docs',
         },
       ],
-      // Diataxis IA, product-first (Wave 5): Get started, Products, Explanation,
-      // Reference. The per-product groups inside Products are generated from
+      // Diataxis IA: Get started, Tutorials, Products, Explanation, Reference.
+      // The per-product groups inside Products are generated from
       // src/data/repo-docs.yaml by scripts/generate-sidebar.mjs (the
       // productSidebar array), so the menu follows each product's
       // doc_type/nav_order and never drifts from the manifest. Within a
@@ -134,24 +136,28 @@ export default defineConfig({
       // shared "Registry" prefix (Relay, Notary, ...) since the site title and
       // the Products group already supply that context.
       //
-      // "Get started" is the newcomer funnel: Overview, the zero-install demo
-      // (See it live), orientation (When to use, Where to start), then the
-      // registryctl tutorials as the first local adoption path.
+      // "Get started" is orientation only: Overview (which carries the
+      // "Choose by question" router), the zero-install demo, and the
+      // evaluation page. The hands-on pages live under Tutorials, ordered by
+      // weight: the lightest local run first, the full multi-service lab last.
       sidebar: [
         {
           label: 'Get started',
           items: [
             // Short nav labels to avoid wrapping in the narrow sidebar; page
-            // titles keep the full wording. Ordered as the newcomer funnel:
-            // orient, then the minimal call, then the full tour.
+            // titles keep the full wording.
             { label: 'Overview', link: '/' },
             { label: 'See it live', slug: 'start/see-it-live' },
-            { label: 'Run lab', slug: 'tutorials/first-run-with-registry-lab' },
             { label: 'When to use', slug: 'start/when-to-use' },
-            { label: 'Where to start', slug: 'start/quickstart' },
-            { label: 'Spreadsheet API', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
+          ],
+        },
+        {
+          label: 'Tutorials',
+          items: [
+            { label: 'Publish a spreadsheet', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
             { label: 'Verify a claim', slug: 'tutorials/verify-claim-registry-api' },
             { label: 'Deploy with own data', slug: 'tutorials/deploy-standalone-with-own-data' },
+            { label: 'Run the lab', slug: 'tutorials/first-run-with-registry-lab' },
           ],
         },
         {
