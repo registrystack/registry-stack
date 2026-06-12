@@ -38,6 +38,36 @@ sequenceDiagram
 conservative retries, optional response provenance, and handoff to Registry
 Notary for verification. Each step is detailed in the sections that follow.*
 
+## Connect to an existing deployment
+
+When another organization operates the Relay you are integrating with, request
+three things from that operator before writing code:
+
+- **A named service identity.** Every caller is a named principal in the
+  deployment's auth config. For API-key deployments the operator runs
+  `registry-relay generate-api-key --id <your_identity>` and hands you the raw
+  key once; only the fingerprint is stored server-side, so a lost key means a
+  new one. For OIDC deployments, ask for the client registration details and
+  the scope grant instead.
+- **Dataset scopes.** Scopes are dataset-local `<dataset_id>:<level>` labels.
+  The levels are `metadata` (catalog, schema, and OpenAPI visibility), `rows`
+  (entity record and relationship reads), `evidence_verification`
+  (evidence-oriented standards-adapter access, separate from row reads),
+  `aggregate` (aggregate discovery and execution), and `admin` (admin listener
+  operations, never needed for data reads). Name the workflows you run and ask
+  for the minimal scope list; see
+  [Authentication in the API reference](api.md#authentication) for the full
+  semantics.
+- **Accepted purpose values.** If your reads serve a human or program
+  decision, the deployment may require a `Data-Purpose` header. Ask which
+  purpose URIs your data-sharing agreement authorizes; see
+  [Purpose header](#purpose-header) below.
+
+To confirm the grant works before integrating deeper, call `GET /v1/datasets`:
+it lists every dataset visible to your principal. An empty list or a `403`
+means the scope grant does not match what you asked for; resolve that with the
+operator before debugging client code.
+
 ## Integration checklist
 
 Before a client is allowed to consume Relay data, confirm:
@@ -84,11 +114,22 @@ notes, bearer tokens, or other secrets in this header. For the full list of
 entities that enforce this header and the resulting error code, see
 the [Registry Relay API reference](api.md#purpose-headers).
 
+The set of acceptable purpose values is defined by the operator and your
+data-sharing agreement, not by Relay: there is no API route that enumerates
+valid purposes. If your agreement does not name specific URIs, propose a small
+set of stable URIs under a namespace your organization controls (one per
+workflow, as in the example above) and have the operator confirm them. Keep
+the values stable across releases so the operator's audit trail stays
+queryable.
+
 ## Discovery
 
 Use scoped discovery before hard-coding dataset assumptions:
 
-1. Fetch the runtime OpenAPI document for the authenticated caller.
+1. Fetch the runtime OpenAPI document for the authenticated caller. Send your
+   bearer credentials on this request too: `GET /openapi.json` is auth-gated by
+   default, and an unauthenticated fetch fails unless the operator has disabled
+   `server.openapi_requires_auth`.
 2. Fetch metadata catalog views for visible datasets and entity schemas.
 3. Cache metadata only as a private, principal-specific artifact.
 4. Refresh discovery after a deployment, config reload, or permission change.
@@ -194,10 +235,14 @@ events and may repeat costly source reads.
 
 ## Signed response credentials
 
-When signed response credentials are enabled, clients can request W3C VCDM 2.0
-VC-JWT credentials with an accepted VC media type. Treat the returned compact
-JWS as an opaque signed artifact and verify it with the issuer DID document and
-published schemas.
+When signed response credentials are enabled, clients can request VC-JWT
+credentials with an accepted VC media type. The credential shape aligns with
+the W3C Verifiable Credentials Data Model 2.0; full VCDM conformance is not
+asserted, and the
+[RegistryStack standards register](https://docs.registrystack.org/reference/standards/)
+records the exact claim level. Treat the returned compact JWS as an opaque
+signed artifact and verify it with the issuer DID document and published
+schemas.
 
 These are signed response credentials, not W3C PROV-O. The `provenance` config
 key governs the issuer configuration for backward compatibility, but the correct
@@ -248,6 +293,61 @@ When a client needs to verify claims or evidence:
    endpoint or discovery URL.
 3. Follow Registry Notary's client documentation for request shape, claim
    semantics, presentation, result verification, and credential issuance.
+
+A discovery response looks like this (one offering shown; host names are
+illustrative):
+
+```json
+{
+  "evidence_offerings": [
+    {
+      "id": "benefits_person_evidence",
+      "title": "Benefits person status evidence",
+      "iri": "https://demo.example.gov/evidence-offerings/benefits-person",
+      "description": "Registry Notary verification for submitted benefits person eligibility status and role facts.",
+      "dataset_id": "benefits_casework",
+      "entity": "person",
+      "evidence_type": {
+        "id": "benefits_person_record_evidence",
+        "iri": "https://demo.example.gov/evidence-types/benefits-person-record",
+        "name": "Benefits person record evidence"
+      },
+      "evidence_type_iri": "https://demo.example.gov/evidence-types/benefits-person-record",
+      "issuing_authority": {
+        "id": "ministry_of_social_affairs",
+        "iri": "did:web:social-affairs.demo.example.gov",
+        "name": "Ministry of Social Affairs",
+        "country": "ZZ"
+      },
+      "jurisdiction": { "country": "ZZ", "region": null },
+      "level_of_assurance": "substantial",
+      "lookup_keys": ["id"],
+      "policy": {
+        "purpose": ["https://demo.example.gov/purpose/social-protection-eligibility"]
+      },
+      "procedure_contexts": [],
+      "requirement_iris": ["https://demo.example.gov/requirements/benefits-person"],
+      "information_concepts": [],
+      "verification_request_schema_url": "https://relay.demo.example.gov/metadata/schema/benefits_casework/person/schema.json",
+      "access": {
+        "kind": "registry-notary",
+        "ruleset": "benefits-person-v1",
+        "endpoint_url": "https://notary.demo.example.gov/evidence-offerings/benefits-person/verifications",
+        "discovery_url": "https://notary.demo.example.gov/.well-known/registry-notary",
+        "conforms_to": "https://demo.example.gov/standards/registry-notary/evidence-v1"
+      }
+    }
+  ]
+}
+```
+
+The `access` object is what drives the handoff: `kind` is always
+`registry-notary` in V1 (Relay is never the verifier), `ruleset` names the
+Notary ruleset that governs verification for this offering, `endpoint_url` is
+where claims or evidence are submitted, `discovery_url` is the Notary
+well-known document for resolving endpoint details (either URL may be null
+when the other is present), and `conforms_to` identifies the evidence contract
+the offering follows.
 
 The `evidence_verification` scope is available as a distinct label for
 standards adapters and integrations that need evidence-oriented access separate
