@@ -10,6 +10,7 @@ use std::time::Duration;
 use registry_platform_authcommon::CredentialFingerprintRef;
 use registry_platform_config::{DeprecatedConfigField, RegistryTrustRoot};
 use registry_platform_crypto::validate_did_web_https_issuer_binding;
+use registry_platform_crypto::PublicJwk;
 pub use registry_platform_crypto::{
     KeyProviderKind as SigningKeyProviderConfig, KeyStatus as SigningKeyStatus,
 };
@@ -533,6 +534,36 @@ impl StandaloneRegistryNotaryConfig {
         self.validate_replay_cross_block()?;
         self.validate_signing_key_alg_usage()?;
         Ok(())
+    }
+
+    /// Signing-key ids whose resolved public material must not be shared, per
+    /// issue #173. These are the separated EdDSA signing roles: every credential
+    /// profile signing key, the access-token signing key (when enabled), and the
+    /// federation signing key (when enabled). The same separation boundary is
+    /// documented in `validate_signing_key_alg_usage`, which treats those three
+    /// sites as distinct EdDSA roles. The eSignet pre-authorized-code RP client
+    /// key is intentionally excluded: it is a separate, relaxed role that is
+    /// allowed to reuse the credential issuer's key material.
+    pub fn reuse_scoped_signing_key_ids(&self) -> HashSet<&str> {
+        let mut scoped: HashSet<&str> = self
+            .evidence
+            .credential_profiles
+            .values()
+            .map(|profile| profile.signing_key.as_str())
+            .collect();
+        if self.auth.access_token_signing.enabled {
+            let access_token_key = self.auth.access_token_signing.signing_key_id.as_str();
+            if !access_token_key.is_empty() {
+                scoped.insert(access_token_key);
+            }
+        }
+        if self.federation.enabled {
+            let federation_key = self.federation.signing.signing_key.as_str();
+            if !federation_key.is_empty() {
+                scoped.insert(federation_key);
+            }
+        }
+        scoped
     }
 
     /// Confine non-EdDSA (RS256) signing keys to the eSignet pre-authorized-code
@@ -3994,6 +4025,65 @@ impl EvidenceConfig {
                     key: key_id.clone(),
                     reason: format!("duplicate published kid '{}'", key.kid),
                 });
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate resolved signing-capable key material after runtime providers
+    /// have loaded their public JWKs. Static config can compare ids and kids,
+    /// but only the resolved JWKs reveal whether different active entries reuse
+    /// the same key material under different ids or kids.
+    ///
+    /// The reuse comparison is confined to the separated EdDSA signing roles
+    /// issue #173 names: the access-token signing key and every credential
+    /// profile signing key, plus the federation signing key (the documented
+    /// separation boundary in `validate_signing_key_alg_usage` treats all three
+    /// as distinct EdDSA roles). `reuse_scoped_key_ids` carries exactly those
+    /// role keys. The eSignet pre-authorized-code RP client key is a separate,
+    /// relaxed role that is deliberately allowed to share material with the
+    /// credential issuer key, so callers must leave it out of
+    /// `reuse_scoped_key_ids`; resolved JWKs for keys outside the set are not
+    /// compared.
+    pub fn validate_resolved_signing_key_material<'a, I>(
+        &self,
+        resolved_public_jwks: I,
+        reuse_scoped_key_ids: &HashSet<&str>,
+    ) -> Result<(), EvidenceConfigError>
+    where
+        I: IntoIterator<Item = (&'a str, &'a PublicJwk)>,
+    {
+        let mut thumbprints_by_key_id = BTreeMap::new();
+        for (key_id, public_jwk) in resolved_public_jwks {
+            let Some(key) = self.signing_keys.get(key_id) else {
+                return invalid_signing_key(
+                    key_id,
+                    "resolved public JWK does not match a configured signing key",
+                );
+            };
+            if !key.status.may_sign() {
+                continue;
+            }
+            // Only the separated signing roles (#173) are compared against one
+            // another; keys outside that set (notably the eSignet RP client
+            // key) are allowed to reuse credential material by design.
+            if !reuse_scoped_key_ids.contains(key_id) {
+                continue;
+            }
+            let thumbprint =
+                public_jwk
+                    .jkt()
+                    .map_err(|_| EvidenceConfigError::InvalidSigningKeyConfig {
+                        key: key_id.to_string(),
+                        reason: "resolved public JWK could not be thumbprinted".to_string(),
+                    })?;
+            if let Some(previous_key_id) =
+                thumbprints_by_key_id.insert(thumbprint, key_id.to_string())
+            {
+                return invalid_signing_key(
+                    key_id,
+                    format!("reuses public key material with signing key '{previous_key_id}'"),
+                );
             }
         }
         Ok(())
@@ -8983,6 +9073,20 @@ status: active
         key
     }
 
+    fn test_public_jwk(kid: &str, x: &str) -> PublicJwk {
+        PublicJwk::parse(
+            &serde_json::json!({
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "x": x,
+                "alg": "EdDSA",
+                "kid": kid,
+            })
+            .to_string(),
+        )
+        .expect("test public JWK parses")
+    }
+
     /// A pre-auth-enabled oid4vci config with a dedicated access-token signing
     /// key, distinct from the credential-signing key.
     fn valid_pre_auth_config() -> StandaloneRegistryNotaryConfig {
@@ -9102,6 +9206,111 @@ access_token_ttl_seconds: 300
         config.auth.access_token_signing.signing_key_id = "issuer-key".to_string();
         let reason = expect_access_token_signing_error(&config);
         assert!(reason.contains("distinct from credential profile"));
+    }
+
+    #[test]
+    fn resolved_signing_key_material_must_not_be_reused_under_distinct_kids() {
+        let config = valid_pre_auth_config();
+        let credential_public_jwk = test_public_jwk(
+            "did:web:issuer.example#key-1",
+            "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc",
+        );
+        let access_token_public_jwk = test_public_jwk(
+            "did:web:issuer.example#access-token-key",
+            "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc",
+        );
+
+        let reuse_scoped_key_ids = config.reuse_scoped_signing_key_ids();
+        let err = config
+            .evidence
+            .validate_resolved_signing_key_material(
+                [
+                    ("issuer-key", &credential_public_jwk),
+                    ("access-token-key", &access_token_public_jwk),
+                ],
+                &reuse_scoped_key_ids,
+            )
+            .expect_err("same public key material under different kids must fail");
+
+        match err {
+            EvidenceConfigError::InvalidSigningKeyConfig { key, reason } => {
+                assert_eq!(key, "access-token-key");
+                assert!(reason.contains("reuses public key material"));
+                assert!(reason.contains("issuer-key"));
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn resolved_signing_key_material_accepts_distinct_public_keys() {
+        let config = valid_pre_auth_config();
+        let credential_public_jwk = test_public_jwk(
+            "did:web:issuer.example#key-1",
+            "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc",
+        );
+        let access_token_public_jwk = test_public_jwk(
+            "did:web:issuer.example#access-token-key",
+            "pv4e_hXHBLN27rcs6VDFV1ED0TiU8M3xy9vsuWFEsec",
+        );
+
+        let reuse_scoped_key_ids = config.reuse_scoped_signing_key_ids();
+        config
+            .evidence
+            .validate_resolved_signing_key_material(
+                [
+                    ("issuer-key", &credential_public_jwk),
+                    ("access-token-key", &access_token_public_jwk),
+                ],
+                &reuse_scoped_key_ids,
+            )
+            .expect("distinct public key material is valid");
+    }
+
+    #[test]
+    fn resolved_signing_key_material_allows_esignet_rp_key_to_reuse_credential_material() {
+        // Issue #173 confines reuse detection to the separated EdDSA roles. The
+        // eSignet pre-authorized-code RP client key is a relaxed role that is
+        // deliberately allowed to share material with the credential issuer key,
+        // so it must not appear in the reuse-scoped set and must not trip the
+        // detector even when its resolved material matches a credential key.
+        let mut config = valid_pre_auth_config();
+        let mut esignet_key = second_signing_key();
+        esignet_key.kid = "did:web:rp.example#esignet-rp-key".to_string();
+        config
+            .evidence
+            .signing_keys
+            .insert("esignet-rp-key".to_string(), esignet_key);
+        config
+            .oid4vci
+            .pre_authorized_code
+            .esignet
+            .client_signing_key_id = "esignet-rp-key".to_string();
+        let credential_public_jwk = test_public_jwk(
+            "did:web:issuer.example#key-1",
+            "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc",
+        );
+        let esignet_public_jwk = test_public_jwk(
+            "did:web:rp.example#esignet-rp-key",
+            "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc",
+        );
+
+        let reuse_scoped_key_ids = config.reuse_scoped_signing_key_ids();
+        assert!(
+            !reuse_scoped_key_ids.contains("esignet-rp-key"),
+            "the eSignet RP client key must be excluded from reuse-scoped roles"
+        );
+
+        config
+            .evidence
+            .validate_resolved_signing_key_material(
+                [
+                    ("issuer-key", &credential_public_jwk),
+                    ("esignet-rp-key", &esignet_public_jwk),
+                ],
+                &reuse_scoped_key_ids,
+            )
+            .expect("eSignet RP key may reuse credential key material");
     }
 
     #[test]
