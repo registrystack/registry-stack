@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## v0.2.0
+
 ### Security
 
 - (F-P3-1) `crypto::sign` now wraps the decoded Ed25519 seed in

@@ -13,7 +13,7 @@ aws-lc-rs = "1.17.0"
 bytes.workspace = true
 futures-core.workspace = true
 olpc-cjson = "0.1.4"
-registry-platform-httputil = { version = "0.1.2", path = "../registry-platform-httputil" }
+registry-platform-httputil = { version = "0.2.0", path = "../registry-platform-httputil" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
