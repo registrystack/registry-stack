@@ -195,6 +195,32 @@ async fn verify_sd_jwt_vc_rejects_wrong_key_binding_sd_hash() {
 }
 
 #[tokio::test]
+async fn verify_sd_jwt_vc_rejects_expired_key_binding_jwt() {
+    let compact = issue_sd_jwt(ISSUER_JWK, ISSUER, NOW, NOW + 50, Some(&holder_did())).await;
+    let presentation = format!(
+        "{compact}{}",
+        signed_key_binding_jwt_with_payload(json!({
+            "iat": NOW - 300,
+            "exp": NOW - 200,
+            "aud": KB_AUD,
+            "nonce": KB_NONCE,
+            "sd_hash": URL_SAFE_NO_PAD.encode(Sha256::digest(compact.as_bytes())),
+        }))
+    );
+
+    let error = verifier::verify_sd_jwt_vc(
+        &presentation,
+        &jwks(ISSUER_JWK),
+        &options()
+            .holder_binding(HolderBindingPolicy::Required)
+            .key_binding_challenge(KB_AUD, KB_NONCE),
+    )
+    .expect_err("expired key binding jwt must be rejected");
+
+    assert_code(error, "holder_binding.proof_invalid");
+}
+
+#[tokio::test]
 async fn verify_sd_jwt_vc_rejects_bad_key_binding_jwt() {
     let compact = issue_sd_jwt(ISSUER_JWK, ISSUER, NOW, NOW + 50, Some(&holder_did())).await;
     let presentation = format!("{compact}{}", unsigned_compact_jws());
