@@ -78,7 +78,10 @@ the file, quote removal corrupts the JSON `REGISTRY_RELAY_PROVENANCE_JWK`
 value):
 
 ```bash
-while IFS='=' read -r key value; do
+while IFS= read -r line || [ -n "$line" ]; do
+  key="${line%%=*}"
+  value="${line#*=}"
+  [ "$key" = "$line" ] && continue
   case "$key" in ''|'#'*) continue ;; esac
   export "$key=$value"
 done < target/perf/perf.env
@@ -109,7 +112,10 @@ Or export the env file (same literal-export loop as above) and run k6
 directly:
 
 ```bash
-while IFS='=' read -r key value; do
+while IFS= read -r line || [ -n "$line" ]; do
+  key="${line%%=*}"
+  value="${line#*=}"
+  [ "$key" = "$line" ] && continue
   case "$key" in ''|'#'*) continue ;; esac
   export "$key=$value"
 done < target/perf/perf.env
