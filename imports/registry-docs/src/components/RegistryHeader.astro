@@ -2,6 +2,7 @@
 import config from 'virtual:starlight/user-config';
 import Search from '@astrojs/starlight/components/Search.astro';
 import docsetsManifest from '../data/generated/docsets.json';
+import RegistryDocsetSwitch from './RegistryDocsetSwitch.astro';
 
 const base = import.meta.env.BASE_URL;
 const shouldRenderSearch =
@@ -12,15 +13,6 @@ const activeDocset =
   docsetsManifest.docsets.find((docset) => docset.id === activeDocsetId) ??
   docsetsManifest.docsets.find((docset) => docset.id === docsetsManifest.current);
 
-function pathForDocset(targetPath: string) {
-  const currentPath = Astro.url.pathname;
-  const activePath = activeDocset?.path ?? '/';
-  const relativePath =
-    activePath !== '/' && currentPath.startsWith(activePath)
-      ? currentPath.slice(activePath.length)
-      : currentPath.replace(/^\//, '');
-  return `${targetPath}${relativePath}`.replace(/\/{2,}/g, '/');
-}
 ---
 
 <div class="registry-header">
@@ -40,16 +32,7 @@ function pathForDocset(targetPath: string) {
     )}
 
     <nav class="registry-utility" aria-label="Site">
-      <label class="registry-version-switch">
-        <span>Version</span>
-        <select aria-label="Docs version" onchange="if (this.value) window.location.href = this.value">
-          {docsetsManifest.docsets.map((docset) => (
-            <option value={pathForDocset(docset.path)} selected={docset.id === activeDocset?.id}>
-              {docset.label}
-            </option>
-          ))}
-        </select>
-      </label>
+      <RegistryDocsetSwitch />
       <a href="https://github.com/jeremi/registry-docs">GitHub ↗</a>
     </nav>
   </div>

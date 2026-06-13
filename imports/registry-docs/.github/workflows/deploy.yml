@@ -5,11 +5,6 @@ on:
     branches:
       - main
   workflow_dispatch:
-    inputs:
-      archive_docset:
-        description: 'Optional archived docset id to publish under /v/<id>/'
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -31,11 +26,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - name: Build archived docset
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.archive_docset != '' }}
-        run: npm run build:archive
-        env:
-          DOCS_DOCSET: ${{ inputs.archive_docset }}
+      - run: npm run build:archives
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

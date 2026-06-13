@@ -232,6 +232,30 @@ body {
   color: var(--registry-ink);
 }
 
+.registry-mobile-menu-footer {
+  display: grid;
+  gap: 14px;
+  border-top: 1px solid var(--registry-rule);
+  padding: 18px 24px 22px;
+}
+
+.registry-mobile-menu-footer .registry-version-switch {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.registry-mobile-menu-footer .registry-version-switch select {
+  inline-size: 100%;
+}
+
+.registry-mobile-menu-footer a {
+  color: var(--registry-muted);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
 button[data-open-modal] {
   border: 1px solid var(--registry-rule) !important;
   background: #ffffff !important;
