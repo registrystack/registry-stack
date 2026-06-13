@@ -339,6 +339,25 @@ test("handleEvaluationProblem maps 429 and retryable 503 to retryable infrastruc
   }
 });
 
+test("handleEvaluationProblem accepts HTTP-date Retry-After values", () => {
+  const retryAt = new Date(Date.now() + 2500).toUTCString();
+  const state = handleEvaluationProblem(
+    {
+      ...baseState,
+      response: {
+        statusCode: 429,
+        headers: { "retry-after": retryAt },
+        body: { title: "Retry later", status: 429, code: "rate_limited" },
+      },
+    },
+    { claimId: "claim-a", purpose: "benefits_eligibility" },
+  );
+
+  assert.equal(state.data.notary.branch, "retryable_infrastructure");
+  assert.ok(state.data.notary.retry_after_seconds >= 1);
+  assert.ok(state.data.notary.retry_after_seconds <= 3);
+});
+
 test("redacted final state contains no forbidden values", () => {
   const prepared = buildEvaluationRequest(baseState, {
     claimId: "benefits-person-exists",
@@ -567,6 +586,39 @@ test("redaction removes nested data paths used as source identifiers", () => {
   const serialized = JSON.stringify(state);
   assert.equal(serialized.includes("person-123"), false);
   assert.equal(serialized.includes("raw-row"), false);
+});
+
+test("path helpers reject prototype traversal", () => {
+  const state = handleEvaluationSuccess(
+    {
+      data: {
+        safe: { id: "person-123" },
+        notary_context: {
+          claim_ids: ["claim-a"],
+          purpose: "benefits_eligibility",
+          redact_data_paths: ["__proto__.polluted", "constructor.prototype.polluted", "safe.id"],
+        },
+      },
+      response: {
+        body: {
+          results: [{ claim_id: "claim-a", evaluation_id: "eval-1", satisfied: true }],
+        },
+      },
+    },
+    { claimId: "claim-a" },
+  );
+
+  assert.equal({}.polluted, undefined);
+  assert.equal(state.data.safe.id, undefined);
+  assert.throws(
+    () =>
+      buildEvaluationRequest(baseState, {
+        claimId: "claim-a",
+        purpose: "benefits_eligibility",
+        target: { type: "Person", identifiers: [{ scheme: "national_id", valueFrom: "__proto__.national_id" }] },
+      }),
+    (error) => error instanceof NotaryCallerError && error.code === "target.value_required",
+  );
 });
 
 test("exported helper functions select, assert, and redact safely", () => {

@@ -18,6 +18,7 @@ const POLICY_DENIED_CODES = new Set([
   "requester.matching_policy_rejected",
   "relationship.policy_rejected",
 ]);
+const UNSAFE_PATH_PARTS = new Set(["__proto__", "prototype", "constructor"]);
 
 export class NotaryCallerError extends Error {
   constructor(message, options = {}) {
@@ -361,7 +362,15 @@ function retryAfterSeconds(state) {
     return undefined;
   }
   const parsed = Number(raw);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+  if (Number.isSafeInteger(parsed) && parsed > 0) {
+    return parsed;
+  }
+  const retryAt = Date.parse(raw);
+  if (!Number.isFinite(retryAt)) {
+    return undefined;
+  }
+  const seconds = Math.ceil((retryAt - Date.now()) / 1000);
+  return Number.isSafeInteger(seconds) && seconds > 0 ? seconds : undefined;
 }
 
 function normalizeClaimIds(options) {
@@ -428,8 +437,8 @@ function redactDataPaths(options, existing = []) {
 }
 
 function deleteDataPath(data, path) {
-  const parts = path.split(".").filter((part) => part.length > 0);
-  if (parts.length === 0) {
+  const parts = safePathParts(path);
+  if (!parts || parts.length === 0) {
     return;
   }
   if (parts.length === 1) {
@@ -439,20 +448,47 @@ function deleteDataPath(data, path) {
   let current = data;
   for (let index = 0; index < parts.length - 1; index += 1) {
     const part = parts[index];
-    if (!current?.[part] || typeof current[part] !== "object" || Array.isArray(current[part])) {
+    if (!isPlainObject(current) || !Object.hasOwn(current, part)) {
       return;
     }
-    current[part] = { ...current[part] };
+    const next = current[part];
+    if (!isPlainObject(next)) {
+      return;
+    }
+    current[part] = { ...next };
     current = current[part];
   }
   delete current[parts[parts.length - 1]];
 }
 
 function valueFrom(data, path) {
+  const parts = safePathParts(path);
+  if (!parts || parts.length === 0) {
+    return undefined;
+  }
+  let current = data;
+  for (const part of parts) {
+    if (!isPlainObject(current) || !Object.hasOwn(current, part)) {
+      return undefined;
+    }
+    current = current[part];
+  }
+  return current;
+}
+
+function safePathParts(path) {
   if (typeof path !== "string" || path.length === 0) {
     return undefined;
   }
-  return path.split(".").reduce((current, part) => current?.[part], data);
+  const parts = path.split(".").filter((part) => part.length > 0);
+  if (parts.some((part) => UNSAFE_PATH_PARTS.has(part))) {
+    return undefined;
+  }
+  return parts;
+}
+
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function resolveValue(_data, value, label) {
