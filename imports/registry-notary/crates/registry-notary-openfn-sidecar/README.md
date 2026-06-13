@@ -355,7 +355,8 @@ sidecar credential, not from CEL. The adapter rejects a base URL that is not in
 `allowed_base_urls`, does not follow redirects, rejects plaintext HTTP to public
 hosts or public IP literals, and blocks loopback, private, link-local, and cloud
 metadata addresses unless the source opts into the matching development escape
-hatch. The private-network escape hatch still blocks cloud metadata addresses.
+hatch. The private-network escape hatch still blocks cloud metadata addresses,
+including IPv4-mapped IPv6 forms.
 When `base_url` includes a path prefix, such as a versioned DHIS2 play URL, the
 configured `path` is appended under that prefix; protocol-relative paths and
 `.`/`..` path segments are rejected before dispatch. The sidecar reuses a
@@ -419,7 +420,9 @@ Result caching is disabled by default. A source may explicitly configure
 `cache.exact_match_ttl_ms` and/or `cache.not_found_ttl_ms`; only exact one-record
 results and not-found empty arrays are cached. Cache keys include the source id,
 source config hash, dataset, entity, lookup, requested fields, limit, and
-purpose. Cache metrics expose only `source_id` and low-cardinality outcomes.
+purpose. Caches are capped by `cache.max_entries`, defaulting to 10000 entries
+per source, and expired entries are swept during writes. Cache metrics expose
+only `source_id` and low-cardinality outcomes.
 
 The `/metrics` endpoint reports worker capacity plus per-source outcomes,
 duration totals, and item totals:
