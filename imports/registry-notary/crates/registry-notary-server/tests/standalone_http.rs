@@ -6772,7 +6772,11 @@ async fn admin_posture_redacts_runtime_config_secrets_and_private_topology() {
     assert!(!text.contains("civil-id-policy-1234567890123"));
     assert!(!text.contains("disclosure"));
     assert!(!text.contains("predicate"));
-    assert!(!text.contains("redacted"));
+    // The disclosure config must not leak. `audit.redaction_mode: "redacted"` is
+    // a legitimate posture vocabulary value, so guard against the disclosure
+    // list shape rather than the bare word.
+    assert!(!text.contains("[value, redacted]"));
+    assert!(!text.contains("\"value\",\"redacted\""));
 }
 
 #[tokio::test]

@@ -20,6 +20,7 @@ use registry_platform_oid4vci::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::deployment::DeploymentConfig;
 use crate::model::{
     DisclosureProfile, FORMAT_SD_JWT_VC, SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_SIGNING_ALG,
 };
@@ -58,6 +59,8 @@ pub struct StandaloneRegistryNotaryConfig {
     pub oid4vci: Oid4vciConfig,
     #[serde(default, skip_serializing_if = "federation_config_is_default")]
     pub federation: FederationConfig,
+    #[serde(default, skip_serializing_if = "DeploymentConfig::is_default")]
+    pub deployment: DeploymentConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -533,7 +536,51 @@ impl StandaloneRegistryNotaryConfig {
         self.federation.validate(&self.evidence)?;
         self.validate_replay_cross_block()?;
         self.validate_signing_key_alg_usage()?;
+        self.deployment.validate().map_err(|error| {
+            EvidenceConfigError::InvalidDeploymentConfig {
+                reason: error.to_string(),
+            }
+        })?;
         Ok(())
+    }
+
+    /// Snapshot the configuration facts the deployment gate engine reads.
+    ///
+    /// Pure projection of the loaded config. Building it here keeps gate
+    /// predicates free of config-shape knowledge.
+    pub fn gate_input(&self) -> crate::deployment::GateInput {
+        crate::deployment::GateInput {
+            replay_in_memory: self.replay.storage != REPLAY_STORAGE_REDIS,
+            federation_enabled: self.federation.enabled,
+            oid4vci_preauth_enabled: self.oid4vci.enabled
+                && self.oid4vci.pre_authorized_code.enabled,
+            holder_proof_required: self.evidence.credential_profiles.values().any(|profile| {
+                profile.holder_binding.proof_of_possession.as_deref() == Some("required")
+            }),
+            wallet_facing: self.self_attestation.enabled,
+            multi_instance: self.deployment.multi_instance,
+            audit_sink_class_durable: audit_sink_is_durable(&self.audit),
+            source_insecure_url: self
+                .evidence
+                .source_connections
+                .values()
+                .any(source_connection_uses_insecure_url),
+            source_private_network_escape: self
+                .evidence
+                .source_connections
+                .values()
+                .any(|connection| connection.allow_insecure_private_network),
+            openfn_source_without_expected_sidecar: self.evidence.source_connections.values().any(
+                |connection| {
+                    connection.bulk_mode == BulkMode::OpenFnSidecarBatch
+                        && connection.expected_sidecar.is_none()
+                },
+            ),
+            admin_shared_exposure: self.server.admin_listener.mode
+                == RegistryNotaryAdminListenerMode::SharedWithPublic,
+            openapi_public: !self.server.openapi_requires_auth,
+            config_unsigned: self.config_trust.is_none(),
+        }
     }
 
     /// Signing-key ids whose resolved public material must not be shared, per
@@ -3709,6 +3756,27 @@ fn default_audit_sink() -> String {
     "stdout".to_string()
 }
 
+/// A durable audit sink retains the evidence trail beyond process stdout.
+///
+/// `stdout` and `none` are not durable, retained sinks for a production-shaped
+/// deployment; `file`, `jsonl`, and `syslog` write to a retained destination.
+fn audit_sink_is_durable(config: &EvidenceAuditConfig) -> bool {
+    matches!(config.sink.as_str(), "file" | "jsonl" | "syslog")
+}
+
+/// A source connection fetches over an insecure URL when its base URL is plain
+/// `http://` and no localhost or private-network escape hatch is enabled.
+///
+/// The escape hatches (`allow_insecure_localhost`, `allow_insecure_private_network`)
+/// are reported by their own gate, so this predicate covers only the case of an
+/// insecure URL on the strict outbound policy.
+fn source_connection_uses_insecure_url(connection: &SourceConnectionConfig) -> bool {
+    let base = connection.base_url.trim();
+    base.starts_with("http://")
+        && !connection.allow_insecure_localhost
+        && !connection.allow_insecure_private_network
+}
+
 pub fn deprecated_config_fields() -> Vec<DeprecatedConfigField> {
     vec![
         DeprecatedConfigField::renamed("auth.oidc.jwks_uri", "auth.oidc.jwks_url"),
@@ -3815,6 +3883,8 @@ pub enum EvidenceConfigError {
     InvalidServerConfig { reason: String },
     #[error("invalid config_trust config: {reason}")]
     InvalidConfigTrustConfig { reason: String },
+    #[error("invalid deployment config: {reason}")]
+    InvalidDeploymentConfig { reason: String },
     #[error("source_connection '{connection}': invalid source_auth config: {reason}")]
     InvalidSourceAuthConfig { connection: String, reason: String },
     #[error("source_connection '{connection}': invalid expected_sidecar config: {reason}")]
@@ -5217,6 +5287,266 @@ auth:
 "#,
         )
         .expect("minimal config is valid YAML")
+    }
+
+    #[test]
+    fn gate_input_defaults_are_low_risk_for_minimal_config() {
+        let config = minimal_config();
+        let input = config.gate_input();
+        // A minimal config uses in-memory replay and stdout audit by default.
+        assert!(input.replay_in_memory);
+        assert!(!input.audit_sink_class_durable);
+        // No high-risk modes are declared.
+        assert!(!input.high_risk_replay_mode());
+        // No source connections, so source gates are clear.
+        assert!(!input.source_insecure_url);
+        assert!(!input.source_private_network_escape);
+        assert!(!input.openfn_source_without_expected_sidecar);
+        // Local YAML config without config_trust is unsigned.
+        assert!(input.config_unsigned);
+        // Admin listener is disabled by default, so no shared exposure.
+        assert!(!input.admin_shared_exposure);
+        // OpenAPI requires auth by default.
+        assert!(!input.openapi_public);
+    }
+
+    #[test]
+    fn gate_input_reports_federation_as_high_risk() {
+        let mut config = minimal_config();
+        config.federation.enabled = true;
+        assert!(config.gate_input().high_risk_replay_mode());
+    }
+
+    #[test]
+    fn gate_input_reports_durable_audit_sink() {
+        let mut config = minimal_config();
+        config.audit.sink = "file".to_string();
+        assert!(config.gate_input().audit_sink_class_durable);
+    }
+
+    #[test]
+    fn gate_input_reports_insecure_source_url() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "src".to_string(),
+            serde_norway::from_str(
+                r#"
+base_url: http://upstream.example
+token_env: SRC_TOKEN
+"#,
+            )
+            .expect("source connection parses"),
+        );
+        assert!(config.gate_input().source_insecure_url);
+    }
+
+    #[test]
+    fn gate_input_localhost_escape_is_not_an_insecure_url() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "src".to_string(),
+            serde_norway::from_str(
+                r#"
+base_url: http://127.0.0.1:9000
+allow_insecure_localhost: true
+token_env: SRC_TOKEN
+"#,
+            )
+            .expect("source connection parses"),
+        );
+        let input = config.gate_input();
+        assert!(!input.source_insecure_url);
+    }
+
+    #[test]
+    fn gate_input_reports_source_private_network_escape() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "src".to_string(),
+            serde_norway::from_str(
+                r#"
+base_url: http://10.0.0.1:9000
+allow_insecure_private_network: true
+token_env: SRC_TOKEN
+"#,
+            )
+            .expect("source connection parses"),
+        );
+        assert!(config.gate_input().source_private_network_escape);
+    }
+
+    #[test]
+    fn gate_input_clears_source_private_network_escape_without_flag() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "src".to_string(),
+            serde_norway::from_str(
+                r#"
+base_url: https://upstream.example
+token_env: SRC_TOKEN
+"#,
+            )
+            .expect("source connection parses"),
+        );
+        assert!(!config.gate_input().source_private_network_escape);
+    }
+
+    #[test]
+    fn gate_input_reports_openfn_source_without_expected_sidecar() {
+        let mut config = minimal_config();
+        // Insert a source connection with bulk_mode = openfn_sidecar_batch and
+        // no expected_sidecar. We call gate_input() directly without validate()
+        // because this projection test only checks the GateInput field.
+        let mut conn: SourceConnectionConfig = serde_norway::from_str(
+            r#"
+base_url: https://openfn.example
+token_env: SRC_TOKEN
+"#,
+        )
+        .expect("source connection parses");
+        conn.bulk_mode = BulkMode::OpenFnSidecarBatch;
+        // expected_sidecar remains None by default.
+        config
+            .evidence
+            .source_connections
+            .insert("openfn-src".to_string(), conn);
+        assert!(config.gate_input().openfn_source_without_expected_sidecar);
+    }
+
+    #[test]
+    fn gate_input_clears_openfn_source_with_expected_sidecar() {
+        let mut config = minimal_config();
+        let mut conn: SourceConnectionConfig = serde_norway::from_str(
+            r#"
+base_url: https://openfn.example
+token_env: SRC_TOKEN
+expected_sidecar:
+  product: openfn-notary-bridge
+  instance_id: bridge-1
+  environment: lab
+  stream_id: stream-a
+  config_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+"#,
+        )
+        .expect("source connection with expected_sidecar parses");
+        conn.bulk_mode = BulkMode::OpenFnSidecarBatch;
+        config
+            .evidence
+            .source_connections
+            .insert("openfn-src".to_string(), conn);
+        assert!(!config.gate_input().openfn_source_without_expected_sidecar);
+    }
+
+    #[test]
+    fn gate_input_reports_admin_shared_exposure() {
+        let mut config = minimal_config();
+        config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
+        assert!(config.gate_input().admin_shared_exposure);
+    }
+
+    #[test]
+    fn gate_input_clears_admin_shared_exposure_when_listener_disabled() {
+        let config = minimal_config();
+        // Default admin listener mode is Disabled; shared exposure must be false.
+        assert!(!config.gate_input().admin_shared_exposure);
+    }
+
+    #[test]
+    fn gate_input_reports_openapi_public() {
+        let mut config = minimal_config();
+        config.server.openapi_requires_auth = false;
+        assert!(config.gate_input().openapi_public);
+    }
+
+    #[test]
+    fn gate_input_clears_openapi_public_when_auth_required() {
+        let config = minimal_config();
+        // Default requires auth; openapi_public must be false.
+        assert!(!config.gate_input().openapi_public);
+    }
+
+    #[test]
+    fn gate_input_clears_config_unsigned_when_trust_configured() {
+        let mut config = minimal_config();
+        // Setting config_trust to Some makes config_unsigned false. We set the
+        // admin listener to dedicated because validate() requires it; this test
+        // only calls gate_input(), which is pure projection and does not validate.
+        config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::Dedicated;
+        config.config_trust = Some(ConfigTrustConfig {
+            antirollback_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-antirollback.json",
+            ),
+            local_approval_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-local-approvals.json",
+            ),
+            break_glass_rate_limit: default_break_glass_rate_limit(),
+            accepted_roots: Vec::new(),
+            remote_tuf_repositories: Vec::new(),
+        });
+        assert!(!config.gate_input().config_unsigned);
+    }
+
+    #[test]
+    fn gate_input_reports_config_unsigned_without_trust() {
+        let config = minimal_config();
+        // Minimal config has no config_trust block; must project as unsigned.
+        assert!(config.gate_input().config_unsigned);
+    }
+
+    #[test]
+    fn gate_input_reports_insecure_source_url_non_triggering_with_https() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "src".to_string(),
+            serde_norway::from_str(
+                r#"
+base_url: https://upstream.example
+token_env: SRC_TOKEN
+"#,
+            )
+            .expect("source connection parses"),
+        );
+        assert!(!config.gate_input().source_insecure_url);
+    }
+
+    #[test]
+    fn deployment_block_round_trips_through_yaml() {
+        let mut config = minimal_config();
+        config.deployment = serde_norway::from_str(
+            r#"
+profile: production
+waivers:
+  - finding: notary.openapi.public
+    reason: synthetic partner integration waiver
+    expires: 2099-09-30
+"#,
+        )
+        .expect("deployment block parses");
+        assert_eq!(
+            config.deployment.profile,
+            Some(crate::deployment::DeploymentProfile::Production)
+        );
+        config
+            .validate()
+            .expect("production config with waivable waiver validates");
+    }
+
+    #[test]
+    fn invalid_profile_value_fails_config_load() {
+        let result: Result<StandaloneRegistryNotaryConfig, _> = serde_norway::from_str(
+            r#"
+evidence:
+  enabled: true
+auth:
+  mode: api_key
+deployment:
+  profile: prod
+"#,
+        );
+        assert!(
+            result.is_err(),
+            "an invalid profile string must fail to load"
+        );
     }
 
     fn use_dedicated_admin_listener(config: &mut StandaloneRegistryNotaryConfig) {

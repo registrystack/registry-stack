@@ -39,6 +39,7 @@ the basic path passes `doctor`.
 | --- | --- | --- |
 | `server` | Bind address and process HTTP settings | No, defaults are present |
 | `auth` | Caller authentication and scope mapping | Yes |
+| `deployment` | Operator-declared deployment profile and gate waivers | No, an undeclared profile binds no gates |
 | `audit` | Redacted audit envelope sink and HMAC secret | Recommended for every deployable environment |
 | `config_trust` | Durable local state for governed config apply | No, only for signed governed config |
 | `evidence` | Claims, sources, rules, formats, signing keys, and credential profiles | Yes |
@@ -51,6 +52,83 @@ the basic path passes `doctor`.
 
 Unknown fields are rejected. That is intentional: a misspelled field should fail
 at config validation instead of becoming an accidental open policy.
+
+## Deployment Profile and Gates
+
+The `deployment` block lets an operator declare the assurance shape of a
+deployment. The profile is always declared by the operator and is never inferred
+from environment name, hostname, or network position.
+
+```yaml
+deployment:
+  profile: production      # local | hosted_lab | production | evidence_grade
+  multi_instance: true     # declares this instance shares a workload with others
+  waivers:
+    - finding: notary.source.private_network_escape
+      reason: "approved internal source for partner pilot, ticket OPS-123"
+      expires: 2026-09-30
+```
+
+| Field | Purpose |
+| --- | --- |
+| `profile` | The declared assurance shape. Absent means undeclared. |
+| `multi_instance` | Operator declaration that this instance runs active-active with peers, which makes shared, durable replay storage mandatory. |
+| `waivers` | Per-finding suppressions, each with a mandatory reason and expiry. |
+
+Profiles:
+
+| Profile | Use |
+| --- | --- |
+| `local` | Development, demos, tests, local pilots. Binds no gates. |
+| `hosted_lab` | Shared demos, partner evaluations, hosted validation. |
+| `production` | Real integrations handling sensitive or operational data. |
+| `evidence_grade` | Deployments where the evidence trail is itself part of the assurance claim. |
+
+An **undeclared** profile binds no gates and keeps current behavior. The posture
+report then carries a single `deployment.profile_undeclared` warning so the gap
+is visible without breaking the deployment. An **invalid** profile value fails
+startup, so a typo cannot silently disable enforcement.
+
+Each gate evaluates to one of four severities under the declared profile:
+
+| Severity | Effect |
+| --- | --- |
+| `startup_fail` | The process refuses to start. Never waivable. |
+| `readiness_fail` | The readiness endpoint reports not-ready; the process runs. |
+| `finding_error` | A posture finding, error class. |
+| `finding_warn` | A posture finding, warn class. |
+
+The gates bound for Registry Notary:
+
+| Finding id | Condition | hosted_lab | production | evidence_grade |
+| --- | --- | --- | --- | --- |
+| `notary.replay.in_memory_high_risk` | In-memory replay while federation, OID4VCI pre-authorized code, holder proof, wallet traffic, or `multi_instance` is declared | error | readiness_fail | startup_fail |
+| `notary.audit.sink_missing` | No durable, retained audit sink | error | startup_fail | startup_fail |
+| `notary.source.insecure_url` | Source connection over a plain `http://` URL with no localhost or private-network allowance | error | readiness_fail | startup_fail |
+| `notary.source.private_network_escape` | A source enables the private-network escape hatch | warn | error | error |
+| `notary.sidecar.expected_sidecar_missing` | An OpenFn source omits `expected_sidecar` | warn | error | readiness_fail |
+| `notary.admin.shared_exposure` | The admin surface shares the public listener | error | readiness_fail | startup_fail |
+| `notary.openapi.public` | OpenAPI is served without authentication | warn | error | error |
+| `notary.config.unsigned` | Local YAML config rather than signed governed config | warn | error | startup_fail |
+
+### Waivers
+
+A waiver names exactly one finding id, a free-text reason, and a mandatory
+`expires` date (`YYYY-MM-DD`). While active, a waiver changes a triggered
+finding's status to `waived` in posture instead of applying its severity effect.
+
+- `startup_fail` gates are never waivable. A waiver for one is rejected at config
+  load, because running at all would falsify the declared profile.
+- An expired waiver stops suppressing its finding and additionally raises
+  `deployment.waiver_expired` in posture, so lapsed approvals surface rather than
+  silently persisting.
+- Waiver reasons appear in the restricted-tier posture for review. Never put a
+  secret in a reason.
+
+Active waivers and gate findings appear in the admin posture document under the
+`deployment` object, and the eight-field audit assurance vocabulary appears under
+the top-level `audit` object. See `docs/security-assurance.md` for the assurance
+vocabulary.
 
 ## Secret Handling
 

@@ -23,6 +23,9 @@ use axum::{Json, Router};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use jsonwebtoken::Algorithm;
+use registry_notary_core::deployment::{
+    evaluate_gates, EvaluatedFinding, EvaluatedWaiver, GateEvaluation,
+};
 use registry_notary_core::sd_jwt::EvidenceIssuer;
 use registry_notary_core::{
     AccessMode, BoundedCorrelationId, BoundedVerifiedClaims, BulkMode, DciSourceConnectionConfig,
@@ -204,6 +207,8 @@ pub fn compile_notary_runtime(
     config: StandaloneRegistryNotaryConfig,
 ) -> Result<NotaryRuntimeSnapshot, StandaloneServerError> {
     config.validate()?;
+    let deployment_gates = DeploymentGateState::evaluate(&config);
+    deployment_gates.fail_startup_if_blocked()?;
     let federation_enabled = config.federation.enabled;
     let http_limits = NotaryHttpLimits {
         request_timeout: config.server.request_timeout,
@@ -216,12 +221,14 @@ pub fn compile_notary_runtime(
     let metrics = Arc::new(AppMetrics::default());
     let replay = ReplayStores::from_config(&config.replay)?;
     let credential_status = CredentialStatusStore::from_config(&config.credential_status)?;
-    if config.federation.enabled
-        && config.replay.storage == registry_notary_core::REPLAY_STORAGE_IN_MEMORY
-    {
+    let gate_input = config.gate_input();
+    if gate_input.replay_in_memory && gate_input.high_risk_replay_mode() {
         tracing::warn!(
-            target: "registry_notary::federation",
-            "replay store is in-memory single-instance only; do not deploy federation active-active"
+            target: "registry_notary::replay",
+            "replay store is in-memory single-instance only; a high-risk mode \
+             (federation, OID4VCI pre-authorized code, holder proof, wallet traffic, \
+             or declared multi-instance) is active. Do not run active-active without \
+             shared replay storage."
         );
     }
     let source = Arc::new(HttpEvidenceSources::from_config(
@@ -293,6 +300,7 @@ pub fn compile_notary_runtime(
     .with_preauth_runtime(preauth_runtime)
     .with_signer_readiness(signer_readiness)
     .with_posture_context(posture_context)
+    .with_deployment_gates(deployment_gates)
     .with_config_governance(ConfigGovernanceContext::from_config(&config))
     .with_runtime_config(Arc::new(config.clone()));
     #[cfg(feature = "registry-notary-cel")]
@@ -622,6 +630,80 @@ pub enum StandaloneServerError {
     #[cfg(feature = "registry-notary-cel")]
     #[error("invalid CEL worker configuration: {0}")]
     InvalidCelConfig(String),
+    #[error("deployment profile '{profile}' refuses startup; failing gates: {findings}")]
+    DeploymentGateStartupFailure { profile: String, findings: String },
+}
+
+/// Deployment gate evaluation result carried through runtime assembly.
+///
+/// Evaluated once at startup. `startup_fail` gates abort assembly; the rest is
+/// stored so the readiness handler and posture can report it without
+/// re-evaluating.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct DeploymentGateState {
+    pub(crate) profile: Option<&'static str>,
+    pub(crate) startup_failures: Vec<String>,
+    pub(crate) readiness_failures: Vec<String>,
+    pub(crate) findings: Vec<EvaluatedFinding>,
+    pub(crate) active_waivers: Vec<EvaluatedWaiver>,
+}
+
+impl DeploymentGateState {
+    pub(crate) fn evaluate(config: &StandaloneRegistryNotaryConfig) -> Self {
+        let input = config.gate_input();
+        let evaluation = evaluate_gates(
+            config.deployment.profile,
+            &input,
+            &config.deployment.waivers,
+            &today_utc_date(),
+        );
+        let GateEvaluation {
+            startup_failures,
+            readiness_failures,
+            findings,
+            active_waivers,
+        } = evaluation;
+        Self {
+            profile: config.deployment.profile.map(|profile| profile.as_str()),
+            startup_failures,
+            readiness_failures,
+            findings,
+            active_waivers,
+        }
+    }
+
+    fn fail_startup_if_blocked(&self) -> Result<(), StandaloneServerError> {
+        if self.startup_failures.is_empty() {
+            return Ok(());
+        }
+        Err(StandaloneServerError::DeploymentGateStartupFailure {
+            profile: self.profile.unwrap_or("undeclared").to_string(),
+            findings: self.startup_failures.join(", "),
+        })
+    }
+
+    /// True when a profile is declared, so its gates participate in readiness.
+    ///
+    /// An undeclared profile binds no gates and contributes no readiness check.
+    pub(crate) fn is_bound(&self) -> bool {
+        self.profile.is_some()
+    }
+
+    /// True when at least one bound gate reports a readiness failure.
+    pub(crate) fn has_readiness_failure(&self) -> bool {
+        !self.readiness_failures.is_empty()
+    }
+}
+
+/// Today's date in UTC as a `YYYY-MM-DD` string, for waiver-expiry comparison.
+fn today_utc_date() -> String {
+    let now = OffsetDateTime::now_utc().date();
+    format!(
+        "{:04}-{:02}-{:02}",
+        now.year(),
+        u8::from(now.month()),
+        now.day()
+    )
 }
 
 #[cfg(feature = "registry-notary-cel")]

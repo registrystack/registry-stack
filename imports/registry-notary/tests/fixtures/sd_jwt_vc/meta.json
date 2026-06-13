@@ -1,0 +1,9 @@
+{
+  "exp": 1705280400,
+  "holder_did": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6InB2NGVfaFhIQkxOMjdyY3M2VkRGVjFFRDBUaVU4TTN4eTl2c3VXRkVzZWMifQ",
+  "iat": 1705276800,
+  "issuer": "did:web:fixture.test",
+  "key_id": "did:web:fixture.test#key-1",
+  "note": "All key material in this directory is synthetic test-only material. Do not use outside tests.",
+  "vct": "https://fixture.test/credentials/registry-witness/v1"
+}

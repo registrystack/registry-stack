@@ -145,6 +145,48 @@ Both routes serve type metadata only and are unrelated to `POST /v1/credentials`
 the explicit `deliberate freeze exception` notes in the exposure manifest rather
 than by route changes that would violate the protocol constraints above.
 
+## Audit assurance posture
+
+The operations posture report (`GET /admin/v1/posture`) carries an `audit`
+object that describes, in a fixed vocabulary, the assurance properties of the
+running audit pipeline. The object is computed from the resolved audit
+configuration, never inferred from traffic, and always reports the same eight
+fields so operators and reviewers can compare two deployments by reading one
+block.
+
+| Field | Values | Meaning |
+| --- | --- | --- |
+| `write_policy` | `fail_closed_route_families`, `availability_first` | Whether protected route families refuse to serve when the audit write cannot be made durable. Becomes `fail_closed_route_families` once keyed integrity is configured. |
+| `redaction_mode` | `redacted` | Audit records carry redacted payloads; raw disclosure values are never written to the sink. |
+| `hash_chain` | `process_local`, `none` | Whether consecutive records are linked by a per-process hash chain. `process_local` once keyed integrity is configured; `none` otherwise. |
+| `keyed_integrity` | `hmac`, `none` | `hmac` when an HMAC key is supplied through the audit `hash_secret_env` setting, so records carry a keyed integrity tag; `none` when no key is set. |
+| `sink_class` | `file`, `external`, `stdout`, `none` | Where audit records are written. `file` covers file and JSONL sinks; `external` covers syslog; `stdout` is the process stream; `none` means no sink is configured. |
+| `retention_owner` | `operator`, `unspecified` | `operator` when the sink is durable (`file` or `external`), signalling that retention is the operator's responsibility; `unspecified` for non-durable sinks. |
+| `checkpoints` | `unsupported` | Periodic signed checkpoints over the audit chain are not produced by this build. |
+| `anchoring` | `none` | Audit state is not anchored to an external transparency log or ledger. |
+
+Note: a running notary always reports `keyed_integrity = hmac` and
+`write_policy = fail_closed_route_families` because startup refuses any
+configuration that omits the `hash_secret_env` HMAC key; the `hmac` and
+`none` rows in the table reflect the vocabulary, not states a live process can
+reach.
+
+Keyed integrity is the pivot. Supplying an HMAC key through the audit
+`hash_secret_env` setting moves `keyed_integrity` to `hmac`, `hash_chain` to
+`process_local`, and `write_policy` to `fail_closed_route_families` together,
+because a keyed, chained audit trail is only meaningful if protected routes stop
+serving rather than silently lose records. Durability of the sink, reported
+through `sink_class` and `retention_owner`, is an independent axis: a keyed
+pipeline can still write to `stdout`, and a durable `file` sink can still run
+without a key.
+
+These properties also feed the deployment profile gates. The
+`notary.audit.sink_missing` gate refuses startup under the `production` and
+`evidence_grade` profiles when no durable sink is configured, and downgrades to
+a waivable finding under `hosted_lab`. See
+[Deployment Profile and Gates](operator-config-reference.md#deployment-profile-and-gates)
+for the full gate catalog and severities.
+
 ## Local security command
 
 Run the practical local subset:
