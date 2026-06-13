@@ -52,10 +52,11 @@ pub trait Source: Send + Sync + 'static {
     /// caller's job. `Format::decode` consumes the reader exactly once.
     fn open<'a>(&'a self) -> SourceFuture<'a, OpenedSource>;
 
-    /// Sample the source's change token without reading the body. Used
-    /// by the refresh loop's `mtime` policy. Returns `None` for fields
-    /// the source can't expose (refresh degrades to `interval` or
-    /// `manual`).
+    /// Sample the source's change token for the refresh loop's `mtime`
+    /// policy. Implementations should avoid body reads when the platform
+    /// exposes a strong metadata token, and must bound any content work
+    /// needed to produce an equivalent token. Returns `None` for fields the
+    /// source can't expose (refresh degrades to `interval` or `manual`).
     fn metadata<'a>(&'a self) -> SourceFuture<'a, SourceMetadata>;
 }
 
