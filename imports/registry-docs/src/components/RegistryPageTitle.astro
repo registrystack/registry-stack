@@ -96,19 +96,26 @@ const mdHref = mdHrefForPath(Astro.url.pathname, import.meta.env.BASE_URL);
       if ((btn as HTMLButtonElement & { _mdBound?: boolean })._mdBound) return;
       (btn as HTMLButtonElement & { _mdBound?: boolean })._mdBound = true;
 
+      // Capture the resting label once at bind time so a click that lands
+      // mid-transition can't snapshot a transient "Copied"/"Copy failed" label
+      // and make it permanent. `busy` blocks re-entrant clicks for the same
+      // reason: a second click while a state is showing would otherwise restore
+      // the transient text as the new resting label.
+      const originalText = btn.textContent ?? 'Copy as Markdown';
+      let busy = false;
+
+      async function showState(text: string, cls: string, durationMs: number) {
+        btn.textContent = text;
+        btn.classList.add(cls);
+        await new Promise((r) => setTimeout(r, durationMs));
+        btn.textContent = originalText;
+        btn.classList.remove(cls);
+      }
+
       btn.addEventListener('click', async () => {
         const href = btn.dataset.mdHref;
-        if (!href) return;
-
-        const originalText = btn.textContent ?? 'Copy as Markdown';
-
-        async function showState(text: string, cls: string, durationMs: number) {
-          btn.textContent = text;
-          btn.classList.add(cls);
-          await new Promise((r) => setTimeout(r, durationMs));
-          btn.textContent = originalText;
-          btn.classList.remove(cls);
-        }
+        if (!href || busy) return;
+        busy = true;
 
         try {
           const res = await fetch(href);
@@ -136,6 +143,8 @@ const mdHref = mdHrefForPath(Astro.url.pathname, import.meta.env.BASE_URL);
         } catch (err) {
           console.error('[registry-docs] Copy as Markdown failed:', err);
           await showState('Copy failed', 'registry-md-btn--error', 3000);
+        } finally {
+          busy = false;
         }
       });
     });
@@ -170,7 +179,7 @@ const mdHref = mdHrefForPath(Astro.url.pathname, import.meta.env.BASE_URL);
     cursor: pointer;
   }
 
-  /* Button: no fill — just a hairline border matching the site's rule colour. */
+  /* Button: no fill, just a hairline border matching the site's rule colour. */
   .registry-md-btn {
     display: inline-flex;
     align-items: center;
@@ -192,7 +201,7 @@ const mdHref = mdHrefForPath(Astro.url.pathname, import.meta.env.BASE_URL);
     border-color: #2e6e3e !important;
   }
 
-  /* Transient state: failure — stamp red so it's visually distinct. */
+  /* Transient state: failure, stamp red so it's visually distinct. */
   .registry-md-btn--error {
     color: var(--registry-stamp) !important;
     border-color: var(--registry-stamp) !important;

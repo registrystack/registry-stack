@@ -2,7 +2,7 @@
 // Kept in a separate module so the logic is unit-testable without Astro.
 
 // Discovery header prepended to every per-page .md response AND to
-// llms-full.txt (contract shared with the UI agent — do not modify).
+// llms-full.txt (contract shared with the UI agent: do not modify).
 export const DISCOVERY_HEADER = `Registry stack documentation: machine-readable Markdown.
 Index of all pages: https://docs.registrystack.org/llms.txt
 Full corpus: https://docs.registrystack.org/llms-full.txt`;

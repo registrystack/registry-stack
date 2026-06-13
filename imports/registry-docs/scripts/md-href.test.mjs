@@ -1,4 +1,4 @@
-// Unit tests for src/lib/md-href.ts (imported as JS — TypeScript is transpiled
+// Unit tests for src/lib/md-href.ts (imported as JS, TypeScript is transpiled
 // by the node --test runner via the project's tsconfig, but since we need to
 // run offline we import the raw .ts file through the tsx loader when available,
 // otherwise we inline an equivalent JS function).
@@ -26,7 +26,7 @@ const tsSource = readFileSync(srcPath, 'utf8');
 
 // Strip TypeScript-only syntax: type annotations, export type, interface blocks,
 // and the "export" keyword on the function (we re-export below).
-// This is intentionally minimal — it only needs to handle what md-href.ts uses.
+// This is intentionally minimal: it only needs to handle what md-href.ts uses.
 const jsSource = tsSource
   .replace(/^\/\*\*[\s\S]*?\*\//gm, '') // remove JSDoc block comments
   .replace(/:\s*string\b/g, '')          // remove ": string" type annotations

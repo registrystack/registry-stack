@@ -7,12 +7,25 @@
 //
 // Exits non-zero with a descriptive message on any failure.
 
-import { readFile, access } from 'node:fs/promises';
+import { readFile, access, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const distDir = resolve(here, '../dist');
+
+// Load the discovery header from its single source of truth so this post-build
+// check fails loudly if the built corpus or any per-page .md drifts from it.
+// We extract the template-literal value with a regex rather than importing the
+// .ts (this script runs under plain node, no transpiler).
+const pageMarkdownSource = await readFile(resolve(here, '../src/lib/page-markdown.ts'), 'utf8');
+const headerMatch = pageMarkdownSource.match(/DISCOVERY_HEADER = `([\s\S]*?)`/);
+if (!headerMatch) {
+  console.error('check-llms: could not extract DISCOVERY_HEADER from src/lib/page-markdown.ts');
+  process.exit(1);
+}
+const DISCOVERY_HEADER = headerMatch[1];
+const HEADER_LINES = DISCOVERY_HEADER.split('\n');
 
 let passed = 0;
 let failed = 0;
@@ -41,6 +54,27 @@ async function exists(rel) {
   } catch {
     return false;
   }
+}
+
+/**
+ * Recursively collect the directory of every index.html under dist/, returned
+ * as a slash path relative to dist/ ('' for the site root). Used to drive the
+ * exhaustive per-page .md coverage check.
+ * @param {string} rel
+ * @returns {Promise<string[]>}
+ */
+async function findPageDirs(rel = '') {
+  const out = [];
+  const entries = await readdir(resolve(distDir, rel || '.'), { withFileTypes: true });
+  for (const entry of entries) {
+    const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      out.push(...(await findPageDirs(childRel)));
+    } else if (entry.name === 'index.html') {
+      out.push(rel);
+    }
+  }
+  return out;
 }
 
 console.log('check-llms: verifying AI corpus files in dist/\n');
@@ -73,14 +107,20 @@ if (corpusPresent[1]) {
   );
 }
 
-// ---- 3. llms.txt has the discovery pointer lines ----
+// ---- 3. llms.txt carries the full discovery header (drift guard) ----
+// astro.config.mjs feeds DISCOVERY_HEADER into the plugin's `details`, so every
+// line must surface in the built llms.txt. Asserting line-by-line means a
+// change to the header in page-markdown.ts that doesn't reach the corpus fails
+// here instead of shipping a silently-divergent pointer.
 if (corpusPresent[0]) {
   const index = await readDist('llms.txt');
-  assert(
-    'llms.txt references llms-full.txt',
-    index.includes('llms-full.txt'),
-    'expected "llms-full.txt" link in llms.txt',
-  );
+  for (const line of HEADER_LINES) {
+    assert(
+      `llms.txt contains discovery header line: "${line}"`,
+      index.includes(line),
+      'expected this DISCOVERY_HEADER line in llms.txt',
+    );
+  }
   assert(
     'llms.txt references llms-small.txt',
     index.includes('llms-small.txt'),
@@ -88,8 +128,7 @@ if (corpusPresent[0]) {
   );
 }
 
-// ---- 4. Sample per-page .md file begins with the discovery header ----
-const DISCOVERY_HEADER = 'Registry stack documentation: machine-readable Markdown.';
+// ---- 4. Sample per-page .md files begin with the full discovery header ----
 const sampleFiles = [
   'explanation/architecture.md',
   'index.md',
@@ -133,6 +172,31 @@ if (await exists(archFile)) {
     'no description blockquote found',
   );
 }
+
+// ---- 6. Exhaustive coverage: every real page has a sibling .md ----
+// Walk dist/ for index.html files and require a matching .md for each, so a
+// page that silently loses its Markdown twin fails the build instead of
+// passing on the sampled checks above. Redirect stubs (meta-refresh) and the
+// built-in 404 have no docs entry and thus no .md, so they are skipped, exactly
+// mirroring the is404/redirect handling in the .astro components.
+const pageDirs = await findPageDirs();
+let covered = 0;
+let skipped = 0;
+for (const dir of pageDirs) {
+  if (dir === '404') {
+    skipped += 1;
+    continue;
+  }
+  const html = await readDist(`${dir ? `${dir}/` : ''}index.html`);
+  if (/http-equiv=["']?refresh/i.test(html)) {
+    skipped += 1; // redirect stub, no backing page
+    continue;
+  }
+  const mdRel = dir === '' ? 'index.md' : `${dir}.md`;
+  assert(`page /${dir}${dir ? '/' : ''} has ${mdRel}`, await exists(mdRel));
+  covered += 1;
+}
+console.log(`  ..  ${covered} pages checked for .md coverage (${skipped} redirect/404 stubs skipped)`);
 
 // ---- Summary ----
 console.log(`\ncheck-llms: ${passed} passed, ${failed} failed`);

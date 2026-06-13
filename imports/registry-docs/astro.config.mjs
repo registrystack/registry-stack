@@ -5,6 +5,10 @@ import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
 import mermaid from 'astro-mermaid';
+// Single source of truth for the machine-discovery pointer. Reused as the
+// llms.txt `details` block so it can never drift from the header the per-page
+// .md endpoint prepends (src/pages/[...slug].md.ts).
+import { DISCOVERY_HEADER } from './src/lib/page-markdown.ts';
 
 // Marketing site that now owns the persuasion layer (the pitch). Old docs
 // routes that migrated there redirect to these pages.
@@ -125,11 +129,7 @@ export default defineConfig({
         // have a stable canonical site URL, and the plugin requires `site`.
         ...(isArchivedBuild ? [] : [starlightLlmsTxt({
           description: 'Documentation for Registry Stack: tutorials, product docs, explanation, and API reference for Registry Relay and Registry Notary.',
-          details: [
-            'Registry stack documentation: machine-readable Markdown.',
-            'Index of all pages: https://docs.registrystack.org/llms.txt',
-            'Full corpus: https://docs.registrystack.org/llms-full.txt',
-          ].join('\n'),
+          details: DISCOVERY_HEADER,
           exclude: ['reference/apis/**'],
           promote: ['index*', 'explanation/**'],
           demote: ['reference/**', 'decisions/**'],

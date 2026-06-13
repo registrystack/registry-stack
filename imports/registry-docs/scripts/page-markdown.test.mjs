@@ -4,37 +4,26 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { resolve, dirname } from 'node:path';
 
-// The TypeScript source lives in src/lib/page-markdown.ts.  Because this
-// project uses plain `node --test` (no transpiler in the test runner), the
-// two pure functions are re-implemented inline below so the tests remain
-// self-contained and offline.  If a transpiler is ever wired into the test
-// pipeline, replace them with a direct import of the compiled module.
+// Load the real helpers from src/lib/page-markdown.ts. The project runs tests
+// with plain `node --test` (no transpiler), so we read the .ts source, strip
+// the TypeScript-only type annotations with a minimal regex, and import it as
+// an ES module via a data: URL. This keeps the test offline and dependency-free
+// while still exercising the actual source (no drift-prone re-implementation).
+// Mirrors the loader in md-href.test.mjs.
+const here = dirname(fileURLToPath(import.meta.url));
+const srcPath = resolve(here, '../src/lib/page-markdown.ts');
+const jsSource = readFileSync(srcPath, 'utf8')
+  .replace(/^\/\*\*[\s\S]*?\*\//gm, '')       // remove JSDoc block comments
+  .replace(/:\s*string\s*\|\s*undefined/g, '') // ": string | undefined" annotations
+  .replace(/:\s*string\[\]/g, '')              // ": string[]" annotations
+  .replace(/:\s*string/g, '');                 // ": string" annotations
 
-const DISCOVERY_HEADER = `Registry stack documentation: machine-readable Markdown.
-Index of all pages: https://docs.registrystack.org/llms.txt
-Full corpus: https://docs.registrystack.org/llms-full.txt`;
-
-/** @param {string} entryId */
-function entrySlugToOutputPath(entryId) {
-  if (entryId === 'index') return 'index';
-  if (entryId.endsWith('/index')) return entryId.slice(0, -'/index'.length);
-  return entryId;
-}
-
-/**
- * @param {string} title
- * @param {string | undefined} description
- * @param {string} body
- */
-function buildPageMarkdown(title, description, body) {
-  const parts = [DISCOVERY_HEADER, '', `# ${title}`];
-  if (description) {
-    parts.push('', `> ${description}`);
-  }
-  parts.push('', body);
-  return parts.join('\n');
-}
+const dataUrl = 'data:text/javascript,' + encodeURIComponent(jsSource);
+const { DISCOVERY_HEADER, entrySlugToOutputPath, buildPageMarkdown } = await import(dataUrl);
 
 // ---- buildPageMarkdown ----
 
