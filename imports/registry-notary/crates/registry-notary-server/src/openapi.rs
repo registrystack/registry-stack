@@ -2774,6 +2774,10 @@ fn config_apply_request_schema() -> Value {
             "break_glass_approval": {
                 "$ref": "#/components/schemas/BreakGlassApproval"
             },
+            "break_glass_approval_reference": {
+                "type": "string",
+                "description": "Apply-only reference for a matching durable break-glass approval record in the verifier-owned local approval store."
+            },
             "local_approval_reference": {
                 "type": "string",
                 "description": "Apply-only reference for a matching local approval record used by root_transition bundles."
@@ -3651,6 +3655,10 @@ mod tests {
         assert_eq!(
             request_schema["break_glass_approval"]["$ref"],
             json!("#/components/schemas/BreakGlassApproval")
+        );
+        assert_eq!(
+            request_schema["break_glass_approval_reference"]["type"],
+            "string"
         );
         assert_eq!(request_schema["local_approval_reference"]["type"], "string");
         assert_eq!(

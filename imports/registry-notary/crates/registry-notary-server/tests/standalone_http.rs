@@ -68,6 +68,8 @@ use tempfile::TempDir;
 use time::OffsetDateTime;
 use tough::editor::signed::{PathExists, SignedRole};
 use tough::editor::RepositoryEditor;
+
+const EMERGENCY_CHANGE_CLASS: &str = "emergency.break_glass";
 use tough::key_source::LocalKeySource;
 use tough::schema::{KeyHolder, Root, Signed, Snapshot, Target, Timestamp};
 use ulid::Ulid;
@@ -511,6 +513,7 @@ fn add_config_trust_with_local_approval_path(
             max_accepted: 1,
             window_seconds: 3600,
         },
+        required_approver_count: BTreeMap::new(),
         accepted_roots: vec![RegistryTrustRoot {
             root_id: "ops-root".to_string(),
             production: false,
@@ -542,7 +545,7 @@ fn add_config_trust_with_local_approval_path(
                     "public_metadata".to_string(),
                     "signing_key_cleanup".to_string(),
                     "signing_key_rotation".to_string(),
-                    "emergency_break_glass".to_string(),
+                    EMERGENCY_CHANGE_CLASS.to_string(),
                     "root_transition".to_string(),
                     "client_credential_rotation".to_string(),
                     "client_access_change".to_string(),
@@ -591,16 +594,48 @@ fn local_operator_approval_for_change_class(
             max_accepted: 1,
             window_seconds: 3600,
         },
+        approvers: Vec::new(),
+    }
+}
+
+fn durable_break_glass_approval(
+    config_yaml: &str,
+    previous_config_hash: Option<&str>,
+    approval_reference: &str,
+    approvers: &[&str],
+) -> LocalOperatorApproval {
+    LocalOperatorApproval {
+        approved_by: "ops-primary@example.test".to_string(),
+        approvers: approvers
+            .iter()
+            .map(|approver| (*approver).to_string())
+            .collect(),
+        reason: "stored emergency approval reason".to_string(),
+        approval_reference: approval_reference.to_string(),
+        change_class: EMERGENCY_CHANGE_CLASS.to_string(),
+        config_hash: internal_config_hash(config_yaml.as_bytes()),
+        previous_config_hash: previous_config_hash.map(ToString::to_string),
+        expires_at_unix_seconds: Utc::now().timestamp() as u64 + 3600,
+        rate_limit_identity:
+            "registry-notary/registry-notary-standalone/development/notary-test-stream".to_string(),
+        rate_limit: BreakGlassRateLimit {
+            max_accepted: 1,
+            window_seconds: 3600,
+        },
     }
 }
 
 fn write_local_approval_state(path: &std::path::Path, approval: LocalOperatorApproval) {
+    write_local_approval_states(path, vec![approval]);
+}
+
+fn write_local_approval_states(path: &std::path::Path, approvals: Vec<LocalOperatorApproval>) {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).expect("local approval parent dir");
     }
     fs::write(
         path,
-        serde_json::to_vec_pretty(&json!({ "approvals": [approval] }))
+        serde_json::to_vec_pretty(&json!({ "approvals": approvals }))
             .expect("local approval state serializes"),
     )
     .expect("local approval state writes");
@@ -732,7 +767,7 @@ fn break_glass_approval() -> Value {
         "approved_by": "ops@example.test",
         "reason": "recover from bad live config",
         "approval_reference": "INC-4242",
-        "emergency_change_class": "emergency_break_glass",
+        "emergency_change_class": EMERGENCY_CHANGE_CLASS,
         "expires_at_unix_seconds": expires_at_unix_seconds,
         "rate_limit_identity": "registry-notary/registry-notary-standalone/development/notary-test-stream"
     })
@@ -5444,6 +5479,53 @@ async fn admin_config_apply_signed_credential_issuer_rotation_rejects_changed_ol
 }
 
 #[tokio::test]
+async fn admin_config_apply_break_glass_reference_requires_admin_scope_before_approval_lookup() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let antirollback_path = tmp.path().join("config-antirollback.json");
+    let local_approval_path = tmp.path().join("missing-local-approvals.json");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    add_admin_api_key(&mut config);
+    add_ops_read_api_key(&mut config);
+    add_config_trust_with_local_approval_path(
+        &mut config,
+        antirollback_path,
+        local_approval_path.clone(),
+    );
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let body = json!({
+        "break_glass": true,
+        "break_glass_approval_reference": "BG-MISSING",
+    });
+
+    let unauthenticated = server.post("/admin/v1/config/apply").json(&body).await;
+    unauthenticated.assert_status(StatusCode::UNAUTHORIZED);
+
+    let wrong_scope = server
+        .post("/admin/v1/config/apply")
+        .add_header("x-api-key", "ops-token")
+        .json(&body)
+        .await;
+    wrong_scope.assert_status(StatusCode::FORBIDDEN);
+
+    assert!(
+        !local_approval_path.exists(),
+        "auth failures must not create or consult local approval state"
+    );
+}
+
+#[tokio::test]
 async fn admin_config_apply_signed_break_glass_issuer_rotation_swaps_without_restart() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
@@ -5497,6 +5579,12 @@ async fn admin_config_apply_signed_break_glass_issuer_rotation_swaps_without_res
         .formats
         .push("application/dc+sd-jwt".to_string());
     add_config_trust(&mut config, antirollback_path.clone());
+    config
+        .config_trust
+        .as_mut()
+        .expect("config trust exists")
+        .required_approver_count
+        .insert(EMERGENCY_CHANGE_CLASS.to_string(), 2);
     let current_config_yaml = serde_norway::to_string(&config).expect("current config serializes");
     initialize_notary_antirollback_state(&antirollback_path, &current_config_yaml, 1);
 
@@ -5509,6 +5597,7 @@ async fn admin_config_apply_signed_break_glass_issuer_rotation_swaps_without_res
         "did:web:issuer.example#key-2",
     );
     let candidate_yaml = serde_norway::to_string(&candidate).expect("candidate serializes");
+    let candidate_hash = internal_config_hash(candidate_yaml.as_bytes());
     let wrong_previous_hash =
         "sha256:0000000000000000000000000000000000000000000000000000000000000000";
     let missing_emergency_class_signed =
@@ -5529,9 +5618,15 @@ async fn admin_config_apply_signed_break_glass_issuer_rotation_swaps_without_res
         2,
         "registry-notary-standalone",
         &["kid-a", "kid-b"],
-        &["signing_key_rotation", "emergency_break_glass"],
+        &["signing_key_rotation", EMERGENCY_CHANGE_CLASS],
     )
     .await;
+    let local_approval_path = config
+        .config_trust
+        .as_ref()
+        .expect("config trust exists")
+        .local_approval_state_path
+        .clone();
 
     let app = standalone_config_admin_test_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
@@ -5599,9 +5694,65 @@ async fn admin_config_apply_signed_break_glass_issuer_rotation_swaps_without_res
     assert_eq!(record.last_sequence, 1);
     assert!(record.break_glass.accepted.is_empty());
 
+    let mut inline_single_approver_request = signed_tuf_apply_request(&signed);
+    inline_single_approver_request["break_glass"] = json!(true);
+    inline_single_approver_request["break_glass_approval"] = break_glass_approval();
+    let response = server
+        .post("/admin/v1/config/apply")
+        .add_header("authorization", authorization.clone())
+        .json(&inline_single_approver_request)
+        .await;
+
+    response.assert_status(StatusCode::CONFLICT);
+    let body: Value = response.json();
+    assert_eq!(body["result"], "rejected_break_glass");
+    assert_eq!(body["applied"], false);
+    let record = FileAntiRollbackStore::new(&antirollback_path)
+        .load(&AntiRollbackKey {
+            product: "registry-notary".to_string(),
+            instance_id: "registry-notary-standalone".to_string(),
+            environment: "development".to_string(),
+            stream_id: "notary-test-stream".to_string(),
+        })
+        .expect("anti-rollback state loads");
+    assert_eq!(record.last_sequence, 1);
+    assert!(record.break_glass.accepted.is_empty());
+
+    write_local_approval_state(
+        &local_approval_path,
+        durable_break_glass_approval(&candidate_yaml, None, "BG-SINGLE", &[]),
+    );
+    let mut stored_single_approver_request = signed_tuf_apply_request(&signed);
+    stored_single_approver_request["break_glass"] = json!(true);
+    stored_single_approver_request["break_glass_approval_reference"] = json!("BG-SINGLE");
+    let response = server
+        .post("/admin/v1/config/apply")
+        .add_header("authorization", authorization.clone())
+        .json(&stored_single_approver_request)
+        .await;
+
+    response.assert_status(StatusCode::CONFLICT);
+    let body: Value = response.json();
+    assert_eq!(body["result"], "rejected_break_glass");
+    assert_eq!(body["applied"], false);
+    let record = FileAntiRollbackStore::new(&antirollback_path)
+        .load(&AntiRollbackKey {
+            product: "registry-notary".to_string(),
+            instance_id: "registry-notary-standalone".to_string(),
+            environment: "development".to_string(),
+            stream_id: "notary-test-stream".to_string(),
+        })
+        .expect("anti-rollback state loads");
+    assert_eq!(record.last_sequence, 1);
+    assert!(record.break_glass.accepted.is_empty());
+
+    write_local_approval_state(
+        &local_approval_path,
+        durable_break_glass_approval(&candidate_yaml, None, "BG-4242", &["ops-peer@example.test"]),
+    );
     let mut request = signed_tuf_apply_request(&signed);
     request["break_glass"] = json!(true);
-    request["break_glass_approval"] = break_glass_approval();
+    request["break_glass_approval_reference"] = json!("BG-4242");
     let response = server
         .post("/admin/v1/config/apply")
         .add_header("authorization", authorization.clone())
@@ -5626,22 +5777,89 @@ async fn admin_config_apply_signed_break_glass_issuer_rotation_swaps_without_res
     assert_eq!(record.last_sequence, 2);
     assert_eq!(record.break_glass.accepted.len(), 1);
     assert_eq!(record.break_glass.accepted[0].sequence, 2);
+    assert_eq!(record.break_glass.accepted[0].approval_reference, "BG-4242");
     assert_eq!(
-        record.break_glass.accepted[0].approval_reference,
-        "INC-4242"
+        record.break_glass.accepted[0]
+            .emergency_change_class
+            .as_deref(),
+        Some(EMERGENCY_CHANGE_CLASS)
     );
     assert_eq!(
         record.break_glass.accepted[0].rate_limit_identity,
         "registry-notary/registry-notary-standalone/development/notary-test-stream"
     );
 
-    let config_audit = config_audit_record(&audit_path, "/admin/v1/config/apply")["config"].clone();
+    let mut policy_candidate = candidate.clone();
+    policy_candidate.server.openapi_requires_auth = false;
+    let policy_candidate_yaml =
+        serde_norway::to_string(&policy_candidate).expect("policy candidate serializes");
+    let policy_signed = write_signed_notary_config_tuf_fixture_with_change_classes(
+        &tmp,
+        &candidate_hash,
+        &policy_candidate_yaml,
+        3,
+        "registry-notary-standalone",
+        &["kid-a", "kid-b"],
+        &["openapi_auth_policy_change", EMERGENCY_CHANGE_CLASS],
+    )
+    .await;
+    write_local_approval_states(
+        &local_approval_path,
+        vec![
+            local_operator_approval_for_change_class(
+                &policy_candidate_yaml,
+                &candidate_hash,
+                "openapi_auth_policy_change",
+                "OPENAPI-BG-REPLAY",
+            ),
+            durable_break_glass_approval(
+                &policy_candidate_yaml,
+                Some(&candidate_hash),
+                "BG-4242",
+                &["ops-peer@example.test"],
+            ),
+        ],
+    );
+    let mut replay_request = signed_tuf_apply_request(&policy_signed);
+    replay_request["break_glass"] = json!(true);
+    replay_request["break_glass_approval_reference"] = json!("BG-4242");
+    replay_request["local_approval_reference"] = json!("OPENAPI-BG-REPLAY");
+    let response = server
+        .post("/admin/v1/config/apply")
+        .add_header("authorization", authorization.clone())
+        .json(&replay_request)
+        .await;
+
+    response.assert_status(StatusCode::CONFLICT);
+    let body: Value = response.json();
+    assert_eq!(body["result"], "rejected_break_glass");
+    assert_eq!(body["applied"], false);
+    let record = FileAntiRollbackStore::new(&antirollback_path)
+        .load(&AntiRollbackKey {
+            product: "registry-notary".to_string(),
+            instance_id: "registry-notary-standalone".to_string(),
+            environment: "development".to_string(),
+            stream_id: "notary-test-stream".to_string(),
+        })
+        .expect("anti-rollback state loads");
+    assert_eq!(record.last_sequence, 2);
+    assert_eq!(record.break_glass.accepted.len(), 1);
+    assert_eq!(record.break_glass.accepted[0].approval_reference, "BG-4242");
+
+    let config_audit = audit_records_from_envelopes(&audit_path)
+        .into_iter()
+        .filter(|record| record["path"] == "/admin/v1/config/apply")
+        .filter_map(|record| record.get("config").cloned())
+        .find(|config| config["apply_result"] == "applied")
+        .expect("accepted break-glass config audit exists");
     assert_eq!(config_audit["break_glass"], true);
-    assert_eq!(config_audit["break_glass_approval_reference"], "INC-4242");
-    assert_eq!(config_audit["break_glass_approved_by"], "ops@example.test");
+    assert_eq!(config_audit["break_glass_approval_reference"], "BG-4242");
+    assert!(config_audit["break_glass_approved_by"]
+        .as_str()
+        .is_some_and(|hash| hash.starts_with("sha256:")));
     assert_eq!(
         config_audit["break_glass_emergency_change_class"],
-        "emergency_break_glass"
+        EMERGENCY_CHANGE_CLASS
     );
     assert_eq!(
         config_audit["break_glass_rate_limit_identity"],
@@ -5652,7 +5870,10 @@ async fn admin_config_apply_signed_break_glass_issuer_rotation_swaps_without_res
         .is_some_and(|hash| hash.starts_with("sha256:")));
     assert!(!serde_json::to_string(&config_audit)
         .expect("config audit serializes")
-        .contains("recover from bad live config"));
+        .contains("stored emergency approval reason"));
+    assert!(!serde_json::to_string(&config_audit)
+        .expect("config audit serializes")
+        .contains("ops-primary@example.test"));
 
     let second_kid =
         issue_direct_civil_status_credential_kid(&server, &idp, "break-glass-after").await;
@@ -5667,6 +5888,25 @@ async fn admin_config_apply_signed_break_glass_issuer_rotation_swaps_without_res
     assert_eq!(posture["configuration"]["source"], "signed_bundle_file");
     assert_eq!(posture["configuration"]["last_bundle_sequence"], 2);
     assert_eq!(posture["configuration"]["last_apply_result"], "accepted");
+    assert_eq!(
+        posture["configuration"]["emergency"]["last_apply_emergency"],
+        true
+    );
+    assert_eq!(
+        posture["configuration"]["emergency"]["last_emergency_change_class"],
+        EMERGENCY_CHANGE_CLASS
+    );
+    assert_eq!(
+        posture["configuration"]["emergency"]["exception_window_open"],
+        true
+    );
+    assert_eq!(
+        posture["configuration"]["emergency"]["open_exception_count"],
+        1
+    );
+    let posture_text = serde_json::to_string(&posture).expect("posture serializes");
+    assert!(!posture_text.contains("stored emergency approval reason"));
+    assert!(!posture_text.contains("ops-primary@example.test"));
     assert_eq!(
         posture["notary"]["signing_keys"]["active"],
         json!(["issuer-key-2"])
@@ -6430,6 +6670,7 @@ async fn governed_config_rejects_shared_admin_listener_topology() {
             max_accepted: 1,
             window_seconds: 3600,
         },
+        required_approver_count: BTreeMap::new(),
         accepted_roots: Vec::new(),
         remote_tuf_repositories: Vec::new(),
     });
