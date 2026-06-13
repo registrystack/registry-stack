@@ -645,6 +645,12 @@ Use `just lab2-smoke` for the exhaustive gate. Use `just lab2-demo-reset` to
 remove only Lab 2 containers and volumes, and `just lab2-demo-open-evidence` to
 open the latest story file.
 
+Use `just lab2-doctor` after `just lab2-up` to capture Registry Relay and
+Registry Notary deployment-profile doctor reports for the running Lab 2
+topology. It defaults to `LAB2_DOCTOR_PROFILE=hosted_lab` and writes redacted
+JSON under `output/lab2/evidence/doctor/`. Set `LAB2_DOCTOR_STRICT=1` when the
+selected profile should be treated as a gate instead of an operator review.
+
 The Bruno API workspace also includes a local-only `40 - Lab 2 Governed Config`
 folder for stepping through the governed apply story request by request. Open
 `requests/registry-lab/` in Bruno, select the `Local Lab 2` environment, and
@@ -676,6 +682,14 @@ REGISTRY_NOTARY_SOURCE_DIR=../registry-notary \
 CROSSWALK_SOURCE_DIR=../crosswalk \
 just build
 ```
+
+`just lab2-up` uses the same source selection model through `compose.lab2.yaml`.
+That makes Lab 2 useful as a pre-pin regression pass against sibling Relay,
+Notary, and Platform checkouts. `just lab2-generate` also rewrites a temporary
+tool manifest when `REGISTRY_PLATFORM_SOURCE_DIR` points outside the vendored
+Platform submodule, so generated governed artifacts can be checked against a
+Platform source checkout. For release evidence, keep using `scripts/release-check.sh`
+in `vendor` mode or pin the `vendor/` submodules before tagging.
 
 Use the same variables with `scripts/generate-demo-secrets.py` when you want
 that script to use a sibling Relay checkout instead of the

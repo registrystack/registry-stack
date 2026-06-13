@@ -924,16 +924,42 @@ fn notary_rotation_candidate(yaml: &str) -> Result<String, Box<dyn std::error::E
             "status": "active"
         }))?,
     );
-    let profile = mapping_at_mut(
+    rotate_notary_credential_profile_signing_key(
         &mut value,
-        &["evidence", "credential_profiles", "civil_status_sd_jwt"],
+        "civil-evidence-demo",
+        "civil-evidence-demo-rotated",
     )?;
-    set_mapping(
-        profile,
-        "signing_key",
-        Value::String("civil-evidence-demo-rotated".to_string()),
-    );
     Ok(serde_yaml::to_string(&value)?)
+}
+
+fn rotate_notary_credential_profile_signing_key(
+    value: &mut Value,
+    old_signing_key: &str,
+    new_signing_key: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let profiles = mapping_at_mut(value, &["evidence", "credential_profiles"])?;
+    let mut rotated = 0usize;
+    for profile in profiles.values_mut() {
+        let Some(profile) = profile.as_mapping_mut() else {
+            continue;
+        };
+        if profile
+            .get(Value::String("signing_key".to_string()))
+            .and_then(Value::as_str)
+            == Some(old_signing_key)
+        {
+            set_mapping(
+                profile,
+                "signing_key",
+                Value::String(new_signing_key.to_string()),
+            );
+            rotated += 1;
+        }
+    }
+    if rotated == 0 {
+        return Err(format!("no credential profile uses signing_key {old_signing_key}").into());
+    }
+    Ok(())
 }
 
 fn notary_break_glass_candidate(yaml: &str) -> Result<String, Box<dyn std::error::Error>> {

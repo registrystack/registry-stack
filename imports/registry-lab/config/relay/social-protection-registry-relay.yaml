@@ -33,14 +33,14 @@ auth:
       fingerprint:
         provider: env
         name: SOCIAL_METADATA_CLIENT_HASH
-        commitment: sha256:8f253ebd0f5b520a885fbf2de741dfb05fe921b7d9ad6eb63cae235fdb944aa3
+        commitment: sha256:be796d3d29ae0acc1f888600c7cff34de8fc47fbb1bd37e04789963d144e7b9a
       scopes:
         - social_protection_registry:metadata
     - id: evidence_source
       fingerprint:
         provider: env
         name: SOCIAL_EVIDENCE_SOURCE_HASH
-        commitment: sha256:437cb39f127f7000f79fde087aa7e49a4e5b28c8617904080280185063931fc4
+        commitment: sha256:33be5e3be3d607abf03c5e0997eeee540d91e2af18f77b7cb76b060e4f3a999b
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:rows
@@ -49,7 +49,7 @@ auth:
       fingerprint:
         provider: env
         name: SOCIAL_EVIDENCE_ONLY_HASH
-        commitment: sha256:02c5ab45dffd458ce9362c4a9af72ca84d64e4494f0ae3c2e472a9bfefd4523d
+        commitment: sha256:f315a3f69aa8f9869f6f1633bce1e89ffa23a3ce1d14bcfb53309c40979dc592
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:evidence_verification
@@ -57,7 +57,7 @@ auth:
       fingerprint:
         provider: env
         name: SOCIAL_ROW_READER_HASH
-        commitment: sha256:2d828e8eadb135521bdac1936d7278e22e0f2ce5f0900a37cc65f2a3180d18dd
+        commitment: sha256:810ee8ce99802bca544340b3f43240f3c7841a47f0585eacfbdd0fee4c845ab0
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:rows
@@ -65,7 +65,7 @@ auth:
       fingerprint:
         provider: env
         name: SOCIAL_AGGREGATE_READER_HASH
-        commitment: sha256:10d2d90acd07ae1d931376a0c0e91aa8c53a0162d2f84d3a5c605fb82f1f5bd2
+        commitment: sha256:cbb1df1a64226e7261eb884ee1257fcc9a45edca335a72536afcf3318e652f1a
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:aggregate
@@ -73,7 +73,7 @@ auth:
       fingerprint:
         provider: env
         name: SHARED_SOCIAL_EVIDENCE_SOURCE_HASH
-        commitment: sha256:2244db0a6a6352fd81cfde9aa35f8a79fb843fe4e3b4b8ab6d76cfa18aa2361f
+        commitment: sha256:06669eb28865489cfe6f8f4c21006a458bc6841925dbcc6d4addfbee1ecb49fd
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:rows

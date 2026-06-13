@@ -91,9 +91,13 @@ lab2-generate:
 # Start the opt-in Lab 2 governed configuration topology.
 lab2-up:
     @test -d output/lab2/runtime-config && test -n "$$(find output/lab2/runtime-config -maxdepth 1 -type f -print -quit)" || (echo "Run just lab2-generate first." >&2; exit 1)
-    REGISTRY_RELAY_SOURCE_DIR=./vendor/registry-relay REGISTRY_NOTARY_SOURCE_DIR=./vendor/registry-notary REGISTRY_PLATFORM_SOURCE_DIR=./vendor/registry-platform REGISTRY_RELAY_PLATFORM_SOURCE_DIR=./vendor/registry-platform REGISTRY_NOTARY_PLATFORM_SOURCE_DIR=./vendor/registry-platform docker compose -f compose.yaml -f compose.lab2.yaml build lab2-civil-registry-relay
-    REGISTRY_RELAY_SOURCE_DIR=./vendor/registry-relay REGISTRY_NOTARY_SOURCE_DIR=./vendor/registry-notary REGISTRY_PLATFORM_SOURCE_DIR=./vendor/registry-platform REGISTRY_RELAY_PLATFORM_SOURCE_DIR=./vendor/registry-platform REGISTRY_NOTARY_PLATFORM_SOURCE_DIR=./vendor/registry-platform docker compose -f compose.yaml -f compose.lab2.yaml build lab2-civil-notary
-    REGISTRY_RELAY_SOURCE_DIR=./vendor/registry-relay REGISTRY_NOTARY_SOURCE_DIR=./vendor/registry-notary REGISTRY_PLATFORM_SOURCE_DIR=./vendor/registry-platform REGISTRY_RELAY_PLATFORM_SOURCE_DIR=./vendor/registry-platform REGISTRY_NOTARY_PLATFORM_SOURCE_DIR=./vendor/registry-platform docker compose -f compose.yaml -f compose.lab2.yaml up -d --no-build lab2-civil-registry-relay lab2-civil-notary
+    docker compose -f compose.yaml -f compose.lab2.yaml build lab2-civil-registry-relay
+    docker compose -f compose.yaml -f compose.lab2.yaml build lab2-civil-notary
+    docker compose -f compose.yaml -f compose.lab2.yaml up -d --no-build lab2-civil-registry-relay lab2-civil-notary
+
+# Capture Relay and Notary deployment-profile doctor reports for the running Lab 2 topology.
+lab2-doctor:
+    scripts/lab2-doctor-profile.sh
 
 # Run the governed configuration smoke for Lab 2.
 lab2-smoke:
