@@ -295,7 +295,8 @@ pub fn parse_resolved_config_candidate_with_provenance(
         .map_err(|_| "candidate config could not be parsed")?;
     let config: Config = serde_saphyr::from_str(&candidate.config_yaml)
         .map_err(|_| "candidate config could not be parsed")?;
-    config::validate::run(&config).map_err(|_| "candidate config did not validate")?;
+    config::validate::run_with_source(&config, candidate.source)
+        .map_err(|_| "candidate config did not validate")?;
     let (metadata, metadata_source_digest) = parse_candidate_metadata(&config, candidate)?;
     let package_digest = candidate.package_digest.clone();
     let internal_hash = if metadata_source_digest.is_some() || package_digest.is_some() {

@@ -20,6 +20,7 @@ use registry_platform_authcommon::{
 };
 use registry_platform_crypto::{validate_did, DidMethod};
 use registry_platform_httpsec::CorsPolicy;
+use registry_platform_ops::ConfigSource;
 
 use super::capabilities::source_capabilities;
 use super::{
@@ -35,7 +36,13 @@ const METRICS_SCOPE: &str = crate::observability::METRICS_SCOPE;
 const OPS_READ_SCOPE: &str = "registry_relay:ops_read";
 const RESERVED_SCOPE_DATASET_IDS: &[&str] = &["registry_relay"];
 
-/// Run every cross-field check on a freshly deserialised [`Config`].
+/// Run every cross-field check on a freshly deserialised [`Config`] loaded
+/// from a local YAML file.
+///
+/// This is the startup path: the config originates from a local file, so the
+/// deployment gates are evaluated against [`ConfigSource::LocalFile`]. The
+/// signed governed apply path calls [`run_with_source`] with the candidate's
+/// real provenance source instead.
 ///
 /// # Errors
 ///
@@ -44,6 +51,21 @@ const RESERVED_SCOPE_DATASET_IDS: &[&str] = &["registry_relay"];
 /// error type unit-shaped; the operator log line names the offending
 /// field.
 pub fn run(config: &Config) -> Result<(), Error> {
+    run_with_source(config, ConfigSource::LocalFile)
+}
+
+/// Run every cross-field check, evaluating the deployment gates against the
+/// config's real provenance `source`.
+///
+/// All checks other than the deployment gates are provenance-independent, so
+/// they behave identically to [`run`]. Only the `relay.config.unsigned` gate
+/// reads `source`: a signed bundle clears it, a local file (or unknown
+/// provenance) does not.
+///
+/// # Errors
+///
+/// Returns the corresponding [`ConfigError`] variant on the first failure.
+pub fn run_with_source(config: &Config, source: ConfigSource) -> Result<(), Error> {
     super::vocabularies::validate_registry(&config.vocabularies).map_err(Error::from)?;
     validate_server(config).map_err(Error::from)?;
     validate_config_trust(config).map_err(Error::from)?;
@@ -59,7 +81,84 @@ pub fn run(config: &Config) -> Result<(), Error> {
     }
     validate_publicschema_feature(config).map_err(Error::from)?;
     validate_spdci_feature(config).map_err(Error::from)?;
+    validate_deployment(config, source).map_err(Error::from)?;
     Ok(())
+}
+
+/// Validate the deployment block and evaluate startup gates.
+///
+/// Waiver finding ids must match the finding id pattern, waiver dates must be
+/// well-formed `YYYY-MM-DD`, reasons must be non-empty, and the deployment must
+/// not declare a profile under which any unwaived `startup_fail` gate triggers.
+/// An invalid profile value is rejected earlier by `serde` (the parse error
+/// path); this check covers the conditions that only hold once the whole config
+/// is deserialised.
+///
+/// `source` is the config's real provenance source. The startup path passes
+/// [`ConfigSource::LocalFile`]; the signed governed apply path threads the
+/// candidate's real source so a signed bundle is evaluated as such and the
+/// `relay.config.unsigned` gate does not fire for it.
+fn validate_deployment(config: &Config, source: ConfigSource) -> Result<(), ConfigError> {
+    for waiver in &config.deployment.waivers {
+        if waiver.finding.trim().is_empty() {
+            tracing::error!(
+                code = "config.validation_error",
+                "deployment waiver is missing a finding id"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        if !is_valid_finding_id(&waiver.finding) {
+            tracing::error!(
+                code = "config.validation_error",
+                finding = %waiver.finding,
+                "deployment waiver finding id does not match ^[a-z][a-z0-9]*(?:\\.[a-z][a-z0-9_-]*)*$"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        if waiver.reason.trim().is_empty() {
+            tracing::error!(
+                code = "config.validation_error",
+                finding = %waiver.finding,
+                "deployment waiver is missing a reason"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        if !is_iso8601_date(&waiver.expires) {
+            tracing::error!(
+                code = "config.validation_error",
+                finding = %waiver.finding,
+                "deployment waiver expiry must be an ISO 8601 YYYY-MM-DD date"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
+
+    let facts = crate::deployment::facts_from_config(config, source);
+    let waivers = crate::deployment::waivers_from_config(config);
+    let evaluation = crate::deployment::evaluate(
+        config.deployment.profile,
+        &facts,
+        &waivers,
+        &crate::deployment::today_utc(),
+    );
+    if evaluation.has_startup_failure() {
+        tracing::error!(
+            code = "config.validation_error",
+            gates = ?evaluation.startup_failures,
+            "deployment profile gates refuse startup"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    Ok(())
+}
+
+/// Lenient `YYYY-MM-DD` shape check: four digits, dash, two digits, dash, two
+/// digits, with calendar parsing to reject impossible dates.
+fn is_iso8601_date(value: &str) -> bool {
+    use time::format_description::well_known::Iso8601;
+    use time::Date;
+
+    Date::parse(value, &Iso8601::DATE).is_ok()
 }
 
 fn validate_config_trust(config: &Config) -> Result<(), ConfigError> {
@@ -1108,6 +1207,42 @@ fn is_valid_id(s: &str) -> bool {
         _ => return false,
     }
     chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Match the deployment finding id pattern
+/// `^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9_-]*)*$` without pulling in a regex crate.
+///
+/// The first dot-separated segment is `[a-z][a-z0-9]*` (no underscore or dash);
+/// every following segment is `[a-z][a-z0-9_-]*`. This matches the ids the gate
+/// catalog emits (for example `relay.config.unsigned`,
+/// `relay.auth.api_key_no_rotation_evidence`, `deployment.profile_undeclared`).
+/// A waiver naming a malformed id would otherwise pass non-empty validation and
+/// only surface later as restricted-tier posture schema invalidity.
+fn is_valid_finding_id(s: &str) -> bool {
+    let mut segments = s.split('.');
+    let Some(first) = segments.next() else {
+        return false;
+    };
+    if !is_valid_finding_segment(first, false) {
+        return false;
+    }
+    segments.all(|segment| is_valid_finding_segment(segment, true))
+}
+
+/// One dot-separated finding id segment. The leading character must be
+/// `[a-z]`; trailing characters are `[a-z0-9]`, plus `_` and `-` when
+/// `allow_underscore_dash` is set (every segment after the first).
+fn is_valid_finding_segment(segment: &str, allow_underscore_dash: bool) -> bool {
+    let mut chars = segment.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_lowercase() => {}
+        _ => return false,
+    }
+    chars.all(|c| {
+        c.is_ascii_lowercase()
+            || c.is_ascii_digit()
+            || (allow_underscore_dash && (c == '_' || c == '-'))
+    })
 }
 
 fn validate_server(config: &Config) -> Result<(), ConfigError> {
@@ -3710,5 +3845,116 @@ issuer:
         let cfg = provenance_with_retired_verification_method("did:web:data.example.test#old-key");
 
         validate_provenance(&cfg).expect("issuer-bound retired key is valid");
+    }
+
+    fn deployment_config_yaml(extra: &str) -> String {
+        format!(
+            r#"
+server:
+  bind: "127.0.0.1:8080"
+catalog:
+  title: "Test Registry"
+  base_url: "https://data.example.test"
+  publisher: "Test Ministry"
+auth:
+  mode: api_key
+  api_keys: []
+audit:
+  sink: stdout
+datasets: []
+{extra}
+"#
+        )
+    }
+
+    fn parse_deployment_config(extra: &str) -> Config {
+        serde_saphyr::from_str(&deployment_config_yaml(extra)).expect("config parses")
+    }
+
+    #[test]
+    fn evidence_grade_via_signed_bundle_source_boots() {
+        // The same evidence_grade config that a local file rejects must validate
+        // when the candidate source is a signed bundle: the `relay.config.unsigned`
+        // startup gate does not fire for a signed bundle.
+        let config = parse_deployment_config(
+            "deployment:\n  profile: evidence_grade\n  evidence:\n    ingress_rate_limit: true\n    api_key_rotation: true",
+        );
+        for source in [
+            ConfigSource::SignedBundleFile,
+            ConfigSource::SignedBundleEndpoint,
+        ] {
+            run_with_source(&config, source)
+                .unwrap_or_else(|err| panic!("signed {source:?} must boot, got {err:?}"));
+        }
+    }
+
+    #[test]
+    fn evidence_grade_via_local_file_refuses_startup() {
+        let config = parse_deployment_config(
+            "deployment:\n  profile: evidence_grade\n  evidence:\n    ingress_rate_limit: true\n    api_key_rotation: true",
+        );
+        assert!(
+            run_with_source(&config, ConfigSource::LocalFile).is_err(),
+            "evidence_grade from a local file must refuse startup"
+        );
+    }
+
+    #[test]
+    fn evidence_grade_via_unknown_source_refuses_startup() {
+        // Unknown provenance must fail closed: it counts as unsigned, so the
+        // `relay.config.unsigned` startup gate fires under evidence_grade.
+        let config = parse_deployment_config(
+            "deployment:\n  profile: evidence_grade\n  evidence:\n    ingress_rate_limit: true\n    api_key_rotation: true",
+        );
+        assert!(
+            run_with_source(&config, ConfigSource::Unknown).is_err(),
+            "evidence_grade with unknown provenance must refuse startup (fail closed)"
+        );
+    }
+
+    #[test]
+    fn waiver_finding_id_must_match_finding_id_pattern() {
+        // A malformed finding id is rejected at config load, before it could
+        // surface later as restricted-tier posture schema invalidity.
+        let config = parse_deployment_config(
+            "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: \"Relay.Config.Unsigned\"\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"",
+        );
+        assert!(
+            run(&config).is_err(),
+            "a waiver with a malformed finding id must fail validation"
+        );
+    }
+
+    #[test]
+    fn waiver_finding_id_accepts_canonical_dotted_id() {
+        let config = parse_deployment_config(
+            "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: \"relay.config.unsigned\"\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"",
+        );
+        run(&config).expect("a canonical dotted finding id must pass validation");
+    }
+
+    #[test]
+    fn finding_id_pattern_matches_catalog_ids() {
+        // The pattern must admit every id the catalog can emit, including the
+        // framework findings with their dotted segments.
+        assert!(is_valid_finding_id("relay.config.unsigned"));
+        assert!(is_valid_finding_id("relay.admin.public_exposure"));
+        assert!(is_valid_finding_id("deployment.profile_undeclared"));
+        assert!(is_valid_finding_id("deployment.waiver_expired"));
+        assert!(is_valid_finding_id(
+            "relay.auth.api_key_no_rotation_evidence"
+        ));
+    }
+
+    #[test]
+    fn finding_id_pattern_rejects_malformed_ids() {
+        assert!(!is_valid_finding_id(""));
+        assert!(!is_valid_finding_id("Relay.config.unsigned"));
+        assert!(!is_valid_finding_id("1relay.config"));
+        assert!(!is_valid_finding_id(".relay.config"));
+        assert!(!is_valid_finding_id("relay..config"));
+        assert!(!is_valid_finding_id("relay.config."));
+        assert!(!is_valid_finding_id("relay.Config"));
+        assert!(!is_valid_finding_id("relay config"));
     }
 }

@@ -3,8 +3,11 @@
 //!
 //! Implements the [`Source`] trait by opening a path on the local filesystem
 //! via `tokio::fs`. The ETag fingerprint is `dev:inode:mtime_ns:size` so the
-//! refresh loop detects both in-place mutations and atomic renames.
+//! refresh loop detects both in-place mutations and atomic renames. On
+//! non-Unix targets, where device and inode numbers are unavailable, the
+//! fingerprint degrades to `mtime_ns:size`.
 
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 
@@ -46,21 +49,36 @@ impl LocalFileSource {
 
 /// Convert a `std::fs::Metadata` into a `SourceMetadata` snapshot.
 ///
-/// The ETag is `dev:inode:mtime_ns:size` using the Unix metadata
+/// On Unix the ETag is `dev:inode:mtime_ns:size` using the Unix metadata
 /// extension fields. Nanosecond mtime resolution ensures atomic-replace
 /// and rapid in-place mutations are detected even when the wall-clock
-/// second does not change.
+/// second does not change. On non-Unix targets the ETag is
+/// `mtime_ns:size` from the portable `modified()` timestamp, which still
+/// catches in-place mutations but cannot distinguish an atomic rename
+/// that preserves both mtime and size.
 fn metadata_from_std(std_meta: std::fs::Metadata) -> SourceMetadata {
-    let dev = std_meta.dev();
-    let ino = std_meta.ino();
-    // `mtime_nsec()` is the sub-second nanosecond fraction; combine with
-    // the full second to get a single nanosecond count since the epoch.
-    let mtime_ns = (std_meta.mtime() as u64)
-        .saturating_mul(1_000_000_000)
-        .saturating_add(std_meta.mtime_nsec() as u64);
-    let size = std_meta.size();
+    let size = std_meta.len();
 
-    let etag = format!("{dev}:{ino}:{mtime_ns}:{size}");
+    #[cfg(unix)]
+    let etag = {
+        let dev = std_meta.dev();
+        let ino = std_meta.ino();
+        // `mtime_nsec()` is the sub-second nanosecond fraction; combine with
+        // the full second to get a single nanosecond count since the epoch.
+        let mtime_ns = (std_meta.mtime() as u64)
+            .saturating_mul(1_000_000_000)
+            .saturating_add(std_meta.mtime_nsec() as u64);
+        format!("{dev}:{ino}:{mtime_ns}:{size}")
+    };
+    #[cfg(not(unix))]
+    let etag = {
+        let mtime_ns = std_meta
+            .modified()
+            .ok()
+            .and_then(|st| st.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_nanos());
+        format!("{mtime_ns}:{size}")
+    };
 
     let mtime = std_meta.modified().ok().and_then(|st| {
         OffsetDateTime::from_unix_timestamp_nanos(

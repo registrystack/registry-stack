@@ -1,5 +1,6 @@
-# Local-dev linker tuning. CI runs on Linux (`ubuntu-latest`) and is
-# unaffected by anything below.
+# Local-dev linker tuning. Linux CI is unaffected; the Binary Release
+# workflow's macOS jobs neutralize this via a set-but-empty RUSTFLAGS,
+# since hosted runners do not ship Homebrew's lld.
 #
 # On Apple Silicon, dev/test builds spend most of their wall time in the
 # linker because each of the 50 integration test binaries statically pulls
