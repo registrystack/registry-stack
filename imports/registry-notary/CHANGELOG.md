@@ -19,11 +19,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   selective-disclosure arrays.
 - **Parser fuzz regression coverage and authentication hardening** (#132, #173,
   #175, #177, PR #213).
+- **Durable break-glass approvals** (#221, PR #223): emergency approvals backed by
+  a durable multi-approver store; the default tier emits a `configuration.emergency`
+  posture block carrying no reason or identity material.
+- **Zero-trust source adapter sidecar** (PR #227): out-of-process source adapter with
+  hardened egress, including SSRF and cloud-metadata (IMDS, including IPv6
+  `fd00:ec2::254`) blocking and a bounded per-source LRU cache (PR #232).
+- **`http_flow` sidecar engine** (PR #228): declarative HTTP flow engine with `when`
+  guards, nullable flow bindings, default 404 not-found behavior, and explicit
+  `on_status` actions.
+- **Transaction-token enforcement** (PR #233): per-evaluation transaction-token
+  authorization-details parsing and enforcement across core and server paths;
+  rejects scope broadening against targetless self-attestation bodies before source
+  reads, enforces `jti` replay protection and subject-binding, and fails closed on
+  `cnf` tokens pending sender-proof validation. Supports Assisted Access proving a
+  user-authorized claim without exposing raw eSignet tokens.
 
 ### Changed
 
 - **Relationships scoped by purpose** (#92, PR #214): relationship resolution now
   honors the declared purpose.
+
+### Fixed
+
+- Compare release tags against the protected `main` SHA before publishing
+  (PRs #234, #235, #238).
+- Align `doctor` deployment gates with runtime behavior and make readiness gates
+  non-waivable (PRs #234, #235, #238).
+- Carry source runtime provenance through derived claims; honor OpenFn native
+  workflow batches; apply published config with antirollback accept; resolve
+  bundled approval integration (PRs #234, #235, #238).
+
+### Security
+
+- Bind SD-JWT holder proofs to the verifier key-binding challenge (PRs #234, #235,
+  #238).
+- Isolate container OIDC from pull-request workflows, enforce workflow security
+  hardening, drop persisted credentials in the fuzz workflow, and modernize
+  gitleaks allowlists (PRs #234, #235, #238).
 
 ## [0.3.0] - 2026-06-12
 
