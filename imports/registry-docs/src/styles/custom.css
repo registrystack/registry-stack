@@ -6,16 +6,21 @@
 :root,
 :root[data-theme='light'],
 :root[data-theme='dark'] {
-  --registry-blue: #000091;
-  --registry-teal: #0f766e;
-  --registry-amber: #855b00;
+  /* Shared identity with registrystack.org: civic blue, ink, and the
+     civic-print palette (ledger paper, stamp red, brass). Keep these in sync
+     with the marketing site's global.css. */
+  --registry-blue: #173b7a;
+  --registry-blue-dark: #102a56;
   --registry-ink: #161616;
   --registry-body: #3a3a3a;
   --registry-muted: #6a6a6a;
   --registry-rule: #e5e5e5;
   --registry-sidebar: #fafafa;
-  --registry-active: #eeeefd;
+  --registry-active: #eef3ff;
   --registry-code-bg: #f3f4f6;
+  --registry-paper: #eef2ec;
+  --registry-stamp: #9d2c1d;
+  --registry-brass: #d4af4e;
   --__sl-font: 'Public Sans', system-ui, sans-serif;
   --__sl-font-mono: 'IBM Plex Mono', ui-monospace, monospace;
   --sl-font: var(--__sl-font);
@@ -50,13 +55,13 @@
   --sl-content-width: 720px;
   --sl-content-pad-x: 56px;
   --registry-content-max: 832px;
-  --sl-text-base: 15px;
-  --sl-text-sm: 13.5px;
-  --sl-text-xs: 12.5px;
-  --sl-text-h1: 36px;
-  --sl-text-h2: 18px;
-  --sl-text-h3: 16px;
-  --sl-line-height: 1.55;
+  --sl-text-base: 16px;
+  --sl-text-sm: 14px;
+  --sl-text-xs: 13px;
+  --sl-text-h1: 38px;
+  --sl-text-h2: 22px;
+  --sl-text-h3: 17px;
+  --sl-line-height: 1.6;
   --sl-line-height-headings: 1.15;
 }
 
@@ -68,8 +73,8 @@ body {
 body {
   color: var(--registry-body);
   font-family: var(--__sl-font);
-  font-size: 15px;
-  line-height: 1.55;
+  font-size: 16px;
+  line-height: 1.6;
 }
 
 * {
@@ -83,9 +88,11 @@ body {
   outline-offset: 2px;
 }
 
+/* Masthead rule: a strong ink line under the site name, in the manner of a
+   broadsheet nameplate (same device as the marketing site's header). */
 .page > .header {
   align-items: stretch;
-  border-bottom: 1px solid var(--registry-rule);
+  border-bottom: 2px solid var(--registry-ink);
   padding: 0 40px;
 }
 
@@ -126,24 +133,50 @@ body {
 
 .registry-wordmark {
   display: inline-flex;
-  align-items: baseline;
-  gap: 16px;
+  align-items: center;
+  gap: 12px;
   color: var(--registry-ink);
-  font-size: 24px;
+  font-size: 17px;
   font-weight: 700;
   line-height: 1;
   text-decoration: none;
   white-space: nowrap;
 }
 
+/* The same RS block the marketing site's brand carries, so both sites read
+   as one identity. */
+.registry-brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  background: var(--registry-blue);
+  color: #ffffff;
+  font-family: var(--__sl-font-mono);
+  font-size: 13px;
+  font-weight: 400;
+}
+
 .registry-wordmark:hover {
   color: var(--registry-ink);
+}
+
+/* The role tag next to the nameplate, set like the marketing site's
+   nav-entry roles: small blue mono capitals. */
+.registry-docs-tag {
+  color: var(--registry-blue);
+  font-family: var(--__sl-font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .registry-version {
   color: var(--registry-muted);
   font-family: var(--__sl-font-mono);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 400;
 }
 
@@ -165,7 +198,7 @@ body {
   align-items: center;
   justify-content: flex-end;
   gap: 22px;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
 }
 
@@ -174,12 +207,16 @@ body {
   text-decoration: none;
 }
 
+.registry-utility a:hover {
+  color: var(--registry-ink);
+}
+
 button[data-open-modal] {
   border: 1px solid var(--registry-rule) !important;
   background: #ffffff !important;
   color: var(--registry-muted) !important;
-  font-size: 15px !important;
-  min-height: 42px;
+  font-size: 14px !important;
+  min-height: 38px;
 }
 
 button[data-open-modal] kbd {
@@ -198,9 +235,15 @@ dialog::backdrop {
   backdrop-filter: none !important;
 }
 
+/* The breadcrumb is set as a register kicker: small mono capitals above the
+   page title, the same eyebrow device the marketing site sets over its
+   headings. */
 .registry-breadcrumb {
   color: var(--registry-muted);
-  font-size: 12.5px;
+  font-family: var(--__sl-font-mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .registry-breadcrumb a {
@@ -209,278 +252,49 @@ dialog::backdrop {
   text-decoration: none;
 }
 
+.registry-breadcrumb a:hover {
+  color: var(--registry-blue);
+}
+
 .registry-breadcrumb span[aria-current='page'] {
   color: var(--registry-ink);
 }
 
 h1,
 .sl-markdown-content h1 {
-  margin: 24px 0 0;
+  margin: 16px 0 0;
   color: var(--registry-ink) !important;
-  font-size: 36px;
+  font-size: 38px;
   font-weight: 700;
-  line-height: 1.15;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
 }
 
 .sl-markdown-content > p:first-child {
-  max-width: 600px;
+  max-width: 640px;
   color: var(--registry-body);
-  font-size: 17px;
+  font-size: 18px;
   line-height: 1.55;
 }
 
 .sl-markdown-content h2 {
   color: var(--registry-ink) !important;
-  font-size: 18px;
+  font-size: 22px;
   font-weight: 700;
   line-height: 1.2;
 }
 
+/* Oxford rule: the short double rule (thick over thin) under section
+   headings, the classic print divider the marketing site uses under its
+   centered headings. */
 .sl-markdown-content h2::after {
   content: '';
   display: block;
-  inline-size: 32px;
-  block-size: 2px;
-  margin-block-start: 12px;
-  background: var(--registry-blue);
-}
-
-.home-hero,
-.home-band {
-  max-inline-size: 1180px;
-}
-
-.home-hero {
-  display: block;
-  margin-block-start: 0;
-  border-block: 1px solid var(--registry-rule);
-  padding-block: 32px;
-}
-
-.home-hero-copy {
-  max-inline-size: 760px;
-  margin-inline: auto;
-}
-
-.home-kicker,
-.home-section-label {
-  margin: 0 0 12px;
-  color: var(--registry-blue);
-  font-family: var(--__sl-font-mono);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.35;
-  text-transform: uppercase;
-}
-
-.home-lede {
-  max-inline-size: 760px !important;
-  margin: 0;
-  color: var(--registry-ink);
-  font-size: 44px;
-  font-weight: 700;
-  line-height: 1.05;
-}
-
-.home-summary {
-  max-inline-size: 680px !important;
-  margin-block: 24px 0;
-  color: var(--registry-body);
-  font-size: 18px;
-  line-height: 1.55;
-}
-
-.home-fit-line {
-  max-inline-size: 660px !important;
-  margin-block: 16px 0;
-  border-inline-start: 3px solid var(--registry-teal);
-  padding-inline-start: 14px;
-  color: var(--registry-muted);
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.home-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-block-start: 28px;
-}
-
-.home-action {
-  display: inline-flex;
-  align-items: center;
-  min-block-size: 42px;
-  border: 1px solid var(--registry-rule);
-  padding: 8px 14px;
-  color: var(--registry-ink) !important;
-  font-size: 14px;
-  font-weight: 600;
-  text-decoration: none !important;
-}
-
-.home-action:hover {
-  border-color: var(--registry-blue);
-  color: var(--registry-blue) !important;
-}
-
-.home-action-primary {
-  border-color: var(--registry-blue);
-  background: var(--registry-blue);
-  color: #ffffff !important;
-}
-
-.home-action-primary:hover {
-  background: #ffffff;
-}
-
-.home-band {
-  display: grid;
-  grid-template-columns: minmax(220px, 0.38fr) minmax(0, 1fr);
-  gap: 36px;
-  margin-block-start: 44px;
-  border-top: 1px solid var(--registry-rule);
-  padding-block-start: 30px;
-}
-
-.home-band h2 {
-  margin-block-start: 0;
-  max-inline-size: 390px;
-  font-size: 24px;
-}
-
-.home-band h2::after {
   inline-size: 44px;
-}
-
-.home-problem-grid,
-.home-route-grid,
-.home-boundary-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.home-problem-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.home-problem-grid a,
-.home-route-grid a {
-  display: grid;
-  gap: 10px;
-  min-block-size: 150px;
-  border: 1px solid var(--registry-rule);
-  padding: 18px;
-  color: var(--registry-body) !important;
-  text-decoration: none !important;
-}
-
-.home-problem-grid a:hover,
-.home-route-grid a:hover {
-  border-color: var(--registry-blue);
-}
-
-.home-problem-grid span,
-.home-route-grid strong {
-  color: var(--registry-ink);
-  font-size: 16px;
-  font-weight: 700;
-  line-height: 1.25;
-}
-
-.home-problem-grid a:nth-child(2) span,
-.home-route-grid a:nth-child(2) strong {
-  color: var(--registry-teal);
-}
-
-.home-problem-grid a:nth-child(3) span,
-.home-route-grid a:nth-child(3) strong {
-  color: var(--registry-amber);
-}
-
-.home-sequence {
-  display: grid;
-  gap: 0;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  counter-reset: home-sequence;
-  border-block: 1px solid var(--registry-rule);
-}
-
-.home-sequence li {
-  display: grid;
-  grid-template-columns: 48px minmax(180px, 0.62fr) minmax(260px, 1fr);
-  column-gap: 28px;
-  row-gap: 8px;
-  align-items: start;
-  margin: 0;
-  padding: 22px 0;
-  counter-increment: home-sequence;
-}
-
-.home-sequence li + li {
-  border-top: 1px solid var(--registry-rule);
-}
-
-.home-sequence li::before {
-  content: counter(home-sequence, decimal-leading-zero);
-  grid-column: 1;
-  grid-row: 1 / span 2;
-  color: var(--registry-blue);
-  font-family: var(--__sl-font-mono);
-  font-size: 12px;
-}
-
-.home-sequence span {
-  grid-column: 2;
-  grid-row: 1;
-  color: var(--registry-ink);
-  font-weight: 700;
-  line-height: 1.35;
-}
-
-.home-sequence p {
-  grid-column: 3;
-  grid-row: 1 / span 2;
-  margin: 0;
-  max-inline-size: none !important;
-  font-size: 14px;
-  line-height: 1.55;
-}
-
-.home-sequence a {
-  grid-column: 2;
-  grid-row: 2;
-  align-self: end;
-  color: var(--registry-blue) !important;
-  font-size: 13px;
-  text-decoration: underline !important;
-  text-underline-offset: 3px;
-}
-
-.home-boundary-grid {
-  gap: 0;
-  border: 1px solid var(--registry-rule);
-}
-
-.home-boundary-grid > div {
-  padding: 20px;
-}
-
-.home-boundary-grid > div + div {
-  border-inline-start: 1px solid var(--registry-rule);
-}
-
-.home-boundary-grid h3 {
-  margin: 0 0 12px;
-  color: var(--registry-ink);
-  font-size: 16px;
-}
-
-.home-boundary-grid ul {
-  margin: 0;
+  block-size: 3px;
+  margin-block-start: 10px;
+  border-top: 3px solid var(--registry-ink);
+  border-bottom: 1px solid var(--registry-ink);
 }
 
 .sl-markdown-content :where(a) {
@@ -526,12 +340,18 @@ pre {
 .sl-markdown-content code:not(:where(.not-content *)),
 kbd {
   border: 0;
-  background: transparent !important;
-  color: var(--registry-muted);
+  background: var(--registry-code-bg) !important;
+  color: var(--registry-ink);
+  font-size: 0.85em;
+  padding: 0.15em 0.4em;
 }
 
 pre,
-.expressive-code .frame,
+.expressive-code .frame {
+  border: 1px solid var(--registry-rule) !important;
+  background: var(--registry-code-bg) !important;
+}
+
 .expressive-code pre {
   border: 0 !important;
   background: var(--registry-code-bg) !important;
@@ -553,14 +373,22 @@ pre,
   padding: 0;
 }
 
+/* Top-level groups read as ledger column headings: a strong ink rule above
+   each label (the marketing site tops its proof columns the same way). */
+.sidebar-content .top-level > li > details > summary {
+  border-top: 2px solid var(--registry-ink);
+  padding: 10px 0 0;
+}
+
 .sidebar-content details > summary .caret {
   display: none;
 }
 
 .sidebar-content .large {
   color: var(--registry-muted);
+  font-family: var(--__sl-font-mono);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 400;
   letter-spacing: 0.08em;
   line-height: 1.2;
   text-transform: uppercase;
@@ -572,7 +400,7 @@ pre,
   padding: 6px 40px;
   border-inline-start: 2px solid transparent;
   color: var(--registry-ink);
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 400;
   line-height: 1.35;
   text-decoration: none;
@@ -582,13 +410,15 @@ pre,
   color: var(--registry-blue);
 }
 
+/* The open page is ticked in the register: ink text, stamp-red mark (the
+   marketing site uses the same device for its current nav entry). */
 .sidebar-content [aria-current='page'],
 .sidebar-content [aria-current='page']:hover,
 .sidebar-content [aria-current='page']:focus {
   background: var(--registry-active) !important;
-  color: var(--registry-blue) !important;
+  color: var(--registry-ink) !important;
   font-weight: 600;
-  border-inline-start-color: var(--registry-blue);
+  border-inline-start-color: var(--registry-stamp);
 }
 
 .right-sidebar-container .right-sidebar {
@@ -616,8 +446,9 @@ pre,
 .registry-page-sidebar h2 {
   margin: 0 0 12px;
   color: var(--registry-muted);
+  font-family: var(--__sl-font-mono);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 400;
   letter-spacing: 0.08em;
   line-height: 1.2;
   text-transform: uppercase;
@@ -637,10 +468,12 @@ pre,
   color: var(--registry-blue);
 }
 
+/* Same ticked-in-the-register device as the left sidebar: the section being
+   read carries the stamp-red mark. */
 .registry-page-sidebar a[aria-current='true'],
 .registry-page-sidebar a[aria-current='location'] {
-  border-inline-start-color: var(--registry-blue);
-  color: var(--registry-blue);
+  border-inline-start-color: var(--registry-stamp);
+  color: var(--registry-ink);
   font-weight: 600;
 }
 
@@ -673,19 +506,25 @@ pre,
   font-size: 12.5px;
 }
 
+/* The footer rule bookends the masthead: the page opens and closes on the
+   same strong ink line. */
 .registry-footer {
   display: flex;
   justify-content: space-between;
   gap: 24px;
-  margin-top: 40px;
-  border-top: 1px solid var(--registry-rule);
+  margin-top: 48px;
+  border-top: 2px solid var(--registry-ink);
   padding: 16px 0 0;
   color: var(--registry-muted);
-  font-size: 12.5px;
+  font-size: 13px;
 }
 
 .registry-footer p {
   margin: 0;
+  font-family: var(--__sl-font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .registry-footer nav {
@@ -797,10 +636,11 @@ pre,
   font-size: 0.85rem;
 }
 
+/* Asides sit on quiet ledger paper, like the marketing site's record slips. */
 .starlight-aside {
   border: 1px solid var(--registry-rule) !important;
   border-inline-start: 4px solid var(--registry-blue) !important;
-  background: var(--registry-code-bg) !important;
+  background: var(--registry-paper) !important;
   color: var(--registry-body) !important;
 }
 
@@ -923,57 +763,21 @@ mobile-starlight-toc summary {
     grid-column: 2;
   }
 
-  .home-hero,
-  .home-band,
-  .home-problem-grid,
-  .home-route-grid,
-  .home-boundary-grid,
-  .home-sequence li {
-    grid-template-columns: 1fr;
-  }
-
-  .home-sequence li::before,
-  .home-sequence span,
-  .home-sequence p,
-  .home-sequence a {
-    grid-column: 1;
-    grid-row: auto;
-  }
-
-  .home-hero {
-    gap: 24px;
-    padding-block: 24px;
-  }
-
-  .home-band {
-    gap: 18px;
-    margin-block-start: 32px;
-  }
-
-  .home-lede {
-    font-size: 30px;
-  }
-
-  .home-summary {
-    font-size: 16px;
-  }
-
-  .home-boundary-grid > div + div {
-    border-block-start: 1px solid var(--registry-rule);
-    border-inline-start: 0;
-  }
-
   .registry-footer {
     display: grid;
   }
 }
 
+/* The preview notice reads as a record slip pinned above the page: ledger
+   paper with a perforated edge, the same artifact device the marketing site
+   uses for its product cards. */
 .registry-preview-banner {
-  border-bottom: 1px solid #d9b300;
-  background: #fff8d6;
-  color: var(--registry-ink);
-  padding: 12px 40px;
-  font-size: 14px;
+  margin: 24px var(--sl-content-pad-x) 0;
+  border: 1px dashed #c2cce0;
+  background: var(--registry-paper);
+  color: var(--registry-body);
+  padding: 10px 14px;
+  font-size: 13.5px;
   line-height: 1.5;
 }
 
@@ -983,10 +787,11 @@ mobile-starlight-toc summary {
 }
 
 .registry-preview-banner strong {
+  color: var(--registry-stamp);
   font-weight: 700;
   font-family: var(--__sl-font-mono);
-  font-size: 12.5px;
-  letter-spacing: 0.04em;
+  font-size: 12px;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   margin-inline-end: 6px;
 }
@@ -994,12 +799,6 @@ mobile-starlight-toc summary {
 .registry-preview-banner a {
   color: var(--registry-blue);
   text-decoration: underline;
-}
-
-@media (max-width: 720px) {
-  .registry-preview-banner {
-    padding: 12px 20px;
-  }
 }
 
 /* Figures with SVG diagrams are authored at a 720px viewBox; cap them so the
