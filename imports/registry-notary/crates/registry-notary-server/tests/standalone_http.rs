@@ -594,6 +594,7 @@ fn local_operator_approval_for_change_class(
             max_accepted: 1,
             window_seconds: 3600,
         },
+        approvers: Vec::new(),
     }
 }
 
@@ -605,6 +606,10 @@ fn durable_break_glass_approval(
 ) -> LocalOperatorApproval {
     LocalOperatorApproval {
         approved_by: "ops-primary@example.test".to_string(),
+        approvers: _approvers
+            .iter()
+            .map(|approver| (*approver).to_string())
+            .collect(),
         reason: "stored emergency approval reason".to_string(),
         approval_reference: approval_reference.to_string(),
         change_class: EMERGENCY_CHANGE_CLASS.to_string(),

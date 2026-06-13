@@ -8689,6 +8689,7 @@ mod tests {
                         max_accepted: 1,
                         window_seconds: 60,
                     },
+                    approvers: Vec::new(),
                 },
             },
             ConfigSource::SignedBundleFile,
