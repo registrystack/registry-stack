@@ -19,6 +19,9 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use ed25519_dalek::SigningKey;
+use registry_notary_core::deployment::{
+    evaluate_gates, DeploymentFindingStatus, DeploymentProfile, EvaluatedFinding,
+};
 use registry_notary_core::{
     deprecated_config_fields, Oauth2ClientCredentialsSourceAuthConfig,
     RegistryNotaryAdminListenerMode, SigningKeyProviderConfig, SourceAuthConfig,
@@ -325,7 +328,7 @@ struct Diagnostic {
     warning: bool,
     label: String,
     action: Option<String>,
-    report_code: Option<&'static str>,
+    report_code: Option<String>,
     report_severity: Option<&'static str>,
     report_status: Option<&'static str>,
 }
@@ -367,20 +370,21 @@ impl Diagnostic {
         }
     }
 
-    fn finding(
-        code: &'static str,
-        severity: &'static str,
-        label: impl Into<String>,
-        action: impl Into<String>,
-    ) -> Self {
+    fn deployment_finding(finding: &EvaluatedFinding, profile: Option<DeploymentProfile>) -> Self {
+        let severity = finding.severity.as_str();
+        let status = finding.status.as_str();
+        let label = deployment_finding_label(finding, profile);
+        let action = deployment_finding_action(finding);
         Self {
-            ok: severity != "startup_fail",
-            warning: severity != "startup_fail",
-            label: label.into(),
-            action: Some(action.into()),
-            report_code: Some(code),
+            ok: !matches!(severity, "startup_fail" | "readiness_fail")
+                || finding.status == DeploymentFindingStatus::Waived,
+            warning: !matches!(severity, "startup_fail" | "readiness_fail")
+                || finding.status == DeploymentFindingStatus::Waived,
+            label,
+            action: Some(action),
+            report_code: Some(finding.id.clone()),
             report_severity: Some(severity),
-            report_status: Some("active"),
+            report_status: Some(status),
         }
     }
 }
@@ -1268,88 +1272,88 @@ fn deployment_profile_diagnostics(
     config: &StandaloneRegistryNotaryConfig,
     profile: &DeploymentProfileReport,
 ) -> Vec<Diagnostic> {
-    let Some(value) = profile.value.as_deref() else {
-        return vec![Diagnostic::finding(
-            "deployment.profile_undeclared",
-            "finding_warn",
-            "deployment profile is undeclared",
-            "set deployment.profile or pass --profile for review-only doctor output",
-        )];
+    let profile_value = profile
+        .value
+        .as_deref()
+        .and_then(deployment_profile_from_str);
+    let input = config.gate_input();
+    let evaluation = evaluate_gates(
+        profile_value,
+        &input,
+        &config.deployment.waivers,
+        &today_utc_date(),
+    );
+    evaluation
+        .findings
+        .iter()
+        .map(|finding| Diagnostic::deployment_finding(finding, profile_value))
+        .collect()
+}
+
+fn deployment_profile_from_str(value: &str) -> Option<DeploymentProfile> {
+    match value {
+        "local" => Some(DeploymentProfile::Local),
+        "hosted_lab" => Some(DeploymentProfile::HostedLab),
+        "production" => Some(DeploymentProfile::Production),
+        "evidence_grade" => Some(DeploymentProfile::EvidenceGrade),
+        _ => None,
+    }
+}
+
+fn deployment_finding_label(
+    finding: &EvaluatedFinding,
+    profile: Option<DeploymentProfile>,
+) -> String {
+    if finding.id == "deployment.profile_undeclared" {
+        return "deployment profile is undeclared".to_string();
+    }
+    if finding.id == "deployment.waiver_expired" {
+        if let Some(waiver) = &finding.waiver {
+            return format!(
+                "deployment waiver for '{}' expired on {}",
+                waiver.finding, waiver.expires
+            );
+        }
+        return "deployment waiver expired".to_string();
+    }
+    let profile = profile
+        .map(DeploymentProfile::as_str)
+        .unwrap_or("undeclared");
+    let status = match finding.status {
+        DeploymentFindingStatus::Active => "active",
+        DeploymentFindingStatus::Waived => "waived",
     };
+    format!(
+        "{profile} deployment gate '{}' is {status} at severity {}",
+        finding.id,
+        finding.severity.as_str()
+    )
+}
 
-    let mut diagnostics = Vec::new();
-
-    if config.config_trust.is_none() {
-        match value {
-            "hosted_lab" => diagnostics.push(Diagnostic::finding(
-                "notary.config.unsigned",
-                "finding_warn",
-                "hosted_lab deployment is using unsigned local config without config_trust",
-                "keep hosted-lab config parity visible, or configure config_trust before promotion",
-            )),
-            "production" => diagnostics.push(Diagnostic::finding(
-                "notary.config.unsigned",
-                "finding_error",
-                "production deployment is using unsigned local config without config_trust",
-                "configure config_trust and signed governed configuration before production rollout",
-            )),
-            "evidence_grade" => diagnostics.push(Diagnostic::finding(
-                "notary.config.unsigned",
-                "startup_fail",
-                "evidence_grade deployment is using unsigned local config without config_trust",
-                "configure config_trust and signed governed configuration before evidence-grade startup",
-            )),
-            _ => {}
-        }
+fn deployment_finding_action(finding: &EvaluatedFinding) -> String {
+    if finding.id == "deployment.profile_undeclared" {
+        return "set deployment.profile or pass --profile for review-only doctor output"
+            .to_string();
     }
-
-    if !config.server.openapi_requires_auth {
-        match value {
-            "production" => diagnostics.push(Diagnostic::finding(
-                "notary.openapi.public",
-                "finding_error",
-                "production deployment exposes OpenAPI without authentication",
-                "set server.openapi_requires_auth to true before production rollout",
-            )),
-            "evidence_grade" => diagnostics.push(Diagnostic::finding(
-                "notary.openapi.public",
-                "startup_fail",
-                "evidence_grade deployment exposes OpenAPI without authentication",
-                "set server.openapi_requires_auth to true before evidence-grade startup",
-            )),
-            _ => {}
-        }
+    if finding.id == "deployment.waiver_expired" {
+        return "renew the waiver only after review, or remove it and fix the deployment condition"
+            .to_string();
     }
-
-    if matches!(value, "production" | "evidence_grade") {
-        let severity = if value == "evidence_grade" {
-            "startup_fail"
-        } else {
-            "finding_error"
-        };
-        let action = if value == "evidence_grade" {
-            "use https:// source base URLs before evidence-grade startup"
-        } else {
-            "use https:// source base URLs before production rollout"
-        };
-        for (connection_id, connection) in &config.evidence.source_connections {
-            let Ok(base_url) = reqwest::Url::parse(&connection.base_url) else {
-                continue;
-            };
-            if base_url.scheme() == "http" {
-                diagnostics.push(Diagnostic::finding(
-                    "notary.source.insecure_url",
-                    severity,
-                    format!(
-                        "{value} deployment source connection '{connection_id}' uses an insecure http:// base URL"
-                    ),
-                    action,
-                ));
-            }
-        }
+    if finding.status == DeploymentFindingStatus::Waived {
+        return "review the active deployment waiver and expiry".to_string();
     }
+    "update deployment config or runtime settings to clear the gate".to_string()
+}
 
-    diagnostics
+/// Today's date in UTC as a `YYYY-MM-DD` string, for waiver-expiry comparison.
+fn today_utc_date() -> String {
+    let now = OffsetDateTime::now_utc().date();
+    format!(
+        "{:04}-{:02}-{:02}",
+        now.year(),
+        u8::from(now.month()),
+        now.day()
+    )
 }
 
 fn pkcs11_preflight_diagnostic(config: &StandaloneRegistryNotaryConfig) -> Option<Diagnostic> {
@@ -1448,7 +1452,7 @@ fn doctor_json_diagnostic(diagnostic: &Diagnostic) -> Value {
     let (severity, status, code) = if let (Some(severity), Some(status), Some(code)) = (
         diagnostic.report_severity,
         diagnostic.report_status,
-        diagnostic.report_code,
+        diagnostic.report_code.as_deref(),
     ) {
         (severity, status, code)
     } else if diagnostic.warning {

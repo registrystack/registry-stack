@@ -20,6 +20,7 @@ struct TestConfigOptions<'a> {
     openapi_requires_auth: Option<bool>,
     source_base_url: Option<&'a str>,
     config_trust: bool,
+    multi_instance: bool,
 }
 
 fn write_config(tmp: &TempDir) -> PathBuf {
@@ -49,6 +50,27 @@ fn write_config_with_options(tmp: &TempDir, options: TestConfigOptions<'_>) -> P
     } else {
         String::new()
     };
+    let deployment = if options.multi_instance {
+        "deployment:\n  multi_instance: true\n"
+    } else {
+        ""
+    };
+    let audit = if options.config_trust {
+        format!(
+            r#"audit:
+  sink: file
+  path: {}
+  hash_secret_env: TEST_DOCTOR_JSON_AUDIT_SECRET
+"#,
+            tmp.path().join("audit.jsonl").display()
+        )
+    } else {
+        r#"audit:
+  sink: stdout
+  hash_secret_env: TEST_DOCTOR_JSON_AUDIT_SECRET
+"#
+        .to_string()
+    };
     let source_connections = options
         .source_base_url
         .map(|base_url| {
@@ -76,10 +98,7 @@ server:
         name: TEST_DOCTOR_JSON_API_HASH
         commitment: {TEST_API_COMMITMENT}
       scopes: [registry_notary:credential_issue]
-audit:
-  sink: stdout
-  hash_secret_env: TEST_DOCTOR_JSON_AUDIT_SECRET
-evidence:
+{deployment}{audit}evidence:
   enabled: true
   service_id: doctor-json-test
   signing_keys:
@@ -326,7 +345,7 @@ fn doctor_json_production_public_openapi_reports_error_but_succeeds() {
 }
 
 #[test]
-fn doctor_json_evidence_grade_public_openapi_fails() {
+fn doctor_json_evidence_grade_public_openapi_reports_error_but_succeeds() {
     let tmp = TempDir::new().expect("tempdir");
     let config = write_config_with_options(
         &tmp,
@@ -344,23 +363,23 @@ fn doctor_json_evidence_grade_public_openapi_fails() {
         .expect("doctor runs");
 
     assert!(
-        !output.status.success(),
-        "evidence_grade public OpenAPI should fail startup\nstdout:\n{}\nstderr:\n{}",
+        output.status.success(),
+        "evidence_grade public OpenAPI should be a finding_error, not startup_fail\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
     let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
 
-    assert_eq!(report["ok"], json!(false));
-    assert_eq!(report["result"], "failed");
+    assert_eq!(report["ok"], json!(true));
+    assert_eq!(report["result"], "passed");
     assert!(
         diagnostic_with_code(&report, "notary.config.unsigned").is_none(),
         "config_trust should isolate the OpenAPI finding"
     );
     let diagnostic =
         diagnostic_with_code(&report, "notary.openapi.public").expect("OpenAPI public finding");
-    assert_eq!(diagnostic["severity"], "startup_fail");
+    assert_eq!(diagnostic["severity"], "finding_error");
     assert_eq!(diagnostic["status"], "active");
 }
 
@@ -397,7 +416,7 @@ fn doctor_json_local_public_openapi_has_no_profile_finding() {
 }
 
 #[test]
-fn doctor_json_production_insecure_source_url_reports_error_but_succeeds() {
+fn doctor_json_production_insecure_source_url_fails_readiness() {
     let tmp = TempDir::new().expect("tempdir");
     let config = write_config_with_options(
         &tmp,
@@ -415,18 +434,53 @@ fn doctor_json_production_insecure_source_url_reports_error_but_succeeds() {
         .expect("doctor runs");
 
     assert!(
-        output.status.success(),
-        "production HTTP source URL should be a finding_error, not startup_fail\nstdout:\n{}\nstderr:\n{}",
+        !output.status.success(),
+        "production HTTP source URL should fail readiness\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
     let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
 
-    assert_eq!(report["ok"], json!(true));
+    assert_eq!(report["ok"], json!(false));
     let diagnostic = diagnostic_with_code(&report, "notary.source.insecure_url")
         .expect("insecure source URL finding");
-    assert_eq!(diagnostic["severity"], "finding_error");
+    assert_eq!(diagnostic["severity"], "readiness_fail");
+    assert_eq!(diagnostic["status"], "active");
+}
+
+#[test]
+fn doctor_json_production_in_memory_replay_high_risk_fails_readiness() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_config_with_options(
+        &tmp,
+        TestConfigOptions {
+            config_trust: true,
+            multi_instance: true,
+            ..TestConfigOptions::default()
+        },
+    );
+    let env_file = write_env_file(&tmp);
+
+    let output = doctor_command(&config, Some(&env_file))
+        .args(["--profile", "production", "--format", "json"])
+        .output()
+        .expect("doctor runs");
+
+    assert!(
+        !output.status.success(),
+        "production high-risk in-memory replay should fail readiness\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
+    let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+
+    assert_eq!(report["ok"], json!(false));
+    assert_eq!(report["result"], "failed");
+    let diagnostic = diagnostic_with_code(&report, "notary.replay.in_memory_high_risk")
+        .expect("high-risk replay finding");
+    assert_eq!(diagnostic["severity"], "readiness_fail");
     assert_eq!(diagnostic["status"], "active");
 }
 
