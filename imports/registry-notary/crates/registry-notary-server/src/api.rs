@@ -870,19 +870,26 @@ async fn admin_config_apply(
         .with_break_glass_rate_limit(break_glass_rate_limit);
     let antirollback_key = antirollback_key(&config_governance, &candidate.stream_id);
     let local_approval = governed_apply.local_approval().cloned();
-    if let Err(error) = accept_antirollback_blocking(
+    let proposal = AntiRollbackProposal {
+        sequence: candidate.sequence,
+        previous_config_hash: candidate.previous_config_hash.clone(),
+        config_hash: internal_config_hash(candidate.config_yaml.as_bytes()),
+        root_version: candidate.root_version,
+        break_glass,
+        break_glass_rate_limit: None,
+        local_approval: local_approval.clone(),
+        local_approval_rate_limit: local_approval.as_ref().map(|approval| approval.rate_limit),
+    };
+    if let Err(error) = accept_antirollback_and_publish_apply_blocking(
         antirollback_store.clone(),
         antirollback_key.clone(),
-        AntiRollbackProposal {
-            sequence: candidate.sequence,
-            previous_config_hash: candidate.previous_config_hash.clone(),
-            config_hash: internal_config_hash(candidate.config_yaml.as_bytes()),
-            root_version: candidate.root_version,
-            break_glass,
-            break_glass_rate_limit: None,
-            local_approval: local_approval.clone(),
-            local_approval_rate_limit: local_approval.as_ref().map(|approval| approval.rate_limit),
-        },
+        proposal,
+        Arc::clone(&state),
+        Arc::clone(&candidate_config),
+        governed_apply,
+        candidate.source,
+        candidate.bundle_id.clone(),
+        candidate.sequence,
     )
     .await
     {
@@ -945,37 +952,6 @@ async fn admin_config_apply(
         );
     }
     consume_apply_metadata(&request);
-    state.publish_governed_apply(candidate_config.clone(), &governed_apply);
-    match governed_apply {
-        GovernedConfigApply::SigningRotation {
-            notary_auth_anchor, ..
-        } => {
-            if let (Some(auth_state), Some(anchor)) =
-                (state.auth_state.as_ref(), notary_auth_anchor)
-            {
-                auth_state.swap_notary_anchor(anchor);
-            }
-        }
-        GovernedConfigApply::RootTransition { .. } => {}
-        GovernedConfigApply::ClientAuthChange { authenticator, .. } => {
-            if let Some(auth_state) = state.auth_state.as_ref() {
-                auth_state.swap_prepared_authenticator(authenticator);
-            }
-        }
-        GovernedConfigApply::OpenApiAuthPolicyChange { .. } => {}
-    }
-    if let Some(auth_state) = state.auth_state.as_ref() {
-        auth_state.swap_openapi_requires_auth(candidate_config.server.openapi_requires_auth);
-    }
-    state.record_config_apply(ConfigApplyPosture {
-        source: candidate.source,
-        last_config_hash: Some(posture_hash(&candidate_config)),
-        last_bundle_id: Some(candidate.bundle_id.clone()),
-        last_bundle_sequence: Some(candidate.sequence),
-        last_apply_result: Some(ApplyReportResult::Applied.as_posture_result()),
-        last_apply_at: Some(format_time(OffsetDateTime::now_utc())),
-        restart_required: false,
-    });
     config_apply_report(
         candidate.bundle_id.clone(),
         candidate.sequence,
@@ -996,6 +972,77 @@ async fn admin_config_apply(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn accept_antirollback_and_publish_apply_blocking(
+    store: FileAntiRollbackStore,
+    key: AntiRollbackKey,
+    proposal: AntiRollbackProposal,
+    state: Arc<RegistryNotaryApiState>,
+    runtime_config: Arc<StandaloneRegistryNotaryConfig>,
+    apply: GovernedConfigApply,
+    source: ConfigSource,
+    bundle_id: String,
+    sequence: u64,
+) -> Result<(), AntiRollbackStoreError> {
+    // Keep durable antirollback acceptance and in-memory publication in one
+    // blocking task. If the request future is dropped after this task starts,
+    // the task still runs to completion and cannot leave antirollback ahead of
+    // the runtime config.
+    tokio::task::spawn_blocking(move || {
+        store.accept(&key, proposal)?;
+        publish_accepted_governed_apply(&state, runtime_config, apply, source, bundle_id, sequence);
+        Ok(())
+    })
+    .await
+    .unwrap_or_else(|error| {
+        Err(AntiRollbackStoreError::Io(format!(
+            "anti-rollback accept and config apply task failed: {error}"
+        )))
+    })
+}
+
+fn publish_accepted_governed_apply(
+    state: &RegistryNotaryApiState,
+    runtime_config: Arc<StandaloneRegistryNotaryConfig>,
+    apply: GovernedConfigApply,
+    source: ConfigSource,
+    bundle_id: String,
+    sequence: u64,
+) {
+    state.publish_governed_apply(Arc::clone(&runtime_config), &apply);
+    match apply {
+        GovernedConfigApply::SigningRotation {
+            notary_auth_anchor, ..
+        } => {
+            if let (Some(auth_state), Some(anchor)) =
+                (state.auth_state.as_ref(), notary_auth_anchor)
+            {
+                auth_state.swap_notary_anchor(anchor);
+            }
+        }
+        GovernedConfigApply::RootTransition { .. } => {}
+        GovernedConfigApply::ClientAuthChange { authenticator, .. } => {
+            if let Some(auth_state) = state.auth_state.as_ref() {
+                auth_state.swap_prepared_authenticator(authenticator);
+            }
+        }
+        GovernedConfigApply::OpenApiAuthPolicyChange { .. } => {}
+    }
+    if let Some(auth_state) = state.auth_state.as_ref() {
+        auth_state.swap_openapi_requires_auth(runtime_config.server.openapi_requires_auth);
+    }
+    state.record_config_apply(ConfigApplyPosture {
+        source,
+        last_config_hash: Some(posture_hash(&runtime_config)),
+        last_bundle_id: Some(bundle_id),
+        last_bundle_sequence: Some(sequence),
+        last_apply_result: Some(ApplyReportResult::Applied.as_posture_result()),
+        last_apply_at: Some(format_time(OffsetDateTime::now_utc())),
+        restart_required: false,
+    });
+}
+
+#[cfg(test)]
 async fn accept_antirollback_blocking(
     store: FileAntiRollbackStore,
     key: AntiRollbackKey,
