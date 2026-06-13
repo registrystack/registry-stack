@@ -19,7 +19,7 @@ use registry_platform_config::RegistryTrustRoot;
 use registry_platform_crypto::{KeyProviderKind, KeyReadiness};
 use registry_platform_ops::{
     filter_posture_for_tier, internal_config_hash, is_sha256_config_hash,
-    posture_safe_runtime_config_hash, AntiRollbackKey, AntiRollbackProposal,
+    posture_safe_runtime_config_hash, AntiRollbackKey, AntiRollbackProposal, AntiRollbackRecord,
     AntiRollbackStoreError, ApplyReportResult, BreakGlassApproval, BreakGlassRateLimit,
     ConfigProvenance, ConfigSource, FileAntiRollbackStore, FileLocalApprovalStore,
     LocalOperatorApproval, PostureFilterError, PostureTier,
@@ -273,6 +273,8 @@ struct ConfigApplyRequest {
     #[serde(default)]
     break_glass_approval: Option<BreakGlassApproval>,
     #[serde(default)]
+    break_glass_approval_reference: Option<String>,
+    #[serde(default)]
     break_glass_rate_limit: Option<BreakGlassRateLimit>,
     #[serde(default)]
     local_approval_reference: Option<String>,
@@ -373,6 +375,7 @@ async fn config_verify(
     }
     if request.break_glass
         || request.break_glass_approval.is_some()
+        || request.break_glass_approval_reference.is_some()
         || request.break_glass_rate_limit.is_some()
     {
         return config_apply_report(
@@ -513,6 +516,7 @@ async fn config_dry_run(
     }
     if request.break_glass
         || request.break_glass_approval.is_some()
+        || request.break_glass_approval_reference.is_some()
         || request.break_glass_rate_limit.is_some()
     {
         return config_apply_report(
@@ -657,6 +661,7 @@ async fn config_apply(
     if !is_signed_config_source(resolved.source) {
         let requested_break_glass = request.break_glass
             || request.break_glass_approval.is_some()
+            || request.break_glass_approval_reference.is_some()
             || request.break_glass_rate_limit.is_some();
         let apply_result = if requested_break_glass {
             ApplyReportResult::RejectedBreakGlass
@@ -696,29 +701,44 @@ async fn config_apply(
             ),
         );
     }
-    let break_glass = match break_glass_proposal(&request) {
-        Ok(break_glass) => break_glass,
-        Err(()) => {
-            return config_apply_report(
-                resolved.bundle_id.clone(),
-                resolved.sequence,
-                ApplyReportResult::RejectedBreakGlass,
+    let Some(config_trust) = &current.config.config_trust else {
+        return with_config_audit(
+            config_apply_unavailable("config_trust.antirollback_state_path is not configured"),
+            resolved_config_audit(
+                ConfigAdminAction::Apply,
+                &resolved,
+                "accepted",
+                ApplyReportResult::InternalError.as_str(),
                 false,
                 false,
-                StatusCode::CONFLICT,
-                resolved_config_audit(
-                    ConfigAdminAction::Apply,
-                    &resolved,
-                    "rejected",
-                    ApplyReportResult::RejectedBreakGlass.as_str(),
-                    false,
-                    false,
-                )
-                .with_break_glass_request(&request),
-            );
-        }
+            ),
+        );
     };
-    if let Err(()) = require_break_glass_emergency_change_class(&request, &resolved) {
+    let candidate_config_hash = internal_config_hash(resolved.config_yaml.as_bytes());
+    let break_glass =
+        match break_glass_proposal(&request, config_trust, &resolved, &candidate_config_hash) {
+            Ok(break_glass) => break_glass,
+            Err(()) => {
+                return config_apply_report(
+                    resolved.bundle_id.clone(),
+                    resolved.sequence,
+                    ApplyReportResult::RejectedBreakGlass,
+                    false,
+                    false,
+                    StatusCode::CONFLICT,
+                    resolved_config_audit(
+                        ConfigAdminAction::Apply,
+                        &resolved,
+                        "rejected",
+                        ApplyReportResult::RejectedBreakGlass.as_str(),
+                        false,
+                        false,
+                    )
+                    .with_break_glass_request(&request),
+                );
+            }
+        };
+    if let Err(()) = require_break_glass_emergency_change_class(break_glass.as_ref(), &resolved) {
         return config_apply_report(
             resolved.bundle_id.clone(),
             resolved.sequence,
@@ -734,8 +754,35 @@ async fn config_apply(
                 false,
                 false,
             )
-            .with_break_glass_request(&request),
+            .with_break_glass_request(&request)
+            .with_break_glass_approval(break_glass.as_ref()),
         );
+    }
+    if let Some(approval) = &break_glass {
+        if let Err(()) = ensure_break_glass_reference_not_consumed(
+            config_trust,
+            &antirollback_key(&current.config, &resolved.stream_id),
+            approval,
+        ) {
+            return config_apply_report(
+                resolved.bundle_id.clone(),
+                resolved.sequence,
+                ApplyReportResult::RejectedBreakGlass,
+                false,
+                false,
+                StatusCode::CONFLICT,
+                resolved_config_audit(
+                    ConfigAdminAction::Apply,
+                    &resolved,
+                    "rejected",
+                    ApplyReportResult::RejectedBreakGlass.as_str(),
+                    false,
+                    false,
+                )
+                .with_break_glass_request(&request)
+                .with_break_glass_approval(break_glass.as_ref()),
+            );
+        }
     }
     let parsed = match parse_resolved_config_candidate_with_provenance(&resolved) {
         Ok(parsed) => parsed,
@@ -847,19 +894,6 @@ async fn config_apply(
             ),
         );
     }
-    let Some(config_trust) = &current.config.config_trust else {
-        return with_config_audit(
-            config_apply_unavailable("config_trust.antirollback_state_path is not configured"),
-            resolved_config_audit(
-                ConfigAdminAction::Apply,
-                &resolved,
-                "accepted",
-                ApplyReportResult::InternalError.as_str(),
-                false,
-                false,
-            ),
-        );
-    };
     let local_approval = match local_approval_proposal(
         &request,
         config_trust,
@@ -885,6 +919,7 @@ async fn config_apply(
                     false,
                 )
                 .with_break_glass_request(&request)
+                .with_break_glass_approval(break_glass.as_ref())
                 .with_local_approval_request(
                     &request,
                     None,
@@ -902,7 +937,7 @@ async fn config_apply(
             previous_config_hash: resolved.previous_config_hash.clone(),
             config_hash: provenance.internal_config_hash.clone(),
             root_version: resolved.root_version,
-            break_glass,
+            break_glass: break_glass.clone(),
             break_glass_rate_limit: None,
             local_approval: local_approval.clone(),
             local_approval_rate_limit: local_approval.as_ref().map(|approval| approval.rate_limit),
@@ -931,6 +966,7 @@ async fn config_apply(
                 false,
             )
             .with_break_glass_request(&request)
+            .with_break_glass_approval(break_glass.as_ref())
             .with_local_approval_request(
                 &request,
                 local_approval.as_ref(),
@@ -969,6 +1005,7 @@ async fn config_apply(
             false,
         )
         .with_break_glass_request(&request)
+        .with_break_glass_approval(break_glass.as_ref())
         .with_local_approval_request(
             &request,
             local_approval.as_ref(),
@@ -977,9 +1014,16 @@ async fn config_apply(
     )
 }
 
-fn break_glass_proposal(request: &ConfigApplyRequest) -> Result<Option<BreakGlassApproval>, ()> {
+fn break_glass_proposal(
+    request: &ConfigApplyRequest,
+    config_trust: &crate::config::ConfigTrustConfig,
+    resolved: &ResolvedConfigCandidate,
+    config_hash: &str,
+) -> Result<Option<BreakGlassApproval>, ()> {
     if !request.break_glass {
-        return if request.break_glass_approval.is_some() || request.break_glass_rate_limit.is_some()
+        return if request.break_glass_approval.is_some()
+            || request.break_glass_approval_reference.is_some()
+            || request.break_glass_rate_limit.is_some()
         {
             Err(())
         } else {
@@ -989,9 +1033,111 @@ fn break_glass_proposal(request: &ConfigApplyRequest) -> Result<Option<BreakGlas
     if request.break_glass_rate_limit.is_some() {
         return Err(());
     }
-    match request.break_glass_approval.clone() {
-        Some(approval) => Ok(Some(approval)),
+    match (
+        request.break_glass_approval.clone(),
+        request.break_glass_approval_reference.as_deref(),
+    ) {
+        (Some(approval), None) => {
+            enforce_required_break_glass_approvers(
+                config_trust,
+                &approval.emergency_change_class,
+                1,
+            )?;
+            Ok(Some(approval))
+        }
+        (None, Some(reference)) => stored_break_glass_approval(
+            config_trust,
+            resolved,
+            reference,
+            config_hash,
+            resolved.previous_config_hash.as_deref(),
+        )
+        .map(Some),
         _ => Err(()),
+    }
+}
+
+fn stored_break_glass_approval(
+    config_trust: &crate::config::ConfigTrustConfig,
+    resolved: &ResolvedConfigCandidate,
+    reference: &str,
+    config_hash: &str,
+    previous_config_hash: Option<&str>,
+) -> Result<BreakGlassApproval, ()> {
+    if reference.trim().is_empty() {
+        return Err(());
+    }
+    let store = FileLocalApprovalStore::new(&config_trust.local_approval_state_path);
+    for change_class in &resolved.change_classes {
+        let loaded = previous_config_hash
+            .and_then(|previous| {
+                store
+                    .load_for_apply(reference, change_class, config_hash, Some(previous))
+                    .ok()
+            })
+            .or_else(|| {
+                store
+                    .load_for_apply(reference, change_class, config_hash, None)
+                    .ok()
+            });
+        let Some(approval) = loaded else {
+            continue;
+        };
+        enforce_required_break_glass_approvers(
+            config_trust,
+            &approval.change_class,
+            effective_approver_count(&approval),
+        )?;
+        return Ok(BreakGlassApproval {
+            approved_by: approval.approved_by,
+            reason: approval.reason,
+            approval_reference: approval.approval_reference,
+            emergency_change_class: approval.change_class,
+            expires_at_unix_seconds: approval.expires_at_unix_seconds,
+            rate_limit_identity: approval.rate_limit_identity,
+        });
+    }
+    Err(())
+}
+
+fn effective_approver_count(approval: &LocalOperatorApproval) -> usize {
+    1 + approval.approvers.len()
+}
+
+fn enforce_required_break_glass_approvers(
+    config_trust: &crate::config::ConfigTrustConfig,
+    emergency_change_class: &str,
+    actual_count: usize,
+) -> Result<(), ()> {
+    let required_count = config_trust
+        .required_approver_count
+        .get(emergency_change_class)
+        .copied()
+        .unwrap_or(1);
+    if actual_count < required_count {
+        Err(())
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_break_glass_reference_not_consumed(
+    config_trust: &crate::config::ConfigTrustConfig,
+    key: &AntiRollbackKey,
+    approval: &BreakGlassApproval,
+) -> Result<(), ()> {
+    let record = FileAntiRollbackStore::new(&config_trust.antirollback_state_path)
+        .load(key)
+        .map_err(|_| ())?;
+    if record
+        .break_glass
+        .accepted
+        .iter()
+        .any(|accepted| accepted.approval_reference == approval.approval_reference)
+    {
+        Err(())
+    } else {
+        Ok(())
     }
 }
 
@@ -1018,10 +1164,10 @@ fn local_approval_proposal(
 }
 
 fn require_break_glass_emergency_change_class(
-    request: &ConfigApplyRequest,
+    approval: Option<&BreakGlassApproval>,
     resolved: &ResolvedConfigCandidate,
 ) -> Result<(), ()> {
-    let Some(approval) = &request.break_glass_approval else {
+    let Some(approval) = approval else {
         return Ok(());
     };
     if resolved
@@ -1213,6 +1359,36 @@ fn build_posture(
         metadata_manifest.insert("package_digest".to_string(), json!(digest));
     }
     let deployment = deployment_summary(config, provenance.source);
+    let mut configuration = Map::new();
+    configuration.insert("source".to_string(), json!(provenance.posture_source()));
+    configuration.insert(
+        "dynamic_reload_supported".to_string(),
+        json!(provenance.dynamic_reload_supported),
+    );
+    configuration.insert(
+        "last_config_hash".to_string(),
+        json!(provenance.posture_config_hash),
+    );
+    configuration.insert(
+        "last_bundle_id".to_string(),
+        json!(provenance.last_bundle_id),
+    );
+    configuration.insert(
+        "last_bundle_sequence".to_string(),
+        json!(provenance.last_bundle_sequence),
+    );
+    configuration.insert(
+        "last_apply_result".to_string(),
+        json!(provenance.last_apply_result.map(|result| result.as_str())),
+    );
+    configuration.insert("last_apply_at".to_string(), json!(provenance.last_apply_at));
+    configuration.insert(
+        "restart_required".to_string(),
+        json!(provenance.restart_required),
+    );
+    if let Some(emergency) = emergency_posture(config, &provenance) {
+        configuration.insert("emergency".to_string(), emergency);
+    }
     let posture = json!({
         "schema": "registry.ops.posture.v1",
         "observed_at": OffsetDateTime::now_utc()
@@ -1230,16 +1406,7 @@ fn build_posture(
             "admin_enabled": config.server.admin_bind.is_some(),
             "readiness": readiness_label(readiness),
         },
-        "configuration": {
-            "source": provenance.posture_source(),
-            "dynamic_reload_supported": provenance.dynamic_reload_supported,
-            "last_config_hash": provenance.posture_config_hash,
-            "last_bundle_id": provenance.last_bundle_id,
-            "last_bundle_sequence": provenance.last_bundle_sequence,
-            "last_apply_result": provenance.last_apply_result.map(|result| result.as_str()),
-            "last_apply_at": provenance.last_apply_at,
-            "restart_required": provenance.restart_required,
-        },
+        "configuration": configuration,
         "deployment": deployment,
         "audit": audit_assurance(config),
         "standards_artifacts": standards_artifacts(config),
@@ -1605,6 +1772,7 @@ fn is_root_transition_config_change(current: &Config, candidate: &Config) -> boo
     current_trust.antirollback_state_path == candidate_trust.antirollback_state_path
         && current_trust.local_approval_state_path == candidate_trust.local_approval_state_path
         && current_trust.break_glass_rate_limit == candidate_trust.break_glass_rate_limit
+        && current_trust.required_approver_count == candidate_trust.required_approver_count
         && !candidate_trust.accepted_roots.is_empty()
         && current_trust.accepted_roots != candidate_trust.accepted_roots
         && retained_accepted_roots_unchanged(
@@ -1646,6 +1814,7 @@ fn equivalent_except_config_trust_accepted_roots(current: &Config, candidate: &C
         && current_trust.antirollback_state_path == candidate_trust.antirollback_state_path
         && current_trust.local_approval_state_path == candidate_trust.local_approval_state_path
         && current_trust.break_glass_rate_limit == candidate_trust.break_glass_rate_limit
+        && current_trust.required_approver_count == candidate_trust.required_approver_count
         && current.metadata == candidate.metadata
         && current.catalog == candidate.catalog
         && current.vocabularies == candidate.vocabularies
@@ -1939,14 +2108,27 @@ fn resolved_config_audit(
 
 trait ConfigAuditBreakGlassExt {
     fn with_break_glass_request(self, request: &ConfigApplyRequest) -> Self;
+    fn with_break_glass_approval(self, approval: Option<&BreakGlassApproval>) -> Self;
 }
 
 impl ConfigAuditBreakGlassExt for ConfigAuditExt {
     fn with_break_glass_request(mut self, request: &ConfigApplyRequest) -> Self {
         self.break_glass = request.break_glass;
+        if self.break_glass_approval_reference.is_none() {
+            self.break_glass_approval_reference = request.break_glass_approval_reference.clone();
+        }
         if let Some(approval) = &request.break_glass_approval {
+            self = self.with_break_glass_approval(Some(approval));
+        }
+        self
+    }
+
+    fn with_break_glass_approval(mut self, approval: Option<&BreakGlassApproval>) -> Self {
+        if let Some(approval) = approval {
+            self.break_glass = true;
             self.break_glass_approval_reference = Some(approval.approval_reference.clone());
-            self.break_glass_approved_by = Some(approval.approved_by.clone());
+            self.break_glass_approved_by =
+                Some(internal_config_hash(approval.approved_by.as_bytes()));
             self.break_glass_reason_hash = Some(internal_config_hash(approval.reason.as_bytes()));
             self.break_glass_emergency_change_class = Some(approval.emergency_change_class.clone());
             self.break_glass_expires_at_unix_seconds = Some(approval.expires_at_unix_seconds);
@@ -2123,6 +2305,53 @@ fn now_rfc3339() -> String {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .expect("current UTC timestamp formats as RFC3339")
+}
+
+fn emergency_posture(config: &Config, provenance: &ConfigProvenance) -> Option<Value> {
+    let record = load_antirollback_record(config)?;
+    let accepted = &record.break_glass.accepted;
+    let last = accepted
+        .iter()
+        .max_by_key(|acceptance| acceptance.sequence)?;
+    let emergency_change_class = last.emergency_change_class.as_ref()?;
+    let now = OffsetDateTime::now_utc().unix_timestamp().max(0) as u64;
+    let open_exception_count = accepted
+        .iter()
+        .filter(|acceptance| acceptance.expires_at_unix_seconds > now)
+        .count();
+    let exception_window_expires_at = accepted
+        .iter()
+        .filter(|acceptance| acceptance.expires_at_unix_seconds > now)
+        .map(|acceptance| acceptance.expires_at_unix_seconds)
+        .max()
+        .and_then(unix_seconds_rfc3339);
+    let last_apply_emergency = provenance.last_bundle_sequence.is_some_and(|sequence| {
+        accepted
+            .iter()
+            .any(|acceptance| acceptance.sequence == sequence)
+    });
+
+    Some(json!({
+        "last_apply_emergency": last_apply_emergency,
+        "last_emergency_change_class": emergency_change_class,
+        "last_emergency_at": unix_seconds_rfc3339(last.accepted_at_unix_seconds),
+        "exception_window_open": open_exception_count > 0,
+        "exception_window_expires_at": exception_window_expires_at,
+        "open_exception_count": open_exception_count,
+    }))
+}
+
+fn load_antirollback_record(config: &Config) -> Option<AntiRollbackRecord> {
+    let path = &config.config_trust.as_ref()?.antirollback_state_path;
+    let bytes = std::fs::read(path).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn unix_seconds_rfc3339(seconds: u64) -> Option<String> {
+    OffsetDateTime::from_unix_timestamp(seconds.try_into().ok()?)
+        .ok()?
+        .format(&Rfc3339)
+        .ok()
 }
 
 fn posture_warnings(config: &Config, readiness: Option<&ReadinessSnapshot>) -> Vec<String> {

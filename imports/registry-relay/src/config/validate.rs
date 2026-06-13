@@ -197,6 +197,17 @@ fn validate_config_trust(config: &Config) -> Result<(), ConfigError> {
         );
         return Err(ConfigError::ValidationError);
     }
+    if config_trust
+        .required_approver_count
+        .values()
+        .any(|count| *count == 0)
+    {
+        tracing::error!(
+            code = "config.validation_error",
+            "config_trust.required_approver_count values must be greater than zero"
+        );
+        return Err(ConfigError::ValidationError);
+    }
     for root in &config_trust.accepted_roots {
         if let Err(error) = root.validate() {
             tracing::error!(
