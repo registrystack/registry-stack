@@ -510,7 +510,8 @@ fn http_json_manifest_with_cache(allowlist_url: &str) -> String {
         r#"    allow_insecure_localhost: true
     cache:
       exact_match_ttl_ms: 60000
-      not_found_ttl_ms: 60000"#,
+      not_found_ttl_ms: 60000
+      max_entries: 1"#,
     )
 }
 
@@ -834,6 +835,16 @@ async fn http_json_source_rate_limit_blocks_before_upstream_dispatch() {
 
     limited.assert_status(StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(limited.json::<Value>()["code"], "source.target_rate_limit");
+    let metrics = sidecar.get("/metrics").await;
+    metrics.assert_status_ok();
+    let metrics = metrics.text();
+    assert!(metrics.contains(
+        "registry_notary_openfn_sidecar_lookup_total{source_id=\"http_people\",outcome=\"source_rate_limited\"} 1"
+    ));
+    assert!(
+        !metrics.contains("outcome=\"source_backoff\""),
+        "local token-bucket rejections must not arm source backoff"
+    );
     let seen = upstream_state.seen.lock().await;
     assert_eq!(
         seen.iter()
@@ -1710,6 +1721,7 @@ async fn http_json_cache_is_explicit_and_scoped_to_lookup_shape() {
         "person-123",
         "missing-person",
         "missing-person",
+        "person-123",
     ] {
         sidecar
             .get(&format!("/v1/datasets/{DATASET}/entities/{ENTITY}/records"))
@@ -1726,7 +1738,7 @@ async fn http_json_cache_is_explicit_and_scoped_to_lookup_shape() {
         seen.iter()
             .filter(|request| request["id"] == json!("person-123"))
             .count(),
-        1
+        2
     );
     assert_eq!(
         seen.iter()
@@ -1741,6 +1753,9 @@ async fn http_json_cache_is_explicit_and_scoped_to_lookup_shape() {
     let metrics = metrics.text();
     assert!(metrics.contains(
         "registry_notary_openfn_sidecar_lookup_total{source_id=\"http_people\",outcome=\"source_cache_hit\"} 2"
+    ));
+    assert!(metrics.contains(
+        "registry_notary_openfn_sidecar_lookup_total{source_id=\"http_people\",outcome=\"source_cache_miss\"} 4"
     ));
     assert!(!metrics.contains("person-123"));
     assert!(!metrics.contains("target-secret"));

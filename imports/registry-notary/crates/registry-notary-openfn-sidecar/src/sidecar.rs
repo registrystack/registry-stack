@@ -296,6 +296,8 @@ pub struct SourceCacheConfig {
     pub exact_match_ttl_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_found_ttl_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_entries: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -557,7 +559,7 @@ pub enum SidecarError {
 
 #[derive(Clone)]
 struct AppState {
-    config: SidecarConfig,
+    config: Arc<SidecarConfig>,
     auth_tokens: Arc<Vec<ResolvedBearerToken>>,
     pool: Option<Arc<WorkerPool>>,
     credentials: Arc<BTreeMap<String, Value>>,
@@ -568,6 +570,7 @@ struct AppState {
 }
 
 struct SourceRuntimeState {
+    source_config_hash: String,
     rate_limiter: Option<Mutex<TokenBucket>>,
     backoff_until: Mutex<Option<Instant>>,
     cache: Mutex<BTreeMap<String, CacheEntry>>,
@@ -582,11 +585,17 @@ struct TokenBucket {
 
 struct CacheEntry {
     expires_at: Instant,
+    last_accessed: Instant,
     value: Value,
 }
 
 impl SourceRuntimeState {
-    fn new(limits: &SourceRuntimeLimitConfig) -> Self {
+    fn new(source: &SourceConfig) -> Result<Self, SidecarError> {
+        let source_config_hash =
+            registry_platform_config::sha256_uri(&serde_json::to_vec(source).map_err(|error| {
+                SidecarError::Config(format!("source config hash failed: {error}"))
+            })?);
+        let limits = &source.limits;
         let rate_limiter = limits.requests_per_second.map(|requests_per_second| {
             let capacity = limits.burst.unwrap_or(requests_per_second).max(1) as f64;
             Mutex::new(TokenBucket {
@@ -596,11 +605,12 @@ impl SourceRuntimeState {
                 last_refill: Instant::now(),
             })
         });
-        Self {
+        Ok(Self {
+            source_config_hash,
             rate_limiter,
             backoff_until: Mutex::new(None),
             cache: Mutex::new(BTreeMap::new()),
-        }
+        })
     }
 }
 
@@ -1392,14 +1402,11 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
         .sources
         .iter()
         .map(|(source_id, source)| {
-            (
-                source_id.clone(),
-                Arc::new(SourceRuntimeState::new(&source.limits)),
-            )
+            SourceRuntimeState::new(source).map(|runtime| (source_id.clone(), Arc::new(runtime)))
         })
-        .collect();
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
     let state = Arc::new(AppState {
-        config,
+        config: Arc::new(config),
         auth_tokens: Arc::new(auth_tokens),
         pool,
         credentials: Arc::new(credentials),
@@ -1738,6 +1745,11 @@ fn validate_config(config: &SidecarConfig) -> Result<(), SidecarError> {
                     "source {source_id} cache TTLs must be greater than zero"
                 )));
             }
+            if cache.max_entries == Some(0) {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} cache.max_entries must be greater than zero"
+                )));
+            }
             if cache.exact_match_ttl_ms.is_none() && cache.not_found_ttl_ms.is_none() {
                 return Err(SidecarError::Config(format!(
                     "source {source_id} cache must configure at least one TTL"
@@ -1782,6 +1794,21 @@ fn validate_source_execution(
             ) {
                 return Err(SidecarError::Config(format!(
                     "source {source_id} batch.mode is only supported for http_json or http_flow sources"
+                )));
+            }
+            if source.batch.max_parallel.is_some() {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} batch.max_parallel is only supported for http_json parallel_lookup sources"
+                )));
+            }
+            if source.http_json.is_some() {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} http_json config is only valid for http_json sources"
+                )));
+            }
+            if source.cache.is_some() {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} cache is only supported for http_json sources"
                 )));
             }
             let workflow = source.workflow.as_ref().ok_or_else(|| {
@@ -2950,7 +2977,7 @@ async fn execute_http_json_parallel_batch(
         .min(items.len().max(1));
     let semaphore = Arc::new(Semaphore::new(max_parallel));
     let state = Arc::new(state.clone());
-    let source = source.clone();
+    let source = Arc::new(source.clone());
     let source_id = source_id.to_string();
     let mut tasks = JoinSet::new();
     let mut requested_ids = Vec::with_capacity(items.len());
@@ -2965,7 +2992,7 @@ async fn execute_http_json_parallel_batch(
             http_json_item_lookup_request(&source_id, request, lookup_field, item)?;
         let permit = semaphore.clone();
         let task_state = Arc::clone(&state);
-        let task_source = source.clone();
+        let task_source = Arc::clone(&source);
         let task_source_id = source_id.clone();
         tasks.spawn(async move {
             let _permit = permit
@@ -2975,7 +3002,7 @@ async fn execute_http_json_parallel_batch(
             let data = execute_http_json_lookup(
                 &task_state,
                 &task_source_id,
-                &task_source,
+                task_source.as_ref(),
                 &lookup_request,
             )
             .await?;
@@ -3097,6 +3124,7 @@ async fn execute_http_json_native_batch(
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(state.config.limits.retry_after_seconds);
+        remember_source_backoff_seconds(state, source_id, retry_after_seconds).await;
         return Ok(json!({
             "error": {
                 "code": "source.target_rate_limit",
@@ -3239,7 +3267,7 @@ async fn execute_http_flow_lookup(
         .cloned()
         .unwrap_or(Value::Null);
     let public_credential = public_credential(source, &credential);
-    let cache_key = http_json_cache_key(source_id, source, request)?;
+    let cache_key = http_json_cache_key(state, source_id, request)?;
     if let Some(cache_key) = cache_key.as_deref() {
         if let Some(value) = http_json_cache_get(state, source_id, cache_key).await {
             return Ok(value);
@@ -3335,6 +3363,7 @@ async fn execute_http_flow_lookup(
                     1,
                 )
                 .await;
+                remember_source_backoff(state, source_id, &error).await;
                 return Ok(error);
             }
         }
@@ -3463,11 +3492,12 @@ async fn execute_http_json_lookup(
         .cloned()
         .unwrap_or(Value::Null);
     let public_credential = public_credential(source, &credential);
-    let cache_key = http_json_cache_key(source_id, source, request)?;
+    let cache_key = http_json_cache_key(state, source_id, request)?;
     if let Some(cache_key) = cache_key.as_deref() {
         if let Some(value) = http_json_cache_get(state, source_id, cache_key).await {
             return Ok(value);
         }
+        record_metric_with_items(state, source_id, "source_cache_miss", Duration::ZERO, 1).await;
     }
     let bindings = http_json_bindings(request, &public_credential, None);
     let base_url = eval_http_json_string(&http_json.base_url, bindings.clone())?;
@@ -3510,6 +3540,7 @@ async fn execute_http_json_lookup(
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(state.config.limits.retry_after_seconds);
+        remember_source_backoff_seconds(state, source_id, retry_after_seconds).await;
         return Ok(json!({
             "error": {
                 "code": "source.target_rate_limit",
@@ -3601,18 +3632,21 @@ fn apply_http_json_auth(
 }
 
 fn http_json_cache_key(
+    state: &AppState,
     source_id: &str,
-    source: &SourceConfig,
     request: &Value,
 ) -> Result<Option<String>, SourceExecutionError> {
+    let Some(runtime) = state.source_runtime.get(source_id) else {
+        return Err(SourceExecutionError::HttpJson);
+    };
+    let Some(source) = state.config.sources.get(source_id) else {
+        return Err(SourceExecutionError::HttpJson);
+    };
     if source.cache.is_none() {
         return Ok(None);
     }
-    let source_config_hash = registry_platform_config::sha256_uri(
-        &serde_json::to_vec(source).map_err(|_| SourceExecutionError::HttpJson)?,
-    );
     let key = json!({
-        "source_config_hash": source_config_hash,
+        "source_config_hash": runtime.source_config_hash,
         "source_id": source_id,
         "dataset": request.get("dataset").cloned().unwrap_or(Value::Null),
         "entity": request.get("entity").cloned().unwrap_or(Value::Null),
@@ -3629,13 +3663,12 @@ async fn http_json_cache_get(state: &AppState, source_id: &str, key: &str) -> Op
     let runtime = state.source_runtime.get(source_id)?;
     let now = Instant::now();
     let mut cache = runtime.cache.lock().await;
-    let entry = cache.get(key)?;
+    let entry = cache.get_mut(key)?;
     if entry.expires_at <= now {
         cache.remove(key);
-        drop(cache);
-        record_metric_with_items(state, source_id, "source_cache_miss", Duration::ZERO, 1).await;
         return None;
     }
+    entry.last_accessed = now;
     let value = entry.value.clone();
     drop(cache);
     record_metric_with_items(state, source_id, "source_cache_hit", Duration::ZERO, 1).await;
@@ -3655,14 +3688,18 @@ async fn http_json_cache_put(
     let Some(runtime) = state.source_runtime.get(source_id) else {
         return;
     };
-    runtime.cache.lock().await.insert(
+    let mut cache = runtime.cache.lock().await;
+    let now = Instant::now();
+    cache.retain(|_, entry| entry.expires_at > now);
+    cache.insert(
         key.to_string(),
         CacheEntry {
-            expires_at: Instant::now() + Duration::from_millis(ttl_ms),
+            expires_at: now + Duration::from_millis(ttl_ms),
+            last_accessed: now,
             value: records.clone(),
         },
     );
-    record_metric_with_items(state, source_id, "source_cache_miss", Duration::ZERO, 1).await;
+    evict_http_json_cache_entries(&mut cache, source.cache.as_ref());
 }
 
 fn http_json_cache_ttl_ms(source: &SourceConfig, records: &Value) -> Option<u64> {
@@ -3671,6 +3708,26 @@ fn http_json_cache_ttl_ms(source: &SourceConfig, records: &Value) -> Option<u64>
         0 => cache.not_found_ttl_ms,
         1 => cache.exact_match_ttl_ms,
         _ => None,
+    }
+}
+
+fn evict_http_json_cache_entries(
+    cache: &mut BTreeMap<String, CacheEntry>,
+    config: Option<&SourceCacheConfig>,
+) {
+    let max_entries = config
+        .and_then(|cache| cache.max_entries)
+        .unwrap_or(DEFAULT_SOURCE_CACHE_MAX_ENTRIES);
+    if cache.len() <= max_entries {
+        return;
+    }
+    let mut entries = cache
+        .iter()
+        .map(|(key, entry)| (key.clone(), entry.last_accessed))
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|(_, last_accessed)| *last_accessed);
+    for (key, _) in entries.into_iter().take(cache.len() - max_entries) {
+        cache.remove(&key);
     }
 }
 
@@ -4002,6 +4059,7 @@ async fn ensure_http_json_url_policy(
 }
 
 fn ensure_ip_allowed(ip: IpAddr, source: &SourceConfig) -> Result<(), ()> {
+    let ip = canonical_ip(ip);
     if is_cloud_metadata_ip(ip) {
         return Err(());
     }
@@ -4022,20 +4080,35 @@ fn ensure_ip_allowed(ip: IpAddr, source: &SourceConfig) -> Result<(), ()> {
     Ok(())
 }
 
+fn canonical_ip(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(ip) => ip
+            .to_ipv4_mapped()
+            .map(IpAddr::V4)
+            .unwrap_or(IpAddr::V6(ip)),
+        IpAddr::V4(_) => ip,
+    }
+}
+
 fn is_localhost_host(host: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
 fn is_cloud_metadata_ip(ip: IpAddr) -> bool {
+    let ip = canonical_ip(ip);
     match ip {
         IpAddr::V4(ip) => ip.octets() == [169, 254, 169, 254],
         IpAddr::V6(ip) => {
-            ip.octets() == [0xfd, 0x00, 0xec, 0x2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xfe]
+            ip.octets()
+                == [
+                    0xfd, 0x00, 0x0e, 0xc2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x02, 0x54,
+                ]
         }
     }
 }
 
 fn is_private_or_link_local_ip(ip: IpAddr) -> bool {
+    let ip = canonical_ip(ip);
     match ip {
         IpAddr::V4(ip) => {
             ip.is_private() || ip.is_link_local() || ip.is_unspecified() || ip.is_broadcast()
@@ -4496,7 +4569,9 @@ async fn lookup(
         }
     };
 
-    remember_source_backoff(&state, source_id, &source_execution.value).await;
+    if source.engine == SourceEngine::OpenFn {
+        remember_source_backoff(&state, source_id, &source_execution.value).await;
+    }
     let response = normalize_worker_response(source_execution.value, &query.fields, query.limit);
     let outcome = if response.status().is_success() {
         "success"
@@ -4675,7 +4750,9 @@ async fn batch_match(
         }
     };
 
-    remember_source_backoff(&state, source_id, &source_execution.value).await;
+    if source.engine == SourceEngine::OpenFn {
+        remember_source_backoff(&state, source_id, &source_execution.value).await;
+    }
     let response = normalize_batch_worker_response(
         source_execution.value,
         &body.fields,
@@ -4898,6 +4975,13 @@ async fn remember_source_backoff(state: &AppState, source_id: &str, response: &V
         .max(1);
     if let Some(runtime) = state.source_runtime.get(source_id) {
         *runtime.backoff_until.lock().await = Some(Instant::now() + Duration::from_secs(seconds));
+    }
+}
+
+async fn remember_source_backoff_seconds(state: &AppState, source_id: &str, seconds: u64) {
+    if let Some(runtime) = state.source_runtime.get(source_id) {
+        *runtime.backoff_until.lock().await =
+            Some(Instant::now() + Duration::from_secs(seconds.max(1)));
     }
 }
 
@@ -5405,6 +5489,7 @@ fn default_max_batch_items() -> usize {
 }
 
 const MAX_URI_BYTES: usize = 8 * 1024;
+const DEFAULT_SOURCE_CACHE_MAX_ENTRIES: usize = 10_000;
 
 fn default_request_timeout_ms() -> u64 {
     30_000
@@ -5677,15 +5762,46 @@ mod tests {
         assert!(error.to_string().contains("batch.max_parallel"));
 
         let mut config = minimal_config();
+        let source = config.sources.get_mut("people").expect("source exists");
+        source.cache = Some(SourceCacheConfig {
+            exact_match_ttl_ms: None,
+            not_found_ttl_ms: None,
+            max_entries: None,
+        });
+        let error = validate_config(&config).expect_err("empty cache config is rejected");
+        assert!(error.to_string().contains("cache"));
+
+        let mut config = minimal_http_json_config();
+        let source = config.sources.get_mut("people").expect("source exists");
+        source.cache = Some(SourceCacheConfig {
+            exact_match_ttl_ms: Some(60_000),
+            not_found_ttl_ms: None,
+            max_entries: Some(0),
+        });
+        let error = validate_config(&config).expect_err("zero cache cap is rejected");
+        assert!(error.to_string().contains("cache.max_entries"));
+    }
+
+    #[test]
+    fn openfn_rejects_http_json_only_source_fields() {
+        let mut config = minimal_config();
         config
             .sources
             .get_mut("people")
             .expect("source exists")
-            .cache = Some(SourceCacheConfig {
-            exact_match_ttl_ms: None,
+            .batch
+            .max_parallel = Some(2);
+        let error = validate_config(&config).expect_err("OpenFn max_parallel is rejected");
+        assert!(error.to_string().contains("batch.max_parallel"));
+
+        let mut config = minimal_config();
+        let source = config.sources.get_mut("people").expect("source exists");
+        source.cache = Some(SourceCacheConfig {
+            exact_match_ttl_ms: Some(60_000),
             not_found_ttl_ms: None,
+            max_entries: None,
         });
-        let error = validate_config(&config).expect_err("empty cache config is rejected");
+        let error = validate_config(&config).expect_err("OpenFn cache is rejected");
         assert!(error.to_string().contains("cache"));
     }
 
@@ -5719,8 +5835,11 @@ mod tests {
         source.allow_insecure_private_network = true;
         assert!(ensure_ip_allowed("10.0.0.1".parse().unwrap(), &source).is_ok());
         assert!(ensure_ip_allowed("169.254.169.254".parse().unwrap(), &source).is_err());
+        assert!(ensure_ip_allowed("fd00:ec2::254".parse().unwrap(), &source).is_err());
+        assert!(ensure_ip_allowed("::ffff:169.254.169.254".parse().unwrap(), &source).is_err());
 
         source.allow_insecure_private_network = false;
+        assert!(ensure_ip_allowed("::ffff:10.0.0.1".parse().unwrap(), &source).is_err());
         source.allow_insecure_localhost = true;
         assert!(ensure_ip_allowed("127.0.0.1".parse().unwrap(), &source).is_ok());
     }
@@ -5770,6 +5889,15 @@ mod tests {
 
         let metadata_http = reqwest::Url::parse("http://169.254.169.254").expect("url parses");
         assert!(ensure_http_json_url_policy(&metadata_http, &source)
+            .await
+            .is_err());
+        let metadata_ipv6_http = reqwest::Url::parse("http://[fd00:ec2::254]").expect("url parses");
+        assert!(ensure_http_json_url_policy(&metadata_ipv6_http, &source)
+            .await
+            .is_err());
+        let metadata_mapped_http =
+            reqwest::Url::parse("http://[::ffff:169.254.169.254]").expect("url parses");
+        assert!(ensure_http_json_url_policy(&metadata_mapped_http, &source)
             .await
             .is_err());
     }

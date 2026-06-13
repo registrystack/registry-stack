@@ -494,7 +494,8 @@ per-source `max_in_flight`, optional request rate and burst, `Retry-After`
 backoff handling, built-in adapter sequential or parallel lookup mode,
 `http_json` native batch mode where the upstream has a real bulk endpoint, and
 any explicit TTL-bound result cache. Treat cache settings as evidence freshness
-policy, not only performance tuning.
+policy, not only performance tuning. Sidecar result caches are bounded by
+`cache.max_entries`, defaulting to 10000 entries per source.
 
 For high-assurance deployments, pin the sidecar runtime that Notary is allowed
 to use with `expected_sidecar`. Notary reads the private sidecar assurance
