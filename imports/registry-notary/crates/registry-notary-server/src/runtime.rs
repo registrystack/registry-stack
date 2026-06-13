@@ -1831,19 +1831,36 @@ async fn evaluate_claim_task(
     // that were evaluated to satisfy depends_on. This ensures predicate
     // and CEL claims that have no source_bindings of their own still
     // report the registry reads performed by their dependencies.
-    let dep_source_count: usize = {
+    let (dep_source_count, mut source_runtime_summaries): (
+        usize,
+        BTreeMap<(String, String), SourceRuntimeSummary>,
+    ) = {
         let snapshot = prior.lock().expect("prior mutex is not poisoned");
-        claim
+        let mut count = 0;
+        let mut summaries = BTreeMap::new();
+        for dep in claim
             .depends_on
             .iter()
             .filter_map(|dep_id| snapshot.get(dep_id))
-            .map(|dep| dep.provenance.used.source_count)
-            .sum()
+        {
+            count += dep.provenance.used.source_count;
+            for summary in &dep.provenance.used.source_runtimes {
+                summaries
+                    .entry((summary.kind.clone(), summary.config_hash.clone()))
+                    .or_insert_with(|| summary.clone());
+            }
+        }
+        (count, summaries)
     };
-    let source_runtimes = ctx
+    for summary in ctx
         .source
         .observed_source_runtimes(&ctx.evidence, &claim.id)
-        .await;
+        .await
+    {
+        source_runtime_summaries
+            .insert((summary.kind.clone(), summary.config_hash.clone()), summary);
+    }
+    let source_runtimes = source_runtime_summaries.into_values().collect();
     let mut provenance = ClaimProvenance::new(
         ctx.evidence.service_id.clone(),
         ctx.evaluation_id.clone(),
@@ -3796,6 +3813,54 @@ mod tests {
     }
 
     #[derive(Debug, Default)]
+    struct RuntimeSummarySource {
+        inner: CountingSource,
+    }
+
+    impl SourceReader for RuntimeSummarySource {
+        fn observed_source_runtimes<'a>(
+            &'a self,
+            _evidence: &'a EvidenceConfig,
+            claim_id: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Vec<SourceRuntimeSummary>> + Send + 'a>> {
+            Box::pin(async move {
+                if claim_id != "dependency" {
+                    return Vec::new();
+                }
+                vec![SourceRuntimeSummary {
+                    kind: "openfn_sidecar".to_string(),
+                    config_hash:
+                        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                            .to_string(),
+                    assurance: registry_notary_core::SourceRuntimeAssurance {
+                        pinned: true,
+                        expression_hashes_verified: true,
+                        runtime_verified: true,
+                        smoke_verified: true,
+                    },
+                }]
+            })
+        }
+
+        fn read_one<'a>(
+            &'a self,
+            binding: &'a SourceBindingConfig,
+            subject: &'a SubjectRequest,
+            purpose: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+            self.inner.read_one(binding, subject, purpose)
+        }
+
+        fn required_scopes(
+            &self,
+            evidence: &EvidenceConfig,
+            claim_id: &str,
+        ) -> Result<Vec<String>, EvidenceError> {
+            self.inner.required_scopes(evidence, claim_id)
+        }
+    }
+
+    #[derive(Debug, Default)]
     struct VersionScopedSource {
         read_count: AtomicU64,
     }
@@ -4924,6 +4989,45 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(source.read_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn derived_claim_provenance_preserves_dependency_source_runtime() {
+        let source = Arc::new(RuntimeSummarySource::default());
+        let evidence = test_evidence(vec![
+            test_claim("selected", vec!["dependency"], false),
+            test_claim("dependency", Vec::new(), true),
+        ]);
+        let store = EvidenceStore::default();
+
+        let results = RegistryNotaryRuntime::new()
+            .evaluate_with_source_capability(
+                evidence,
+                source.clone() as Arc<dyn SourceReader>,
+                &store,
+                &machine_principal(),
+                SourceCapability::Machine {
+                    scopes: BTreeSet::new(),
+                },
+                test_request("selected"),
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("derived claim evaluates");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(source.inner.read_count.load(Ordering::SeqCst), 1);
+        let runtimes = &results[0].provenance.used.source_runtimes;
+        assert_eq!(runtimes.len(), 1);
+        assert_eq!(runtimes[0].kind, "openfn_sidecar");
+        assert_eq!(
+            runtimes[0].config_hash,
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert!(runtimes[0].assurance.pinned);
+        assert!(runtimes[0].assurance.runtime_verified);
     }
 
     #[tokio::test]
