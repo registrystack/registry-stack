@@ -53,6 +53,7 @@ fn approval(expires_at_unix_seconds: u64) -> BreakGlassApproval {
 fn local_approval(expires_at_unix_seconds: u64, config_hash: &str) -> LocalOperatorApproval {
     LocalOperatorApproval {
         approved_by: "security@example.test".to_string(),
+        approvers: Vec::new(),
         reason: "rotate config trust roots".to_string(),
         approval_reference: "ROOT-2026-Q2".to_string(),
         change_class: "root_transition".to_string(),
@@ -617,6 +618,10 @@ fn break_glass_waives_previous_hash_only_with_valid_approval() {
     assert_eq!(accepted.break_glass.accepted.len(), 1);
     assert_eq!(accepted.break_glass.accepted[0].sequence, 43);
     assert_eq!(
+        accepted.break_glass.accepted[0].emergency_change_class,
+        Some("emergency_break_glass".to_string())
+    );
+    assert_eq!(
         accepted.break_glass.accepted[0].approval_reference,
         "INC-4242"
     );
@@ -889,6 +894,85 @@ fn local_operator_approval_store_loads_matching_unexpired_approval() {
             )
             .expect_err("expired approval is rejected"),
         LocalApprovalStoreError::ApprovalExpired
+    );
+}
+
+#[test]
+fn local_operator_approval_store_loads_distinct_approvers() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let approval_path = dir.path().join("config-approvals.json");
+    std::fs::write(
+        &approval_path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "approvals": [
+                {
+                    "approved_by": "security@example.test",
+                    "approvers": ["ops@example.test"],
+                    "reason": "approve emergency",
+                    "approval_reference": "BG-2026-Q2",
+                    "change_class": "emergency_break_glass",
+                    "config_hash": hash("next"),
+                    "expires_at_unix_seconds": 2_000,
+                    "rate_limit_identity": "registry-relay/relay-a/production/national-config",
+                    "rate_limit": rate_limit()
+                }
+            ]
+        }))
+        .expect("approval file serializes"),
+    )
+    .expect("approval file writes");
+    let store = FileLocalApprovalStore::new(&approval_path);
+
+    let approval = store
+        .load_for_apply_at(
+            "BG-2026-Q2",
+            "emergency_break_glass",
+            &hash("next"),
+            None,
+            1_000,
+        )
+        .expect("matching approval loads");
+
+    assert_eq!(approval.approvers, vec!["ops@example.test".to_string()]);
+}
+
+#[test]
+fn local_operator_approval_store_rejects_duplicate_approvers() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let approval_path = dir.path().join("config-approvals.json");
+    std::fs::write(
+        &approval_path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "approvals": [
+                {
+                    "approved_by": "security@example.test",
+                    "approvers": ["security@example.test", " security@example.test "],
+                    "reason": "approve emergency",
+                    "approval_reference": "BG-2026-Q2",
+                    "change_class": "emergency_break_glass",
+                    "config_hash": hash("next"),
+                    "expires_at_unix_seconds": 2_000,
+                    "rate_limit_identity": "registry-relay/relay-a/production/national-config",
+                    "rate_limit": rate_limit()
+                }
+            ]
+        }))
+        .expect("approval file serializes"),
+    )
+    .expect("approval file writes");
+    let store = FileLocalApprovalStore::new(&approval_path);
+
+    assert_eq!(
+        store
+            .load_for_apply_at(
+                "BG-2026-Q2",
+                "emergency_break_glass",
+                &hash("next"),
+                None,
+                1_000,
+            )
+            .expect_err("duplicate approver identities are rejected"),
+        LocalApprovalStoreError::InvalidApproval("approvers")
     );
 }
 

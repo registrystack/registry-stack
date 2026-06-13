@@ -276,11 +276,57 @@
         "restart_required": {
           "type": "boolean"
         },
+        "emergency": {
+          "$ref": "#/$defs/configuration_emergency"
+        },
         "trusted_roots": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/trusted_root"
           }
+        }
+      }
+    },
+    "configuration_emergency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "last_apply_emergency",
+        "exception_window_open"
+      ],
+      "properties": {
+        "last_apply_emergency": {
+          "type": "boolean"
+        },
+        "last_emergency_change_class": {
+          "$ref": "#/$defs/finding_id"
+        },
+        "last_emergency_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/rfc3339"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exception_window_open": {
+          "type": "boolean"
+        },
+        "exception_window_expires_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/rfc3339"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "open_exception_count": {
+          "type": "integer",
+          "minimum": 0
         }
       }
     },
