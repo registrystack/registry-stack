@@ -5758,6 +5758,36 @@ async fn admin_config_apply_signed_break_glass_issuer_rotation_swaps_without_res
     assert_eq!(record.last_sequence, 1);
     assert!(record.break_glass.accepted.is_empty());
 
+    let mut low_risk_approvals =
+        durable_break_glass_approvals(&candidate_yaml, None, "BG-LOW", &["ops-peer@example.test"]);
+    for approval in &mut low_risk_approvals {
+        approval.change_class = "signing_key_rotation".to_string();
+    }
+    write_local_approval_states(&local_approval_path, low_risk_approvals);
+    let mut low_risk_request = signed_tuf_apply_request(&signed);
+    low_risk_request["break_glass"] = json!(true);
+    low_risk_request["break_glass_approval_reference"] = json!("BG-LOW");
+    let response = server
+        .post("/admin/v1/config/apply")
+        .add_header("authorization", authorization.clone())
+        .json(&low_risk_request)
+        .await;
+
+    response.assert_status(StatusCode::CONFLICT);
+    let body: Value = response.json();
+    assert_eq!(body["result"], "rejected_break_glass");
+    assert_eq!(body["applied"], false);
+    let record = FileAntiRollbackStore::new(&antirollback_path)
+        .load(&AntiRollbackKey {
+            product: "registry-notary".to_string(),
+            instance_id: "registry-notary-standalone".to_string(),
+            environment: "development".to_string(),
+            stream_id: "notary-test-stream".to_string(),
+        })
+        .expect("anti-rollback state loads");
+    assert_eq!(record.last_sequence, 1);
+    assert!(record.break_glass.accepted.is_empty());
+
     write_local_approval_states(
         &local_approval_path,
         durable_break_glass_approvals(&candidate_yaml, None, "BG-4242", &["ops-peer@example.test"]),

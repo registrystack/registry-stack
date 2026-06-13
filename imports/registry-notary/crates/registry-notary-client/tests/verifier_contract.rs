@@ -135,6 +135,20 @@ async fn verify_sd_jwt_vc_rejects_key_binding_without_expected_challenge() {
 }
 
 #[tokio::test]
+async fn verify_sd_jwt_vc_accepts_optional_key_binding_without_challenge() {
+    let compact = issue_sd_jwt(ISSUER_JWK, ISSUER, NOW, NOW + 50, Some(&holder_did())).await;
+    let presentation = format!("{compact}{}", signed_key_binding_jwt(&compact));
+
+    let verified = verifier::verify_sd_jwt_vc(&presentation, &jwks(ISSUER_JWK), &options())
+        .expect("optional key binding does not require a verifier challenge");
+
+    assert_eq!(
+        verified.holder_key_id.as_deref(),
+        Some(holder_did().as_str())
+    );
+}
+
+#[tokio::test]
 async fn verify_sd_jwt_vc_rejects_wrong_key_binding_audience() {
     let compact = issue_sd_jwt(ISSUER_JWK, ISSUER, NOW, NOW + 50, Some(&holder_did())).await;
     let presentation = format!("{compact}{}", signed_key_binding_jwt(&compact));

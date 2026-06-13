@@ -553,7 +553,9 @@ async fn admin_config_apply(
         &request,
         config_governance.config_trust.as_ref(),
         &candidate,
-    ) {
+    )
+    .await
+    {
         Ok(break_glass) => break_glass,
         Err(()) => {
             return config_apply_report(
@@ -1193,7 +1195,7 @@ fn signing_change_authorization(candidate: &ResolvedConfigCandidate) -> SigningC
     }
 }
 
-fn break_glass_proposal(
+async fn break_glass_proposal(
     request: &ConfigApplyRequest,
     config_trust: Option<&registry_notary_core::ConfigTrustConfig>,
     candidate: &ResolvedConfigCandidate,
@@ -1217,21 +1219,22 @@ fn break_glass_proposal(
         request.break_glass_approval_reference.as_deref(),
     ) {
         (Some(approval), None) => {
-            enforce_required_break_glass_approvers(
+            enforce_break_glass_approval_satisfies_candidate(
                 config_trust,
+                &candidate.change_classes,
                 &approval.emergency_change_class,
                 1,
             )?;
             Ok(Some(approval))
         }
-        (None, Some(reference)) => {
-            stored_break_glass_approval(config_trust, candidate, reference).map(Some)
-        }
+        (None, Some(reference)) => stored_break_glass_approval(config_trust, candidate, reference)
+            .await
+            .map(Some),
         _ => Err(()),
     }
 }
 
-fn stored_break_glass_approval(
+async fn stored_break_glass_approval(
     config_trust: &registry_notary_core::ConfigTrustConfig,
     candidate: &ResolvedConfigCandidate,
     reference: &str,
@@ -1239,27 +1242,50 @@ fn stored_break_glass_approval(
     if reference.trim().is_empty() {
         return Err(());
     }
-    let store = FileLocalApprovalStore::new(&config_trust.local_approval_state_path);
+    let config_trust = config_trust.clone();
+    let reference = reference.to_string();
     let config_hash = internal_config_hash(candidate.config_yaml.as_bytes());
-    for change_class in &candidate.change_classes {
-        let loaded = candidate
-            .previous_config_hash
-            .as_deref()
+    let previous_config_hash = candidate.previous_config_hash.clone();
+    let change_classes = candidate.change_classes.clone();
+    tokio::task::spawn_blocking(move || {
+        stored_break_glass_approval_blocking(
+            &config_trust,
+            &change_classes,
+            &config_hash,
+            previous_config_hash.as_deref(),
+            &reference,
+        )
+    })
+    .await
+    .map_err(|_| ())?
+}
+
+fn stored_break_glass_approval_blocking(
+    config_trust: &registry_notary_core::ConfigTrustConfig,
+    change_classes: &BTreeSet<String>,
+    config_hash: &str,
+    previous_config_hash: Option<&str>,
+    reference: &str,
+) -> Result<BreakGlassApproval, ()> {
+    let store = FileLocalApprovalStore::new(&config_trust.local_approval_state_path);
+    for change_class in change_classes {
+        let loaded = previous_config_hash
             .and_then(|previous| {
                 store
-                    .load_for_apply(reference, change_class, &config_hash, Some(previous))
+                    .load_for_apply(reference, change_class, config_hash, Some(previous))
                     .ok()
             })
             .or_else(|| {
                 store
-                    .load_for_apply(reference, change_class, &config_hash, None)
+                    .load_for_apply(reference, change_class, config_hash, None)
                     .ok()
             });
         let Some(approval) = loaded else {
             continue;
         };
-        enforce_required_break_glass_approvers(
+        enforce_break_glass_approval_satisfies_candidate(
             config_trust,
+            change_classes,
             &approval.change_class,
             effective_approver_count(config_trust, &approval),
         )?;
@@ -1307,16 +1333,43 @@ fn effective_approver_count(
     approvers.len()
 }
 
-fn enforce_required_break_glass_approvers(
+fn required_break_glass_approver_count(
     config_trust: &registry_notary_core::ConfigTrustConfig,
     emergency_change_class: &str,
-    actual_count: usize,
-) -> Result<(), ()> {
-    let required_count = config_trust
+) -> usize {
+    config_trust
         .required_approver_count
         .get(emergency_change_class)
         .copied()
-        .unwrap_or(1);
+        .unwrap_or(1)
+}
+
+fn max_required_break_glass_approver_count(
+    config_trust: &registry_notary_core::ConfigTrustConfig,
+    change_classes: &BTreeSet<String>,
+) -> usize {
+    change_classes
+        .iter()
+        .map(|change_class| required_break_glass_approver_count(config_trust, change_class))
+        .max()
+        .unwrap_or(1)
+}
+
+fn enforce_break_glass_approval_satisfies_candidate(
+    config_trust: &registry_notary_core::ConfigTrustConfig,
+    change_classes: &BTreeSet<String>,
+    approval_change_class: &str,
+    actual_count: usize,
+) -> Result<(), ()> {
+    if !change_classes.contains(approval_change_class) {
+        return Err(());
+    }
+    let required_count = max_required_break_glass_approver_count(config_trust, change_classes);
+    let approval_required_count =
+        required_break_glass_approver_count(config_trust, approval_change_class);
+    if approval_required_count < required_count {
+        return Err(());
+    }
     if actual_count < required_count {
         Err(())
     } else {

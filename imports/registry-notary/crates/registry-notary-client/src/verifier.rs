@@ -399,7 +399,9 @@ fn verify_holder_binding(
     context: HolderBindingContext<'_>,
 ) -> Result<Option<String>, VerificationError> {
     if matches!(context.policy, HolderBindingPolicy::NotRequired)
-        && context.key_binding_jwt.is_none()
+        && (context.key_binding_jwt.is_none()
+            || context.expected_audience.is_none()
+            || context.expected_nonce.is_none())
     {
         return Ok(context
             .payload
