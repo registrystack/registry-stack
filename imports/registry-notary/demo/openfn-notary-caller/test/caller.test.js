@@ -340,13 +340,15 @@ test("handleEvaluationProblem maps 429 and retryable 503 to retryable infrastruc
 });
 
 test("handleEvaluationProblem accepts HTTP-date Retry-After values", () => {
-  const retryAt = new Date(Date.now() + 2500).toUTCString();
   const state = handleEvaluationProblem(
     {
       ...baseState,
       response: {
         statusCode: 429,
-        headers: { "retry-after": retryAt },
+        headers: {
+          date: "Tue, 01 Jan 2030 00:00:00 GMT",
+          "retry-after": "Tue, 01 Jan 2030 00:00:10 GMT",
+        },
         body: { title: "Retry later", status: 429, code: "rate_limited" },
       },
     },
@@ -354,8 +356,7 @@ test("handleEvaluationProblem accepts HTTP-date Retry-After values", () => {
   );
 
   assert.equal(state.data.notary.branch, "retryable_infrastructure");
-  assert.ok(state.data.notary.retry_after_seconds >= 1);
-  assert.ok(state.data.notary.retry_after_seconds <= 3);
+  assert.equal(state.data.notary.retry_after_seconds, 10);
 });
 
 test("redacted final state contains no forbidden values", () => {

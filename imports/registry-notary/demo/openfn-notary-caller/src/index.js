@@ -369,7 +369,9 @@ function retryAfterSeconds(state) {
   if (!Number.isFinite(retryAt)) {
     return undefined;
   }
-  const seconds = Math.ceil((retryAt - Date.now()) / 1000);
+  const serverDate = Date.parse(responseHeader(state, "date") ?? "");
+  const referenceTime = Number.isFinite(serverDate) ? serverDate : Date.now();
+  const seconds = Math.ceil((retryAt - referenceTime) / 1000);
   return Number.isSafeInteger(seconds) && seconds > 0 ? seconds : undefined;
 }
 
