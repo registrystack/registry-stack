@@ -9311,6 +9311,7 @@ config_trust:
             scopes: vec!["civil_registry:evidence_verification".to_string()],
             access_mode: AccessMode::MachineClient,
             verified_claims: None,
+            authorization_details: None,
         };
 
         let results = crate::RegistryNotaryRuntime::new()
@@ -9523,6 +9524,7 @@ config_trust:
             scopes: vec!["civil_registry:evidence_verification".to_string()],
             access_mode: AccessMode::MachineClient,
             verified_claims: None,
+            authorization_details: None,
         };
 
         let results = crate::RegistryNotaryRuntime::new()
