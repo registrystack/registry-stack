@@ -117,7 +117,8 @@ sidecar normalizes a target system into that shape.
 The source adapter sidecar is a separate private process that normalizes a target
 system into Notary's source-read contracts. The Notary connector value remains
 `openfn_sidecar` for compatibility. Inside the sidecar, a source can use the
-built-in `http_json` engine for straightforward HTTP JSON APIs or a pinned
+built-in `http_json` engine for straightforward HTTP JSON APIs, the built-in
+`http_flow` engine for short dependent GET-only HTTP JSON reads, or a pinned
 OpenFn workflow for adaptor-backed sources. Use the first-class connector for
 new configs:
 
@@ -471,13 +472,13 @@ Bulk source modes are separate from API batch evaluation:
   shared `query_signature`.
 
 Do not enable bulk modes until contract tests prove response shape,
-cardinality, and source limits. For `http_json` sidecars, prefer sequential
+cardinality, and source limits. For built-in HTTP sidecars, prefer sequential
 lookup first, then opt into `parallel_lookup` only with a bounded
-`batch.max_parallel`, or `native_batch` only when the upstream has a real bulk
-endpoint and configured response fan-out keys. Optional sidecar result caching
-must be TTL-bound and reviewed as an evidence freshness decision. Notary does
-not retry sidecar adapter execution failures; keep `retry_on_5xx: false` on
-sidecar connections.
+`batch.max_parallel`. Use `http_json` `native_batch` only when the upstream has
+a real bulk endpoint and configured response fan-out keys. Optional sidecar
+result caching must be TTL-bound and reviewed as an evidence freshness decision.
+Notary does not retry sidecar adapter execution failures; keep
+`retry_on_5xx: false` on sidecar connections.
 
 ## Purpose Propagation
 

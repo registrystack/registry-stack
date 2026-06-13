@@ -178,6 +178,8 @@ pub struct SourceConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_json: Option<HttpJsonSourceConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_flow: Option<HttpFlowSourceConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache: Option<SourceCacheConfig>,
     #[serde(default)]
     pub smoke_lookup: Option<SmokeLookupConfig>,
@@ -190,6 +192,7 @@ pub enum SourceEngine {
     #[serde(rename = "openfn", alias = "open_fn")]
     OpenFn,
     HttpJson,
+    HttpFlow,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -344,6 +347,63 @@ pub struct HttpJsonBatchResponseConfig {
     pub records: HttpJsonCelExpression,
     pub record_key: HttpJsonCelExpression,
     pub item_key: HttpJsonCelExpression,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct HttpFlowSourceConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_steps: Option<usize>,
+    pub steps: Vec<HttpFlowStepConfig>,
+    pub output: HttpFlowOutputConfig,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct HttpFlowStepConfig {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<HttpJsonCelExpression>,
+    pub request: HttpFlowRequestConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response: Option<HttpFlowResponseConfig>,
+    #[serde(default)]
+    pub on_status: BTreeMap<String, HttpFlowStatusAction>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct HttpFlowRequestConfig {
+    #[serde(default)]
+    pub method: HttpJsonMethod,
+    pub base_url: String,
+    pub path: String,
+    #[serde(default)]
+    pub query: BTreeMap<String, HttpJsonCelExpression>,
+    #[serde(default)]
+    pub headers: BTreeMap<String, HttpJsonCelExpression>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<HttpJsonAuthConfig>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct HttpFlowResponseConfig {
+    #[serde(default)]
+    pub bind: BTreeMap<String, HttpJsonCelExpression>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct HttpFlowOutputConfig {
+    pub records: HttpJsonCelExpression,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpFlowStatusAction {
+    Continue,
+    SourceUnavailable,
+    TargetAuth,
+    TargetRateLimit,
+    Timeout,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1709,7 +1769,7 @@ fn validate_source_execution(
                 SourceBatchMode::ParallelLookup | SourceBatchMode::NativeBatch
             ) {
                 return Err(SidecarError::Config(format!(
-                    "source {source_id} batch.mode is only supported for http_json sources"
+                    "source {source_id} batch.mode is only supported for http_json or http_flow sources"
                 )));
             }
             let workflow = source.workflow.as_ref().ok_or_else(|| {
@@ -1720,6 +1780,7 @@ fn validate_source_execution(
             validate_source_workflow(source_id, workflow, canonical_jobs_root)
         }
         SourceEngine::HttpJson => validate_http_json_source(source_id, source),
+        SourceEngine::HttpFlow => validate_http_flow_source(source_id, source),
     }
 }
 
@@ -1829,6 +1890,230 @@ fn validate_http_json_source(source_id: &str, source: &SourceConfig) -> Result<(
         }
     }
     Ok(())
+}
+
+fn validate_http_flow_source(source_id: &str, source: &SourceConfig) -> Result<(), SidecarError> {
+    if source.workflow.is_some() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} workflow is not valid for http_flow sources"
+        )));
+    }
+    if source.http_json.is_some() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} http_json config is not valid when engine is http_flow"
+        )));
+    }
+    if matches!(
+        source.batch.mode,
+        SourceBatchMode::WorkflowBatch | SourceBatchMode::NativeBatch
+    ) {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} batch.mode is not supported for http_flow sources"
+        )));
+    }
+    if source.batch.mode != SourceBatchMode::ParallelLookup && source.batch.max_parallel.is_some() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} batch.max_parallel requires batch.mode parallel_lookup"
+        )));
+    }
+    if source.allowed_base_urls.is_empty() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} allowed_base_urls is required for http_flow"
+        )));
+    }
+    let flow = source.http_flow.as_ref().ok_or_else(|| {
+        SidecarError::Config(format!(
+            "source {source_id} http_flow config is required when engine is http_flow"
+        ))
+    })?;
+    if flow.steps.len() < 2 {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} http_flow.steps must contain at least two steps"
+        )));
+    }
+    if flow.steps.len() > 5 {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} http_flow.steps must not contain more than five steps"
+        )));
+    }
+    if let Some(max_steps) = flow.max_steps {
+        if max_steps == 0 || max_steps > 5 {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} http_flow.max_steps must be between one and five"
+            )));
+        }
+        if flow.steps.len() > max_steps {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} http_flow.steps exceeds http_flow.max_steps"
+            )));
+        }
+    }
+    if flow.timeout_ms == Some(0) {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} http_flow.timeout_ms must be greater than zero"
+        )));
+    }
+    validate_http_json_cel(source_id, "http_flow.output.records", &flow.output.records)?;
+
+    let mut step_ids = BTreeSet::new();
+    let mut bindings = BTreeSet::new();
+    for step in &flow.steps {
+        validate_http_flow_identifier(source_id, "http_flow step id", &step.id)?;
+        if !step_ids.insert(step.id.clone()) {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} http_flow step {} is duplicated",
+                step.id
+            )));
+        }
+        if let Some(when) = &step.when {
+            validate_http_json_cel(
+                source_id,
+                &format!("http_flow.steps.{}.when", step.id),
+                when,
+            )?;
+        }
+        if step.request.method != HttpJsonMethod::Get {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} http_flow step {} only supports GET in v1",
+                step.id
+            )));
+        }
+        validate_http_flow_base_url(source_id, source, &step.id, &step.request.base_url)?;
+        validate_http_json_path(
+            source_id,
+            &format!("http_flow.steps.{}.request.path", step.id),
+            &step.request.path,
+        )?;
+        for (name, expr) in &step.request.query {
+            validate_http_header_or_query_name(source_id, "query", name)?;
+            validate_http_json_cel(
+                source_id,
+                &format!("http_flow.steps.{}.request.query.{name}", step.id),
+                expr,
+            )?;
+        }
+        for (name, expr) in &step.request.headers {
+            validate_http_header_or_query_name(source_id, "headers", name)?;
+            validate_http_json_cel(
+                source_id,
+                &format!("http_flow.steps.{}.request.headers.{name}", step.id),
+                expr,
+            )?;
+        }
+        if let Some(response) = &step.response {
+            for (name, expr) in &response.bind {
+                validate_http_flow_identifier(source_id, "http_flow binding", name)?;
+                if http_flow_reserved_binding(name) {
+                    return Err(SidecarError::Config(format!(
+                        "source {source_id} http_flow binding {name} is reserved"
+                    )));
+                }
+                if !bindings.insert(name.clone()) {
+                    return Err(SidecarError::Config(format!(
+                        "source {source_id} http_flow binding {name} is duplicated"
+                    )));
+                }
+                validate_http_json_cel(
+                    source_id,
+                    &format!("http_flow.steps.{}.response.bind.{name}", step.id),
+                    expr,
+                )?;
+            }
+        }
+        for status in step.on_status.keys() {
+            let status_code = status.parse::<u16>().map_err(|_| {
+                SidecarError::Config(format!(
+                    "source {source_id} http_flow step {} on_status keys must be HTTP status codes",
+                    step.id
+                ))
+            })?;
+            if !(100..=599).contains(&status_code) {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} http_flow step {} on_status keys must be HTTP status codes",
+                    step.id
+                )));
+            }
+        }
+        if let Some(auth) = &step.request.auth {
+            match auth.kind {
+                HttpJsonAuthKind::Bearer => {
+                    validate_http_json_secret_ref(
+                        source_id,
+                        &format!("http_flow.steps.{}.request.auth.token.secret", step.id),
+                        auth.token.as_ref(),
+                    )?;
+                }
+                HttpJsonAuthKind::Basic => {
+                    validate_http_json_secret_ref(
+                        source_id,
+                        &format!("http_flow.steps.{}.request.auth.username.secret", step.id),
+                        auth.username.as_ref(),
+                    )?;
+                    validate_http_json_secret_ref(
+                        source_id,
+                        &format!("http_flow.steps.{}.request.auth.password.secret", step.id),
+                        auth.password.as_ref(),
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_http_flow_base_url(
+    source_id: &str,
+    source: &SourceConfig,
+    step_id: &str,
+    base_url: &str,
+) -> Result<(), SidecarError> {
+    let base = reqwest::Url::parse(base_url).map_err(|_| {
+        SidecarError::Config(format!(
+            "source {source_id} http_flow step {step_id} request.base_url must be a URL"
+        ))
+    })?;
+    ensure_allowed_base_url(source_id, source, &base)
+}
+
+fn validate_http_flow_identifier(
+    source_id: &str,
+    label: &str,
+    value: &str,
+) -> Result<(), SidecarError> {
+    let valid = !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'));
+    if valid {
+        Ok(())
+    } else {
+        Err(SidecarError::Config(format!(
+            "source {source_id} {label} contains an invalid identifier"
+        )))
+    }
+}
+
+fn http_flow_reserved_binding(value: &str) -> bool {
+    matches!(
+        value,
+        "source_id"
+            | "dataset"
+            | "entity"
+            | "lookup"
+            | "fields"
+            | "limit"
+            | "purpose"
+            | "correlation_id"
+            | "credential_public"
+            | "body"
+            | "status"
+            | "headers"
+            | "items"
+            | "query_signature"
+            | "item"
+            | "record"
+    )
 }
 
 fn validate_http_json_path(source_id: &str, label: &str, path: &str) -> Result<(), SidecarError> {
@@ -2339,6 +2624,7 @@ async fn execute_source_json(
             })
         }
         SourceEngine::HttpJson => execute_http_json(state, source_id, source, request).await,
+        SourceEngine::HttpFlow => execute_http_flow(state, source_id, source, request).await,
     }
 }
 
@@ -2375,6 +2661,190 @@ async fn execute_http_json(
         value: json!({ "data": data }),
         worker_id: "http_json".to_string(),
     })
+}
+
+async fn execute_http_flow(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: Value,
+) -> Result<SourceExecution, SourceExecutionError> {
+    if request.get("mode").and_then(Value::as_str) == Some("batch_match") {
+        let item_count = request
+            .get("items")
+            .and_then(Value::as_array)
+            .map_or(1, |items| items.len().max(1));
+        let value = tokio::time::timeout(
+            http_json_batch_timeout(&state.config.limits, item_count),
+            execute_http_flow_batch(state, source_id, source, &request),
+        )
+        .await
+        .map_err(|_| SourceExecutionError::HttpJsonTimeout)??;
+        return Ok(SourceExecution {
+            value,
+            worker_id: "http_flow".to_string(),
+        });
+    }
+    let data = execute_http_flow_lookup_with_timeout(state, source_id, source, &request).await?;
+    if data.get("error").is_some() {
+        return Ok(SourceExecution {
+            value: data,
+            worker_id: "http_flow".to_string(),
+        });
+    }
+    Ok(SourceExecution {
+        value: json!({ "data": data }),
+        worker_id: "http_flow".to_string(),
+    })
+}
+
+async fn execute_http_flow_batch(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: &Value,
+) -> Result<Value, SourceExecutionError> {
+    match source.batch.mode {
+        SourceBatchMode::SequentialLookup => {
+            execute_http_flow_sequential_batch(state, source_id, source, request).await
+        }
+        SourceBatchMode::ParallelLookup => {
+            execute_http_flow_parallel_batch(state, source_id, source, request).await
+        }
+        SourceBatchMode::WorkflowBatch | SourceBatchMode::NativeBatch => {
+            Err(SourceExecutionError::HttpJsonBadRequest)
+        }
+    }
+}
+
+async fn execute_http_flow_sequential_batch(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: &Value,
+) -> Result<Value, SourceExecutionError> {
+    let query_signature = request
+        .get("query_signature")
+        .and_then(Value::as_array)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    if query_signature.len() != 1 {
+        return Err(SourceExecutionError::HttpJsonBadRequest);
+    }
+    let lookup_field = query_signature
+        .first()
+        .and_then(|term| term.get("field"))
+        .and_then(Value::as_str)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let items = request
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let mut responses = Vec::with_capacity(items.len());
+    for item in items {
+        let id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or(SourceExecutionError::HttpJson)?;
+        let lookup_request = http_json_item_lookup_request(source_id, request, lookup_field, item)?;
+        let data = execute_http_flow_lookup_with_timeout(state, source_id, source, &lookup_request)
+            .await?;
+        if let Some(error) = data.get("error") {
+            if shared_credential_error(error) {
+                return Ok(json!({ "error": error }));
+            }
+            responses.push(json!({ "id": id, "error": error }));
+        } else {
+            responses.push(json!({ "id": id, "data": data }));
+        }
+    }
+    Ok(json!({ "items": responses }))
+}
+
+async fn execute_http_flow_parallel_batch(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: &Value,
+) -> Result<Value, SourceExecutionError> {
+    let query_signature = request
+        .get("query_signature")
+        .and_then(Value::as_array)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    if query_signature.len() != 1 {
+        return Err(SourceExecutionError::HttpJsonBadRequest);
+    }
+    let lookup_field = query_signature
+        .first()
+        .and_then(|term| term.get("field"))
+        .and_then(Value::as_str)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let items = request
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let max_parallel = source
+        .batch
+        .max_parallel
+        .unwrap_or(1)
+        .min(items.len().max(1));
+    let semaphore = Arc::new(Semaphore::new(max_parallel));
+    let state = Arc::new(state.clone());
+    let source = source.clone();
+    let source_id = source_id.to_string();
+    let mut tasks = JoinSet::new();
+    let mut requested_ids = Vec::with_capacity(items.len());
+    for (idx, item) in items.iter().enumerate() {
+        let id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or(SourceExecutionError::HttpJson)?
+            .to_string();
+        requested_ids.push(id.clone());
+        let lookup_request =
+            http_json_item_lookup_request(&source_id, request, lookup_field, item)?;
+        let permit = semaphore.clone();
+        let task_state = Arc::clone(&state);
+        let task_source = source.clone();
+        let task_source_id = source_id.clone();
+        tasks.spawn(async move {
+            let _permit = permit
+                .acquire_owned()
+                .await
+                .map_err(|_| SourceExecutionError::HttpJson)?;
+            let data = execute_http_flow_lookup_with_timeout(
+                &task_state,
+                &task_source_id,
+                &task_source,
+                &lookup_request,
+            )
+            .await?;
+            Ok::<_, SourceExecutionError>((idx, id, data))
+        });
+    }
+
+    let mut responses = vec![Value::Null; items.len()];
+    while let Some(joined) = tasks.join_next().await {
+        let (idx, id, data) = joined.map_err(|_| SourceExecutionError::HttpJson)??;
+        if let Some(error) = data.get("error") {
+            if shared_credential_error(error) {
+                tasks.abort_all();
+                return Ok(json!({ "error": error }));
+            }
+            responses[idx] = json!({ "id": id, "error": error });
+        } else {
+            responses[idx] = json!({ "id": id, "data": data });
+        }
+    }
+
+    for (idx, response) in responses.iter_mut().enumerate() {
+        if response.is_null() {
+            *response = json!({
+                "id": requested_ids[idx],
+                "error": { "code": "source.unavailable" }
+            });
+        }
+    }
+    Ok(json!({ "items": responses }))
 }
 
 async fn execute_http_json_batch(
@@ -2705,6 +3175,235 @@ fn shared_credential_error(error: &Value) -> bool {
     )
 }
 
+async fn execute_http_flow_lookup_with_timeout(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: &Value,
+) -> Result<Value, SourceExecutionError> {
+    let timeout = http_flow_timeout(state, source)?;
+    tokio::time::timeout(
+        timeout,
+        execute_http_flow_lookup(state, source_id, source, request),
+    )
+    .await
+    .map_err(|_| SourceExecutionError::HttpJsonTimeout)?
+}
+
+fn http_flow_timeout(
+    state: &AppState,
+    source: &SourceConfig,
+) -> Result<Duration, SourceExecutionError> {
+    let flow = source
+        .http_flow
+        .as_ref()
+        .ok_or(SourceExecutionError::HttpJson)?;
+    Ok(Duration::from_millis(
+        flow.timeout_ms
+            .unwrap_or(state.config.limits.worker_timeout_ms)
+            .max(1),
+    ))
+}
+
+async fn execute_http_flow_lookup(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: &Value,
+) -> Result<Value, SourceExecutionError> {
+    let flow = source
+        .http_flow
+        .as_ref()
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let credential = state
+        .credentials
+        .get(source_id)
+        .cloned()
+        .unwrap_or(Value::Null);
+    let public_credential = public_credential(source, &credential);
+    let cache_key = http_json_cache_key(source_id, source, request)?;
+    if let Some(cache_key) = cache_key.as_deref() {
+        if let Some(value) = http_json_cache_get(state, source_id, cache_key).await {
+            return Ok(value);
+        }
+    }
+
+    let mut bindings = http_flow_initial_bindings(flow);
+    for step in &flow.steps {
+        if let Some(when) = &step.when {
+            if !eval_http_flow_bool(
+                when,
+                http_flow_bindings(request, &public_credential, &bindings, None, None),
+            )? {
+                record_metric_with_items(state, source_id, "step_skipped", Duration::ZERO, 1).await;
+                continue;
+            }
+        }
+
+        let prepared = prepare_http_json_request(
+            state,
+            source_id,
+            source,
+            &step.request.base_url,
+            &step.request.path,
+        )
+        .await?;
+        let mut builder = match step.request.method {
+            HttpJsonMethod::Get => prepared.client.get(prepared.url),
+            HttpJsonMethod::Post => return Err(SourceExecutionError::HttpJsonBadRequest),
+        };
+        let request_bindings =
+            http_flow_bindings(request, &public_credential, &bindings, None, None);
+        for (name, expr) in &step.request.query {
+            let value = eval_http_json_string(expr, request_bindings.clone())?;
+            builder = builder.query(&[(name.as_str(), value)]);
+        }
+        for (name, expr) in &step.request.headers {
+            let value = eval_http_json_string(expr, request_bindings.clone())?;
+            builder = builder.header(name.as_str(), value);
+        }
+        builder = apply_http_json_auth(builder, step.request.auth.as_ref(), &credential)?;
+        if let Some(error) = acquire_http_json_rate_or_error(state, source_id).await {
+            return Ok(error);
+        }
+        let response = builder.send().await.map_err(|error| {
+            if error.is_timeout() {
+                SourceExecutionError::HttpJsonTimeout
+            } else {
+                SourceExecutionError::HttpJson
+            }
+        })?;
+        let status = response.status();
+        match http_flow_status_action(state, step, status, response.headers())? {
+            HttpFlowStepOutcome::Bind => {
+                let response_headers = http_flow_headers_value(response.headers());
+                let body =
+                    read_limited_json_response(response, state.config.limits.max_output_bytes)
+                        .await?;
+                let scope = http_flow_bindings(
+                    request,
+                    &public_credential,
+                    &bindings,
+                    Some(body),
+                    Some((status, response_headers)),
+                );
+                let mut step_bindings = BTreeMap::new();
+                if let Some(response) = &step.response {
+                    for (name, expr) in &response.bind {
+                        let value = eval_http_json_value(expr, scope.clone())?;
+                        step_bindings.insert(name.clone(), value);
+                    }
+                }
+                bindings.extend(step_bindings);
+                record_metric_with_items(state, source_id, "step_success", Duration::ZERO, 1).await;
+            }
+            HttpFlowStepOutcome::Continue => {
+                record_metric_with_items(state, source_id, "step_skipped", Duration::ZERO, 1).await;
+            }
+            HttpFlowStepOutcome::NotFound => {
+                record_metric_with_items(state, source_id, "flow_not_found", Duration::ZERO, 1)
+                    .await;
+                if let Some(cache_key) = cache_key.as_deref() {
+                    http_json_cache_put(state, source_id, source, cache_key, &json!([])).await;
+                }
+                return Ok(json!([]));
+            }
+            HttpFlowStepOutcome::Error(error) => return Ok(error),
+        }
+    }
+
+    let records = eval_http_json_value(
+        &flow.output.records,
+        http_flow_bindings(request, &public_credential, &bindings, None, None),
+    )?;
+    if !records.is_array() {
+        return Err(SourceExecutionError::HttpJson);
+    }
+    if let Some(cache_key) = cache_key.as_deref() {
+        http_json_cache_put(state, source_id, source, cache_key, &records).await;
+    }
+    Ok(records)
+}
+
+enum HttpFlowStepOutcome {
+    Bind,
+    Continue,
+    NotFound,
+    Error(Value),
+}
+
+fn http_flow_status_action(
+    state: &AppState,
+    step: &HttpFlowStepConfig,
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+) -> Result<HttpFlowStepOutcome, SourceExecutionError> {
+    let action = step.on_status.get(&status.as_u16().to_string()).copied();
+    match action {
+        Some(HttpFlowStatusAction::Continue) => return Ok(HttpFlowStepOutcome::Continue),
+        Some(HttpFlowStatusAction::SourceUnavailable) => {
+            return Ok(HttpFlowStepOutcome::Error(
+                json!({ "error": { "code": "source.unavailable" } }),
+            ));
+        }
+        Some(HttpFlowStatusAction::TargetAuth) => {
+            return Ok(HttpFlowStepOutcome::Error(
+                json!({ "error": { "code": "source.target_auth" } }),
+            ));
+        }
+        Some(HttpFlowStatusAction::TargetRateLimit) => {
+            return Ok(HttpFlowStepOutcome::Error(json!({
+                "error": {
+                    "code": "source.target_rate_limit",
+                    "retry_after_seconds": http_flow_retry_after_seconds(state, headers)
+                }
+            })));
+        }
+        Some(HttpFlowStatusAction::Timeout) => {
+            return Ok(HttpFlowStepOutcome::Error(
+                json!({ "error": { "code": "source.timeout" } }),
+            ));
+        }
+        None => {}
+    }
+
+    if status.is_success() {
+        return Ok(HttpFlowStepOutcome::Bind);
+    }
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Ok(HttpFlowStepOutcome::NotFound);
+    }
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return Ok(HttpFlowStepOutcome::Error(
+            json!({ "error": { "code": "source.target_auth" } }),
+        ));
+    }
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Ok(HttpFlowStepOutcome::Error(json!({
+            "error": {
+                "code": "source.target_rate_limit",
+                "retry_after_seconds": http_flow_retry_after_seconds(state, headers)
+            }
+        })));
+    }
+    if status == reqwest::StatusCode::REQUEST_TIMEOUT {
+        return Ok(HttpFlowStepOutcome::Error(
+            json!({ "error": { "code": "source.timeout" } }),
+        ));
+    }
+    Ok(HttpFlowStepOutcome::Error(
+        json!({ "error": { "code": "source.unavailable" } }),
+    ))
+}
+
+fn http_flow_retry_after_seconds(state: &AppState, headers: &reqwest::header::HeaderMap) -> u64 {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(state.config.limits.retry_after_seconds)
+}
+
 async fn execute_http_json_lookup(
     state: &AppState,
     source_id: &str,
@@ -2993,6 +3692,57 @@ fn http_json_bindings(
     StandaloneExpressionInput::new(root_bindings)
 }
 
+fn http_flow_initial_bindings(flow: &HttpFlowSourceConfig) -> BTreeMap<String, Value> {
+    let mut bindings = BTreeMap::new();
+    for step in &flow.steps {
+        if let Some(response) = &step.response {
+            for name in response.bind.keys() {
+                bindings.insert(name.clone(), Value::Null);
+            }
+        }
+    }
+    bindings
+}
+
+fn http_flow_bindings(
+    request: &Value,
+    public_credential: &Value,
+    flow_bindings: &BTreeMap<String, Value>,
+    body: Option<Value>,
+    response_meta: Option<(reqwest::StatusCode, Value)>,
+) -> StandaloneExpressionInput {
+    let mut bindings = http_json_bindings(request, public_credential, body);
+    for (name, value) in flow_bindings {
+        bindings.root_bindings.insert(name.clone(), value.clone());
+    }
+    if let Some((status, headers)) = response_meta {
+        bindings
+            .root_bindings
+            .insert("status".to_string(), json!(status.as_u16()));
+        bindings
+            .root_bindings
+            .insert("headers".to_string(), headers);
+    } else {
+        bindings
+            .root_bindings
+            .insert("status".to_string(), Value::Null);
+        bindings
+            .root_bindings
+            .insert("headers".to_string(), Value::Null);
+    }
+    bindings
+}
+
+fn http_flow_headers_value(headers: &reqwest::header::HeaderMap) -> Value {
+    let mut object = Map::new();
+    for (name, value) in headers {
+        if let Ok(value) = value.to_str() {
+            object.insert(name.as_str().to_ascii_lowercase(), json!(value));
+        }
+    }
+    Value::Object(object)
+}
+
 fn http_json_batch_item_bindings(
     request: &Value,
     public_credential: &Value,
@@ -3038,6 +3788,16 @@ fn eval_http_json_value(
     runtime
         .evaluate_cel_expression_with_input(&expr.cel, bindings)
         .map_err(|_| SourceExecutionError::HttpJson)
+}
+
+fn eval_http_flow_bool(
+    expr: &HttpJsonCelExpression,
+    bindings: StandaloneExpressionInput,
+) -> Result<bool, SourceExecutionError> {
+    match eval_http_json_value(expr, bindings)? {
+        Value::Bool(value) => Ok(value),
+        _ => Err(SourceExecutionError::HttpJson),
+    }
 }
 
 async fn prepare_http_json_request(
@@ -4683,6 +5443,7 @@ mod tests {
                     allow_insecure_localhost: false,
                     allow_insecure_private_network: false,
                     http_json: None,
+                    http_flow: None,
                     cache: None,
                     smoke_lookup: Some(SmokeLookupConfig {
                         field: "national_id".to_string(),
