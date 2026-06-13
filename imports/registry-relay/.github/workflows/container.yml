@@ -124,18 +124,26 @@ jobs:
         run: |
           set -euo pipefail
 
-          protected="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.protected')"
+          main_branch="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main")"
+          protected="$(jq -r '.protected' <<<"$main_branch")"
           if [[ "$protected" != "true" ]]; then
             echo "Official release image aliases require the repository's main branch to be protected." >&2
+            exit 1
+          fi
+          main_sha="$(jq -r '.commit.sha' <<<"$main_branch")"
+          if [[ ! "$main_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve protected main branch to an immutable commit SHA." >&2
             exit 1
           fi
 
           # Ancestry via the compare API: the checkout has no persisted
           # credentials (persist-credentials: false), so a git fetch here
           # cannot authenticate, while the job token works against the
-          # REST API. "ahead" or "identical" means the tag commit is
-          # reachable from main.
-          status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${GITHUB_SHA}...main" --jq '.status')"
+          # REST API. Compare against the protected branch commit SHA to
+          # avoid ambiguous ref resolution if a tag named "main" exists.
+          # "ahead" or "identical" means the tag commit is reachable from
+          # protected main.
+          status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${GITHUB_SHA}...${main_sha}" --jq '.status')"
           if [[ "$status" != "ahead" && "$status" != "identical" ]]; then
             echo "Official release image aliases require tag commit $GITHUB_SHA to be reachable from protected main (compare status: ${status})." >&2
             exit 1

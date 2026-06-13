@@ -179,7 +179,15 @@ def main() -> int:
     failures.extend(
         require(
             container_text,
-            'gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq \'.protected\'',
+            'main_branch="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main")"',
+            container,
+            "main branch metadata lookup before release image publish",
+        )
+    )
+    failures.extend(
+        require(
+            container_text,
+            'protected="$(jq -r \'.protected\' <<<"$main_branch")"',
             container,
             "main branch protection check before release image publish",
         )
@@ -187,9 +195,25 @@ def main() -> int:
     failures.extend(
         require(
             container_text,
-            'gh api "repos/${GITHUB_REPOSITORY}/compare/${GITHUB_SHA}...main"',
+            'main_sha="$(jq -r \'.commit.sha\' <<<"$main_branch")"',
             container,
-            "tag commit reachability check before release image publish",
+            "protected main commit SHA extraction before release image publish",
+        )
+    )
+    failures.extend(
+        require(
+            container_text,
+            'gh api "repos/${GITHUB_REPOSITORY}/compare/${GITHUB_SHA}...${main_sha}"',
+            container,
+            "tag commit reachability check against protected main commit SHA before release image publish",
+        )
+    )
+    failures.extend(
+        forbid(
+            container_text,
+            r"compare/\$\{GITHUB_SHA\}\.\.\.main",
+            container,
+            "ambiguous main ref in release tag reachability check",
         )
     )
 
