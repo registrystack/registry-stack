@@ -4,9 +4,9 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine as _;
@@ -43,6 +43,11 @@ const TUTORIAL_PURPOSE: &str = "https://example.local/purpose/tutorial";
 const BRUNO_COLLECTION_DIR: &str = "bruno/registry-api";
 const BRUNO_GENERATED_MANIFEST: &str = "bruno/registry-api/.registryctl-generated";
 const STANDALONE_SOURCE_TOKEN_PLACEHOLDER: &str = "replace-with-source-api-token";
+const REGISTRYCTL_RELEASES_API: &str =
+    "https://api.github.com/repos/jeremi/registry-registryctl/releases/latest";
+const REGISTRYCTL_INSTALL_SCRIPT: &str =
+    "https://raw.githubusercontent.com/jeremi/registry-registryctl/main/install.sh";
+const UPDATE_CHECK_CACHE_SECONDS: u64 = 60 * 60 * 24;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum NotarySource {
@@ -258,6 +263,232 @@ pub fn import_openfn_project(options: OpenFnImportOptions) -> Result<()> {
         &convert_options,
     );
     Ok(())
+}
+
+pub fn maybe_warn_about_update(current_version: &str) {
+    if update_check_disabled() {
+        return;
+    }
+    let Some(cache_path) = update_check_cache_path() else {
+        return;
+    };
+
+    let should_refresh = match read_update_check_cache(&cache_path) {
+        Ok(Some(cache)) => {
+            if is_newer_release(current_version, &cache.latest_tag) {
+                eprintln!("{}", update_notice(current_version, &cache.latest_tag));
+            }
+            !cache.is_fresh
+        }
+        Ok(None) | Err(_) => true,
+    };
+
+    if should_refresh {
+        spawn_update_check_refresh();
+    }
+}
+
+pub fn update_check(current_version: &str) -> Result<()> {
+    let latest_tag = fetch_latest_registryctl_release()?;
+    if is_newer_release(current_version, &latest_tag) {
+        println!("{}", update_notice(current_version, &latest_tag));
+    } else {
+        println!(
+            "registryctl {} is current. Latest release: {}.",
+            display_version(current_version),
+            latest_tag
+        );
+    }
+
+    if let Some(cache_path) = update_check_cache_path() {
+        let _ = write_update_check_cache(&cache_path, &latest_tag);
+    }
+
+    Ok(())
+}
+
+pub fn refresh_update_check_cache() -> Result<()> {
+    let latest_tag = fetch_latest_registryctl_release()?;
+    if let Some(cache_path) = update_check_cache_path() {
+        write_update_check_cache(&cache_path, &latest_tag)?;
+    }
+    Ok(())
+}
+
+fn spawn_update_check_refresh() {
+    let Ok(current_exe) = std::env::current_exe() else {
+        return;
+    };
+    let _ = Command::new(current_exe)
+        .arg("__update-check-refresh")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+}
+
+fn update_check_disabled() -> bool {
+    env_flag_is_set("CI")
+        || env_flag_is_set("REGISTRYCTL_NO_UPDATE_CHECK")
+        || matches!(
+            std::env::var("REGISTRYCTL_UPDATE_CHECK"),
+            Ok(value) if value == "0" || value.eq_ignore_ascii_case("false")
+        )
+}
+
+fn env_flag_is_set(name: &str) -> bool {
+    matches!(
+        std::env::var(name),
+        Ok(value) if !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("false")
+    )
+}
+
+fn read_update_check_cache(cache_path: &Path) -> Result<Option<CachedLatestRelease>> {
+    let raw = match fs::read_to_string(cache_path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err).context("failed to read registryctl update check cache"),
+    };
+    let cache: UpdateCheckCache =
+        serde_json::from_str(&raw).context("failed to parse registryctl update check cache")?;
+    let now = unix_now();
+    Ok(Some(CachedLatestRelease {
+        is_fresh: now.saturating_sub(cache.checked_at) <= UPDATE_CHECK_CACHE_SECONDS,
+        latest_tag: cache.latest_tag,
+    }))
+}
+
+fn write_update_check_cache(cache_path: &Path, latest_tag: &str) -> Result<()> {
+    if let Some(parent) = cache_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let cache = UpdateCheckCache {
+        checked_at: unix_now(),
+        latest_tag: latest_tag.to_string(),
+    };
+    let json = serde_json::to_string(&cache).context("failed to render update check cache")?;
+    fs::write(cache_path, json).with_context(|| format!("failed to write {}", cache_path.display()))
+}
+
+fn update_check_cache_path() -> Option<PathBuf> {
+    let cache_home = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))?;
+    Some(cache_home.join("registryctl").join("update-check.json"))
+}
+
+fn fetch_latest_registryctl_release() -> Result<String> {
+    let response = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .get(REGISTRYCTL_RELEASES_API)
+        .set("Accept", "application/vnd.github+json")
+        .set("User-Agent", "registryctl")
+        .call()
+        .map_err(registryctl_release_http_error)?;
+    let body = response
+        .into_string()
+        .context("failed to read registryctl latest release response")?;
+    let latest: GitHubLatestRelease = serde_json::from_str(&body)
+        .context("failed to parse registryctl latest release response")?;
+    if latest.tag_name.trim().is_empty() {
+        bail!("registryctl latest release response did not include tag_name");
+    }
+    Ok(latest.tag_name)
+}
+
+fn registryctl_release_http_error(error: ureq::Error) -> anyhow::Error {
+    match error {
+        ureq::Error::Status(status, response) => {
+            let body = response.into_string().unwrap_or_default();
+            anyhow!(
+                "GitHub returned HTTP {status} while checking registryctl releases: {}",
+                body.trim()
+            )
+        }
+        ureq::Error::Transport(error) => {
+            anyhow!("failed to check registryctl releases: {error}")
+        }
+    }
+}
+
+fn is_newer_release(current_version: &str, latest_tag: &str) -> bool {
+    let Some(current) = VersionNumber::parse(current_version) else {
+        return false;
+    };
+    let Some(latest) = VersionNumber::parse(latest_tag) else {
+        return false;
+    };
+    latest > current
+}
+
+fn update_notice(current_version: &str, latest_tag: &str) -> String {
+    format!(
+        "registryctl {latest_tag} is available. You have {}.\nUpgrade with:\n  REGISTRYCTL_VERSION={latest_tag} curl -fsSL {REGISTRYCTL_INSTALL_SCRIPT} | sh",
+        display_version(current_version)
+    )
+}
+
+fn display_version(version: &str) -> String {
+    if version.starts_with('v') {
+        version.to_string()
+    } else {
+        format!("v{version}")
+    }
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubLatestRelease {
+    tag_name: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct UpdateCheckCache {
+    checked_at: u64,
+    latest_tag: String,
+}
+
+#[derive(Debug)]
+struct CachedLatestRelease {
+    is_fresh: bool,
+    latest_tag: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct VersionNumber {
+    major: u64,
+    minor: u64,
+    patch: u64,
+}
+
+impl VersionNumber {
+    fn parse(value: &str) -> Option<Self> {
+        let trimmed = value.trim().trim_start_matches('v');
+        let without_prerelease = trimmed.split_once('-').map_or(trimmed, |(base, _)| base);
+        let base = without_prerelease
+            .split_once('+')
+            .map_or(without_prerelease, |(base, _)| base);
+        let mut parts = base.split('.');
+        let major = parts.next()?.parse().ok()?;
+        let minor = parts.next()?.parse().ok()?;
+        let patch = parts.next()?.parse().ok()?;
+        if parts.next().is_some() {
+            return None;
+        }
+        Some(Self {
+            major,
+            minor,
+            patch,
+        })
+    }
 }
 
 fn write_openfn_sidecar_conversion(
@@ -3598,6 +3829,54 @@ mod tests {
             allow_latest_adaptors: false,
             allow_empty_job_bodies: false,
         }
+    }
+
+    #[test]
+    fn update_check_detects_newer_semver_tags() {
+        assert!(is_newer_release("0.1.0", "v0.1.1"));
+        assert!(is_newer_release("0.1.9", "v0.10.0"));
+        assert!(!is_newer_release("0.1.0", "v0.1.0"));
+        assert!(!is_newer_release("0.2.0", "v0.1.9"));
+        assert!(!is_newer_release("not-a-version", "v0.2.0"));
+    }
+
+    #[test]
+    fn update_notice_uses_pinned_installer_version() {
+        let notice = update_notice("0.1.0", "v0.2.0");
+
+        assert!(notice.contains("registryctl v0.2.0 is available"));
+        assert!(notice.contains("You have v0.1.0"));
+        assert!(notice.contains("REGISTRYCTL_VERSION=v0.2.0"));
+        assert!(notice.contains(REGISTRYCTL_INSTALL_SCRIPT));
+    }
+
+    #[test]
+    fn update_check_cache_round_trips_latest_tag() {
+        let temp = TempDir::new().unwrap();
+        let cache_path = temp.path().join("registryctl/update-check.json");
+
+        write_update_check_cache(&cache_path, "v0.2.0").unwrap();
+
+        let read = read_update_check_cache(&cache_path).unwrap().unwrap();
+        assert_eq!(read.latest_tag, "v0.2.0");
+        assert!(read.is_fresh);
+    }
+
+    #[test]
+    fn update_check_reads_stale_cache_for_nonblocking_notice() {
+        let temp = TempDir::new().unwrap();
+        let cache_path = temp.path().join("registryctl/update-check.json");
+        let cache = UpdateCheckCache {
+            checked_at: 1,
+            latest_tag: "v0.2.0".to_string(),
+        };
+        fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        fs::write(&cache_path, serde_json::to_string(&cache).unwrap()).unwrap();
+
+        let read = read_update_check_cache(&cache_path).unwrap().unwrap();
+
+        assert_eq!(read.latest_tag, "v0.2.0");
+        assert!(!read.is_fresh);
     }
 
     #[test]
