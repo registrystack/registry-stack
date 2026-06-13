@@ -338,7 +338,7 @@ pre {
 }
 
 .sl-markdown-content code:not(:where(.not-content *)),
-kbd {
+.sl-markdown-content kbd {
   border: 0;
   background: var(--registry-code-bg) !important;
   color: var(--registry-ink);
