@@ -1,13 +1,29 @@
 ---
+import docsetsManifest from '../data/generated/docsets.json';
+
 const repoUrl = 'https://github.com/jeremi/registry-docs';
+const activeDocsetId = process.env.DOCS_DOCSET || docsetsManifest.current;
+const activeDocset =
+  docsetsManifest.docsets.find((docset) => docset.id === activeDocsetId) ??
+  docsetsManifest.docsets.find((docset) => docset.id === docsetsManifest.current);
+const isArchived = activeDocset?.status === 'archived';
 ---
 
 <aside class="registry-preview-banner" role="note" aria-label="Site status">
-  <p>
-    <strong>Preview release.</strong>
-    These docs are a work in progress. Pages are still being written, links
-    may break, and structure may shift without notice. Treat everything here as
-    a draft and report issues on
-    <a href={repoUrl}>GitHub</a>.
-  </p>
+  {isArchived ? (
+    <p>
+      <strong>Archived docs.</strong>
+      You are viewing {activeDocset.label}. For current guidance, use
+      <a href="/">Latest</a>. Report archive issues on
+      <a href={repoUrl}>GitHub</a>.
+    </p>
+  ) : (
+    <p>
+      <strong>Preview release.</strong>
+      These docs are a work in progress. Pages are still being written, links
+      may break, and structure may shift without notice. Treat everything here as
+      a draft and report issues on
+      <a href={repoUrl}>GitHub</a>.
+    </p>
+  )}
 </aside>

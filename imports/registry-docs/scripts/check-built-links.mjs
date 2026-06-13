@@ -2,7 +2,6 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { dirname, join, normalize, relative } from 'node:path';
 
 const distDir = 'dist';
-const base = '/registry-docs';
 const attrPattern = /\s(?:href|src)=["']([^"']+)["']/g;
 const idPattern = /\sid=["']([^"']+)["']/g;
 
@@ -33,37 +32,40 @@ function splitUrl(raw) {
 
 function pageUrl(file) {
   const rel = relative(distDir, file);
-  if (rel === 'index.html') return `${base}/`;
-  if (rel.endsWith('/index.html')) return `${base}/${rel.slice(0, -'index.html'.length)}`;
-  return `${base}/${rel}`;
+  if (rel === 'index.html') return '/';
+  if (rel.endsWith('/index.html')) return `/${rel.slice(0, -'index.html'.length)}`;
+  return `/${rel}`;
 }
 
 function resolveInternal(raw, fromFile) {
-  if (
-    raw === '' ||
-    raw.startsWith('#') ||
-    raw.startsWith('http://') ||
-    raw.startsWith('https://') ||
-    raw.startsWith('mailto:') ||
-    raw.startsWith('tel:') ||
-    raw.startsWith('data:')
-  ) {
+  if (raw === '' || raw.startsWith('#') || isExternal(raw)) {
     return null;
   }
 
   let url = raw;
-  if (url.startsWith(base)) {
-    url = url.slice(base.length) || '/';
-  } else if (url.startsWith('/')) {
-    return null;
-  } else {
-    const current = pageUrl(fromFile).slice(base.length);
+  if (!url.startsWith('/')) {
+    const current = pageUrl(fromFile);
     const currentDir = current.endsWith('/') ? current : dirname(current);
     url = normalize(join(currentDir, url));
     if (!url.startsWith('/')) url = `/${url}`;
   }
 
   return url;
+}
+
+function archiveRoot(file) {
+  const match = pageUrl(file).match(/^\/v\/[^/]+\//);
+  return match?.[0] ?? null;
+}
+
+function isExternal(raw) {
+  return (
+    raw.startsWith('http://') ||
+    raw.startsWith('https://') ||
+    raw.startsWith('mailto:') ||
+    raw.startsWith('tel:') ||
+    raw.startsWith('data:')
+  );
 }
 
 function targetPath(url) {
@@ -88,6 +90,18 @@ for (const file of await htmlFiles(distDir)) {
   const html = await readFile(file, 'utf8');
   for (const match of html.matchAll(attrPattern)) {
     const raw = match[1];
+    const root = archiveRoot(file);
+    if (
+      root &&
+      raw.startsWith('/') &&
+      raw !== '/' &&
+      !raw.startsWith(root) &&
+      !isExternal(raw)
+    ) {
+      errors.push(`${relative('.', file)} links outside its archive: ${raw}`);
+      continue;
+    }
+
     const url = resolveInternal(raw, file);
     if (!url) continue;
 

@@ -30,22 +30,30 @@ function loadProductSidebar() {
   }
 }
 
+const base = process.env.DOCS_BASE || undefined;
+const basePath = base?.replace(/\/$/, '');
 const productSidebar = loadProductSidebar();
+
+/** @param {string} path */
+function internalRedirect(path) {
+  return basePath ? `${basePath}${path}` : path;
+}
 
 export default defineConfig({
   site: 'https://docs.registrystack.org',
+  base,
   trailingSlash: 'always',
   // Redirects for content that moved in the docs/marketing split (Wave 4).
   // External redirects (to marketing) absorb the migrated persuasion pages;
   // internal redirects map the retired /projects/* and /capabilities/* routes
   // to their new homes so old links and search results keep resolving.
   redirects: {
-    '/start/': '/',
+    '/start/': internalRedirect('/'),
     // quickstart's "Choose by question" router merged into the homepage (2026-06).
-    '/start/quickstart/': '/',
-    '/start/your-first-call/': '/tutorials/first-run-with-registry-lab/',
+    '/start/quickstart/': internalRedirect('/'),
+    '/start/your-first-call/': internalRedirect('/tutorials/first-run-with-registry-lab/'),
     // verify-claim-own-api merged into the claim-verification tutorial (2026-06).
-    '/tutorials/verify-claim-own-api/': '/tutorials/verify-claim-registry-api/',
+    '/tutorials/verify-claim-own-api/': internalRedirect('/tutorials/verify-claim-registry-api/'),
     // Problems -> marketing /why
     '/problems/': `${marketing}/why/`,
     '/problems/existing-data-not-service-ready/': `${marketing}/why/`,
@@ -67,24 +75,24 @@ export default defineConfig({
     // Why now -> marketing /why-now
     '/start/safer-registry-surfaces/': `${marketing}/why-now/`,
     // Capabilities taxonomy -> the Explanation pages that absorbed it (internal)
-    '/capabilities/': '/explanation/architecture/',
-    '/capabilities/describe-registries/': '/explanation/architecture/',
-    '/capabilities/expose-protected-apis/': '/explanation/architecture/',
-    '/capabilities/certify-evidence/': '/explanation/architecture/',
-    '/capabilities/audit-and-operate/': '/explanation/architecture/',
-    '/capabilities/inspect-published-artifacts/': '/explanation/architecture/',
+    '/capabilities/': internalRedirect('/explanation/architecture/'),
+    '/capabilities/describe-registries/': internalRedirect('/explanation/architecture/'),
+    '/capabilities/expose-protected-apis/': internalRedirect('/explanation/architecture/'),
+    '/capabilities/certify-evidence/': internalRedirect('/explanation/architecture/'),
+    '/capabilities/audit-and-operate/': internalRedirect('/explanation/architecture/'),
+    '/capabilities/inspect-published-artifacts/': internalRedirect('/explanation/architecture/'),
     // Hand-authored projects/* -> pulled products/* (internal)
-    '/projects/registry-relay/': '/products/registry-relay/',
-    '/projects/registry-relay/run-locally/': '/products/registry-relay/',
-    '/projects/registry-relay/authorize-callers/': '/products/registry-relay/client-integration/',
-    '/projects/registry-relay/reference/': '/products/registry-relay/configuration/',
-    '/projects/registry-notary/': '/products/registry-notary/',
-    '/projects/registry-notary/run-locally/': '/products/registry-notary/',
-    '/projects/registry-notary/configure-a-claim/': '/products/registry-notary/source-claim-modeling-guide/',
-    '/projects/registry-notary/reference/': '/products/registry-notary/operator-config-reference/',
+    '/projects/registry-relay/': internalRedirect('/products/registry-relay/'),
+    '/projects/registry-relay/run-locally/': internalRedirect('/products/registry-relay/'),
+    '/projects/registry-relay/authorize-callers/': internalRedirect('/products/registry-relay/client-integration/'),
+    '/projects/registry-relay/reference/': internalRedirect('/products/registry-relay/configuration/'),
+    '/projects/registry-notary/': internalRedirect('/products/registry-notary/'),
+    '/projects/registry-notary/run-locally/': internalRedirect('/products/registry-notary/'),
+    '/projects/registry-notary/configure-a-claim/': internalRedirect('/products/registry-notary/source-claim-modeling-guide/'),
+    '/projects/registry-notary/reference/': internalRedirect('/products/registry-notary/operator-config-reference/'),
     // registry-manifest, registry-atlas, registry-platform, registry-lab projects/*
     // redirects removed: targets are deferred from the MVP docs cut.
-    '/projects/registry-lab/demo-flow/': '/start/see-it-live/',
+    '/projects/registry-lab/demo-flow/': internalRedirect('/start/see-it-live/'),
   },
   integrations: [
     // Mermaid must come BEFORE starlight: its rehype plugin rewrites

@@ -21,6 +21,7 @@ import { dirname, join, normalize, posix, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import YAML from 'yaml';
+import { applyDocsetRefs, getDocset, loadDocsets, selectedDocsetId } from './docsets.mjs';
 
 const run = promisify(execFile);
 
@@ -344,6 +345,12 @@ async function main() {
   const manifest = YAML.parse(await readFile(manifestPath, 'utf8'));
   if (!manifest || typeof manifest.repos !== 'object') {
     fail('repo-docs.yaml must contain a top-level `repos` map');
+  }
+  const docsets = await loadDocsets({ dataDir });
+  const docset = getDocset(docsets, selectedDocsetId(docsets));
+  if (docset.id !== docsets.current) {
+    applyDocsetRefs(manifest, docset);
+    console.log(`Using archived docset ${docset.id} for product docs.`);
   }
 
   // Clean and recreate the output dir so removed allowlist entries don't linger.

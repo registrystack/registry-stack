@@ -9,9 +9,12 @@
   "scripts": {
     "dev": "npm run generate && astro dev",
     "build": "npm run generate && npm run redoc && astro check && astro build",
+    "build:archive": "node scripts/build-archive.mjs",
+    "build:archives": "node scripts/build-archives.mjs",
     "preview": "astro preview",
     "generate": "node scripts/generate-data.mjs && node scripts/fetch-openapi.mjs && node scripts/sync-repo-docs.mjs && node scripts/generate-sidebar.mjs",
     "test": "node --test \"scripts/**/*.test.mjs\"",
+    "check:docset": "node scripts/check-docset.mjs",
     "check:content": "node scripts/check-doc-frontmatter.mjs",
     "check:svg": "node scripts/check-svg-a11y.mjs",
     "check:markdown": "markdownlint-cli2",
@@ -21,7 +24,7 @@
     "check:tutorial": "scripts/check-tutorial.sh",
     "check:tutorial:dry-run": "scripts/check-tutorial.sh --dry-run",
     "check:links": "npm run build && npm run check:links:built",
-    "check": "npm run generate && npm run check:content && npm run check:markdown && npm run check:style && npm run check:style:fixtures && npm run check:openapi && npm run check:tutorial:dry-run && npm run check:svg && npm run build && npm run check:links:built",
+    "check": "npm run generate && npm run check:docset && npm run check:content && npm run check:markdown && npm run check:style && npm run check:style:fixtures && npm run check:openapi && npm run check:tutorial:dry-run && npm run check:svg && npm run build && npm run build:archives && npm run check:links:built",
     "check:links:built": "node scripts/check-built-links.mjs",
     "redoc": "redocly build-docs registry-relay --output public/api/registry-relay.html && redocly build-docs registry-notary --output public/api/registry-notary.html"
   },

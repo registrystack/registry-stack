@@ -21,6 +21,7 @@ import { execFile } from 'node:child_process';
 import { join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import YAML from 'yaml';
+import { applyDocsetRefs, getDocset, loadDocsets, selectedDocsetId } from './docsets.mjs';
 
 const run = promisify(execFile);
 
@@ -85,6 +86,12 @@ async function main() {
   const manifest = YAML.parse(await readFile(resolve(dataDir, 'repo-docs.yaml'), 'utf8'));
   if (!manifest || typeof manifest.repos !== 'object') {
     fail('repo-docs.yaml must contain a top-level `repos` map');
+  }
+  const docsets = await loadDocsets({ dataDir });
+  const docset = getDocset(docsets, selectedDocsetId(docsets));
+  if (docset.id !== docsets.current) {
+    applyDocsetRefs(manifest, docset);
+    console.log(`Using archived docset ${docset.id} for OpenAPI refs.`);
   }
 
   await mkdir(openapiDir, { recursive: true });

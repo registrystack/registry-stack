@@ -26,6 +26,8 @@ const required = {
   'openapi-sources': ['id', 'name', 'owner', 'source', 'artifact', 'status', 'redoc_path'],
 };
 
+const generated = [];
+
 async function loadYaml(name) {
   const file = resolve(dataDir, `${name}.yaml`);
   const text = await readFile(file, 'utf8');
@@ -48,6 +50,11 @@ await mkdir(generatedDir, { recursive: true });
 for (const name of Object.keys(required)) {
   const data = await loadYaml(name);
   await writeFile(resolve(generatedDir, `${name}.json`), `${JSON.stringify(data, null, 2)}\n`);
+  generated.push(name);
 }
 
-console.log(`Generated ${Object.keys(required).length} data files.`);
+const docsets = YAML.parse(await readFile(resolve(dataDir, 'docsets.yaml'), 'utf8'));
+await writeFile(resolve(generatedDir, 'docsets.json'), `${JSON.stringify(docsets, null, 2)}\n`);
+generated.push('docsets');
+
+console.log(`Generated ${generated.length} data files.`);

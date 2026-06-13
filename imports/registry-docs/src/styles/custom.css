@@ -202,6 +202,27 @@ body {
   font-weight: 600;
 }
 
+.registry-version-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--registry-muted);
+  font-family: var(--__sl-font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.registry-version-switch select {
+  min-block-size: 32px;
+  border: 1px solid var(--registry-rule);
+  background: #ffffff;
+  color: var(--registry-ink);
+  font: 600 13px/1 var(--__sl-font);
+  padding: 0 28px 0 8px;
+}
+
 .registry-utility a {
   color: var(--registry-muted);
   text-decoration: none;
@@ -209,6 +230,30 @@ body {
 
 .registry-utility a:hover {
   color: var(--registry-ink);
+}
+
+.registry-mobile-menu-footer {
+  display: grid;
+  gap: 14px;
+  border-top: 1px solid var(--registry-rule);
+  padding: 18px 24px 22px;
+}
+
+.registry-mobile-menu-footer .registry-version-switch {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.registry-mobile-menu-footer .registry-version-switch select {
+  inline-size: 100%;
+}
+
+.registry-mobile-menu-footer a {
+  color: var(--registry-muted);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
 }
 
 button[data-open-modal] {

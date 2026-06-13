@@ -1,5 +1,11 @@
 ---
 import sources from '../data/generated/openapi-sources.json';
+
+const base = import.meta.env.BASE_URL === '/' ? '' : import.meta.env.BASE_URL.replace(/\/$/, '');
+
+function withBase(path: string) {
+  return path.startsWith('/') ? `${base}${path}` : path;
+}
 ---
 
 <div class="openapi-sources-list">
@@ -23,7 +29,7 @@ import sources from '../data/generated/openapi-sources.json';
 
       {source.redoc_path && (
         <footer class="card-footer">
-          <a href={source.redoc_path} class="redoc-link">Open Redoc page</a>
+          <a href={withBase(source.redoc_path)} class="redoc-link">Open Redoc page</a>
         </footer>
       )}
     </section>
