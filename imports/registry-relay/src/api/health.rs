@@ -62,7 +62,7 @@ async fn ready(runtime: RuntimeSnapshot) -> Response {
             &crate::deployment::today_utc(),
         );
         if evaluation.has_readiness_failure() {
-            return deployment_not_ready_response(&evaluation.readiness_failures);
+            return deployment_not_ready_response();
         }
     }
 
@@ -101,16 +101,15 @@ async fn ready(runtime: RuntimeSnapshot) -> Response {
 }
 
 /// 503 problem response raised when one or more declared deployment gates
-/// evaluate to `readiness_fail`. The triggering finding ids are reported so
-/// operators can see which gates hold the deployment not-ready.
-fn deployment_not_ready_response(findings: &[String]) -> Response {
+/// evaluate to `readiness_fail`. Detailed gate findings stay on authenticated
+/// admin posture surfaces; this public probe only reports aggregate status.
+fn deployment_not_ready_response() -> Response {
     let body = Json(json!({
         "type": format!("{}deployment/not_ready", crate::error::PROBLEM_TYPE_BASE),
         "title": "Deployment not ready",
         "status": 503,
         "detail": "one or more declared deployment profile gates report not-ready",
         "code": "deployment.not_ready",
-        "findings": findings,
     }));
     let mut response = (StatusCode::SERVICE_UNAVAILABLE, body).into_response();
     response.headers_mut().insert(
