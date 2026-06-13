@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-crate_dir="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-repo_dir="$(CDPATH= cd -- "$crate_dir/../.." && pwd)"
+crate_dir="$(unset CDPATH && cd -- "$(dirname -- "$0")/.." && pwd)"
+repo_dir="$(unset CDPATH && cd -- "$crate_dir/../.." && pwd)"
 port="${HTTP_FLOW_DHIS2_CANARY_PORT:-19397}"
 smoke_dir="$repo_dir/target/http-flow-dhis2-sidecar-smoke-$port"
 manifest="$smoke_dir/http-flow-dhis2-sidecar.yaml"
@@ -126,13 +126,14 @@ redact_log() {
 
 export HTTP_FLOW_DHIS2_CANARY_SIDECAR_TOKEN_HASH="$sidecar_token_hash"
 if [ -z "${HTTP_FLOW_DHIS2_CREDENTIAL_JSON:-}" ]; then
-  export HTTP_FLOW_DHIS2_CREDENTIAL_JSON="$(
+  HTTP_FLOW_DHIS2_CREDENTIAL_JSON="$(
     jq -cn \
       --arg baseUrl "$dhis2_base_url" \
       --arg username "$dhis2_username" \
       --arg password "$dhis2_password" \
       '{baseUrl:$baseUrl,username:$username,password:$password}'
   )"
+  export HTTP_FLOW_DHIS2_CREDENTIAL_JSON
 fi
 
 cargo run -p registry-notary-openfn-sidecar --bin registry-notary-openfn-sidecar -- \

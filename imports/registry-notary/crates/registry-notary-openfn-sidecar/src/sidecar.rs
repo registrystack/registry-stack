@@ -195,6 +195,16 @@ pub enum SourceEngine {
     HttpFlow,
 }
 
+impl SourceEngine {
+    fn worker_id(self) -> &'static str {
+        match self {
+            SourceEngine::OpenFn => "openfn",
+            SourceEngine::HttpJson => "http_json",
+            SourceEngine::HttpFlow => "http_flow",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SourceBatchConfig {
     #[serde(default)]
@@ -619,6 +629,8 @@ struct ResolvedBearerToken {
 struct MetricKey {
     source_id: String,
     outcome: String,
+    engine: Option<String>,
+    step_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -3182,12 +3194,18 @@ async fn execute_http_flow_lookup_with_timeout(
     request: &Value,
 ) -> Result<Value, SourceExecutionError> {
     let timeout = http_flow_timeout(state, source)?;
-    tokio::time::timeout(
+    match tokio::time::timeout(
         timeout,
         execute_http_flow_lookup(state, source_id, source, request),
     )
     .await
-    .map_err(|_| SourceExecutionError::HttpJsonTimeout)?
+    {
+        Ok(result) => result,
+        Err(_) => {
+            record_http_flow_metric(state, source_id, None, "flow_timeout", 1).await;
+            Err(SourceExecutionError::HttpJsonTimeout)
+        }
+    }
 }
 
 fn http_flow_timeout(
@@ -3235,7 +3253,7 @@ async fn execute_http_flow_lookup(
                 when,
                 http_flow_bindings(request, &public_credential, &bindings, None, None),
             )? {
-                record_metric_with_items(state, source_id, "step_skipped", Duration::ZERO, 1).await;
+                record_http_flow_metric(state, source_id, Some(&step.id), "step_skipped", 1).await;
                 continue;
             }
         }
@@ -3295,20 +3313,30 @@ async fn execute_http_flow_lookup(
                     }
                 }
                 bindings.extend(step_bindings);
-                record_metric_with_items(state, source_id, "step_success", Duration::ZERO, 1).await;
+                record_http_flow_metric(state, source_id, Some(&step.id), "step_success", 1).await;
             }
             HttpFlowStepOutcome::Continue => {
-                record_metric_with_items(state, source_id, "step_skipped", Duration::ZERO, 1).await;
+                record_http_flow_metric(state, source_id, Some(&step.id), "step_skipped", 1).await;
             }
             HttpFlowStepOutcome::NotFound => {
-                record_metric_with_items(state, source_id, "flow_not_found", Duration::ZERO, 1)
+                record_http_flow_metric(state, source_id, Some(&step.id), "flow_not_found", 1)
                     .await;
                 if let Some(cache_key) = cache_key.as_deref() {
                     http_json_cache_put(state, source_id, source, cache_key, &json!([])).await;
                 }
                 return Ok(json!([]));
             }
-            HttpFlowStepOutcome::Error(error) => return Ok(error),
+            HttpFlowStepOutcome::Error(error) => {
+                record_http_flow_metric(
+                    state,
+                    source_id,
+                    Some(&step.id),
+                    http_flow_error_metric_outcome(&error),
+                    1,
+                )
+                .await;
+                return Ok(error);
+            }
         }
     }
 
@@ -3317,12 +3345,27 @@ async fn execute_http_flow_lookup(
         http_flow_bindings(request, &public_credential, &bindings, None, None),
     )?;
     if !records.is_array() {
+        record_http_flow_metric(state, source_id, None, "flow_invalid_output", 1).await;
         return Err(SourceExecutionError::HttpJson);
     }
     if let Some(cache_key) = cache_key.as_deref() {
         http_json_cache_put(state, source_id, source, cache_key, &records).await;
     }
     Ok(records)
+}
+
+fn http_flow_error_metric_outcome(error: &Value) -> &'static str {
+    match error
+        .get("error")
+        .and_then(|error| error.get("code"))
+        .and_then(Value::as_str)
+    {
+        Some("source.target_auth") => "step_target_auth",
+        Some("source.target_rate_limit") => "step_target_rate_limit",
+        Some("source.timeout") => "step_source_timeout",
+        Some("source.unavailable") => "step_source_unavailable",
+        _ => "step_source_error",
+    }
 }
 
 enum HttpFlowStepOutcome {
@@ -4296,22 +4339,17 @@ async fn metrics(State(state): State<Arc<AppState>>) -> Response {
         body.push_str("# TYPE registry_notary_openfn_sidecar_lookup_items_total counter\n");
     }
     for (key, value) in metrics.iter() {
+        let labels = metric_labels(key);
         body.push_str(&format!(
-            "registry_notary_openfn_sidecar_lookup_total{{source_id=\"{}\",outcome=\"{}\"}} {}\n",
-            escape_metric_label(&key.source_id),
-            escape_metric_label(&key.outcome),
+            "registry_notary_openfn_sidecar_lookup_total{{{labels}}} {}\n",
             value.count
         ));
         body.push_str(&format!(
-            "registry_notary_openfn_sidecar_lookup_duration_ms_total{{source_id=\"{}\",outcome=\"{}\"}} {}\n",
-            escape_metric_label(&key.source_id),
-            escape_metric_label(&key.outcome),
+            "registry_notary_openfn_sidecar_lookup_duration_ms_total{{{labels}}} {}\n",
             value.duration_ms_total
         ));
         body.push_str(&format!(
-            "registry_notary_openfn_sidecar_lookup_items_total{{source_id=\"{}\",outcome=\"{}\"}} {}\n",
-            escape_metric_label(&key.source_id),
-            escape_metric_label(&key.outcome),
+            "registry_notary_openfn_sidecar_lookup_items_total{{{labels}}} {}\n",
             value.items_total
         ));
     }
@@ -4321,6 +4359,20 @@ async fn metrics(State(state): State<Arc<AppState>>) -> Response {
         body,
     )
         .into_response()
+}
+
+fn metric_labels(key: &MetricKey) -> String {
+    let mut labels = vec![
+        format!("source_id=\"{}\"", escape_metric_label(&key.source_id)),
+        format!("outcome=\"{}\"", escape_metric_label(&key.outcome)),
+    ];
+    if let Some(engine) = &key.engine {
+        labels.push(format!("engine=\"{}\"", escape_metric_label(engine)));
+    }
+    if let Some(step_id) = &key.step_id {
+        labels.push(format!("step_id=\"{}\"", escape_metric_label(step_id)));
+    }
+    labels.join(",")
 }
 
 async fn lookup(
@@ -4408,11 +4460,12 @@ async fn lookup(
         Err(SourceExecutionError::HttpJson) => {
             record_metric_with_items(&state, source_id, "source_error", started_at.elapsed(), 1)
                 .await;
+            let worker_id = source.engine.worker_id();
             warn!(
                 correlation_id = correlation_id.as_deref().unwrap_or(""),
                 source_id = source_id.as_str(),
                 outcome = "source_error",
-                worker_id = "http_json",
+                worker_id,
                 duration_ms = started_at.elapsed().as_millis() as u64,
                 "sidecar lookup failed"
             );
@@ -4421,11 +4474,12 @@ async fn lookup(
         Err(SourceExecutionError::HttpJsonTimeout) => {
             record_metric_with_items(&state, source_id, "source_timeout", started_at.elapsed(), 1)
                 .await;
+            let worker_id = source.engine.worker_id();
             warn!(
                 correlation_id = correlation_id.as_deref().unwrap_or(""),
                 source_id = source_id.as_str(),
                 outcome = "source_timeout",
-                worker_id = "http_json",
+                worker_id,
                 duration_ms = started_at.elapsed().as_millis() as u64,
                 "sidecar lookup timed out"
             );
@@ -4573,11 +4627,12 @@ async fn batch_match(
                 batch_item_count,
             )
             .await;
+            let worker_id = source.engine.worker_id();
             warn!(
                 correlation_id = correlation_id.as_deref().unwrap_or(""),
                 source_id = source_id.as_str(),
                 outcome = "batch_source_error",
-                worker_id = "http_json",
+                worker_id,
                 duration_ms = started_at.elapsed().as_millis() as u64,
                 "sidecar batch match failed"
             );
@@ -4592,11 +4647,12 @@ async fn batch_match(
                 batch_item_count,
             )
             .await;
+            let worker_id = source.engine.worker_id();
             warn!(
                 correlation_id = correlation_id.as_deref().unwrap_or(""),
                 source_id = source_id.as_str(),
                 outcome = "batch_source_timeout",
-                worker_id = "http_json",
+                worker_id,
                 duration_ms = started_at.elapsed().as_millis() as u64,
                 "sidecar batch match timed out"
             );
@@ -4695,9 +4751,23 @@ async fn record_metric_with_items(
     duration: Duration,
     items: usize,
 ) {
+    record_metric_with_labels(state, source_id, outcome, duration, items, None, None).await;
+}
+
+async fn record_metric_with_labels(
+    state: &AppState,
+    source_id: &str,
+    outcome: &str,
+    duration: Duration,
+    items: usize,
+    engine: Option<&str>,
+    step_id: Option<&str>,
+) {
     let key = MetricKey {
         source_id: source_id.to_string(),
         outcome: outcome.to_string(),
+        engine: engine.map(ToOwned::to_owned),
+        step_id: step_id.map(ToOwned::to_owned),
     };
     let mut metrics = state.metrics.lock().await;
     let value = metrics.entry(key).or_default();
@@ -4706,6 +4776,25 @@ async fn record_metric_with_items(
         .duration_ms_total
         .saturating_add(duration.as_millis() as u64);
     value.items_total = value.items_total.saturating_add(items as u64);
+}
+
+async fn record_http_flow_metric(
+    state: &AppState,
+    source_id: &str,
+    step_id: Option<&str>,
+    outcome: &str,
+    items: usize,
+) {
+    record_metric_with_labels(
+        state,
+        source_id,
+        outcome,
+        Duration::ZERO,
+        items,
+        Some("http_flow"),
+        step_id,
+    )
+    .await;
 }
 
 async fn acquire_source_rate(

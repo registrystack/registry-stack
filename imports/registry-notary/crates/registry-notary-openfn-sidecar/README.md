@@ -435,9 +435,11 @@ sources:
 ```
 
 Bindings declared by later steps are initialized to `null`, so a skipped step
-does not make final CEL expressions fail. A default upstream `404` stops the
-flow as a not-found result. Configure `on_status` per step when a source uses
-`404` for optional subresources:
+does not make final CEL expressions fail. By default, an upstream `404` on any
+step stops the whole flow as a not-found result. This is usually correct for a
+required search step, but it is wrong for optional dependent subresources where
+the parent record still exists. Configure `on_status` on every optional step
+whose `404` should mean "continue without bindings":
 
 ```yaml
 on_status:

@@ -112,6 +112,10 @@ async fn oversized_lookup(Query(query): Query<HashMap<String, String>>) -> Json<
             "results": [{
                 "national_id": "smoke-person",
                 "birth_date": "1990-01-01"
+            }],
+            "trackedEntityInstances": [{
+                "trackedEntityInstance": "tei-smoke-person",
+                "national_id": "smoke-person"
             }]
         }));
     }
@@ -1188,6 +1192,66 @@ async fn http_flow_parallel_batch_is_bounded_and_preserves_order() {
 }
 
 #[tokio::test]
+async fn http_flow_sequential_batch_preserves_order_and_not_found_items() {
+    let _env_guard = ENV_LOCK.lock().await;
+    let upstream_state = UpstreamState::default();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route("/trackedEntityInstances", get(flow_person_lookup))
+            .route("/enrollments", get(flow_enrollment_lookup))
+            .with_state(upstream_state.clone()),
+    );
+    let upstream_url = server_base_url(&upstream);
+    set_sidecar_env(&upstream_url);
+    let config: SidecarConfig =
+        serde_norway::from_str(&http_flow_manifest(&upstream_url)).expect("flow manifest parses");
+    let app = sidecar_router(config)
+        .await
+        .expect("http_flow sidecar starts");
+    let sidecar = TestServer::builder().http_transport().build(app);
+    upstream_state.seen.lock().await.clear();
+
+    let response = sidecar
+        .post(&format!(
+            "/v1/datasets/{DATASET}/entities/{ENTITY}/records:batchMatch"
+        ))
+        .add_header("authorization", format!("Bearer {TOKEN}"))
+        .add_header("data-purpose", "eligibility")
+        .json(&json!({
+            "fields": ["national_id", "program_status"],
+            "query_signature": [{ "field": "national_id", "op": "eq" }],
+            "items": [
+                { "id": "first", "values": ["person-123"] },
+                { "id": "missing", "values": ["missing-person"] },
+                { "id": "second", "values": ["person-456"] }
+            ]
+        }))
+        .await;
+
+    response.assert_status_ok();
+    assert_eq!(
+        response.json::<Value>(),
+        json!({
+            "items": [
+                { "id": "first", "data": [{ "national_id": "person-123", "program_status": "ACTIVE" }] },
+                { "id": "missing", "data": [] },
+                { "id": "second", "data": [{ "national_id": "person-456", "program_status": "ACTIVE" }] }
+            ]
+        })
+    );
+    let seen = upstream_state.seen.lock().await;
+    let person_steps = seen
+        .iter()
+        .filter(|request| request["step"] == json!("person"))
+        .map(|request| request["id"].as_str().expect("id is a string").to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        person_steps,
+        vec!["person-123", "missing-person", "person-456"]
+    );
+}
+
+#[tokio::test]
 async fn http_flow_source_saturation_returns_503_before_dispatch() {
     let _env_guard = ENV_LOCK.lock().await;
     let upstream_state = UpstreamState::default();
@@ -1315,6 +1379,85 @@ async fn http_flow_upstream_statuses_map_to_controlled_errors_and_backoff() {
         seen_before_backoff,
         "Retry-After backoff should fail before another upstream dispatch"
     );
+    let metrics = sidecar.get("/metrics").await.text();
+    assert!(metrics
+        .contains("outcome=\"step_target_auth\",engine=\"http_flow\",step_id=\"find_person\""));
+    assert!(metrics.contains(
+        "outcome=\"step_source_unavailable\",engine=\"http_flow\",step_id=\"find_person\""
+    ));
+    assert!(metrics.contains(
+        "outcome=\"step_target_rate_limit\",engine=\"http_flow\",step_id=\"find_person\""
+    ));
+}
+
+#[tokio::test]
+async fn http_flow_invalid_output_records_flow_metric_and_maps_to_502() {
+    let _env_guard = ENV_LOCK.lock().await;
+    let upstream_state = UpstreamState::default();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route("/trackedEntityInstances", get(flow_person_lookup))
+            .route("/enrollments", get(flow_enrollment_lookup))
+            .with_state(upstream_state.clone()),
+    );
+    let upstream_url = server_base_url(&upstream);
+    set_sidecar_env(&upstream_url);
+    let manifest = http_flow_manifest(&upstream_url).replace(
+        r#"          cel: "enrollments == null ? [] : enrollments""#,
+        r#"          cel: "lookup.value == 'smoke-person' ? enrollments : person_id""#,
+    );
+    let config: SidecarConfig = serde_norway::from_str(&manifest).expect("flow manifest parses");
+    let app = sidecar_router(config)
+        .await
+        .expect("http_flow sidecar starts");
+    let sidecar = TestServer::builder().http_transport().build(app);
+
+    let response = sidecar
+        .get(&format!("/v1/datasets/{DATASET}/entities/{ENTITY}/records"))
+        .add_header("authorization", format!("Bearer {TOKEN}"))
+        .add_header("data-purpose", "eligibility")
+        .add_query_param("national_id", "person-123")
+        .add_query_param("fields", "national_id")
+        .await;
+
+    response.assert_status(StatusCode::BAD_GATEWAY);
+    let metrics = sidecar.get("/metrics").await.text();
+    assert!(metrics.contains("outcome=\"flow_invalid_output\",engine=\"http_flow\""));
+}
+
+#[tokio::test]
+async fn http_flow_oversized_upstream_response_maps_to_502() {
+    let _env_guard = ENV_LOCK.lock().await;
+    let upstream_state = UpstreamState::default();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route("/oversized", get(oversized_lookup))
+            .route("/enrollments", get(flow_enrollment_lookup))
+            .with_state(upstream_state.clone()),
+    );
+    let upstream_url = server_base_url(&upstream);
+    set_sidecar_env(&upstream_url);
+    let manifest = http_flow_manifest(&upstream_url)
+        .replace("  max_output_bytes: 4096", "  max_output_bytes: 256")
+        .replace(
+            r#"path: "/trackedEntityInstances""#,
+            r#"path: "/oversized""#,
+        );
+    let config: SidecarConfig = serde_norway::from_str(&manifest).expect("flow manifest parses");
+    let app = sidecar_router(config)
+        .await
+        .expect("http_flow sidecar starts");
+    let sidecar = TestServer::builder().http_transport().build(app);
+
+    let response = sidecar
+        .get(&format!("/v1/datasets/{DATASET}/entities/{ENTITY}/records"))
+        .add_header("authorization", format!("Bearer {TOKEN}"))
+        .add_header("data-purpose", "eligibility")
+        .add_query_param("national_id", "person-123")
+        .add_query_param("fields", "national_id")
+        .await;
+
+    response.assert_status(StatusCode::BAD_GATEWAY);
 }
 
 #[tokio::test]
