@@ -58,10 +58,11 @@ impl GateSeverity {
         }
     }
 
-    /// `startup_fail` is reserved for conditions where running at all would
-    /// falsify the profile claim, so it can never be waived.
+    /// Hard deployment gates cannot be waived. `startup_fail` means running at
+    /// all would falsify the profile claim; `readiness_fail` means the process
+    /// may run but must not report ready until the condition is cleared.
     pub const fn is_waivable(self) -> bool {
-        !matches!(self, Self::StartupFail)
+        matches!(self, Self::FindingError | Self::FindingWarn)
     }
 }
 
@@ -126,9 +127,9 @@ pub enum DeploymentConfigError {
     #[error("deployment.waivers[{index}].expires must be a YYYY-MM-DD date")]
     InvalidWaiverExpiry { index: usize },
     #[error(
-        "deployment.waivers[{index}] waives finding '{finding}', which is a startup_fail gate and cannot be waived"
+        "deployment.waivers[{index}] waives finding '{finding}', which is a hard deployment gate and cannot be waived"
     )]
-    StartupFailNotWaivable { index: usize, finding: String },
+    HardGateNotWaivable { index: usize, finding: String },
     #[error(
         "deployment.waivers[{index}] waives unknown finding id '{finding}'; check the catalog"
     )]
@@ -139,9 +140,9 @@ impl DeploymentConfig {
     /// Validate the deployment block at config load.
     ///
     /// This checks waiver shape (non-empty fields, parseable expiry) and the
-    /// hard rule that a `startup_fail` gate can never be waived under the
-    /// declared profile. An undeclared profile still validates waiver shape so
-    /// typos are caught early.
+    /// hard rule that `startup_fail` and `readiness_fail` gates can never be
+    /// waived under the declared profile. An undeclared profile still validates
+    /// waiver shape so typos are caught early.
     pub fn validate(&self) -> Result<(), DeploymentConfigError> {
         for (index, waiver) in self.waivers.iter().enumerate() {
             if waiver.finding.trim().is_empty() {
@@ -162,7 +163,7 @@ impl DeploymentConfig {
             if let Some(profile) = self.profile {
                 if let Some(severity) = gate.severity_for(profile) {
                     if !severity.is_waivable() {
-                        return Err(DeploymentConfigError::StartupFailNotWaivable {
+                        return Err(DeploymentConfigError::HardGateNotWaivable {
                             index,
                             finding: waiver.finding.clone(),
                         });
@@ -385,6 +386,16 @@ pub fn evaluate_gates(
                 }),
             });
         } else {
+            let Some(severity) = gate_catalog()
+                .iter()
+                .find(|gate| gate.id == waiver.finding)
+                .and_then(|gate| gate.severity_for(profile))
+            else {
+                continue;
+            };
+            if !severity.is_waivable() {
+                continue;
+            }
             waived_findings.push(waiver);
             evaluation.active_waivers.push(EvaluatedWaiver {
                 finding: waiver.finding.clone(),
@@ -616,7 +627,28 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_waiver_for_startup_fail_gate() {
+    fn readiness_fail_gate_is_not_waivable_even_with_active_waiver() {
+        let input = high_risk_in_memory_input();
+        let evaluation = evaluate_gates(
+            Some(DeploymentProfile::Production),
+            &input,
+            &[waiver(FINDING_REPLAY_IN_MEMORY_HIGH_RISK, "2099-01-01")],
+            "2026-06-13",
+        );
+        assert!(evaluation
+            .readiness_failures
+            .contains(&FINDING_REPLAY_IN_MEMORY_HIGH_RISK.to_string()));
+        let finding = evaluation
+            .findings
+            .iter()
+            .find(|finding| finding.id == FINDING_REPLAY_IN_MEMORY_HIGH_RISK)
+            .expect("high-risk replay finding exists");
+        assert_eq!(finding.status, DeploymentFindingStatus::Active);
+        assert!(evaluation.active_waivers.is_empty());
+    }
+
+    #[test]
+    fn validate_rejects_waiver_for_hard_startup_gate() {
         let config = DeploymentConfig {
             profile: Some(DeploymentProfile::EvidenceGrade),
             multi_instance: false,
@@ -625,7 +657,23 @@ mod tests {
         let error = config.validate().expect_err("startup_fail waiver rejected");
         assert!(matches!(
             error,
-            DeploymentConfigError::StartupFailNotWaivable { .. }
+            DeploymentConfigError::HardGateNotWaivable { .. }
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_waiver_for_hard_readiness_gate() {
+        let config = DeploymentConfig {
+            profile: Some(DeploymentProfile::Production),
+            multi_instance: false,
+            waivers: vec![waiver(FINDING_REPLAY_IN_MEMORY_HIGH_RISK, "2099-01-01")],
+        };
+        let error = config
+            .validate()
+            .expect_err("readiness_fail waiver rejected");
+        assert!(matches!(
+            error,
+            DeploymentConfigError::HardGateNotWaivable { .. }
         ));
     }
 
