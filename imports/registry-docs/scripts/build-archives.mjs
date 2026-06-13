@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
+import { rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { applyArchiveSeo } from './apply-archive-seo.mjs';
 import { loadDocsets } from './docsets.mjs';
 
 function outDirForDocset(docset) {
@@ -29,10 +31,12 @@ export async function buildDocsetArchive(docset) {
 
   const env = { ...process.env, DOCS_DOCSET: docset.id, DOCS_BASE: docset.path };
   const outDir = outDirForDocset(docset);
+  await rm(outDir, { recursive: true, force: true });
   await run('npm', ['run', 'generate'], env);
   await run('npm', ['run', 'redoc'], env);
   await run('npx', ['astro', 'check'], env);
   await run('npx', ['astro', 'build', '--outDir', outDir], env);
+  await applyArchiveSeo(outDir);
   console.log(`Built archived docset ${docset.id} at ${outDir}.`);
 }
 
