@@ -1,6 +1,6 @@
 title = "registry-notary gitleaks config"
 
-[allowlist]
+[[allowlists]]
 description = "Generated and local build output are not source review surfaces."
 paths = [
   '''^target/''',

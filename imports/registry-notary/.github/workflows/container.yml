@@ -24,19 +24,123 @@ concurrency:
 
 env:
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: 7ac4be89e91c0c2e8aa94ad15bd033a679ce4a6e
+  REGISTRY_PLATFORM_REF: 51bb9a61c31ab55c4d8dbaf156426bc887d5f096
   CROSSWALK_REPOSITORY: PublicSchema/crosswalk
   CROSSWALK_REF: 54e0f537830837fcd0c9efa87990987b1846931c
   NOTARY_IMAGE: ghcr.io/jeremi/registry-notary
   OPENFN_SIDECAR_IMAGE: ghcr.io/jeremi/registry-notary-openfn-sidecar
 
 jobs:
+  pull-request-images:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Checkout registry-notary
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          path: registry-notary
+          persist-credentials: false
+      - name: Checkout registry-platform
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          path: registry-platform
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          persist-credentials: false
+      - name: Checkout crosswalk
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          repository: ${{ env.CROSSWALK_REPOSITORY }}
+          ref: ${{ env.CROSSWALK_REF }}
+          path: crosswalk
+          persist-credentials: false
+      - name: Build registry-notary image
+        run: |
+          docker build \
+            --build-context registry-platform=registry-platform \
+            --build-context crosswalk=crosswalk \
+            --build-arg REGISTRY_NOTARY_FEATURES=registry-notary-cel,pkcs11 \
+            --file registry-notary/Dockerfile \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.version=${GITHUB_REF_NAME}" \
+            --tag "$NOTARY_IMAGE:ci-${GITHUB_SHA}" \
+            registry-notary
+      - name: Smoke registry-notary image worker protocol
+        run: |
+          output="$(
+            printf '%s\n' '{"protocol":"registry-notary-cel-worker/v1","expression":"source.age >= 18","root_bindings":{"source":{"age":21},"claims":{},"ctx":{},"vars":{},"meta":{}}}' \
+              | docker run --rm -i --entrypoint /usr/local/bin/registry-notary-cel-worker "$NOTARY_IMAGE:ci-${GITHUB_SHA}"
+          )"
+          python3 - "$output" <<'PY'
+          import json
+          import sys
+
+          response = json.loads(sys.argv[1])
+          assert response["protocol"] == "registry-notary-cel-worker/v1"
+          assert response["value"] is True
+          assert response["policy_hash"].startswith("sha256:")
+          PY
+      - name: Build OpenFn sidecar image
+        run: |
+          docker build \
+            --build-context registry-platform=registry-platform \
+            --build-context crosswalk=crosswalk \
+            --file registry-notary/Dockerfile.openfn-sidecar \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.version=${GITHUB_REF_NAME}" \
+            --tag "$OPENFN_SIDECAR_IMAGE:ci-${GITHUB_SHA}" \
+            registry-notary
+      - name: Generate image SBOMs and advisory vulnerability reports
+        run: |
+          set -o pipefail
+          mkdir -p registry-notary/target/security
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD/registry-notary/target/security:/out" \
+            anchore/syft:v1.18.1@sha256:b8c170b8e51bfc4779ec3ef4399942c57290f5ce76a9c3af564c9d00d4946a6b "$NOTARY_IMAGE:ci-${GITHUB_SHA}" \
+            -o spdx-json=/out/registry-notary-image.spdx.json
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD/registry-notary/target/security:/out" \
+            anchore/syft:v1.18.1@sha256:b8c170b8e51bfc4779ec3ef4399942c57290f5ce76a9c3af564c9d00d4946a6b "$OPENFN_SIDECAR_IMAGE:ci-${GITHUB_SHA}" \
+            -o spdx-json=/out/registry-notary-openfn-sidecar-image.spdx.json
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD/registry-notary/target/security:/out" \
+            anchore/grype:v0.85.0@sha256:8d7a54c4281e334a60c2d1616269411a940efad44c2cc1533ddc76689b9268af "$NOTARY_IMAGE:ci-${GITHUB_SHA}" \
+            -o json > registry-notary/target/security/registry-notary-image-vulnerabilities.json
+          python3 registry-notary/scripts/check_advisory_baselines.py grype \
+            registry-notary/target/security/registry-notary-image-vulnerabilities.json \
+            --subject registry-notary-image
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD/registry-notary/target/security:/out" \
+            anchore/grype:v0.85.0@sha256:8d7a54c4281e334a60c2d1616269411a940efad44c2cc1533ddc76689b9268af "$OPENFN_SIDECAR_IMAGE:ci-${GITHUB_SHA}" \
+            -o json > registry-notary/target/security/registry-notary-openfn-sidecar-image-vulnerabilities.json
+          python3 registry-notary/scripts/check_advisory_baselines.py grype \
+            registry-notary/target/security/registry-notary-openfn-sidecar-image-vulnerabilities.json \
+            --subject registry-notary-openfn-sidecar-image
+      - name: Upload image security evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: registry-notary-image-security-evidence
+          path: registry-notary/target/security/
+
   images:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
       packages: write
+    defaults:
+      run:
+        working-directory: .
     steps:
       - name: Decide image channel
         id: channel
@@ -147,9 +251,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          protected="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.protected')"
+          IFS=$'\t' read -r protected protected_main_sha < <(
+            gh api "repos/${GITHUB_REPOSITORY}/branches/main" \
+              --jq '[.protected, .commit.sha] | @tsv'
+          )
           if [[ "$protected" != "true" ]]; then
             echo "Official release image aliases require the repository's main branch to be protected." >&2
+            exit 1
+          fi
+          if [[ ! "$protected_main_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve the protected main branch SHA." >&2
             exit 1
           fi
 
@@ -157,8 +268,8 @@ jobs:
           # credentials (persist-credentials: false), so a git fetch here
           # cannot authenticate, while the job token works against the
           # REST API. "ahead" or "identical" means the tag commit is
-          # reachable from main.
-          status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${GITHUB_SHA}...main" --jq '.status')"
+          # reachable from the protected main branch SHA returned above.
+          status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${GITHUB_SHA}...${protected_main_sha}" --jq '.status')"
           if [[ "$status" != "ahead" && "$status" != "identical" ]]; then
             echo "Official release image aliases require tag commit $GITHUB_SHA to be reachable from protected main (compare status: ${status})." >&2
             exit 1

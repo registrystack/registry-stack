@@ -58,10 +58,11 @@ impl GateSeverity {
         }
     }
 
-    /// `startup_fail` is reserved for conditions where running at all would
-    /// falsify the profile claim, so it can never be waived.
+    /// Hard deployment gates cannot be waived. `startup_fail` means running at
+    /// all would falsify the profile claim; `readiness_fail` means the process
+    /// may run but must not report ready until the condition is cleared.
     pub const fn is_waivable(self) -> bool {
-        !matches!(self, Self::StartupFail)
+        matches!(self, Self::FindingError | Self::FindingWarn)
     }
 }
 
@@ -126,9 +127,9 @@ pub enum DeploymentConfigError {
     #[error("deployment.waivers[{index}].expires must be a YYYY-MM-DD date")]
     InvalidWaiverExpiry { index: usize },
     #[error(
-        "deployment.waivers[{index}] waives finding '{finding}', which is a startup_fail gate and cannot be waived"
+        "deployment.waivers[{index}] waives finding '{finding}', which is a hard deployment gate and cannot be waived"
     )]
-    StartupFailNotWaivable { index: usize, finding: String },
+    HardGateNotWaivable { index: usize, finding: String },
     #[error(
         "deployment.waivers[{index}] waives unknown finding id '{finding}'; check the catalog"
     )]
@@ -139,9 +140,9 @@ impl DeploymentConfig {
     /// Validate the deployment block at config load.
     ///
     /// This checks waiver shape (non-empty fields, parseable expiry) and the
-    /// hard rule that a `startup_fail` gate can never be waived under the
-    /// declared profile. An undeclared profile still validates waiver shape so
-    /// typos are caught early.
+    /// hard rule that `startup_fail` and `readiness_fail` gates can never be
+    /// waived under the declared profile. An undeclared profile still validates
+    /// waiver shape so typos are caught early.
     pub fn validate(&self) -> Result<(), DeploymentConfigError> {
         for (index, waiver) in self.waivers.iter().enumerate() {
             if waiver.finding.trim().is_empty() {
@@ -162,7 +163,7 @@ impl DeploymentConfig {
             if let Some(profile) = self.profile {
                 if let Some(severity) = gate.severity_for(profile) {
                     if !severity.is_waivable() {
-                        return Err(DeploymentConfigError::StartupFailNotWaivable {
+                        return Err(DeploymentConfigError::HardGateNotWaivable {
                             index,
                             finding: waiver.finding.clone(),
                         });
@@ -193,6 +194,9 @@ pub struct GateInput {
     pub admin_shared_exposure: bool,
     pub openapi_public: bool,
     pub config_unsigned: bool,
+    pub self_attestation_enabled: bool,
+    pub transaction_token_anchor_configured: bool,
+    pub transaction_token_sender_constrained: bool,
 }
 
 impl GateInput {
@@ -239,6 +243,10 @@ pub const FINDING_SIDECAR_EXPECTED_MISSING: &str = "notary.sidecar.expected_side
 pub const FINDING_ADMIN_SHARED_EXPOSURE: &str = "notary.admin.shared_exposure";
 pub const FINDING_OPENAPI_PUBLIC: &str = "notary.openapi.public";
 pub const FINDING_CONFIG_UNSIGNED: &str = "notary.config.unsigned";
+pub const FINDING_ASSISTED_ACCESS_TRANSACTION_TOKEN_ANCHOR_MISSING: &str =
+    "notary.assisted_access.transaction_token_anchor_missing";
+pub const FINDING_ASSISTED_ACCESS_SENDER_CONSTRAINT_MISSING: &str =
+    "notary.assisted_access.sender_constraint_missing";
 
 // Diagnostic finding ids emitted by the framework itself.
 pub const FINDING_PROFILE_UNDECLARED: &str = "deployment.profile_undeclared";
@@ -306,6 +314,25 @@ fn gate_catalog() -> &'static [Gate] {
             production: Some(FindingError),
             evidence_grade: Some(StartupFail),
             condition: |input| input.config_unsigned,
+        },
+        Gate {
+            id: FINDING_ASSISTED_ACCESS_TRANSACTION_TOKEN_ANCHOR_MISSING,
+            hosted_lab: Some(FindingError),
+            production: Some(ReadinessFail),
+            evidence_grade: Some(StartupFail),
+            condition: |input| {
+                input.self_attestation_enabled && !input.transaction_token_anchor_configured
+            },
+        },
+        Gate {
+            id: FINDING_ASSISTED_ACCESS_SENDER_CONSTRAINT_MISSING,
+            hosted_lab: Some(FindingWarn),
+            production: Some(FindingError),
+            evidence_grade: Some(ReadinessFail),
+            condition: |input| {
+                input.transaction_token_anchor_configured
+                    && !input.transaction_token_sender_constrained
+            },
         },
     ]
 }
@@ -385,6 +412,16 @@ pub fn evaluate_gates(
                 }),
             });
         } else {
+            let Some(severity) = gate_catalog()
+                .iter()
+                .find(|gate| gate.id == waiver.finding)
+                .and_then(|gate| gate.severity_for(profile))
+            else {
+                continue;
+            };
+            if !severity.is_waivable() {
+                continue;
+            }
             waived_findings.push(waiver);
             evaluation.active_waivers.push(EvaluatedWaiver {
                 finding: waiver.finding.clone(),
@@ -616,7 +653,28 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_waiver_for_startup_fail_gate() {
+    fn readiness_fail_gate_is_not_waivable_even_with_active_waiver() {
+        let input = high_risk_in_memory_input();
+        let evaluation = evaluate_gates(
+            Some(DeploymentProfile::Production),
+            &input,
+            &[waiver(FINDING_REPLAY_IN_MEMORY_HIGH_RISK, "2099-01-01")],
+            "2026-06-13",
+        );
+        assert!(evaluation
+            .readiness_failures
+            .contains(&FINDING_REPLAY_IN_MEMORY_HIGH_RISK.to_string()));
+        let finding = evaluation
+            .findings
+            .iter()
+            .find(|finding| finding.id == FINDING_REPLAY_IN_MEMORY_HIGH_RISK)
+            .expect("high-risk replay finding exists");
+        assert_eq!(finding.status, DeploymentFindingStatus::Active);
+        assert!(evaluation.active_waivers.is_empty());
+    }
+
+    #[test]
+    fn validate_rejects_waiver_for_hard_startup_gate() {
         let config = DeploymentConfig {
             profile: Some(DeploymentProfile::EvidenceGrade),
             multi_instance: false,
@@ -625,7 +683,23 @@ mod tests {
         let error = config.validate().expect_err("startup_fail waiver rejected");
         assert!(matches!(
             error,
-            DeploymentConfigError::StartupFailNotWaivable { .. }
+            DeploymentConfigError::HardGateNotWaivable { .. }
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_waiver_for_hard_readiness_gate() {
+        let config = DeploymentConfig {
+            profile: Some(DeploymentProfile::Production),
+            multi_instance: false,
+            waivers: vec![waiver(FINDING_REPLAY_IN_MEMORY_HIGH_RISK, "2099-01-01")],
+        };
+        let error = config
+            .validate()
+            .expect_err("readiness_fail waiver rejected");
+        assert!(matches!(
+            error,
+            DeploymentConfigError::HardGateNotWaivable { .. }
         ));
     }
 
@@ -791,6 +865,38 @@ mod tests {
                 hosted_lab: GateSeverity::FindingWarn,
                 production: GateSeverity::FindingError,
                 evidence_grade: GateSeverity::StartupFail,
+            },
+            GateCase {
+                id: FINDING_ASSISTED_ACCESS_TRANSACTION_TOKEN_ANCHOR_MISSING,
+                triggering: GateInput {
+                    self_attestation_enabled: true,
+                    transaction_token_anchor_configured: false,
+                    ..GateInput::default()
+                },
+                non_triggering: GateInput {
+                    self_attestation_enabled: true,
+                    transaction_token_anchor_configured: true,
+                    ..GateInput::default()
+                },
+                hosted_lab: GateSeverity::FindingError,
+                production: GateSeverity::ReadinessFail,
+                evidence_grade: GateSeverity::StartupFail,
+            },
+            GateCase {
+                id: FINDING_ASSISTED_ACCESS_SENDER_CONSTRAINT_MISSING,
+                triggering: GateInput {
+                    transaction_token_anchor_configured: true,
+                    transaction_token_sender_constrained: false,
+                    ..GateInput::default()
+                },
+                non_triggering: GateInput {
+                    transaction_token_anchor_configured: true,
+                    transaction_token_sender_constrained: true,
+                    ..GateInput::default()
+                },
+                hosted_lab: GateSeverity::FindingWarn,
+                production: GateSeverity::FindingError,
+                evidence_grade: GateSeverity::ReadinessFail,
             },
         ]
     }

@@ -205,6 +205,22 @@ printf '%s\n' "$native_batch_output" |
     (.items[1].data | length == 0)
   ' >/dev/null
 
+forwarded_native_batch_output="$(
+  printf '%s\n' "$native_batch_request" |
+    jq -c '.batch = {mode: "workflow_batch"}' |
+    node --experimental-vm-modules "$worker"
+)"
+printf '%s\n' "$forwarded_native_batch_output" |
+  jq -e '
+    (.items | length == 2) and
+    (.items[0].id == "hit") and
+    (.items[0].data | length == 1) and
+    (.items[0].data[0].national_id == "person-123") and
+    (.items[0].data[0].birth_date == "1990-01-01") and
+    (.items[1].id == "miss") and
+    (.items[1].data | length == 0)
+  ' >/dev/null
+
 auth_request="$(printf '%s\n' "$request" | jq -c '.lookup.value = "target-auth"')"
 auth_output="$(
   printf '%s\n' "$auth_request" |

@@ -122,6 +122,7 @@ fn self_attestation_principal() -> EvidencePrincipal {
             iat: Some(now),
             nbf: Some(now),
         }),
+        authorization_details: None,
     }
 }
 
@@ -140,6 +141,7 @@ fn machine_principal() -> EvidencePrincipal {
         scopes: vec!["people:evidence_verification".to_string()],
         access_mode: AccessMode::MachineClient,
         verified_claims: None,
+        authorization_details: None,
     }
 }
 

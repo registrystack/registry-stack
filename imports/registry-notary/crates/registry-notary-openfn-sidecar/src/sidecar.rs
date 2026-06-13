@@ -2642,6 +2642,19 @@ fn workflow_for_worker(
     workflow
 }
 
+fn batch_for_worker(source: &SourceConfig) -> SourceBatchConfig {
+    let mut batch = source.batch.clone();
+    if source.engine == SourceEngine::OpenFn
+        && source.workflow.as_ref().is_some_and(|workflow| {
+            workflow.batch_mode == SourceWorkflowBatchMode::Native
+                || source.batch.mode == SourceBatchMode::WorkflowBatch
+        })
+    {
+        batch.mode = SourceBatchMode::WorkflowBatch;
+    }
+    batch
+}
+
 async fn execute_source_json(
     state: &AppState,
     source_id: &str,
@@ -4632,6 +4645,7 @@ async fn batch_match(
         .get("x-correlation-id")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
+    let worker_batch = batch_for_worker(source);
     let mut request = json!({
         "mode": "batch_match",
         "source_id": source_id,
@@ -4639,7 +4653,7 @@ async fn batch_match(
         "entity": entity,
         "query_signature": body.query_signature,
         "items": body.items,
-        "batch": &source.batch,
+        "batch": worker_batch,
         "fields": body.fields,
         "purpose": purpose,
         "correlation_id": correlation_id.clone(),

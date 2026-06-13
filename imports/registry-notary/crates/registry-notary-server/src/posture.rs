@@ -16,6 +16,7 @@ use serde_json::{json, Map, Value};
 use time::OffsetDateTime;
 
 use crate::{
+    api::{ConfigApplyPosture, ConfigEmergencyPosture},
     format_time,
     replay::ReplayReadiness,
     standalone::{AuditPipeline, DeploymentGateState},
@@ -220,18 +221,19 @@ pub(crate) async fn posture_document(
         "environment".to_string(),
         json!(context.instance.environment),
     );
-    if let Some(owner) = context.instance.owner {
+    if let Some(owner) = &context.instance.owner {
         instance.insert("owner".to_string(), json!(owner));
     }
-    if let Some(jurisdiction) = context.instance.jurisdiction {
+    if let Some(jurisdiction) = &context.instance.jurisdiction {
         instance.insert("jurisdiction".to_string(), json!(jurisdiction));
     }
-    if let Some(public_base_url) = context.instance.public_base_url {
+    if let Some(public_base_url) = &context.instance.public_base_url {
         instance.insert("public_base_url".to_string(), json!(public_base_url));
     }
 
     let deployment = deployment_object(&state.deployment_gates);
     let audit_assurance = audit_assurance_object(state.runtime_config().as_deref());
+    let configuration = configuration_object(&config_apply, &context);
 
     let posture = json!({
         "schema": "registry.ops.posture.v1",
@@ -250,29 +252,7 @@ pub(crate) async fn posture_document(
         },
         "deployment": deployment,
         "audit": audit_assurance,
-        "configuration": {
-            "source": config_apply.source.as_posture_str(),
-            "dynamic_reload_supported": false,
-            "last_config_hash": config_apply
-                .last_config_hash
-                .as_deref()
-                .unwrap_or(context.config_hash.as_str()),
-            "last_bundle_id": config_apply
-                .last_bundle_id
-                .as_ref()
-                .map_or(Value::Null, |value| json!(value)),
-            "last_bundle_sequence": config_apply
-                .last_bundle_sequence
-                .map_or(Value::Null, |value| json!(value)),
-            "last_apply_result": config_apply
-                .last_apply_result
-                .map_or(Value::Null, |value| json!(value.as_str())),
-            "last_apply_at": config_apply
-                .last_apply_at
-                .as_ref()
-                .map_or(Value::Null, |value| json!(value)),
-            "restart_required": config_apply.restart_required,
-        },
+        "configuration": configuration,
         "standards_artifacts": standards_artifacts(state),
         "notary": {
             "claim_count": state.evidence.claims.len(),
@@ -321,6 +301,96 @@ pub(crate) async fn posture_document(
         },
     });
     filter_posture_for_tier(posture, tier).map_err(PostureDocumentError::Filter)
+}
+
+fn configuration_object(config_apply: &ConfigApplyPosture, context: &PostureContext) -> Value {
+    let mut configuration = Map::new();
+    configuration.insert(
+        "source".to_string(),
+        json!(config_apply.source.as_posture_str()),
+    );
+    configuration.insert("dynamic_reload_supported".to_string(), json!(false));
+    configuration.insert(
+        "last_config_hash".to_string(),
+        json!(config_apply
+            .last_config_hash
+            .as_deref()
+            .unwrap_or(context.config_hash.as_str())),
+    );
+    configuration.insert(
+        "last_bundle_id".to_string(),
+        config_apply
+            .last_bundle_id
+            .as_ref()
+            .map_or(Value::Null, |value| json!(value)),
+    );
+    configuration.insert(
+        "last_bundle_sequence".to_string(),
+        config_apply
+            .last_bundle_sequence
+            .map_or(Value::Null, |value| json!(value)),
+    );
+    configuration.insert(
+        "last_apply_result".to_string(),
+        config_apply
+            .last_apply_result
+            .map_or(Value::Null, |value| json!(value.as_str())),
+    );
+    configuration.insert(
+        "last_apply_at".to_string(),
+        config_apply
+            .last_apply_at
+            .as_ref()
+            .map_or(Value::Null, |value| json!(value)),
+    );
+    configuration.insert(
+        "restart_required".to_string(),
+        json!(config_apply.restart_required),
+    );
+    if let Some(emergency) = &config_apply.emergency {
+        configuration.insert(
+            "emergency".to_string(),
+            emergency_object(config_apply, emergency),
+        );
+    }
+    Value::Object(configuration)
+}
+
+fn emergency_object(
+    config_apply: &ConfigApplyPosture,
+    emergency: &ConfigEmergencyPosture,
+) -> Value {
+    let now = OffsetDateTime::now_utc().unix_timestamp().max(0) as u64;
+    let open_expiries = emergency
+        .accepted_expires_at_unix_seconds
+        .iter()
+        .copied()
+        .filter(|expires_at| *expires_at > now)
+        .collect::<Vec<_>>();
+    let exception_window_expires_at = open_expiries
+        .iter()
+        .copied()
+        .max()
+        .and_then(unix_seconds_rfc3339);
+    let last_apply_emergency = config_apply
+        .last_bundle_sequence
+        .is_some_and(|sequence| sequence == emergency.last_emergency_sequence);
+
+    json!({
+        "last_apply_emergency": last_apply_emergency,
+        "last_emergency_change_class": emergency.last_emergency_change_class,
+        "last_emergency_at": emergency.last_emergency_at,
+        "exception_window_open": !open_expiries.is_empty(),
+        "exception_window_expires_at": exception_window_expires_at,
+        "open_exception_count": open_expiries.len(),
+    })
+}
+
+fn unix_seconds_rfc3339(seconds: u64) -> Option<String> {
+    OffsetDateTime::from_unix_timestamp(seconds.try_into().ok()?)
+        .ok()?
+        .format(&time::format_description::well_known::Rfc3339)
+        .ok()
 }
 
 fn default_posture_context() -> PostureContext {

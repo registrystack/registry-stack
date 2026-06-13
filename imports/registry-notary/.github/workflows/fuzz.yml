@@ -25,7 +25,7 @@ concurrency:
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: true
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: 7ac4be89e91c0c2e8aa94ad15bd033a679ce4a6e
+  REGISTRY_PLATFORM_REF: 51bb9a61c31ab55c4d8dbaf156426bc887d5f096
   CROSSWALK_REPOSITORY: PublicSchema/crosswalk
   CROSSWALK_REF: 54e0f537830837fcd0c9efa87990987b1846931c
 
@@ -43,6 +43,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: registry-notary
+          persist-credentials: false
 
       - name: Checkout registry-platform
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -51,6 +52,7 @@ jobs:
           ref: ${{ env.REGISTRY_PLATFORM_REF }}
           path: registry-platform
           token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          persist-credentials: false
 
       - name: Checkout crosswalk
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -58,6 +60,7 @@ jobs:
           repository: ${{ env.CROSSWALK_REPOSITORY }}
           ref: ${{ env.CROSSWALK_REF }}
           path: crosswalk
+          persist-credentials: false
 
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@5b842231ba77f5c045dba54ac5560fed2db780e2 # nightly

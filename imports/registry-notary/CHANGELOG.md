@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Deployment profile gates and audit assurance posture** (#205–#209, PR #218):
+  profile-aware startup and readiness gates with expiring waivers, plus deployment
+  and audit-assurance posture blocks. A `doctor` command reports gate status (PR #219).
+- **SD-JWT VC compatibility conformance harness** (#10, PR #218): fixture-driven
+  verifier conformance suite with stable verification error codes.
+- **Explicit credential verifier** (#77, PRs #215, #216): standalone SD-JWT VC
+  verifier with stable error codes; accepts credentials issued without
+  selective-disclosure arrays.
+- **Parser fuzz regression coverage and authentication hardening** (#132, #173,
+  #175, #177, PR #213).
+
+### Changed
+
+- **Relationships scoped by purpose** (#92, PR #214): relationship resolution now
+  honors the declared purpose.
+
 ## [0.3.0] - 2026-06-12
 
 ### Added

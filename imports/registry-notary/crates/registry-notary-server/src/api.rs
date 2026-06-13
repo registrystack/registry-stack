@@ -3,6 +3,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fs,
     net::{IpAddr, SocketAddr},
     sync::{Arc, RwLock},
     time::Duration,
@@ -29,14 +30,14 @@ use registry_notary_core::{
     AccessMode, BatchEvaluateItemRequest, BatchEvaluateRequest, BoundedClaimId,
     BoundedCorrelationId, ClaimRef, ClaimResultView, ClaimSet, ConfigAuditEvent, ConfigMetadata,
     CredentialIssueRequest, CredentialProfileConfig, EvaluateRequest, EvidenceAuthMode,
-    EvidenceBatchItemAuditEvent, EvidenceConfig, EvidenceEntity, EvidenceEntityReference,
-    EvidenceError, EvidencePrincipal, EvidenceRelationship, FederationConfig, Hashed,
-    HolderRequest, Oid4vciConfig, Oid4vciCredentialConfigurationConfig, Oid4vciDisplayImageConfig,
-    Oid4vciIssuerDisplayConfig, PolicyIdentifier, RateLimitBucket, RegistryNotaryAdminListenerMode,
-    RenderEvaluationRequest, SelfAttestationConfig, SelfAttestationDenialCode,
-    SelfAttestationScopePolicy, SigningKeyStatus, SourceCapability, StandaloneRegistryNotaryConfig,
-    StoredSelfAttestationMetadata, SubjectRequest, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON,
-    FORMAT_SD_JWT_VC,
+    EvidenceAuthorizationDetails, EvidenceBatchItemAuditEvent, EvidenceConfig, EvidenceEntity,
+    EvidenceEntityReference, EvidenceError, EvidencePrincipal, EvidenceRelationship,
+    FederationConfig, Hashed, HolderRequest, Oid4vciConfig, Oid4vciCredentialConfigurationConfig,
+    Oid4vciDisplayImageConfig, Oid4vciIssuerDisplayConfig, PolicyIdentifier, RateLimitBucket,
+    RegistryNotaryAdminListenerMode, RenderEvaluationRequest, SelfAttestationConfig,
+    SelfAttestationDenialCode, SelfAttestationScopePolicy, SigningKeyStatus, SourceCapability,
+    StandaloneRegistryNotaryConfig, StoredSelfAttestationMetadata, SubjectRequest,
+    VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
 };
 use registry_platform_audit::AuditKeyHasher;
 use registry_platform_config::RegistryTrustRoot;
@@ -53,9 +54,9 @@ use registry_platform_oid4vci::{
 };
 use registry_platform_ops::{
     internal_config_hash, posture_safe_runtime_config_hash, AntiRollbackKey, AntiRollbackProposal,
-    AntiRollbackStoreError, ApplyReportResult, BreakGlassApproval, BreakGlassRateLimit,
-    ConfigSource, FileAntiRollbackStore, FileLocalApprovalStore, LocalApprovalStoreError,
-    LocalOperatorApproval, PostureApplyResult,
+    AntiRollbackRecord, AntiRollbackStoreError, ApplyReportResult, BreakGlassApproval,
+    BreakGlassRateLimit, ConfigSource, FileAntiRollbackStore, FileLocalApprovalStore,
+    LocalApprovalStoreError, LocalOperatorApproval, PostureApplyResult,
 };
 use registry_platform_replay::{ReplayKey, ReplayScope, ReplayStoreError, RequiredReplayError};
 use registry_platform_sdjwt::{validate_holder_proof, HolderProofBindings, HolderProofPolicy};
@@ -197,6 +198,8 @@ struct ConfigApplyRequest {
     #[serde(default)]
     break_glass_approval: Option<BreakGlassApproval>,
     #[serde(default)]
+    break_glass_approval_reference: Option<String>,
+    #[serde(default)]
     break_glass_rate_limit: Option<BreakGlassRateLimit>,
     #[serde(default)]
     local_approval_reference: Option<String>,
@@ -213,6 +216,15 @@ pub(crate) struct ConfigApplyPosture {
     pub(crate) last_apply_result: Option<PostureApplyResult>,
     pub(crate) last_apply_at: Option<String>,
     pub(crate) restart_required: bool,
+    pub(crate) emergency: Option<ConfigEmergencyPosture>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ConfigEmergencyPosture {
+    pub(crate) last_emergency_sequence: u64,
+    pub(crate) last_emergency_change_class: String,
+    pub(crate) last_emergency_at: Option<String>,
+    pub(crate) accepted_expires_at_unix_seconds: Vec<u64>,
 }
 
 impl Default for ConfigApplyPosture {
@@ -225,6 +237,7 @@ impl Default for ConfigApplyPosture {
             last_apply_result: None,
             last_apply_at: None,
             restart_required: false,
+            emergency: None,
         }
     }
 }
@@ -313,6 +326,7 @@ async fn admin_config_verify(
     };
     if request.break_glass
         || request.break_glass_approval.is_some()
+        || request.break_glass_approval_reference.is_some()
         || request.break_glass_rate_limit.is_some()
     {
         return config_apply_report(
@@ -424,6 +438,7 @@ async fn admin_config_dry_run(
     };
     if request.break_glass
         || request.break_glass_approval.is_some()
+        || request.break_glass_approval_reference.is_some()
         || request.break_glass_rate_limit.is_some()
     {
         return config_apply_report(
@@ -534,7 +549,13 @@ async fn admin_config_apply(
         }
     };
     let config_governance = state.config_governance();
-    let break_glass = match break_glass_proposal(&request) {
+    let break_glass = match break_glass_proposal(
+        &request,
+        config_governance.config_trust.as_ref(),
+        &candidate,
+    )
+    .await
+    {
         Ok(break_glass) => break_glass,
         Err(()) => {
             return config_apply_report(
@@ -556,7 +577,7 @@ async fn admin_config_apply(
             );
         }
     };
-    if let Err(()) = require_break_glass_emergency_change_class(&request, &candidate) {
+    if let Err(()) = require_break_glass_emergency_change_class(break_glass.as_ref(), &candidate) {
         return config_apply_report(
             candidate.bundle_id.clone(),
             candidate.sequence,
@@ -572,7 +593,8 @@ async fn admin_config_apply(
                 false,
                 false,
             )
-            .with_break_glass_request(&request),
+            .with_break_glass_request(&request)
+            .with_break_glass_approval(break_glass.as_ref()),
         );
     }
     if !is_signed_config_source(candidate.source) {
@@ -593,7 +615,8 @@ async fn admin_config_apply(
                     false,
                     false,
                 )
-                .with_break_glass_request(&request),
+                .with_break_glass_request(&request)
+                .with_break_glass_approval(break_glass.as_ref()),
             );
         }
         return with_config_audit(
@@ -869,20 +892,51 @@ async fn admin_config_apply(
     let antirollback_store = FileAntiRollbackStore::new(&config_trust.antirollback_state_path)
         .with_break_glass_rate_limit(break_glass_rate_limit);
     let antirollback_key = antirollback_key(&config_governance, &candidate.stream_id);
+    if let Some(approval) = &break_glass {
+        if let Err(()) =
+            ensure_break_glass_reference_not_consumed(config_trust, &antirollback_key, approval)
+        {
+            return config_apply_report(
+                candidate.bundle_id.clone(),
+                candidate.sequence,
+                ApplyReportResult::RejectedBreakGlass,
+                false,
+                false,
+                StatusCode::CONFLICT,
+                resolved_config_audit(
+                    ConfigAdminAction::Apply,
+                    &candidate,
+                    "rejected",
+                    ApplyReportResult::RejectedBreakGlass.as_str(),
+                    false,
+                    false,
+                )
+                .with_break_glass_request(&request)
+                .with_break_glass_approval(break_glass.as_ref()),
+            );
+        }
+    }
     let local_approval = governed_apply.local_approval().cloned();
-    if let Err(error) = accept_antirollback_blocking(
+    let proposal = AntiRollbackProposal {
+        sequence: candidate.sequence,
+        previous_config_hash: candidate.previous_config_hash.clone(),
+        config_hash: internal_config_hash(candidate.config_yaml.as_bytes()),
+        root_version: candidate.root_version,
+        break_glass: break_glass.clone(),
+        break_glass_rate_limit: None,
+        local_approval: local_approval.clone(),
+        local_approval_rate_limit: local_approval.as_ref().map(|approval| approval.rate_limit),
+    };
+    if let Err(error) = accept_antirollback_and_publish_apply_blocking(
         antirollback_store.clone(),
         antirollback_key.clone(),
-        AntiRollbackProposal {
-            sequence: candidate.sequence,
-            previous_config_hash: candidate.previous_config_hash.clone(),
-            config_hash: internal_config_hash(candidate.config_yaml.as_bytes()),
-            root_version: candidate.root_version,
-            break_glass,
-            break_glass_rate_limit: None,
-            local_approval: local_approval.clone(),
-            local_approval_rate_limit: local_approval.as_ref().map(|approval| approval.rate_limit),
-        },
+        proposal,
+        Arc::clone(&state),
+        Arc::clone(&candidate_config),
+        governed_apply,
+        candidate.source,
+        candidate.bundle_id.clone(),
+        candidate.sequence,
     )
     .await
     {
@@ -941,12 +995,126 @@ async fn admin_config_apply(
                 false,
             )
             .with_break_glass_request(&request)
+            .with_break_glass_approval(break_glass.as_ref())
             .with_local_approval(local_approval.as_ref()),
         );
     }
     consume_apply_metadata(&request);
-    state.publish_governed_apply(candidate_config.clone(), &governed_apply);
-    match governed_apply {
+    config_apply_report(
+        candidate.bundle_id.clone(),
+        candidate.sequence,
+        ApplyReportResult::Applied,
+        true,
+        false,
+        StatusCode::OK,
+        resolved_config_audit(
+            ConfigAdminAction::Apply,
+            &candidate,
+            "accepted",
+            ApplyReportResult::Applied.as_str(),
+            true,
+            false,
+        )
+        .with_break_glass_request(&request)
+        .with_break_glass_approval(break_glass.as_ref())
+        .with_local_approval(local_approval.as_ref()),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn accept_antirollback_and_publish_apply_blocking(
+    store: FileAntiRollbackStore,
+    key: AntiRollbackKey,
+    proposal: AntiRollbackProposal,
+    state: Arc<RegistryNotaryApiState>,
+    runtime_config: Arc<StandaloneRegistryNotaryConfig>,
+    apply: GovernedConfigApply,
+    source: ConfigSource,
+    bundle_id: String,
+    sequence: u64,
+) -> Result<(), AntiRollbackStoreError> {
+    // Keep durable antirollback acceptance and in-memory publication in one
+    // blocking task. If the request future is dropped after this task starts,
+    // the task still runs to completion and cannot leave antirollback ahead of
+    // the runtime config.
+    spawn_antirollback_accept_and_publish_apply_blocking(
+        store,
+        key,
+        proposal,
+        state,
+        runtime_config,
+        apply,
+        source,
+        bundle_id,
+        sequence,
+    )
+    .await
+    .unwrap_or_else(|error| {
+        Err(AntiRollbackStoreError::Io(format!(
+            "anti-rollback accept and config apply task failed: {error}"
+        )))
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_antirollback_accept_and_publish_apply_blocking(
+    store: FileAntiRollbackStore,
+    key: AntiRollbackKey,
+    proposal: AntiRollbackProposal,
+    state: Arc<RegistryNotaryApiState>,
+    runtime_config: Arc<StandaloneRegistryNotaryConfig>,
+    apply: GovernedConfigApply,
+    source: ConfigSource,
+    bundle_id: String,
+    sequence: u64,
+) -> tokio::task::JoinHandle<Result<(), AntiRollbackStoreError>> {
+    tokio::task::spawn_blocking(move || {
+        let break_glass_applied = proposal.break_glass.is_some();
+        let emergency_change_class = proposal
+            .break_glass
+            .as_ref()
+            .map(|approval| approval.emergency_change_class.clone());
+        store.accept(&key, proposal)?;
+        let emergency = if break_glass_applied {
+            match store.load(&key) {
+                Ok(record) => emergency_change_class
+                    .as_deref()
+                    .and_then(|change_class| emergency_posture_from_record(&record, change_class)),
+                Err(error) => {
+                    tracing::debug!(
+                        error = %error,
+                        "failed to load antirollback record for emergency posture"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        publish_accepted_governed_apply(
+            &state,
+            runtime_config,
+            apply,
+            source,
+            bundle_id,
+            sequence,
+            emergency,
+        );
+        Ok(())
+    })
+}
+
+fn publish_accepted_governed_apply(
+    state: &RegistryNotaryApiState,
+    runtime_config: Arc<StandaloneRegistryNotaryConfig>,
+    apply: GovernedConfigApply,
+    source: ConfigSource,
+    bundle_id: String,
+    sequence: u64,
+    emergency: Option<ConfigEmergencyPosture>,
+) {
+    state.publish_governed_apply(Arc::clone(&runtime_config), &apply);
+    match apply {
         GovernedConfigApply::SigningRotation {
             notary_auth_anchor, ..
         } => {
@@ -965,37 +1133,21 @@ async fn admin_config_apply(
         GovernedConfigApply::OpenApiAuthPolicyChange { .. } => {}
     }
     if let Some(auth_state) = state.auth_state.as_ref() {
-        auth_state.swap_openapi_requires_auth(candidate_config.server.openapi_requires_auth);
+        auth_state.swap_openapi_requires_auth(runtime_config.server.openapi_requires_auth);
     }
     state.record_config_apply(ConfigApplyPosture {
-        source: candidate.source,
-        last_config_hash: Some(posture_hash(&candidate_config)),
-        last_bundle_id: Some(candidate.bundle_id.clone()),
-        last_bundle_sequence: Some(candidate.sequence),
+        source,
+        last_config_hash: Some(posture_hash(&runtime_config)),
+        last_bundle_id: Some(bundle_id),
+        last_bundle_sequence: Some(sequence),
         last_apply_result: Some(ApplyReportResult::Applied.as_posture_result()),
         last_apply_at: Some(format_time(OffsetDateTime::now_utc())),
         restart_required: false,
+        emergency,
     });
-    config_apply_report(
-        candidate.bundle_id.clone(),
-        candidate.sequence,
-        ApplyReportResult::Applied,
-        true,
-        false,
-        StatusCode::OK,
-        resolved_config_audit(
-            ConfigAdminAction::Apply,
-            &candidate,
-            "accepted",
-            ApplyReportResult::Applied.as_str(),
-            true,
-            false,
-        )
-        .with_break_glass_request(&request)
-        .with_local_approval(local_approval.as_ref()),
-    )
 }
 
+#[cfg(test)]
 async fn accept_antirollback_blocking(
     store: FileAntiRollbackStore,
     key: AntiRollbackKey,
@@ -1043,9 +1195,15 @@ fn signing_change_authorization(candidate: &ResolvedConfigCandidate) -> SigningC
     }
 }
 
-fn break_glass_proposal(request: &ConfigApplyRequest) -> Result<Option<BreakGlassApproval>, ()> {
+async fn break_glass_proposal(
+    request: &ConfigApplyRequest,
+    config_trust: Option<&registry_notary_core::ConfigTrustConfig>,
+    candidate: &ResolvedConfigCandidate,
+) -> Result<Option<BreakGlassApproval>, ()> {
     if !request.break_glass {
-        return if request.break_glass_approval.is_some() || request.break_glass_rate_limit.is_some()
+        return if request.break_glass_approval.is_some()
+            || request.break_glass_approval_reference.is_some()
+            || request.break_glass_rate_limit.is_some()
         {
             Err(())
         } else {
@@ -1055,17 +1213,188 @@ fn break_glass_proposal(request: &ConfigApplyRequest) -> Result<Option<BreakGlas
     if request.break_glass_rate_limit.is_some() {
         return Err(());
     }
-    match request.break_glass_approval.clone() {
-        Some(approval) => Ok(Some(approval)),
+    let config_trust = config_trust.ok_or(())?;
+    match (
+        request.break_glass_approval.clone(),
+        request.break_glass_approval_reference.as_deref(),
+    ) {
+        (Some(approval), None) => {
+            enforce_break_glass_approval_satisfies_candidate(
+                config_trust,
+                &candidate.change_classes,
+                &approval.emergency_change_class,
+                1,
+            )?;
+            Ok(Some(approval))
+        }
+        (None, Some(reference)) => stored_break_glass_approval(config_trust, candidate, reference)
+            .await
+            .map(Some),
         _ => Err(()),
     }
 }
 
+async fn stored_break_glass_approval(
+    config_trust: &registry_notary_core::ConfigTrustConfig,
+    candidate: &ResolvedConfigCandidate,
+    reference: &str,
+) -> Result<BreakGlassApproval, ()> {
+    if reference.trim().is_empty() {
+        return Err(());
+    }
+    let config_trust = config_trust.clone();
+    let reference = reference.to_string();
+    let config_hash = internal_config_hash(candidate.config_yaml.as_bytes());
+    let previous_config_hash = candidate.previous_config_hash.clone();
+    let change_classes = candidate.change_classes.clone();
+    tokio::task::spawn_blocking(move || {
+        stored_break_glass_approval_blocking(
+            &config_trust,
+            &change_classes,
+            &config_hash,
+            previous_config_hash.as_deref(),
+            &reference,
+        )
+    })
+    .await
+    .map_err(|_| ())?
+}
+
+fn stored_break_glass_approval_blocking(
+    config_trust: &registry_notary_core::ConfigTrustConfig,
+    change_classes: &BTreeSet<String>,
+    config_hash: &str,
+    previous_config_hash: Option<&str>,
+    reference: &str,
+) -> Result<BreakGlassApproval, ()> {
+    let store = FileLocalApprovalStore::new(&config_trust.local_approval_state_path);
+    for change_class in change_classes {
+        let loaded = previous_config_hash
+            .and_then(|previous| {
+                store
+                    .load_for_apply(reference, change_class, config_hash, Some(previous))
+                    .ok()
+            })
+            .or_else(|| {
+                store
+                    .load_for_apply(reference, change_class, config_hash, None)
+                    .ok()
+            });
+        let Some(approval) = loaded else {
+            continue;
+        };
+        enforce_break_glass_approval_satisfies_candidate(
+            config_trust,
+            change_classes,
+            &approval.change_class,
+            effective_approver_count(config_trust, &approval),
+        )?;
+        return Ok(BreakGlassApproval {
+            approved_by: approval.approved_by,
+            reason: approval.reason,
+            approval_reference: approval.approval_reference,
+            emergency_change_class: approval.change_class,
+            expires_at_unix_seconds: approval.expires_at_unix_seconds,
+            rate_limit_identity: approval.rate_limit_identity,
+        });
+    }
+    Err(())
+}
+
+#[derive(Deserialize)]
+struct LocalApprovalFileView {
+    #[serde(default)]
+    approvals: Vec<LocalOperatorApproval>,
+}
+
+fn effective_approver_count(
+    config_trust: &registry_notary_core::ConfigTrustConfig,
+    approval: &LocalOperatorApproval,
+) -> usize {
+    let mut approvers = BTreeSet::from([approval.approved_by.clone()]);
+    approvers.extend(
+        approval
+            .approvers
+            .iter()
+            .filter(|approver| !approver.trim().is_empty())
+            .cloned(),
+    );
+    let Ok(bytes) = fs::read(&config_trust.local_approval_state_path) else {
+        return approvers.len();
+    };
+    let Ok(state) = serde_json::from_slice::<LocalApprovalFileView>(&bytes) else {
+        return approvers.len();
+    };
+    let now = OffsetDateTime::now_utc().unix_timestamp().max(0) as u64;
+    for candidate in state.approvals {
+        if candidate.approval_reference == approval.approval_reference
+            && candidate.change_class == approval.change_class
+            && candidate.config_hash == approval.config_hash
+            && candidate.previous_config_hash == approval.previous_config_hash
+            && candidate.expires_at_unix_seconds > now
+            && !candidate.approved_by.trim().is_empty()
+        {
+            approvers.insert(candidate.approved_by);
+            approvers.extend(
+                candidate
+                    .approvers
+                    .into_iter()
+                    .filter(|approver| !approver.trim().is_empty()),
+            );
+        }
+    }
+    approvers.len()
+}
+
+fn required_break_glass_approver_count(
+    config_trust: &registry_notary_core::ConfigTrustConfig,
+    emergency_change_class: &str,
+) -> usize {
+    config_trust
+        .required_approver_count
+        .get(emergency_change_class)
+        .copied()
+        .unwrap_or(1)
+}
+
+fn max_required_break_glass_approver_count(
+    config_trust: &registry_notary_core::ConfigTrustConfig,
+    change_classes: &BTreeSet<String>,
+) -> usize {
+    change_classes
+        .iter()
+        .map(|change_class| required_break_glass_approver_count(config_trust, change_class))
+        .max()
+        .unwrap_or(1)
+}
+
+fn enforce_break_glass_approval_satisfies_candidate(
+    config_trust: &registry_notary_core::ConfigTrustConfig,
+    change_classes: &BTreeSet<String>,
+    approval_change_class: &str,
+    actual_count: usize,
+) -> Result<(), ()> {
+    if !change_classes.contains(approval_change_class) {
+        return Err(());
+    }
+    let required_count = max_required_break_glass_approver_count(config_trust, change_classes);
+    let approval_required_count =
+        required_break_glass_approver_count(config_trust, approval_change_class);
+    if approval_required_count < required_count {
+        return Err(());
+    }
+    if actual_count < required_count {
+        Err(())
+    } else {
+        Ok(())
+    }
+}
+
 fn require_break_glass_emergency_change_class(
-    request: &ConfigApplyRequest,
+    approval: Option<&BreakGlassApproval>,
     candidate: &ResolvedConfigCandidate,
 ) -> Result<(), ()> {
-    let Some(approval) = &request.break_glass_approval else {
+    let Some(approval) = approval else {
         return Ok(());
     };
     if candidate
@@ -1076,6 +1405,52 @@ fn require_break_glass_emergency_change_class(
     } else {
         Err(())
     }
+}
+
+fn ensure_break_glass_reference_not_consumed(
+    config_trust: &registry_notary_core::ConfigTrustConfig,
+    key: &AntiRollbackKey,
+    approval: &BreakGlassApproval,
+) -> Result<(), ()> {
+    let record = FileAntiRollbackStore::new(&config_trust.antirollback_state_path)
+        .load(key)
+        .map_err(|_| ())?;
+    if record
+        .break_glass
+        .accepted
+        .iter()
+        .any(|accepted| accepted.approval_reference == approval.approval_reference)
+    {
+        Err(())
+    } else {
+        Ok(())
+    }
+}
+
+fn emergency_posture_from_record(
+    record: &AntiRollbackRecord,
+    emergency_change_class: &str,
+) -> Option<ConfigEmergencyPosture> {
+    let accepted = &record.break_glass.accepted;
+    let last = accepted
+        .iter()
+        .max_by_key(|acceptance| acceptance.sequence)?;
+    Some(ConfigEmergencyPosture {
+        last_emergency_sequence: last.sequence,
+        last_emergency_change_class: emergency_change_class.to_string(),
+        last_emergency_at: unix_seconds_rfc3339(last.accepted_at_unix_seconds),
+        accepted_expires_at_unix_seconds: accepted
+            .iter()
+            .map(|acceptance| acceptance.expires_at_unix_seconds)
+            .collect(),
+    })
+}
+
+fn unix_seconds_rfc3339(seconds: u64) -> Option<String> {
+    OffsetDateTime::from_unix_timestamp(seconds.try_into().ok()?)
+        .ok()?
+        .format(&Rfc3339)
+        .ok()
 }
 
 fn credential_issuer_rotation_ready(rotation: &CredentialIssuerRotation) -> bool {
@@ -1865,6 +2240,7 @@ fn consume_apply_metadata(request: &ConfigApplyRequest) {
         request.root_version,
         request.break_glass,
         request.break_glass_approval.as_ref(),
+        request.break_glass_approval_reference.as_deref(),
         request.break_glass_rate_limit,
         request.local_approval_reference.as_deref(),
         request.bundle_id.as_deref(),
@@ -2039,14 +2415,27 @@ fn resolved_config_audit(
 
 trait ConfigAuditBreakGlassExt {
     fn with_break_glass_request(self, request: &ConfigApplyRequest) -> Self;
+    fn with_break_glass_approval(self, approval: Option<&BreakGlassApproval>) -> Self;
 }
 
 impl ConfigAuditBreakGlassExt for ConfigAuditEvent {
     fn with_break_glass_request(mut self, request: &ConfigApplyRequest) -> Self {
         self.break_glass = request.break_glass;
+        if self.break_glass_approval_reference.is_none() {
+            self.break_glass_approval_reference = request.break_glass_approval_reference.clone();
+        }
         if let Some(approval) = &request.break_glass_approval {
+            self = self.with_break_glass_approval(Some(approval));
+        }
+        self
+    }
+
+    fn with_break_glass_approval(mut self, approval: Option<&BreakGlassApproval>) -> Self {
+        if let Some(approval) = approval {
+            self.break_glass = true;
             self.break_glass_approval_reference = Some(approval.approval_reference.clone());
-            self.break_glass_approved_by = Some(approval.approved_by.clone());
+            self.break_glass_approved_by =
+                Some(internal_config_hash(approval.approved_by.as_bytes()));
             self.break_glass_reason_hash = Some(internal_config_hash(approval.reason.as_bytes()));
             self.break_glass_emergency_change_class = Some(approval.emergency_change_class.clone());
             self.break_glass_expires_at_unix_seconds = Some(approval.expires_at_unix_seconds);
@@ -4222,10 +4611,14 @@ async fn oid4vci_token(
     };
     let access_token_claims = AccessTokenClaims {
         issuer: preauth.notary_issuer().to_string(),
+        jti: None,
         audiences: preauth.notary_audiences().to_vec(),
         token_type: "Bearer".to_string(),
         credential_configuration_id: configuration_id.clone(),
         subject: bound_subject,
+        authorization_details: Vec::new(),
+        confirmation: None,
+        actor: None,
         iat: now,
         exp: now + preauth.access_token_ttl_seconds() as i64,
     };
@@ -6525,6 +6918,35 @@ fn require_self_attestation_evaluate(
         }
     }
 
+    let requested_claim = request
+        .claims
+        .first()
+        .ok_or_else(|| self_attestation_denied(SelfAttestationDenialCode::ClaimDenied))?;
+    let claim = find_requested_claim(evidence, requested_claim)
+        .map_err(|_| self_attestation_denied(SelfAttestationDenialCode::ClaimDenied))?;
+    let purpose = claim
+        .purpose
+        .as_deref()
+        .ok_or_else(|| self_attestation_denied(SelfAttestationDenialCode::OperationDenied))?;
+    if request
+        .purpose
+        .as_deref()
+        .is_some_and(|requested| requested != purpose)
+    {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::OperationDenied,
+        ));
+    }
+    require_self_attestation_authorization_details(
+        evidence.service_id.as_str(),
+        config,
+        principal.authorization_details.as_ref(),
+        request,
+        &disclosure,
+        format,
+        purpose,
+    )?;
+
     let subject_binding = &config.subject_binding;
     let Some(target_subject) = request.target_subject() else {
         return Err(self_attestation_denied(
@@ -6549,6 +6971,79 @@ fn require_self_attestation_evaluate(
         ));
     };
     if bound_subject != target_subject.id {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::SubjectMismatch,
+        ));
+    }
+    Ok(())
+}
+
+fn require_self_attestation_authorization_details(
+    service_id: &str,
+    config: &SelfAttestationConfig,
+    authorization_details: Option<&EvidenceAuthorizationDetails>,
+    request: &EvaluateRequest,
+    disclosure: &str,
+    format: &str,
+    purpose: &str,
+) -> Result<(), EvidenceError> {
+    let Some(details) = authorization_details else {
+        return Ok(());
+    };
+
+    if !details.actions.iter().any(|action| action == "evaluate") {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::OperationDenied,
+        ));
+    }
+    if !details
+        .locations
+        .iter()
+        .any(|location| location == service_id)
+    {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::OperationDenied,
+        ));
+    }
+    if details.access_mode != Some(AccessMode::SelfAttestation) {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::OperationDenied,
+        ));
+    }
+    if details.purpose.as_deref() != Some(purpose) {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::OperationDenied,
+        ));
+    }
+    if details.disclosure.as_deref() != Some(disclosure) {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::DisclosureDenied,
+        ));
+    }
+    if details.format.as_deref() != Some(format) {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::FormatDenied,
+        ));
+    }
+    if details.claims.is_empty()
+        || !request
+            .claims
+            .iter()
+            .all(|requested| details.claims.iter().any(|allowed| allowed == requested))
+    {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::ClaimDenied,
+        ));
+    }
+
+    let Some(subject) = details.subject.as_ref() else {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::SubjectMismatch,
+        ));
+    };
+    if subject.binding_claim != config.subject_binding.token_claim
+        || subject.id_type != config.subject_binding.id_type
+    {
         return Err(self_attestation_denied(
             SelfAttestationDenialCode::SubjectMismatch,
         ));
@@ -8063,6 +8558,7 @@ mod tests {
             root_version: None,
             break_glass: false,
             break_glass_approval: None,
+            break_glass_approval_reference: None,
             break_glass_rate_limit: None,
             local_approval_reference: None,
             tuf: None,
@@ -8149,6 +8645,99 @@ mod tests {
             .expect("record loads");
         assert_eq!(record.last_sequence, 2);
         assert_eq!(record.last_config_hash, test_hash('b'));
+    }
+
+    #[tokio::test]
+    async fn antirollback_accept_and_publish_survives_dropped_join_handle() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let store = FileAntiRollbackStore::new(tmp.path().join("antirollback.json"));
+        let key = antirollback_wrapper_test_key();
+        store
+            .initialize(registry_platform_ops::AntiRollbackRecord {
+                key: key.clone(),
+                last_sequence: 1,
+                last_config_hash: test_hash('a'),
+                root_version: Some(1),
+                break_glass: registry_platform_ops::BreakGlassState::default(),
+                local_approvals: registry_platform_ops::LocalApprovalState::default(),
+            })
+            .expect("antirollback state initializes");
+
+        let state = Arc::new(RegistryNotaryApiState::new(
+            Arc::new(EvidenceConfig::default()),
+            AuditKeyHasher::unkeyed_dev_only(),
+            Arc::new(CountingSource::default()),
+            Arc::new(EvidenceStore::default()),
+            Arc::new(NoopIssuerResolver),
+        ));
+        let mut runtime_config = classifier_config();
+        runtime_config.server.openapi_requires_auth = false;
+        let runtime_config = Arc::new(runtime_config);
+        let handle = spawn_antirollback_accept_and_publish_apply_blocking(
+            store.clone(),
+            key.clone(),
+            AntiRollbackProposal {
+                sequence: 2,
+                previous_config_hash: Some(test_hash('a')),
+                config_hash: test_hash('b'),
+                root_version: Some(2),
+                break_glass: None,
+                break_glass_rate_limit: None,
+                local_approval: None,
+                local_approval_rate_limit: None,
+            },
+            Arc::clone(&state),
+            Arc::clone(&runtime_config),
+            GovernedConfigApply::OpenApiAuthPolicyChange {
+                local_approval: LocalOperatorApproval {
+                    approved_by: "ops@example.test".to_string(),
+                    reason: "approve OpenAPI auth policy change".to_string(),
+                    approval_reference: "APPROVAL-1".to_string(),
+                    change_class: "client_access".to_string(),
+                    config_hash: test_hash('b'),
+                    previous_config_hash: Some(test_hash('a')),
+                    expires_at_unix_seconds: 4_102_444_800,
+                    rate_limit_identity: "ops@example.test".to_string(),
+                    rate_limit: BreakGlassRateLimit {
+                        max_accepted: 1,
+                        window_seconds: 60,
+                    },
+                    approvers: Vec::new(),
+                },
+            },
+            ConfigSource::SignedBundleFile,
+            "bundle-after-cancel".to_string(),
+            2,
+        );
+        drop(handle);
+
+        for _ in 0..100 {
+            let record = load_antirollback_record_blocking(store.clone(), key.clone())
+                .await
+                .expect("record loads");
+            let published = state
+                .runtime_config()
+                .is_some_and(|config| !config.server.openapi_requires_auth);
+            if record.last_sequence == 2 && record.last_config_hash == test_hash('b') && published {
+                let posture = state.config_apply_posture();
+                assert_eq!(posture.last_bundle_sequence, Some(2));
+                assert_eq!(
+                    posture.last_bundle_id.as_deref(),
+                    Some("bundle-after-cancel")
+                );
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let record = load_antirollback_record_blocking(store, key)
+            .await
+            .expect("record loads after timeout");
+        panic!(
+            "dropped join handle did not complete both accept and publish; antirollback sequence={}, runtime_published={}",
+            record.last_sequence,
+            state.runtime_config().is_some()
+        );
     }
 
     #[tokio::test]
@@ -9062,6 +9651,7 @@ mod tests {
                 iat: Some(1_700_000_000),
                 nbf: None,
             }),
+            authorization_details: None,
         }
     }
 
@@ -9095,6 +9685,172 @@ mod tests {
             format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
             purpose: None,
         }
+    }
+
+    fn transaction_authorization_details(
+        evidence: &EvidenceConfig,
+    ) -> EvidenceAuthorizationDetails {
+        EvidenceAuthorizationDetails {
+            detail_type: registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE
+                .to_string(),
+            schema_version:
+                registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION
+                    .to_string(),
+            actions: vec!["evaluate".to_string()],
+            locations: vec![evidence.service_id.clone()],
+            claims: vec![ClaimRef::with_version("person-is-alive", "1")],
+            disclosure: Some("predicate".to_string()),
+            format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+            purpose: Some("citizen_self_attestation".to_string()),
+            subject: Some(registry_notary_core::EvidenceAuthorizationSubject {
+                binding_claim: SUBJECT_BINDING_CLAIM.to_string(),
+                id_type: "national_id".to_string(),
+            }),
+            access_mode: Some(AccessMode::SelfAttestation),
+            assisted_access_context: None,
+        }
+    }
+
+    fn classified_transaction_principal(
+        config: &SelfAttestationConfig,
+        evidence: &EvidenceConfig,
+    ) -> EvidencePrincipal {
+        let mut principal = classify_self_attestation_principal(
+            config,
+            &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        )
+        .expect("citizen principal classifies");
+        principal.authorization_details = Some(transaction_authorization_details(evidence));
+        principal
+    }
+
+    #[test]
+    fn self_attestation_authorization_details_allow_exact_transaction() {
+        let config = self_attestation_config();
+        let evidence = evidence_config();
+        let principal = classified_transaction_principal(&config, &evidence);
+        let mut request = evaluate_request("NAT-123");
+        request.claims = vec![ClaimRef::with_version("person-is-alive", "1")];
+
+        require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+            .expect("exact transaction details authorize request");
+    }
+
+    #[test]
+    fn self_attestation_authorization_details_reject_omitted_claim_version() {
+        let config = self_attestation_config();
+        let evidence = evidence_config();
+        let principal = classified_transaction_principal(&config, &evidence);
+        let request = evaluate_request("NAT-123");
+
+        let err = require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+            .expect_err("omitting a versioned authorized claim broadens the request");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::ClaimDenied
+            }
+        ));
+    }
+
+    #[test]
+    fn self_attestation_authorization_details_reject_empty_claims_without_panic() {
+        let config = self_attestation_config();
+        let evidence = evidence_config();
+        let principal = classified_transaction_principal(&config, &evidence);
+        let mut request = evaluate_request("NAT-123");
+        request.claims = Vec::new();
+
+        let err = require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+            .expect_err("empty claim array must deny instead of panicking");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::ClaimDenied
+            }
+        ));
+    }
+
+    #[test]
+    fn self_attestation_authorization_details_tolerate_future_fields() {
+        let details: EvidenceAuthorizationDetails = serde_json::from_value(serde_json::json!({
+            "type": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE,
+            "schema_version": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION,
+            "actions": ["evaluate"],
+            "locations": ["registry-notary:test"],
+            "claims": [{"id": "person-is-alive", "version": "1"}],
+            "subject": {
+                "binding_claim": SUBJECT_BINDING_CLAIM,
+                "id_type": "national_id",
+                "future_subject_metadata": true
+            },
+            "assisted_access_context": {
+                "channel": "citizen_self_service",
+                "future_context_metadata": true
+            },
+            "future_authorization_metadata": true
+        }))
+        .expect("authorization_details should ignore future metadata fields");
+
+        assert_eq!(
+            details.subject.as_ref().unwrap().binding_claim,
+            SUBJECT_BINDING_CLAIM
+        );
+        assert_eq!(
+            details.assisted_access_context.as_ref().unwrap().channel,
+            "citizen_self_service"
+        );
+    }
+
+    #[test]
+    fn self_attestation_authorization_details_reject_wrong_notary_location() {
+        let config = self_attestation_config();
+        let evidence = evidence_config();
+        let mut principal = classified_transaction_principal(&config, &evidence);
+        principal
+            .authorization_details
+            .as_mut()
+            .expect("details exist")
+            .locations = vec!["other-notary".to_string()];
+        let mut request = evaluate_request("NAT-123");
+        request.claims = vec![ClaimRef::with_version("person-is-alive", "1")];
+
+        let err = require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+            .expect_err("wrong Notary audience broadens the transaction");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::OperationDenied
+            }
+        ));
+    }
+
+    #[test]
+    fn self_attestation_authorization_details_reject_wrong_subject_binding_metadata() {
+        let config = self_attestation_config();
+        let evidence = evidence_config();
+        let mut principal = classified_transaction_principal(&config, &evidence);
+        principal
+            .authorization_details
+            .as_mut()
+            .and_then(|details| details.subject.as_mut())
+            .expect("subject details exist")
+            .id_type = "other_id".to_string();
+        let mut request = evaluate_request("NAT-123");
+        request.claims = vec![ClaimRef::with_version("person-is-alive", "1")];
+
+        let err = require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+            .expect_err("wrong subject binding metadata broadens the transaction");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::SubjectMismatch
+            }
+        ));
     }
 
     #[test]
@@ -9199,6 +9955,7 @@ mod tests {
             scopes: vec!["self_attestation".to_string()],
             access_mode: AccessMode::MachineClient,
             verified_claims: None,
+            authorization_details: None,
         };
 
         let err = classify_self_attestation_principal(&config, &principal)
@@ -10506,6 +11263,7 @@ evaluation_profiles:
             scopes: vec!["civil_registry:evidence_verification".to_string()],
             access_mode: AccessMode::MachineClient,
             verified_claims: None,
+            authorization_details: None,
         };
 
         let response = issue_credential(
@@ -10558,6 +11316,7 @@ evaluation_profiles:
             scopes: vec!["person-is-alive:1.0".to_string()],
             access_mode: AccessMode::MachineClient,
             verified_claims: None,
+            authorization_details: None,
         };
 
         let err = require_evaluation_access(&evidence, &source, &principal, &evaluation)

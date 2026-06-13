@@ -92,6 +92,8 @@ pub struct ConfigTrustConfig {
         skip_serializing_if = "config_trust_rate_limit_is_default"
     )]
     pub break_glass_rate_limit: ConfigTrustRateLimit,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub required_approver_count: BTreeMap<String, usize>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub accepted_roots: Vec<RegistryTrustRoot>,
     /// Operator-owned allowlist of remote TUF config sources.
@@ -201,6 +203,16 @@ impl StandaloneRegistryNotaryConfig {
             if config_trust.break_glass_rate_limit.window_seconds == 0 {
                 return Err(EvidenceConfigError::InvalidConfigTrustConfig {
                     reason: "config_trust.break_glass_rate_limit.window_seconds must be greater than zero"
+                        .to_string(),
+                });
+            }
+            if config_trust
+                .required_approver_count
+                .values()
+                .any(|count| *count == 0)
+            {
+                return Err(EvidenceConfigError::InvalidConfigTrustConfig {
+                    reason: "config_trust.required_approver_count values must be greater than zero"
                         .to_string(),
                 });
             }
@@ -580,6 +592,12 @@ impl StandaloneRegistryNotaryConfig {
                 == RegistryNotaryAdminListenerMode::SharedWithPublic,
             openapi_public: !self.server.openapi_requires_auth,
             config_unsigned: self.config_trust.is_none(),
+            self_attestation_enabled: self.self_attestation.enabled,
+            transaction_token_anchor_configured: self.auth.access_token_signing.enabled,
+            // DPoP/mTLS proof validation for transaction tokens is not yet
+            // implemented. Keep this explicit so production/evidence profiles
+            // surface the missing sender-constraint assurance.
+            transaction_token_sender_constrained: false,
         }
     }
 
@@ -5438,6 +5456,23 @@ expected_sidecar:
     }
 
     #[test]
+    fn gate_input_reports_assisted_access_transaction_token_posture() {
+        let mut config = minimal_config();
+        config.self_attestation.enabled = true;
+        let input_without_anchor = config.gate_input();
+        assert!(input_without_anchor.self_attestation_enabled);
+        assert!(!input_without_anchor.transaction_token_anchor_configured);
+
+        config.auth.access_token_signing.enabled = true;
+        let input_with_anchor = config.gate_input();
+        assert!(input_with_anchor.transaction_token_anchor_configured);
+        assert!(
+            !input_with_anchor.transaction_token_sender_constrained,
+            "DPoP/mTLS proof validation is not implemented yet"
+        );
+    }
+
+    #[test]
     fn gate_input_reports_admin_shared_exposure() {
         let mut config = minimal_config();
         config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
@@ -5480,6 +5515,7 @@ expected_sidecar:
                 "/var/lib/registry-notary/config-local-approvals.json",
             ),
             break_glass_rate_limit: default_break_glass_rate_limit(),
+            required_approver_count: BTreeMap::new(),
             accepted_roots: Vec::new(),
             remote_tuf_repositories: Vec::new(),
         });
@@ -5581,6 +5617,7 @@ rule:
                 "/var/lib/registry-notary/config-local-approvals.json",
             ),
             break_glass_rate_limit: default_break_glass_rate_limit(),
+            required_approver_count: BTreeMap::new(),
             accepted_roots: Vec::new(),
             remote_tuf_repositories: Vec::new(),
         });
@@ -5598,6 +5635,7 @@ rule:
             ),
             local_approval_state_path: PathBuf::from(""),
             break_glass_rate_limit: default_break_glass_rate_limit(),
+            required_approver_count: BTreeMap::new(),
             accepted_roots: Vec::new(),
             remote_tuf_repositories: Vec::new(),
         });
@@ -5617,12 +5655,39 @@ rule:
                 "/var/lib/registry-notary/config-local-approvals.json",
             ),
             break_glass_rate_limit: default_break_glass_rate_limit(),
+            required_approver_count: BTreeMap::new(),
             accepted_roots: Vec::new(),
             remote_tuf_repositories: Vec::new(),
         });
         config
             .validate()
             .expect("explicit governed-state paths validate");
+    }
+
+    #[test]
+    fn config_trust_rejects_zero_required_approver_count() {
+        let mut config = minimal_config();
+        use_dedicated_admin_listener(&mut config);
+        config.config_trust = Some(ConfigTrustConfig {
+            antirollback_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-antirollback.json",
+            ),
+            local_approval_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-local-approvals.json",
+            ),
+            break_glass_rate_limit: default_break_glass_rate_limit(),
+            required_approver_count: BTreeMap::from([("emergency.break_glass".to_string(), 0)]),
+            accepted_roots: Vec::new(),
+            remote_tuf_repositories: Vec::new(),
+        });
+
+        let error = config
+            .validate()
+            .expect_err("zero required approver count must fail validation");
+        assert!(matches!(
+            error,
+            EvidenceConfigError::InvalidConfigTrustConfig { .. }
+        ));
     }
 
     #[test]
@@ -5637,6 +5702,7 @@ rule:
                 "/var/lib/registry-notary/config-local-approvals.json",
             ),
             break_glass_rate_limit: default_break_glass_rate_limit(),
+            required_approver_count: BTreeMap::new(),
             accepted_roots: vec![RegistryTrustRoot {
                 root_id: "ops-root".to_string(),
                 production: false,
@@ -5689,6 +5755,7 @@ rule:
                 "/var/lib/registry-notary/config-local-approvals.json",
             ),
             break_glass_rate_limit: default_break_glass_rate_limit(),
+            required_approver_count: BTreeMap::new(),
             accepted_roots: Vec::new(),
             remote_tuf_repositories: vec![RemoteTufRepositoryConfig {
                 root_path: PathBuf::from("/etc/registry-notary/tuf/root.json"),
@@ -5715,6 +5782,7 @@ rule:
                 "/var/lib/registry-notary/config-local-approvals.json",
             ),
             break_glass_rate_limit: default_break_glass_rate_limit(),
+            required_approver_count: BTreeMap::new(),
             accepted_roots: Vec::new(),
             remote_tuf_repositories: vec![RemoteTufRepositoryConfig {
                 root_path: PathBuf::from("/etc/registry-notary/tuf/root.json"),
@@ -5745,6 +5813,7 @@ rule:
                 "/var/lib/registry-notary/config-local-approvals.json",
             ),
             break_glass_rate_limit: default_break_glass_rate_limit(),
+            required_approver_count: BTreeMap::new(),
             accepted_roots: Vec::new(),
             remote_tuf_repositories: vec![RemoteTufRepositoryConfig {
                 root_path: PathBuf::from("/etc/registry-notary/tuf/root.json"),
@@ -5771,6 +5840,7 @@ rule:
                 "/var/lib/registry-notary/config-local-approvals.json",
             ),
             break_glass_rate_limit: default_break_glass_rate_limit(),
+            required_approver_count: BTreeMap::new(),
             accepted_roots: Vec::new(),
             remote_tuf_repositories: vec![RemoteTufRepositoryConfig {
                 root_path: PathBuf::from(""),
@@ -6193,6 +6263,7 @@ credential_configurations:
                 "/var/lib/registry-notary/config-local-approvals.json",
             ),
             break_glass_rate_limit: default_break_glass_rate_limit(),
+            required_approver_count: BTreeMap::new(),
             accepted_roots: Vec::new(),
             remote_tuf_repositories: Vec::new(),
         });
