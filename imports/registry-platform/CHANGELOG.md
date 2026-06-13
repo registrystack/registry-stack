@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- Posture profile gate vocabulary in `registry-platform-ops` (#55, PR #58): shared
+  `DeploymentProfile`, `GateSeverity`, `DeploymentFinding`, `DeploymentWaiver`,
+  `DeploymentFindingWaiver`, and `AuditAssurance` types plus the
+  `registry.ops.posture.v1` finding and waiver shapes consumed by the Notary and
+  Relay deployment-profile gates.
+- Parser fuzz regression jobs (#51, PR #57): CI fuzz coverage for platform parsers.
+
 ## v0.2.1 — 2026-06-12
 
 ### Fixed
