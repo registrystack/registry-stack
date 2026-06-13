@@ -20,9 +20,9 @@ use registry_platform_crypto::{KeyProviderKind, KeyReadiness};
 use registry_platform_ops::{
     filter_posture_for_tier, internal_config_hash, is_sha256_config_hash,
     posture_safe_runtime_config_hash, AntiRollbackKey, AntiRollbackProposal, AntiRollbackRecord,
-    AntiRollbackStoreError, ApplyReportResult, BreakGlassApproval, BreakGlassRateLimit,
-    ConfigProvenance, ConfigSource, FileAntiRollbackStore, FileLocalApprovalStore,
-    LocalOperatorApproval, PostureFilterError, PostureTier,
+    AntiRollbackStoreError, ApplyReportResult, AuditWritePolicy, BreakGlassApproval,
+    BreakGlassRateLimit, ConfigProvenance, ConfigSource, FileAntiRollbackStore,
+    FileLocalApprovalStore, LocalOperatorApproval, PostureFilterError, PostureTier,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -31,7 +31,9 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use tokio::sync::watch;
 
-use crate::audit::{ConfigAuditExt, ErrorCodeExt};
+use crate::audit::{
+    audit_write_failed_response, ConfigAuditExt, ErrorCodeExt, OperationalAuditEvent,
+};
 use crate::auth::middleware::AuthProviderRef;
 use crate::auth::runtime::build_auth;
 use crate::auth::scopes::require_scope;
@@ -930,6 +932,11 @@ async fn config_apply(
     };
     let antirollback_store = FileAntiRollbackStore::new(&config_trust.antirollback_state_path)
         .with_break_glass_rate_limit(config_trust.break_glass_rate_limit);
+    if let Err(response) =
+        fail_closed_admin_mutation_preflight(&runtime, "admin.config_apply.preflight").await
+    {
+        return response;
+    }
     if let Err(error) = antirollback_store.accept(
         &antirollback_key(&current.config, &resolved.stream_id),
         AntiRollbackProposal {
@@ -1223,6 +1230,11 @@ async fn reload_table(
         );
     };
 
+    if let Err(response) =
+        fail_closed_admin_mutation_preflight(&runtime, "admin.reload_table.preflight").await
+    {
+        return response;
+    }
     let result = registry.reload(&path.dataset_id, &path.table_id).await;
     publish_readiness(runtime.readiness_tx(), &registry);
 
@@ -1248,6 +1260,11 @@ async fn reload_all(runtime: RuntimeSnapshot, _admin: AdminPrincipal) -> Respons
         );
     };
 
+    if let Err(response) =
+        fail_closed_admin_mutation_preflight(&runtime, "admin.reload_all.preflight").await
+    {
+        return response;
+    }
     let report = registry.reload_all().await;
     publish_readiness(runtime.readiness_tx(), &registry);
     let status = if report.failed == 0 { "ok" } else { "failed" };
@@ -1274,6 +1291,29 @@ async fn reload_all(runtime: RuntimeSnapshot, _admin: AdminPrincipal) -> Respons
             .insert(ErrorCodeExt(RELOAD_FAILED_CODE.to_string()));
     }
     response
+}
+
+async fn fail_closed_admin_mutation_preflight(
+    runtime: &RuntimeSnapshot,
+    event: &'static str,
+) -> Result<(), Response> {
+    let Some(config) = runtime.config() else {
+        return Ok(());
+    };
+    if config.audit.write_policy != AuditWritePolicy::FailClosed {
+        return Ok(());
+    }
+    let Some(sink) = runtime.audit_sink() else {
+        return Err(audit_write_failed_response());
+    };
+    if let Err(error) = sink
+        .write_operational_event(OperationalAuditEvent::success(event))
+        .await
+    {
+        tracing::error!(error = %error, event, "audit.write_failed");
+        return Err(audit_write_failed_response());
+    }
+    Ok(())
 }
 
 #[derive(Debug, Default, Deserialize)]
