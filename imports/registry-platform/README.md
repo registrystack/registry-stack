@@ -29,6 +29,7 @@ and integration-test fixtures.
 | [`registry-platform-ops`](crates/registry-platform-ops/README.md) | Shared public operations posture schemas, examples, and redaction fixtures. |
 | [`registry-platform-replay`](crates/registry-platform-replay/README.md) | Shared replay and consumable nonce semantics over cache stores for nonce and JWT `jti` rejection. |
 | [`registry-platform-sdjwt`](crates/registry-platform-sdjwt/README.md) | SD-JWT VC issuance and holder-proof validation helpers. |
+| [`registry-platform-sts`](crates/registry-platform-sts/README.md) | RegistryStack STS bridge for minting Notary-bound transaction tokens from verified subject tokens. |
 | [`registry-platform-testing`](crates/registry-platform-testing/README.md) | Mock IdP, mock HTTP upstreams, key fixtures, and cross-crate assertions for consumers. |
 
 ## Design Principles
