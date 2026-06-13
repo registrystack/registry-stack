@@ -27,6 +27,16 @@ if (!headerMatch) {
 const DISCOVERY_HEADER = headerMatch[1];
 const HEADER_LINES = DISCOVERY_HEADER.split('\n');
 
+// Site roots: the main build root plus every archived docset mount point.
+// A page served at one of these roots maps its Markdown to "<root>/index.md"
+// (mirroring the URL), whereas every other page maps to "<dir>.md". Driven by
+// the docsets manifest so archive mount points are never hard-coded here.
+const docsetsManifest = JSON.parse(
+  await readFile(resolve(here, '../src/data/generated/docsets.json'), 'utf8'),
+);
+const rootDirs = new Set(docsetsManifest.docsets.map((d) => d.path.replace(/^\/+|\/+$/g, '')));
+rootDirs.add(''); // main build root, in case the manifest omits the '/' docset
+
 let passed = 0;
 let failed = 0;
 
@@ -192,7 +202,7 @@ for (const dir of pageDirs) {
     skipped += 1; // redirect stub, no backing page
     continue;
   }
-  const mdRel = dir === '' ? 'index.md' : `${dir}.md`;
+  const mdRel = rootDirs.has(dir) ? `${dir ? `${dir}/` : ''}index.md` : `${dir}.md`;
   assert(`page /${dir}${dir ? '/' : ''} has ${mdRel}`, await exists(mdRel));
   covered += 1;
 }
