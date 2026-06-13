@@ -32,7 +32,12 @@ function loadProductSidebar() {
 
 const base = process.env.DOCS_BASE || undefined;
 const basePath = base?.replace(/\/$/, '');
+const isArchivedBuild = Boolean(basePath);
 const productSidebar = loadProductSidebar();
+const disabledSitemap = {
+  name: '@astrojs/sitemap',
+  hooks: {},
+};
 
 /** @param {string} path */
 function internalRedirect(path) {
@@ -118,6 +123,7 @@ export default defineConfig({
       customCss: ['./src/styles/custom.css'],
       components: {
         Banner: './src/components/RegistryBanner.astro',
+        Head: './src/components/RegistryHead.astro',
         Header: './src/components/RegistryHeader.astro',
         PageSidebar: './src/components/RegistryPageSidebar.astro',
         PageTitle: './src/components/RegistryPageTitle.astro',
@@ -204,6 +210,6 @@ export default defineConfig({
         },
       ],
     }),
-    sitemap(),
+    ...(isArchivedBuild ? [disabledSitemap] : [sitemap()]),
   ],
 });
