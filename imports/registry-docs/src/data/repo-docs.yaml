@@ -13,6 +13,8 @@
 #   remote  GitHub repository the page links and clones from.
 #   ref     Pinned commit (bumped explicitly) for reproducible CI builds and
 #           for editUrl / GitHub fallback links.
+#   version Human-facing version label for the pinned ref. Release docsets in
+#           src/data/docsets.yaml bind public doc versions to exact refs.
 #   local   Sibling checkout used as the source when it exists (dev). The clone
 #           path is used only when no sibling checkout resolves.
 # Fields per docs entry:
@@ -28,6 +30,7 @@ repos:
   registry-relay:
     remote: https://github.com/jeremi/registry-relay
     ref: 479b27709f8f2653d1fd0a882ed809d6185a2d2b
+    version: main snapshot
     local: ../registry-relay
     docs:
       - src: docs/README.md
@@ -60,6 +63,7 @@ repos:
   registry-notary:
     remote: https://github.com/jeremi/registry-notary
     ref: 313a226b92a6e2075003b04353dcbdab335c2c10
+    version: main snapshot
     local: ../registry-notary
     docs:
       - src: docs/README.md

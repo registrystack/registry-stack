@@ -31,9 +31,11 @@ function loadProductSidebar() {
 }
 
 const productSidebar = loadProductSidebar();
+const base = process.env.DOCS_BASE || undefined;
 
 export default defineConfig({
   site: 'https://docs.registrystack.org',
+  base,
   trailingSlash: 'always',
   // Redirects for content that moved in the docs/marketing split (Wave 4).
   // External redirects (to marketing) absorb the migrated persuasion pages;
