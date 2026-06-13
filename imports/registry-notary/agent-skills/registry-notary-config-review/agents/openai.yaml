@@ -1,0 +1,7 @@
+interface:
+  display_name: "Registry Notary Config Review"
+  short_description: "Review Registry Notary configs and doctor output"
+  default_prompt: "Use $registry-notary-config-review to review this Registry Notary config before deployment."
+
+policy:
+  allow_implicit_invocation: true

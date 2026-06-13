@@ -1,0 +1,7 @@
+interface:
+  display_name: "Registry Notary Config Author"
+  short_description: "Author Registry Notary claim and credential configs"
+  default_prompt: "Use $registry-notary-config-author to configure Registry Notary for this claim workflow."
+
+policy:
+  allow_implicit_invocation: true
