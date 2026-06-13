@@ -17,7 +17,7 @@ use axum::extract::MatchedPath;
 use axum::http::Request;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use clap::{Args as ClapArgs, Parser, Subcommand};
+use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use ed25519_dalek::SigningKey;
 use registry_notary_core::{
     deprecated_config_fields, Oauth2ClientCredentialsSourceAuthConfig,
@@ -89,6 +89,15 @@ enum Command {
         /// Print resolved config with no secret values.
         #[arg(long)]
         show_expanded_config: bool,
+        /// Review-only deployment profile override for JSON doctor findings.
+        #[arg(
+            long,
+            value_parser = ["local", "hosted_lab", "production", "evidence_grade"]
+        )]
+        profile: Option<String>,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = DoctorOutputFormat::Text)]
+        format: DoctorOutputFormat,
     },
     /// Print resolved config and required env vars.
     ExplainConfig,
@@ -295,12 +304,30 @@ impl fmt::Display for EnvFileError {
 
 impl std::error::Error for EnvFileError {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum DoctorOutputFormat {
+    Text,
+    Json,
+}
+
+impl fmt::Display for DoctorOutputFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Text => f.write_str("text"),
+            Self::Json => f.write_str("json"),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Diagnostic {
     ok: bool,
     warning: bool,
     label: String,
     action: Option<String>,
+    report_code: Option<&'static str>,
+    report_severity: Option<&'static str>,
+    report_status: Option<&'static str>,
 }
 
 impl Diagnostic {
@@ -310,6 +337,9 @@ impl Diagnostic {
             warning: false,
             label: label.into(),
             action: None,
+            report_code: None,
+            report_severity: None,
+            report_status: None,
         }
     }
 
@@ -319,6 +349,9 @@ impl Diagnostic {
             warning: true,
             label: label.into(),
             action: Some(action.into()),
+            report_code: None,
+            report_severity: None,
+            report_status: None,
         }
     }
 
@@ -328,6 +361,26 @@ impl Diagnostic {
             warning: false,
             label: label.into(),
             action: Some(action.into()),
+            report_code: None,
+            report_severity: None,
+            report_status: None,
+        }
+    }
+
+    fn finding(
+        code: &'static str,
+        severity: &'static str,
+        label: impl Into<String>,
+        action: impl Into<String>,
+    ) -> Self {
+        Self {
+            ok: severity != "startup_fail",
+            warning: severity != "startup_fail",
+            label: label.into(),
+            action: Some(action.into()),
+            report_code: Some(code),
+            report_severity: Some(severity),
+            report_status: Some("active"),
         }
     }
 }
@@ -361,6 +414,8 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
             target_id_type,
             issue_demo_vc,
             show_expanded_config,
+            profile,
+            format,
         }) => {
             let config_path = required_config_path(args.config.as_deref())?;
             let ok = doctor(
@@ -373,6 +428,8 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
                     target_id_type,
                     issue_demo_vc,
                     show_expanded_config,
+                    profile_override: profile,
+                    format,
                 },
             )
             .await?;
@@ -1101,6 +1158,14 @@ struct DoctorOptions {
     target_id_type: Option<String>,
     issue_demo_vc: bool,
     show_expanded_config: bool,
+    profile_override: Option<String>,
+    format: DoctorOutputFormat,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DeploymentProfileReport {
+    value: Option<String>,
+    source: &'static str,
 }
 
 async fn doctor(
@@ -1110,6 +1175,15 @@ async fn doctor(
     options: DoctorOptions,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let mut diagnostics = Vec::new();
+    let mut expanded_config = None;
+    let mut deployment_profile = DeploymentProfileReport {
+        value: options.profile_override.clone(),
+        source: if options.profile_override.is_some() {
+            "override"
+        } else {
+            "undeclared"
+        },
+    };
     let raw = match fs::read_to_string(config_path) {
         Ok(raw) => {
             diagnostics.push(Diagnostic::ok("config file read"));
@@ -1120,7 +1194,12 @@ async fn doctor(
                 format!("config file read failed: {err}"),
                 "check --config points to a readable YAML file",
             ));
-            print_diagnostics(&diagnostics);
+            render_doctor_output(
+                &diagnostics,
+                options.format,
+                None,
+                Some(&deployment_profile),
+            )?;
             return Ok(false);
         }
     };
@@ -1147,6 +1226,15 @@ async fn doctor(
         None => None,
     };
     if let Some(config) = &config {
+        if options.profile_override.is_none() {
+            if let Some(profile) = config.deployment.profile {
+                deployment_profile = DeploymentProfileReport {
+                    value: Some(profile.as_str().to_string()),
+                    source: "config",
+                };
+            }
+        }
+        diagnostics.extend(deployment_profile_diagnostics(config, &deployment_profile));
         diagnostics.extend(local_env_diagnostics(config, env_report));
         if let Some(diagnostic) = pkcs11_preflight_diagnostic(config) {
             diagnostics.push(diagnostic);
@@ -1164,14 +1252,104 @@ async fn doctor(
             );
         }
         if options.show_expanded_config {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&redacted_config(config))?
-            );
+            expanded_config = Some(redacted_config(config));
         }
     }
-    print_diagnostics(&diagnostics);
+    render_doctor_output(
+        &diagnostics,
+        options.format,
+        expanded_config.as_ref(),
+        Some(&deployment_profile),
+    )?;
     Ok(diagnostics.iter().all(|diag| diag.ok))
+}
+
+fn deployment_profile_diagnostics(
+    config: &StandaloneRegistryNotaryConfig,
+    profile: &DeploymentProfileReport,
+) -> Vec<Diagnostic> {
+    let Some(value) = profile.value.as_deref() else {
+        return vec![Diagnostic::finding(
+            "deployment.profile_undeclared",
+            "finding_warn",
+            "deployment profile is undeclared",
+            "set deployment.profile or pass --profile for review-only doctor output",
+        )];
+    };
+
+    let mut diagnostics = Vec::new();
+
+    if config.config_trust.is_none() {
+        match value {
+            "hosted_lab" => diagnostics.push(Diagnostic::finding(
+                "notary.config.unsigned",
+                "finding_warn",
+                "hosted_lab deployment is using unsigned local config without config_trust",
+                "keep hosted-lab config parity visible, or configure config_trust before promotion",
+            )),
+            "production" => diagnostics.push(Diagnostic::finding(
+                "notary.config.unsigned",
+                "finding_error",
+                "production deployment is using unsigned local config without config_trust",
+                "configure config_trust and signed governed configuration before production rollout",
+            )),
+            "evidence_grade" => diagnostics.push(Diagnostic::finding(
+                "notary.config.unsigned",
+                "startup_fail",
+                "evidence_grade deployment is using unsigned local config without config_trust",
+                "configure config_trust and signed governed configuration before evidence-grade startup",
+            )),
+            _ => {}
+        }
+    }
+
+    if !config.server.openapi_requires_auth {
+        match value {
+            "production" => diagnostics.push(Diagnostic::finding(
+                "notary.openapi.public",
+                "finding_error",
+                "production deployment exposes OpenAPI without authentication",
+                "set server.openapi_requires_auth to true before production rollout",
+            )),
+            "evidence_grade" => diagnostics.push(Diagnostic::finding(
+                "notary.openapi.public",
+                "startup_fail",
+                "evidence_grade deployment exposes OpenAPI without authentication",
+                "set server.openapi_requires_auth to true before evidence-grade startup",
+            )),
+            _ => {}
+        }
+    }
+
+    if matches!(value, "production" | "evidence_grade") {
+        let severity = if value == "evidence_grade" {
+            "startup_fail"
+        } else {
+            "finding_error"
+        };
+        let action = if value == "evidence_grade" {
+            "use https:// source base URLs before evidence-grade startup"
+        } else {
+            "use https:// source base URLs before production rollout"
+        };
+        for (connection_id, connection) in &config.evidence.source_connections {
+            let Ok(base_url) = reqwest::Url::parse(&connection.base_url) else {
+                continue;
+            };
+            if base_url.scheme() == "http" {
+                diagnostics.push(Diagnostic::finding(
+                    "notary.source.insecure_url",
+                    severity,
+                    format!(
+                        "{value} deployment source connection '{connection_id}' uses an insecure http:// base URL"
+                    ),
+                    action,
+                ));
+            }
+        }
+    }
+
+    diagnostics
 }
 
 fn pkcs11_preflight_diagnostic(config: &StandaloneRegistryNotaryConfig) -> Option<Diagnostic> {
@@ -1206,6 +1384,90 @@ fn print_diagnostics(diagnostics: &[Diagnostic]) {
             println!("     Next action: {action}");
         }
     }
+}
+
+fn render_doctor_output(
+    diagnostics: &[Diagnostic],
+    format: DoctorOutputFormat,
+    expanded_config: Option<&Value>,
+    deployment_profile: Option<&DeploymentProfileReport>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match format {
+        DoctorOutputFormat::Text => {
+            if let Some(config) = expanded_config {
+                println!("{}", serde_json::to_string_pretty(config)?);
+            }
+            print_diagnostics(diagnostics);
+        }
+        DoctorOutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&doctor_json_report(
+                    diagnostics,
+                    expanded_config,
+                    deployment_profile,
+                ))?
+            );
+        }
+    }
+    Ok(())
+}
+
+fn doctor_json_report(
+    diagnostics: &[Diagnostic],
+    expanded_config: Option<&Value>,
+    deployment_profile: Option<&DeploymentProfileReport>,
+) -> Value {
+    let ok = diagnostics.iter().all(|diag| diag.ok);
+    let diagnostics = diagnostics
+        .iter()
+        .map(doctor_json_diagnostic)
+        .collect::<Vec<_>>();
+    let mut report = json!({
+        "schema": "registry.validation.report.v1",
+        "product": "registry-notary",
+        "command": "doctor",
+        "ok": ok,
+        "result": if ok { "passed" } else { "failed" },
+        "checks": diagnostics.clone(),
+        "diagnostics": diagnostics,
+    });
+    if let Some(config) = expanded_config {
+        report["expanded_config"] = config.clone();
+    }
+    if let Some(profile) = deployment_profile {
+        report["deployment_profile"] = json!({
+            "value": profile.value.as_deref(),
+            "source": profile.source,
+        });
+    }
+    report
+}
+
+fn doctor_json_diagnostic(diagnostic: &Diagnostic) -> Value {
+    let (severity, status, code) = if let (Some(severity), Some(status), Some(code)) = (
+        diagnostic.report_severity,
+        diagnostic.report_status,
+        diagnostic.report_code,
+    ) {
+        (severity, status, code)
+    } else if diagnostic.warning {
+        ("warning", "warning", "warning")
+    } else if diagnostic.ok {
+        ("info", "passed", "ok")
+    } else {
+        ("error", "failed", "failed")
+    };
+    let mut value = json!({
+        "severity": severity,
+        "status": status,
+        "code": code,
+        "message": diagnostic.label,
+    });
+    if let Some(action) = &diagnostic.action {
+        value["action"] = json!(action);
+    }
+    value
 }
 
 fn local_env_diagnostics(
@@ -2003,6 +2265,7 @@ fn redact_value(value: &mut Value) {
                     || lower == "credential"
                     || lower.ends_with("_credential")
                     || lower == "credential_env"
+                    || lower == "commitment"
                 {
                     *value = Value::String("[redacted]".to_string());
                 } else {
@@ -2777,6 +3040,47 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
             .expect_err("zero timeout is rejected");
 
         assert!(err.to_string().contains("invalid value"));
+    }
+
+    #[test]
+    fn doctor_cli_defaults_to_text_format() {
+        let args = Args::try_parse_from(["registry-notary", "doctor"]).expect("args parse");
+        let Some(Command::Doctor { format, .. }) = args.command else {
+            panic!("expected doctor command");
+        };
+
+        assert_eq!(format, DoctorOutputFormat::Text);
+    }
+
+    #[test]
+    fn doctor_cli_accepts_json_format() {
+        let args = Args::try_parse_from(["registry-notary", "doctor", "--format", "json"])
+            .expect("args parse");
+        let Some(Command::Doctor { format, .. }) = args.command else {
+            panic!("expected doctor command");
+        };
+
+        assert_eq!(format, DoctorOutputFormat::Json);
+    }
+
+    #[test]
+    fn doctor_cli_accepts_profile_override() {
+        let args = Args::try_parse_from(["registry-notary", "doctor", "--profile", "production"])
+            .expect("args parse");
+        let Some(Command::Doctor { profile, .. }) = args.command else {
+            panic!("expected doctor command");
+        };
+
+        assert_eq!(profile.as_deref(), Some("production"));
+    }
+
+    #[test]
+    fn doctor_cli_rejects_unknown_format() {
+        let err = Args::try_parse_from(["registry-notary", "doctor", "--format", "pretty"])
+            .expect_err("unknown doctor format is rejected");
+
+        assert!(err.to_string().contains("text"));
+        assert!(err.to_string().contains("json"));
     }
 
     #[test]
