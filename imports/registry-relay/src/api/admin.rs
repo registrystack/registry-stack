@@ -110,10 +110,10 @@ where
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
         let principal = req.extensions().get::<Principal>().cloned();
+        require_scope_from_principal(principal, ADMIN_SCOPE)?;
         let Json(value) = Json::<T>::from_request(req, state)
             .await
             .map_err(|rejection| AdminAuthRejection::new(rejection.into_response()))?;
-        require_scope_from_principal(principal, ADMIN_SCOPE)?;
         Ok(Self(value))
     }
 }

@@ -1831,6 +1831,22 @@ async fn config_apply_routes_are_admin_only_and_not_public() {
 }
 
 #[tokio::test]
+async fn admin_json_checks_scope_before_parsing_body() {
+    let fixture = build_fixture();
+
+    let resp = fixture
+        .server
+        .post("/admin/v1/config/verify")
+        .add_header("Authorization", format!("Bearer {OPS_KEY}"))
+        .add_header("content-type", "application/json")
+        .text("{not json")
+        .await;
+
+    let body = assert_problem(resp, StatusCode::FORBIDDEN, "auth.scope_denied").await;
+    assert_eq!(body["detail"], "required scope: registry_relay:admin");
+}
+
+#[tokio::test]
 async fn config_dry_run_reports_restart_required_without_swapping() {
     let fixture = build_fixture();
     let candidate = std::fs::read_to_string(&fixture.config_path)
