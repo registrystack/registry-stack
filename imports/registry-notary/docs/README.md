@@ -32,12 +32,12 @@ For application and wallet developers calling the API or the SDKs.
 For operators deploying, configuring, and running a Registry Notary.
 
 - [Configuration reference](operator-config-reference.md): the config blocks for auth, evidence, sources, replay, status, self-attestation, OID4VCI, and federation.
-- [Model sources and claims](source-claim-modeling-guide.md): design source connectors, OpenFn sidecars, claim boundaries, disclosure, and batch reads.
+- [Model sources and claims](source-claim-modeling-guide.md): design source connectors, sidecar adapters, claim boundaries, disclosure, and batch reads.
 - [Signing key providers](signing-key-provider.md): SD-JWT VC signing-key configuration, rotation, and PKCS#11 setup.
 - [Self-attestation](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/self-attestation-operator-guide.md): citizen OIDC subject binding, token policy, allow-lists, and rollout.
 - [Federated evaluation](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/federated-evaluation-operator-guide.md): static-peer setup, environment variables, and the replay limitation.
 - [Credential lifecycle and status](credential-lifecycle-status.md): short-lived credentials, optional live status, retention, and verifier caveats.
-- [Sidecar trust and secret handling](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/sidecar-trust-and-secrets.md): how the OpenFn sidecar verifies its configuration, how Notary pins the sidecar it trusts, how secrets are handled, and what that path does and does not protect against.
+- [Sidecar trust and secret handling](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/sidecar-trust-and-secrets.md): how the source adapter sidecar verifies its configuration, how Notary pins the sidecar it trusts, how secrets are handled, and what that path does and does not protect against.
 - [Deployment hardening runbook](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/deployment-hardening-runbook.md): production-readiness checklist for network boundaries, secrets, Redis, audit, and rollback.
 
 ## Build and maintain

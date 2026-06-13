@@ -1,10 +1,11 @@
-# Registry Notary OpenFn Sidecar
+# Registry Notary Source Adapter Sidecar
 
-This crate exposes a synchronous Registry Data API-shaped source endpoint backed
-by a bounded pool of long-lived worker processes. The first intended worker
-implementation is a pinned OpenFn adaptor runner, but the Rust sidecar owns the
-HTTP contract, manifest validation, concurrency limits, timeouts, normalization,
-health checks, and credential non-disclosure boundary.
+This crate exposes a synchronous Registry Data API-shaped source endpoint. A
+source can run through the pinned OpenFn worker pool or through the built-in
+`http_json` and `http_flow` adapters for governed HTTP JSON registries. In all
+cases the
+Rust sidecar owns the HTTP contract, manifest validation, concurrency limits,
+timeouts, normalization, health checks, and credential non-disclosure boundary.
 
 Registry Notary should connect to this sidecar with the `openfn_sidecar`
 source connector:
@@ -71,11 +72,13 @@ authorized, bound to the configured product/instance/environment/stream, marked
 `restart_required`, or accepted by anti-rollback after runtime checks pass.
 
 The signed target uses schema `registry.notary.openfn_sidecar.runtime.v1` and
-contains `limits`, `openfn`, `worker`, `jobs_root`, and `sources`. In governed
-mode every workflow expression path is relative to `jobs_root` and every step
-must include `expression_sha256`. Absolute paths, `..` traversal, symlink
-escapes, missing files, malformed hashes, and hash mismatches fail startup
-before the HTTP listener serves traffic.
+always contains `limits` and `sources`. It contains `openfn`, `worker`, and
+`jobs_root` only when at least one source uses `engine: openfn`; built-in adapter
+targets omit the worker runtime fields. In governed mode every OpenFn workflow
+expression path is relative to `jobs_root` and every OpenFn step must include
+`expression_sha256`. Absolute paths, `..` traversal, symlink escapes, missing
+files, malformed hashes, and hash mismatches fail startup before the HTTP
+listener serves traffic.
 
 The sidecar exposes `GET /v1/assurance` with the verified product identity,
 TUF versions, signer kids, change classes, and `config_hash`. `GET /ready`
@@ -193,6 +196,7 @@ limits:
   max_request_bytes: 16384
   max_query_parameter_bytes: 1024
   max_batch_items: 100
+  batch_timeout_ms: 30000
   liveness_window_ms: 30000
   retry_after_seconds: 1
 openfn:
@@ -250,14 +254,15 @@ sources:
 ```
 
 At startup the sidecar checks that bearer-token fingerprints are loaded from
-`hash_env`, expression files exist, credentials are present as JSON in
-`credential_env`, configured credential `baseUrl` values match
-`allowed_base_urls` when present, the worker version output contains the exact
-configured OpenFn compiler/build tool, runtime, and adaptor pins, and every
-source has a smoke lookup that can execute. `auth.bearer_tokens[].token` is
-rejected; keep the raw sidecar bearer in the caller's secret store and expose
-only its `sha256:<hex>` fingerprint through the configured `hash_env`. Runtime
-execution must not fetch packages from the network.
+`hash_env`, credentials are present as JSON in `credential_env`, configured
+credential `baseUrl` values match `allowed_base_urls` when present, and every
+source has a smoke lookup that can execute. For OpenFn sources it also verifies
+that expression files exist and that the worker version output contains the
+exact configured OpenFn compiler/build tool, runtime, and adaptor pins.
+`auth.bearer_tokens[].token` is rejected; keep the raw sidecar bearer in the
+caller's secret store and expose only its `sha256:<hex>` fingerprint through the
+configured `hash_env`. Runtime execution must not fetch packages from the
+network.
 
 The worker reports adaptor pins as
 `@openfn/language-http@7.2.0:7.2.0=/path/to/package`. The sidecar verifies that
@@ -298,6 +303,157 @@ The worker compiles the configured OpenFn workflow steps, injects
 `@openfn/runtime`, and returns only an RDA-shaped `{ "data": [...] }` envelope
 to the Rust HTTP boundary.
 
+### Built-In HTTP JSON Adapter
+
+Use `engine: http_json` when a registry can be queried with a governed HTTP
+request and a small CEL mapping. This avoids a worker process for simple
+endpoints while keeping the same Notary-facing RDA route, bearer auth, source
+concurrency limit, startup smoke lookup, metrics, and governed config path.
+
+```yaml
+sources:
+  people_registry:
+    engine: http_json
+    dataset: civil_registry
+    entity: civil_person
+    credential_env: PEOPLE_REGISTRY_CREDENTIAL_JSON
+    credential_public_fields:
+      - baseUrl
+      - clientId
+    allowed_base_urls:
+      - https://registry.example.test
+    http_json:
+      method: GET
+      base_url:
+        cel: credential_public.baseUrl
+      path: /people
+      query:
+        id:
+          cel: lookup.value
+      headers:
+        x-client-id:
+          cel: credential_public.clientId
+      auth:
+        type: bearer
+        token:
+          secret: apiToken
+      response:
+        records:
+          cel: body.results
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields: ["national_id"]
+      purpose: startup-readiness-smoke
+```
+
+Only fields listed in `credential_public_fields` are available to CEL as
+`credential_public`. Secret material remains available only to explicit adapter
+secret references such as `http_json.auth.token.secret`,
+`http_json.auth.username.secret`, and `http_json.auth.password.secret`. Supported
+HTTP auth modes are `bearer` and `basic`; both read secret values from the
+sidecar credential, not from CEL. The adapter rejects a base URL that is not in
+`allowed_base_urls`, does not follow redirects, rejects plaintext HTTP to public
+hosts or public IP literals, and blocks loopback, private, link-local, and cloud
+metadata addresses unless the source opts into the matching development escape
+hatch. The private-network escape hatch still blocks cloud metadata addresses,
+including IPv4-mapped IPv6 forms.
+When `base_url` includes a path prefix, such as a versioned DHIS2 play URL, the
+configured `path` is appended under that prefix; protocol-relative paths and
+`.`/`..` path segments are rejected before dispatch. The sidecar reuses a
+bounded `reqwest` client per source/base URL after the URL policy and DNS/IP
+checks pass, so steady-state reads can reuse TLS connections without relaxing
+redirect, timeout, or DNS pinning behavior.
+
+### Built-In HTTP Flow Adapter
+
+Use `engine: http_flow` when a source read needs a short dependent HTTP JSON
+sequence, such as search person, then fetch enrollments by the returned tracked
+entity id. V1 is intentionally narrow: GET only, 2 to 5 configured steps,
+literal `base_url` and `path` values, CEL only for query/header values, `when`
+guards, response bindings, and final `output.records`. Use OpenFn when the
+source needs POST, loops, paging, non-JSON protocols, adaptor-specific helpers,
+or general scripting.
+
+```yaml
+sources:
+  dhis2_people:
+    engine: http_flow
+    dataset: civil_registry
+    entity: civil_person
+    credential_env: DHIS2_READER_CREDENTIAL_JSON
+    credential_public_fields:
+      - clientId
+    allowed_base_urls:
+      - https://dhis2.example.test/api
+    http_flow:
+      timeout_ms: 10000
+      max_steps: 3
+      steps:
+        - id: find_person
+          request:
+            method: GET
+            base_url: https://dhis2.example.test/api
+            path: /trackedEntityInstances
+            query:
+              nationalId:
+                cel: lookup.value
+            headers:
+              x-client-id:
+                cel: credential_public.clientId
+            auth:
+              type: basic
+              username:
+                secret: username
+              password:
+                secret: password
+          response:
+            bind:
+              person_id:
+                cel: size(body.trackedEntityInstances) == 0 ? null : body.trackedEntityInstances[0].trackedEntityInstance
+        - id: fetch_enrollments
+          when:
+            cel: person_id != null
+          request:
+            method: GET
+            base_url: https://dhis2.example.test/api
+            path: /enrollments
+            query:
+              trackedEntityInstance:
+                cel: person_id
+          response:
+            bind:
+              enrollments:
+                cel: body.enrollments
+      output:
+        records:
+          cel: enrollments == null ? [] : enrollments
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields: ["national_id"]
+      purpose: startup-readiness-smoke
+```
+
+Bindings declared by later steps are initialized to `null`, so a skipped step
+does not make final CEL expressions fail. By default, an upstream `404` on any
+step stops the whole flow as a not-found result. This is usually correct for a
+required search step, but it is wrong for optional dependent subresources where
+the parent record still exists. Configure `on_status` on every optional step
+whose `404` should mean "continue without bindings":
+
+```yaml
+on_status:
+  "404": continue
+```
+
+Supported status actions are `continue`, `source_unavailable`, `target_auth`,
+`target_rate_limit`, and `timeout`. Any upstream `401` or `403` maps to
+`source.target_auth`, `429` maps to `source.target_rate_limit` and preserves
+`Retry-After`, `408` maps to `source.timeout`, and other non-success statuses
+map to `source.unavailable`. Secret material is still available only through
+explicit auth secret references under each step.
+
 ### Batch And Backpressure
 
 The sidecar exposes the RDA batch shape at:
@@ -322,6 +478,14 @@ Source batch behavior is explicit:
   the target once per item is not a real upstream batch optimization. Native
   workflows should usually return through `returnBatchItems` from
   `@registry/notary-openfn`.
+- `batch.mode: parallel_lookup` is available for `engine: http_json` and
+  `engine: http_flow` sources and runs per-item lookups concurrently up to
+  `batch.max_parallel`. It is opt-in because it can increase upstream pressure.
+- `batch.mode: native_batch` is available for `engine: http_json` sources that
+  expose a real bulk endpoint. Configure `http_json.batch.response.record_key`
+  and `item_key` CEL expressions to fan response records back to request items.
+  Unknown response keys are ignored; multiple records for one requested key are
+  returned for that item and then normalized by the existing cardinality rules.
 
 Each source can also set `limits.max_in_flight`. When all permits for that source
 are in use, the sidecar returns `503` with `Retry-After` before dispatching a
@@ -330,6 +494,26 @@ to protect slower upstreams such as DHIS2, CRVS, or facility registries from one
 Notary batch consuming all local worker capacity or exceeding the target system's
 safe rate.
 
+For target protection over time, a source can set
+`limits.requests_per_second` and optional `limits.burst`. These are enforced at
+the upstream dispatch boundary for the built-in HTTP adapters; cache hits do not
+spend rate tokens. When a target returns `429`, the sidecar remembers the returned
+`Retry-After` window per source and fails fast with `source.target_rate_limit`
+until the window expires.
+
+`limits.batch_timeout_ms` is an optional whole-batch deadline. If it is unset,
+the sidecar computes the batch deadline as `worker_timeout_ms * item_count`; if
+it is set, the lower of the configured value and the computed value is used.
+Timeouts return `504` with code `source.timeout`.
+
+Result caching is disabled by default. A source may explicitly configure
+`cache.exact_match_ttl_ms` and/or `cache.not_found_ttl_ms`; only exact one-record
+results and not-found empty arrays are cached. Cache keys include the source id,
+source config hash, dataset, entity, lookup, requested fields, limit, and
+purpose. Caches are capped by `cache.max_entries`, defaulting to 10000 entries
+per source, and expired entries are swept during writes. Cache metrics expose
+only `source_id` and low-cardinality outcomes.
+
 The `/metrics` endpoint reports worker capacity plus per-source outcomes,
 duration totals, and item totals:
 
@@ -337,6 +521,7 @@ duration totals, and item totals:
 registry_notary_openfn_sidecar_lookup_total{source_id="openfn_crvs",outcome="batch_success"} 1
 registry_notary_openfn_sidecar_lookup_items_total{source_id="openfn_crvs",outcome="batch_success"} 3
 registry_notary_openfn_sidecar_source_permits{source_id="openfn_crvs",state="in_flight"} 0
+registry_notary_openfn_sidecar_http_json_clients{source_id="http_people"} 1
 ```
 
 Metrics labels intentionally include only `source_id` and outcome. They must not
@@ -446,17 +631,69 @@ cargo build -p registry-notary-openfn-sidecar
 crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-worker.sh
 crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-sidecar.sh
 crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-http-sidecar.sh
+crates/registry-notary-openfn-sidecar/scripts/smoke-http-json-dhis2-sidecar.sh
+crates/registry-notary-openfn-sidecar/scripts/smoke-http-flow-dhis2-sidecar.sh
+crates/registry-notary-openfn-sidecar/scripts/load-http-json-sidecar.sh
 ```
+
+For repeatable local load checks against the built-in `http_json` engine, run:
+
+```bash
+LOAD_HTTP_JSON_REQUESTS=200 \
+LOAD_HTTP_JSON_CONCURRENCY=16 \
+  crates/registry-notary-openfn-sidecar/scripts/load-http-json-sidecar.sh
+
+LOAD_HTTP_JSON_SCENARIO=batch \
+LOAD_HTTP_JSON_BATCH_MODE=parallel_lookup \
+LOAD_HTTP_JSON_REQUESTS=100 \
+LOAD_HTTP_JSON_BATCH_SIZE=20 \
+LOAD_HTTP_JSON_CONCURRENCY=8 \
+LOAD_HTTP_JSON_MAX_PARALLEL=4 \
+  crates/registry-notary-openfn-sidecar/scripts/load-http-json-sidecar.sh
+
+LOAD_HTTP_JSON_SCENARIO=batch \
+LOAD_HTTP_JSON_BATCH_MODE=native_batch \
+LOAD_HTTP_JSON_REQUESTS=100 \
+LOAD_HTTP_JSON_BATCH_SIZE=20 \
+LOAD_HTTP_JSON_CONCURRENCY=8 \
+  crates/registry-notary-openfn-sidecar/scripts/load-http-json-sidecar.sh
+
+LOAD_HTTP_JSON_SCENARIO=cache \
+LOAD_HTTP_JSON_REQUESTS=200 \
+LOAD_HTTP_JSON_CONCURRENCY=16 \
+  crates/registry-notary-openfn-sidecar/scripts/load-http-json-sidecar.sh
+```
+
+Set `LOAD_HTTP_JSON_RELEASE=1` for capacity baselines. Without it the harness
+runs the sidecar through Cargo's debug profile, which is useful for fast local
+iteration but not for performance numbers.
+
+The load harness starts a synthetic upstream and sidecar, writes a JSON report
+under `target/http-json-sidecar-load-*`, captures sidecar metrics and upstream
+stats, and fails when status validation, leak checks, error-rate thresholds, or
+`LOAD_HTTP_JSON_MAX_P95_MS` fail. It is a local regression harness, not a
+substitute for environment-specific capacity tests with production network
+limits and a source-owner-approved request rate.
 
 For a live target canary against the DHIS2 play server, run:
 
 ```bash
-crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-dhis2-sidecar.sh
+HTTP_JSON_DHIS2_PASSWORD=... \
+  crates/registry-notary-openfn-sidecar/scripts/smoke-http-json-dhis2-sidecar.sh
+
+HTTP_FLOW_DHIS2_PASSWORD=... \
+  crates/registry-notary-openfn-sidecar/scripts/smoke-http-flow-dhis2-sidecar.sh
+
+OPENFN_DHIS2_PASSWORD=... \
+  crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-dhis2-sidecar.sh
 ```
 
-The DHIS2 canary defaults to the public play instance URL and username. For
-local runs, provide `OPENFN_DHIS2_PASSWORD`, and override
-`OPENFN_DHIS2_HOST_URL` or `OPENFN_DHIS2_USERNAME` when needed. It is also
-available as the manual `OpenFn DHIS2 Canary` GitHub Actions workflow, where
-the password is read from the `OPENFN_DHIS2_PASSWORD` repository secret and the
-target host and username are fixed by the workflow.
+The http_json, http_flow, and OpenFn DHIS2 canaries default to the public play
+instance URL and username. For local runs, provide the matching password
+environment variable and override `HTTP_JSON_DHIS2_HOST_URL` /
+`HTTP_JSON_DHIS2_USERNAME`, `HTTP_FLOW_DHIS2_HOST_URL` /
+`HTTP_FLOW_DHIS2_USERNAME`, or `OPENFN_DHIS2_HOST_URL` /
+`OPENFN_DHIS2_USERNAME` when needed. The OpenFn canary is also available as the
+manual `OpenFn DHIS2 Canary` GitHub Actions workflow, where the password is read
+from the `OPENFN_DHIS2_PASSWORD` repository secret and the target host and
+username are fixed by the workflow.

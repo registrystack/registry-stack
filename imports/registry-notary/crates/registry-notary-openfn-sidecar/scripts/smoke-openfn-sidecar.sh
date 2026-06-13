@@ -146,7 +146,7 @@ if [ "$auth_status" != "502" ]; then
   exit 1
 fi
 cat "$auth_json" |
-  jq -e '.code == "target_auth"' >/dev/null
+  jq -e '.code == "source.target_auth"' >/dev/null
 
 rate_limit_response_headers="$smoke_dir/rate-limit.headers"
 rate_limit_json="$smoke_dir/rate-limit.json"
@@ -165,7 +165,7 @@ if [ "$rate_limit_status" != "503" ]; then
   exit 1
 fi
 cat "$rate_limit_json" |
-  jq -e '.code == "target_rate_limit"' >/dev/null
+  jq -e '.code == "source.target_rate_limit"' >/dev/null
 grep -i '^retry-after: 5' "$rate_limit_response_headers" >/dev/null
 
 printf 'OpenFn sidecar smoke passed\n'

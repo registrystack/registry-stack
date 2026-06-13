@@ -95,6 +95,7 @@ worker:
     - {attempt_log}
 sources:
   openfn_crvs:
+    engine: openfn
     dataset: civil_registry
     entity: civil_person
     workflow:
@@ -124,6 +125,90 @@ sources:
     fn config(&self, expression: &str, expression_sha256: Option<&str>) -> SidecarConfig {
         serde_norway::from_str(&self.raw_config(expression, expression_sha256))
             .expect("config parses")
+    }
+
+    fn raw_http_json_config(&self) -> String {
+        format!(
+            r#"
+server:
+  bind: "127.0.0.1:0"
+auth:
+  bearer_tokens:
+    - id: notary-contract
+      hash_env: {token_hash_env}
+limits:
+  max_workers: 1
+  worker_timeout_ms: 250
+  max_output_bytes: 4096
+  max_request_bytes: 2048
+  max_query_parameter_bytes: 128
+  liveness_window_ms: 30000
+  max_batch_items: 100
+sources:
+  http_people:
+    engine: http_json
+    dataset: civil_registry
+    entity: civil_person
+    credential_env: {credential_env}
+    credential_public_fields:
+      - baseUrl
+    allowed_base_urls:
+      - "https://opencrvs.example.test"
+    http_json:
+      method: GET
+      base_url:
+        cel: credential_public.baseUrl
+      path: "/people"
+      query:
+        id:
+          cel: lookup.value
+      response:
+        records:
+          cel: body.results
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields:
+        - national_id
+      purpose: startup-smoke
+"#,
+            token_hash_env = yaml_string(TOKEN_HASH_ENV),
+            credential_env = yaml_string(CREDENTIAL_ENV),
+        )
+    }
+
+    fn raw_mixed_config(&self, expression: &str, expression_sha256: Option<&str>) -> String {
+        format!(
+            r#"{}  http_people:
+    engine: http_json
+    dataset: civil_registry
+    entity: civil_person
+    credential_env: {}
+    credential_public_fields:
+      - baseUrl
+    allowed_base_urls:
+      - "https://opencrvs.example.test"
+    http_json:
+      method: GET
+      base_url:
+        cel: credential_public.baseUrl
+      path: "/people"
+      query:
+        id:
+          cel: lookup.value
+      response:
+        records:
+          cel: body.results
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields:
+        - national_id
+      purpose: startup-smoke
+"#,
+            self.raw_config(expression, expression_sha256),
+            yaml_string(CREDENTIAL_ENV),
+        )
     }
 
     fn governed_runtime_target(&self, expression_sha256: &str) -> Value {
@@ -247,6 +332,70 @@ async fn release_helpers_render_hash_and_verify_plain_bundle() {
         expression_hash
     );
     assert!(verify_report["tuf"].is_null());
+}
+
+#[tokio::test]
+async fn release_helpers_render_and_verify_http_json_only_target_without_openfn_runtime() {
+    let harness = Harness::new();
+    let target_bytes =
+        render_governed_runtime_target_json(&harness.raw_http_json_config(), &harness.jobs_root)
+            .expect("http_json-only target renders");
+    let target: Value = serde_json::from_slice(&target_bytes).expect("target is JSON");
+
+    assert_eq!(
+        target["schema"],
+        "registry.notary.openfn_sidecar.runtime.v1"
+    );
+    assert!(target["openfn"].is_null());
+    assert!(target["worker"].is_null());
+    assert!(target["jobs_root"].is_null());
+    assert!(target["limits"]["max_worker_memory_mb"].is_null());
+    assert_eq!(target["sources"]["http_people"]["engine"], "http_json");
+
+    let hash_report =
+        print_expression_hashes_report_json(&target_bytes).expect("expression hashes print");
+    assert_eq!(hash_report["expression_hashes"], json!({}));
+
+    let verify_report = verify_governed_bundle_report_json(Some(&target_bytes), None)
+        .await
+        .expect("plain http_json-only target verifies");
+    assert_eq!(verify_report["verified"], true);
+    assert_eq!(verify_report["expression_hashes"], json!({}));
+}
+
+#[tokio::test]
+async fn release_helpers_render_mixed_engine_target_with_only_openfn_expression_hashes() {
+    let harness = Harness::new();
+    let target_bytes = render_governed_runtime_target_json(
+        &harness.raw_mixed_config("lookup.js", None),
+        &harness.jobs_root,
+    )
+    .expect("mixed-engine target renders");
+    let target: Value = serde_json::from_slice(&target_bytes).expect("target is JSON");
+    let expression_hash =
+        sha256_uri(&fs::read(harness.jobs_root.join("lookup.js")).expect("job reads"));
+
+    assert_eq!(target["sources"]["openfn_crvs"]["engine"], "openfn");
+    assert_eq!(target["sources"]["http_people"]["engine"], "http_json");
+    assert_eq!(
+        target["sources"]["openfn_crvs"]["workflow"]["steps"][0]["expression_sha256"],
+        expression_hash
+    );
+    assert!(target["jobs_root"].is_string());
+    assert!(target["openfn"].is_object());
+    assert!(target["worker"].is_object());
+
+    let hash_report =
+        print_expression_hashes_report_json(&target_bytes).expect("expression hashes print");
+    assert_eq!(
+        hash_report["expression_hashes"]["openfn_crvs.lookup"],
+        expression_hash
+    );
+    assert!(hash_report["expression_hashes"]
+        .as_object()
+        .expect("hash report object")
+        .get("http_people.lookup")
+        .is_none());
 }
 
 #[tokio::test]
