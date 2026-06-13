@@ -65,6 +65,7 @@ const TUF_TARGETS_SIGNER_KID: &str =
     "8ec3a843a0f9328c863cac4046ab1cacbbc67888476ac7acf73d9bcd9a223ada";
 const FORGED_TUF_SIGNER_KID: &str =
     "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0";
+const EMERGENCY_CHANGE_CLASS: &str = "emergency.break_glass";
 
 struct ReadinessOverrideResolver {
     readiness: registry_platform_crypto::KeyReadiness,
@@ -496,7 +497,7 @@ config_trust:
             - public_metadata
             - signing_key_cleanup
             - signing_key_rotation
-            - emergency_break_glass
+            - emergency.break_glass
             - root_transition
             - client_credential_rotation
             - client_access_change
@@ -904,6 +905,23 @@ fn build_auth() -> Arc<ApiKeyAuth> {
 fn build_fixture() -> AdminFixture {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = write_config(&tmp);
+    build_fixture_from_config_path(tmp, config_path)
+}
+
+fn build_fixture_with_required_break_glass_approvers(count: usize) -> AdminFixture {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(&tmp);
+    let config = std::fs::read_to_string(&config_path).expect("config reads");
+    std::fs::write(
+        &config_path,
+        config.replace(
+            "  break_glass_rate_limit:\n    max_accepted: 1\n    window_seconds: 3600\n",
+            &format!(
+                "  break_glass_rate_limit:\n    max_accepted: 1\n    window_seconds: 3600\n  required_approver_count:\n    emergency.break_glass: {count}\n"
+            ),
+        ),
+    )
+    .expect("config writes");
     build_fixture_from_config_path(tmp, config_path)
 }
 
@@ -1348,7 +1366,7 @@ fn break_glass_approval() -> Value {
         "approved_by": "ops@example.test",
         "reason": "recover from bad live config",
         "approval_reference": "INC-4242",
-        "emergency_change_class": "emergency_break_glass",
+        "emergency_change_class": EMERGENCY_CHANGE_CLASS,
         "expires_at_unix_seconds": expires_at_unix_seconds,
         "rate_limit_identity": "registry-relay/relay-test-instance/lab/test-stream"
     })
@@ -1391,6 +1409,36 @@ fn local_approval_for_change_class(
             "window_seconds": 3600
         }
     })
+}
+
+fn durable_break_glass_approval(
+    reference: &str,
+    config_hash: &str,
+    previous_config_hash: Option<&str>,
+    approvers: &[&str],
+) -> Value {
+    let placeholder = fixture_hash_placeholder();
+    let mut approval = local_approval_for_change_class(
+        reference,
+        EMERGENCY_CHANGE_CLASS,
+        config_hash,
+        previous_config_hash.unwrap_or(&placeholder),
+    );
+    if previous_config_hash.is_none() {
+        approval
+            .as_object_mut()
+            .expect("approval is object")
+            .remove("previous_config_hash");
+    }
+    approval["approved_by"] = json!("ops-primary@example.test");
+    approval["approvers"] = json!(approvers);
+    approval["reason"] = json!("stored emergency approval reason");
+    approval["rate_limit_identity"] = json!("registry-relay/relay-test-instance/lab/test-stream");
+    approval
+}
+
+fn fixture_hash_placeholder() -> String {
+    "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string()
 }
 
 fn write_local_approval(fixture: &AdminFixture, approval: Value) {
@@ -2220,7 +2268,7 @@ async fn config_apply_signed_tuf_break_glass_with_approval_swaps_runtime_snapsho
         5,
         "relay-test-instance",
         &["kid-a", "kid-b"],
-        &["public_metadata", "emergency_break_glass"],
+        &["public_metadata", EMERGENCY_CHANGE_CLASS],
         wrong_previous_hash,
     )
     .await;
@@ -2274,10 +2322,12 @@ async fn config_apply_signed_tuf_break_glass_with_approval_swaps_runtime_snapsho
     let config_audit = &audit_record["config"];
     assert_eq!(config_audit["break_glass"], true);
     assert_eq!(config_audit["break_glass_approval_reference"], "INC-4242");
-    assert_eq!(config_audit["break_glass_approved_by"], "ops@example.test");
+    assert!(config_audit["break_glass_approved_by"]
+        .as_str()
+        .is_some_and(|hash| hash.starts_with("sha256:")));
     assert_eq!(
         config_audit["break_glass_emergency_change_class"],
-        "emergency_break_glass"
+        EMERGENCY_CHANGE_CLASS
     );
     assert_eq!(
         config_audit["break_glass_rate_limit_identity"],
@@ -2289,6 +2339,272 @@ async fn config_apply_signed_tuf_break_glass_with_approval_swaps_runtime_snapsho
     assert!(!serde_json::to_string(config_audit)
         .expect("config audit serializes")
         .contains("recover from bad live config"));
+    assert!(!serde_json::to_string(config_audit)
+        .expect("config audit serializes")
+        .contains("ops@example.test"));
+}
+
+#[tokio::test]
+async fn config_apply_signed_tuf_break_glass_with_stored_reference_emits_emergency_posture() {
+    let fixture = build_fixture();
+    let candidate = std::fs::read_to_string(&fixture.config_path)
+        .expect("config reads")
+        .replace("owner: Test Ministry", "owner: Stored Emergency Ministry");
+    let candidate_hash = internal_config_hash(candidate.as_bytes());
+    write_local_approval(
+        &fixture,
+        durable_break_glass_approval("BG-4242", &candidate_hash, None, &[]),
+    );
+    let wrong_previous_hash =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    let signed = write_signed_config_tuf_fixture_with_previous_hash_and_change_classes(
+        &fixture,
+        &candidate,
+        5,
+        "relay-test-instance",
+        &["kid-a", "kid-b"],
+        &["public_metadata", EMERGENCY_CHANGE_CLASS],
+        wrong_previous_hash,
+    )
+    .await;
+    let mut request = signed_tuf_apply_request(&signed);
+    request["break_glass"] = json!(true);
+    request["break_glass_approval_reference"] = json!("BG-4242");
+
+    let response = post_admin_config(&fixture, "/admin/v1/config/apply", request, ADMIN_KEY).await;
+
+    if response.status_code() != StatusCode::OK {
+        let body: Value = response.json();
+        panic!("stored break-glass apply should succeed, got {body:#}");
+    }
+    let body: Value = response.json();
+    assert_eq!(body["result"], "applied");
+    assert_eq!(body["posture_result"], "accepted");
+    assert_eq!(body["applied"], true);
+
+    let record = FileAntiRollbackStore::new(&fixture.antirollback_path)
+        .load(&AntiRollbackKey {
+            product: "registry-relay".to_string(),
+            instance_id: "relay-test-instance".to_string(),
+            environment: "lab".to_string(),
+            stream_id: "test-stream".to_string(),
+        })
+        .expect("antirollback state loads");
+    assert_eq!(record.last_sequence, 5);
+    assert_eq!(record.break_glass.accepted.len(), 1);
+    assert_eq!(record.break_glass.accepted[0].approval_reference, "BG-4242");
+    assert_eq!(
+        record.break_glass.accepted[0]
+            .emergency_change_class
+            .as_deref(),
+        Some(EMERGENCY_CHANGE_CLASS)
+    );
+
+    let posture = fixture
+        .server
+        .get("/admin/v1/posture")
+        .add_header("Authorization", format!("Bearer {OPS_KEY}"))
+        .await;
+    posture.assert_status(StatusCode::OK);
+    let posture: Value = posture.json();
+    assert_matches_posture_schema(&posture);
+    assert_eq!(posture["instance"]["owner"], "Stored Emergency Ministry");
+    assert_eq!(
+        posture["configuration"]["emergency"]["last_apply_emergency"],
+        true
+    );
+    assert_eq!(
+        posture["configuration"]["emergency"]["last_emergency_change_class"],
+        EMERGENCY_CHANGE_CLASS
+    );
+    assert_eq!(
+        posture["configuration"]["emergency"]["exception_window_open"],
+        true
+    );
+    assert_eq!(
+        posture["configuration"]["emergency"]["open_exception_count"],
+        1
+    );
+    let posture_text = serde_json::to_string(&posture).expect("posture serializes");
+    assert!(!posture_text.contains("stored emergency approval reason"));
+    assert!(!posture_text.contains("ops-primary@example.test"));
+
+    let audit_record = config_audit_record(&fixture, "/admin/v1/config/apply");
+    let audit_text = serde_json::to_string(&audit_record).expect("audit serializes");
+    assert!(audit_text.contains("BG-4242"));
+    assert!(audit_text.contains(EMERGENCY_CHANGE_CLASS));
+    assert!(!audit_text.contains("stored emergency approval reason"));
+    assert!(!audit_text.contains("ops-primary@example.test"));
+
+    let replay_signed = write_signed_config_tuf_fixture_with_previous_hash_and_change_classes(
+        &fixture,
+        &candidate,
+        6,
+        "relay-test-instance",
+        &["kid-a", "kid-b"],
+        &["public_metadata", EMERGENCY_CHANGE_CLASS],
+        wrong_previous_hash,
+    )
+    .await;
+    let mut replay_request = signed_tuf_apply_request(&replay_signed);
+    replay_request["break_glass"] = json!(true);
+    replay_request["break_glass_approval_reference"] = json!("BG-4242");
+    let replay_response = post_admin_config(
+        &fixture,
+        "/admin/v1/config/apply",
+        replay_request,
+        ADMIN_KEY,
+    )
+    .await;
+    replay_response.assert_status(StatusCode::CONFLICT);
+    let replay_body: Value = replay_response.json();
+    assert_eq!(replay_body["result"], "rejected_break_glass");
+
+    let record = FileAntiRollbackStore::new(&fixture.antirollback_path)
+        .load(&AntiRollbackKey {
+            product: "registry-relay".to_string(),
+            instance_id: "relay-test-instance".to_string(),
+            environment: "lab".to_string(),
+            stream_id: "test-stream".to_string(),
+        })
+        .expect("antirollback state loads");
+    assert_eq!(record.last_sequence, 5);
+    assert_eq!(record.break_glass.accepted.len(), 1);
+}
+
+#[tokio::test]
+async fn config_apply_break_glass_required_approver_count_rejects_inline_and_single_stored_record()
+{
+    let fixture = build_fixture_with_required_break_glass_approvers(2);
+    let candidate = std::fs::read_to_string(&fixture.config_path)
+        .expect("config reads")
+        .replace(
+            "owner: Test Ministry",
+            "owner: Two Person Emergency Ministry",
+        );
+    let candidate_hash = internal_config_hash(candidate.as_bytes());
+    let wrong_previous_hash =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    let signed = write_signed_config_tuf_fixture_with_previous_hash_and_change_classes(
+        &fixture,
+        &candidate,
+        5,
+        "relay-test-instance",
+        &["kid-a", "kid-b"],
+        &["public_metadata", EMERGENCY_CHANGE_CLASS],
+        wrong_previous_hash,
+    )
+    .await;
+
+    let mut inline_request = signed_tuf_apply_request(&signed);
+    inline_request["break_glass"] = json!(true);
+    inline_request["break_glass_approval"] = break_glass_approval();
+    let inline_response = post_admin_config(
+        &fixture,
+        "/admin/v1/config/apply",
+        inline_request,
+        ADMIN_KEY,
+    )
+    .await;
+    inline_response.assert_status(StatusCode::CONFLICT);
+    let inline_body: Value = inline_response.json();
+    assert_eq!(inline_body["result"], "rejected_break_glass");
+
+    write_local_approval(
+        &fixture,
+        durable_break_glass_approval("BG-4242", &candidate_hash, None, &[]),
+    );
+    let mut stored_request = signed_tuf_apply_request(&signed);
+    stored_request["break_glass"] = json!(true);
+    stored_request["break_glass_approval_reference"] = json!("BG-4242");
+    let stored_response = post_admin_config(
+        &fixture,
+        "/admin/v1/config/apply",
+        stored_request,
+        ADMIN_KEY,
+    )
+    .await;
+    stored_response.assert_status(StatusCode::CONFLICT);
+    let stored_body: Value = stored_response.json();
+    assert_eq!(stored_body["result"], "rejected_break_glass");
+
+    let record = FileAntiRollbackStore::new(&fixture.antirollback_path)
+        .load(&AntiRollbackKey {
+            product: "registry-relay".to_string(),
+            instance_id: "relay-test-instance".to_string(),
+            environment: "lab".to_string(),
+            stream_id: "test-stream".to_string(),
+        })
+        .expect("antirollback state loads");
+    assert_eq!(record.last_sequence, 0);
+    assert!(record.break_glass.accepted.is_empty());
+
+    write_local_approval(
+        &fixture,
+        durable_break_glass_approval("BG-4243", &candidate_hash, None, &["ops-peer@example.test"]),
+    );
+    let mut two_approver_request = signed_tuf_apply_request(&signed);
+    two_approver_request["break_glass"] = json!(true);
+    two_approver_request["break_glass_approval_reference"] = json!("BG-4243");
+    let two_approver_response = post_admin_config(
+        &fixture,
+        "/admin/v1/config/apply",
+        two_approver_request,
+        ADMIN_KEY,
+    )
+    .await;
+    two_approver_response.assert_status(StatusCode::OK);
+    let body: Value = two_approver_response.json();
+    assert_eq!(body["result"], "applied");
+
+    let record = FileAntiRollbackStore::new(&fixture.antirollback_path)
+        .load(&AntiRollbackKey {
+            product: "registry-relay".to_string(),
+            instance_id: "relay-test-instance".to_string(),
+            environment: "lab".to_string(),
+            stream_id: "test-stream".to_string(),
+        })
+        .expect("antirollback state loads");
+    assert_eq!(record.last_sequence, 5);
+    assert_eq!(record.break_glass.accepted.len(), 1);
+}
+
+#[tokio::test]
+async fn config_apply_stored_break_glass_requires_matching_signed_change_class() {
+    let fixture = build_fixture();
+    let candidate = std::fs::read_to_string(&fixture.config_path)
+        .expect("config reads")
+        .replace(
+            "owner: Test Ministry",
+            "owner: Mismatched Emergency Ministry",
+        );
+    let candidate_hash = internal_config_hash(candidate.as_bytes());
+    write_local_approval(
+        &fixture,
+        durable_break_glass_approval("BG-4242", &candidate_hash, None, &["ops-peer@example.test"]),
+    );
+    let wrong_previous_hash =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    let signed = write_signed_config_tuf_fixture_with_previous_hash_and_change_classes(
+        &fixture,
+        &candidate,
+        5,
+        "relay-test-instance",
+        &["kid-a", "kid-b"],
+        &["public_metadata"],
+        wrong_previous_hash,
+    )
+    .await;
+    let mut request = signed_tuf_apply_request(&signed);
+    request["break_glass"] = json!(true);
+    request["break_glass_approval_reference"] = json!("BG-4242");
+
+    let response = post_admin_config(&fixture, "/admin/v1/config/apply", request, ADMIN_KEY).await;
+
+    response.assert_status(StatusCode::CONFLICT);
+    let body: Value = response.json();
+    assert_eq!(body["result"], "rejected_break_glass");
+    assert_eq!(body["applied"], false);
 }
 
 #[tokio::test]
@@ -2305,7 +2621,7 @@ async fn config_apply_break_glass_rejects_client_supplied_rate_limit() {
         5,
         "relay-test-instance",
         &["kid-a", "kid-b"],
-        &["public_metadata", "emergency_break_glass"],
+        &["public_metadata", EMERGENCY_CHANGE_CLASS],
         wrong_previous_hash,
     )
     .await;
