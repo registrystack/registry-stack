@@ -82,6 +82,16 @@ Use that bundled reference as the source of truth for V1 syntax, constraints, ro
 
 Perform a structural review against `references/v1-config-contract.md`. Do not require repository access to complete the review.
 
+When the `registry-relay` binary and config inputs are available, run:
+
+```sh
+registry-relay doctor --config <config.yaml> --env-file <env-file> --format json
+```
+
+Add `--profile <local|hosted_lab|production|evidence_grade>` only when the user explicitly asks for a review override. Prefer the final config to declare `deployment.profile`.
+
+Treat the product doctor JSON as the validation authority. Do not replace it with manual YAML reasoning. If the binary or env file is unavailable, state that product validation was not run and list the residual risk.
+
 If the user supplies loader errors, readiness output, audit samples, or validation logs from a `registry-relay` deployment, map them back to the bundled contract and include them in the findings. Never ask for production secrets or full environment dumps.
 
 ## Review Output

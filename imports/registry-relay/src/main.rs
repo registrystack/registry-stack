@@ -43,6 +43,8 @@ use registry_platform_authcommon::{
     credential_fingerprint_commitment, fingerprint_api_key, CredentialCommitmentContext,
     CredentialProduct, CredentialType,
 };
+use registry_platform_config::expand_config_env_vars;
+use registry_platform_ops::{ConfigSource, DeploymentProfile};
 use registry_relay::audit::{AuditPipeline, FileSink, StdoutSink, SyslogSink};
 use registry_relay::auth::middleware::{AuthProviderRef, RuntimeAuthProvider};
 use registry_relay::auth::runtime::build_auth;
@@ -88,6 +90,9 @@ const GENERATE_API_KEY_COMMAND: &str = "generate-api-key";
 /// Top-level command for generating the OpenAPI release artifact.
 const OPENAPI_COMMAND: &str = "openapi";
 
+/// Offline operator diagnostics for config, env, and metadata readiness.
+const DOCTOR_COMMAND: &str = "doctor";
+
 /// Top-level namespace for operator configuration commands.
 const CONFIG_COMMAND: &str = "config";
 
@@ -121,6 +126,8 @@ const ALLOW_DEV_INSECURE_FETCH_URLS_FLAG: &str = "--allow-dev-insecure-fetch-url
 const ADMIN_URL_FLAG: &str = "--admin-url";
 const ADMIN_TOKEN_ENV_FLAG: &str = "--admin-token-env";
 const LOCAL_APPROVAL_REFERENCE_FLAG: &str = "--local-approval-reference";
+const FORMAT_FLAG: &str = "--format";
+const PROFILE_FLAG: &str = "--profile";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CliCommand {
@@ -138,8 +145,19 @@ enum CliCommand {
         config_path: PathBuf,
         env_file: Option<PathBuf>,
     },
+    Doctor {
+        config_path: PathBuf,
+        env_file: Option<PathBuf>,
+        format: OutputFormat,
+        profile_override: Option<DeploymentProfile>,
+    },
     ConfigVerifyBundle(ConfigVerifyBundleCommand),
     ConfigApplyBundle(ConfigApplyBundleCommand),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputFormat {
+    Json,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -248,6 +266,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             config_path,
             env_file,
         } => run_openapi(config_path, env_file).await,
+        CliCommand::Doctor {
+            config_path,
+            env_file,
+            format,
+            profile_override,
+        } => run_doctor(config_path, env_file, format, profile_override).await,
         CliCommand::ConfigVerifyBundle(command) => run_config_verify_bundle(command).await,
         CliCommand::ConfigApplyBundle(command) => run_config_apply_bundle(command).await,
     }
@@ -377,6 +401,278 @@ async fn run_openapi(
     let document = registry_relay::api::openapi::release_artifact_document(&config, &registry);
     println!("{}", serde_json::to_string_pretty(&document)?);
     Ok(())
+}
+
+async fn run_doctor(
+    config_path: PathBuf,
+    env_file: Option<PathBuf>,
+    format: OutputFormat,
+    profile_override: Option<DeploymentProfile>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    match format {
+        OutputFormat::Json => {
+            let report = build_doctor_report(&config_path, env_file.as_deref(), profile_override);
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            if report.ok {
+                Ok(())
+            } else {
+                Err(io::Error::other("registry-relay doctor failed").into())
+            }
+        }
+    }
+}
+
+fn build_doctor_report(
+    config_path: &std::path::Path,
+    env_file: Option<&std::path::Path>,
+    profile_override: Option<DeploymentProfile>,
+) -> DoctorReport {
+    let mut checks = Vec::new();
+    if let Some(env_file) = env_file {
+        match load_env_file_arg(Some(env_file)) {
+            Ok(()) => checks.push(DoctorCheck::passed(
+                "env_file",
+                "relay.env_file.loaded",
+                "env file loaded",
+                None,
+            )),
+            Err(_) => checks.push(DoctorCheck::failed(
+                "env_file",
+                "relay.env_file.failed",
+                "env file could not be loaded",
+                Some("check --env-file points to a readable KEY=VALUE file"),
+            )),
+        }
+    }
+
+    if checks.iter().any(|check| check.status == "failed") {
+        return DoctorReport::new(checks, None, profile_override);
+    }
+
+    let loaded_config = match config::load_with_metadata(config_path) {
+        Ok(loaded) => {
+            checks.push(DoctorCheck::passed(
+                "config",
+                "relay.config.loaded",
+                "config parsed and validated",
+                None,
+            ));
+            match EntityRegistry::from_config(&loaded.runtime) {
+                Ok(_) => checks.push(DoctorCheck::passed(
+                    "entity_registry",
+                    "relay.entity_registry.verified",
+                    "entity registry semantic validation passed",
+                    None,
+                )),
+                Err(_) => checks.push(DoctorCheck::failed(
+                    "entity_registry",
+                    "relay.entity_registry.failed",
+                    "entity registry validation failed",
+                    Some("check entity definitions, table mappings, and relationship targets"),
+                )),
+            }
+            if loaded.metadata.is_some() {
+                checks.push(DoctorCheck::passed(
+                    "metadata",
+                    "relay.metadata.loaded",
+                    "split metadata manifest loaded and matched runtime bindings",
+                    None,
+                ));
+            } else {
+                checks.push(DoctorCheck::passed(
+                    "metadata",
+                    "relay.metadata.not_configured",
+                    "split metadata manifest is not configured",
+                    None,
+                ));
+            }
+            if loaded.metadata_source_digest.is_some() {
+                checks.push(DoctorCheck::passed(
+                    "metadata_digest",
+                    "relay.metadata.digest_verified",
+                    "split metadata source digest is present",
+                    None,
+                ));
+            }
+            Some(loaded.runtime.clone())
+        }
+        Err(err) => {
+            checks.push(DoctorCheck::failed(
+                "config",
+                err.code(),
+                "config could not be loaded or validated",
+                Some("fix the config file, required env vars, and split metadata bindings"),
+            ));
+            parse_doctor_config_without_validation(config_path)
+        }
+    };
+
+    DoctorReport::new(checks, loaded_config.as_ref(), profile_override)
+}
+
+fn parse_doctor_config_without_validation(config_path: &std::path::Path) -> Option<Config> {
+    let raw = fs::read_to_string(config_path).ok()?;
+    let expanded = expand_config_env_vars(&raw).ok()?;
+    serde_saphyr::from_str(&expanded).ok()
+}
+
+#[derive(Debug, Serialize)]
+struct DoctorReport {
+    schema: &'static str,
+    product: &'static str,
+    command: &'static str,
+    ok: bool,
+    result: &'static str,
+    deployment_profile: DeploymentProfileReport,
+    checks: Vec<DoctorCheck>,
+    findings: Vec<DoctorFinding>,
+}
+
+impl DoctorReport {
+    fn new(
+        checks: Vec<DoctorCheck>,
+        config: Option<&Config>,
+        profile_override: Option<DeploymentProfile>,
+    ) -> Self {
+        let deployment_profile = resolve_deployment_profile(config, profile_override);
+        let findings = deployment_findings(config, &deployment_profile);
+        let ok = checks.iter().all(|check| check.status != "failed")
+            && findings
+                .iter()
+                .all(|finding| finding.severity != "startup_fail");
+        Self {
+            schema: "registry.validation.report.v1",
+            product: "registry-relay",
+            command: DOCTOR_COMMAND,
+            ok,
+            result: if ok { "passed" } else { "failed" },
+            deployment_profile,
+            checks,
+            findings,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct DeploymentProfileReport {
+    value: Option<&'static str>,
+    source: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct DoctorFinding {
+    id: String,
+    severity: &'static str,
+    status: &'static str,
+    message: &'static str,
+}
+
+fn resolve_deployment_profile(
+    config: Option<&Config>,
+    profile_override: Option<DeploymentProfile>,
+) -> DeploymentProfileReport {
+    if let Some(profile) = profile_override {
+        return DeploymentProfileReport {
+            value: Some(profile.as_str()),
+            source: "override",
+        };
+    }
+    if let Some(profile) = config.and_then(|config| config.deployment.profile) {
+        return DeploymentProfileReport {
+            value: Some(profile.as_str()),
+            source: "config",
+        };
+    }
+    DeploymentProfileReport {
+        value: None,
+        source: "undeclared",
+    }
+}
+
+fn deployment_findings(
+    config: Option<&Config>,
+    deployment_profile: &DeploymentProfileReport,
+) -> Vec<DoctorFinding> {
+    let Some(config) = config else {
+        if deployment_profile.value.is_none() {
+            return vec![DoctorFinding {
+                id: "deployment.profile_undeclared".to_string(),
+                severity: "finding_warn",
+                status: "active",
+                message: "deployment profile is undeclared; no profile gates bind",
+            }];
+        }
+        return Vec::new();
+    };
+    let profile = deployment_profile.value.and_then(|value| match value {
+        "local" => Some(DeploymentProfile::Local),
+        "hosted_lab" => Some(DeploymentProfile::HostedLab),
+        "production" => Some(DeploymentProfile::Production),
+        "evidence_grade" => Some(DeploymentProfile::EvidenceGrade),
+        _ => None,
+    });
+    let facts = registry_relay::deployment::facts_from_config(config, ConfigSource::LocalFile);
+    let waivers = registry_relay::deployment::waivers_from_config(config);
+    registry_relay::deployment::evaluate(
+        profile,
+        &facts,
+        &waivers,
+        &registry_relay::deployment::today_utc(),
+    )
+    .findings
+    .into_iter()
+    .map(|finding| DoctorFinding {
+        id: finding.id,
+        severity: finding.severity.as_str(),
+        status: finding.status.as_str(),
+        message: "deployment profile gate evaluated",
+    })
+    .collect()
+}
+
+#[derive(Debug, Serialize)]
+struct DoctorCheck {
+    name: &'static str,
+    status: &'static str,
+    severity: &'static str,
+    code: &'static str,
+    message: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    action: Option<&'static str>,
+}
+
+impl DoctorCheck {
+    fn passed(
+        name: &'static str,
+        code: &'static str,
+        message: &'static str,
+        action: Option<&'static str>,
+    ) -> Self {
+        Self {
+            name,
+            status: "passed",
+            severity: "info",
+            code,
+            message,
+            action,
+        }
+    }
+
+    fn failed(
+        name: &'static str,
+        code: &'static str,
+        message: &'static str,
+        action: Option<&'static str>,
+    ) -> Self {
+        Self {
+            name,
+            status: "failed",
+            severity: "error",
+            code,
+            message,
+            action,
+        }
+    }
 }
 
 async fn run_config_verify_bundle(
@@ -659,6 +955,8 @@ fn parse_cli_command_from(args: Vec<String>) -> Result<CliCommand, CliError> {
         parse_generate_api_key_command(&rest[1..])
     } else if rest.first().is_some_and(|arg| arg == OPENAPI_COMMAND) {
         parse_openapi_command(&rest[1..])
+    } else if rest.first().is_some_and(|arg| arg == DOCTOR_COMMAND) {
+        parse_doctor_command(&rest[1..])
     } else if rest.first().is_some_and(|arg| arg == CONFIG_COMMAND) {
         parse_config_command(&rest[1..])
     } else {
@@ -696,6 +994,78 @@ fn parse_openapi_command(args: &[String]) -> Result<CliCommand, CliError> {
         config_path: config_path.unwrap_or_else(default_config_path_from_env),
         env_file,
     })
+}
+
+fn parse_doctor_command(args: &[String]) -> Result<CliCommand, CliError> {
+    let mut config_path: Option<PathBuf> = None;
+    let mut env_file: Option<PathBuf> = None;
+    let mut format = OutputFormat::Json;
+    let mut profile_override: Option<DeploymentProfile> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if let Some(value) = flag_value(arg, CONFIG_FLAG) {
+            config_path = Some(required_path_value(CONFIG_FLAG, value)?);
+        } else if arg == CONFIG_FLAG {
+            index += 1;
+            config_path = Some(required_path_arg(args, index, CONFIG_FLAG)?);
+        } else if let Some(value) = flag_value(arg, ENV_FILE_FLAG) {
+            env_file = Some(required_path_value(ENV_FILE_FLAG, value)?);
+        } else if arg == ENV_FILE_FLAG {
+            index += 1;
+            env_file = Some(required_path_arg(args, index, ENV_FILE_FLAG)?);
+        } else if let Some(value) = flag_value(arg, FORMAT_FLAG) {
+            format = parse_output_format(required_string_value(FORMAT_FLAG, value)?)?;
+        } else if arg == FORMAT_FLAG {
+            index += 1;
+            format = parse_output_format(required_string_arg(args, index, FORMAT_FLAG)?)?;
+        } else if let Some(value) = flag_value(arg, PROFILE_FLAG) {
+            profile_override = Some(parse_deployment_profile(required_string_value(
+                PROFILE_FLAG,
+                value,
+            )?)?);
+        } else if arg == PROFILE_FLAG {
+            index += 1;
+            profile_override = Some(parse_deployment_profile(required_string_arg(
+                args,
+                index,
+                PROFILE_FLAG,
+            )?)?);
+        } else {
+            return Err(CliError(format!(
+                "unknown {DOCTOR_COMMAND} argument: {arg}"
+            )));
+        }
+        index += 1;
+    }
+    if env_file.is_none() {
+        env_file = default_env_file_from_env();
+    }
+    Ok(CliCommand::Doctor {
+        config_path: config_path.unwrap_or_else(default_config_path_from_env),
+        env_file,
+        format,
+        profile_override,
+    })
+}
+
+fn parse_output_format(value: String) -> Result<OutputFormat, CliError> {
+    match value.as_str() {
+        "json" => Ok(OutputFormat::Json),
+        _ => Err(CliError(format!("{FORMAT_FLAG} must be json"))),
+    }
+}
+
+fn parse_deployment_profile(value: String) -> Result<DeploymentProfile, CliError> {
+    match value.as_str() {
+        "local" => Ok(DeploymentProfile::Local),
+        "hosted_lab" => Ok(DeploymentProfile::HostedLab),
+        "production" => Ok(DeploymentProfile::Production),
+        "evidence_grade" => Ok(DeploymentProfile::EvidenceGrade),
+        _ => Err(CliError(format!(
+            "{PROFILE_FLAG} must be local, hosted_lab, production, or evidence_grade"
+        ))),
+    }
 }
 
 fn parse_serve_command(args: &[String]) -> Result<CliCommand, CliError> {
@@ -1330,7 +1700,7 @@ mod tests {
         build_audit_sink, compile_relay_runtime, config_apply_bundle_request_body,
         load_env_file_arg, parse_cli_command_from, parse_env_file_value, render_generated_api_key,
         run_config_apply_bundle, run_healthcheck, CliCommand, ConfigApplyBundleCommand,
-        ConfigVerifyBundleSource, GenerateApiKeyCommand, OperationalLogFormat,
+        ConfigVerifyBundleSource, GenerateApiKeyCommand, OperationalLogFormat, OutputFormat,
         DEFAULT_HEALTHCHECK_TIMEOUT_MS, DEFAULT_HEALTHCHECK_URL,
     };
     use axum::extract::State;
@@ -1340,6 +1710,7 @@ mod tests {
     use registry_platform_audit::{
         verify_jsonl_lines, verify_jsonl_lines_with_hasher, AuditChainHasher,
     };
+    use registry_platform_ops::DeploymentProfile;
     use registry_relay::audit::{AuditRecord, EndpointKind};
     use registry_relay::config::Config;
     use serde_json::{json, Value};
@@ -1596,6 +1967,102 @@ audit:
         .expect_err("openapi command rejects serve-only flag");
 
         assert_eq!(err.to_string(), "unknown openapi argument: --bind");
+    }
+
+    #[test]
+    fn doctor_cli_accepts_config_env_file_and_json_format() {
+        let command = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "doctor",
+            "--config",
+            "/etc/registry-relay/config.yaml",
+            "--env-file=/etc/registry-relay/relay.env",
+            "--format",
+            "json",
+        ]))
+        .expect("doctor command parses");
+
+        let CliCommand::Doctor {
+            config_path,
+            env_file,
+            format,
+            profile_override,
+        } = command
+        else {
+            panic!("expected doctor command");
+        };
+        assert_eq!(
+            config_path,
+            std::path::PathBuf::from("/etc/registry-relay/config.yaml")
+        );
+        assert_eq!(
+            env_file,
+            Some(std::path::PathBuf::from("/etc/registry-relay/relay.env"))
+        );
+        assert_eq!(format, OutputFormat::Json);
+        assert!(profile_override.is_none());
+    }
+
+    #[test]
+    fn doctor_cli_defaults_env_file_from_env_format_to_json_and_accepts_profile() {
+        let _guard = env_lock();
+        std::env::set_var("REGISTRY_RELAY_ENV_FILE", "/etc/registry-relay/default.env");
+
+        let command = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "doctor",
+            "--config=/etc/registry-relay/config.yaml",
+            "--profile",
+            "local",
+        ]))
+        .expect("doctor command parses");
+
+        let CliCommand::Doctor {
+            env_file,
+            format,
+            profile_override,
+            ..
+        } = command
+        else {
+            panic!("expected doctor command");
+        };
+        assert_eq!(
+            env_file,
+            Some(std::path::PathBuf::from("/etc/registry-relay/default.env"))
+        );
+        assert_eq!(format, OutputFormat::Json);
+        assert_eq!(profile_override, Some(DeploymentProfile::Local));
+
+        std::env::remove_var("REGISTRY_RELAY_ENV_FILE");
+    }
+
+    #[test]
+    fn doctor_cli_rejects_unknown_format() {
+        let err = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "doctor",
+            "--format",
+            "text",
+        ]))
+        .expect_err("doctor rejects unsupported format");
+
+        assert_eq!(err.to_string(), "--format must be json");
+    }
+
+    #[test]
+    fn doctor_cli_rejects_unknown_profile() {
+        let err = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "doctor",
+            "--profile",
+            "pilot",
+        ]))
+        .expect_err("doctor rejects unsupported deployment profile");
+
+        assert_eq!(
+            err.to_string(),
+            "--profile must be local, hosted_lab, production, or evidence_grade"
+        );
     }
 
     #[test]
