@@ -6,6 +6,7 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use axum::Extension;
 use axum_test::TestServer;
+use registry_manifest_core::{self as metadata_core, MetadataManifest};
 use registry_relay::api::{metadata_router, openapi_router};
 use registry_relay::auth::{AuthMode, Principal, ScopeSet};
 use registry_relay::config;
@@ -241,6 +242,60 @@ fn server_from_config(path: std::path::PathBuf, scopes: &[&str]) -> TestServer {
             .layer(Extension(cfg))
             .layer(Extension(principal(scopes))),
     )
+}
+
+fn server_from_config_with_compiled_metadata(
+    path: std::path::PathBuf,
+    scopes: &[&str],
+    metadata: metadata_core::CompiledMetadata,
+) -> TestServer {
+    let cfg = Arc::new(config::load(&path).expect("config loads"));
+    let registry = Arc::new(EntityRegistry::from_config(&cfg).expect("registry compiles"));
+
+    TestServer::new(
+        metadata_router()
+            .merge(openapi_router())
+            .layer(Extension(Arc::new(metadata)))
+            .layer(Extension(registry))
+            .layer(Extension(cfg))
+            .layer(Extension(principal(scopes))),
+    )
+}
+
+fn curated_metadata_manifest() -> metadata_core::CompiledMetadata {
+    let manifest: MetadataManifest = serde_saphyr::from_str(
+        r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: curated
+  base_url: https://metadata.example.test/
+  title: Curated Metadata Catalog
+  publisher:
+    name: Metadata Ministry
+datasets:
+  - id: social_registry
+    title: Curated Social Registry
+    description: Portable registry description
+    owner: Metadata Ministry
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    entities:
+      - name: household
+        title: Curated Household
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: region
+            type: string
+"#,
+    )
+    .expect("metadata manifest parses");
+    metadata_core::compile_manifest(&manifest).expect("metadata manifest compiles")
 }
 
 fn aggregate_metadata_config(tmp: &TempDir) -> std::path::PathBuf {
@@ -519,6 +574,34 @@ async fn metadata_landing_links_resolve_to_profile_dcat() {
     assert_eq!(
         body["@id"],
         "https://data.example.test/metadata/dcat.bregdcat-ap.jsonld"
+    );
+}
+
+#[tokio::test]
+async fn base_dcat_prefers_compiled_metadata_manifest() {
+    let tmp = TempDir::new().expect("tempdir");
+    let server = server_from_config_with_compiled_metadata(
+        write_config(&tmp),
+        &["social_registry:metadata"],
+        curated_metadata_manifest(),
+    );
+
+    let resp = server.get("/metadata/dcat").await;
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    let raw = raw_json(&body);
+
+    assert!(
+        raw.contains("Curated Metadata Catalog"),
+        "base DCAT must render the curated manifest catalog"
+    );
+    assert!(
+        raw.contains("Curated Social Registry"),
+        "base DCAT must render the curated manifest dataset metadata"
+    );
+    assert!(
+        !raw.contains("Program Data Catalog"),
+        "base DCAT must not rebuild catalog metadata from runtime config when a manifest exists"
     );
 }
 
