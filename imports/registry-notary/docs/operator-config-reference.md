@@ -482,16 +482,18 @@ Docker Compose style setups.
 ### Source Adapter Sidecar Source Connections
 
 Use `connector: openfn_sidecar` when a target system needs governed HTTP JSON
-mapping, OpenFn adaptor execution, target credential handling, or output
-normalization outside Notary. The connector value remains `openfn_sidecar` for
-compatibility; the sidecar source chooses `engine: http_json` or
-`engine: openfn` in its own signed manifest. The source connection must use
+mapping, a short dependent HTTP JSON flow, OpenFn adaptor execution, target
+credential handling, or output normalization outside Notary. The connector
+value remains `openfn_sidecar` for compatibility; the sidecar source chooses
+`engine: http_json`, `engine: http_flow`, or `engine: openfn` in its own signed
+manifest. The source connection must use
 static sidecar bearer auth through `token_env`. Do not configure target-service
 credentials in Notary; keep them in the sidecar environment or secret store.
 Configure performance and target-protection controls in the sidecar manifest:
 per-source `max_in_flight`, optional request rate and burst, `Retry-After`
-backoff handling, `http_json` sequential/parallel/native batch mode, and any
-explicit TTL-bound result cache. Treat cache settings as evidence freshness
+backoff handling, built-in adapter sequential or parallel lookup mode,
+`http_json` native batch mode where the upstream has a real bulk endpoint, and
+any explicit TTL-bound result cache. Treat cache settings as evidence freshness
 policy, not only performance tuning. Sidecar result caches are bounded by
 `cache.max_entries`, defaulting to 10000 entries per source.
 

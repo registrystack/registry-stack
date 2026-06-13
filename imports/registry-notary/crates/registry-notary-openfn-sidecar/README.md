@@ -2,7 +2,8 @@
 
 This crate exposes a synchronous Registry Data API-shaped source endpoint. A
 source can run through the pinned OpenFn worker pool or through the built-in
-`http_json` adapter for straightforward HTTP JSON registries. In both cases the
+`http_json` and `http_flow` adapters for governed HTTP JSON registries. In all
+cases the
 Rust sidecar owns the HTTP contract, manifest validation, concurrency limits,
 timeouts, normalization, health checks, and credential non-disclosure boundary.
 
@@ -72,7 +73,7 @@ authorized, bound to the configured product/instance/environment/stream, marked
 
 The signed target uses schema `registry.notary.openfn_sidecar.runtime.v1` and
 always contains `limits` and `sources`. It contains `openfn`, `worker`, and
-`jobs_root` only when at least one source uses `engine: openfn`; `http_json`-only
+`jobs_root` only when at least one source uses `engine: openfn`; built-in adapter
 targets omit the worker runtime fields. In governed mode every OpenFn workflow
 expression path is relative to `jobs_root` and every OpenFn step must include
 `expression_sha256`. Absolute paths, `..` traversal, symlink escapes, missing
@@ -364,6 +365,95 @@ bounded `reqwest` client per source/base URL after the URL policy and DNS/IP
 checks pass, so steady-state reads can reuse TLS connections without relaxing
 redirect, timeout, or DNS pinning behavior.
 
+### Built-In HTTP Flow Adapter
+
+Use `engine: http_flow` when a source read needs a short dependent HTTP JSON
+sequence, such as search person, then fetch enrollments by the returned tracked
+entity id. V1 is intentionally narrow: GET only, 2 to 5 configured steps,
+literal `base_url` and `path` values, CEL only for query/header values, `when`
+guards, response bindings, and final `output.records`. Use OpenFn when the
+source needs POST, loops, paging, non-JSON protocols, adaptor-specific helpers,
+or general scripting.
+
+```yaml
+sources:
+  dhis2_people:
+    engine: http_flow
+    dataset: civil_registry
+    entity: civil_person
+    credential_env: DHIS2_READER_CREDENTIAL_JSON
+    credential_public_fields:
+      - clientId
+    allowed_base_urls:
+      - https://dhis2.example.test/api
+    http_flow:
+      timeout_ms: 10000
+      max_steps: 3
+      steps:
+        - id: find_person
+          request:
+            method: GET
+            base_url: https://dhis2.example.test/api
+            path: /trackedEntityInstances
+            query:
+              nationalId:
+                cel: lookup.value
+            headers:
+              x-client-id:
+                cel: credential_public.clientId
+            auth:
+              type: basic
+              username:
+                secret: username
+              password:
+                secret: password
+          response:
+            bind:
+              person_id:
+                cel: size(body.trackedEntityInstances) == 0 ? null : body.trackedEntityInstances[0].trackedEntityInstance
+        - id: fetch_enrollments
+          when:
+            cel: person_id != null
+          request:
+            method: GET
+            base_url: https://dhis2.example.test/api
+            path: /enrollments
+            query:
+              trackedEntityInstance:
+                cel: person_id
+          response:
+            bind:
+              enrollments:
+                cel: body.enrollments
+      output:
+        records:
+          cel: enrollments == null ? [] : enrollments
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields: ["national_id"]
+      purpose: startup-readiness-smoke
+```
+
+Bindings declared by later steps are initialized to `null`, so a skipped step
+does not make final CEL expressions fail. By default, an upstream `404` on any
+step stops the whole flow as a not-found result. This is usually correct for a
+required search step, but it is wrong for optional dependent subresources where
+the parent record still exists. Configure `on_status` on every optional step
+whose `404` should mean "continue without bindings":
+
+```yaml
+on_status:
+  "404": continue
+```
+
+Supported status actions are `continue`, `source_unavailable`, `target_auth`,
+`target_rate_limit`, and `timeout`. Any upstream `401` or `403` maps to
+`source.target_auth`, `429` maps to `source.target_rate_limit` and preserves
+`Retry-After`, `408` maps to `source.timeout`, and other non-success statuses
+map to `source.unavailable`. Secret material is still available only through
+explicit auth secret references under each step.
+
 ### Batch And Backpressure
 
 The sidecar exposes the RDA batch shape at:
@@ -388,9 +478,9 @@ Source batch behavior is explicit:
   the target once per item is not a real upstream batch optimization. Native
   workflows should usually return through `returnBatchItems` from
   `@registry/notary-openfn`.
-- `batch.mode: parallel_lookup` is available for `engine: http_json` sources and
-  runs per-item lookups concurrently up to `batch.max_parallel`. It is opt-in
-  because it can increase upstream pressure.
+- `batch.mode: parallel_lookup` is available for `engine: http_json` and
+  `engine: http_flow` sources and runs per-item lookups concurrently up to
+  `batch.max_parallel`. It is opt-in because it can increase upstream pressure.
 - `batch.mode: native_batch` is available for `engine: http_json` sources that
   expose a real bulk endpoint. Configure `http_json.batch.response.record_key`
   and `item_key` CEL expressions to fan response records back to request items.
@@ -406,8 +496,8 @@ safe rate.
 
 For target protection over time, a source can set
 `limits.requests_per_second` and optional `limits.burst`. These are enforced at
-the upstream dispatch boundary for `http_json`; cache hits do not spend rate
-tokens. When a target returns `429`, the sidecar remembers the returned
+the upstream dispatch boundary for the built-in HTTP adapters; cache hits do not
+spend rate tokens. When a target returns `429`, the sidecar remembers the returned
 `Retry-After` window per source and fails fast with `source.target_rate_limit`
 until the window expires.
 
@@ -542,6 +632,7 @@ crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-worker.sh
 crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-sidecar.sh
 crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-http-sidecar.sh
 crates/registry-notary-openfn-sidecar/scripts/smoke-http-json-dhis2-sidecar.sh
+crates/registry-notary-openfn-sidecar/scripts/smoke-http-flow-dhis2-sidecar.sh
 crates/registry-notary-openfn-sidecar/scripts/load-http-json-sidecar.sh
 ```
 
@@ -590,14 +681,19 @@ For a live target canary against the DHIS2 play server, run:
 HTTP_JSON_DHIS2_PASSWORD=... \
   crates/registry-notary-openfn-sidecar/scripts/smoke-http-json-dhis2-sidecar.sh
 
+HTTP_FLOW_DHIS2_PASSWORD=... \
+  crates/registry-notary-openfn-sidecar/scripts/smoke-http-flow-dhis2-sidecar.sh
+
 OPENFN_DHIS2_PASSWORD=... \
   crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-dhis2-sidecar.sh
 ```
 
-The http_json and OpenFn DHIS2 canaries default to the public play instance URL
-and username. For local runs, provide the matching password environment variable
-and override `HTTP_JSON_DHIS2_HOST_URL` / `HTTP_JSON_DHIS2_USERNAME` or
-`OPENFN_DHIS2_HOST_URL` / `OPENFN_DHIS2_USERNAME` when needed. The OpenFn canary
-is also available as the manual `OpenFn DHIS2 Canary` GitHub Actions workflow,
-where the password is read from the `OPENFN_DHIS2_PASSWORD` repository secret
-and the target host and username are fixed by the workflow.
+The http_json, http_flow, and OpenFn DHIS2 canaries default to the public play
+instance URL and username. For local runs, provide the matching password
+environment variable and override `HTTP_JSON_DHIS2_HOST_URL` /
+`HTTP_JSON_DHIS2_USERNAME`, `HTTP_FLOW_DHIS2_HOST_URL` /
+`HTTP_FLOW_DHIS2_USERNAME`, or `OPENFN_DHIS2_HOST_URL` /
+`OPENFN_DHIS2_USERNAME` when needed. The OpenFn canary is also available as the
+manual `OpenFn DHIS2 Canary` GitHub Actions workflow, where the password is read
+from the `OPENFN_DHIS2_PASSWORD` repository secret and the target host and
+username are fixed by the workflow.
