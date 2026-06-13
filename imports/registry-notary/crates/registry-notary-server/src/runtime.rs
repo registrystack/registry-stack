@@ -1364,6 +1364,7 @@ impl RegistryNotaryRuntime {
                     scopes: principal_scopes,
                     access_mode: registry_notary_core::AccessMode::MachineClient,
                     verified_claims: None,
+                    authorization_details: None,
                 };
                 let result = runtime
                     .evaluate_subject_for_batch(
@@ -4019,6 +4020,7 @@ mod tests {
             scopes: Vec::new(),
             access_mode: AccessMode::MachineClient,
             verified_claims: None,
+            authorization_details: None,
         }
     }
 
@@ -4028,6 +4030,7 @@ mod tests {
             scopes: vec!["self_attestation".to_string()],
             access_mode: AccessMode::SelfAttestation,
             verified_claims: None,
+            authorization_details: None,
         }
     }
 
@@ -4549,6 +4552,7 @@ mod tests {
             scopes: vec!["selected:1.0".to_string()],
             access_mode: AccessMode::MachineClient,
             verified_claims: None,
+            authorization_details: None,
         };
 
         let err = RegistryNotaryRuntime::new()

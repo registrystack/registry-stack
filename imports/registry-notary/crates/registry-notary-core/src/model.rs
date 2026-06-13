@@ -409,6 +409,7 @@ impl BoundedVerifiedClaims {
             .filter(|configured| configured.as_str() == claim_name)
             .and(self.subject_binding_value.as_ref())
             .map(Bounded::as_str)
+            .filter(|value| !value.trim().is_empty())
     }
 }
 
@@ -1355,12 +1356,52 @@ const fn self_attestation_access_mode() -> AccessMode {
     AccessMode::SelfAttestation
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceAuthorizationDetails {
+    #[serde(rename = "type")]
+    pub detail_type: String,
+    pub schema_version: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub locations: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub claims: Vec<ClaimRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disclosure: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<EvidenceAuthorizationSubject>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_mode: Option<AccessMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assisted_access_context: Option<EvidenceAssistedAccessContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceAuthorizationSubject {
+    pub binding_claim: String,
+    pub id_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceAssistedAccessContext {
+    pub channel: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct EvidencePrincipal {
     pub principal_id: String,
     pub scopes: Vec<String>,
     pub access_mode: AccessMode,
     pub verified_claims: Option<BoundedVerifiedClaims>,
+    pub authorization_details: Option<EvidenceAuthorizationDetails>,
 }
 
 impl EvidencePrincipal {
@@ -1995,6 +2036,32 @@ mod tests {
             claims.subject_binding_value("https://id.example.gov/claims/national_id"),
             Some("NAT-123")
         );
+    }
+
+    #[test]
+    fn verified_claim_lookup_treats_blank_subject_binding_value_as_missing() {
+        for blank in ["", "   "] {
+            let claims = BoundedVerifiedClaims {
+                issuer: bounded("https://id.example.gov"),
+                audiences: vec![bounded("registry-notary-citizen")],
+                client_id: Some(bounded("citizen-portal")),
+                token_type: Some(bounded("JWT")),
+                scopes: vec![bounded("self_attestation")],
+                subject: Some(bounded("login-subject")),
+                subject_binding_claim: Some(bounded("https://id.example.gov/claims/national_id")),
+                subject_binding_value: Some(bounded(blank)),
+                acr: None,
+                auth_time: None,
+                exp: None,
+                iat: None,
+                nbf: None,
+            };
+
+            assert_eq!(
+                claims.subject_binding_value("https://id.example.gov/claims/national_id"),
+                None
+            );
+        }
     }
 
     #[test]

@@ -193,6 +193,9 @@ pub struct GateInput {
     pub admin_shared_exposure: bool,
     pub openapi_public: bool,
     pub config_unsigned: bool,
+    pub self_attestation_enabled: bool,
+    pub transaction_token_anchor_configured: bool,
+    pub transaction_token_sender_constrained: bool,
 }
 
 impl GateInput {
@@ -239,6 +242,10 @@ pub const FINDING_SIDECAR_EXPECTED_MISSING: &str = "notary.sidecar.expected_side
 pub const FINDING_ADMIN_SHARED_EXPOSURE: &str = "notary.admin.shared_exposure";
 pub const FINDING_OPENAPI_PUBLIC: &str = "notary.openapi.public";
 pub const FINDING_CONFIG_UNSIGNED: &str = "notary.config.unsigned";
+pub const FINDING_ASSISTED_ACCESS_TRANSACTION_TOKEN_ANCHOR_MISSING: &str =
+    "notary.assisted_access.transaction_token_anchor_missing";
+pub const FINDING_ASSISTED_ACCESS_SENDER_CONSTRAINT_MISSING: &str =
+    "notary.assisted_access.sender_constraint_missing";
 
 // Diagnostic finding ids emitted by the framework itself.
 pub const FINDING_PROFILE_UNDECLARED: &str = "deployment.profile_undeclared";
@@ -306,6 +313,25 @@ fn gate_catalog() -> &'static [Gate] {
             production: Some(FindingError),
             evidence_grade: Some(StartupFail),
             condition: |input| input.config_unsigned,
+        },
+        Gate {
+            id: FINDING_ASSISTED_ACCESS_TRANSACTION_TOKEN_ANCHOR_MISSING,
+            hosted_lab: Some(FindingError),
+            production: Some(ReadinessFail),
+            evidence_grade: Some(StartupFail),
+            condition: |input| {
+                input.self_attestation_enabled && !input.transaction_token_anchor_configured
+            },
+        },
+        Gate {
+            id: FINDING_ASSISTED_ACCESS_SENDER_CONSTRAINT_MISSING,
+            hosted_lab: Some(FindingWarn),
+            production: Some(FindingError),
+            evidence_grade: Some(ReadinessFail),
+            condition: |input| {
+                input.transaction_token_anchor_configured
+                    && !input.transaction_token_sender_constrained
+            },
         },
     ]
 }
@@ -791,6 +817,38 @@ mod tests {
                 hosted_lab: GateSeverity::FindingWarn,
                 production: GateSeverity::FindingError,
                 evidence_grade: GateSeverity::StartupFail,
+            },
+            GateCase {
+                id: FINDING_ASSISTED_ACCESS_TRANSACTION_TOKEN_ANCHOR_MISSING,
+                triggering: GateInput {
+                    self_attestation_enabled: true,
+                    transaction_token_anchor_configured: false,
+                    ..GateInput::default()
+                },
+                non_triggering: GateInput {
+                    self_attestation_enabled: true,
+                    transaction_token_anchor_configured: true,
+                    ..GateInput::default()
+                },
+                hosted_lab: GateSeverity::FindingError,
+                production: GateSeverity::ReadinessFail,
+                evidence_grade: GateSeverity::StartupFail,
+            },
+            GateCase {
+                id: FINDING_ASSISTED_ACCESS_SENDER_CONSTRAINT_MISSING,
+                triggering: GateInput {
+                    transaction_token_anchor_configured: true,
+                    transaction_token_sender_constrained: false,
+                    ..GateInput::default()
+                },
+                non_triggering: GateInput {
+                    transaction_token_anchor_configured: true,
+                    transaction_token_sender_constrained: true,
+                    ..GateInput::default()
+                },
+                hosted_lab: GateSeverity::FindingWarn,
+                production: GateSeverity::FindingError,
+                evidence_grade: GateSeverity::ReadinessFail,
             },
         ]
     }

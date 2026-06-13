@@ -1466,6 +1466,7 @@ async fn memo_counters_record_hits_and_misses_on_shared_binding_batch() {
         scopes: Vec::new(),
         access_mode: AccessMode::MachineClient,
         verified_claims: None,
+        authorization_details: None,
     };
     let response = runtime
         .batch_evaluate(
