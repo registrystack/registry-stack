@@ -3759,22 +3759,26 @@ mod tests {
 
     fn assert_no_local_demo_external_auth_deps(label: &str, contents: &str) {
         let normalized = contents.to_ascii_lowercase();
+        let boundary_normalized = normalized
+            .chars()
+            .map(|value| {
+                if value.is_alphanumeric() || value == '-' || value == '_' || value == ' ' {
+                    value
+                } else {
+                    ' '
+                }
+            })
+            .collect::<String>();
         for forbidden in [
             "assisted access",
             "assisted-access",
             "assisted_access",
-            "esign",
             "e-signet",
             "oidc",
             "oauth",
             "openid",
-            "_sts",
-            "sts_",
             "sts-url",
             "sts url",
-            "sts.",
-            "sts:",
-            "/sts",
             "security token service",
             "security-token-service",
             "security_token_service",
@@ -3783,8 +3787,15 @@ mod tests {
             "transaction token",
         ] {
             assert!(
-                !normalized.contains(forbidden),
+                !boundary_normalized.contains(forbidden),
                 "{label} should not reference external auth dependency {forbidden:?}"
+            );
+        }
+
+        for word in boundary_normalized.split_whitespace() {
+            assert!(
+                word != "esign" && word != "sts",
+                "{label} should not reference external auth dependency {word:?}"
             );
         }
     }
