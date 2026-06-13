@@ -11,7 +11,7 @@ use axum_test::TestServer;
 use registry_notary_client::RegistryNotaryClient;
 use registry_notary_core::StandaloneRegistryNotaryConfig;
 use registry_notary_server::standalone_router;
-use serde_json::json;
+use serde_json::{json, Value};
 use tempfile::TempDir;
 
 const TEST_AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
@@ -77,7 +77,8 @@ async fn client_evaluates_against_real_standalone_server() {
     assert!(!audit.contains("api-token"));
     assert!(!audit.contains("source-token"));
     assert!(!audit.contains("person-1"));
-    assert!(!audit.contains("3.5"));
+    assert!(!audit_contains_json_number(&audit, 3.5));
+    assert!(!audit.contains("total_farmed_area"));
 }
 
 async fn registry_data_api(
@@ -184,4 +185,27 @@ evidence:
 "#
     );
     serde_norway::from_str(&raw).expect("config deserializes")
+}
+
+fn audit_contains_json_number(audit: &str, expected: f64) -> bool {
+    audit
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str::<Value>(line).expect("audit line is JSON"))
+        .any(|value| json_contains_number(&value, expected))
+}
+
+fn json_contains_number(value: &Value, expected: f64) -> bool {
+    match value {
+        Value::Number(number) => number
+            .as_f64()
+            .is_some_and(|actual| (actual - expected).abs() < f64::EPSILON),
+        Value::Array(items) => items
+            .iter()
+            .any(|item| json_contains_number(item, expected)),
+        Value::Object(fields) => fields
+            .values()
+            .any(|field| json_contains_number(field, expected)),
+        Value::Null | Value::Bool(_) | Value::String(_) => false,
+    }
 }
