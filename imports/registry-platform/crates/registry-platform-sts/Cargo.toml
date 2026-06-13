@@ -14,8 +14,8 @@ base64.workspace = true
 http.workspace = true
 hmac.workspace = true
 jsonwebtoken.workspace = true
-registry-platform-crypto = { version = "0.2.0", path = "../registry-platform-crypto" }
-registry-platform-oidc = { version = "0.2.0", path = "../registry-platform-oidc" }
+registry-platform-crypto = { version = "0.3.0", path = "../registry-platform-crypto" }
+registry-platform-oidc = { version = "0.3.0", path = "../registry-platform-oidc" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
