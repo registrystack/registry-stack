@@ -1312,6 +1312,13 @@ fn effective_approver_count(
     approval: &LocalOperatorApproval,
 ) -> usize {
     let mut approvers = BTreeSet::from([approval.approved_by.clone()]);
+    approvers.extend(
+        approval
+            .approvers
+            .iter()
+            .filter(|approver| !approver.trim().is_empty())
+            .cloned(),
+    );
     let Ok(bytes) = fs::read(&config_trust.local_approval_state_path) else {
         return approvers.len();
     };
@@ -1328,6 +1335,12 @@ fn effective_approver_count(
             && !candidate.approved_by.trim().is_empty()
         {
             approvers.insert(candidate.approved_by);
+            approvers.extend(
+                candidate
+                    .approvers
+                    .into_iter()
+                    .filter(|approver| !approver.trim().is_empty()),
+            );
         }
     }
     approvers.len()
