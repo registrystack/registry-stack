@@ -359,6 +359,7 @@ mod tests {
     use registry_notary_core::{
         ConfigTrustConfig, ConfigTrustRateLimit, RemoteTufRepositoryConfig,
     };
+    use std::collections::BTreeMap;
 
     use super::*;
 
@@ -379,6 +380,7 @@ mod tests {
                 max_accepted: 1,
                 window_seconds: 3600,
             },
+            required_approver_count: BTreeMap::new(),
             accepted_roots: Vec::new(),
             remote_tuf_repositories: vec![RemoteTufRepositoryConfig {
                 root_path: "/etc/registry-notary/tuf/root.json".into(),
@@ -411,6 +413,7 @@ mod tests {
                 max_accepted: 1,
                 window_seconds: 3600,
             },
+            required_approver_count: BTreeMap::new(),
             accepted_roots: Vec::new(),
             remote_tuf_repositories: Vec::new(),
         };

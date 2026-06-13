@@ -53,9 +53,9 @@ use registry_platform_oid4vci::{
 };
 use registry_platform_ops::{
     internal_config_hash, posture_safe_runtime_config_hash, AntiRollbackKey, AntiRollbackProposal,
-    AntiRollbackStoreError, ApplyReportResult, BreakGlassApproval, BreakGlassRateLimit,
-    ConfigSource, FileAntiRollbackStore, FileLocalApprovalStore, LocalApprovalStoreError,
-    LocalOperatorApproval, PostureApplyResult,
+    AntiRollbackRecord, AntiRollbackStoreError, ApplyReportResult, BreakGlassApproval,
+    BreakGlassRateLimit, ConfigSource, FileAntiRollbackStore, FileLocalApprovalStore,
+    LocalApprovalStoreError, LocalOperatorApproval, PostureApplyResult,
 };
 use registry_platform_replay::{ReplayKey, ReplayScope, ReplayStoreError, RequiredReplayError};
 use registry_platform_sdjwt::{validate_holder_proof, HolderProofBindings, HolderProofPolicy};
@@ -197,6 +197,8 @@ struct ConfigApplyRequest {
     #[serde(default)]
     break_glass_approval: Option<BreakGlassApproval>,
     #[serde(default)]
+    break_glass_approval_reference: Option<String>,
+    #[serde(default)]
     break_glass_rate_limit: Option<BreakGlassRateLimit>,
     #[serde(default)]
     local_approval_reference: Option<String>,
@@ -213,6 +215,15 @@ pub(crate) struct ConfigApplyPosture {
     pub(crate) last_apply_result: Option<PostureApplyResult>,
     pub(crate) last_apply_at: Option<String>,
     pub(crate) restart_required: bool,
+    pub(crate) emergency: Option<ConfigEmergencyPosture>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ConfigEmergencyPosture {
+    pub(crate) last_emergency_sequence: u64,
+    pub(crate) last_emergency_change_class: String,
+    pub(crate) last_emergency_at: Option<String>,
+    pub(crate) accepted_expires_at_unix_seconds: Vec<u64>,
 }
 
 impl Default for ConfigApplyPosture {
@@ -225,6 +236,7 @@ impl Default for ConfigApplyPosture {
             last_apply_result: None,
             last_apply_at: None,
             restart_required: false,
+            emergency: None,
         }
     }
 }
@@ -313,6 +325,7 @@ async fn admin_config_verify(
     };
     if request.break_glass
         || request.break_glass_approval.is_some()
+        || request.break_glass_approval_reference.is_some()
         || request.break_glass_rate_limit.is_some()
     {
         return config_apply_report(
@@ -424,6 +437,7 @@ async fn admin_config_dry_run(
     };
     if request.break_glass
         || request.break_glass_approval.is_some()
+        || request.break_glass_approval_reference.is_some()
         || request.break_glass_rate_limit.is_some()
     {
         return config_apply_report(
@@ -534,7 +548,11 @@ async fn admin_config_apply(
         }
     };
     let config_governance = state.config_governance();
-    let break_glass = match break_glass_proposal(&request) {
+    let break_glass = match break_glass_proposal(
+        &request,
+        config_governance.config_trust.as_ref(),
+        &candidate,
+    ) {
         Ok(break_glass) => break_glass,
         Err(()) => {
             return config_apply_report(
@@ -556,7 +574,7 @@ async fn admin_config_apply(
             );
         }
     };
-    if let Err(()) = require_break_glass_emergency_change_class(&request, &candidate) {
+    if let Err(()) = require_break_glass_emergency_change_class(break_glass.as_ref(), &candidate) {
         return config_apply_report(
             candidate.bundle_id.clone(),
             candidate.sequence,
@@ -572,7 +590,8 @@ async fn admin_config_apply(
                 false,
                 false,
             )
-            .with_break_glass_request(&request),
+            .with_break_glass_request(&request)
+            .with_break_glass_approval(break_glass.as_ref()),
         );
     }
     if !is_signed_config_source(candidate.source) {
@@ -593,7 +612,8 @@ async fn admin_config_apply(
                     false,
                     false,
                 )
-                .with_break_glass_request(&request),
+                .with_break_glass_request(&request)
+                .with_break_glass_approval(break_glass.as_ref()),
             );
         }
         return with_config_audit(
@@ -869,13 +889,37 @@ async fn admin_config_apply(
     let antirollback_store = FileAntiRollbackStore::new(&config_trust.antirollback_state_path)
         .with_break_glass_rate_limit(break_glass_rate_limit);
     let antirollback_key = antirollback_key(&config_governance, &candidate.stream_id);
+    if let Some(approval) = &break_glass {
+        if let Err(()) =
+            ensure_break_glass_reference_not_consumed(config_trust, &antirollback_key, approval)
+        {
+            return config_apply_report(
+                candidate.bundle_id.clone(),
+                candidate.sequence,
+                ApplyReportResult::RejectedBreakGlass,
+                false,
+                false,
+                StatusCode::CONFLICT,
+                resolved_config_audit(
+                    ConfigAdminAction::Apply,
+                    &candidate,
+                    "rejected",
+                    ApplyReportResult::RejectedBreakGlass.as_str(),
+                    false,
+                    false,
+                )
+                .with_break_glass_request(&request)
+                .with_break_glass_approval(break_glass.as_ref()),
+            );
+        }
+    }
     let local_approval = governed_apply.local_approval().cloned();
     let proposal = AntiRollbackProposal {
         sequence: candidate.sequence,
         previous_config_hash: candidate.previous_config_hash.clone(),
         config_hash: internal_config_hash(candidate.config_yaml.as_bytes()),
         root_version: candidate.root_version,
-        break_glass,
+        break_glass: break_glass.clone(),
         break_glass_rate_limit: None,
         local_approval: local_approval.clone(),
         local_approval_rate_limit: local_approval.as_ref().map(|approval| approval.rate_limit),
@@ -948,6 +992,7 @@ async fn admin_config_apply(
                 false,
             )
             .with_break_glass_request(&request)
+            .with_break_glass_approval(break_glass.as_ref())
             .with_local_approval(local_approval.as_ref()),
         );
     }
@@ -968,6 +1013,7 @@ async fn admin_config_apply(
             false,
         )
         .with_break_glass_request(&request)
+        .with_break_glass_approval(break_glass.as_ref())
         .with_local_approval(local_approval.as_ref()),
     )
 }
@@ -1020,8 +1066,31 @@ fn spawn_antirollback_accept_and_publish_apply_blocking(
     sequence: u64,
 ) -> tokio::task::JoinHandle<Result<(), AntiRollbackStoreError>> {
     tokio::task::spawn_blocking(move || {
+        let break_glass_applied = proposal.break_glass.is_some();
         store.accept(&key, proposal)?;
-        publish_accepted_governed_apply(&state, runtime_config, apply, source, bundle_id, sequence);
+        let emergency = if break_glass_applied {
+            match store.load(&key) {
+                Ok(record) => emergency_posture_from_record(&record),
+                Err(error) => {
+                    tracing::debug!(
+                        error = %error,
+                        "failed to load antirollback record for emergency posture"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        publish_accepted_governed_apply(
+            &state,
+            runtime_config,
+            apply,
+            source,
+            bundle_id,
+            sequence,
+            emergency,
+        );
         Ok(())
     })
 }
@@ -1033,6 +1102,7 @@ fn publish_accepted_governed_apply(
     source: ConfigSource,
     bundle_id: String,
     sequence: u64,
+    emergency: Option<ConfigEmergencyPosture>,
 ) {
     state.publish_governed_apply(Arc::clone(&runtime_config), &apply);
     match apply {
@@ -1064,6 +1134,7 @@ fn publish_accepted_governed_apply(
         last_apply_result: Some(ApplyReportResult::Applied.as_posture_result()),
         last_apply_at: Some(format_time(OffsetDateTime::now_utc())),
         restart_required: false,
+        emergency,
     });
 }
 
@@ -1115,9 +1186,15 @@ fn signing_change_authorization(candidate: &ResolvedConfigCandidate) -> SigningC
     }
 }
 
-fn break_glass_proposal(request: &ConfigApplyRequest) -> Result<Option<BreakGlassApproval>, ()> {
+fn break_glass_proposal(
+    request: &ConfigApplyRequest,
+    config_trust: Option<&registry_notary_core::ConfigTrustConfig>,
+    candidate: &ResolvedConfigCandidate,
+) -> Result<Option<BreakGlassApproval>, ()> {
     if !request.break_glass {
-        return if request.break_glass_approval.is_some() || request.break_glass_rate_limit.is_some()
+        return if request.break_glass_approval.is_some()
+            || request.break_glass_approval_reference.is_some()
+            || request.break_glass_rate_limit.is_some()
         {
             Err(())
         } else {
@@ -1127,17 +1204,96 @@ fn break_glass_proposal(request: &ConfigApplyRequest) -> Result<Option<BreakGlas
     if request.break_glass_rate_limit.is_some() {
         return Err(());
     }
-    match request.break_glass_approval.clone() {
-        Some(approval) => Ok(Some(approval)),
+    let config_trust = config_trust.ok_or(())?;
+    match (
+        request.break_glass_approval.clone(),
+        request.break_glass_approval_reference.as_deref(),
+    ) {
+        (Some(approval), None) => {
+            enforce_required_break_glass_approvers(
+                config_trust,
+                &approval.emergency_change_class,
+                1,
+            )?;
+            Ok(Some(approval))
+        }
+        (None, Some(reference)) => {
+            stored_break_glass_approval(config_trust, candidate, reference).map(Some)
+        }
         _ => Err(()),
     }
 }
 
+fn stored_break_glass_approval(
+    config_trust: &registry_notary_core::ConfigTrustConfig,
+    candidate: &ResolvedConfigCandidate,
+    reference: &str,
+) -> Result<BreakGlassApproval, ()> {
+    if reference.trim().is_empty() {
+        return Err(());
+    }
+    let store = FileLocalApprovalStore::new(&config_trust.local_approval_state_path);
+    let config_hash = internal_config_hash(candidate.config_yaml.as_bytes());
+    for change_class in &candidate.change_classes {
+        let loaded = candidate
+            .previous_config_hash
+            .as_deref()
+            .and_then(|previous| {
+                store
+                    .load_for_apply(reference, change_class, &config_hash, Some(previous))
+                    .ok()
+            })
+            .or_else(|| {
+                store
+                    .load_for_apply(reference, change_class, &config_hash, None)
+                    .ok()
+            });
+        let Some(approval) = loaded else {
+            continue;
+        };
+        enforce_required_break_glass_approvers(
+            config_trust,
+            &approval.change_class,
+            effective_approver_count(&approval),
+        )?;
+        return Ok(BreakGlassApproval {
+            approved_by: approval.approved_by,
+            reason: approval.reason,
+            approval_reference: approval.approval_reference,
+            emergency_change_class: approval.change_class,
+            expires_at_unix_seconds: approval.expires_at_unix_seconds,
+            rate_limit_identity: approval.rate_limit_identity,
+        });
+    }
+    Err(())
+}
+
+fn effective_approver_count(approval: &LocalOperatorApproval) -> usize {
+    1 + approval.approvers.len()
+}
+
+fn enforce_required_break_glass_approvers(
+    config_trust: &registry_notary_core::ConfigTrustConfig,
+    emergency_change_class: &str,
+    actual_count: usize,
+) -> Result<(), ()> {
+    let required_count = config_trust
+        .required_approver_count
+        .get(emergency_change_class)
+        .copied()
+        .unwrap_or(1);
+    if actual_count < required_count {
+        Err(())
+    } else {
+        Ok(())
+    }
+}
+
 fn require_break_glass_emergency_change_class(
-    request: &ConfigApplyRequest,
+    approval: Option<&BreakGlassApproval>,
     candidate: &ResolvedConfigCandidate,
 ) -> Result<(), ()> {
-    let Some(approval) = &request.break_glass_approval else {
+    let Some(approval) = approval else {
         return Ok(());
     };
     if candidate
@@ -1148,6 +1304,49 @@ fn require_break_glass_emergency_change_class(
     } else {
         Err(())
     }
+}
+
+fn ensure_break_glass_reference_not_consumed(
+    config_trust: &registry_notary_core::ConfigTrustConfig,
+    key: &AntiRollbackKey,
+    approval: &BreakGlassApproval,
+) -> Result<(), ()> {
+    let record = FileAntiRollbackStore::new(&config_trust.antirollback_state_path)
+        .load(key)
+        .map_err(|_| ())?;
+    if record
+        .break_glass
+        .accepted
+        .iter()
+        .any(|accepted| accepted.approval_reference == approval.approval_reference)
+    {
+        Err(())
+    } else {
+        Ok(())
+    }
+}
+
+fn emergency_posture_from_record(record: &AntiRollbackRecord) -> Option<ConfigEmergencyPosture> {
+    let accepted = &record.break_glass.accepted;
+    let last = accepted
+        .iter()
+        .max_by_key(|acceptance| acceptance.sequence)?;
+    Some(ConfigEmergencyPosture {
+        last_emergency_sequence: last.sequence,
+        last_emergency_change_class: last.emergency_change_class.clone()?,
+        last_emergency_at: unix_seconds_rfc3339(last.accepted_at_unix_seconds),
+        accepted_expires_at_unix_seconds: accepted
+            .iter()
+            .map(|acceptance| acceptance.expires_at_unix_seconds)
+            .collect(),
+    })
+}
+
+fn unix_seconds_rfc3339(seconds: u64) -> Option<String> {
+    OffsetDateTime::from_unix_timestamp(seconds.try_into().ok()?)
+        .ok()?
+        .format(&Rfc3339)
+        .ok()
 }
 
 fn credential_issuer_rotation_ready(rotation: &CredentialIssuerRotation) -> bool {
@@ -1937,6 +2136,7 @@ fn consume_apply_metadata(request: &ConfigApplyRequest) {
         request.root_version,
         request.break_glass,
         request.break_glass_approval.as_ref(),
+        request.break_glass_approval_reference.as_deref(),
         request.break_glass_rate_limit,
         request.local_approval_reference.as_deref(),
         request.bundle_id.as_deref(),
@@ -2111,14 +2311,27 @@ fn resolved_config_audit(
 
 trait ConfigAuditBreakGlassExt {
     fn with_break_glass_request(self, request: &ConfigApplyRequest) -> Self;
+    fn with_break_glass_approval(self, approval: Option<&BreakGlassApproval>) -> Self;
 }
 
 impl ConfigAuditBreakGlassExt for ConfigAuditEvent {
     fn with_break_glass_request(mut self, request: &ConfigApplyRequest) -> Self {
         self.break_glass = request.break_glass;
+        if self.break_glass_approval_reference.is_none() {
+            self.break_glass_approval_reference = request.break_glass_approval_reference.clone();
+        }
         if let Some(approval) = &request.break_glass_approval {
+            self = self.with_break_glass_approval(Some(approval));
+        }
+        self
+    }
+
+    fn with_break_glass_approval(mut self, approval: Option<&BreakGlassApproval>) -> Self {
+        if let Some(approval) = approval {
+            self.break_glass = true;
             self.break_glass_approval_reference = Some(approval.approval_reference.clone());
-            self.break_glass_approved_by = Some(approval.approved_by.clone());
+            self.break_glass_approved_by =
+                Some(internal_config_hash(approval.approved_by.as_bytes()));
             self.break_glass_reason_hash = Some(internal_config_hash(approval.reason.as_bytes()));
             self.break_glass_emergency_change_class = Some(approval.emergency_change_class.clone());
             self.break_glass_expires_at_unix_seconds = Some(approval.expires_at_unix_seconds);
@@ -8135,6 +8348,7 @@ mod tests {
             root_version: None,
             break_glass: false,
             break_glass_approval: None,
+            break_glass_approval_reference: None,
             break_glass_rate_limit: None,
             local_approval_reference: None,
             tuf: None,

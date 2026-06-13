@@ -412,6 +412,10 @@
           "break_glass_approval": {
             "$ref": "#/components/schemas/BreakGlassApproval"
           },
+          "break_glass_approval_reference": {
+            "description": "Apply-only reference for a matching durable break-glass approval record in the verifier-owned local approval store.",
+            "type": "string"
+          },
           "bundle_id": {
             "description": "Operator-visible candidate identifier. Signed TUF targets may derive it from target metadata.",
             "type": "string"
