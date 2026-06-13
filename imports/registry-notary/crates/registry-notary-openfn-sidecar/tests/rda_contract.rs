@@ -30,7 +30,8 @@ struct HarnessOptions {
     max_output_bytes: usize,
     liveness_window_ms: u64,
     max_batch_items: usize,
-    batch_mode: Option<&'static str>,
+    source_batch_mode: Option<&'static str>,
+    workflow_batch_mode: Option<&'static str>,
     source_max_in_flight: Option<usize>,
 }
 
@@ -42,7 +43,8 @@ impl Default for HarnessOptions {
             max_output_bytes: 4096,
             liveness_window_ms: 30_000,
             max_batch_items: 100,
-            batch_mode: None,
+            source_batch_mode: None,
+            workflow_batch_mode: None,
             source_max_in_flight: None,
         }
     }
@@ -75,9 +77,13 @@ fn manifest_yaml(options: &HarnessOptions, attempt_log: &Path) -> String {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let worker = fixtures.join("contract_worker.sh");
     let job = fixtures.join("jobs/opencrvs-person-lookup.js");
-    let batch_config = options
-        .batch_mode
+    let source_batch_config = options
+        .source_batch_mode
         .map(|mode| format!("    batch:\n      mode: {mode}\n"))
+        .unwrap_or_default();
+    let workflow_batch_config = options
+        .workflow_batch_mode
+        .map(|mode| format!("      batch_mode: {mode}\n"))
         .unwrap_or_default();
     let source_limits_config = options
         .source_max_in_flight
@@ -113,9 +119,9 @@ sources:
   openfn_crvs:
     dataset: civil_registry
     entity: civil_person
-{batch_config}{source_limits_config}
+{source_batch_config}{source_limits_config}
     workflow:
-      steps:
+{workflow_batch_config}      steps:
         - id: lookup
           expression: {job}
           adaptors:
@@ -134,7 +140,8 @@ sources:
         max_output_bytes = options.max_output_bytes,
         liveness_window_ms = options.liveness_window_ms,
         max_batch_items = options.max_batch_items,
-        batch_config = batch_config,
+        source_batch_config = source_batch_config,
+        workflow_batch_config = workflow_batch_config,
         source_limits_config = source_limits_config,
         worker = yaml_path(&worker),
         attempt_log = yaml_path(attempt_log),
@@ -364,7 +371,7 @@ async fn batch_match_returns_per_item_projected_rda_data_and_sends_minimized_wor
 #[tokio::test]
 async fn batch_match_forwards_workflow_batch_mode_to_worker() {
     let harness = contract_harness(HarnessOptions {
-        batch_mode: Some("workflow_batch"),
+        source_batch_mode: Some("workflow_batch"),
         ..HarnessOptions::default()
     })
     .await;
@@ -384,6 +391,33 @@ async fn batch_match_forwards_workflow_batch_mode_to_worker() {
         attempt_count(&harness),
         1,
         "true batch mode still dispatches a single worker execution"
+    );
+}
+
+#[tokio::test]
+async fn batch_match_honors_native_workflow_batch_mode_in_worker_request() {
+    let harness = contract_harness(HarnessOptions {
+        workflow_batch_mode: Some("native"),
+        ..HarnessOptions::default()
+    })
+    .await;
+
+    let response = authorized_batch_match(&harness.server).await;
+
+    response.assert_status_ok();
+    let attempts = fs::read_to_string(&harness.attempt_log).expect("attempt log is written");
+    let batch_request = attempts
+        .lines()
+        .find(|line| line.contains(r#""mode":"batch_match""#))
+        .expect("batch worker request is logged");
+    let request: Value = serde_json::from_str(batch_request).expect("worker request is JSON");
+    assert_eq!(request["workflow"]["batch_mode"], json!("native"));
+    assert_eq!(request["batch"], json!({ "mode": "workflow_batch" }));
+    assert_eq!(request["items"].as_array().map(Vec::len), Some(3));
+    assert_eq!(
+        attempt_count(&harness),
+        1,
+        "native workflow batch mode dispatches a single worker execution"
     );
 }
 
