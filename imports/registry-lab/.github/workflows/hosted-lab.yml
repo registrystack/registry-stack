@@ -30,6 +30,8 @@ on:
       - "scripts/test_dhis2_programme_vc_config.py"
       - "scripts/hosted-smoke.py"
       - "scripts/test_hosted_smoke.py"
+      - "scripts/check-coolify-required-env.py"
+      - "scripts/test_coolify_required_env.py"
       - "scripts/validate-hosted-deploy.py"
       - "scripts/test_validate_hosted_deploy.py"
       - "scripts/validate-public-api-workspace.py"
@@ -67,6 +69,8 @@ on:
       - "scripts/test_dhis2_programme_vc_config.py"
       - "scripts/hosted-smoke.py"
       - "scripts/test_hosted_smoke.py"
+      - "scripts/check-coolify-required-env.py"
+      - "scripts/test_coolify_required_env.py"
       - "scripts/validate-hosted-deploy.py"
       - "scripts/test_validate_hosted_deploy.py"
       - "scripts/validate-public-api-workspace.py"
@@ -123,6 +127,8 @@ jobs:
             scripts/test_dhis2_programme_vc_config.py \
             scripts/hosted-smoke.py \
             scripts/test_hosted_smoke.py \
+            scripts/check-coolify-required-env.py \
+            scripts/test_coolify_required_env.py \
             scripts/validate-hosted-deploy.py \
             scripts/test_validate_hosted_deploy.py \
             scripts/validate-public-api-workspace.py \
@@ -167,6 +173,9 @@ jobs:
       - name: Run hosted smoke tests
         run: python3 scripts/test_hosted_smoke.py
 
+      - name: Run Coolify required env gate tests
+        run: python3 scripts/test_coolify_required_env.py
+
       - name: Validate hosted deploy artifacts
         run: python3 scripts/validate-hosted-deploy.py --reject-interim-product-images
 
@@ -199,22 +208,27 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "$COOLIFY_API_TOKEN" ]; then
-            echo "::notice::COOLIFY_API_TOKEN is not configured; hosted deploy trigger skipped."
-            exit 0
+            echo "::error::COOLIFY_API_TOKEN is not configured."
+            exit 1
           fi
 
           missing=0
           for name in COOLIFY_API_BASE_URL COOLIFY_REGISTRY_LAB_APP_UUID COOLIFY_HOSTED_ESIGNET_APP_UUID COOLIFY_HOSTED_WALT_APP_UUID; do
             if [ -z "${!name:-}" ]; then
-              echo "::notice::${name} is not configured; hosted deploy trigger skipped."
+              echo "::error::${name} is not configured."
               missing=1
             fi
           done
           if [ "$missing" -eq 1 ]; then
-            exit 0
+            exit 1
           fi
 
           api_base="${COOLIFY_API_BASE_URL%/}"
+          python3 scripts/check-coolify-required-env.py \
+            --compose compose.coolify.yaml \
+            --api-base-url "${api_base}" \
+            --app-uuid "${COOLIFY_REGISTRY_LAB_APP_UUID}"
+
           deployments_file="$(mktemp)"
           for app in "$COOLIFY_REGISTRY_LAB_APP_UUID" "$COOLIFY_HOSTED_ESIGNET_APP_UUID" "$COOLIFY_HOSTED_WALT_APP_UUID"; do
             python3 -c 'import json, os; print(json.dumps({"key": "CONFIG_REPO_REF", "value": os.environ["GITHUB_SHA"], "is_preview": False}))' \

@@ -764,6 +764,9 @@ evidence:
     def test_hosted_workflow_deploys_all_coolify_apps_by_api(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         self.assertIn("COOLIFY_API_TOKEN", workflow)
+        self.assertIn("::error::COOLIFY_API_TOKEN is not configured.", workflow)
+        self.assertNotIn("hosted deploy trigger skipped", workflow)
+        self.assertIn("scripts/check-coolify-required-env.py", workflow)
         self.assertNotIn("COOLIFY_DEPLOY_WEBHOOK_URL", workflow)
         self.assertIn("${{ vars.COOLIFY_REGISTRY_LAB_APP_UUID }}", workflow)
         self.assertIn("${{ vars.COOLIFY_HOSTED_ESIGNET_APP_UUID }}", workflow)
