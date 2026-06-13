@@ -488,6 +488,11 @@ compatibility; the sidecar source chooses `engine: http_json` or
 `engine: openfn` in its own signed manifest. The source connection must use
 static sidecar bearer auth through `token_env`. Do not configure target-service
 credentials in Notary; keep them in the sidecar environment or secret store.
+Configure performance and target-protection controls in the sidecar manifest:
+per-source `max_in_flight`, optional request rate and burst, `Retry-After`
+backoff handling, `http_json` sequential/parallel/native batch mode, and any
+explicit TTL-bound result cache. Treat cache settings as evidence freshness
+policy, not only performance tuning.
 
 For high-assurance deployments, pin the sidecar runtime that Notary is allowed
 to use with `expected_sidecar`. Notary reads the private sidecar assurance

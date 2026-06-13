@@ -62,6 +62,9 @@ Design rules:
 - Configure exactly one of `token_env` or `source_auth`.
 - Use HTTPS source URLs in shared environments.
 - Keep `max_in_flight` below the upstream's safe concurrency limit.
+- For sidecar sources, also set sidecar `limits.requests_per_second` and
+  `limits.burst` when the upstream has a documented safe rate. The sidecar
+  honors target `Retry-After` responses and fails fast during the backoff window.
 - Leave `retry_on_5xx: true` for idempotent reads.
 - Set `retry_on_5xx: false` for sidecar worker flows that must not repeat.
 - Use `bulk_mode: none` until the source contract has been tested.
@@ -468,8 +471,13 @@ Bulk source modes are separate from API batch evaluation:
   shared `query_signature`.
 
 Do not enable bulk modes until contract tests prove response shape,
-cardinality, and source limits. Notary does not retry sidecar adapter execution
-failures; keep `retry_on_5xx: false` on sidecar connections.
+cardinality, and source limits. For `http_json` sidecars, prefer sequential
+lookup first, then opt into `parallel_lookup` only with a bounded
+`batch.max_parallel`, or `native_batch` only when the upstream has a real bulk
+endpoint and configured response fan-out keys. Optional sidecar result caching
+must be TTL-bound and reviewed as an evidence freshness decision. Notary does
+not retry sidecar adapter execution failures; keep `retry_on_5xx: false` on
+sidecar connections.
 
 ## Purpose Propagation
 

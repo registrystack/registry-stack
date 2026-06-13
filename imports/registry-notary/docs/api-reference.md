@@ -182,6 +182,7 @@ for policy mapping. Map on `code`, not on prose. Safe fields for logs are
 | `relationship.purpose_not_allowed` | Relationship |
 | `source.target_auth` | Source |
 | `source.target_rate_limit` | Source |
+| `source.saturated` | Source |
 | `source.timeout` | Source |
 | `source.unavailable` | Source |
 | `claim.not_found` | Claim |

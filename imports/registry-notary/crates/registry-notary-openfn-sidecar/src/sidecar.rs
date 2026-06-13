@@ -177,6 +177,8 @@ pub struct SourceConfig {
     pub allow_insecure_private_network: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_json: Option<HttpJsonSourceConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<SourceCacheConfig>,
     #[serde(default)]
     pub smoke_lookup: Option<SmokeLookupConfig>,
 }
@@ -194,6 +196,8 @@ pub enum SourceEngine {
 pub struct SourceBatchConfig {
     #[serde(default)]
     pub mode: SourceBatchMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_parallel: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -202,6 +206,8 @@ pub enum SourceBatchMode {
     #[default]
     SequentialLookup,
     WorkflowBatch,
+    ParallelLookup,
+    NativeBatch,
 }
 
 impl SourceBatchConfig {
@@ -214,6 +220,10 @@ impl SourceBatchConfig {
 pub struct SourceRuntimeLimitConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_in_flight: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requests_per_second: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub burst: Option<u64>,
 }
 
 impl SourceRuntimeLimitConfig {
@@ -263,6 +273,16 @@ pub struct HttpJsonSourceConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<HttpJsonAuthConfig>,
     pub response: HttpJsonResponseConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch: Option<HttpJsonBatchConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SourceCacheConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exact_match_ttl_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_found_ttl_ms: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -305,6 +325,25 @@ pub struct HttpJsonSecretRef {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct HttpJsonResponseConfig {
     pub records: HttpJsonCelExpression,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct HttpJsonBatchConfig {
+    #[serde(default)]
+    pub method: HttpJsonMethod,
+    pub path: String,
+    #[serde(default)]
+    pub query: BTreeMap<String, HttpJsonCelExpression>,
+    #[serde(default)]
+    pub headers: BTreeMap<String, HttpJsonCelExpression>,
+    pub response: HttpJsonBatchResponseConfig,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct HttpJsonBatchResponseConfig {
+    pub records: HttpJsonCelExpression,
+    pub record_key: HttpJsonCelExpression,
+    pub item_key: HttpJsonCelExpression,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -453,7 +492,62 @@ struct AppState {
     pool: Option<Arc<WorkerPool>>,
     credentials: Arc<BTreeMap<String, Value>>,
     source_limiters: Arc<BTreeMap<String, Arc<Semaphore>>>,
+    source_runtime: Arc<BTreeMap<String, Arc<SourceRuntimeState>>>,
+    http_json_clients: Arc<Mutex<BTreeMap<String, reqwest::Client>>>,
     metrics: Arc<Mutex<BTreeMap<MetricKey, MetricValue>>>,
+}
+
+struct SourceRuntimeState {
+    rate_limiter: Option<Mutex<TokenBucket>>,
+    backoff_until: Mutex<Option<Instant>>,
+    cache: Mutex<BTreeMap<String, CacheEntry>>,
+}
+
+struct TokenBucket {
+    capacity: f64,
+    tokens: f64,
+    refill_per_second: f64,
+    last_refill: Instant,
+}
+
+struct CacheEntry {
+    expires_at: Instant,
+    value: Value,
+}
+
+impl SourceRuntimeState {
+    fn new(limits: &SourceRuntimeLimitConfig) -> Self {
+        let rate_limiter = limits.requests_per_second.map(|requests_per_second| {
+            let capacity = limits.burst.unwrap_or(requests_per_second).max(1) as f64;
+            Mutex::new(TokenBucket {
+                capacity,
+                tokens: capacity,
+                refill_per_second: requests_per_second.max(1) as f64,
+                last_refill: Instant::now(),
+            })
+        });
+        Self {
+            rate_limiter,
+            backoff_until: Mutex::new(None),
+            cache: Mutex::new(BTreeMap::new()),
+        }
+    }
+}
+
+impl TokenBucket {
+    fn try_take(&mut self, now: Instant) -> Result<(), Duration> {
+        let elapsed = now.duration_since(self.last_refill).as_secs_f64();
+        self.last_refill = now;
+        self.tokens = (self.tokens + elapsed * self.refill_per_second).min(self.capacity);
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            Ok(())
+        } else {
+            let missing = 1.0 - self.tokens;
+            let wait_seconds = (missing / self.refill_per_second).max(0.001);
+            Err(Duration::from_secs_f64(wait_seconds))
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -479,9 +573,9 @@ struct SourceExecution {
     worker_id: String,
 }
 
-struct PreparedHttpJsonUrl {
+struct PreparedHttpJsonRequest {
     url: reqwest::Url,
-    resolved_addrs: Vec<SocketAddr>,
+    client: reqwest::Client,
 }
 
 enum SourceExecutionError {
@@ -1222,12 +1316,24 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
             (source_id.clone(), Arc::new(Semaphore::new(max_in_flight)))
         })
         .collect();
+    let source_runtime = config
+        .sources
+        .iter()
+        .map(|(source_id, source)| {
+            (
+                source_id.clone(),
+                Arc::new(SourceRuntimeState::new(&source.limits)),
+            )
+        })
+        .collect();
     let state = Arc::new(AppState {
         config,
         auth_tokens: Arc::new(auth_tokens),
         pool,
         credentials: Arc::new(credentials),
         source_limiters: Arc::new(source_limiters),
+        source_runtime: Arc::new(source_runtime),
+        http_json_clients: Arc::new(Mutex::new(BTreeMap::new())),
         metrics: Arc::new(Mutex::new(BTreeMap::new())),
     });
     run_smoke_lookups(&state).await?;
@@ -1534,6 +1640,38 @@ fn validate_config(config: &SidecarConfig) -> Result<(), SidecarError> {
                 "source {source_id} limits.max_in_flight must be greater than zero"
             )));
         }
+        if source.limits.requests_per_second == Some(0) {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} limits.requests_per_second must be greater than zero"
+            )));
+        }
+        if source.limits.burst == Some(0) {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} limits.burst must be greater than zero"
+            )));
+        }
+        if source.limits.burst.is_some() && source.limits.requests_per_second.is_none() {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} limits.burst requires limits.requests_per_second"
+            )));
+        }
+        if source.batch.max_parallel == Some(0) {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} batch.max_parallel must be greater than zero"
+            )));
+        }
+        if let Some(cache) = &source.cache {
+            if cache.exact_match_ttl_ms == Some(0) || cache.not_found_ttl_ms == Some(0) {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} cache TTLs must be greater than zero"
+                )));
+            }
+            if cache.exact_match_ttl_ms.is_none() && cache.not_found_ttl_ms.is_none() {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} cache must configure at least one TTL"
+                )));
+            }
+        }
         validate_source_execution(source_id, source, canonical_jobs_root.as_deref())?;
         if source
             .allowed_base_urls
@@ -1566,6 +1704,14 @@ fn validate_source_execution(
 ) -> Result<(), SidecarError> {
     match source.engine {
         SourceEngine::OpenFn => {
+            if matches!(
+                source.batch.mode,
+                SourceBatchMode::ParallelLookup | SourceBatchMode::NativeBatch
+            ) {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} batch.mode is only supported for http_json sources"
+                )));
+            }
             let workflow = source.workflow.as_ref().ok_or_else(|| {
                 SidecarError::Config(format!(
                     "source {source_id} workflow is required for OpenFn sources"
@@ -1593,17 +1739,20 @@ fn validate_http_json_source(source_id: &str, source: &SourceConfig) -> Result<(
             "source {source_id} http_json.base_url.cel must be non-empty"
         )));
     }
-    if http_json.path.trim().is_empty()
-        || !http_json.path.starts_with('/')
-        || http_json.path.starts_with("//")
-        || http_json
-            .path
-            .trim_start_matches('/')
-            .split('/')
-            .any(|segment| matches!(segment, "." | ".."))
-    {
+    validate_http_json_path(source_id, "http_json.path", &http_json.path)?;
+    if source.batch.mode == SourceBatchMode::NativeBatch && http_json.batch.is_none() {
         return Err(SidecarError::Config(format!(
-            "source {source_id} http_json.path must be an absolute path under the configured base_url"
+            "source {source_id} http_json.batch is required when batch.mode is native_batch"
+        )));
+    }
+    if source.batch.mode == SourceBatchMode::WorkflowBatch {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} batch.mode workflow_batch is only supported for OpenFn sources"
+        )));
+    }
+    if source.batch.mode != SourceBatchMode::ParallelLookup && source.batch.max_parallel.is_some() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} batch.max_parallel requires batch.mode parallel_lookup"
         )));
     }
     if http_json.response.records.cel.trim().is_empty() {
@@ -1630,6 +1779,32 @@ fn validate_http_json_source(source_id: &str, source: &SourceConfig) -> Result<(
         "http_json.response.records",
         &http_json.response.records,
     )?;
+    if let Some(batch) = &http_json.batch {
+        validate_http_json_path(source_id, "http_json.batch.path", &batch.path)?;
+        for (name, expr) in &batch.query {
+            validate_http_header_or_query_name(source_id, "query", name)?;
+            validate_http_json_cel(source_id, &format!("http_json.batch.query.{name}"), expr)?;
+        }
+        for (name, expr) in &batch.headers {
+            validate_http_header_or_query_name(source_id, "headers", name)?;
+            validate_http_json_cel(source_id, &format!("http_json.batch.headers.{name}"), expr)?;
+        }
+        validate_http_json_cel(
+            source_id,
+            "http_json.batch.response.records",
+            &batch.response.records,
+        )?;
+        validate_http_json_cel(
+            source_id,
+            "http_json.batch.response.record_key",
+            &batch.response.record_key,
+        )?;
+        validate_http_json_cel(
+            source_id,
+            "http_json.batch.response.item_key",
+            &batch.response.item_key,
+        )?;
+    }
     if let Some(auth) = &http_json.auth {
         match auth.kind {
             HttpJsonAuthKind::Bearer => {
@@ -1652,6 +1827,22 @@ fn validate_http_json_source(source_id: &str, source: &SourceConfig) -> Result<(
                 )?;
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_http_json_path(source_id: &str, label: &str, path: &str) -> Result<(), SidecarError> {
+    if path.trim().is_empty()
+        || !path.starts_with('/')
+        || path.starts_with("//")
+        || path
+            .trim_start_matches('/')
+            .split('/')
+            .any(|segment| matches!(segment, "." | ".."))
+    {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} {label} must be an absolute path under the configured base_url"
+        )));
     }
     Ok(())
 }
@@ -2192,6 +2383,26 @@ async fn execute_http_json_batch(
     source: &SourceConfig,
     request: &Value,
 ) -> Result<Value, SourceExecutionError> {
+    match source.batch.mode {
+        SourceBatchMode::SequentialLookup => {
+            execute_http_json_sequential_batch(state, source_id, source, request).await
+        }
+        SourceBatchMode::ParallelLookup => {
+            execute_http_json_parallel_batch(state, source_id, source, request).await
+        }
+        SourceBatchMode::NativeBatch => {
+            execute_http_json_native_batch(state, source_id, source, request).await
+        }
+        SourceBatchMode::WorkflowBatch => Err(SourceExecutionError::HttpJsonBadRequest),
+    }
+}
+
+async fn execute_http_json_sequential_batch(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: &Value,
+) -> Result<Value, SourceExecutionError> {
     let query_signature = request
         .get("query_signature")
         .and_then(Value::as_array)
@@ -2214,25 +2425,7 @@ async fn execute_http_json_batch(
             .get("id")
             .and_then(Value::as_str)
             .ok_or(SourceExecutionError::HttpJson)?;
-        let lookup_value = item
-            .get("values")
-            .and_then(Value::as_array)
-            .and_then(|values| values.first())
-            .cloned()
-            .ok_or(SourceExecutionError::HttpJson)?;
-        let lookup_request = json!({
-            "source_id": source_id,
-            "dataset": request.get("dataset").cloned().unwrap_or(Value::Null),
-            "entity": request.get("entity").cloned().unwrap_or(Value::Null),
-            "lookup": {
-                "field": lookup_field,
-                "value": lookup_value,
-            },
-            "fields": request.get("fields").cloned().unwrap_or_else(|| json!([])),
-            "limit": 2,
-            "purpose": request.get("purpose").cloned().unwrap_or(Value::Null),
-            "correlation_id": request.get("correlation_id").cloned().unwrap_or(Value::Null),
-        });
+        let lookup_request = http_json_item_lookup_request(source_id, request, lookup_field, item)?;
         let data = execute_http_json_lookup(state, source_id, source, &lookup_request).await?;
         if let Some(error) = data.get("error") {
             if shared_credential_error(error) {
@@ -2244,6 +2437,253 @@ async fn execute_http_json_batch(
         }
     }
     Ok(json!({ "items": responses }))
+}
+
+async fn execute_http_json_parallel_batch(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: &Value,
+) -> Result<Value, SourceExecutionError> {
+    let query_signature = request
+        .get("query_signature")
+        .and_then(Value::as_array)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    if query_signature.len() != 1 {
+        return Err(SourceExecutionError::HttpJsonBadRequest);
+    }
+    let lookup_field = query_signature
+        .first()
+        .and_then(|term| term.get("field"))
+        .and_then(Value::as_str)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let items = request
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let max_parallel = source
+        .batch
+        .max_parallel
+        .unwrap_or(1)
+        .min(items.len().max(1));
+    let semaphore = Arc::new(Semaphore::new(max_parallel));
+    let state = Arc::new(state.clone());
+    let source = source.clone();
+    let source_id = source_id.to_string();
+    let mut tasks = JoinSet::new();
+    let mut requested_ids = Vec::with_capacity(items.len());
+    for (idx, item) in items.iter().enumerate() {
+        let id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or(SourceExecutionError::HttpJson)?
+            .to_string();
+        requested_ids.push(id.clone());
+        let lookup_request =
+            http_json_item_lookup_request(&source_id, request, lookup_field, item)?;
+        let permit = semaphore.clone();
+        let task_state = Arc::clone(&state);
+        let task_source = source.clone();
+        let task_source_id = source_id.clone();
+        tasks.spawn(async move {
+            let _permit = permit
+                .acquire_owned()
+                .await
+                .map_err(|_| SourceExecutionError::HttpJson)?;
+            let data = execute_http_json_lookup(
+                &task_state,
+                &task_source_id,
+                &task_source,
+                &lookup_request,
+            )
+            .await?;
+            Ok::<_, SourceExecutionError>((idx, id, data))
+        });
+    }
+
+    let mut responses = vec![Value::Null; items.len()];
+    while let Some(joined) = tasks.join_next().await {
+        let (idx, id, data) = joined.map_err(|_| SourceExecutionError::HttpJson)??;
+        if let Some(error) = data.get("error") {
+            if shared_credential_error(error) {
+                tasks.abort_all();
+                return Ok(json!({ "error": error }));
+            }
+            responses[idx] = json!({ "id": id, "error": error });
+        } else {
+            responses[idx] = json!({ "id": id, "data": data });
+        }
+    }
+
+    for (idx, response) in responses.iter_mut().enumerate() {
+        if response.is_null() {
+            *response = json!({
+                "id": requested_ids[idx],
+                "error": { "code": "source.unavailable" }
+            });
+        }
+    }
+    Ok(json!({ "items": responses }))
+}
+
+fn http_json_item_lookup_request(
+    source_id: &str,
+    batch_request: &Value,
+    lookup_field: &str,
+    item: &Value,
+) -> Result<Value, SourceExecutionError> {
+    let lookup_value = item
+        .get("values")
+        .and_then(Value::as_array)
+        .and_then(|values| values.first())
+        .cloned()
+        .ok_or(SourceExecutionError::HttpJson)?;
+    Ok(json!({
+        "source_id": source_id,
+        "dataset": batch_request.get("dataset").cloned().unwrap_or(Value::Null),
+        "entity": batch_request.get("entity").cloned().unwrap_or(Value::Null),
+        "lookup": {
+            "field": lookup_field,
+            "value": lookup_value,
+        },
+        "fields": batch_request.get("fields").cloned().unwrap_or_else(|| json!([])),
+        "limit": 2,
+        "purpose": batch_request.get("purpose").cloned().unwrap_or(Value::Null),
+        "correlation_id": batch_request.get("correlation_id").cloned().unwrap_or(Value::Null),
+    }))
+}
+
+async fn execute_http_json_native_batch(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: &Value,
+) -> Result<Value, SourceExecutionError> {
+    let http_json = source
+        .http_json
+        .as_ref()
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let batch = http_json
+        .batch
+        .as_ref()
+        .ok_or(SourceExecutionError::HttpJsonBadRequest)?;
+    let credential = state
+        .credentials
+        .get(source_id)
+        .cloned()
+        .unwrap_or(Value::Null);
+    let public_credential = public_credential(source, &credential);
+    let bindings = http_json_bindings(request, &public_credential, None);
+    let base_url = eval_http_json_string(&http_json.base_url, bindings.clone())?;
+    let prepared =
+        prepare_http_json_request(state, source_id, source, &base_url, &batch.path).await?;
+    let mut builder = match batch.method {
+        HttpJsonMethod::Get => prepared.client.get(prepared.url),
+        HttpJsonMethod::Post => prepared
+            .client
+            .post(prepared.url)
+            .json(&http_json_batch_request_body(request)),
+    };
+    for (name, expr) in &batch.query {
+        let value = eval_http_json_string(expr, bindings.clone())?;
+        builder = builder.query(&[(name.as_str(), value)]);
+    }
+    for (name, expr) in &batch.headers {
+        let value = eval_http_json_string(expr, bindings.clone())?;
+        builder = builder.header(name.as_str(), value);
+    }
+    builder = apply_http_json_auth(builder, http_json.auth.as_ref(), &credential)?;
+    if let Some(error) = acquire_http_json_rate_or_error(state, source_id).await {
+        return Ok(error);
+    }
+
+    let response = builder.send().await.map_err(|error| {
+        if error.is_timeout() {
+            SourceExecutionError::HttpJsonTimeout
+        } else {
+            SourceExecutionError::HttpJson
+        }
+    })?;
+    let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return Ok(json!({ "error": { "code": "source.target_auth" } }));
+    }
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        let retry_after_seconds = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(state.config.limits.retry_after_seconds);
+        return Ok(json!({
+            "error": {
+                "code": "source.target_rate_limit",
+                "retry_after_seconds": retry_after_seconds
+            }
+        }));
+    }
+    if !status.is_success() {
+        return Ok(json!({ "error": { "code": "source.unavailable" } }));
+    }
+    let body = read_limited_json_response(response, state.config.limits.max_output_bytes).await?;
+    fan_out_http_json_native_batch(batch, request, &public_credential, body)
+}
+
+fn fan_out_http_json_native_batch(
+    batch: &HttpJsonBatchConfig,
+    request: &Value,
+    public_credential: &Value,
+    body: Value,
+) -> Result<Value, SourceExecutionError> {
+    let records = eval_http_json_value(
+        &batch.response.records,
+        http_json_bindings(request, public_credential, Some(body)),
+    )?;
+    let records = records.as_array().ok_or(SourceExecutionError::HttpJson)?;
+    let items = request
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or(SourceExecutionError::HttpJson)?;
+
+    let mut request_keys = BTreeSet::new();
+    for item in items {
+        item.get("id")
+            .and_then(Value::as_str)
+            .ok_or(SourceExecutionError::HttpJson)?;
+        let key = eval_http_json_string(
+            &batch.response.item_key,
+            http_json_batch_item_bindings(request, public_credential, item, None),
+        )?;
+        request_keys.insert(key);
+    }
+
+    let mut grouped = BTreeMap::<String, Vec<Value>>::new();
+    for record in records {
+        let key = eval_http_json_string(
+            &batch.response.record_key,
+            http_json_batch_record_bindings(request, public_credential, record),
+        )?;
+        if request_keys.contains(&key) {
+            grouped.entry(key).or_default().push(record.clone());
+        }
+    }
+
+    let mut response_items = Vec::with_capacity(items.len());
+    for item in items {
+        let id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or(SourceExecutionError::HttpJson)?;
+        let key = eval_http_json_string(
+            &batch.response.item_key,
+            http_json_batch_item_bindings(request, public_credential, item, None),
+        )?;
+        response_items.push(json!({
+            "id": id,
+            "data": grouped.get(&key).cloned().unwrap_or_default()
+        }));
+    }
+    Ok(json!({ "items": response_items }))
 }
 
 fn http_json_batch_timeout(limits: &LimitConfig, item_count: usize) -> Duration {
@@ -2281,24 +2721,21 @@ async fn execute_http_json_lookup(
         .cloned()
         .unwrap_or(Value::Null);
     let public_credential = public_credential(source, &credential);
+    let cache_key = http_json_cache_key(source_id, source, request)?;
+    if let Some(cache_key) = cache_key.as_deref() {
+        if let Some(value) = http_json_cache_get(state, source_id, cache_key).await {
+            return Ok(value);
+        }
+    }
     let bindings = http_json_bindings(request, &public_credential, None);
     let base_url = eval_http_json_string(&http_json.base_url, bindings.clone())?;
-    let prepared_url = build_http_json_url(source_id, source, &base_url, &http_json.path).await?;
-    let host = prepared_url
-        .url
-        .host_str()
-        .ok_or(SourceExecutionError::HttpJson)?
-        .to_string();
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_millis(state.config.limits.worker_timeout_ms))
-        .resolve_to_addrs(&host, &prepared_url.resolved_addrs)
-        .build()
-        .map_err(|_| SourceExecutionError::HttpJson)?;
+    let prepared =
+        prepare_http_json_request(state, source_id, source, &base_url, &http_json.path).await?;
     let mut builder = match http_json.method {
-        HttpJsonMethod::Get => client.get(prepared_url.url),
-        HttpJsonMethod::Post => client
-            .post(prepared_url.url)
+        HttpJsonMethod::Get => prepared.client.get(prepared.url),
+        HttpJsonMethod::Post => prepared
+            .client
+            .post(prepared.url)
             .json(&http_json_request_body(request)),
     };
     for (name, expr) in &http_json.query {
@@ -2309,27 +2746,9 @@ async fn execute_http_json_lookup(
         let value = eval_http_json_string(expr, bindings.clone())?;
         builder = builder.header(name.as_str(), value);
     }
-    if let Some(auth) = &http_json.auth {
-        match auth.kind {
-            HttpJsonAuthKind::Bearer => {
-                let token_ref = auth.token.as_ref().ok_or(SourceExecutionError::HttpJson)?;
-                let token = credential_secret(&credential, token_ref)?;
-                builder = builder.bearer_auth(token);
-            }
-            HttpJsonAuthKind::Basic => {
-                let username_ref = auth
-                    .username
-                    .as_ref()
-                    .ok_or(SourceExecutionError::HttpJson)?;
-                let password_ref = auth
-                    .password
-                    .as_ref()
-                    .ok_or(SourceExecutionError::HttpJson)?;
-                let username = credential_secret(&credential, username_ref)?;
-                let password = credential_secret(&credential, password_ref)?;
-                builder = builder.basic_auth(username, Some(password));
-            }
-        }
+    builder = apply_http_json_auth(builder, http_json.auth.as_ref(), &credential)?;
+    if let Some(error) = acquire_http_json_rate_or_error(state, source_id).await {
+        return Ok(error);
     }
     let response = builder.send().await.map_err(|error| {
         if error.is_timeout() {
@@ -2367,6 +2786,9 @@ async fn execute_http_json_lookup(
     if !records.is_array() {
         return Err(SourceExecutionError::HttpJson);
     }
+    if let Some(cache_key) = cache_key.as_deref() {
+        http_json_cache_put(state, source_id, source, cache_key, &records).await;
+    }
     Ok(records)
 }
 
@@ -2391,6 +2813,123 @@ fn http_json_request_body(request: &Value) -> Value {
         "purpose": request.get("purpose").cloned().unwrap_or(Value::Null),
         "correlation_id": request.get("correlation_id").cloned().unwrap_or(Value::Null),
     })
+}
+
+fn http_json_batch_request_body(request: &Value) -> Value {
+    json!({
+        "source_id": request.get("source_id").cloned().unwrap_or(Value::Null),
+        "dataset": request.get("dataset").cloned().unwrap_or(Value::Null),
+        "entity": request.get("entity").cloned().unwrap_or(Value::Null),
+        "query_signature": request.get("query_signature").cloned().unwrap_or_else(|| json!([])),
+        "items": request.get("items").cloned().unwrap_or_else(|| json!([])),
+        "fields": request.get("fields").cloned().unwrap_or_else(|| json!([])),
+        "purpose": request.get("purpose").cloned().unwrap_or(Value::Null),
+        "correlation_id": request.get("correlation_id").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn apply_http_json_auth(
+    mut builder: reqwest::RequestBuilder,
+    auth: Option<&HttpJsonAuthConfig>,
+    credential: &Value,
+) -> Result<reqwest::RequestBuilder, SourceExecutionError> {
+    if let Some(auth) = auth {
+        match auth.kind {
+            HttpJsonAuthKind::Bearer => {
+                let token_ref = auth.token.as_ref().ok_or(SourceExecutionError::HttpJson)?;
+                let token = credential_secret(credential, token_ref)?;
+                builder = builder.bearer_auth(token);
+            }
+            HttpJsonAuthKind::Basic => {
+                let username_ref = auth
+                    .username
+                    .as_ref()
+                    .ok_or(SourceExecutionError::HttpJson)?;
+                let password_ref = auth
+                    .password
+                    .as_ref()
+                    .ok_or(SourceExecutionError::HttpJson)?;
+                let username = credential_secret(credential, username_ref)?;
+                let password = credential_secret(credential, password_ref)?;
+                builder = builder.basic_auth(username, Some(password));
+            }
+        }
+    }
+    Ok(builder)
+}
+
+fn http_json_cache_key(
+    source_id: &str,
+    source: &SourceConfig,
+    request: &Value,
+) -> Result<Option<String>, SourceExecutionError> {
+    if source.cache.is_none() {
+        return Ok(None);
+    }
+    let source_config_hash = registry_platform_config::sha256_uri(
+        &serde_json::to_vec(source).map_err(|_| SourceExecutionError::HttpJson)?,
+    );
+    let key = json!({
+        "source_config_hash": source_config_hash,
+        "source_id": source_id,
+        "dataset": request.get("dataset").cloned().unwrap_or(Value::Null),
+        "entity": request.get("entity").cloned().unwrap_or(Value::Null),
+        "lookup": request.get("lookup").cloned().unwrap_or(Value::Null),
+        "fields": request.get("fields").cloned().unwrap_or_else(|| json!([])),
+        "limit": request.get("limit").cloned().unwrap_or(Value::Null),
+        "purpose": request.get("purpose").cloned().unwrap_or(Value::Null),
+    });
+    let bytes = serde_json::to_vec(&key).map_err(|_| SourceExecutionError::HttpJson)?;
+    Ok(Some(registry_platform_config::sha256_uri(&bytes)))
+}
+
+async fn http_json_cache_get(state: &AppState, source_id: &str, key: &str) -> Option<Value> {
+    let runtime = state.source_runtime.get(source_id)?;
+    let now = Instant::now();
+    let mut cache = runtime.cache.lock().await;
+    let entry = cache.get(key)?;
+    if entry.expires_at <= now {
+        cache.remove(key);
+        drop(cache);
+        record_metric_with_items(state, source_id, "source_cache_miss", Duration::ZERO, 1).await;
+        return None;
+    }
+    let value = entry.value.clone();
+    drop(cache);
+    record_metric_with_items(state, source_id, "source_cache_hit", Duration::ZERO, 1).await;
+    Some(value)
+}
+
+async fn http_json_cache_put(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    key: &str,
+    records: &Value,
+) {
+    let Some(ttl_ms) = http_json_cache_ttl_ms(source, records) else {
+        return;
+    };
+    let Some(runtime) = state.source_runtime.get(source_id) else {
+        return;
+    };
+    runtime.cache.lock().await.insert(
+        key.to_string(),
+        CacheEntry {
+            expires_at: Instant::now() + Duration::from_millis(ttl_ms),
+            value: records.clone(),
+        },
+    );
+    record_metric_with_items(state, source_id, "source_cache_miss", Duration::ZERO, 1).await;
+}
+
+fn http_json_cache_ttl_ms(source: &SourceConfig, records: &Value) -> Option<u64> {
+    let cache = source.cache.as_ref()?;
+    match records.as_array()?.len() {
+        0 => cache.not_found_ttl_ms,
+        1 => cache.exact_match_ttl_ms,
+        _ => None,
+    }
 }
 
 async fn read_limited_json_response(
@@ -2441,6 +2980,8 @@ fn http_json_bindings(
         "dataset",
         "entity",
         "source_id",
+        "items",
+        "query_signature",
     ] {
         root_bindings.insert(
             key.to_string(),
@@ -2450,6 +2991,31 @@ fn http_json_bindings(
     root_bindings.insert("credential_public".to_string(), public_credential.clone());
     root_bindings.insert("body".to_string(), body.unwrap_or(Value::Null));
     StandaloneExpressionInput::new(root_bindings)
+}
+
+fn http_json_batch_item_bindings(
+    request: &Value,
+    public_credential: &Value,
+    item: &Value,
+    body: Option<Value>,
+) -> StandaloneExpressionInput {
+    let mut bindings = http_json_bindings(request, public_credential, body);
+    bindings
+        .root_bindings
+        .insert("item".to_string(), item.clone());
+    bindings
+}
+
+fn http_json_batch_record_bindings(
+    request: &Value,
+    public_credential: &Value,
+    record: &Value,
+) -> StandaloneExpressionInput {
+    let mut bindings = http_json_bindings(request, public_credential, None);
+    bindings
+        .root_bindings
+        .insert("record".to_string(), record.clone());
+    bindings
 }
 
 fn eval_http_json_string(
@@ -2474,24 +3040,55 @@ fn eval_http_json_value(
         .map_err(|_| SourceExecutionError::HttpJson)
 }
 
-async fn build_http_json_url(
+async fn prepare_http_json_request(
+    state: &AppState,
     source_id: &str,
     source: &SourceConfig,
     base_url: &str,
     path: &str,
-) -> Result<PreparedHttpJsonUrl, SourceExecutionError> {
+) -> Result<PreparedHttpJsonRequest, SourceExecutionError> {
     let base = reqwest::Url::parse(base_url).map_err(|_| SourceExecutionError::HttpJson)?;
     ensure_allowed_base_url(source_id, source, &base)
         .map_err(|_| SourceExecutionError::HttpJson)?;
-    let resolved_addrs = ensure_http_json_url_policy(&base, source)
-        .await
-        .map_err(|_| SourceExecutionError::HttpJson)?;
     let url = append_http_json_path(&base, path).map_err(|_| SourceExecutionError::HttpJson)?;
     ensure_same_origin(&base, &url).map_err(|_| SourceExecutionError::HttpJson)?;
-    Ok(PreparedHttpJsonUrl {
-        url,
-        resolved_addrs,
-    })
+    let client = http_json_client_for(state, source_id, source, &base).await?;
+    Ok(PreparedHttpJsonRequest { url, client })
+}
+
+async fn http_json_client_for(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    base: &reqwest::Url,
+) -> Result<reqwest::Client, SourceExecutionError> {
+    let cache_key = format!("{}|{}", source_id, base.as_str().trim_end_matches('/'));
+    if let Some(client) = state
+        .http_json_clients
+        .lock()
+        .await
+        .get(&cache_key)
+        .cloned()
+    {
+        return Ok(client);
+    }
+
+    let resolved_addrs = ensure_http_json_url_policy(base, source)
+        .await
+        .map_err(|_| SourceExecutionError::HttpJson)?;
+    let host = base
+        .host_str()
+        .ok_or(SourceExecutionError::HttpJson)?
+        .to_string();
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_millis(state.config.limits.worker_timeout_ms))
+        .resolve_to_addrs(&host, &resolved_addrs)
+        .build()
+        .map_err(|_| SourceExecutionError::HttpJson)?;
+    let mut clients = state.http_json_clients.lock().await;
+    let client = clients.entry(cache_key).or_insert(client).clone();
+    Ok(client)
 }
 
 fn append_http_json_path(base: &reqwest::Url, path: &str) -> Result<reqwest::Url, ()> {
@@ -2912,6 +3509,26 @@ async fn metrics(State(state): State<Arc<AppState>>) -> Response {
             ));
         }
     }
+    let client_counts = {
+        let clients = state.http_json_clients.lock().await;
+        let mut counts = BTreeMap::<String, usize>::new();
+        for key in clients.keys() {
+            if let Some((source_id, _)) = key.split_once('|') {
+                *counts.entry(source_id.to_string()).or_default() += 1;
+            }
+        }
+        counts
+    };
+    if !client_counts.is_empty() {
+        body.push_str("# TYPE registry_notary_openfn_sidecar_http_json_clients gauge\n");
+        for (source_id, count) in client_counts {
+            body.push_str(&format!(
+                "registry_notary_openfn_sidecar_http_json_clients{{source_id=\"{}\"}} {}\n",
+                escape_metric_label(&source_id),
+                count
+            ));
+        }
+    }
     let metrics = state.metrics.lock().await;
     if !metrics.is_empty() {
         body.push_str("# TYPE registry_notary_openfn_sidecar_lookup_total counter\n");
@@ -3000,6 +3617,13 @@ async fn lookup(
     });
     add_source_execution(&mut request, &state.config, source);
 
+    if source.engine == SourceEngine::OpenFn {
+        if let Err(response) =
+            acquire_source_rate(&state, source_id, "source_rate_limited", 1).await
+        {
+            return *response;
+        }
+    }
     let _source_permit = match acquire_source_permit(&state, source_id, "source_saturated", 1).await
     {
         Ok(permit) => permit,
@@ -3058,6 +3682,7 @@ async fn lookup(
         }
     };
 
+    remember_source_backoff(&state, source_id, &source_execution.value).await;
     let response = normalize_worker_response(source_execution.value, &query.fields, query.limit);
     let outcome = if response.status().is_success() {
         "success"
@@ -3134,6 +3759,18 @@ async fn batch_match(
     add_source_execution(&mut request, &state.config, source);
 
     let batch_item_count = body.items.len();
+    if source.engine == SourceEngine::OpenFn {
+        if let Err(response) = acquire_source_rate(
+            &state,
+            source_id,
+            "batch_source_rate_limited",
+            batch_item_count,
+        )
+        .await
+        {
+            return *response;
+        }
+    }
     let _source_permit = match acquire_source_permit(
         &state,
         source_id,
@@ -3222,6 +3859,7 @@ async fn batch_match(
         }
     };
 
+    remember_source_backoff(&state, source_id, &source_execution.value).await;
     let response = normalize_batch_worker_response(
         source_execution.value,
         &body.fields,
@@ -3310,6 +3948,122 @@ async fn record_metric_with_items(
     value.items_total = value.items_total.saturating_add(items as u64);
 }
 
+async fn acquire_source_rate(
+    state: &Arc<AppState>,
+    source_id: &str,
+    rate_limited_outcome: &'static str,
+    items: usize,
+) -> Result<(), Box<Response>> {
+    let Some(runtime) = state.source_runtime.get(source_id) else {
+        return Err(Box::new(problem(
+            StatusCode::BAD_GATEWAY,
+            "source runtime unavailable",
+        )));
+    };
+    if let Some(retry_after) = source_backoff_retry_after(runtime).await {
+        record_metric_with_items(state, source_id, "source_backoff", Duration::ZERO, items).await;
+        return Err(Box::new(rate_limited_response(retry_after)));
+    }
+    let Some(rate_limiter) = &runtime.rate_limiter else {
+        return Ok(());
+    };
+    let mut bucket = rate_limiter.lock().await;
+    if let Err(wait) = bucket.try_take(Instant::now()) {
+        record_metric_with_items(
+            state,
+            source_id,
+            rate_limited_outcome,
+            Duration::ZERO,
+            items,
+        )
+        .await;
+        return Err(Box::new(rate_limited_response(
+            duration_retry_after_seconds(wait),
+        )));
+    }
+    Ok(())
+}
+
+async fn acquire_http_json_rate_or_error(state: &AppState, source_id: &str) -> Option<Value> {
+    let runtime = state.source_runtime.get(source_id)?;
+    if let Some(retry_after) = source_backoff_retry_after(runtime).await {
+        record_metric_with_items(state, source_id, "source_backoff", Duration::ZERO, 1).await;
+        return Some(json!({
+            "error": {
+                "code": "source.target_rate_limit",
+                "retry_after_seconds": retry_after
+            }
+        }));
+    }
+    let Some(rate_limiter) = &runtime.rate_limiter else {
+        return None;
+    };
+    let mut bucket = rate_limiter.lock().await;
+    if let Err(wait) = bucket.try_take(Instant::now()) {
+        let retry_after = duration_retry_after_seconds(wait);
+        drop(bucket);
+        record_metric_with_items(state, source_id, "source_rate_limited", Duration::ZERO, 1).await;
+        return Some(json!({
+            "error": {
+                "code": "source.target_rate_limit",
+                "retry_after_seconds": retry_after
+            }
+        }));
+    }
+    None
+}
+
+async fn source_backoff_retry_after(runtime: &SourceRuntimeState) -> Option<u64> {
+    let now = Instant::now();
+    let mut backoff = runtime.backoff_until.lock().await;
+    let until = backoff.as_ref().copied()?;
+    if until <= now {
+        *backoff = None;
+        None
+    } else {
+        Some(duration_retry_after_seconds(until.duration_since(now)))
+    }
+}
+
+fn duration_retry_after_seconds(duration: Duration) -> u64 {
+    duration
+        .as_secs()
+        .saturating_add(u64::from(duration.subsec_nanos() > 0))
+        .max(1)
+}
+
+async fn remember_source_backoff(state: &AppState, source_id: &str, response: &Value) {
+    let Some(error) = response.get("error").and_then(Value::as_object) else {
+        return;
+    };
+    if !matches!(
+        error.get("code").and_then(Value::as_str),
+        Some("target_rate_limit" | "source.target_rate_limit")
+    ) {
+        return;
+    }
+    let seconds = error
+        .get("retry_after_seconds")
+        .and_then(Value::as_u64)
+        .unwrap_or(state.config.limits.retry_after_seconds)
+        .max(1);
+    if let Some(runtime) = state.source_runtime.get(source_id) {
+        *runtime.backoff_until.lock().await = Some(Instant::now() + Duration::from_secs(seconds));
+    }
+}
+
+fn rate_limited_response(retry_after_seconds: u64) -> Response {
+    let mut response = problem_with_code(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "target rate limited",
+        "source.target_rate_limit",
+    );
+    if let Ok(value) = HeaderValue::from_str(&retry_after_seconds.to_string()) {
+        response.headers_mut().insert(header::RETRY_AFTER, value);
+    }
+    response
+}
+
 async fn acquire_source_permit(
     state: &Arc<AppState>,
     source_id: &str,
@@ -3327,9 +4081,10 @@ async fn acquire_source_permit(
         Err(_) => {
             record_metric_with_items(state, source_id, saturated_outcome, Duration::ZERO, items)
                 .await;
-            let mut response = problem(
+            let mut response = problem_with_code(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "source concurrency limit reached",
+                "source.saturated",
             );
             if let Ok(value) =
                 HeaderValue::from_str(&state.config.limits.retry_after_seconds.to_string())
@@ -3928,6 +4683,7 @@ mod tests {
                     allow_insecure_localhost: false,
                     allow_insecure_private_network: false,
                     http_json: None,
+                    cache: None,
                     smoke_lookup: Some(SmokeLookupConfig {
                         field: "national_id".to_string(),
                         value: "person-1".to_string(),
@@ -3939,6 +4695,35 @@ mod tests {
             assurance: None,
             governed_acceptance: None,
         }
+    }
+
+    fn minimal_http_json_config() -> SidecarConfig {
+        let mut config = minimal_config();
+        config.openfn = None;
+        config.worker = None;
+        config.limits.max_worker_memory_mb = None;
+        let source = config.sources.get_mut("people").expect("source exists");
+        source.engine = SourceEngine::HttpJson;
+        source.workflow = None;
+        source.credential_public_fields = vec!["baseUrl".to_string()];
+        source.allowed_base_urls = vec!["https://source.example.test".to_string()];
+        source.http_json = Some(HttpJsonSourceConfig {
+            method: HttpJsonMethod::Get,
+            base_url: HttpJsonCelExpression {
+                cel: "credential_public.baseUrl".to_string(),
+            },
+            path: "/records".to_string(),
+            query: BTreeMap::new(),
+            headers: BTreeMap::new(),
+            auth: None,
+            response: HttpJsonResponseConfig {
+                records: HttpJsonCelExpression {
+                    cel: "body.results".to_string(),
+                },
+            },
+            batch: None,
+        });
+        config
     }
 
     #[test]
@@ -3987,7 +4772,7 @@ mod tests {
 
     #[test]
     fn source_concurrency_limit_must_be_nonzero() {
-        let mut config = minimal_config();
+        let mut config = minimal_http_json_config();
         config
             .sources
             .get_mut("people")
@@ -4002,6 +4787,71 @@ mod tests {
             error.to_string().contains("limits.max_in_flight"),
             "expected source limit in {error}"
         );
+    }
+
+    #[test]
+    fn source_rate_limit_config_must_be_consistent() {
+        type MutateSource = fn(&mut SourceConfig);
+        let cases: [(&str, MutateSource); 3] = [
+            ("limits.requests_per_second", |source| {
+                source.limits.requests_per_second = Some(0)
+            }),
+            ("limits.burst", |source| source.limits.burst = Some(0)),
+            ("limits.burst requires", |source| {
+                source.limits.burst = Some(5)
+            }),
+        ];
+        for (label, mutate) in cases {
+            let mut config = minimal_config();
+            mutate(config.sources.get_mut("people").expect("source exists"));
+
+            let error = validate_config(&config).expect_err("invalid source rate limit rejected");
+
+            assert!(
+                error.to_string().contains(label),
+                "expected {label} in {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_batch_and_cache_config_must_be_consistent() {
+        let mut config = minimal_http_json_config();
+        config
+            .sources
+            .get_mut("people")
+            .expect("source exists")
+            .batch
+            .max_parallel = Some(2);
+        let error = validate_config(&config).expect_err("max_parallel without mode is rejected");
+        assert!(error.to_string().contains("batch.max_parallel"));
+
+        let mut config = minimal_config();
+        config
+            .sources
+            .get_mut("people")
+            .expect("source exists")
+            .cache = Some(SourceCacheConfig {
+            exact_match_ttl_ms: None,
+            not_found_ttl_ms: None,
+        });
+        let error = validate_config(&config).expect_err("empty cache config is rejected");
+        assert!(error.to_string().contains("cache"));
+    }
+
+    #[test]
+    fn http_json_native_batch_requires_batch_mapping() {
+        let mut config = minimal_http_json_config();
+        config
+            .sources
+            .get_mut("people")
+            .expect("source exists")
+            .batch
+            .mode = SourceBatchMode::NativeBatch;
+
+        let error = validate_config(&config).expect_err("native batch mapping is required");
+
+        assert!(error.to_string().contains("http_json.batch"));
     }
 
     #[test]

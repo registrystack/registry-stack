@@ -739,6 +739,7 @@ async fn source_concurrency_limit_returns_503_before_worker_dispatch() {
     };
     let body = assert_problem_details(&saturated, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["title"], json!("source concurrency limit reached"));
+    assert_eq!(body["code"], json!("source.saturated"));
     assert!(
         saturated.headers().contains_key("retry-after"),
         "source saturation responses include Retry-After"

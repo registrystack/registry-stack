@@ -358,9 +358,10 @@ metadata addresses unless the source opts into the matching development escape
 hatch. The private-network escape hatch still blocks cloud metadata addresses.
 When `base_url` includes a path prefix, such as a versioned DHIS2 play URL, the
 configured `path` is appended under that prefix; protocol-relative paths and
-`.`/`..` path segments are rejected before dispatch. Batch requests use
-sequential lookups unless a future adapter mode explicitly adds a native bulk
-mapping.
+`.`/`..` path segments are rejected before dispatch. The sidecar reuses a
+bounded `reqwest` client per source/base URL after the URL policy and DNS/IP
+checks pass, so steady-state reads can reuse TLS connections without relaxing
+redirect, timeout, or DNS pinning behavior.
 
 ### Batch And Backpressure
 
@@ -386,6 +387,14 @@ Source batch behavior is explicit:
   the target once per item is not a real upstream batch optimization. Native
   workflows should usually return through `returnBatchItems` from
   `@registry/notary-openfn`.
+- `batch.mode: parallel_lookup` is available for `engine: http_json` sources and
+  runs per-item lookups concurrently up to `batch.max_parallel`. It is opt-in
+  because it can increase upstream pressure.
+- `batch.mode: native_batch` is available for `engine: http_json` sources that
+  expose a real bulk endpoint. Configure `http_json.batch.response.record_key`
+  and `item_key` CEL expressions to fan response records back to request items.
+  Unknown response keys are ignored; multiple records for one requested key are
+  returned for that item and then normalized by the existing cardinality rules.
 
 Each source can also set `limits.max_in_flight`. When all permits for that source
 are in use, the sidecar returns `503` with `Retry-After` before dispatching a
@@ -394,10 +403,23 @@ to protect slower upstreams such as DHIS2, CRVS, or facility registries from one
 Notary batch consuming all local worker capacity or exceeding the target system's
 safe rate.
 
+For target protection over time, a source can set
+`limits.requests_per_second` and optional `limits.burst`. These are enforced at
+the upstream dispatch boundary for `http_json`; cache hits do not spend rate
+tokens. When a target returns `429`, the sidecar remembers the returned
+`Retry-After` window per source and fails fast with `source.target_rate_limit`
+until the window expires.
+
 `limits.batch_timeout_ms` is an optional whole-batch deadline. If it is unset,
 the sidecar computes the batch deadline as `worker_timeout_ms * item_count`; if
 it is set, the lower of the configured value and the computed value is used.
 Timeouts return `504` with code `source.timeout`.
+
+Result caching is disabled by default. A source may explicitly configure
+`cache.exact_match_ttl_ms` and/or `cache.not_found_ttl_ms`; only exact one-record
+results and not-found empty arrays are cached. Cache keys include the source id,
+source config hash, dataset, entity, lookup, requested fields, limit, and
+purpose. Cache metrics expose only `source_id` and low-cardinality outcomes.
 
 The `/metrics` endpoint reports worker capacity plus per-source outcomes,
 duration totals, and item totals:
@@ -406,6 +428,7 @@ duration totals, and item totals:
 registry_notary_openfn_sidecar_lookup_total{source_id="openfn_crvs",outcome="batch_success"} 1
 registry_notary_openfn_sidecar_lookup_items_total{source_id="openfn_crvs",outcome="batch_success"} 3
 registry_notary_openfn_sidecar_source_permits{source_id="openfn_crvs",state="in_flight"} 0
+registry_notary_openfn_sidecar_http_json_clients{source_id="http_people"} 1
 ```
 
 Metrics labels intentionally include only `source_id` and outcome. They must not
@@ -516,7 +539,47 @@ crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-worker.sh
 crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-sidecar.sh
 crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-http-sidecar.sh
 crates/registry-notary-openfn-sidecar/scripts/smoke-http-json-dhis2-sidecar.sh
+crates/registry-notary-openfn-sidecar/scripts/load-http-json-sidecar.sh
 ```
+
+For repeatable local load checks against the built-in `http_json` engine, run:
+
+```bash
+LOAD_HTTP_JSON_REQUESTS=200 \
+LOAD_HTTP_JSON_CONCURRENCY=16 \
+  crates/registry-notary-openfn-sidecar/scripts/load-http-json-sidecar.sh
+
+LOAD_HTTP_JSON_SCENARIO=batch \
+LOAD_HTTP_JSON_BATCH_MODE=parallel_lookup \
+LOAD_HTTP_JSON_REQUESTS=100 \
+LOAD_HTTP_JSON_BATCH_SIZE=20 \
+LOAD_HTTP_JSON_CONCURRENCY=8 \
+LOAD_HTTP_JSON_MAX_PARALLEL=4 \
+  crates/registry-notary-openfn-sidecar/scripts/load-http-json-sidecar.sh
+
+LOAD_HTTP_JSON_SCENARIO=batch \
+LOAD_HTTP_JSON_BATCH_MODE=native_batch \
+LOAD_HTTP_JSON_REQUESTS=100 \
+LOAD_HTTP_JSON_BATCH_SIZE=20 \
+LOAD_HTTP_JSON_CONCURRENCY=8 \
+  crates/registry-notary-openfn-sidecar/scripts/load-http-json-sidecar.sh
+
+LOAD_HTTP_JSON_SCENARIO=cache \
+LOAD_HTTP_JSON_REQUESTS=200 \
+LOAD_HTTP_JSON_CONCURRENCY=16 \
+  crates/registry-notary-openfn-sidecar/scripts/load-http-json-sidecar.sh
+```
+
+Set `LOAD_HTTP_JSON_RELEASE=1` for capacity baselines. Without it the harness
+runs the sidecar through Cargo's debug profile, which is useful for fast local
+iteration but not for performance numbers.
+
+The load harness starts a synthetic upstream and sidecar, writes a JSON report
+under `target/http-json-sidecar-load-*`, captures sidecar metrics and upstream
+stats, and fails when status validation, leak checks, error-rate thresholds, or
+`LOAD_HTTP_JSON_MAX_P95_MS` fail. It is a local regression harness, not a
+substitute for environment-specific capacity tests with production network
+limits and a source-owner-approved request rate.
 
 For a live target canary against the DHIS2 play server, run:
 
