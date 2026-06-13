@@ -5,6 +5,7 @@
   version_or_profile: DCAT 3 plus DCAT-AP profile usage
   status: used
   claim_level: emits
+  adoption_mode: profiled
   used_by:
     - registry-relay
     - registry-manifest
@@ -28,6 +29,7 @@
   version_or_profile: BRegDCAT-AP 2.00 render surface
   status: used
   claim_level: emits
+  adoption_mode: profiled
   used_by:
     - registry-relay
     - registry-manifest
@@ -50,6 +52,7 @@
   version_or_profile: CPSV-AP 3.2.0
   status: used
   claim_level: emits
+  adoption_mode: profiled
   used_by:
     - registry-manifest
     - registry-atlas
@@ -75,6 +78,7 @@
   version_or_profile: OGC API Records (no numbered spec version asserted; URL-pinned)
   status: used
   claim_level: emits
+  adoption_mode: profiled
   used_by:
     - registry-relay
     - registry-manifest
@@ -97,6 +101,7 @@
   version_or_profile: OGC API Features (no numbered spec version asserted; URL-pinned)
   status: referenced
   claim_level: aligns_with
+  adoption_mode: not adopted
   used_by:
     - registry-relay
   surfaces:
@@ -113,6 +118,7 @@
   version_or_profile: OpenAPI 3.x
   status: used
   claim_level: emits
+  adoption_mode: adopted
   used_by:
     - registry-relay
     - registry-notary
@@ -137,6 +143,7 @@
   version_or_profile: SHACL Core
   status: used
   claim_level: emits
+  adoption_mode: adopted
   used_by:
     - registry-relay
     - registry-manifest
@@ -159,6 +166,7 @@
   version_or_profile: Draft 2020-12
   status: used
   claim_level: emits
+  adoption_mode: adopted
   used_by:
     - registry-relay
     - registry-manifest
@@ -181,6 +189,7 @@
   version_or_profile: JSON-LD 1.1
   status: used
   claim_level: emits
+  adoption_mode: adopted
   used_by:
     - registry-relay
     - registry-manifest
@@ -207,6 +216,7 @@
   version_or_profile: Profiled subset using the `application/dc+sd-jwt` media type and `dc+sd-jwt` JWT `typ` (no specific IETF draft revision pinned by the implementation)
   status: used
   claim_level: emits
+  adoption_mode: profiled
   used_by:
     - registry-notary
     - registry-platform
@@ -236,6 +246,7 @@
   version_or_profile: Verifiable Credentials Data Model 2.0
   status: referenced
   claim_level: aligns_with
+  adoption_mode: not adopted
   used_by:
     - registry-relay
     - registry-notary
@@ -259,6 +270,7 @@
   version_or_profile: CCCEV 2.2.0
   status: used
   claim_level: emits
+  adoption_mode: profiled
   used_by:
     - registry-manifest
     - registry-notary
@@ -288,6 +300,7 @@
   version_or_profile: ODRL Information Model 2.2; emitted policies use ODRL Vocabulary terms
   status: used
   claim_level: emits
+  adoption_mode: adopted
   used_by:
     - registry-relay
     - registry-manifest
@@ -310,6 +323,7 @@
   version_or_profile: SDMX-JSON 2.1 data messages
   status: used
   claim_level: emits
+  adoption_mode: profiled
   used_by:
     - registry-relay
   surfaces:
@@ -337,6 +351,7 @@
   version_or_profile: PROV-O
   status: referenced
   claim_level: inspired_by
+  adoption_mode: not adopted
   used_by:
     - registry-relay
     - registry-notary
@@ -357,6 +372,7 @@
   version_or_profile: Digital Registries Building Block (no numbered spec version asserted; URL-pinned)
   status: evaluated
   claim_level: compares_against
+  adoption_mode: not adopted
   used_by:
     - registry-relay
   surfaces:
@@ -374,6 +390,7 @@
   version_or_profile: Universal DPI Safeguards Framework (governance framework; no numbered technical version asserted)
   status: evaluated
   claim_level: compares_against
+  adoption_mode: not adopted
   used_by:
     - registry-relay
     - registry-manifest
@@ -398,6 +415,7 @@
   version_or_profile: Optional sync adapter and source connector (no SP-DCI spec version asserted; URL-pinned)
   status: referenced
   claim_level: maps_to
+  adoption_mode: adapted
   used_by:
     - registry-relay
     - registry-notary
@@ -418,6 +436,7 @@
   version_or_profile: 'OID4VCI Draft 13, profiled issuer subset (SD-JWT VC `dc+sd-jwt` format; advertised as `openid4vci.support: not_full_issuer`)'
   status: used
   claim_level: emits
+  adoption_mode: profiled
   used_by:
     - registry-notary
     - registry-platform
@@ -455,6 +474,7 @@
   version_or_profile: DID Core 1.0 with did:web and did:jwk methods
   status: used
   claim_level: emits
+  adoption_mode: profiled
   used_by:
     - registry-relay
     - registry-notary

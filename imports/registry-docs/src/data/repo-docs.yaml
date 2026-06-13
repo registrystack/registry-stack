@@ -125,36 +125,36 @@ repos:
     #   docs/notary-scenario-patterns.md    scenario catalog, repo-owned
     #   docs/opencrvs-dci-standalone-tutorial.md  tutorial against an external system, repo-owned
     #   docs/deployment-hardening-runbook.md  operator runbook, repo-owned
-# Deferred from the MVP docs cut (2026-06-08): re-enable when reviewed and ready.
-#   registry-manifest:
-#     remote: https://github.com/jeremi/registry-manifest
-#     ref: a2e648aaac864563a3311b9d95b8143afa1b7334
-#     local: ../registry-manifest
-#     docs:
-#       - src: docs/overview.md
-#         dest: products/registry-manifest/index
-#         label: Registry Manifest
-#         nav_order: 0
-#         doc_type: explanation
-#         description: Operator and integrator documentation for Registry Manifest, pulled from the product repository.
-#       - src: docs/validate-and-render.md
-#         dest: products/registry-manifest/validate-and-render
-#         label: Validate and render a manifest
-#         nav_order: 10
-#         doc_type: how-to
-#       - src: docs/profile-fixtures.md
-#         dest: products/registry-manifest/profile-fixtures
-#         label: Validate against profile fixtures
-#         nav_order: 20
-#         doc_type: how-to
-#       - src: docs/reference.md
-#         dest: products/registry-manifest/reference
-#         label: Reference
-#         nav_order: 30
-#         doc_type: reference
-#     # Excluded (intentionally not public via the docs site):
-#     #   docs/release-notes.md               release notes (repo-owned)
-#     #   docs/repository-split.md            historical metadata/evidence split note
+  registry-manifest:
+    remote: https://github.com/jeremi/registry-manifest
+    ref: 81eb005f1808415199d79e02e24e84a6649be318
+    version: main snapshot
+    local: ../registry-manifest
+    docs:
+      - src: docs/overview.md
+        dest: products/registry-manifest/index
+        label: Registry Manifest
+        nav_order: 0
+        doc_type: explanation
+        description: Operator and integrator documentation for Registry Manifest, pulled from the product repository.
+      - src: docs/validate-and-render.md
+        dest: products/registry-manifest/validate-and-render
+        label: Validate and render a manifest
+        nav_order: 10
+        doc_type: how-to
+      - src: docs/profile-fixtures.md
+        dest: products/registry-manifest/profile-fixtures
+        label: Validate against profile fixtures
+        nav_order: 20
+        doc_type: how-to
+      - src: docs/reference.md
+        dest: products/registry-manifest/reference
+        label: Reference
+        nav_order: 30
+        doc_type: reference
+    # Excluded (intentionally not public via the docs site):
+    #   docs/release-notes.md               release notes (repo-owned)
+    #   docs/repository-split.md            historical metadata/evidence split note
 #   registry-atlas:
 #     remote: https://github.com/jeremi/registry-atlas
 #     ref: d46f943b9fdcbab787d1d4eed114058aa43980be

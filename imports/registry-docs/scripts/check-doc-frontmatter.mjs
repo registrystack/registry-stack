@@ -15,7 +15,19 @@ const required = [
   'standards_referenced',
 ];
 const validStatus = new Set(['draft', 'current', 'historical', 'deprecated']);
-const validDocTypes = new Set(['tutorial', 'how-to', 'explanation', 'reference', 'decision']);
+const validDocTypes = new Set(['tutorial', 'how-to', 'explanation', 'reference', 'decision', 'specification']);
+// Formal specification layer axes (see spec/RS-DOC). category is the document's
+// role; evidence is how true it is against shipped code. doc_id is the stable
+// citable identifier and must be unique across the specification register.
+const validCategory = new Set(['normative', 'informative']);
+const validEvidence = new Set(['aspirational', 'partial', 'verified']);
+// Section 2 declaration vocabularies (see spec/RS-TERMS Section 6). Both keys are
+// optional and only validated when present; layer enumerates the stack's real
+// layers, audience the reader roles.
+const validLayer = new Set(['metadata', 'consultation', 'evaluation', 'credential', 'federation', 'administration', 'operations']);
+const validAudience = new Set(['integrator', 'operator', 'maintainer', 'specification editor', 'tooling']);
+const docIdPattern = /^RS-[A-Z0-9]+(-[A-Z0-9]+)*$/;
+const seenDocIds = new Map();
 const standardsRegister = YAML.parse(await readFile('src/data/standards.yaml', 'utf8'));
 if (!Array.isArray(standardsRegister) || standardsRegister.length === 0) {
   console.error('src/data/standards.yaml did not parse to a non-empty list; cannot validate standards_referenced ids.');
@@ -67,6 +79,42 @@ for (const file of await files(docsDir)) {
         if (!knownStandards.has(id)) {
           errors.push(`${relative('.', file)} standards_referenced id "${id}" is not in src/data/standards.yaml`);
         }
+      }
+    }
+    if (data.layer !== undefined) {
+      if (!Array.isArray(data.layer)) {
+        errors.push(`${relative('.', file)} layer must be a list`);
+      } else {
+        for (const value of data.layer) {
+          if (!validLayer.has(value)) errors.push(`${relative('.', file)} has invalid layer "${value}"`);
+        }
+      }
+    }
+    if (data.audience !== undefined) {
+      if (!Array.isArray(data.audience)) {
+        errors.push(`${relative('.', file)} audience must be a list`);
+      } else {
+        for (const value of data.audience) {
+          if (!validAudience.has(value)) errors.push(`${relative('.', file)} has invalid audience "${value}"`);
+        }
+      }
+    }
+    if (data.doc_type === 'specification') {
+      const rel = relative('.', file);
+      if (data.doc_id === undefined || data.doc_id === null || data.doc_id === '') {
+        errors.push(`${rel} (specification) missing doc_id`);
+      } else if (!docIdPattern.test(data.doc_id)) {
+        errors.push(`${rel} has invalid doc_id "${data.doc_id}" (expected e.g. RS-PR-NOTARY)`);
+      } else if (seenDocIds.has(data.doc_id)) {
+        errors.push(`${rel} reuses doc_id "${data.doc_id}" already used by ${seenDocIds.get(data.doc_id)}`);
+      } else {
+        seenDocIds.set(data.doc_id, rel);
+      }
+      if (!validCategory.has(data.category)) {
+        errors.push(`${rel} (specification) has missing or invalid category (normative or informative)`);
+      }
+      if (!validEvidence.has(data.evidence)) {
+        errors.push(`${rel} (specification) has missing or invalid evidence (aspirational, partial, or verified)`);
       }
     }
   } catch (error) {

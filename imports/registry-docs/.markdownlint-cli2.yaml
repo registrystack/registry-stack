@@ -24,6 +24,7 @@ config:
       - OpenApiSourcesTable
       - ContractsTable
       - StandardsTable
+      - SpecRegister
       - LegendList
       - HomeLanding
 globs:

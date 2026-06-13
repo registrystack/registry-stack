@@ -1,0 +1,43 @@
+---
+title: Specifications
+description: "The formal layer of the registry stack documentation: independently identified, versioned, normative specifications, each a distilled public contract."
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-relay
+  - registry-notary
+  - registry-platform
+  - registry-manifest
+last_reviewed: "2026-06-13"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+import SpecRegister from '../../../components/SpecRegister.astro';
+
+This is the formal layer of the registry stack documentation. Where the tutorials and explanation pages teach and orient, these documents *define*: each one is an independently identified, versioned specification written so a third party can implement, audit, or govern against it.
+
+The documentation has three layers, and a reader should know which one they are in:
+
+- **Practical docs** (Get started, Tutorials, Explanation, Reference) are task-oriented and developer-facing. Read them to learn the system.
+- **Formal docs** (these pages) are system-facing, versioned, and evidence-backed. Read them to build an independent implementation, to audit a claim, or to govern a deployment.
+- **Internal evidence** (release records, security review notes, deployment specifics, working plans) stays in the internal repository. Formal docs are *distilled* from it, never copied out of it.
+
+A specification is not a more formal copy of a guide. It is a contract. When a practical page and a current, normative specification disagree, the specification governs, and that is a bug in the practical page to be fixed. A specification that is still `draft` does not yet carry that authority; it states the intended contract while it is reviewed.
+
+## Register
+
+The register lists every specification, its role, how true it is against shipped code, and where it sits in its lifecycle. It is generated from each document's own frontmatter, so it cannot drift from the documents it lists.
+
+<SpecRegister />
+
+## How to read the register
+
+Every specification carries three independent axes. [RS-DOC](rs-doc/) defines them in full; in short:
+
+- **Category** is the document's role. `normative` defines required behavior; `informative` explains it. A requirement only binds when it is in a normative document.
+- **Evidence** is how true the document is against shipped code. `verified` is backed by code, tests, fixtures, or generated artifacts; `partial` mixes shipped and target behavior; `aspirational` describes a target state that is not built yet. A `normative` plus `aspirational` document is the design for behavior that does not exist yet, and it says so at the top.
+- **Status** is the lifecycle state: `draft`, `current`, `historical`, or `deprecated`.
+
+Start with [RS-DOC](rs-doc/) for how this layer works, then [RS-TERMS](rs-terms/) for the shared vocabulary the other specifications build on.

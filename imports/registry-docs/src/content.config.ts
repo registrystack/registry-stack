@@ -8,10 +8,41 @@ const registryLegendFrontmatter = z.object({
   owner: z.string().min(1),
   source_repos: z.array(z.string()),
   last_reviewed: z.coerce.string(),
-  doc_type: z.enum(['tutorial', 'how-to', 'explanation', 'reference', 'decision']),
+  doc_type: z.enum(['tutorial', 'how-to', 'explanation', 'reference', 'decision', 'specification']),
   locale: z.literal('en'),
   standards_referenced: z.array(z.string()),
   wide: z.boolean().optional(),
+  // Formal specification layer (doc_type: specification). The three axes are
+  // defined in spec/RS-DOC. They are optional here so the single shared schema
+  // stays valid for every existing doc; their presence is *required* for
+  // specification docs by scripts/check-doc-frontmatter.mjs (Zod `extend`
+  // cannot host a conditional refinement). doc_id is the stable, citable
+  // identifier; category is the document's role; evidence is how true the
+  // document is against shipped code.
+  doc_id: z.string().regex(/^RS-[A-Z0-9]+(-[A-Z0-9]+)*$/).optional(),
+  category: z.enum(['normative', 'informative']).optional(),
+  evidence: z.enum(['aspirational', 'partial', 'verified']).optional(),
+  // Section 2 declaration keys (see spec/RS-DOC and spec/RS-TERMS Section 6):
+  // layer is the stack layer(s) the page documents; audience is the reader
+  // role(s) it serves. Both are arrays because a specification is frequently
+  // cross-cutting. They are optional: most pages predate the keys, and a spec
+  // that spans every layer omits `layer` rather than list all of them.
+  layer: z
+    .array(
+      z.enum([
+        'metadata',
+        'consultation',
+        'evaluation',
+        'credential',
+        'federation',
+        'administration',
+        'operations',
+      ]),
+    )
+    .optional(),
+  audience: z
+    .array(z.enum(['integrator', 'operator', 'maintainer', 'specification editor', 'tooling']))
+    .optional(),
 });
 
 export const collections = {

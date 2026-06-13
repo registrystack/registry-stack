@@ -73,5 +73,27 @@
         ]
       }
     ]
+  },
+  {
+    "label": "Manifest",
+    "collapsed": true,
+    "items": [
+      {
+        "label": "Overview",
+        "slug": "products/registry-manifest"
+      },
+      {
+        "label": "Validate and render a manifest",
+        "slug": "products/registry-manifest/validate-and-render"
+      },
+      {
+        "label": "Validate against profile fixtures",
+        "slug": "products/registry-manifest/profile-fixtures"
+      },
+      {
+        "label": "Reference",
+        "slug": "products/registry-manifest/reference"
+      }
+    ]
   }
 ]
