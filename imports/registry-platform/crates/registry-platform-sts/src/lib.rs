@@ -26,6 +26,7 @@ use registry_platform_oidc::{TokenVerifier, VerifiedToken};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 use thiserror::Error;
 use time::OffsetDateTime;
 use ulid::Ulid;
@@ -431,6 +432,7 @@ impl RateLimitStore for InMemoryRateLimitStore {
             .map_err(|_| RateLimitError::StoreUnavailable)?;
         let now_unix = now.unix_timestamp();
         let window_secs = policy.window.as_secs().max(1) as i64;
+        counters.retain(|_, counter| now_unix.saturating_sub(counter.window_start) < window_secs);
         let counter = counters
             .entry((scope.clone(), key.clone()))
             .or_insert(WindowCounter {
@@ -741,7 +743,10 @@ fn validate_exchange_context(
             subject_id_hash,
             actor_id_hash,
         );
-        if context.session_binding.as_deref() != Some(expected.as_str()) {
+        let provided = context.session_binding.as_deref().unwrap_or("");
+        if expected.len() != provided.len()
+            || expected.as_bytes().ct_eq(provided.as_bytes()).unwrap_u8() != 1
+        {
             return Err(StsError::SessionBindingInvalid);
         }
     }
@@ -890,12 +895,7 @@ fn jwt_alg(algorithm: SigningAlgorithm) -> &'static str {
 
 fn sha256_hex(value: &str) -> String {
     let digest = Sha256::digest(value.as_bytes());
-    let mut output = String::with_capacity(64);
-    for byte in digest {
-        use std::fmt::Write;
-        let _ = write!(output, "{byte:02x}");
-    }
-    output
+    hex_bytes(&digest)
 }
 
 type HmacSha256 = Hmac<Sha256>;
@@ -1475,6 +1475,36 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(err, StsError::RateLimited { .. }));
+    }
+
+    #[tokio::test]
+    async fn in_memory_rate_limit_evicts_expired_counters() {
+        let store = InMemoryRateLimitStore::default();
+        let scope = RateLimitScope::new("client").unwrap();
+        let first_key = RateLimitKey::new("client-a").unwrap();
+        let second_key = RateLimitKey::new("client-b").unwrap();
+        let policy = RateLimitPolicy {
+            max_requests: 10,
+            window: Duration::from_secs(60),
+        };
+
+        store
+            .check_and_increment(&scope, &first_key, policy, OffsetDateTime::UNIX_EPOCH)
+            .await
+            .unwrap();
+        store
+            .check_and_increment(
+                &scope,
+                &second_key,
+                policy,
+                OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(61),
+            )
+            .await
+            .unwrap();
+
+        let counters = store.counters.lock().unwrap();
+        assert!(!counters.contains_key(&(scope.clone(), first_key)));
+        assert!(counters.contains_key(&(scope, second_key)));
     }
 
     #[tokio::test]
