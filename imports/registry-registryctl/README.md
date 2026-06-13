@@ -13,6 +13,7 @@ Then create and start your first secured spreadsheet API:
 ```sh
 registryctl init relay my-first-api --sample benefits
 cd my-first-api
+registryctl doctor --profile local --format json
 registryctl start
 registryctl smoke
 ```
@@ -20,6 +21,10 @@ registryctl smoke
 The generated project contains a local Registry Relay configuration, sample
 XLSX workbook, Compose file, project manifest, local demo credentials, and an
 optional Bruno API collection.
+
+Run `registryctl doctor --format json` before starting a generated stack or
+after editing config. It calls the product-owned validators, redacts local
+secret values, and returns a machine-readable report for troubleshooting.
 
 For the full walkthroughs, use the Registry Docs tutorials:
 
@@ -96,6 +101,7 @@ The generated project uses the public Relay image published from current main:
 tmpdir="$(mktemp -d)"
 cargo run -- init relay "$tmpdir/my-first-api" --sample benefits
 cd "$tmpdir/my-first-api"
+registryctl doctor --profile local --format json
 registryctl start
 registryctl status
 registryctl smoke

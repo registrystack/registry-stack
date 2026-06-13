@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -16,6 +17,7 @@ use registry_platform_authcommon::{
     CredentialCommitmentContext, CredentialProduct, CredentialType,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 pub use crate::sample::Sample;
 
@@ -109,6 +111,32 @@ impl OpenFnBatchMode {
         match self {
             Self::PerItem => "per_item",
             Self::Native => "native",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum DoctorFormat {
+    Json,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum DeploymentProfile {
+    Local,
+    HostedLab,
+    Production,
+    EvidenceGrade,
+}
+
+impl DeploymentProfile {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::HostedLab => "hosted_lab",
+            Self::Production => "production",
+            Self::EvidenceGrade => "evidence_grade",
         }
     }
 }
@@ -493,6 +521,419 @@ pub fn bruno_run_project(project_dir: &Path) -> Result<()> {
             Ok(())
         }
         Err(err) => Err(err).context("failed to run bru"),
+    }
+}
+
+pub fn doctor_project(
+    project_dir: &Path,
+    format: DoctorFormat,
+    deployment_profile: Option<DeploymentProfile>,
+) -> Result<()> {
+    let report = run_doctor_report_with_path(project_dir, format, deployment_profile, None)?;
+    let json =
+        serde_json::to_string_pretty(&report).context("failed to render doctor report JSON")?;
+    println!("{json}");
+    ensure_doctor_report_ok(&report)
+}
+
+#[derive(Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DoctorResult {
+    Passed,
+    Failed,
+}
+
+#[derive(Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DoctorProductStatus {
+    Passed,
+    Failed,
+    NotRun,
+}
+
+#[derive(Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DoctorCheckStatus {
+    Passed,
+    Failed,
+    NotRun,
+}
+
+#[derive(Debug, Serialize)]
+struct DoctorReport {
+    schema: &'static str,
+    product: &'static str,
+    command: &'static str,
+    ok: bool,
+    result: DoctorResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deployment_profile: Option<DoctorDeploymentProfileReport>,
+    checks: Vec<DoctorProductReport>,
+}
+
+#[derive(Debug, Serialize)]
+struct DoctorDeploymentProfileReport {
+    value: &'static str,
+    source: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct DoctorProductReport {
+    product: &'static str,
+    status: DoctorProductStatus,
+    checks: Vec<DoctorCheck>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    product_report: Option<Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    findings: Vec<Value>,
+}
+
+#[derive(Debug, Serialize)]
+struct DoctorCheck {
+    name: &'static str,
+    status: DoctorCheckStatus,
+    command: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exit_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stdout: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stderr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+struct ProductDoctorInvocation {
+    product: &'static str,
+    binary: &'static str,
+    cwd: PathBuf,
+    args: Vec<String>,
+}
+
+fn run_doctor_report_with_path(
+    project_dir: &Path,
+    format: DoctorFormat,
+    deployment_profile: Option<DeploymentProfile>,
+    path: Option<&Path>,
+) -> Result<DoctorReport> {
+    match format {
+        DoctorFormat::Json => {}
+    }
+    let project = Project::load(project_dir)?;
+    let secrets_path = project_dir.join(&project.local.secrets_env);
+    let secrets = LocalEnv::load(&secrets_path)?;
+    let redactor = SecretRedactor::new(&secrets);
+    let checks = product_doctor_invocations(project_dir, &project, deployment_profile)?
+        .into_iter()
+        .map(|invocation| run_product_doctor(invocation, path.map(Path::as_os_str), &redactor))
+        .collect::<Vec<_>>();
+    let ok = checks
+        .iter()
+        .all(|check| check.status == DoctorProductStatus::Passed);
+    Ok(DoctorReport {
+        schema: "registry.validation.report.v1",
+        product: "registryctl",
+        command: "doctor",
+        ok,
+        result: if ok {
+            DoctorResult::Passed
+        } else {
+            DoctorResult::Failed
+        },
+        deployment_profile: deployment_profile.map(|profile| DoctorDeploymentProfileReport {
+            value: profile.as_str(),
+            source: "override",
+        }),
+        checks,
+    })
+}
+
+fn ensure_doctor_report_ok(report: &DoctorReport) -> Result<()> {
+    if report.ok {
+        Ok(())
+    } else {
+        bail!("one or more product doctor checks failed")
+    }
+}
+
+fn product_doctor_invocations(
+    project_dir: &Path,
+    project: &Project,
+    deployment_profile: Option<DeploymentProfile>,
+) -> Result<Vec<ProductDoctorInvocation>> {
+    let env_file = project_dir.join(&project.local.secrets_env);
+    let mut invocations = Vec::new();
+    if let Some(relay) = &project.relay {
+        let config = relay_doctor_config_path(project_dir, project, relay)?;
+        invocations.push(ProductDoctorInvocation {
+            product: "registry-relay",
+            binary: "registry-relay",
+            cwd: project_dir.to_path_buf(),
+            args: product_doctor_args(config, &env_file, deployment_profile),
+        });
+    }
+    if let Some(notary) = &project.notary {
+        invocations.push(ProductDoctorInvocation {
+            product: "registry-notary",
+            binary: "registry-notary",
+            cwd: project_dir.to_path_buf(),
+            args: product_doctor_args(
+                project_dir.join(&notary.config),
+                &env_file,
+                deployment_profile,
+            ),
+        });
+    }
+    Ok(invocations)
+}
+
+fn relay_doctor_config_path(
+    project_dir: &Path,
+    project: &Project,
+    relay: &ProjectRelay,
+) -> Result<PathBuf> {
+    let config_path = project_dir.join(&relay.config);
+    if relay.metadata.is_none() && relay.data.is_empty() {
+        return Ok(config_path);
+    }
+
+    let raw = fs::read_to_string(&config_path)
+        .with_context(|| format!("failed to read {}", config_path.display()))?;
+    let mut value: serde_yaml::Value = serde_yaml::from_str(&raw)
+        .with_context(|| format!("failed to parse {}", config_path.display()))?;
+
+    if let Some(metadata) = &relay.metadata {
+        set_yaml_path_string(
+            &mut value,
+            &["metadata", "source", "path"],
+            project_dir.join(metadata).display().to_string(),
+        );
+    }
+    rewrite_relay_container_data_paths(&mut value, project_dir, relay);
+
+    let output_dir = project_dir.join(&project.local.output_dir).join("doctor");
+    fs::create_dir_all(&output_dir)
+        .with_context(|| format!("failed to create {}", output_dir.display()))?;
+    let doctor_config = output_dir.join("relay.config.yaml");
+    let rendered = serde_yaml::to_string(&value).context("failed to render Relay doctor config")?;
+    write_text(doctor_config.clone(), &rendered)?;
+    Ok(doctor_config)
+}
+
+fn set_yaml_path_string(value: &mut serde_yaml::Value, path: &[&str], replacement: String) {
+    let mut current = value;
+    for segment in &path[..path.len().saturating_sub(1)] {
+        let serde_yaml::Value::Mapping(map) = current else {
+            return;
+        };
+        let key = serde_yaml::Value::String((*segment).to_string());
+        let Some(next) = map.get_mut(&key) else {
+            return;
+        };
+        current = next;
+    }
+    let Some(last) = path.last() else {
+        return;
+    };
+    if let serde_yaml::Value::Mapping(map) = current {
+        map.insert(
+            serde_yaml::Value::String((*last).to_string()),
+            serde_yaml::Value::String(replacement),
+        );
+    }
+}
+
+fn rewrite_relay_container_data_paths(
+    value: &mut serde_yaml::Value,
+    project_dir: &Path,
+    relay: &ProjectRelay,
+) {
+    match value {
+        serde_yaml::Value::String(text) => {
+            const PREFIX: &str = "/var/lib/registry-relay/data/";
+            if let Some(relative) = text.strip_prefix(PREFIX) {
+                let host_path = relay
+                    .data
+                    .iter()
+                    .find(|path| path.ends_with(relative))
+                    .cloned()
+                    .unwrap_or_else(|| PathBuf::from("data").join(relative));
+                *text = project_dir.join(host_path).display().to_string();
+            }
+        }
+        serde_yaml::Value::Sequence(items) => {
+            for item in items {
+                rewrite_relay_container_data_paths(item, project_dir, relay);
+            }
+        }
+        serde_yaml::Value::Mapping(map) => {
+            for value in map.values_mut() {
+                rewrite_relay_container_data_paths(value, project_dir, relay);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn product_doctor_args(
+    config: PathBuf,
+    env_file: &Path,
+    deployment_profile: Option<DeploymentProfile>,
+) -> Vec<String> {
+    let mut args = vec![
+        "doctor".to_string(),
+        "--config".to_string(),
+        config.display().to_string(),
+        "--env-file".to_string(),
+        env_file.display().to_string(),
+        "--format".to_string(),
+        "json".to_string(),
+    ];
+    if let Some(profile) = deployment_profile {
+        args.push("--profile".to_string());
+        args.push(profile.as_str().to_string());
+    }
+    args
+}
+
+fn run_product_doctor(
+    invocation: ProductDoctorInvocation,
+    path: Option<&OsStr>,
+    redactor: &SecretRedactor,
+) -> DoctorProductReport {
+    let mut command = Command::new(invocation.binary);
+    command.args(&invocation.args);
+    command.current_dir(&invocation.cwd);
+    if let Some(path) = path {
+        command.env("PATH", path);
+    }
+    let command_line = std::iter::once(invocation.binary.to_string())
+        .chain(invocation.args.iter().cloned())
+        .collect::<Vec<_>>();
+
+    match command.output() {
+        Ok(output) => product_report_from_output(invocation.product, command_line, output, redactor),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => DoctorProductReport {
+            product: invocation.product,
+            status: DoctorProductStatus::NotRun,
+            checks: vec![DoctorCheck {
+                name: "product doctor binary is available",
+                status: DoctorCheckStatus::NotRun,
+                command: command_line,
+                exit_code: None,
+                stdout: None,
+                stderr: None,
+                message: Some(format!(
+                    "Install {} and ensure it is on PATH, then rerun `registryctl doctor --format json`.",
+                    invocation.binary
+                )),
+            }],
+            product_report: None,
+            findings: Vec::new(),
+        },
+        Err(err) => DoctorProductReport {
+            product: invocation.product,
+            status: DoctorProductStatus::Failed,
+            checks: vec![DoctorCheck {
+                name: "product doctor process starts",
+                status: DoctorCheckStatus::Failed,
+                command: command_line,
+                exit_code: None,
+                stdout: None,
+                stderr: None,
+                message: Some(format!("failed to run {}: {err}", invocation.binary)),
+            }],
+            product_report: None,
+            findings: Vec::new(),
+        },
+    }
+}
+
+fn product_report_from_output(
+    product: &'static str,
+    command: Vec<String>,
+    output: Output,
+    redactor: &SecretRedactor,
+) -> DoctorProductReport {
+    let stdout = redactor.redact_output(&output.stdout);
+    let stderr = redactor.redact_output(&output.stderr);
+    let passed = output.status.success();
+    let product_report = stdout.as_deref().and_then(parse_product_report);
+    let findings = product_findings(product_report.as_ref());
+    DoctorProductReport {
+        product,
+        status: if passed {
+            DoctorProductStatus::Passed
+        } else {
+            DoctorProductStatus::Failed
+        },
+        checks: vec![DoctorCheck {
+            name: "product doctor completed",
+            status: if passed {
+                DoctorCheckStatus::Passed
+            } else {
+                DoctorCheckStatus::Failed
+            },
+            command,
+            exit_code: output.status.code(),
+            stdout,
+            stderr,
+            message: if passed {
+                None
+            } else {
+                Some(
+                    "product doctor exited nonzero; inspect redacted stdout and stderr".to_string(),
+                )
+            },
+        }],
+        product_report,
+        findings,
+    }
+}
+
+fn parse_product_report(stdout: &str) -> Option<Value> {
+    serde_json::from_str(stdout).ok()
+}
+
+fn product_findings(report: Option<&Value>) -> Vec<Value> {
+    let Some(report) = report else {
+        return Vec::new();
+    };
+    for key in ["findings", "diagnostics"] {
+        if let Some(items) = report.get(key).and_then(Value::as_array) {
+            return items.clone();
+        }
+    }
+    Vec::new()
+}
+
+struct SecretRedactor {
+    secrets: Vec<String>,
+}
+
+impl SecretRedactor {
+    fn new(secrets: &LocalEnv) -> Self {
+        let mut secrets = secrets
+            .values
+            .values()
+            .filter(|value| !value.is_empty())
+            .cloned()
+            .collect::<Vec<_>>();
+        secrets.sort();
+        secrets.dedup();
+        secrets.sort_by_key(|value| std::cmp::Reverse(value.len()));
+        Self { secrets }
+    }
+
+    fn redact_output(&self, bytes: &[u8]) -> Option<String> {
+        if bytes.is_empty() {
+            return None;
+        }
+        let mut output = String::from_utf8_lossy(bytes).into_owned();
+        for secret in &self.secrets {
+            output = output.replace(secret, "[REDACTED]");
+        }
+        Some(output)
     }
 }
 
@@ -1996,6 +2437,10 @@ impl Project {
 #[derive(Debug, Deserialize)]
 struct ProjectRelay {
     config: PathBuf,
+    #[serde(default)]
+    metadata: Option<PathBuf>,
+    #[serde(default)]
+    data: Vec<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3498,6 +3943,10 @@ workflows:
         ] {
             assert!(project.join(path).exists(), "{path} should exist");
         }
+
+        let readme = fs::read_to_string(project.join("README.md")).unwrap();
+        assert!(readme.contains("registryctl doctor --profile local --format json"));
+        assert!(readme.contains("redacts local secret values"));
     }
 
     #[test]
@@ -3606,6 +4055,11 @@ workflows:
         ] {
             assert!(project.join(path).exists(), "{path} should exist");
         }
+
+        let readme = fs::read_to_string(project.join("README.md")).unwrap();
+        assert!(readme.contains("registryctl doctor --profile local --format json"));
+        assert!(readme.contains("calls the Notary"));
+        assert!(readme.contains("validator and redacts local secret values"));
 
         let manifest: Value =
             serde_yaml::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())
@@ -4107,6 +4561,413 @@ workflows:
             assert!(!report.contains(secret));
         }
         assert!(report.contains("\"passed\": false"));
+    }
+
+    #[test]
+    fn doctor_invokes_relay_product_for_relay_project() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("my-first-api");
+        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+        let fake_bin = temp.path().join("bin");
+        fs::create_dir_all(&fake_bin).unwrap();
+        write_fake_product(
+            &fake_bin.join("registry-relay"),
+            &format!(
+                "printf '%s\\n' \"$@\" > {}\nprintf '{{\"ok\":true}}\\n'\nexit 0\n",
+                shell_single_quoted(&temp.path().join("relay.args").display().to_string())
+            ),
+        );
+
+        let report =
+            run_doctor_report_with_path(&project_dir, DoctorFormat::Json, None, Some(&fake_bin))
+                .unwrap();
+
+        assert!(report.ok);
+        assert_eq!(report.checks.len(), 1);
+        assert_eq!(report.checks[0].product, "registry-relay");
+        assert_eq!(report.checks[0].status, DoctorProductStatus::Passed);
+        let json = serde_json::to_value(&report).unwrap();
+        assert!(json.get("deployment_profile").is_none());
+        let args = fs::read_to_string(temp.path().join("relay.args")).unwrap();
+        let doctor_config = project_dir.join("output/doctor/relay.config.yaml");
+        assert_eq!(
+            args,
+            format!(
+                "doctor\n--config\n{}\n--env-file\n{}\n--format\njson\n",
+                doctor_config.display(),
+                project_dir.join("secrets/local.env").display(),
+            )
+        );
+        let rendered = fs::read_to_string(&doctor_config).unwrap();
+        assert!(rendered.contains(
+            &project_dir
+                .join("relay/metadata.yaml")
+                .display()
+                .to_string()
+        ));
+        assert!(rendered.contains(
+            &project_dir
+                .join("data/benefits_casework.xlsx")
+                .display()
+                .to_string()
+        ));
+    }
+
+    #[test]
+    fn doctor_invokes_relay_product_with_profile_override() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("my-first-api");
+        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+        let fake_bin = temp.path().join("bin");
+        fs::create_dir_all(&fake_bin).unwrap();
+        write_fake_product(
+            &fake_bin.join("registry-relay"),
+            &format!(
+                "printf '%s\\n' \"$@\" > {}\nexit 0\n",
+                shell_single_quoted(&temp.path().join("relay.args").display().to_string())
+            ),
+        );
+
+        let report = run_doctor_report_with_path(
+            &project_dir,
+            DoctorFormat::Json,
+            Some(DeploymentProfile::Local),
+            Some(&fake_bin),
+        )
+        .unwrap();
+
+        assert!(report.ok);
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["deployment_profile"]["value"], "local");
+        assert_eq!(json["deployment_profile"]["source"], "override");
+        let args = fs::read_to_string(temp.path().join("relay.args")).unwrap();
+        assert_eq!(
+            args,
+            format!(
+                "doctor\n--config\n{}\n--env-file\n{}\n--format\njson\n--profile\nlocal\n",
+                project_dir
+                    .join("output/doctor/relay.config.yaml")
+                    .display(),
+                project_dir.join("secrets/local.env").display(),
+            )
+        );
+    }
+
+    #[test]
+    fn doctor_invokes_relay_and_notary_for_combined_project_with_profile_override() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("my-first-api");
+        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+        add_notary(&project_dir, NotarySource::LocalRelay, false).unwrap();
+        let fake_bin = temp.path().join("bin");
+        fs::create_dir_all(&fake_bin).unwrap();
+        write_fake_product(
+            &fake_bin.join("registry-relay"),
+            &format!(
+                "printf '%s\\n' \"$@\" > {}\nexit 0\n",
+                shell_single_quoted(&temp.path().join("relay.args").display().to_string())
+            ),
+        );
+        write_fake_product(
+            &fake_bin.join("registry-notary"),
+            &format!(
+                "printf '%s\\n' \"$@\" > {}\nexit 0\n",
+                shell_single_quoted(&temp.path().join("notary.args").display().to_string())
+            ),
+        );
+
+        let report = run_doctor_report_with_path(
+            &project_dir,
+            DoctorFormat::Json,
+            Some(DeploymentProfile::Local),
+            Some(&fake_bin),
+        )
+        .unwrap();
+
+        assert!(report.ok);
+        assert_eq!(
+            report
+                .checks
+                .iter()
+                .map(|check| check.product)
+                .collect::<Vec<_>>(),
+            ["registry-relay", "registry-notary"]
+        );
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["deployment_profile"]["value"], "local");
+        assert_eq!(json["deployment_profile"]["source"], "override");
+        let relay_args = fs::read_to_string(temp.path().join("relay.args")).unwrap();
+        let notary_args = fs::read_to_string(temp.path().join("notary.args")).unwrap();
+        assert!(relay_args.contains("output/doctor/relay.config.yaml"));
+        assert!(relay_args.contains("\n--profile\nlocal\n"));
+        assert!(notary_args.contains("notary/config.yaml"));
+        assert!(notary_args.contains("\n--profile\nlocal\n"));
+    }
+
+    #[test]
+    fn doctor_invokes_only_notary_for_standalone_notary_project() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("notary-only");
+        init_notary_project(&project_dir, default_notary_options()).unwrap();
+        let fake_bin = temp.path().join("bin");
+        fs::create_dir_all(&fake_bin).unwrap();
+        write_fake_product(
+            &fake_bin.join("registry-notary"),
+            &format!(
+                "printf '%s\\n' \"$@\" > {}\nexit 0\n",
+                shell_single_quoted(&temp.path().join("notary.args").display().to_string())
+            ),
+        );
+
+        let report =
+            run_doctor_report_with_path(&project_dir, DoctorFormat::Json, None, Some(&fake_bin))
+                .unwrap();
+
+        assert!(report.ok);
+        assert_eq!(report.checks.len(), 1);
+        assert_eq!(report.checks[0].product, "registry-notary");
+        assert_eq!(report.checks[0].status, DoctorProductStatus::Passed);
+        assert!(!temp.path().join("relay.args").exists());
+    }
+
+    #[test]
+    fn doctor_reports_missing_product_binary_without_panic() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("my-first-api");
+        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+        let empty_path = temp.path().join("empty-path");
+        fs::create_dir_all(&empty_path).unwrap();
+
+        let report =
+            run_doctor_report_with_path(&project_dir, DoctorFormat::Json, None, Some(&empty_path))
+                .unwrap();
+
+        assert!(!report.ok);
+        assert_eq!(report.result, DoctorResult::Failed);
+        assert_eq!(report.checks[0].status, DoctorProductStatus::NotRun);
+        assert_eq!(report.checks[0].checks[0].status, DoctorCheckStatus::NotRun);
+        assert!(report.checks[0].checks[0]
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("Install registry-relay"));
+    }
+
+    #[test]
+    fn doctor_reports_nonzero_product_exit_and_redacts_output() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("my-first-api");
+        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+        let env = fs::read_to_string(project_dir.join("secrets/local.env")).unwrap();
+        let secrets = env
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .map(|(_, value)| value.to_string())
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>();
+        let fake_bin = temp.path().join("bin");
+        fs::create_dir_all(&fake_bin).unwrap();
+        let secret_prints = secrets
+            .iter()
+            .map(|secret| {
+                format!(
+                    "printf 'stdout has {}\\n'\nprintf 'stderr has {}\\n' >&2\n",
+                    shell_single_quoted(secret),
+                    shell_single_quoted(secret)
+                )
+            })
+            .collect::<String>();
+        write_fake_product(
+            &fake_bin.join("registry-relay"),
+            &format!("{secret_prints}exit 17\n"),
+        );
+
+        let report =
+            run_doctor_report_with_path(&project_dir, DoctorFormat::Json, None, Some(&fake_bin))
+                .unwrap();
+        let json = serde_json::to_string(&report).unwrap();
+
+        assert!(!report.ok);
+        assert_eq!(report.checks[0].status, DoctorProductStatus::Failed);
+        assert_eq!(report.checks[0].checks[0].exit_code, Some(17));
+        let error = ensure_doctor_report_ok(&report).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("one or more product doctor checks failed"));
+        for secret in &secrets {
+            assert!(!json.contains(secret));
+        }
+        assert!(json.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn secret_redactor_deduplicates_before_length_ordering() {
+        let secrets = LocalEnv {
+            values: BTreeMap::from([
+                ("A".to_string(), "secret1".to_string()),
+                ("B".to_string(), "another".to_string()),
+                ("C".to_string(), "secret1".to_string()),
+                ("D".to_string(), "longer-secret".to_string()),
+            ]),
+        };
+
+        let redactor = SecretRedactor::new(&secrets);
+
+        assert_eq!(
+            redactor.secrets,
+            vec![
+                "longer-secret".to_string(),
+                "another".to_string(),
+                "secret1".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn doctor_extracts_structured_product_report_and_findings_after_redaction() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("my-first-api");
+        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+        let env = fs::read_to_string(project_dir.join("secrets/local.env")).unwrap();
+        let secret = env
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .map(|(_, value)| value)
+            .find(|value| !value.is_empty())
+            .unwrap();
+        let product_json = serde_json::json!({
+            "schema": "registry.validation.report.v1",
+            "product": "registry-relay",
+            "ok": false,
+            "findings": [
+                {
+                    "id": "relay.config.unsigned",
+                    "severity": "startup_fail",
+                    "message": format!("do not leak {secret}")
+                }
+            ]
+        })
+        .to_string();
+        let fake_bin = temp.path().join("bin");
+        fs::create_dir_all(&fake_bin).unwrap();
+        write_fake_product(
+            &fake_bin.join("registry-relay"),
+            &format!(
+                "printf '%s\\n' {}\nexit 1\n",
+                shell_single_quoted(&product_json)
+            ),
+        );
+
+        let report =
+            run_doctor_report_with_path(&project_dir, DoctorFormat::Json, None, Some(&fake_bin))
+                .unwrap();
+        let json = serde_json::to_value(&report).unwrap();
+
+        assert!(!report.ok);
+        assert_eq!(json["checks"][0]["product"], "registry-relay");
+        assert_eq!(
+            json["checks"][0]["product_report"]["findings"][0]["id"],
+            "relay.config.unsigned"
+        );
+        assert_eq!(
+            json["checks"][0]["findings"][0]["id"],
+            "relay.config.unsigned"
+        );
+        let rendered = serde_json::to_string(&json).unwrap();
+        assert!(!rendered.contains(secret));
+        assert!(rendered.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn doctor_extracts_notary_diagnostics_as_product_findings() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("notary-only");
+        init_notary_project(&project_dir, default_notary_options()).unwrap();
+        let product_json = serde_json::json!({
+            "schema": "registry.validation.report.v1",
+            "product": "registry-notary",
+            "ok": true,
+            "diagnostics": [
+                {
+                    "code": "deployment.profile_undeclared",
+                    "level": "warning",
+                    "message": "deployment profile is not declared"
+                }
+            ]
+        })
+        .to_string();
+        let fake_bin = temp.path().join("bin");
+        fs::create_dir_all(&fake_bin).unwrap();
+        write_fake_product(
+            &fake_bin.join("registry-notary"),
+            &format!(
+                "printf '%s\\n' {}\nexit 0\n",
+                shell_single_quoted(&product_json)
+            ),
+        );
+
+        let report =
+            run_doctor_report_with_path(&project_dir, DoctorFormat::Json, None, Some(&fake_bin))
+                .unwrap();
+        let json = serde_json::to_value(&report).unwrap();
+
+        assert!(report.ok);
+        assert_eq!(json["checks"][0]["product"], "registry-notary");
+        assert_eq!(
+            json["checks"][0]["findings"][0]["code"],
+            "deployment.profile_undeclared"
+        );
+    }
+
+    #[test]
+    fn doctor_report_json_has_registryctl_schema() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("my-first-api");
+        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+        let fake_bin = temp.path().join("bin");
+        fs::create_dir_all(&fake_bin).unwrap();
+        write_fake_product(&fake_bin.join("registry-relay"), "exit 0\n");
+
+        let report =
+            run_doctor_report_with_path(&project_dir, DoctorFormat::Json, None, Some(&fake_bin))
+                .unwrap();
+        let json = serde_json::to_value(&report).unwrap();
+
+        assert_eq!(json["schema"], "registry.validation.report.v1");
+        assert_eq!(json["product"], "registryctl");
+        assert_eq!(json["command"], "doctor");
+        assert_eq!(json["result"], "passed");
+        assert!(json.get("deployment_profile").is_none());
+        assert_eq!(json["checks"][0]["status"], "passed");
+    }
+
+    fn write_fake_product(path: &Path, body: &str) {
+        fs::write(path, format!("#!/bin/sh\n{body}")).unwrap();
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            permissions.set_mode(0o755);
+        }
+        fs::set_permissions(path, permissions).unwrap();
+    }
+
+    fn shell_single_quoted(value: &str) -> String {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+
+    fn default_notary_options() -> NotaryInitOptions {
+        NotaryInitOptions {
+            source_url: "https://api.example.test".to_string(),
+            source_token_from_env: None,
+            source_token_env: "EVIDENCE_SOURCE_API_TOKEN".to_string(),
+            source_dataset: "benefits_casework".to_string(),
+            source_entity: "person".to_string(),
+            source_lookup_field: "id".to_string(),
+            source_network: None,
+            source_claim: "benefits-person-exists".to_string(),
+            source_claim_title: "Benefits person exists".to_string(),
+        }
     }
 
     fn env_value(env: &str, name: &str) -> String {
