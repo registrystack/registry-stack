@@ -1,0 +1,29 @@
+[package]
+name = "registry-platform-sts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+publish = false
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+base64.workspace = true
+http.workspace = true
+hmac.workspace = true
+jsonwebtoken.workspace = true
+registry-platform-crypto = { version = "0.2.0", path = "../registry-platform-crypto" }
+registry-platform-oidc = { version = "0.2.0", path = "../registry-platform-oidc" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+ulid.workspace = true
+
+[dev-dependencies]
+tower.workspace = true

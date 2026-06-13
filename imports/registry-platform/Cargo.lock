@@ -2216,6 +2216,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-platform-sts"
+version = "0.2.1"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64",
+ "hmac 0.13.0",
+ "http",
+ "jsonwebtoken",
+ "registry-platform-crypto",
+ "registry-platform-oidc",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "subtle",
+ "thiserror",
+ "time",
+ "tokio",
+ "tower",
+ "ulid",
+]
+
+[[package]]
 name = "registry-platform-testing"
 version = "0.2.1"
 dependencies = [
