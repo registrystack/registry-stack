@@ -10,7 +10,12 @@ use registryctl::{
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    if cli.command.should_check_for_updates() {
+        registryctl::maybe_warn_about_update(env!("CARGO_PKG_VERSION"));
+    }
     match cli.command {
+        Commands::UpdateCheck => registryctl::update_check(env!("CARGO_PKG_VERSION"))?,
+        Commands::UpdateCheckRefresh => registryctl::refresh_update_check_cache()?,
         Commands::Init { command } => match *command {
             InitCommand::Relay { dir, sample } => {
                 registryctl::init_spreadsheet_api(&dir, sample)?;
@@ -231,6 +236,11 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// Check whether a newer registryctl release is available.
+    UpdateCheck,
+    /// Refresh the update-check cache in a detached child process.
+    #[command(name = "__update-check-refresh", hide = true)]
+    UpdateCheckRefresh,
     /// Create a local Registry Commons project.
     Init {
         #[command(subcommand)]
@@ -279,6 +289,15 @@ enum Commands {
     },
 }
 
+impl Commands {
+    fn should_check_for_updates(&self) -> bool {
+        !matches!(
+            self,
+            Self::Doctor { .. } | Self::UpdateCheck | Self::UpdateCheckRefresh
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use clap::Parser as _;
@@ -302,6 +321,28 @@ mod tests {
         };
         assert_eq!(format, DoctorFormat::Json);
         assert_eq!(profile, Some(DeploymentProfile::Local));
+    }
+
+    #[test]
+    fn update_check_cli_parses() {
+        let cli = Cli::try_parse_from(["registryctl", "update-check"]).unwrap();
+
+        assert!(matches!(cli.command, Commands::UpdateCheck));
+    }
+
+    #[test]
+    fn doctor_skips_automatic_update_check() {
+        let cli = Cli::try_parse_from(["registryctl", "doctor"]).unwrap();
+
+        assert!(!cli.command.should_check_for_updates());
+    }
+
+    #[test]
+    fn hidden_update_refresh_skips_automatic_update_check() {
+        let cli = Cli::try_parse_from(["registryctl", "__update-check-refresh"]).unwrap();
+
+        assert!(matches!(cli.command, Commands::UpdateCheckRefresh));
+        assert!(!cli.command.should_check_for_updates());
     }
 }
 

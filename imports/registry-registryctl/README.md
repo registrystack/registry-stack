@@ -41,6 +41,22 @@ REGISTRYCTL_VERSION=vX.Y.Z curl -fsSL https://raw.githubusercontent.com/jeremi/r
 
 Binaries are published for Linux x86_64, Linux aarch64, and macOS aarch64.
 
+## Update checks
+
+`registryctl` checks GitHub releases at most once per day for normal
+human-facing commands and prints an upgrade notice to stderr when a newer
+release is available. It skips the automatic check in CI and while running
+`registryctl doctor` so JSON output stays quiet.
+
+Run an explicit check at any time:
+
+```sh
+registryctl update-check
+```
+
+Disable automatic checks with `REGISTRYCTL_NO_UPDATE_CHECK=1` or
+`REGISTRYCTL_UPDATE_CHECK=0`.
+
 ## OpenFn sidecar import
 
 `registryctl openfn import` converts an OpenFn workflow URL or exported YAML
