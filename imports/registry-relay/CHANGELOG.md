@@ -8,12 +8,21 @@
   PR #136): profile-aware gates, deployment posture findings, and a configurable
   audit write policy (`availability_first` default, `fail_closed`). A `doctor`
   command reports gate status (PR #137).
+- **Durable break-glass approvals** (#138, PR #140): emergency approvals backed by a
+  durable multi-approver store; the default tier emits the emergency posture block
+  without reason or identity material.
 
 ### Fixed
 
 - Release pipeline: verify release tag ancestry via the compare API (PR #122);
   neutralize a local-dev `ld64.lld` override in macOS binary builds (PR #123);
   set `GH_REPO` so the release publish job resolves the repository (PR #125).
+- Bind the release-ancestry check to the protected `main` SHA (PR #142).
+- Fail and redact `doctor` readiness-gate findings; preflight fail-closed admin
+  mutations; authorize admin JSON before parsing; harden static-metadata server
+  concurrency; strengthen non-Unix file ETags; prefer the curated manifest for the
+  base DCAT; preserve `=` in perf env exports and the active shell in the perf gate
+  check (PR #143).
 
 ## 0.2.0 - 2026-06-12
 
