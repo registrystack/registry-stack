@@ -47,11 +47,11 @@
   --sl-color-hairline-light: var(--registry-rule);
   --sl-color-hairline-shade: var(--registry-rule);
   --sl-nav-height: 60px;
-  --sl-nav-pad-x: 40px;
+  --sl-nav-pad-x: 28px;
   --sl-nav-pad-y: 0px;
   --sl-nav-gap: 24px;
-  --sl-sidebar-width: 240px;
-  --sl-sidebar-pad-x: 40px;
+  --sl-sidebar-width: 300px;
+  --sl-sidebar-pad-x: 28px;
   --sl-content-width: 720px;
   --sl-content-pad-x: 56px;
   --registry-content-max: 832px;
@@ -93,7 +93,7 @@ body {
 .page > .header {
   align-items: stretch;
   border-bottom: 2px solid var(--registry-ink);
-  padding: 0 40px;
+  padding: 0 var(--sl-nav-pad-x);
 }
 
 .main-frame {
@@ -408,6 +408,9 @@ pre,
 
 .sidebar-content {
   padding-block-start: 16px !important;
+  /* No right gutter: the 16px scrollbar gutter already insets the text, and
+     dropping the padding lets the longest spec labels run a line wider. */
+  padding-inline-end: 0 !important;
 }
 
 .sidebar-content .top-level > li + li {
@@ -441,8 +444,10 @@ pre,
 
 .sidebar-content a {
   position: relative;
-  margin-inline: -40px;
-  padding: 6px 40px;
+  /* Bleed left to the pane edge for the full-width active highlight; on the
+     right the content padding is 0, so only a small text inset is needed. */
+  margin-inline: calc(-1 * var(--sl-sidebar-pad-x)) 0;
+  padding: 6px 8px 6px var(--sl-sidebar-pad-x);
   border-inline-start: 2px solid transparent;
   color: var(--registry-ink);
   font-size: 14px;
@@ -661,7 +666,8 @@ pre,
 }
 
 .status-chip,
-.claim-chip {
+.claim-chip,
+.adoption-chip {
   display: inline;
   border: 0;
   padding: 0;

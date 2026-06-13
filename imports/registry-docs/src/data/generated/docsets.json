@@ -17,6 +17,10 @@
         "registry-notary": {
           "version": "main snapshot",
           "ref": "313a226b92a6e2075003b04353dcbdab335c2c10"
+        },
+        "registry-manifest": {
+          "version": "main snapshot",
+          "ref": "81eb005f1808415199d79e02e24e84a6649be318"
         }
       }
     },

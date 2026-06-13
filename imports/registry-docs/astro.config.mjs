@@ -230,6 +230,25 @@ export default defineConfig({
             { label: 'Glossary', slug: 'reference/glossary' },
           ],
         },
+        {
+          // The formal layer: independently identified, versioned, normative
+          // specifications. Hand-authored (not generated from repo-docs.yaml)
+          // because these are distilled public contracts, not pulled product
+          // docs. The register page lists every spec from its own frontmatter.
+          label: 'Specifications',
+          collapsed: true,
+          items: [
+            { label: 'Register', slug: 'spec' },
+            { label: 'RS-DOC · Documentation framework', slug: 'spec/rs-doc' },
+            { label: 'RS-TERMS · Terms', slug: 'spec/rs-terms' },
+            { label: 'RS-ARC-G · Architecture', slug: 'spec/rs-arc-g' },
+            { label: 'RS-PR-NOTARY · Notary protocol', slug: 'spec/rs-pr-notary' },
+            { label: 'RS-PR-RELAY · Relay protocol', slug: 'spec/rs-pr-relay' },
+            { label: 'RS-SEC-G · Security model', slug: 'spec/rs-sec-g' },
+            { label: 'RS-DM-CLAIM · Claim definition model', slug: 'spec/rs-dm-claim' },
+            { label: 'RS-DM-MANIFEST · Portable metadata model', slug: 'spec/rs-dm-manifest' },
+          ],
+        },
       ],
     }),
     ...(isArchivedBuild ? [disabledSitemap] : [sitemap()]),

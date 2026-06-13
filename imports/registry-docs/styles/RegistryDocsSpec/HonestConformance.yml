@@ -1,0 +1,9 @@
+extends: existence
+message: "Avoid a bare compliance claim with '%s'. Name the adoption mode (conforms to, implements a subset of, profiles) and state what is out of scope. See spec/RS-DOC and the standards register."
+level: warning
+ignorecase: true
+tokens:
+  - '\bcompliant\s+(?:with|to)\b'
+  - '\bfully\s+compliant\b'
+  - '\bfull\s+compliance\b'
+  - '\b100%\s+compliant\b'

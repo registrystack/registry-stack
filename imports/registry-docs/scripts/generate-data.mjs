@@ -16,6 +16,7 @@ const required = {
     'official_url',
     'status',
     'claim_level',
+    'adoption_mode',
     'used_by',
     'surfaces',
     'version_or_profile',
