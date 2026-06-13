@@ -330,9 +330,10 @@ unchanged anti-rollback state where applicable.
 ## Definition Of Done
 
 This work is done only when every item below is true in a clean checkout. Final
-evidence must use the Lab vendor pins for Platform, Relay, and Notary. The Lab
-2 commands force those vendor paths so sibling checkout overrides cannot
-silently change the evidence binary.
+release evidence must use the Lab vendor pins for Platform, Relay, and Notary.
+Interactive Lab 2 commands use the same source directory environment variables
+as the default Compose topology so sibling Relay, Notary, and Platform
+checkouts can be exercised before the Lab submodule pins move.
 
 - Vendor pins are current: `vendor/registry-platform`,
   `vendor/registry-relay`, and `vendor/registry-notary` point to product
@@ -361,6 +362,16 @@ silently change the evidence binary.
   `output/lab2/runtime-config/` is missing or empty, starts only documented
   `lab2-` services and ports when artifacts exist, and `just lab2-down` removes
   Lab 2 containers and Lab 2-only volumes without removing Lab 1 volumes.
+- Lab 2 source selection is explicit: `just lab2-up` honors
+  `REGISTRY_RELAY_SOURCE_DIR`, `REGISTRY_NOTARY_SOURCE_DIR`, and
+  `REGISTRY_PLATFORM_SOURCE_DIR` through Compose named contexts, while
+  `just lab2-generate` uses `REGISTRY_PLATFORM_SOURCE_DIR` for its governed
+  config tool dependencies when that variable points outside `vendor/`.
+  `scripts/release-check.sh` remains the release evidence path for forced vendor
+  pins.
+- Lab 2 posture evidence includes deployment-profile review:
+  `just lab2-doctor` captures Relay and Notary `doctor --profile` JSON reports
+  for the running Lab 2 topology and the narrated demo links those reports.
 - `just lab2-smoke` exits `0` from an empty `output/lab2/evidence/` directory
   and captures `00-lab1-static-smoke.txt`, generated-config summaries, initial and
   final posture JSON, apply responses, negative-case responses, container logs,
