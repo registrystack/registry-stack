@@ -7,7 +7,9 @@ browser-hardening security headers to every response (issue #88 / LAB-008).
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import socket
 import tempfile
 import threading
@@ -60,11 +62,11 @@ class StaticMetadataServerSecurityHeadersTest(unittest.TestCase):
 
         cls.port = _free_port()
 
-        import http.server
-
         handler = cls.module.SecureStaticHandler
 
-        cls.server = http.server.HTTPServer(("127.0.0.1", cls.port), handler)
+        cls.server = cls.module.SecureThreadingHTTPServer(
+            ("127.0.0.1", cls.port), handler
+        )
         # Change into tmpdir so SimpleHTTPRequestHandler resolves paths correctly.
         import os
 
@@ -143,6 +145,15 @@ class StaticMetadataServerSecurityHeadersTest(unittest.TestCase):
         self.assertIn("content-security-policy", headers)
         self.assertEqual(headers.get("x-content-type-options"), "nosniff")
 
+    def test_partial_connection_does_not_block_other_requests(self) -> None:
+        with socket.create_connection(("127.0.0.1", self.port), timeout=2) as held:
+            start = time.monotonic()
+            headers = self._get_headers("/.well-known/api-catalog")
+            elapsed = time.monotonic() - start
+
+            self.assertLess(elapsed, 1.0)
+            self.assertIn("content-security-policy", headers)
+
 
 class StaticMetadataServerArgParseTest(unittest.TestCase):
     """Unit tests for argument parsing."""
@@ -166,6 +177,62 @@ class StaticMetadataServerArgParseTest(unittest.TestCase):
         )
         self.assertEqual(args.bind, "127.0.0.1")
         self.assertEqual(args.directory, "/data")
+
+
+class StaticMetadataServerConcurrencyTest(unittest.TestCase):
+    """Unit tests for the server class used by main()."""
+
+    def setUp(self) -> None:
+        self.module = _load_server_module()
+
+    def test_server_uses_threaded_daemon_request_handling(self) -> None:
+        self.assertTrue(
+            issubclass(
+                self.module.SecureThreadingHTTPServer,
+                self.module.http.server.ThreadingHTTPServer,
+            )
+        )
+        self.assertTrue(self.module.SecureThreadingHTTPServer.daemon_threads)
+        self.assertEqual(
+            self.module.SecureThreadingHTTPServer.request_queue_size,
+            self.module._REQUEST_QUEUE_SIZE,
+        )
+
+    def test_accepted_connections_receive_timeout(self) -> None:
+        with self.module.SecureThreadingHTTPServer(
+            ("127.0.0.1", 0), self.module.SecureStaticHandler
+        ) as server:
+            port = server.server_address[1]
+            with socket.create_connection(("127.0.0.1", port), timeout=2) as client:
+                accepted, _ = server.get_request()
+                try:
+                    self.assertEqual(
+                        accepted.gettimeout(),
+                        self.module._REQUEST_TIMEOUT_SECONDS,
+                    )
+                finally:
+                    accepted.close()
+                client.close()
+
+
+class StaticMetadataServerLoggingTest(unittest.TestCase):
+    """Unit tests for request log hardening."""
+
+    def setUp(self) -> None:
+        self.module = _load_server_module()
+
+    def test_log_message_translates_control_characters(self) -> None:
+        handler = object.__new__(self.module.SecureStaticHandler)
+        handler.client_address = ("127.0.0.1", 12345)
+        output = io.StringIO()
+
+        with contextlib.redirect_stderr(output):
+            handler.log_message("GET %s", "/metadata\n/index\x1b.json")
+
+        line = output.getvalue()
+        self.assertNotIn("/metadata\n/index", line)
+        self.assertNotIn("\x1b", line)
+        self.assertIn(r"/metadata\x0a/index\x1b.json", line)
 
 
 if __name__ == "__main__":
