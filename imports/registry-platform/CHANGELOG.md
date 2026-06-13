@@ -10,6 +10,12 @@
   `registry.ops.posture.v1` finding and waiver shapes consumed by the Notary and
   Relay deployment-profile gates.
 - Parser fuzz regression jobs (#51, PR #57): CI fuzz coverage for platform parsers.
+- Emergency posture schema (#61, PR #62): adds the six `configuration.emergency`
+  posture leaves to the default-tier allowlist and break-glass approval metadata
+  shapes; contract tests pin schema validation, default-tier filtering, the
+  change-class grammar, and the no-reason / no-approver-identity rule.
+- STS bridge in `registry-platform` (PR #64): security-token-service bridge that
+  backs Assisted Access token exchange.
 
 ## v0.2.1 — 2026-06-12
 
