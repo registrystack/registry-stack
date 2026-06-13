@@ -1,4 +1,6 @@
 ---
+import { mdHrefForPath } from '../lib/md-href';
+
 const { starlightRoute } = Astro.locals;
 const PAGE_TITLE_ID = '_top';
 const path = Astro.url.pathname.replace(import.meta.env.BASE_URL, '/');
@@ -28,6 +30,10 @@ const isHome = path === '/';
 const section = parts[0] ? sectionLabels.get(parts[0]) : undefined;
 const current = currentLabels.get(path) ?? starlightRoute.entry.data.title;
 const isWide = starlightRoute.entry.data.wide === true;
+
+// Compute the .md URL for this page (BASE_URL-aware). The data attribute is
+// read by the client script so the script doesn't need to recompute it.
+const mdHref = mdHrefForPath(Astro.url.pathname, import.meta.env.BASE_URL);
 ---
 
 {isWide && (
@@ -55,3 +61,161 @@ const isWide = starlightRoute.entry.data.wide === true;
 )}
 
 <h1 id={PAGE_TITLE_ID}>{starlightRoute.entry.data.title}</h1>
+
+<!-- Vendor-neutral AI affordances: Copy as Markdown / View as Markdown.
+     The .md URL follows the contract: strip trailing slash, append .md; root -> index.md.
+     The click handler is bound in the <script> block below, re-attached on
+     astro:page-load so it survives Starlight's client-side view transitions. -->
+<div class="registry-md-actions">
+  <button
+    class="registry-md-btn"
+    data-md-href={mdHref}
+    aria-label="Copy page source as Markdown"
+    type="button"
+  >Copy as Markdown</button>
+  <a
+    class="registry-md-link"
+    href={mdHref}
+    aria-label="View page source as Markdown in the browser"
+  >View as Markdown</a>
+</div>
+
+<script>
+  // Bind the "Copy as Markdown" button. Called on initial load and on every
+  // Starlight view-transition navigation (astro:page-load).
+  function bindCopyButtons() {
+    document.querySelectorAll<HTMLButtonElement>('button[data-md-href]').forEach((btn) => {
+      // Avoid attaching duplicate listeners when the same element persists
+      // across navigations by checking a flag we set ourselves.
+      if ((btn as HTMLButtonElement & { _mdBound?: boolean })._mdBound) return;
+      (btn as HTMLButtonElement & { _mdBound?: boolean })._mdBound = true;
+
+      btn.addEventListener('click', async () => {
+        const href = btn.dataset.mdHref;
+        if (!href) return;
+
+        const originalText = btn.textContent ?? 'Copy as Markdown';
+
+        async function showState(text: string, cls: string, durationMs: number) {
+          btn.textContent = text;
+          btn.classList.add(cls);
+          await new Promise((r) => setTimeout(r, durationMs));
+          btn.textContent = originalText;
+          btn.classList.remove(cls);
+        }
+
+        try {
+          const res = await fetch(href);
+          if (!res.ok) {
+            throw new Error(`Fetch failed: ${res.status} ${res.statusText}`);
+          }
+          const text = await res.text();
+
+          if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(text);
+          } else {
+            // Fallback for contexts where the Clipboard API is unavailable
+            // (e.g. non-HTTPS, embedded frames): select a hidden textarea.
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none;';
+            document.body.appendChild(ta);
+            ta.select();
+            const ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+            if (!ok) throw new Error('execCommand copy returned false');
+          }
+
+          await showState('Copied', 'registry-md-btn--copied', 2000);
+        } catch (err) {
+          console.error('[registry-docs] Copy as Markdown failed:', err);
+          await showState('Copy failed', 'registry-md-btn--error', 3000);
+        }
+      });
+    });
+  }
+
+  // Bind on initial page load.
+  bindCopyButtons();
+
+  // Re-bind after every Starlight view-transition navigation.
+  document.addEventListener('astro:page-load', bindCopyButtons);
+</script>
+
+<style>
+  /* Control group sits directly below the <h1>, flush-left, using mono type
+     to read as a utility annotation rather than navigation. */
+  .registry-md-actions {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-top: 10px;
+  }
+
+  .registry-md-btn,
+  .registry-md-link {
+    font-family: var(--__sl-font-mono);
+    font-size: 11px;
+    font-weight: 400;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    line-height: 1;
+    text-decoration: none;
+    cursor: pointer;
+  }
+
+  /* Button: no fill — just a hairline border matching the site's rule colour. */
+  .registry-md-btn {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--registry-rule);
+    background: transparent;
+    color: var(--registry-muted);
+    padding: 4px 8px;
+    transition: color 0.15s, border-color 0.15s;
+  }
+
+  .registry-md-btn:hover {
+    color: var(--registry-blue);
+    border-color: var(--registry-blue);
+  }
+
+  /* Transient state: success */
+  .registry-md-btn--copied {
+    color: #2e6e3e !important;
+    border-color: #2e6e3e !important;
+  }
+
+  /* Transient state: failure — stamp red so it's visually distinct. */
+  .registry-md-btn--error {
+    color: var(--registry-stamp) !important;
+    border-color: var(--registry-stamp) !important;
+  }
+
+  /* Link: plain text, muted, same mono treatment. */
+  .registry-md-link {
+    color: var(--registry-muted);
+    border-bottom: 1px solid transparent;
+  }
+
+  .registry-md-link:hover {
+    color: var(--registry-blue);
+    border-bottom-color: var(--registry-blue);
+  }
+
+  /* Visible focus rings for keyboard navigation (inherits :focus-visible from
+     global custom.css but set explicitly here so both controls look consistent). */
+  .registry-md-btn:focus-visible,
+  .registry-md-link:focus-visible {
+    outline: 2px solid var(--registry-blue);
+    outline-offset: 2px;
+  }
+
+  /* Dark theme: Starlight sets [data-theme="dark"] on :root. The muted/rule
+     variables are already theme-aware via Starlight's own overrides; we only
+     need to adjust the success green which has no CSS variable equivalent. */
+  :root[data-theme='dark'] .registry-md-btn--copied {
+    color: #5abf7a !important;
+    border-color: #5abf7a !important;
+  }
+</style>
