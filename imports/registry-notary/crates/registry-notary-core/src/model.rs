@@ -1357,7 +1357,6 @@ const fn self_attestation_access_mode() -> AccessMode {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct EvidenceAuthorizationDetails {
     #[serde(rename = "type")]
     pub detail_type: String,
@@ -1383,14 +1382,12 @@ pub struct EvidenceAuthorizationDetails {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct EvidenceAuthorizationSubject {
     pub binding_claim: String,
     pub id_type: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct EvidenceAssistedAccessContext {
     pub channel: String,
 }

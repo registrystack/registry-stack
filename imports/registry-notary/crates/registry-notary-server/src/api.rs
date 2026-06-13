@@ -6529,7 +6529,11 @@ fn require_self_attestation_evaluate(
         }
     }
 
-    let claim = find_requested_claim(evidence, &request.claims[0])
+    let requested_claim = request
+        .claims
+        .first()
+        .ok_or_else(|| self_attestation_denied(SelfAttestationDenialCode::ClaimDenied))?;
+    let claim = find_requested_claim(evidence, requested_claim)
         .map_err(|_| self_attestation_denied(SelfAttestationDenialCode::ClaimDenied))?;
     let purpose = claim
         .purpose
@@ -9265,6 +9269,56 @@ mod tests {
                 reason: SelfAttestationDenialCode::ClaimDenied
             }
         ));
+    }
+
+    #[test]
+    fn self_attestation_authorization_details_reject_empty_claims_without_panic() {
+        let config = self_attestation_config();
+        let evidence = evidence_config();
+        let principal = classified_transaction_principal(&config, &evidence);
+        let mut request = evaluate_request("NAT-123");
+        request.claims = Vec::new();
+
+        let err = require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+            .expect_err("empty claim array must deny instead of panicking");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::ClaimDenied
+            }
+        ));
+    }
+
+    #[test]
+    fn self_attestation_authorization_details_tolerate_future_fields() {
+        let details: EvidenceAuthorizationDetails = serde_json::from_value(serde_json::json!({
+            "type": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE,
+            "schema_version": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION,
+            "actions": ["evaluate"],
+            "locations": ["registry-notary:test"],
+            "claims": [{"id": "person-is-alive", "version": "1"}],
+            "subject": {
+                "binding_claim": SUBJECT_BINDING_CLAIM,
+                "id_type": "national_id",
+                "future_subject_metadata": true
+            },
+            "assisted_access_context": {
+                "channel": "citizen_self_service",
+                "future_context_metadata": true
+            },
+            "future_authorization_metadata": true
+        }))
+        .expect("authorization_details should ignore future metadata fields");
+
+        assert_eq!(
+            details.subject.as_ref().unwrap().binding_claim,
+            SUBJECT_BINDING_CLAIM
+        );
+        assert_eq!(
+            details.assisted_access_context.as_ref().unwrap().channel,
+            "citizen_self_service"
+        );
     }
 
     #[test]

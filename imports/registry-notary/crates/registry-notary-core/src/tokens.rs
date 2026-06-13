@@ -402,15 +402,12 @@ fn require_authorization_details(payload: &Value) -> Result<(), EvidenceError> {
     else {
         return Err(EvidenceError::MissingCredential);
     };
-    let Some(detail) = details.first().and_then(Value::as_object) else {
-        return Err(EvidenceError::MissingCredential);
-    };
-    if detail.get("type").and_then(Value::as_str) != Some(NOTARY_AUTHORIZATION_DETAILS_TYPE) {
-        return Err(EvidenceError::MissingCredential);
-    }
-    if detail.get("schema_version").and_then(Value::as_str)
-        != Some(NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION)
-    {
+    let has_matching_detail = details.iter().filter_map(Value::as_object).any(|detail| {
+        detail.get("type").and_then(Value::as_str) == Some(NOTARY_AUTHORIZATION_DETAILS_TYPE)
+            && detail.get("schema_version").and_then(Value::as_str)
+                == Some(NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION)
+    });
+    if !has_matching_detail {
         return Err(EvidenceError::MissingCredential);
     }
     Ok(())
@@ -728,6 +725,35 @@ mod tests {
             "hmac-sha256:actor"
         );
         assert_eq!(verified.payload["act"]["delegation_ref"], "delegation-123");
+    }
+
+    #[test]
+    fn transaction_token_accepts_matching_authorization_details_after_other_entries() {
+        let signer = access_token_signer();
+        let mut claims = transaction_token_claims();
+        claims.authorization_details.insert(
+            0,
+            serde_json::json!({
+                "type": "unrelated_authorization_detail",
+                "schema_version": "example/v1",
+            }),
+        );
+        let token = block_on(mint_access_token(
+            &signer,
+            NOTARY_TRANSACTION_TOKEN_JWT_TYP,
+            &claims,
+        ))
+        .expect("transaction token mints");
+
+        verify_notary_token(
+            &token.compact,
+            &signer.public_jwk(),
+            NOTARY_TRANSACTION_TOKEN_JWT_TYP,
+            ISSUER,
+            &[AUDIENCE.to_string()],
+            NOW + 1,
+        )
+        .expect("matching authorization_details need not be first");
     }
 
     #[test]
