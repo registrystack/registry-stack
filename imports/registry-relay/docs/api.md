@@ -115,7 +115,7 @@ HTTP loopback remote repositories are accepted only when that configured
 repository sets `allow_dev_insecure_fetch_urls: true`; request bodies cannot
 enable insecure fetching by themselves.
 
-Break-glass is apply-only. `verify` and `dry-run` reject any break-glass fields. `apply` accepts break-glass only for signed TUF targets and only when the approval is present, the signed bundle includes the requested emergency change class, and local anti-rollback rate limits allow it. The rolling-window rate-limit policy comes from local `config_trust.break_glass_rate_limit`; clients must not include it in the request:
+Break-glass is apply-only. `verify` and `dry-run` reject any break-glass fields. `apply` accepts break-glass only for signed TUF targets and only when the approval is present, the signed bundle includes the requested emergency change class, and local anti-rollback rate limits allow it. The inline `break_glass_approval` form is the single-approver path. Multi-approver policies use `break_glass_approval_reference`, resolved from the verifier-owned local approval store. The rolling-window rate-limit policy comes from local `config_trust.break_glass_rate_limit`; clients must not include it in the request:
 
 ```json
 {
@@ -124,14 +124,23 @@ Break-glass is apply-only. `verify` and `dry-run` reject any break-glass fields.
     "approved_by": "ops@example.gov",
     "reason": "recover from bad live config",
     "approval_reference": "INC-4242",
-    "emergency_change_class": "emergency_break_glass",
+    "emergency_change_class": "emergency.break_glass",
     "expires_at_unix_seconds": 1780000000,
     "rate_limit_identity": "registry-relay/relay-prod/production/default"
   }
 }
 ```
 
-The audit record stores the approval reference, approver, emergency change class, expiry, and rate-limit identity. It hashes the free-text `reason` and does not store the raw reason.
+For the stored path, the request carries the reference only:
+
+```json
+{
+  "break_glass": true,
+  "break_glass_approval_reference": "INC-4242"
+}
+```
+
+The audit record stores the approval reference, emergency change class, expiry, rate-limit identity, and hashes of approver identity and free-text `reason`. It does not store raw reason text or raw approver identity.
 
 ## Authentication
 

@@ -162,6 +162,8 @@ config_trust:
   break_glass_rate_limit:
     max_accepted: 1
     window_seconds: 3600
+  required_approver_count:
+    emergency.break_glass: 2
   accepted_roots:
     - root_id: ops-root
       production: true
@@ -195,6 +197,9 @@ local YAML loaded at startup. Governed config apply requires
 durable local state such as a mounted volume. `break_glass_rate_limit` is the
 trusted local rolling-window policy used for break-glass apply requests; when
 omitted it defaults to one accepted request per rate-limit identity per hour.
+`required_approver_count` is an optional per-emergency-change-class map for
+stored break-glass approval records. Counts default to `1`; values must be
+greater than zero.
 Registry Relay fails closed for
 apply when required local state is absent, unreadable, stale, or inconsistent;
 verify and dry-run remain available.

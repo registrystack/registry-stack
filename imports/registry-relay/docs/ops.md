@@ -515,14 +515,15 @@ Break-glass requests are apply-only and must include all current fields:
     "approved_by": "ops@example.gov",
     "reason": "recover from bad live config",
     "approval_reference": "INC-4242",
-    "emergency_change_class": "emergency_break_glass",
+    "emergency_change_class": "emergency.break_glass",
     "expires_at_unix_seconds": 1780000000,
     "rate_limit_identity": "registry-relay/relay-prod/production/default"
   }
 }
 ```
 
-Break-glass can waive only the previous-config-hash rollback check. It does not waive monotonic sequence, TUF signature and local trust-root authorization, expiry, emergency change-class authorization, or local rolling-window rate limits. The rolling-window policy comes from local `config_trust.break_glass_rate_limit`; requests that include `break_glass_rate_limit` are rejected. The audit record stores the approval reference, approver, emergency change class, expiry, and rate-limit identity; it stores a hash of `reason`, not the raw free text.
+Break-glass can waive only the previous-config-hash rollback check. It does not waive monotonic sequence, TUF signature and local trust-root authorization, expiry, emergency change-class authorization, or local rolling-window rate limits. The rolling-window policy comes from local `config_trust.break_glass_rate_limit`; requests that include `break_glass_rate_limit` are rejected. The audit record stores the approval reference, emergency change class, expiry, rate-limit identity, and hashes of approver identity and reason text; it does not store raw approver identity or raw reason text.
+Inline `break_glass_approval` remains the single-approver path. For multi-approver policies, write a verifier-owned approval record to `local_approval_state_path` and send only `break_glass_approval_reference` in the request.
 
 ## Governed Config CLI
 

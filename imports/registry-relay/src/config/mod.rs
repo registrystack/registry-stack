@@ -171,6 +171,8 @@ pub struct ConfigTrustConfig {
     #[serde(default = "default_break_glass_rate_limit")]
     pub break_glass_rate_limit: BreakGlassRateLimit,
     #[serde(default)]
+    pub required_approver_count: BTreeMap<String, usize>,
+    #[serde(default)]
     pub remote_tuf_repositories: Vec<RemoteTufRepositoryConfig>,
     #[serde(default)]
     pub accepted_roots: Vec<RegistryTrustRoot>,
