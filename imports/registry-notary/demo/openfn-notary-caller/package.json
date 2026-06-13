@@ -15,7 +15,7 @@
     "README.md"
   ],
   "scripts": {
-    "test": "node --experimental-vm-modules --no-warnings --test test/*.test.js"
+    "test": "node --experimental-vm-modules --no-warnings --test test/caller.test.js"
   },
   "engines": {
     "node": ">=20.18.1"

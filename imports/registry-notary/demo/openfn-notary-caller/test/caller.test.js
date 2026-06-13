@@ -463,6 +463,42 @@ test("callNotaryEvaluation maps Problem Details without logging detail", async (
   }
 });
 
+test("callNotaryEvaluation maps transport errors without leaking error detail", async () => {
+  const state = await callNotaryEvaluation(baseState, {
+    claimId: "benefits-person-exists",
+    purpose: "benefits_eligibility",
+    target: { type: "Person", identifiers: [{ scheme: "national_id", valueFrom: "national_id" }] },
+    fetch: async () => {
+      throw new Error("socket failed for secret subject person-123");
+    },
+  });
+
+  assert.equal(state.data.notary.branch, "retryable_infrastructure");
+  assert.equal(state.data.notary.problem.code, "transport.error");
+  assert.equal(state.data.notary.problem.retryable, true);
+  assert.equal("notary_request" in state.data, false);
+  assert.equal(JSON.stringify(state).includes("secret subject"), false);
+});
+
+test("callNotaryEvaluation accepts plain object response headers in tests", async () => {
+  const state = await callNotaryEvaluation(baseState, {
+    claimId: "benefits-person-exists",
+    purpose: "benefits_eligibility",
+    target: { type: "Person", identifiers: [{ scheme: "national_id", valueFrom: "national_id" }] },
+    fetch: async () => ({
+      status: 200,
+      headers: { "x-request-id": "plain-header-req" },
+      text: async () =>
+        JSON.stringify({
+          results: [{ claim_id: "benefits-person-exists", evaluation_id: "eval-plain", satisfied: true }],
+        }),
+    }),
+  });
+
+  assert.equal(state.data.notary.request_id, "plain-header-req");
+  assert.equal(state.data.notary.evaluation_id, "eval-plain");
+});
+
 test("callNotaryEvaluation skips replay without a second POST", async () => {
   const calls = [];
   const first = await callNotaryEvaluation(baseState, {

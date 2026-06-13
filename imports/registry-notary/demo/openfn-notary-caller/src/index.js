@@ -114,11 +114,16 @@ export async function callNotaryEvaluation(state, options = {}) {
       code: "fetch.required",
     });
   }
-  const response = await fetchImpl(request.url, {
-    method: "POST",
-    headers: request.headers,
-    body: JSON.stringify(request.body),
-  });
+  let response;
+  try {
+    response = await fetchImpl(request.url, {
+      method: "POST",
+      headers: request.headers,
+      body: JSON.stringify(request.body),
+    });
+  } catch (_error) {
+    return handleEvaluationTransportError(prepared, options);
+  }
   const body = await readJsonResponse(response);
   const responseState = {
     ...prepared,
@@ -132,6 +137,26 @@ export async function callNotaryEvaluation(state, options = {}) {
     return handleEvaluationSuccess(responseState, options);
   }
   return handleEvaluationProblem(responseState, options);
+}
+
+function handleEvaluationTransportError(state, options = {}) {
+  const data = dataObject(state);
+  const context = notaryContext(data, options);
+  return redactFinishedState(state, {
+    branch: "retryable_infrastructure",
+    ...(context.claim_ids.length === 1
+      ? { claim: context.claim_ids[0] }
+      : { claims: context.claim_ids.map((claim) => ({ claim, branch: "retryable_infrastructure" })) }),
+    purpose: context.purpose,
+    request_id: data.notary_request?.headers?.["X-Request-Id"],
+    target_fingerprint: context.target_fingerprint,
+    problem: {
+      code: "transport.error",
+      status: 0,
+      title: "Registry Notary request failed",
+      retryable: true,
+    },
+  }, context.redact_data_paths);
 }
 
 export function handleEvaluationSuccess(state, options = {}) {
@@ -522,11 +547,21 @@ async function readJsonResponse(response) {
 
 function headersObject(headers) {
   const out = {};
-  if (!headers || typeof headers.forEach !== "function") {
+  if (!headers || typeof headers !== "object") {
     return out;
   }
-  headers.forEach((value, key) => {
-    out[key] = value;
-  });
+  if (typeof headers.forEach === "function") {
+    headers.forEach((value, key) => {
+      out[key] = value;
+    });
+    return out;
+  }
+  for (const [key, value] of Object.entries(headers)) {
+    if (Array.isArray(value)) {
+      out[key] = value.join(", ");
+    } else if (value !== undefined && value !== null) {
+      out[key] = String(value);
+    }
+  }
   return out;
 }
