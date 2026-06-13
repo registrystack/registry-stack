@@ -27,6 +27,10 @@ pub struct VerifyOptions {
     pub clock_skew: Duration,
     /// Holder-binding policy for the embedded `cnf` confirmation.
     pub holder_binding: HolderBindingPolicy,
+    /// Expected key-binding JWT audience for verifier-controlled challenges.
+    pub expected_key_binding_audience: Option<String>,
+    /// Expected key-binding JWT nonce for verifier-controlled challenges.
+    pub expected_key_binding_nonce: Option<String>,
     /// Test hook for deterministic time checks. Production callers should leave
     /// this unset.
     pub now: Option<OffsetDateTime>,
@@ -41,6 +45,8 @@ impl VerifyOptions {
             expected_vct: None,
             clock_skew: Duration::from_secs(60),
             holder_binding: HolderBindingPolicy::NotRequired,
+            expected_key_binding_audience: None,
+            expected_key_binding_nonce: None,
             now: None,
         }
     }
@@ -69,6 +75,17 @@ impl VerifyOptions {
     #[must_use]
     pub fn holder_binding(mut self, holder_binding: HolderBindingPolicy) -> Self {
         self.holder_binding = holder_binding;
+        self
+    }
+
+    #[must_use]
+    pub fn key_binding_challenge(
+        mut self,
+        expected_audience: impl Into<String>,
+        expected_nonce: impl Into<String>,
+    ) -> Self {
+        self.expected_key_binding_audience = Some(expected_audience.into());
+        self.expected_key_binding_nonce = Some(expected_nonce.into());
         self
     }
 
@@ -283,13 +300,16 @@ fn verify_claims(
     }
 
     verify_disclosures(payload, &parsed.disclosures)?;
-    let holder_key_id = verify_holder_binding(
+    let holder_key_id = verify_holder_binding(HolderBindingContext {
         payload,
-        &options.holder_binding,
-        parsed.key_binding_jwt,
+        policy: &options.holder_binding,
+        key_binding_jwt: parsed.key_binding_jwt,
+        sd_hash_input: parsed.sd_hash_input,
+        expected_audience: options.expected_key_binding_audience.as_deref(),
+        expected_nonce: options.expected_key_binding_nonce.as_deref(),
         now,
         skew,
-    )?;
+    })?;
     Ok(VerifiedCredential {
         issuer: issuer.to_string(),
         subject: payload
@@ -364,23 +384,36 @@ fn verify_disclosures(payload: &Value, disclosures: &[&str]) -> Result<(), Verif
     Ok(())
 }
 
-fn verify_holder_binding(
-    payload: &Value,
-    policy: &HolderBindingPolicy,
-    key_binding_jwt: Option<&str>,
+struct HolderBindingContext<'a> {
+    payload: &'a Value,
+    policy: &'a HolderBindingPolicy,
+    key_binding_jwt: Option<&'a str>,
+    sd_hash_input: &'a str,
+    expected_audience: Option<&'a str>,
+    expected_nonce: Option<&'a str>,
     now: i64,
     skew: i64,
+}
+
+fn verify_holder_binding(
+    context: HolderBindingContext<'_>,
 ) -> Result<Option<String>, VerificationError> {
-    if matches!(policy, HolderBindingPolicy::NotRequired) && key_binding_jwt.is_none() {
-        return Ok(payload
+    if matches!(context.policy, HolderBindingPolicy::NotRequired)
+        && context.key_binding_jwt.is_none()
+    {
+        return Ok(context
+            .payload
             .get("cnf")
             .and_then(|cnf| cnf.get("kid"))
             .and_then(Value::as_str)
             .map(ToString::to_string));
     }
-    let cnf = payload.get("cnf").ok_or(VerificationError::HolderBinding {
-        code: "holder_binding.required",
-    })?;
+    let cnf = context
+        .payload
+        .get("cnf")
+        .ok_or(VerificationError::HolderBinding {
+            code: "holder_binding.required",
+        })?;
     let jwk_value = cnf.get("jwk").ok_or(VerificationError::HolderBinding {
         code: "holder_binding.required",
     })?;
@@ -395,22 +428,33 @@ fn verify_holder_binding(
         .get("kid")
         .and_then(Value::as_str)
         .map(ToString::to_string);
-    if let HolderBindingPolicy::RequiredKid(expected) = policy {
+    if let HolderBindingPolicy::RequiredKid(expected) = context.policy {
         if actual_kid.as_deref() != Some(expected.as_str()) {
             return Err(VerificationError::HolderBinding {
                 code: "holder_binding.kid_mismatch",
             });
         }
     }
-    if let Some(key_binding_jwt) = key_binding_jwt {
-        verify_key_binding_jwt(key_binding_jwt, &holder_jwk, now, skew)?;
+    if let Some(key_binding_jwt) = context.key_binding_jwt {
+        verify_key_binding_jwt(
+            key_binding_jwt,
+            context.sd_hash_input,
+            &holder_jwk,
+            context.expected_audience,
+            context.expected_nonce,
+            context.now,
+            context.skew,
+        )?;
     }
     Ok(actual_kid)
 }
 
 fn verify_key_binding_jwt(
     compact: &str,
+    sd_hash_input: &str,
     holder_jwk: &PublicJwk,
+    expected_audience: Option<&str>,
+    expected_nonce: Option<&str>,
     now: i64,
     skew: i64,
 ) -> Result<(), VerificationError> {
@@ -471,7 +515,60 @@ fn verify_key_binding_jwt(
             code: "holder_binding.proof_invalid",
         });
     }
+    let exp =
+        payload
+            .get("exp")
+            .and_then(Value::as_i64)
+            .ok_or(VerificationError::HolderBinding {
+                code: "holder_binding.proof_invalid",
+            })?;
+    if exp <= now.saturating_sub(skew) {
+        return Err(VerificationError::HolderBinding {
+            code: "holder_binding.proof_invalid",
+        });
+    }
+    if payload
+        .get("nbf")
+        .and_then(Value::as_i64)
+        .is_some_and(|nbf| nbf > now.saturating_add(skew))
+    {
+        return Err(VerificationError::HolderBinding {
+            code: "holder_binding.proof_invalid",
+        });
+    }
+    let expected_sd_hash = URL_SAFE_NO_PAD.encode(Sha256::digest(sd_hash_input.as_bytes()));
+    if payload.get("sd_hash").and_then(Value::as_str) != Some(expected_sd_hash.as_str()) {
+        return Err(VerificationError::HolderBinding {
+            code: "holder_binding.proof_invalid",
+        });
+    }
+    let (Some(expected_audience), Some(expected_nonce)) = (expected_audience, expected_nonce)
+    else {
+        return Err(VerificationError::HolderBinding {
+            code: "holder_binding.challenge_required",
+        });
+    };
+    if !audience_matches(&payload, expected_audience) {
+        return Err(VerificationError::HolderBinding {
+            code: "holder_binding.proof_invalid",
+        });
+    }
+    if payload.get("nonce").and_then(Value::as_str) != Some(expected_nonce) {
+        return Err(VerificationError::HolderBinding {
+            code: "holder_binding.proof_invalid",
+        });
+    }
     Ok(())
+}
+
+fn audience_matches(payload: &Value, expected_audience: &str) -> bool {
+    match payload.get("aud") {
+        Some(Value::String(audience)) => audience == expected_audience,
+        Some(Value::Array(audiences)) => audiences
+            .iter()
+            .any(|audience| audience.as_str() == Some(expected_audience)),
+        _ => false,
+    }
 }
 
 fn reject_untrusted_header_references(header: &Value) -> Result<(), VerificationError> {
@@ -561,6 +658,7 @@ struct ParsedSdJwt<'a> {
     signature_b64: &'a str,
     disclosures: Vec<&'a str>,
     key_binding_jwt: Option<&'a str>,
+    sd_hash_input: &'a str,
 }
 
 impl<'a> ParsedSdJwt<'a> {
@@ -586,6 +684,19 @@ impl<'a> ParsedSdJwt<'a> {
                 code: "token.malformed",
             });
         }
+        let sd_hash_input = if let Some(key_binding_jwt) = key_binding_jwt {
+            compact
+                .strip_suffix(key_binding_jwt)
+                .ok_or(VerificationError::Malformed {
+                    code: "token.malformed",
+                })?
+                .strip_suffix('~')
+                .ok_or(VerificationError::Malformed {
+                    code: "token.malformed",
+                })?
+        } else {
+            compact
+        };
         let mut jwt_parts = issuer_jwt.split('.');
         let header_b64 = jwt_parts.next().ok_or(VerificationError::Malformed {
             code: "token.malformed",
@@ -611,6 +722,7 @@ impl<'a> ParsedSdJwt<'a> {
             signature_b64,
             disclosures: presentation_parts,
             key_binding_jwt,
+            sd_hash_input,
         })
     }
 

@@ -870,19 +870,26 @@ async fn admin_config_apply(
         .with_break_glass_rate_limit(break_glass_rate_limit);
     let antirollback_key = antirollback_key(&config_governance, &candidate.stream_id);
     let local_approval = governed_apply.local_approval().cloned();
-    if let Err(error) = accept_antirollback_blocking(
+    let proposal = AntiRollbackProposal {
+        sequence: candidate.sequence,
+        previous_config_hash: candidate.previous_config_hash.clone(),
+        config_hash: internal_config_hash(candidate.config_yaml.as_bytes()),
+        root_version: candidate.root_version,
+        break_glass,
+        break_glass_rate_limit: None,
+        local_approval: local_approval.clone(),
+        local_approval_rate_limit: local_approval.as_ref().map(|approval| approval.rate_limit),
+    };
+    if let Err(error) = accept_antirollback_and_publish_apply_blocking(
         antirollback_store.clone(),
         antirollback_key.clone(),
-        AntiRollbackProposal {
-            sequence: candidate.sequence,
-            previous_config_hash: candidate.previous_config_hash.clone(),
-            config_hash: internal_config_hash(candidate.config_yaml.as_bytes()),
-            root_version: candidate.root_version,
-            break_glass,
-            break_glass_rate_limit: None,
-            local_approval: local_approval.clone(),
-            local_approval_rate_limit: local_approval.as_ref().map(|approval| approval.rate_limit),
-        },
+        proposal,
+        Arc::clone(&state),
+        Arc::clone(&candidate_config),
+        governed_apply,
+        candidate.source,
+        candidate.bundle_id.clone(),
+        candidate.sequence,
     )
     .await
     {
@@ -945,37 +952,6 @@ async fn admin_config_apply(
         );
     }
     consume_apply_metadata(&request);
-    state.publish_governed_apply(candidate_config.clone(), &governed_apply);
-    match governed_apply {
-        GovernedConfigApply::SigningRotation {
-            notary_auth_anchor, ..
-        } => {
-            if let (Some(auth_state), Some(anchor)) =
-                (state.auth_state.as_ref(), notary_auth_anchor)
-            {
-                auth_state.swap_notary_anchor(anchor);
-            }
-        }
-        GovernedConfigApply::RootTransition { .. } => {}
-        GovernedConfigApply::ClientAuthChange { authenticator, .. } => {
-            if let Some(auth_state) = state.auth_state.as_ref() {
-                auth_state.swap_prepared_authenticator(authenticator);
-            }
-        }
-        GovernedConfigApply::OpenApiAuthPolicyChange { .. } => {}
-    }
-    if let Some(auth_state) = state.auth_state.as_ref() {
-        auth_state.swap_openapi_requires_auth(candidate_config.server.openapi_requires_auth);
-    }
-    state.record_config_apply(ConfigApplyPosture {
-        source: candidate.source,
-        last_config_hash: Some(posture_hash(&candidate_config)),
-        last_bundle_id: Some(candidate.bundle_id.clone()),
-        last_bundle_sequence: Some(candidate.sequence),
-        last_apply_result: Some(ApplyReportResult::Applied.as_posture_result()),
-        last_apply_at: Some(format_time(OffsetDateTime::now_utc())),
-        restart_required: false,
-    });
     config_apply_report(
         candidate.bundle_id.clone(),
         candidate.sequence,
@@ -996,6 +972,102 @@ async fn admin_config_apply(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn accept_antirollback_and_publish_apply_blocking(
+    store: FileAntiRollbackStore,
+    key: AntiRollbackKey,
+    proposal: AntiRollbackProposal,
+    state: Arc<RegistryNotaryApiState>,
+    runtime_config: Arc<StandaloneRegistryNotaryConfig>,
+    apply: GovernedConfigApply,
+    source: ConfigSource,
+    bundle_id: String,
+    sequence: u64,
+) -> Result<(), AntiRollbackStoreError> {
+    // Keep durable antirollback acceptance and in-memory publication in one
+    // blocking task. If the request future is dropped after this task starts,
+    // the task still runs to completion and cannot leave antirollback ahead of
+    // the runtime config.
+    spawn_antirollback_accept_and_publish_apply_blocking(
+        store,
+        key,
+        proposal,
+        state,
+        runtime_config,
+        apply,
+        source,
+        bundle_id,
+        sequence,
+    )
+    .await
+    .unwrap_or_else(|error| {
+        Err(AntiRollbackStoreError::Io(format!(
+            "anti-rollback accept and config apply task failed: {error}"
+        )))
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_antirollback_accept_and_publish_apply_blocking(
+    store: FileAntiRollbackStore,
+    key: AntiRollbackKey,
+    proposal: AntiRollbackProposal,
+    state: Arc<RegistryNotaryApiState>,
+    runtime_config: Arc<StandaloneRegistryNotaryConfig>,
+    apply: GovernedConfigApply,
+    source: ConfigSource,
+    bundle_id: String,
+    sequence: u64,
+) -> tokio::task::JoinHandle<Result<(), AntiRollbackStoreError>> {
+    tokio::task::spawn_blocking(move || {
+        store.accept(&key, proposal)?;
+        publish_accepted_governed_apply(&state, runtime_config, apply, source, bundle_id, sequence);
+        Ok(())
+    })
+}
+
+fn publish_accepted_governed_apply(
+    state: &RegistryNotaryApiState,
+    runtime_config: Arc<StandaloneRegistryNotaryConfig>,
+    apply: GovernedConfigApply,
+    source: ConfigSource,
+    bundle_id: String,
+    sequence: u64,
+) {
+    state.publish_governed_apply(Arc::clone(&runtime_config), &apply);
+    match apply {
+        GovernedConfigApply::SigningRotation {
+            notary_auth_anchor, ..
+        } => {
+            if let (Some(auth_state), Some(anchor)) =
+                (state.auth_state.as_ref(), notary_auth_anchor)
+            {
+                auth_state.swap_notary_anchor(anchor);
+            }
+        }
+        GovernedConfigApply::RootTransition { .. } => {}
+        GovernedConfigApply::ClientAuthChange { authenticator, .. } => {
+            if let Some(auth_state) = state.auth_state.as_ref() {
+                auth_state.swap_prepared_authenticator(authenticator);
+            }
+        }
+        GovernedConfigApply::OpenApiAuthPolicyChange { .. } => {}
+    }
+    if let Some(auth_state) = state.auth_state.as_ref() {
+        auth_state.swap_openapi_requires_auth(runtime_config.server.openapi_requires_auth);
+    }
+    state.record_config_apply(ConfigApplyPosture {
+        source,
+        last_config_hash: Some(posture_hash(&runtime_config)),
+        last_bundle_id: Some(bundle_id),
+        last_bundle_sequence: Some(sequence),
+        last_apply_result: Some(ApplyReportResult::Applied.as_posture_result()),
+        last_apply_at: Some(format_time(OffsetDateTime::now_utc())),
+        restart_required: false,
+    });
+}
+
+#[cfg(test)]
 async fn accept_antirollback_blocking(
     store: FileAntiRollbackStore,
     key: AntiRollbackKey,
@@ -8149,6 +8221,98 @@ mod tests {
             .expect("record loads");
         assert_eq!(record.last_sequence, 2);
         assert_eq!(record.last_config_hash, test_hash('b'));
+    }
+
+    #[tokio::test]
+    async fn antirollback_accept_and_publish_survives_dropped_join_handle() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let store = FileAntiRollbackStore::new(tmp.path().join("antirollback.json"));
+        let key = antirollback_wrapper_test_key();
+        store
+            .initialize(registry_platform_ops::AntiRollbackRecord {
+                key: key.clone(),
+                last_sequence: 1,
+                last_config_hash: test_hash('a'),
+                root_version: Some(1),
+                break_glass: registry_platform_ops::BreakGlassState::default(),
+                local_approvals: registry_platform_ops::LocalApprovalState::default(),
+            })
+            .expect("antirollback state initializes");
+
+        let state = Arc::new(RegistryNotaryApiState::new(
+            Arc::new(EvidenceConfig::default()),
+            AuditKeyHasher::unkeyed_dev_only(),
+            Arc::new(CountingSource::default()),
+            Arc::new(EvidenceStore::default()),
+            Arc::new(NoopIssuerResolver),
+        ));
+        let mut runtime_config = classifier_config();
+        runtime_config.server.openapi_requires_auth = false;
+        let runtime_config = Arc::new(runtime_config);
+        let handle = spawn_antirollback_accept_and_publish_apply_blocking(
+            store.clone(),
+            key.clone(),
+            AntiRollbackProposal {
+                sequence: 2,
+                previous_config_hash: Some(test_hash('a')),
+                config_hash: test_hash('b'),
+                root_version: Some(2),
+                break_glass: None,
+                break_glass_rate_limit: None,
+                local_approval: None,
+                local_approval_rate_limit: None,
+            },
+            Arc::clone(&state),
+            Arc::clone(&runtime_config),
+            GovernedConfigApply::OpenApiAuthPolicyChange {
+                local_approval: LocalOperatorApproval {
+                    approved_by: "ops@example.test".to_string(),
+                    reason: "approve OpenAPI auth policy change".to_string(),
+                    approval_reference: "APPROVAL-1".to_string(),
+                    change_class: "client_access".to_string(),
+                    config_hash: test_hash('b'),
+                    previous_config_hash: Some(test_hash('a')),
+                    expires_at_unix_seconds: 4_102_444_800,
+                    rate_limit_identity: "ops@example.test".to_string(),
+                    rate_limit: BreakGlassRateLimit {
+                        max_accepted: 1,
+                        window_seconds: 60,
+                    },
+                },
+            },
+            ConfigSource::SignedBundleFile,
+            "bundle-after-cancel".to_string(),
+            2,
+        );
+        drop(handle);
+
+        for _ in 0..100 {
+            let record = load_antirollback_record_blocking(store.clone(), key.clone())
+                .await
+                .expect("record loads");
+            let published = state
+                .runtime_config()
+                .is_some_and(|config| !config.server.openapi_requires_auth);
+            if record.last_sequence == 2 && record.last_config_hash == test_hash('b') && published {
+                let posture = state.config_apply_posture();
+                assert_eq!(posture.last_bundle_sequence, Some(2));
+                assert_eq!(
+                    posture.last_bundle_id.as_deref(),
+                    Some("bundle-after-cancel")
+                );
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let record = load_antirollback_record_blocking(store, key)
+            .await
+            .expect("record loads after timeout");
+        panic!(
+            "dropped join handle did not complete both accept and publish; antirollback sequence={}, runtime_published={}",
+            record.last_sequence,
+            state.runtime_config().is_some()
+        );
     }
 
     #[tokio::test]
