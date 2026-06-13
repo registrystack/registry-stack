@@ -147,9 +147,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          protected="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.protected')"
+          IFS=$'\t' read -r protected protected_main_sha < <(
+            gh api "repos/${GITHUB_REPOSITORY}/branches/main" \
+              --jq '[.protected, .commit.sha] | @tsv'
+          )
           if [[ "$protected" != "true" ]]; then
             echo "Official release image aliases require the repository's main branch to be protected." >&2
+            exit 1
+          fi
+          if [[ ! "$protected_main_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve the protected main branch SHA." >&2
             exit 1
           fi
 
@@ -157,8 +164,8 @@ jobs:
           # credentials (persist-credentials: false), so a git fetch here
           # cannot authenticate, while the job token works against the
           # REST API. "ahead" or "identical" means the tag commit is
-          # reachable from main.
-          status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${GITHUB_SHA}...main" --jq '.status')"
+          # reachable from the protected main branch SHA returned above.
+          status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${GITHUB_SHA}...${protected_main_sha}" --jq '.status')"
           if [[ "$status" != "ahead" && "$status" != "identical" ]]; then
             echo "Official release image aliases require tag commit $GITHUB_SHA to be reachable from protected main (compare status: ${status})." >&2
             exit 1
