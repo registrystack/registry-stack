@@ -3,6 +3,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fs,
     net::{IpAddr, SocketAddr},
     sync::{Arc, RwLock},
     time::Duration,
@@ -1067,10 +1068,16 @@ fn spawn_antirollback_accept_and_publish_apply_blocking(
 ) -> tokio::task::JoinHandle<Result<(), AntiRollbackStoreError>> {
     tokio::task::spawn_blocking(move || {
         let break_glass_applied = proposal.break_glass.is_some();
+        let emergency_change_class = proposal
+            .break_glass
+            .as_ref()
+            .map(|approval| approval.emergency_change_class.clone());
         store.accept(&key, proposal)?;
         let emergency = if break_glass_applied {
             match store.load(&key) {
-                Ok(record) => emergency_posture_from_record(&record),
+                Ok(record) => emergency_change_class
+                    .as_deref()
+                    .and_then(|change_class| emergency_posture_from_record(&record, change_class)),
                 Err(error) => {
                     tracing::debug!(
                         error = %error,
@@ -1254,7 +1261,7 @@ fn stored_break_glass_approval(
         enforce_required_break_glass_approvers(
             config_trust,
             &approval.change_class,
-            effective_approver_count(&approval),
+            effective_approver_count(config_trust, &approval),
         )?;
         return Ok(BreakGlassApproval {
             approved_by: approval.approved_by,
@@ -1268,8 +1275,36 @@ fn stored_break_glass_approval(
     Err(())
 }
 
-fn effective_approver_count(approval: &LocalOperatorApproval) -> usize {
-    1 + approval.approvers.len()
+#[derive(Deserialize)]
+struct LocalApprovalFileView {
+    #[serde(default)]
+    approvals: Vec<LocalOperatorApproval>,
+}
+
+fn effective_approver_count(
+    config_trust: &registry_notary_core::ConfigTrustConfig,
+    approval: &LocalOperatorApproval,
+) -> usize {
+    let mut approvers = BTreeSet::from([approval.approved_by.clone()]);
+    let Ok(bytes) = fs::read(&config_trust.local_approval_state_path) else {
+        return approvers.len();
+    };
+    let Ok(state) = serde_json::from_slice::<LocalApprovalFileView>(&bytes) else {
+        return approvers.len();
+    };
+    let now = OffsetDateTime::now_utc().unix_timestamp().max(0) as u64;
+    for candidate in state.approvals {
+        if candidate.approval_reference == approval.approval_reference
+            && candidate.change_class == approval.change_class
+            && candidate.config_hash == approval.config_hash
+            && candidate.previous_config_hash == approval.previous_config_hash
+            && candidate.expires_at_unix_seconds > now
+            && !candidate.approved_by.trim().is_empty()
+        {
+            approvers.insert(candidate.approved_by);
+        }
+    }
+    approvers.len()
 }
 
 fn enforce_required_break_glass_approvers(
@@ -1326,14 +1361,17 @@ fn ensure_break_glass_reference_not_consumed(
     }
 }
 
-fn emergency_posture_from_record(record: &AntiRollbackRecord) -> Option<ConfigEmergencyPosture> {
+fn emergency_posture_from_record(
+    record: &AntiRollbackRecord,
+    emergency_change_class: &str,
+) -> Option<ConfigEmergencyPosture> {
     let accepted = &record.break_glass.accepted;
     let last = accepted
         .iter()
         .max_by_key(|acceptance| acceptance.sequence)?;
     Some(ConfigEmergencyPosture {
         last_emergency_sequence: last.sequence,
-        last_emergency_change_class: last.emergency_change_class.clone()?,
+        last_emergency_change_class: emergency_change_class.to_string(),
         last_emergency_at: unix_seconds_rfc3339(last.accepted_at_unix_seconds),
         accepted_expires_at_unix_seconds: accepted
             .iter()

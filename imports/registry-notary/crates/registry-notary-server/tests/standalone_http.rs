@@ -594,7 +594,6 @@ fn local_operator_approval_for_change_class(
             max_accepted: 1,
             window_seconds: 3600,
         },
-        approvers: Vec::new(),
     }
 }
 
@@ -602,14 +601,10 @@ fn durable_break_glass_approval(
     config_yaml: &str,
     previous_config_hash: Option<&str>,
     approval_reference: &str,
-    approvers: &[&str],
+    _approvers: &[&str],
 ) -> LocalOperatorApproval {
     LocalOperatorApproval {
         approved_by: "ops-primary@example.test".to_string(),
-        approvers: approvers
-            .iter()
-            .map(|approver| (*approver).to_string())
-            .collect(),
         reason: "stored emergency approval reason".to_string(),
         approval_reference: approval_reference.to_string(),
         change_class: EMERGENCY_CHANGE_CLASS.to_string(),
@@ -623,6 +618,23 @@ fn durable_break_glass_approval(
             window_seconds: 3600,
         },
     }
+}
+
+fn durable_break_glass_approvals(
+    config_yaml: &str,
+    previous_config_hash: Option<&str>,
+    approval_reference: &str,
+    approvers: &[&str],
+) -> Vec<LocalOperatorApproval> {
+    let primary =
+        durable_break_glass_approval(config_yaml, previous_config_hash, approval_reference, &[]);
+    let mut approvals = vec![primary.clone()];
+    approvals.extend(approvers.iter().map(|approver| {
+        let mut approval = primary.clone();
+        approval.approved_by = (*approver).to_string();
+        approval
+    }));
+    approvals
 }
 
 fn write_local_approval_state(path: &std::path::Path, approval: LocalOperatorApproval) {
@@ -5746,9 +5758,9 @@ async fn admin_config_apply_signed_break_glass_issuer_rotation_swaps_without_res
     assert_eq!(record.last_sequence, 1);
     assert!(record.break_glass.accepted.is_empty());
 
-    write_local_approval_state(
+    write_local_approval_states(
         &local_approval_path,
-        durable_break_glass_approval(&candidate_yaml, None, "BG-4242", &["ops-peer@example.test"]),
+        durable_break_glass_approvals(&candidate_yaml, None, "BG-4242", &["ops-peer@example.test"]),
     );
     let mut request = signed_tuf_apply_request(&signed);
     request["break_glass"] = json!(true);
@@ -5779,12 +5791,6 @@ async fn admin_config_apply_signed_break_glass_issuer_rotation_swaps_without_res
     assert_eq!(record.break_glass.accepted[0].sequence, 2);
     assert_eq!(record.break_glass.accepted[0].approval_reference, "BG-4242");
     assert_eq!(
-        record.break_glass.accepted[0]
-            .emergency_change_class
-            .as_deref(),
-        Some(EMERGENCY_CHANGE_CLASS)
-    );
-    assert_eq!(
         record.break_glass.accepted[0].rate_limit_identity,
         "registry-notary/registry-notary-standalone/development/notary-test-stream"
     );
@@ -5803,23 +5809,19 @@ async fn admin_config_apply_signed_break_glass_issuer_rotation_swaps_without_res
         &["openapi_auth_policy_change", EMERGENCY_CHANGE_CLASS],
     )
     .await;
-    write_local_approval_states(
-        &local_approval_path,
-        vec![
-            local_operator_approval_for_change_class(
-                &policy_candidate_yaml,
-                &candidate_hash,
-                "openapi_auth_policy_change",
-                "OPENAPI-BG-REPLAY",
-            ),
-            durable_break_glass_approval(
-                &policy_candidate_yaml,
-                Some(&candidate_hash),
-                "BG-4242",
-                &["ops-peer@example.test"],
-            ),
-        ],
-    );
+    let mut replay_approvals = vec![local_operator_approval_for_change_class(
+        &policy_candidate_yaml,
+        &candidate_hash,
+        "openapi_auth_policy_change",
+        "OPENAPI-BG-REPLAY",
+    )];
+    replay_approvals.extend(durable_break_glass_approvals(
+        &policy_candidate_yaml,
+        Some(&candidate_hash),
+        "BG-4242",
+        &["ops-peer@example.test"],
+    ));
+    write_local_approval_states(&local_approval_path, replay_approvals);
     let mut replay_request = signed_tuf_apply_request(&policy_signed);
     replay_request["break_glass"] = json!(true);
     replay_request["break_glass_approval_reference"] = json!("BG-4242");

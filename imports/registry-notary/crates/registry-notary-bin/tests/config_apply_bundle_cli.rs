@@ -421,7 +421,6 @@ fn initialize_antirollback_state(path: &Path, config_yaml: &str) {
 fn write_local_approval_state(path: &Path, candidate_yaml: &str, previous_config_hash: &str) {
     let approval = LocalOperatorApproval {
         approved_by: "ops@example.test".to_string(),
-        approvers: Vec::new(),
         reason: "approve Notary root transition".to_string(),
         approval_reference: "ROOT-2026-Q2".to_string(),
         change_class: "root_transition".to_string(),
