@@ -29,14 +29,14 @@ use registry_notary_core::{
     AccessMode, BatchEvaluateItemRequest, BatchEvaluateRequest, BoundedClaimId,
     BoundedCorrelationId, ClaimRef, ClaimResultView, ClaimSet, ConfigAuditEvent, ConfigMetadata,
     CredentialIssueRequest, CredentialProfileConfig, EvaluateRequest, EvidenceAuthMode,
-    EvidenceBatchItemAuditEvent, EvidenceConfig, EvidenceEntity, EvidenceEntityReference,
-    EvidenceError, EvidencePrincipal, EvidenceRelationship, FederationConfig, Hashed,
-    HolderRequest, Oid4vciConfig, Oid4vciCredentialConfigurationConfig, Oid4vciDisplayImageConfig,
-    Oid4vciIssuerDisplayConfig, PolicyIdentifier, RateLimitBucket, RegistryNotaryAdminListenerMode,
-    RenderEvaluationRequest, SelfAttestationConfig, SelfAttestationDenialCode,
-    SelfAttestationScopePolicy, SigningKeyStatus, SourceCapability, StandaloneRegistryNotaryConfig,
-    StoredSelfAttestationMetadata, SubjectRequest, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON,
-    FORMAT_SD_JWT_VC,
+    EvidenceAuthorizationDetails, EvidenceBatchItemAuditEvent, EvidenceConfig, EvidenceEntity,
+    EvidenceEntityReference, EvidenceError, EvidencePrincipal, EvidenceRelationship,
+    FederationConfig, Hashed, HolderRequest, Oid4vciConfig, Oid4vciCredentialConfigurationConfig,
+    Oid4vciDisplayImageConfig, Oid4vciIssuerDisplayConfig, PolicyIdentifier, RateLimitBucket,
+    RegistryNotaryAdminListenerMode, RenderEvaluationRequest, SelfAttestationConfig,
+    SelfAttestationDenialCode, SelfAttestationScopePolicy, SigningKeyStatus, SourceCapability,
+    StandaloneRegistryNotaryConfig, StoredSelfAttestationMetadata, SubjectRequest,
+    VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
 };
 use registry_platform_audit::AuditKeyHasher;
 use registry_platform_config::RegistryTrustRoot;
@@ -4507,10 +4507,14 @@ async fn oid4vci_token(
     };
     let access_token_claims = AccessTokenClaims {
         issuer: preauth.notary_issuer().to_string(),
+        jti: None,
         audiences: preauth.notary_audiences().to_vec(),
         token_type: "Bearer".to_string(),
         credential_configuration_id: configuration_id.clone(),
         subject: bound_subject,
+        authorization_details: Vec::new(),
+        confirmation: None,
+        actor: None,
         iat: now,
         exp: now + preauth.access_token_ttl_seconds() as i64,
     };
@@ -6810,6 +6814,35 @@ fn require_self_attestation_evaluate(
         }
     }
 
+    let requested_claim = request
+        .claims
+        .first()
+        .ok_or_else(|| self_attestation_denied(SelfAttestationDenialCode::ClaimDenied))?;
+    let claim = find_requested_claim(evidence, requested_claim)
+        .map_err(|_| self_attestation_denied(SelfAttestationDenialCode::ClaimDenied))?;
+    let purpose = claim
+        .purpose
+        .as_deref()
+        .ok_or_else(|| self_attestation_denied(SelfAttestationDenialCode::OperationDenied))?;
+    if request
+        .purpose
+        .as_deref()
+        .is_some_and(|requested| requested != purpose)
+    {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::OperationDenied,
+        ));
+    }
+    require_self_attestation_authorization_details(
+        evidence.service_id.as_str(),
+        config,
+        principal.authorization_details.as_ref(),
+        request,
+        &disclosure,
+        format,
+        purpose,
+    )?;
+
     let subject_binding = &config.subject_binding;
     let Some(target_subject) = request.target_subject() else {
         return Err(self_attestation_denied(
@@ -6834,6 +6867,79 @@ fn require_self_attestation_evaluate(
         ));
     };
     if bound_subject != target_subject.id {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::SubjectMismatch,
+        ));
+    }
+    Ok(())
+}
+
+fn require_self_attestation_authorization_details(
+    service_id: &str,
+    config: &SelfAttestationConfig,
+    authorization_details: Option<&EvidenceAuthorizationDetails>,
+    request: &EvaluateRequest,
+    disclosure: &str,
+    format: &str,
+    purpose: &str,
+) -> Result<(), EvidenceError> {
+    let Some(details) = authorization_details else {
+        return Ok(());
+    };
+
+    if !details.actions.iter().any(|action| action == "evaluate") {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::OperationDenied,
+        ));
+    }
+    if !details
+        .locations
+        .iter()
+        .any(|location| location == service_id)
+    {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::OperationDenied,
+        ));
+    }
+    if details.access_mode != Some(AccessMode::SelfAttestation) {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::OperationDenied,
+        ));
+    }
+    if details.purpose.as_deref() != Some(purpose) {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::OperationDenied,
+        ));
+    }
+    if details.disclosure.as_deref() != Some(disclosure) {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::DisclosureDenied,
+        ));
+    }
+    if details.format.as_deref() != Some(format) {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::FormatDenied,
+        ));
+    }
+    if details.claims.is_empty()
+        || !request
+            .claims
+            .iter()
+            .all(|requested| details.claims.iter().any(|allowed| allowed == requested))
+    {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::ClaimDenied,
+        ));
+    }
+
+    let Some(subject) = details.subject.as_ref() else {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::SubjectMismatch,
+        ));
+    };
+    if subject.binding_claim != config.subject_binding.token_claim
+        || subject.id_type != config.subject_binding.id_type
+    {
         return Err(self_attestation_denied(
             SelfAttestationDenialCode::SubjectMismatch,
         ));
@@ -9440,6 +9546,7 @@ mod tests {
                 iat: Some(1_700_000_000),
                 nbf: None,
             }),
+            authorization_details: None,
         }
     }
 
@@ -9473,6 +9580,172 @@ mod tests {
             format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
             purpose: None,
         }
+    }
+
+    fn transaction_authorization_details(
+        evidence: &EvidenceConfig,
+    ) -> EvidenceAuthorizationDetails {
+        EvidenceAuthorizationDetails {
+            detail_type: registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE
+                .to_string(),
+            schema_version:
+                registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION
+                    .to_string(),
+            actions: vec!["evaluate".to_string()],
+            locations: vec![evidence.service_id.clone()],
+            claims: vec![ClaimRef::with_version("person-is-alive", "1")],
+            disclosure: Some("predicate".to_string()),
+            format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+            purpose: Some("citizen_self_attestation".to_string()),
+            subject: Some(registry_notary_core::EvidenceAuthorizationSubject {
+                binding_claim: SUBJECT_BINDING_CLAIM.to_string(),
+                id_type: "national_id".to_string(),
+            }),
+            access_mode: Some(AccessMode::SelfAttestation),
+            assisted_access_context: None,
+        }
+    }
+
+    fn classified_transaction_principal(
+        config: &SelfAttestationConfig,
+        evidence: &EvidenceConfig,
+    ) -> EvidencePrincipal {
+        let mut principal = classify_self_attestation_principal(
+            config,
+            &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        )
+        .expect("citizen principal classifies");
+        principal.authorization_details = Some(transaction_authorization_details(evidence));
+        principal
+    }
+
+    #[test]
+    fn self_attestation_authorization_details_allow_exact_transaction() {
+        let config = self_attestation_config();
+        let evidence = evidence_config();
+        let principal = classified_transaction_principal(&config, &evidence);
+        let mut request = evaluate_request("NAT-123");
+        request.claims = vec![ClaimRef::with_version("person-is-alive", "1")];
+
+        require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+            .expect("exact transaction details authorize request");
+    }
+
+    #[test]
+    fn self_attestation_authorization_details_reject_omitted_claim_version() {
+        let config = self_attestation_config();
+        let evidence = evidence_config();
+        let principal = classified_transaction_principal(&config, &evidence);
+        let request = evaluate_request("NAT-123");
+
+        let err = require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+            .expect_err("omitting a versioned authorized claim broadens the request");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::ClaimDenied
+            }
+        ));
+    }
+
+    #[test]
+    fn self_attestation_authorization_details_reject_empty_claims_without_panic() {
+        let config = self_attestation_config();
+        let evidence = evidence_config();
+        let principal = classified_transaction_principal(&config, &evidence);
+        let mut request = evaluate_request("NAT-123");
+        request.claims = Vec::new();
+
+        let err = require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+            .expect_err("empty claim array must deny instead of panicking");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::ClaimDenied
+            }
+        ));
+    }
+
+    #[test]
+    fn self_attestation_authorization_details_tolerate_future_fields() {
+        let details: EvidenceAuthorizationDetails = serde_json::from_value(serde_json::json!({
+            "type": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE,
+            "schema_version": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION,
+            "actions": ["evaluate"],
+            "locations": ["registry-notary:test"],
+            "claims": [{"id": "person-is-alive", "version": "1"}],
+            "subject": {
+                "binding_claim": SUBJECT_BINDING_CLAIM,
+                "id_type": "national_id",
+                "future_subject_metadata": true
+            },
+            "assisted_access_context": {
+                "channel": "citizen_self_service",
+                "future_context_metadata": true
+            },
+            "future_authorization_metadata": true
+        }))
+        .expect("authorization_details should ignore future metadata fields");
+
+        assert_eq!(
+            details.subject.as_ref().unwrap().binding_claim,
+            SUBJECT_BINDING_CLAIM
+        );
+        assert_eq!(
+            details.assisted_access_context.as_ref().unwrap().channel,
+            "citizen_self_service"
+        );
+    }
+
+    #[test]
+    fn self_attestation_authorization_details_reject_wrong_notary_location() {
+        let config = self_attestation_config();
+        let evidence = evidence_config();
+        let mut principal = classified_transaction_principal(&config, &evidence);
+        principal
+            .authorization_details
+            .as_mut()
+            .expect("details exist")
+            .locations = vec!["other-notary".to_string()];
+        let mut request = evaluate_request("NAT-123");
+        request.claims = vec![ClaimRef::with_version("person-is-alive", "1")];
+
+        let err = require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+            .expect_err("wrong Notary audience broadens the transaction");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::OperationDenied
+            }
+        ));
+    }
+
+    #[test]
+    fn self_attestation_authorization_details_reject_wrong_subject_binding_metadata() {
+        let config = self_attestation_config();
+        let evidence = evidence_config();
+        let mut principal = classified_transaction_principal(&config, &evidence);
+        principal
+            .authorization_details
+            .as_mut()
+            .and_then(|details| details.subject.as_mut())
+            .expect("subject details exist")
+            .id_type = "other_id".to_string();
+        let mut request = evaluate_request("NAT-123");
+        request.claims = vec![ClaimRef::with_version("person-is-alive", "1")];
+
+        let err = require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+            .expect_err("wrong subject binding metadata broadens the transaction");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::SubjectMismatch
+            }
+        ));
     }
 
     #[test]
@@ -9577,6 +9850,7 @@ mod tests {
             scopes: vec!["self_attestation".to_string()],
             access_mode: AccessMode::MachineClient,
             verified_claims: None,
+            authorization_details: None,
         };
 
         let err = classify_self_attestation_principal(&config, &principal)
@@ -10884,6 +11158,7 @@ evaluation_profiles:
             scopes: vec!["civil_registry:evidence_verification".to_string()],
             access_mode: AccessMode::MachineClient,
             verified_claims: None,
+            authorization_details: None,
         };
 
         let response = issue_credential(
@@ -10936,6 +11211,7 @@ evaluation_profiles:
             scopes: vec!["person-is-alive:1.0".to_string()],
             access_mode: AccessMode::MachineClient,
             verified_claims: None,
+            authorization_details: None,
         };
 
         let err = require_evaluation_access(&evidence, &source, &principal, &evaluation)

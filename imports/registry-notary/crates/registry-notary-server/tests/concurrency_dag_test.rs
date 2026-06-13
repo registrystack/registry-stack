@@ -272,6 +272,7 @@ fn principal() -> EvidencePrincipal {
         scopes: Vec::new(),
         access_mode: AccessMode::MachineClient,
         verified_claims: None,
+        authorization_details: None,
     }
 }
 

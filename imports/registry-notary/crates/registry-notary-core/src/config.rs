@@ -592,6 +592,12 @@ impl StandaloneRegistryNotaryConfig {
                 == RegistryNotaryAdminListenerMode::SharedWithPublic,
             openapi_public: !self.server.openapi_requires_auth,
             config_unsigned: self.config_trust.is_none(),
+            self_attestation_enabled: self.self_attestation.enabled,
+            transaction_token_anchor_configured: self.auth.access_token_signing.enabled,
+            // DPoP/mTLS proof validation for transaction tokens is not yet
+            // implemented. Keep this explicit so production/evidence profiles
+            // surface the missing sender-constraint assurance.
+            transaction_token_sender_constrained: false,
         }
     }
 
@@ -5447,6 +5453,23 @@ expected_sidecar:
             .source_connections
             .insert("openfn-src".to_string(), conn);
         assert!(!config.gate_input().openfn_source_without_expected_sidecar);
+    }
+
+    #[test]
+    fn gate_input_reports_assisted_access_transaction_token_posture() {
+        let mut config = minimal_config();
+        config.self_attestation.enabled = true;
+        let input_without_anchor = config.gate_input();
+        assert!(input_without_anchor.self_attestation_enabled);
+        assert!(!input_without_anchor.transaction_token_anchor_configured);
+
+        config.auth.access_token_signing.enabled = true;
+        let input_with_anchor = config.gate_input();
+        assert!(input_with_anchor.transaction_token_anchor_configured);
+        assert!(
+            !input_with_anchor.transaction_token_sender_constrained,
+            "DPoP/mTLS proof validation is not implemented yet"
+        );
     }
 
     #[test]

@@ -237,6 +237,7 @@ async fn handle_federated_evaluate(
         scopes: peer.config.source_scopes.clone(),
         access_mode: AccessMode::MachineClient,
         verified_claims: None,
+        authorization_details: None,
     };
     let source_capability = SourceCapability::Machine {
         scopes: peer

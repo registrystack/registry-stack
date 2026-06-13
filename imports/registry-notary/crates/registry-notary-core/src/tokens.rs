@@ -34,6 +34,12 @@ pub const PRE_AUTHORIZED_CODE_JWT_TYP: &str = "registry-notary-preauth-code+jwt"
 /// Default header `typ` for the Notary access token.
 pub const NOTARY_ACCESS_TOKEN_JWT_TYP: &str = "registry-notary-access+jwt";
 
+/// Header `typ` for Notary transaction tokens minted by the platform STS.
+pub const NOTARY_TRANSACTION_TOKEN_JWT_TYP: &str = "at+jwt";
+pub const NOTARY_AUTHORIZATION_DETAILS_TYPE: &str = "registry_notary_evidence_transaction";
+pub const NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION: &str =
+    "registry-notary-authorization-details/v1";
+
 /// The eSignet-verified subject the Notary binds a pre-authorized code and the
 /// resulting access token to. Captured at the offer callback.
 ///
@@ -95,6 +101,8 @@ pub struct AccessTokenClaims {
     /// Notary token issuer (`iss`); must equal the second verifier's pinned
     /// issuer.
     pub issuer: String,
+    /// Optional JWT id (`jti`) for transaction-token replay protection.
+    pub jti: Option<String>,
     /// Accepted audiences (`aud`); must satisfy
     /// `oid4vci.accepted_token_audiences` and
     /// `self_attestation.citizen_clients.allowed_audiences`.
@@ -105,6 +113,14 @@ pub struct AccessTokenClaims {
     pub credential_configuration_id: String,
     /// eSignet-verified subject claims.
     pub subject: BoundSubject,
+    /// OAuth 2.0 Rich Authorization Requests-shaped authorization details.
+    pub authorization_details: Vec<Value>,
+    /// Sender constraint confirmation (`cnf`) copied from the verified subject
+    /// token when the deployment profile requires sender-constrained tokens.
+    pub confirmation: Option<Value>,
+    /// Verified assisted-access actor envelope. Public responses must not copy
+    /// this wholesale; it is for restricted audit/evaluation records.
+    pub actor: Option<Value>,
     /// Issued-at (unix seconds).
     pub iat: i64,
     /// Expiry (unix seconds).
@@ -170,6 +186,9 @@ pub async fn mint_access_token(
 ) -> Result<SignedNotaryToken, EvidenceError> {
     let mut payload = Map::new();
     payload.insert("iss".to_string(), Value::String(claims.issuer.clone()));
+    if let Some(jti) = &claims.jti {
+        payload.insert("jti".to_string(), Value::String(jti.clone()));
+    }
     payload.insert("aud".to_string(), audience_value(&claims.audiences));
     payload.insert(
         "token_type".to_string(),
@@ -182,6 +201,18 @@ pub async fn mint_access_token(
     payload.insert("iat".to_string(), Value::from(claims.iat));
     payload.insert("nbf".to_string(), Value::from(claims.iat));
     payload.insert("exp".to_string(), Value::from(claims.exp));
+    if !claims.authorization_details.is_empty() {
+        payload.insert(
+            "authorization_details".to_string(),
+            Value::Array(claims.authorization_details.clone()),
+        );
+    }
+    if let Some(cnf) = &claims.confirmation {
+        payload.insert("cnf".to_string(), cnf.clone());
+    }
+    if let Some(actor) = &claims.actor {
+        payload.insert("act".to_string(), actor.clone());
+    }
     insert_subject_claims(&mut payload, &claims.subject)?;
     let compact = sign_compact_jwt(signer, typ, Value::Object(payload)).await?;
     Ok(SignedNotaryToken {
@@ -260,7 +291,25 @@ pub fn verify_notary_token(
     if header.get("typ").and_then(Value::as_str) != Some(expected_typ) {
         return Err(EvidenceError::MissingCredential);
     }
+    if expected_typ == NOTARY_TRANSACTION_TOKEN_JWT_TYP
+        && header
+            .get("kid")
+            .and_then(Value::as_str)
+            .map(str::is_empty)
+            .unwrap_or(true)
+    {
+        return Err(EvidenceError::MissingCredential);
+    }
     let payload = decode_segment_json(payload_b64)?;
+    if expected_typ == NOTARY_TRANSACTION_TOKEN_JWT_TYP {
+        require_nonempty_claim(&payload, "jti")?;
+        require_nonempty_claim(&payload, "sub")?;
+        require_nonempty_claim(&payload, "scope")?;
+        require_authorization_details(&payload)?;
+        if payload.get("cnf").is_some() {
+            return Err(EvidenceError::MissingCredential);
+        }
+    }
     if payload.get("iss").and_then(Value::as_str) != Some(expected_issuer) {
         return Err(EvidenceError::MissingCredential);
     }
@@ -293,6 +342,9 @@ const RESERVED_TOKEN_CLAIMS: &[&str] = &[
     "nbf",
     "iat",
     "jti",
+    "authorization_details",
+    "cnf",
+    "act",
     "scope",
     "client_id",
     "token_type",
@@ -328,6 +380,35 @@ fn insert_subject_claims(
     }
     if let Some(auth_time) = subject.auth_time {
         payload.insert("auth_time".to_string(), Value::from(auth_time));
+    }
+    Ok(())
+}
+
+fn require_nonempty_claim(payload: &Value, name: &str) -> Result<(), EvidenceError> {
+    if payload
+        .get(name)
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return Ok(());
+    }
+    Err(EvidenceError::MissingCredential)
+}
+
+fn require_authorization_details(payload: &Value) -> Result<(), EvidenceError> {
+    let Some(details) = payload
+        .get("authorization_details")
+        .and_then(Value::as_array)
+    else {
+        return Err(EvidenceError::MissingCredential);
+    };
+    let has_matching_detail = details.iter().filter_map(Value::as_object).any(|detail| {
+        detail.get("type").and_then(Value::as_str) == Some(NOTARY_AUTHORIZATION_DETAILS_TYPE)
+            && detail.get("schema_version").and_then(Value::as_str)
+                == Some(NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION)
+    });
+    if !has_matching_detail {
+        return Err(EvidenceError::MissingCredential);
     }
     Ok(())
 }
@@ -449,10 +530,39 @@ mod tests {
     fn access_token_claims() -> AccessTokenClaims {
         AccessTokenClaims {
             issuer: ISSUER.to_string(),
+            jti: None,
             audiences: vec![AUDIENCE.to_string()],
             token_type: "Bearer".to_string(),
             credential_configuration_id: "date_of_birth_sd_jwt".to_string(),
             subject: bound_subject(),
+            authorization_details: Vec::new(),
+            confirmation: None,
+            actor: None,
+            iat: NOW,
+            exp: NOW + 300,
+        }
+    }
+
+    fn transaction_token_claims() -> AccessTokenClaims {
+        AccessTokenClaims {
+            issuer: ISSUER.to_string(),
+            jti: Some("01J0000000000000000000TXN1".to_string()),
+            audiences: vec![AUDIENCE.to_string()],
+            token_type: "Bearer".to_string(),
+            credential_configuration_id: "date_of_birth_sd_jwt".to_string(),
+            subject: bound_subject(),
+            authorization_details: vec![serde_json::json!({
+                "type": NOTARY_AUTHORIZATION_DETAILS_TYPE,
+                "schema_version": NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION,
+                "actions": ["evaluate"],
+                "locations": [AUDIENCE],
+            })],
+            confirmation: None,
+            actor: Some(serde_json::json!({
+                "actor_id_hash": "hmac-sha256:actor",
+                "assurance": "workforce-login",
+                "delegation_ref": "delegation-123",
+            })),
             iat: NOW,
             exp: NOW + 300,
         }
@@ -569,6 +679,165 @@ mod tests {
             verified.claim_str("credential_configuration_id"),
             Some("date_of_birth_sd_jwt")
         );
+    }
+
+    #[test]
+    fn transaction_token_round_trip_requires_jti_authz_details_and_actor() {
+        let signer = access_token_signer();
+        let claims = transaction_token_claims();
+        let token = block_on(mint_access_token(
+            &signer,
+            NOTARY_TRANSACTION_TOKEN_JWT_TYP,
+            &claims,
+        ))
+        .expect("transaction token mints");
+
+        let verified = verify_notary_token(
+            &token.compact,
+            &signer.public_jwk(),
+            NOTARY_TRANSACTION_TOKEN_JWT_TYP,
+            ISSUER,
+            &[AUDIENCE.to_string()],
+            NOW + 1,
+        )
+        .expect("transaction token verifies");
+
+        assert_eq!(verified.header["typ"], NOTARY_TRANSACTION_TOKEN_JWT_TYP);
+        assert_eq!(
+            verified.header["kid"],
+            "did:web:issuer.example#access-token-key"
+        );
+        assert_eq!(
+            verified.claim_str("jti"),
+            Some("01J0000000000000000000TXN1")
+        );
+        assert!(verified.payload.get("cnf").is_none());
+        assert_eq!(
+            verified.payload["authorization_details"][0]["type"],
+            NOTARY_AUTHORIZATION_DETAILS_TYPE
+        );
+        assert_eq!(
+            verified.payload["authorization_details"][0]["schema_version"],
+            NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION
+        );
+        assert_eq!(
+            verified.payload["act"]["actor_id_hash"],
+            "hmac-sha256:actor"
+        );
+        assert_eq!(verified.payload["act"]["delegation_ref"], "delegation-123");
+    }
+
+    #[test]
+    fn transaction_token_accepts_matching_authorization_details_after_other_entries() {
+        let signer = access_token_signer();
+        let mut claims = transaction_token_claims();
+        claims.authorization_details.insert(
+            0,
+            serde_json::json!({
+                "type": "unrelated_authorization_detail",
+                "schema_version": "example/v1",
+            }),
+        );
+        let token = block_on(mint_access_token(
+            &signer,
+            NOTARY_TRANSACTION_TOKEN_JWT_TYP,
+            &claims,
+        ))
+        .expect("transaction token mints");
+
+        verify_notary_token(
+            &token.compact,
+            &signer.public_jwk(),
+            NOTARY_TRANSACTION_TOKEN_JWT_TYP,
+            ISSUER,
+            &[AUDIENCE.to_string()],
+            NOW + 1,
+        )
+        .expect("matching authorization_details need not be first");
+    }
+
+    #[test]
+    fn transaction_token_verify_rejects_unvalidated_sender_constraint() {
+        let signer = access_token_signer();
+        let claims = AccessTokenClaims {
+            confirmation: Some(serde_json::json!({"jkt": "sender-key-thumbprint"})),
+            ..transaction_token_claims()
+        };
+        let token = block_on(mint_access_token(
+            &signer,
+            NOTARY_TRANSACTION_TOKEN_JWT_TYP,
+            &claims,
+        ))
+        .expect("transaction token mints");
+
+        let error = verify_notary_token(
+            &token.compact,
+            &signer.public_jwk(),
+            NOTARY_TRANSACTION_TOKEN_JWT_TYP,
+            ISSUER,
+            &[AUDIENCE.to_string()],
+            NOW + 1,
+        )
+        .expect_err("cnf without proof validation must be rejected");
+
+        assert!(matches!(error, EvidenceError::MissingCredential));
+    }
+
+    #[test]
+    fn transaction_token_verify_rejects_missing_authorization_details() {
+        let signer = access_token_signer();
+        let claims = AccessTokenClaims {
+            authorization_details: Vec::new(),
+            ..transaction_token_claims()
+        };
+        let token = block_on(mint_access_token(
+            &signer,
+            NOTARY_TRANSACTION_TOKEN_JWT_TYP,
+            &claims,
+        ))
+        .expect("transaction token mints");
+
+        let error = verify_notary_token(
+            &token.compact,
+            &signer.public_jwk(),
+            NOTARY_TRANSACTION_TOKEN_JWT_TYP,
+            ISSUER,
+            &[AUDIENCE.to_string()],
+            NOW + 1,
+        )
+        .expect_err("missing authorization_details must be rejected");
+
+        assert!(matches!(error, EvidenceError::MissingCredential));
+    }
+
+    #[test]
+    fn transaction_token_verify_rejects_wrong_authorization_details_type() {
+        let signer = access_token_signer();
+        let claims = AccessTokenClaims {
+            authorization_details: vec![serde_json::json!({
+                "type": "registry_notary_self_attestation",
+                "schema_version": NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION,
+            })],
+            ..transaction_token_claims()
+        };
+        let token = block_on(mint_access_token(
+            &signer,
+            NOTARY_TRANSACTION_TOKEN_JWT_TYP,
+            &claims,
+        ))
+        .expect("transaction token mints");
+
+        let error = verify_notary_token(
+            &token.compact,
+            &signer.public_jwk(),
+            NOTARY_TRANSACTION_TOKEN_JWT_TYP,
+            ISSUER,
+            &[AUDIENCE.to_string()],
+            NOW + 1,
+        )
+        .expect_err("wrong authorization_details type must be rejected");
+
+        assert!(matches!(error, EvidenceError::MissingCredential));
     }
 
     #[test]

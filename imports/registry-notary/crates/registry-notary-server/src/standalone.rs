@@ -29,13 +29,13 @@ use registry_notary_core::deployment::{
 use registry_notary_core::sd_jwt::EvidenceIssuer;
 use registry_notary_core::{
     AccessMode, BoundedCorrelationId, BoundedVerifiedClaims, BulkMode, DciSourceConnectionConfig,
-    EvidenceAuditEvent, EvidenceAuthMode, EvidenceConfig, EvidenceCredentialConfig, EvidenceEntity,
-    EvidenceError, EvidencePrincipal, EvidenceRequestContext, ExpectedSidecarConfig, Hashed,
-    Oauth2ClientCredentialsSourceAuthConfig, PrincipalIdentifier, RateLimitBucket,
-    RegistryNotaryAdminListenerMode, RequestIdentifier, SelfAttestationAssuranceClaimSource,
-    SelfAttestationClaimSource, SelfAttestationDenialCode, SigningKeyConfig,
-    SigningKeyProviderConfig, SourceAuthConfig, SourceBindingConfig, SourceConnectionConfig,
-    SourceConnectorKind, SourceRuntimeAssurance, SourceRuntimeSummary,
+    EvidenceAuditEvent, EvidenceAuthMode, EvidenceAuthorizationDetails, EvidenceConfig,
+    EvidenceCredentialConfig, EvidenceEntity, EvidenceError, EvidencePrincipal,
+    EvidenceRequestContext, ExpectedSidecarConfig, Hashed, Oauth2ClientCredentialsSourceAuthConfig,
+    PrincipalIdentifier, RateLimitBucket, RegistryNotaryAdminListenerMode, RequestIdentifier,
+    SelfAttestationAssuranceClaimSource, SelfAttestationClaimSource, SelfAttestationDenialCode,
+    SigningKeyConfig, SigningKeyProviderConfig, SourceAuthConfig, SourceBindingConfig,
+    SourceConnectionConfig, SourceConnectorKind, SourceRuntimeAssurance, SourceRuntimeSummary,
     StandaloneRegistryNotaryConfig, SubjectRequest, VerifiedClaimName, VerifiedClaimValue,
     SOURCE_RUNTIME_KIND_OPENFN_SIDECAR,
 };
@@ -57,6 +57,7 @@ use registry_platform_oidc::{
     fetch_userinfo_jwt_with_policy, Audience, JwksFetcher, JwksFetcherConfig, OidcError,
     TokenVerifier, TokenVerifierConfig, VerifiedToken,
 };
+use registry_platform_replay::{ReplayKey, ReplayScope};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use subtle::ConstantTimeEq;
@@ -76,7 +77,7 @@ use crate::{
     credential_status::{CredentialStatusBuildError, CredentialStatusStore},
     metrics::{metrics_handler, metrics_middleware, AppMetrics},
     posture::PostureContext,
-    replay::{ReplayBuildError, ReplayStores},
+    replay::{require_replay_insert, ReplayBuildError, ReplayStores},
     router, EvidenceAuditContext, EvidenceErrorCodeContext, EvidenceIssuerResolver, EvidenceStore,
     RegistryNotaryApiState, SelfAttestationRateLimitKeys, SelfAttestationRateLimiter, SourceReader,
 };
@@ -268,7 +269,11 @@ pub fn compile_notary_runtime(
     };
     cors_policy.validate()?;
     let wallet_cors_policy = SelfAttestationWalletCorsPolicy::from_config(&config);
-    let auth_state = Arc::new(AuthAuditState::from_config(&config, Arc::clone(&metrics))?);
+    let auth_state = Arc::new(AuthAuditState::from_config(
+        &config,
+        Arc::clone(&metrics),
+        replay.clone(),
+    )?);
     let posture_context =
         PostureContext::from_config(&config, &auth_state.audit).map_err(|error| {
             StandaloneServerError::InvalidSigningKey {
@@ -3735,6 +3740,7 @@ impl std::fmt::Debug for ResolvedCredential {
 pub(crate) struct AuthAuditState {
     authenticator: RwLock<Arc<Authenticator>>,
     audit: AuditPipeline,
+    replay: ReplayStores,
     metrics: Arc<AppMetrics>,
     openapi_requires_auth: AtomicBool,
     self_attestation_invalid_token_limiter: Option<Arc<SelfAttestationRateLimiter>>,
@@ -3816,6 +3822,7 @@ impl AuthAuditState {
     fn from_config(
         config: &StandaloneRegistryNotaryConfig,
         metrics: Arc<AppMetrics>,
+        replay: ReplayStores,
     ) -> Result<Self, StandaloneServerError> {
         let audit = AuditPipeline::from_config(&config.audit)?;
         let self_attestation_invalid_token_limiter = config.self_attestation.enabled.then(|| {
@@ -3831,6 +3838,7 @@ impl AuthAuditState {
         Ok(Self {
             authenticator: RwLock::new(Arc::new(Authenticator::from_config(config)?)),
             audit,
+            replay,
             metrics,
             openapi_requires_auth: AtomicBool::new(config.server.openapi_requires_auth),
             self_attestation_invalid_token_limiter,
@@ -3847,7 +3855,7 @@ impl AuthAuditState {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
-        authenticator.authenticate(credentials).await
+        authenticator.authenticate(credentials, &self.replay).await
     }
 
     pub(crate) fn notary_anchor_for_config(
@@ -4022,6 +4030,7 @@ impl Authenticator {
     async fn authenticate(
         &self,
         credentials: RequestCredentials,
+        replay: &ReplayStores,
     ) -> Result<EvidencePrincipal, EvidenceError> {
         if credentials.credential_type_count() > 1 {
             return Err(EvidenceError::MultipleCredentials);
@@ -4050,9 +4059,10 @@ impl Authenticator {
                     if let Some(token) = credentials.bearer_token.as_deref() {
                         let anchor = anchor
                             .read()
-                            .map_err(|_| EvidenceError::MissingCredential)?;
+                            .map_err(|_| EvidenceError::MissingCredential)?
+                            .clone();
                         if unverified_issuer(token).as_deref() == Some(anchor.issuer.as_str()) {
-                            return authenticate_notary_token(token, &anchor);
+                            return authenticate_notary_token(token, &anchor, replay).await;
                         }
                     }
                 }
@@ -4792,9 +4802,10 @@ fn unverified_issuer(token: &str) -> Option<String> {
 /// configured audiences, the signature against the dedicated access-token key,
 /// and `exp`/`nbf`. Every failure collapses to `EvidenceError::MissingCredential`,
 /// matching `oidc_auth_error` (no info leak).
-fn authenticate_notary_token(
+async fn authenticate_notary_token(
     token: &str,
     anchor: &NotaryTokenAnchor,
+    replay: &ReplayStores,
 ) -> Result<EvidencePrincipal, EvidenceError> {
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let verified_notary = anchor
@@ -4813,6 +4824,7 @@ fn authenticate_notary_token(
             .ok()
         })
         .ok_or(EvidenceError::MissingCredential)?;
+    consume_notary_token_jti(&verified_notary.payload, anchor, replay).await?;
     let verified = verified_token_from_notary_payload(&verified_notary.payload)
         .ok_or(EvidenceError::MissingCredential)?;
     // Notary tokens carry the assurance and subject-binding claims in the access
@@ -4830,6 +4842,36 @@ fn authenticate_notary_token(
         SelfAttestationAssuranceClaimSource::AccessToken,
     )
     .ok_or(EvidenceError::MissingCredential)
+}
+
+async fn consume_notary_token_jti(
+    payload: &Value,
+    anchor: &NotaryTokenAnchor,
+    replay: &ReplayStores,
+) -> Result<(), EvidenceError> {
+    let Some(jti) = payload.get("jti").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    if jti.trim().is_empty() {
+        return Err(EvidenceError::MissingCredential);
+    }
+    let exp = payload
+        .get("exp")
+        .and_then(Value::as_i64)
+        .ok_or(EvidenceError::MissingCredential)?;
+    let expires_at =
+        OffsetDateTime::from_unix_timestamp(exp).map_err(|_| EvidenceError::MissingCredential)?;
+    let scope = ReplayScope::new([
+        ("protocol", "registry-notary"),
+        ("flow", "notary-token-jti"),
+        ("issuer", anchor.issuer.as_str()),
+        ("typ", anchor.token_typ.as_str()),
+    ])
+    .map_err(|_| EvidenceError::MissingCredential)?;
+    let key = ReplayKey::new(jti).map_err(|_| EvidenceError::MissingCredential)?;
+    require_replay_insert(replay.store().as_ref(), &scope, &key, expires_at)
+        .await
+        .map_err(|_| EvidenceError::MissingCredential)
 }
 
 /// Adapt a verified Notary token payload into the platform `VerifiedToken` the
@@ -4891,7 +4933,28 @@ fn principal_from_oidc(
             subject_binding_claim_source,
             assurance_claim_source,
         ),
+        authorization_details: authorization_details_from_oidc(verified),
     })
+}
+
+fn authorization_details_from_oidc(
+    verified: &VerifiedToken,
+) -> Option<EvidenceAuthorizationDetails> {
+    let details = verified
+        .claims
+        .extra
+        .get("authorization_details")?
+        .as_array()?;
+    details
+        .iter()
+        .filter_map(|detail| {
+            serde_json::from_value::<EvidenceAuthorizationDetails>(detail.clone()).ok()
+        })
+        .find(|detail| {
+            detail.detail_type == registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE
+                && detail.schema_version
+                    == registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION
+        })
 }
 
 fn bounded_verified_claims_from_oidc(
@@ -5078,6 +5141,7 @@ fn principal_from_credential(credential: &ResolvedCredential) -> EvidencePrincip
         scopes: credential.scopes.clone(),
         access_mode: AccessMode::MachineClient,
         verified_claims: None,
+        authorization_details: None,
     }
 }
 
@@ -6813,7 +6877,11 @@ mod tests {
     use base64::Engine;
     use chrono::{TimeDelta, Utc};
     use registry_notary_core::{
-        tokens::{mint_access_token, AccessTokenClaims, BoundSubject},
+        tokens::{
+            mint_access_token, AccessTokenClaims, BoundSubject,
+            NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION, NOTARY_AUTHORIZATION_DETAILS_TYPE,
+            NOTARY_TRANSACTION_TOKEN_JWT_TYP,
+        },
         EvaluateRequest, SelfAttestationDenialCode, SelfAttestationRateLimitsConfig,
         SourceConnectionConfig, SourceLookupConfig, SourceQueryFieldConfig,
         FORMAT_CLAIM_RESULT_JSON,
@@ -6968,6 +7036,7 @@ mod tests {
             "registry-notary-access+jwt",
             &AccessTokenClaims {
                 issuer: "https://notary.example".to_string(),
+                jti: None,
                 audiences: vec!["registry-notary".to_string()],
                 token_type: "Bearer".to_string(),
                 credential_configuration_id: "identity_credential".to_string(),
@@ -6980,6 +7049,9 @@ mod tests {
                     acr: None,
                     auth_time: None,
                 },
+                authorization_details: Vec::new(),
+                confirmation: None,
+                actor: None,
                 iat: now - 1,
                 exp: now + 300,
             },
@@ -6999,7 +7071,7 @@ mod tests {
             subject_binding_claim: Some("civil_id".to_string()),
         };
         assert!(matches!(
-            authenticate_notary_token(&token.compact, &anchor),
+            authenticate_notary_token(&token.compact, &anchor, &ReplayStores::memory()).await,
             Err(EvidenceError::MissingCredential)
         ));
 
@@ -7007,7 +7079,70 @@ mod tests {
             public_jwk,
             publish_until_unix_seconds: Some(u64::try_from(now + 300).expect("future is positive")),
         };
-        assert!(authenticate_notary_token(&token.compact, &anchor).is_ok());
+        assert!(
+            authenticate_notary_token(&token.compact, &anchor, &ReplayStores::memory())
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn notary_transaction_token_auth_consumes_jti_once() {
+        let signer =
+            LocalJwkSigner::new(PrivateJwk::parse(TEST_ISSUER_JWK_WITH_KID).expect("private jwk"))
+                .expect("local signer builds");
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let token = mint_access_token(
+            &signer,
+            NOTARY_TRANSACTION_TOKEN_JWT_TYP,
+            &AccessTokenClaims {
+                issuer: "https://notary.example".to_string(),
+                jti: Some("txn-jti-1".to_string()),
+                audiences: vec!["registry-notary".to_string()],
+                token_type: "Bearer".to_string(),
+                credential_configuration_id: "identity_credential".to_string(),
+                subject: BoundSubject {
+                    subject: "subject-1".to_string(),
+                    subject_binding_claim: "civil_id".to_string(),
+                    subject_binding_value: "civil-1".to_string(),
+                    client_id: "assisted-access".to_string(),
+                    scopes: vec!["registry_notary:self_attestation".to_string()],
+                    acr: None,
+                    auth_time: None,
+                },
+                authorization_details: vec![json!({
+                    "type": NOTARY_AUTHORIZATION_DETAILS_TYPE,
+                    "schema_version": NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION,
+                })],
+                confirmation: None,
+                actor: Some(json!({"actor_id_hash": "hmac-sha256:actor"})),
+                iat: now - 1,
+                exp: now + 300,
+            },
+        )
+        .await
+        .expect("transaction token mints");
+        let anchor = NotaryTokenAnchor {
+            verification_keys: vec![AccessTokenVerificationKey {
+                public_jwk: signer.public_jwk(),
+                publish_until_unix_seconds: None,
+            }],
+            issuer: "https://notary.example".to_string(),
+            token_typ: NOTARY_TRANSACTION_TOKEN_JWT_TYP.to_string(),
+            audiences: vec!["registry-notary".to_string()],
+            principal_claim: "sub".to_string(),
+            subject_binding_claim: Some("civil_id".to_string()),
+        };
+        let replay = ReplayStores::memory();
+
+        authenticate_notary_token(&token.compact, &anchor, &replay)
+            .await
+            .expect("first token use succeeds");
+        let replay_error = authenticate_notary_token(&token.compact, &anchor, &replay)
+            .await
+            .expect_err("second token use is replay");
+
+        assert!(matches!(replay_error, EvidenceError::MissingCredential));
     }
 
     fn file_watch_key(path: &std::path::Path) -> SigningKeyConfig {
@@ -7515,6 +7650,7 @@ credential_profiles:
                 bearer_tokens: Vec::new(),
             })),
             audit,
+            replay: ReplayStores::memory(),
             metrics: Arc::new(AppMetrics::default()),
             openapi_requires_auth: AtomicBool::new(true),
             self_attestation_invalid_token_limiter: None,
@@ -8026,6 +8162,7 @@ credential_profiles:
             scopes: vec!["self_attestation".to_string()],
             access_mode: AccessMode::MachineClient,
             verified_claims: None,
+            authorization_details: None,
         };
         let mut response = StatusCode::FORBIDDEN.into_response();
         response.extensions_mut().insert(EvidenceAuditContext {
@@ -9106,6 +9243,7 @@ config_trust:
             scopes: vec!["civil_registry:evidence_verification".to_string()],
             access_mode: AccessMode::MachineClient,
             verified_claims: None,
+            authorization_details: None,
         };
 
         let results = crate::RegistryNotaryRuntime::new()
@@ -9173,6 +9311,7 @@ config_trust:
             scopes: vec!["civil_registry:evidence_verification".to_string()],
             access_mode: AccessMode::MachineClient,
             verified_claims: None,
+            authorization_details: None,
         };
 
         let results = crate::RegistryNotaryRuntime::new()
@@ -9268,6 +9407,7 @@ config_trust:
             scopes: vec!["civil_registry:evidence_verification".to_string()],
             access_mode: AccessMode::MachineClient,
             verified_claims: None,
+            authorization_details: None,
         };
 
         let results = crate::RegistryNotaryRuntime::new()
@@ -9384,6 +9524,7 @@ config_trust:
             scopes: vec!["civil_registry:evidence_verification".to_string()],
             access_mode: AccessMode::MachineClient,
             verified_claims: None,
+            authorization_details: None,
         };
 
         let results = crate::RegistryNotaryRuntime::new()
@@ -9460,6 +9601,7 @@ config_trust:
             scopes: vec!["civil_registry:evidence_verification".to_string()],
             access_mode: AccessMode::MachineClient,
             verified_claims: None,
+            authorization_details: None,
         };
 
         let result = crate::RegistryNotaryRuntime::new()
@@ -9604,6 +9746,7 @@ config_trust:
                 bearer_tokens: Vec::new(),
             })),
             audit: audit.clone(),
+            replay: ReplayStores::memory(),
             metrics: Arc::new(AppMetrics::default()),
             openapi_requires_auth: AtomicBool::new(true),
             self_attestation_invalid_token_limiter: Some(Arc::new(
@@ -9650,6 +9793,7 @@ config_trust:
                 bearer_tokens: Vec::new(),
             })),
             audit: audit.clone(),
+            replay: ReplayStores::memory(),
             metrics: Arc::new(AppMetrics::default()),
             openapi_requires_auth: AtomicBool::new(true),
             self_attestation_invalid_token_limiter: Some(Arc::new(
@@ -9685,6 +9829,7 @@ config_trust:
                 }],
             })),
             audit: AuditPipeline::for_sink_dev_only(Arc::new(JsonlStdoutSink::new())),
+            replay: ReplayStores::memory(),
             metrics: Arc::new(AppMetrics::default()),
             openapi_requires_auth: AtomicBool::new(true),
             self_attestation_invalid_token_limiter: None,
@@ -9726,7 +9871,7 @@ config_trust:
         };
 
         let err = authenticator
-            .authenticate(request)
+            .authenticate(request, &ReplayStores::memory())
             .await
             .expect_err("multiple credentials must fail");
 
@@ -9751,7 +9896,7 @@ config_trust:
         };
 
         let err = authenticator
-            .authenticate(request)
+            .authenticate(request, &ReplayStores::memory())
             .await
             .expect_err("ambiguous credentials must not fall back to api key");
 
