@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use registry_platform_authcommon::CredentialFingerprintRef;
 use registry_platform_config::RegistryTrustRoot;
-use registry_platform_ops::BreakGlassRateLimit;
+use registry_platform_ops::{AuditWritePolicy, BreakGlassRateLimit, DeploymentProfile};
 use serde::{Deserialize, Serialize};
 
 pub mod capabilities;
@@ -73,6 +73,61 @@ pub struct Config {
     /// stable taxonomy code.
     #[serde(default)]
     pub standards: StandardsConfig,
+    /// Operator-declared deployment profile, gate waivers, and assurance
+    /// evidence. Omitting the block leaves the deployment undeclared: no
+    /// profile gates bind and existing behavior is preserved exactly.
+    #[serde(default)]
+    pub deployment: DeploymentConfig,
+}
+
+/// Operator-declared deployment posture.
+///
+/// The profile is an explicit assurance claim, never inferred from
+/// environment or network position. When `profile` is absent the deployment
+/// is undeclared: no gates bind, and posture reports a single
+/// `deployment.profile_undeclared` warn finding. A profile value that is not
+/// one of the known variants fails startup (fail closed on typos).
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DeploymentConfig {
+    #[serde(default)]
+    pub profile: Option<DeploymentProfile>,
+    /// Per-deployment waivers. Each names one finding id, a free-text reason,
+    /// and a mandatory expiry date. Expired waivers stop suppressing their
+    /// finding and raise `deployment.waiver_expired`.
+    #[serde(default)]
+    pub waivers: Vec<DeploymentWaiverConfig>,
+    /// Operator declarations of assurance evidence the runtime cannot observe
+    /// for itself (out-of-band ingress rate limiting, API-key rotation).
+    /// Absent declarations leave the corresponding gates active.
+    #[serde(default)]
+    pub evidence: DeploymentEvidenceConfig,
+}
+
+/// One declared waiver. `expires` is an ISO 8601 `YYYY-MM-DD` date; format is
+/// validated at load time. Reasons must not carry secrets.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DeploymentWaiverConfig {
+    pub finding: String,
+    pub reason: String,
+    pub expires: String,
+}
+
+/// Operator-asserted assurance evidence for conditions the runtime cannot
+/// observe directly. Each flag defaults to `false`, meaning "no evidence
+/// declared", which keeps the corresponding gate active until the operator
+/// asserts the control is in place out of band.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DeploymentEvidenceConfig {
+    /// Operator asserts ingress rate limiting is enforced (for example by a
+    /// gateway or reverse proxy in front of the relay).
+    #[serde(default)]
+    pub ingress_rate_limit: bool,
+    /// Operator asserts an API-key rotation process is in place.
+    #[serde(default)]
+    pub api_key_rotation: bool,
 }
 
 /// Stable deployment identity surfaced in redacted operations posture.
@@ -543,6 +598,15 @@ pub struct AuditConfig {
     pub chain: bool,
     #[serde(default)]
     pub include_health: bool,
+    /// Behavior when an audit record fails to write.
+    ///
+    /// `availability_first` (default) logs the failure and lets the request
+    /// succeed, exactly as the relay has always behaved. `fail_closed` instead
+    /// fails the request with a stable error code so that no request outcome is
+    /// returned without a durable audit record. Per-route-family selection is
+    /// out of scope; this is a single deployment-wide policy.
+    #[serde(default = "default_audit_write_policy")]
+    pub write_policy: AuditWritePolicy,
     /// Name of the environment variable holding the per-deploy secret
     /// used to HMAC sensitive audit values (single-record primary keys,
     /// sensitive query parameters). Runtime startup fails closed when
@@ -555,6 +619,10 @@ pub struct AuditConfig {
 
 fn default_audit_format() -> AuditFormat {
     AuditFormat::Jsonl
+}
+
+fn default_audit_write_policy() -> AuditWritePolicy {
+    AuditWritePolicy::AvailabilityFirst
 }
 
 /// Audit serialisation format. JSONL is the only V1 format.

@@ -18,6 +18,7 @@ catalog: {}
 vocabularies: {}
 auth: {}
 audit: {}
+deployment: {}   # optional declared assurance profile, waivers, and evidence
 config_trust: {} # optional governed config apply state
 datasets: []
 provenance: {} # optional
@@ -530,7 +531,90 @@ audit:
 
 Audit output uses `registry-platform-audit` envelopes with `prev_hash` and `record_hash` on every record. These fields detect ordering gaps and accidental corruption in retained logs, but they do not protect against an actor who can rewrite the audit sink. Use an append-only external sink or independent tail-hash anchoring when stronger integrity is required. `chain` is retained in config for compatibility with older deployments, but platform audit envelopes are always chained.
 
+A normally booted relay always reports keyed integrity `hmac` in its posture because startup requires the audit hash secret (`hash_secret_env`); the `none` value appears only in dev or test configurations that build the posture without that secret.
+
 Audit records are separate from operational logs, which go to stderr as readable text by default. Set `REGISTRY_RELAY_LOG_FORMAT=json` or `REGISTRY_RELAY_LOG_FORMAT=jsonl` when operational logs are emitted as JSON Lines for collection or redirected files.
+
+### Write policy
+
+`write_policy` selects what happens when an audit record cannot be written (for example the sink is unreachable or the disk is full):
+
+```yaml
+audit:
+  sink: file
+  hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
+  path: /var/log/registry-relay/audit.jsonl
+  write_policy: availability_first   # availability_first | fail_closed
+```
+
+* `availability_first` (default): an audit write failure is logged and the request returns its original outcome unchanged. The deployment stays available even when audit is degraded. This is the historical behavior.
+* `fail_closed`: a request whose audit record cannot be written fails with HTTP `503` and the stable error code `audit.write_failed` (`application/problem+json`). No request outcome is returned without a durable audit record. Choose this when audit completeness is a hard requirement.
+
+The policy applies to every audited route. Per-route-family selection is not configurable. The selected policy is reported truthfully as the `write_policy` fact in the operations posture audit block, so a deployment cannot claim a stronger guarantee than it runs.
+
+## Deployment profile
+
+The `deployment` block lets an operator declare the assurance level a deployment claims. The profile is never inferred from hostname, environment, or network position: it is an explicit statement. Each profile binds a set of gates that check the running configuration and contribute findings at a defined severity.
+
+```yaml
+deployment:
+  profile: production        # local | hosted_lab | production | evidence_grade
+  evidence:
+    ingress_rate_limit: true # operator asserts a gateway enforces rate limiting
+    api_key_rotation: true   # operator asserts an API-key rotation process exists
+  waivers:
+    - finding: relay.openapi.public
+      reason: public API catalog is intentional for this deployment
+      expires: 2026-12-31
+```
+
+The `deployment` block is optional. When it is omitted, no gates bind and the deployment keeps its existing behavior exactly; the posture reports a single `deployment.profile_undeclared` warning so the choice is visible. An unknown profile value is rejected at startup.
+
+### Profiles and severities
+
+Each gate maps to one of four severities per profile:
+
+* `startup_fail`: the process refuses to start. Never waivable.
+* `readiness_fail`: the readiness endpoint reports not-ready; the process keeps running.
+* `finding_error` / `finding_warn`: a posture finding only.
+
+The four profiles escalate from `local` (binds no hard gates) through `hosted_lab` and `production` to `evidence_grade` (the strictest). For example, `evidence_grade` requires a signed, governed config bundle: running it from a plain local YAML file trips a `startup_fail` gate (`relay.config.unsigned`) and the process refuses to start.
+
+### Evidence declarations
+
+Some controls live outside the relay and cannot be observed by the process (for example ingress rate limiting enforced by a gateway, or an API-key rotation process). The `evidence` flags let the operator assert those controls are in place. Each flag defaults to `false`, which leaves the corresponding gate active until the operator declares the control.
+
+### Waivers
+
+A triggered, waivable finding can be suppressed by a waiver that names the finding id, carries a free-text reason, and a mandatory expiry date (`YYYY-MM-DD`):
+
+```yaml
+deployment:
+  profile: hosted_lab
+  waivers:
+    - finding: relay.ingress.rate_limit_missing
+      reason: rate limiting is handled by the lab gateway
+      expires: 2026-09-30
+```
+
+A waived finding reports status `waived` instead of its severity effect. Once the expiry date passes, the waiver stops suppressing the finding and the posture additionally raises `deployment.waiver_expired`. The expiry date is mandatory; reasons must be non-empty and must not contain secrets. `startup_fail` gates are never waivable.
+
+Waiver reasons are only visible in the restricted posture tier; the default tier reports finding id, severity, and status but not the reason.
+
+### Findings catalog
+
+| Finding id | hosted_lab | production | evidence_grade |
+| --- | --- | --- | --- |
+| `relay.admin.public_exposure` | error | readiness_fail | startup_fail |
+| `relay.openapi.public` | warn | error | error |
+| `relay.ingress.rate_limit_missing` | warn | error | error |
+| `relay.oidc.client_allowlist_empty` | warn | error | readiness_fail |
+| `relay.auth.api_key_no_rotation_evidence` | warn | error | error |
+| `relay.config.unsigned` | warn | error | startup_fail |
+| `relay.audit.best_effort` | (not bound) | warn | readiness_fail |
+| `relay.audit.sink_missing` | error | readiness_fail | startup_fail |
+
+The current deployment profile, its findings, and active waivers are reported under `deployment` in the operations posture (`GET /admin/v1/posture`).
 
 ## Datasets
 

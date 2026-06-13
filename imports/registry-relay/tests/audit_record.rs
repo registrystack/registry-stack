@@ -574,6 +574,7 @@ async fn middleware_hashes_configured_sensitive_query_values() {
         trusted_proxies: Vec::new(),
         sensitive_fields: vec!["social_registry:individual:id".to_string()],
         hash_hasher: AuditKeyHasher::unkeyed_dev_only(),
+        ..AuditSettings::default()
     };
     let app = Router::new()
         .route(
@@ -1106,6 +1107,7 @@ async fn remote_addr_from_x_forwarded_for(
         trusted_proxies,
         sensitive_fields: Vec::new(),
         hash_hasher: AuditKeyHasher::unkeyed_dev_only(),
+        ..AuditSettings::default()
     };
     let app = Router::new()
         .route("/probe", get(|| async { StatusCode::OK }))
