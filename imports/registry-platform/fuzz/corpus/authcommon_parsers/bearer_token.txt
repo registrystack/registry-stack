@@ -1,0 +1,1 @@
+Bearer registry-platform-fuzz-token-00000000000000000000000000000000

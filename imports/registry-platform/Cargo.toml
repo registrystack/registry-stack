@@ -15,6 +15,7 @@ members = [
     "crates/registry-platform-crypto",
     "crates/registry-platform-testing",
 ]
+exclude = ["fuzz"]
 resolver = "2"
 
 [workspace.package]

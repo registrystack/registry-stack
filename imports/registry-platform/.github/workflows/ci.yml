@@ -83,6 +83,15 @@ jobs:
               "^crates/registry-platform-config/tests/fixtures/tough-data/snakeoil\\.pem$",
               "^crates/registry-platform-config/tests/fixtures/tough-data/snakeoil_2\\.pem$",
             ]
+
+            [[allowlists]]
+            description = "Allow synthetic test JWTs in fuzz corpus (example.test/issuer.example hosts, did:example subjects, repo test JWK only)."
+            paths = [
+              "^fuzz/corpus/oid4vci_request_and_proof/valid-proof-jwt$",
+              "^fuzz/corpus/oid4vci_request_and_proof/credential_request\\.json$",
+              "^fuzz/corpus/sdjwt_holder_proof/holder_proof\\.jwt$",
+              "^fuzz/corpus/sdjwt_holder_proof/valid-holder-proof-jwt$",
+            ]
         run: |
           "$RUNNER_TEMP/bin/gitleaks" dir --no-banner --redact --verbose --timeout 120 .
 

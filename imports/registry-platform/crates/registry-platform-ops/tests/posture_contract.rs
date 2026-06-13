@@ -125,6 +125,34 @@ fn malformed_posture_documents_fail_validation() {
 }
 
 #[test]
+fn posture_schema_accepts_default_safe_emergency_configuration_block() {
+    let validator = posture_validator();
+    let mut posture = parse(registry_platform_ops::RELAY_POSTURE_EXAMPLE_V1);
+    posture["configuration"]["emergency"] = json!({
+        "last_apply_emergency": true,
+        "last_emergency_change_class": "config.emergency",
+        "last_emergency_at": "2026-06-13T01:02:03Z",
+        "exception_window_open": true,
+        "exception_window_expires_at": "2026-06-13T02:02:03Z",
+        "open_exception_count": 1
+    });
+    assert_valid(&validator, &posture);
+
+    let mut invalid_change_class = posture.clone();
+    invalid_change_class["configuration"]["emergency"]["last_emergency_change_class"] =
+        json!("Config Emergency");
+    assert_invalid(&validator, &invalid_change_class);
+
+    let mut leaked_reason = posture.clone();
+    leaked_reason["configuration"]["emergency"]["reason"] = json!("operator free text");
+    assert_invalid(&validator, &leaked_reason);
+
+    let mut leaked_approver = posture;
+    leaked_approver["configuration"]["emergency"]["approved_by"] = json!("did:example:operator");
+    assert_invalid(&validator, &leaked_approver);
+}
+
+#[test]
 fn redaction_fixture_default_posture_is_allowlist_projection() {
     let allowlist = parse(registry_platform_ops::DEFAULT_POSTURE_ALLOWLIST_FIXTURE_V1);
     let allowed = allowlist["allowed_json_pointers"]
@@ -161,6 +189,39 @@ fn redaction_fixture_default_posture_is_allowlist_projection() {
             "default posture contains a leaf outside the default allowlist: {pointer}"
         );
     }
+}
+
+#[test]
+fn default_filter_preserves_emergency_configuration_block() {
+    let validator = posture_validator();
+    let mut posture = parse(registry_platform_ops::RELAY_POSTURE_EXAMPLE_V1);
+    posture["configuration"]["emergency"] = json!({
+        "last_apply_emergency": true,
+        "last_emergency_change_class": "config.emergency",
+        "last_emergency_at": "2026-06-13T01:02:03Z",
+        "exception_window_open": true,
+        "exception_window_expires_at": "2026-06-13T02:02:03Z",
+        "open_exception_count": 1
+    });
+
+    let filtered = registry_platform_ops::filter_posture_for_tier(
+        posture,
+        registry_platform_ops::PostureTier::Default,
+    )
+    .expect("default posture filters");
+
+    assert_valid(&validator, &filtered);
+    assert_eq!(
+        filtered["configuration"]["emergency"],
+        json!({
+            "last_apply_emergency": true,
+            "last_emergency_change_class": "config.emergency",
+            "last_emergency_at": "2026-06-13T01:02:03Z",
+            "exception_window_open": true,
+            "exception_window_expires_at": "2026-06-13T02:02:03Z",
+            "open_exception_count": 1
+        })
+    );
 }
 
 #[test]

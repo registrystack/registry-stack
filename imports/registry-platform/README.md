@@ -46,8 +46,8 @@ and integration-test fixtures.
 - Rust edition: 2021.
 - License: Apache-2.0.
 - Publication: crates are private to this workspace (`publish = false`).
-- Versioning: all crates currently share the workspace version `0.1.2`.
-- Signing support: v0.1.2 supports EdDSA/Ed25519 for platform-owned signing and
+- Versioning: all crates currently share the workspace version `0.2.1`.
+- Signing support: v0.2.1 supports EdDSA/Ed25519 for platform-owned signing and
   verification, including a provider abstraction for local JWKs and external
   signing adapters. OIDC JWT verification is caller-configurable for provider
   compatibility, but consumers should keep algorithm allowlists as narrow as
@@ -60,8 +60,8 @@ only the crates they need.
 
 ```toml
 [dependencies]
-registry-platform-httputil = { git = "https://github.com/jeremi/registry-platform", tag = "v0.1.2" }
-registry-platform-oidc = { git = "https://github.com/jeremi/registry-platform", tag = "v0.1.2" }
+registry-platform-httputil = { git = "https://github.com/jeremi/registry-platform", tag = "v0.2.1" }
+registry-platform-oidc = { git = "https://github.com/jeremi/registry-platform", tag = "v0.2.1" }
 ```
 
 The `registry-platform-httputil` crate uses `rustls` for outbound HTTPS.
