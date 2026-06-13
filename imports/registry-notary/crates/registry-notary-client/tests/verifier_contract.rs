@@ -204,7 +204,9 @@ async fn verify_sd_jwt_vc_rejects_expired_key_binding_jwt() {
             "exp": NOW - 200,
             "aud": KB_AUD,
             "nonce": KB_NONCE,
-            "sd_hash": URL_SAFE_NO_PAD.encode(Sha256::digest(compact.as_bytes())),
+            "sd_hash": URL_SAFE_NO_PAD.encode(Sha256::digest(
+                compact.strip_suffix('~').unwrap_or(&compact).as_bytes()
+            )),
         }))
     );
 
@@ -504,6 +506,7 @@ fn unsigned_compact_jws() -> String {
 }
 
 fn signed_key_binding_jwt(sd_jwt: &str) -> String {
+    let sd_jwt = sd_jwt.strip_suffix('~').unwrap_or(sd_jwt);
     signed_key_binding_jwt_with_payload(json!({
         "iat": NOW,
         "exp": NOW + 30,

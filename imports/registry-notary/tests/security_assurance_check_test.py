@@ -292,6 +292,16 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
         self.write_hardened_workflows()
         self.module.check_workflow_pull_request_hardening()
 
+    def test_workflow_pull_request_hardening_accepts_quoted_false_credentials(self):
+        self.write_hardened_workflows()
+        for path in (self.root / ".github" / "workflows").glob("*.yml"):
+            path.write_text(path.read_text().replace(
+                "persist-credentials: false",
+                "persist-credentials: 'false'",
+            ))
+
+        self.module.check_workflow_pull_request_hardening()
+
     def test_workflow_pull_request_hardening_rejects_persisted_checkout_credentials(self):
         self.write_hardened_workflows()
         fuzz = self.root / ".github" / "workflows" / "fuzz.yml"

@@ -516,7 +516,7 @@ def check_checkout_steps_disable_persisted_credentials(path: Path) -> None:
         if "uses: actions/checkout@" not in line:
             continue
         window = lines[index + 1 : index + 9]
-        if not any(re.match(r"^\s+persist-credentials:\s*false\s*$", item) for item in window):
+        if not any(re.match(r"^\s+persist-credentials:\s*['\"]?false['\"]?\s*$", item) for item in window):
             fail(
                 f"{path.relative_to(ROOT)}:{index + 1} checkout step must set "
                 "persist-credentials: false"
