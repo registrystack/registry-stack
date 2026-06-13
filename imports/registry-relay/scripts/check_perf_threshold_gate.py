@@ -12,13 +12,22 @@ WORKFLOW = ROOT / ".github" / "workflows" / "perf-smoke.yml"
 COMMON_JS = ROOT / "perf" / "k6" / "lib" / "common.js"
 
 
-def strip_shell_style_comments(text: str) -> str:
-    return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+def active_yaml_lines(text: str) -> str:
+    """Return YAML lines that are not whole-line comments.
+
+    Workflow `run:` blocks contain shell, where `#` may appear inside strings
+    before active commands. Dropping inline `#...` suffixes can hide active
+    threshold bypasses, so only whole-line YAML comments are ignored here.
+    """
+
+    return "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
 
 
 def main() -> int:
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    active_workflow = strip_shell_style_comments(workflow)
+    active_workflow = active_yaml_lines(workflow)
     common_js = COMMON_JS.read_text(encoding="utf-8")
 
     if re.search(r"\bREGISTRY_RELAY_NO_THRESHOLD\b", active_workflow):
