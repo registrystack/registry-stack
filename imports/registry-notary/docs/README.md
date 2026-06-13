@@ -10,8 +10,7 @@ format, or issues a short-lived SD-JWT VC credential.
 Pick your path below. New to Registry Notary? Start with the hosted walkthrough or a runnable local tutorial. If you are configuring or operating Notary, start with the [architecture overview](architecture-overview.md).
 
 - [See it live](https://docs.registrystack.org/start/see-it-live/): watch Notary issue a privacy-preserving credential against a hosted lab, with zero install.
-- [Verify a claim from your registry API](https://docs.registrystack.org/tutorials/verify-claim-registry-api/): add Notary to a local registry API project with `registryctl`.
-- [Verify a claim from your own API](https://docs.registrystack.org/tutorials/verify-claim-own-api/): create a standalone Notary project for a source API you operate.
+- [Verify a claim with Registry Notary](https://docs.registrystack.org/tutorials/verify-claim-registry-api/): add Notary to a local registry API project with `registryctl`. Its final section, [Run Notary standalone for an API you operate](https://docs.registrystack.org/tutorials/verify-claim-registry-api/#run-notary-standalone-for-an-api-you-operate), covers creating a standalone Notary project for a source API you operate.
 
 - [Architecture overview](architecture-overview.md): what Registry Notary is, the request lifecycle, and how the layers relate.
 - [Capability matrix](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/notary-capability-matrix.md): which flows Notary supports today, by persona and system.

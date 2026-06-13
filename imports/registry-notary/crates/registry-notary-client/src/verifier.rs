@@ -313,6 +313,9 @@ fn verify_claims(
 }
 
 fn verify_disclosures(payload: &Value, disclosures: &[&str]) -> Result<(), VerificationError> {
+    if disclosures.is_empty() && payload.get("_sd").is_none() {
+        return Ok(());
+    }
     if payload.get("_sd_alg").and_then(Value::as_str) != Some("sha-256") {
         return Err(VerificationError::DisclosureDigestMismatch {
             code: "disclosure.digest_mismatch",

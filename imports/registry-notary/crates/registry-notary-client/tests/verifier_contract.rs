@@ -18,6 +18,7 @@ use registry_notary_client::verifier;
 use registry_notary_client::{
     HolderBindingPolicy, RegistryNotaryClient, VerificationError, VerifyOptions,
 };
+use registry_notary_core::SD_JWT_VC_JWT_TYP;
 use registry_platform_crypto::{did_jwk_from_public_jwk, sign, PrivateJwk};
 use registry_platform_sdjwt::{Disclosure, HolderConfirmation, SdJwtIssuanceInput, SdJwtIssuer};
 use serde_json::{json, Value};
@@ -47,6 +48,17 @@ async fn verify_sd_jwt_vc_accepts_valid_holder_bound_credential() {
     assert_eq!(verified.algorithm, "EdDSA");
     assert_eq!(verified.disclosure_count, 1);
     assert_eq!(verified.holder_key_id.as_deref(), Some(holder.as_str()));
+}
+
+#[tokio::test]
+async fn verify_sd_jwt_vc_accepts_credential_without_disclosures() {
+    let compact = issue_plain_jwt_vc(ISSUER_JWK, ISSUER, NOW, NOW + 50);
+
+    let verified = verifier::verify_sd_jwt_vc(&compact, &jwks(ISSUER_JWK), &options())
+        .expect("credential without disclosures verifies");
+
+    assert_eq!(verified.issuer, ISSUER);
+    assert_eq!(verified.disclosure_count, 0);
 }
 
 #[tokio::test]
@@ -291,6 +303,32 @@ async fn issue_sd_jwt_with_claims(
         .await
         .expect("sd-jwt issues")
         .jwt
+}
+
+fn issue_plain_jwt_vc(private_jwk: &str, issuer_id: &str, iat: i64, exp: i64) -> String {
+    let issuer = PrivateJwk::parse(private_jwk).expect("issuer jwk parses");
+    let header = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&json!({
+            "alg": "EdDSA",
+            "kid": "did:web:issuer.test#key-1",
+            "typ": SD_JWT_VC_JWT_TYP,
+        }))
+        .expect("header serializes"),
+    );
+    let payload = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&json!({
+            "iss": issuer_id,
+            "sub": "subject-ref",
+            "jti": "urn:ulid:01HG0000000000000000000000",
+            "iat": iat,
+            "exp": exp,
+            "vct": VCT,
+        }))
+        .expect("payload serializes"),
+    );
+    let signing_input = format!("{header}.{payload}");
+    let signature = sign(signing_input.as_bytes(), &issuer).expect("issuer signs");
+    format!("{}.{}", signing_input, URL_SAFE_NO_PAD.encode(signature))
 }
 
 fn options() -> VerifyOptions {
