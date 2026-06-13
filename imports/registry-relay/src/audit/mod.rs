@@ -369,7 +369,7 @@ pub type AuditError = registry_platform_audit::AuditError;
 #[derive(Debug, Clone)]
 pub struct OperationalAuditEvent {
     pub event: &'static str,
-    pub error_code: &'static str,
+    pub error_code: Option<&'static str>,
     pub status_code: u16,
     pub dataset_id: Option<String>,
     pub table_id_hash: Option<String>,
@@ -380,8 +380,19 @@ impl OperationalAuditEvent {
     pub fn new(event: &'static str, error_code: &'static str) -> Self {
         Self {
             event,
-            error_code,
+            error_code: Some(error_code),
             status_code: 500,
+            dataset_id: None,
+            table_id_hash: None,
+        }
+    }
+
+    #[must_use]
+    pub fn success(event: &'static str) -> Self {
+        Self {
+            event,
+            error_code: None,
+            status_code: 200,
             dataset_id: None,
             table_id_hash: None,
         }
@@ -442,7 +453,7 @@ impl OperationalAuditEvent {
             geometry_vertex_count: None,
             suppressed_groups: None,
             duration_ms: 0,
-            error_code: Some(self.error_code.to_string()),
+            error_code: self.error_code.map(ToString::to_string),
             provenance: None,
             config: None,
         }
@@ -835,7 +846,7 @@ pub async fn audit_layer(
 /// [`AUDIT_WRITE_FAILED_CODE`] error code. The code is also attached as a
 /// response extension so downstream layers (and operational logging) see the
 /// same stable value.
-fn audit_write_failed_response() -> Response {
+pub fn audit_write_failed_response() -> Response {
     let body = json!({
         "type": format!("{}audit/write_failed", crate::error::PROBLEM_TYPE_BASE),
         "title": "Audit record write failed",

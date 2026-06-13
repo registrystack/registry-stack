@@ -565,15 +565,16 @@ impl IngestRegistry {
                 let declared = Arc::new(DeclaredSchema::from(&resource.schema));
                 let connector: Arc<dyn TableConnector> = match source_cfg {
                     SourceConfig::File { .. } => {
-                        let source = build_source(source_cfg).map_err(|e| {
-                            tracing::error!(
-                                event = "ingest.source_not_found",
-                                dataset_id = %dataset.id,
-                                resource_id = %resource.id,
-                                error = %e,
-                            );
-                            IngestError::SourceNotFound
-                        })?;
+                        let source = build_source(source_cfg, config.server.max_source_file_bytes)
+                            .map_err(|e| {
+                                tracing::error!(
+                                    event = "ingest.source_not_found",
+                                    dataset_id = %dataset.id,
+                                    resource_id = %resource.id,
+                                    error = %e,
+                                );
+                                IngestError::SourceNotFound
+                            })?;
 
                         // Derive format name from resource/source config, then file extension.
                         let format_name = resource
@@ -908,11 +909,14 @@ fn build_sample(batches: &[RecordBatch], n: usize, schema: &SchemaRef) -> Option
 }
 
 /// Build a byte-oriented `Source` from a `SourceConfig`.
-fn build_source(source_cfg: &SourceConfig) -> Result<Arc<dyn Source>, std::io::Error> {
+fn build_source(
+    source_cfg: &SourceConfig,
+    max_source_file_bytes: u64,
+) -> Result<Arc<dyn Source>, std::io::Error> {
     match source_cfg {
         SourceConfig::File { path, .. } => {
             use crate::source::local_file::LocalFileSource;
-            let src = LocalFileSource::new(path)?;
+            let src = LocalFileSource::new_with_content_digest_limit(path, max_source_file_bytes)?;
             Ok(Arc::new(src))
         }
         SourceConfig::Postgres { .. } => Err(std::io::Error::new(

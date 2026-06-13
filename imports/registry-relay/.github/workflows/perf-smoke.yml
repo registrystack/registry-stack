@@ -133,7 +133,10 @@ jobs:
           # Export env-file lines literally (docker --env-file semantics).
           # Shell-sourcing would apply quote removal and corrupt the JSON
           # value of REGISTRY_RELAY_PROVENANCE_JWK.
-          while IFS='=' read -r key value; do
+          while IFS= read -r line || [ -n "$line" ]; do
+            key="${line%%=*}"
+            value="${line#*=}"
+            [ "$key" = "$line" ] && continue
             case "$key" in ''|'#'*) continue ;; esac
             export "$key=$value"
           done < target/perf/perf.env

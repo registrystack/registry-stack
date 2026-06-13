@@ -5,6 +5,7 @@ use std::num::NonZeroU64;
 use std::path::Path;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use aws_lc_rs::rand::SystemRandom;
 use axum::http::StatusCode;
 use axum_test::TestServer;
@@ -15,6 +16,7 @@ use datafusion::execution::context::SessionContext;
 use ed25519_dalek::SigningKey;
 use rand_core::OsRng;
 use registry_manifest_core::{canonicalize_json, source_manifest_digest, MetadataManifest};
+use registry_platform_audit::{AuditEnvelope, AuditError, AuditSink};
 use registry_platform_authcommon::{
     credential_fingerprint_commitment, CredentialCommitmentContext, CredentialProduct,
     CredentialType,
@@ -26,7 +28,7 @@ use registry_platform_ops::{
 use registry_relay::api::admin::{
     router as admin_router, CandidateProvenanceResolver, CandidateProvenanceResolverRef,
 };
-use registry_relay::audit::{AuditPipeline, InMemorySink};
+use registry_relay::audit::{AuditPipeline, InMemorySink, AUDIT_WRITE_FAILED_CODE};
 use registry_relay::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
 use registry_relay::auth::middleware::{AuthProviderRef, RuntimeAuthProvider};
 use registry_relay::auth::ScopeSet;
@@ -66,6 +68,21 @@ const TUF_TARGETS_SIGNER_KID: &str =
 const FORGED_TUF_SIGNER_KID: &str =
     "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0";
 const EMERGENCY_CHANGE_CLASS: &str = "emergency.break_glass";
+
+struct AlwaysFailWriteSink;
+
+#[async_trait]
+impl AuditSink for AlwaysFailWriteSink {
+    async fn write(&self, _envelope: &AuditEnvelope) -> Result<(), AuditError> {
+        Err(AuditError::Io(std::io::Error::other(
+            "injected audit write failure",
+        )))
+    }
+
+    async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
+        Ok(None)
+    }
+}
 
 struct ReadinessOverrideResolver {
     readiness: registry_platform_crypto::KeyReadiness,
@@ -712,6 +729,26 @@ fn build_fixture_from_config_path_with_provenance_state_and_admin_resolver(
     include_provenance_state: bool,
     admin_resolver: Option<CandidateProvenanceResolverRef>,
 ) -> AdminFixture {
+    let audit_sink = InMemorySink::new();
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(audit_sink.clone());
+    build_fixture_from_config_path_with_audit_pipeline(
+        tmp,
+        config_path,
+        include_provenance_state,
+        admin_resolver,
+        sink,
+        audit_sink,
+    )
+}
+
+fn build_fixture_from_config_path_with_audit_pipeline(
+    tmp: TempDir,
+    config_path: std::path::PathBuf,
+    include_provenance_state: bool,
+    admin_resolver: Option<CandidateProvenanceResolverRef>,
+    sink: Arc<AuditPipeline>,
+    audit_sink: InMemorySink,
+) -> AdminFixture {
     #[allow(unused_unsafe)]
     unsafe {
         std::env::set_var("REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET", AUDIT_SECRET_VALUE);
@@ -739,8 +776,6 @@ fn build_fixture_from_config_path_with_provenance_state_and_admin_resolver(
         .expect("ingest registry builds"),
     );
     let (readiness_tx, readiness_rx) = watch::channel::<ReadinessSnapshot>(ingest.snapshot());
-    let audit_sink = InMemorySink::new();
-    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(audit_sink.clone());
     let auth = build_auth();
     let entity_registry = Arc::new(EntityRegistry::from_config(&config).expect("registry builds"));
     let entity_query = Arc::new(EntityQueryEngine::new(
@@ -923,6 +958,28 @@ fn build_fixture_with_required_break_glass_approvers(count: usize) -> AdminFixtu
     )
     .expect("config writes");
     build_fixture_from_config_path(tmp, config_path)
+}
+
+fn build_fail_closed_fixture_with_failing_audit_sink() -> AdminFixture {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(&tmp);
+    let raw = std::fs::read_to_string(&config_path).expect("config reads");
+    std::fs::write(
+        &config_path,
+        raw.replace(
+            "  hash_secret_env: REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET\n",
+            "  hash_secret_env: REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET\n  write_policy: fail_closed\n",
+        ),
+    )
+    .expect("config writes");
+    build_fixture_from_config_path_with_audit_pipeline(
+        tmp,
+        config_path,
+        false,
+        None,
+        AuditPipeline::from_sink(AlwaysFailWriteSink),
+        InMemorySink::new(),
+    )
 }
 
 fn build_fixture_with_remote_tuf_repository(server: &MockServer) -> AdminFixture {
@@ -1771,6 +1828,22 @@ async fn config_apply_routes_are_admin_only_and_not_public() {
             "route: {route}"
         );
     }
+}
+
+#[tokio::test]
+async fn admin_json_checks_scope_before_parsing_body() {
+    let fixture = build_fixture();
+
+    let resp = fixture
+        .server
+        .post("/admin/v1/config/verify")
+        .add_header("Authorization", format!("Bearer {OPS_KEY}"))
+        .add_header("content-type", "application/json")
+        .text("{not json")
+        .await;
+
+    let body = assert_problem(resp, StatusCode::FORBIDDEN, "auth.scope_denied").await;
+    assert_eq!(body["detail"], "required scope: registry_relay:admin");
 }
 
 #[tokio::test]
@@ -3001,6 +3074,53 @@ async fn config_apply_signed_tuf_target_swaps_runtime_snapshot() {
     assert!(!audit_text.contains("registry-relay.yaml"));
     assert!(!audit_text.contains("signed-config-5"));
     assert!(!audit_text.contains("private-jwk-material"));
+}
+
+#[tokio::test]
+async fn fail_closed_audit_failure_blocks_config_apply_before_state_mutation() {
+    let fixture = build_fail_closed_fixture_with_failing_audit_sink();
+    let candidate = std::fs::read_to_string(&fixture.config_path)
+        .expect("config reads")
+        .replace("owner: Test Ministry", "owner: Blocked Operations Ministry");
+    let signed = write_signed_config_tuf_fixture(
+        &fixture,
+        &candidate,
+        5,
+        "relay-test-instance",
+        &["kid-a", "kid-b"],
+    )
+    .await;
+
+    let response = post_admin_config(
+        &fixture,
+        "/admin/v1/config/apply",
+        signed_tuf_apply_request(&signed),
+        ADMIN_KEY,
+    )
+    .await;
+
+    assert_problem(
+        response,
+        StatusCode::SERVICE_UNAVAILABLE,
+        AUDIT_WRITE_FAILED_CODE,
+    )
+    .await;
+    let record = FileAntiRollbackStore::new(&fixture.antirollback_path)
+        .load(&AntiRollbackKey {
+            product: "registry-relay".to_string(),
+            instance_id: "relay-test-instance".to_string(),
+            environment: "lab".to_string(),
+            stream_id: "test-stream".to_string(),
+        })
+        .expect("antirollback state loads");
+    assert_eq!(record.last_sequence, 0);
+
+    let snapshot = fixture.handle.load_full();
+    assert_eq!(snapshot.config.catalog.publisher, "Test Ministry");
+    assert_eq!(
+        snapshot.config_provenance.internal_config_hash,
+        fixture.current_config_hash
+    );
 }
 
 #[tokio::test]
@@ -4779,6 +4899,44 @@ async fn table_reload_publishes_updated_readiness_snapshot() {
 }
 
 #[tokio::test]
+async fn fail_closed_audit_failure_blocks_table_reload_before_mutation() {
+    let fixture = build_fail_closed_fixture_with_failing_audit_sink();
+
+    let before = fixture.server.get("/ready").await;
+    let before_body = assert_problem(
+        before,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "schema.resource_unavailable",
+    )
+    .await;
+    assert_eq!(before_body["not_ready_count"], 2);
+
+    let response = fixture
+        .server
+        .post("/admin/v1/datasets/social_registry/tables/beneficiaries_csv/reload")
+        .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
+        .await;
+    assert_problem(
+        response,
+        StatusCode::SERVICE_UNAVAILABLE,
+        AUDIT_WRITE_FAILED_CODE,
+    )
+    .await;
+
+    let after = fixture.server.get("/ready").await;
+    let after_body = assert_problem(
+        after,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "schema.resource_unavailable",
+    )
+    .await;
+    assert_eq!(
+        after_body["not_ready_count"], 2,
+        "table reload must not mutate readiness when fail-closed audit preflight fails"
+    );
+}
+
+#[tokio::test]
 async fn reload_all_without_credential_is_rejected() {
     let fixture = build_fixture();
 
@@ -4799,6 +4957,44 @@ async fn reload_all_with_non_admin_key_is_rejected() {
 
     let body = assert_problem(resp, StatusCode::FORBIDDEN, "auth.scope_denied").await;
     assert_eq!(body["detail"], "required scope: registry_relay:admin");
+}
+
+#[tokio::test]
+async fn fail_closed_audit_failure_blocks_reload_all_before_mutation() {
+    let fixture = build_fail_closed_fixture_with_failing_audit_sink();
+
+    let before = fixture.server.get("/ready").await;
+    let before_body = assert_problem(
+        before,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "schema.resource_unavailable",
+    )
+    .await;
+    assert_eq!(before_body["not_ready_count"], 2);
+
+    let resp = fixture
+        .server
+        .post("/admin/v1/reload")
+        .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
+        .await;
+    assert_problem(
+        resp,
+        StatusCode::SERVICE_UNAVAILABLE,
+        AUDIT_WRITE_FAILED_CODE,
+    )
+    .await;
+
+    let after = fixture.server.get("/ready").await;
+    let after_body = assert_problem(
+        after,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "schema.resource_unavailable",
+    )
+    .await;
+    assert_eq!(
+        after_body["not_ready_count"], 2,
+        "reload_all must not mutate readiness when fail-closed audit preflight fails"
+    );
 }
 
 #[tokio::test]

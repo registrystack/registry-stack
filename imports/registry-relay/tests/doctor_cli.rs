@@ -104,6 +104,45 @@ audit:
     path
 }
 
+fn write_public_admin_profile_config(tmp: &TempDir, profile: &str) -> std::path::PathBuf {
+    let path = tmp
+        .path()
+        .join(format!("relay-{profile}-public-admin.yaml"));
+    std::fs::write(
+        &path,
+        format!(
+            r#"
+instance:
+  id: registry-relay-profile-test
+deployment:
+  profile: {profile}
+config_trust:
+  antirollback_state_path: {state}/antirollback.json
+  local_approval_state_path: {state}/local-approvals.json
+server:
+  bind: 127.0.0.1:0
+  admin_bind: 0.0.0.0:0
+  openapi_requires_auth: true
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {{}}
+auth:
+  mode: api_key
+  api_keys: []
+datasets: []
+audit:
+  sink: stdout
+  format: jsonl
+"#,
+            state = yaml_path(tmp)
+        ),
+    )
+    .expect("config writes");
+    path
+}
+
 fn write_missing_secret_config(tmp: &TempDir) -> std::path::PathBuf {
     let path = tmp.path().join("relay-missing-secret.yaml");
     std::fs::write(
@@ -413,6 +452,38 @@ fn doctor_json_reports_missing_ingress_rate_limit_evidence() {
             |finding| finding["id"] == "relay.ingress.rate_limit_missing"
                 && finding["severity"] == "finding_error"
         ));
+}
+
+#[test]
+fn doctor_json_fails_active_readiness_fail_gate() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_path = write_public_admin_profile_config(&tmp, "production");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_registry-relay"))
+        .env("RUST_LOG", "off")
+        .args([
+            "doctor",
+            "--config",
+            config_path.to_str().expect("utf-8 path"),
+            "--format=json",
+        ])
+        .output()
+        .expect("doctor command runs");
+
+    assert!(
+        !output.status.success(),
+        "production readiness_fail gate should fail doctor"
+    );
+    let report = parse_stdout_json(&output.stdout);
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["result"], "failed");
+    assert!(report["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .any(|finding| finding["id"] == "relay.admin.public_exposure"
+            && finding["severity"] == "readiness_fail"
+            && finding["status"] == "active"));
 }
 
 #[test]

@@ -312,6 +312,17 @@ async fn dcat(
     runtime: RuntimeSnapshot,
     principal: Option<Extension<Principal>>,
 ) -> Response {
+    if runtime.compiled_metadata().is_some() {
+        let compiled = match scoped_metadata(runtime, principal) {
+            Ok(compiled) => compiled,
+            Err(response) => return *response,
+        };
+        let Some(document) = metadata_core::render_dcat_profile(&compiled, "dcat") else {
+            return Error::from(SchemaError::UnknownResource).into_response();
+        };
+        return json_ld_response(document, &headers);
+    }
+
     let Some(config) = runtime.config() else {
         return metadata_unavailable("metadata route matched, but config state is not installed");
     };

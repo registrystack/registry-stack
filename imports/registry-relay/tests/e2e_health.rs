@@ -35,6 +35,7 @@ use std::time::Duration;
 use axum::http::StatusCode;
 use axum_test::TestServer;
 use datafusion::execution::context::SessionContext;
+use registry_platform_ops::DeploymentProfile;
 use registry_relay::audit::{AuditPipeline, InMemorySink};
 use registry_relay::auth::api_key::ApiKeyAuth;
 use registry_relay::auth::AuthProvider;
@@ -258,6 +259,35 @@ async fn ready_503_reports_unresolved_count_without_names() {
     assert!(
         !body.to_string().contains("social_registry"),
         "dataset id must not leak in 503 body"
+    );
+}
+
+#[tokio::test]
+async fn ready_503_redacts_deployment_gate_findings() {
+    let mut cfg = load_example_config();
+    cfg.deployment.profile = Some(DeploymentProfile::Production);
+    cfg.server.admin_bind = Some("0.0.0.0:0".parse().expect("socket addr parses"));
+    cfg.server.openapi_requires_auth = true;
+    let config = Arc::new(cfg);
+
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
+    let app = build_test_app_with_config(config, sink);
+    let server = TestServer::new(app);
+
+    let resp = server.get("/ready").await;
+    resp.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(resp.header("content-type"), "application/problem+json");
+
+    let body: Value = resp.json();
+    assert_eq!(body["code"], "deployment.not_ready");
+    assert!(
+        body.get("findings").is_none(),
+        "public readiness must not expose deployment finding ids"
+    );
+    let dump = body.to_string();
+    assert!(
+        !dump.contains("relay.admin.public_exposure"),
+        "public readiness must not name the failed deployment gate"
     );
 }
 
