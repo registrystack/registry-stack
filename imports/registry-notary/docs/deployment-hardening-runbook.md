@@ -57,8 +57,7 @@ allow_insecure_private_network: false
 
 The private-network escape hatch is useful for Docker Compose or lab
 topologies, but production source fetches should use HTTPS and a reviewed
-network path. Cloud metadata addresses remain blocked, including IPv4-mapped
-IPv6 forms.
+network path.
 
 ## Authentication And Authorization
 
@@ -225,14 +224,14 @@ Deployment checks:
   response shape and cardinality.
 - Keep `field_paths` and claim `fields` to the minimum data needed.
 
-When using source adapter sidecars, isolate worker execution when OpenFn is
-used, pin adaptor versions for OpenFn sources, and avoid retrying
-non-idempotent adapter calls. The sidecar must be reachable only from Notary
-over localhost or a private pod network. Do not expose it publicly, put it
-behind an internet-facing ingress, or allow callers to invoke OpenFn worker
-execution directly.
+When using source adapter sidecars, keep target credentials in the sidecar,
+configure target rate and concurrency limits, and avoid retrying
+non-idempotent adapter execution. For OpenFn sources, isolate worker execution
+and pin adaptor versions. The sidecar must be reachable only from Notary over
+localhost or a private pod network. Do not expose it publicly, put it behind an
+internet-facing ingress, or allow callers to invoke adapter execution directly.
 
-Runbook gates for sidecar source connections:
+Runbook gates for source adapter sidecar source connections:
 
 - Set `retry_on_5xx: false`. Notary does not retry sidecar adapter execution
   failures.

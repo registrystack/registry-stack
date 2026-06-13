@@ -2,12 +2,12 @@
 
 > **Page type:** Explanation · **Product:** Registry Notary · **Layer:** evaluation · **Audience:** operator, integrator, security reviewer
 
-Registry Notary can read source facts through a source adapter sidecar. This
-page covers what is specific to that source path: how the sidecar verifies the
+Registry Notary reads source facts through the source adapter sidecar when a
+target system needs governed HTTP JSON mapping, a short dependent HTTP JSON
+flow, OpenFn adaptor execution, or normalization outside Notary. This page
+covers what is specific to that source path: how the sidecar verifies the
 configuration it runs, how Notary confirms it is talking to the sidecar you
-expect, and how secrets are handled along the way. The stable Notary connector
-value is still `openfn_sidecar` for compatibility; inside the sidecar, a source
-can run the built-in `http_json` engine or a pinned OpenFn workflow.
+expect, and how secrets are handled along the way.
 
 The general governed-configuration model (signed bundles, TUF verification, trust
 roots, signer thresholds, and anti-rollback) is a shared Registry Platform
@@ -23,9 +23,9 @@ is the Notary- and sidecar-specific layer on top of that model.
 
 - **The sidecar fails closed at startup.** In production the sidecar starts only
   from a signed configuration bundle. If the signature, signer authorization,
-  content hashes, OpenFn expression/runtime/adaptor checks when OpenFn sources
-  are configured, or the startup smoke lookup fail, it refuses to serve. It does
-  not start in a partial or best-effort state.
+  content and per-file expression hashes, pinned runtime and adaptor versions, or
+  the startup smoke lookup fail, it refuses to serve. It does not start in a
+  partial or best-effort state.
 - **Notary can pin the sidecar it trusts.** A source connection can record the
   exact sidecar identity and configuration hash it expects. Notary refuses to
   read from a sidecar whose reported assurance does not match, so a drifted or
@@ -65,22 +65,20 @@ real token. The sidecar holds only a hash (fingerprint) of it and verifies
 presented tokens against that fingerprint, so the plaintext token never sits on
 the sidecar.
 
-**The target-service credential** is what the sidecar uses to read the upstream
-registry. Its value lives in an environment variable on the sidecar host. The
-signed bundle records only the variable's name and the base URLs that credential
-is allowed to target, never the value. At startup the sidecar loads the
-credential, checks its base URL against the allow-list, and holds it in memory.
+**The target-service credential** is what the sidecar source uses to read the
+upstream registry. Its value lives in an environment variable on the sidecar
+host. The signed bundle records only the variable's name and the base URLs that
+credential is allowed to target, never the value. At startup the sidecar loads
+the credential, checks its base URL against the allow-list, and holds it in
+memory.
 
 For OpenFn sources, the credential reaches a workflow only through the
 per-request input passed to the worker over a private channel, scoped to that
 single execution. The worker process runs with a cleared environment, so it does
 not inherit the sidecar host's secrets, and configured credential and token
 environment variable names are explicitly blocked from being passed into the
-worker. For `http_json` sources, only fields explicitly listed in
-`credential_public_fields` are available to CEL mappings, and secret values are
-available only through explicit adapter secret references. In both engines, the
-credential is never returned to Notary, never logged, and never included in the
-assurance output.
+worker. The credential is never returned to Notary, never logged, and never
+included in the assurance output.
 
 Because the binding (which environment variable, which allowed base URLs) is part
 of the signed bundle, someone who can edit local files cannot repoint a source at
@@ -104,17 +102,17 @@ for them with deployment controls.
   network controls and the bearer token for that boundary.
 - **Configuration integrity is not runtime-code integrity.** The signature proves
   the configuration bundle is authentic, including OpenFn workflow expression
-  files when they are present. For OpenFn sources, the worker runtime and
-  adaptors are pinned by version and verified against the installed versions,
-  but their contents are not hashed by the configuration signature. A compromised
-  dependency published at a pinned version is outside what the config signature
-  covers; manage that with your image build and supply-chain controls.
-- **The base-URL allow-list is not a complete egress sandbox.**
-  `allowed_base_urls` validates configured credential targets at startup and is
-  enforced by the built-in `http_json` adapter when it builds requests. For
-  OpenFn workflow code, it is not a general JavaScript egress firewall.
-  Constrain outbound traffic with deployment networking, for example a
-  Kubernetes network policy or an internal network.
+  files when they are used. Those files are content-hashed. The OpenFn worker
+  runtime and its adaptors are pinned by version and verified against the
+  installed versions, but their contents are not hashed by the configuration
+  signature. A compromised dependency published at a pinned version is outside
+  what the config signature covers; manage that with your image build and
+  supply-chain controls.
+- **The base-URL allow-list is not an egress sandbox.** `allowed_base_urls`
+  validates the configured credential targets at startup. It is not a general
+  JavaScript egress firewall for workflow code. Constrain outbound traffic with
+  deployment networking, for example a Kubernetes network policy or an internal
+  network.
 - **Notary's assurance view is periodic, not per-read.** Notary refreshes the
   sidecar's assurance on readiness checks and caches it for a short interval, so a
   sidecar that changes underneath a running Notary is recognized on the next
@@ -139,7 +137,7 @@ without production key custody.
   the shared platform model behind signed configuration, trust roots, signer
   thresholds, and anti-rollback. Read this first for the trust model itself.
 - [Model sources and claims](source-claim-modeling-guide.md): configure the
-  sidecar source connector and the claim boundary.
+  source adapter sidecar connector and the claim boundary.
 - [Operator configuration reference](operator-config-reference.md): the exact
   configuration blocks, including the source connection and expected-sidecar
   pinning.

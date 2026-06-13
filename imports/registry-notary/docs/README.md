@@ -21,6 +21,7 @@ Pick your path below. New to Registry Notary? Start with the hosted walkthrough 
 For application and wallet developers calling the API or the SDKs.
 
 - [Client SDK guide](client-sdk-guide.md): evaluate claims and issue credentials from Rust, Python, and Node.js.
+- [Call Notary from OpenFn](openfn-notary-caller-guide.md): branch an OpenFn workflow on a minimized Registry Notary claim result.
 - [API reference](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/api-reference.md): the route-to-client-method matrix and the stable problem-code registry.
 - [Wallet interop with OID4VCI](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/oid4vci-wallet-interop.md): the OpenID4VCI wallet facade contract and compatibility checklist.
 - [SD-JWT VC conformance](sd-jwt-vc-conformance-profile.md): the supported credential wire contract and the explicit non-support list.
@@ -32,7 +33,7 @@ For application and wallet developers calling the API or the SDKs.
 For operators deploying, configuring, and running a Registry Notary.
 
 - [Configuration reference](operator-config-reference.md): the config blocks for auth, evidence, sources, replay, status, self-attestation, OID4VCI, and federation.
-- [Model sources and claims](source-claim-modeling-guide.md): design source connectors, sidecar adapters, claim boundaries, disclosure, and batch reads.
+- [Model sources and claims](source-claim-modeling-guide.md): design source connectors, source adapter sidecars, claim boundaries, disclosure, and batch reads.
 - [Signing key providers](signing-key-provider.md): SD-JWT VC signing-key configuration, rotation, and PKCS#11 setup.
 - [Self-attestation](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/self-attestation-operator-guide.md): citizen OIDC subject binding, token policy, allow-lists, and rollout.
 - [Federated evaluation](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/federated-evaluation-operator-guide.md): static-peer setup, environment variables, and the replay limitation.

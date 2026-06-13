@@ -1,0 +1,30 @@
+{
+  "name": "@registry/notary-openfn-caller",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenFn workflow helpers and templates for calling Registry Notary.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "jobs",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --experimental-vm-modules --no-warnings --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20.18.1"
+  },
+  "dependencies": {
+    "@openfn/language-common": "3.3.3"
+  },
+  "devDependencies": {
+    "@openfn/compiler": "1.2.5",
+    "@openfn/runtime": "1.9.3"
+  }
+}

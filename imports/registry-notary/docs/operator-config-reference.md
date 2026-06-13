@@ -25,8 +25,8 @@ Before editing YAML, decide these items:
 | Multi-instance deployment | More than one Notary process serves traffic | `replay.storage: redis`, usually `credential_status.storage: redis` |
 | Credential suspension or revocation | Verifiers need a live status URL | `credential_status.enabled: true` |
 | Audit retention | Operators need traceability without raw personal data | `audit` |
-| Source adapter sidecar reads | A target system needs governed HTTP JSON mapping, pinned adaptor execution, or normalization outside Notary | `connector: openfn_sidecar`, `retry_on_5xx: false` |
-| Sidecar assurance | Notary must fail closed unless it is talking to the approved sidecar runtime | `source_connections.<id>.expected_sidecar` |
+| Source adapter sidecar reads | A target system needs governed HTTP JSON mapping, a short dependent HTTP JSON flow, pinned OpenFn adaptor execution, or normalization outside Notary | `connector: openfn_sidecar`, `retry_on_5xx: false` |
+| Source adapter sidecar assurance | Notary must fail closed unless it is talking to the approved sidecar runtime | `source_connections.<id>.expected_sidecar` |
 | Sidecar batch matching | Batch evaluation should share one sidecar read across compatible items | `bulk_mode: openfn_sidecar_batch`, binding `query_fields` |
 
 Start with one narrow claim, one source connection, one signing key, and one
@@ -186,8 +186,6 @@ config_trust:
   break_glass_rate_limit:
     max_accepted: 1
     window_seconds: 3600
-  required_approver_count:
-    emergency.break_glass: 2
   remote_tuf_repositories:
     - root_path: /etc/registry-notary/tuf/metadata/1.root.json
       metadata_base_url: https://config.example.gov/metadata
@@ -217,9 +215,6 @@ local YAML loaded at startup. Governed config apply requires
 durable local state such as a mounted volume. `break_glass_rate_limit` is the
 trusted local rolling-window policy for break-glass apply requests; when omitted
 it defaults to one accepted request per rate-limit identity per hour.
-`required_approver_count` is an optional per-emergency-change-class map for
-stored break-glass approval records. Counts default to `1`; values must be
-greater than zero.
 `accepted_roots` uses the shared Registry trust-root shape.
 Standalone Registry Notary verifies local or remote signed TUF config targets
 against `accepted_roots` when the admin request provides a `tuf` source.
@@ -289,15 +284,10 @@ registry.admin.capability.not_supported`.
 
 Break-glass apply is
 available only for signed targets whose target metadata includes the local
-approval's `emergency_change_class`. Inline `break_glass_approval` remains the
-single-approver path. Multi-approver policies write a verifier-owned approval
-record to `local_approval_state_path` and send only
-`break_glass_approval_reference` in the request. The rolling-window policy comes
-from local `config_trust.break_glass_rate_limit`; requests that include
-`break_glass_rate_limit` are rejected. The audit record stores the approval
-reference, emergency change class, expiry, rate-limit identity, and hashes of
-approver identity and reason text; it does not store raw approver identity or
-raw reason text.
+approval's `emergency_change_class`; the approval fields come from the admin
+request, the rolling-window policy comes from local
+`config_trust.break_glass_rate_limit`, and the audit record stores no raw reason
+text.
 
 ## Minimal Machine Config
 
@@ -496,16 +486,16 @@ mapping, a short dependent HTTP JSON flow, OpenFn adaptor execution, target
 credential handling, or output normalization outside Notary. The connector
 value remains `openfn_sidecar` for compatibility; the sidecar source chooses
 `engine: http_json`, `engine: http_flow`, or `engine: openfn` in its own signed
-manifest. The source connection must use
-static sidecar bearer auth through `token_env`. Do not configure target-service
-credentials in Notary; keep them in the sidecar environment or secret store.
-Configure performance and target-protection controls in the sidecar manifest:
-per-source `max_in_flight`, optional request rate and burst, `Retry-After`
-backoff handling, built-in adapter sequential or parallel lookup mode,
-`http_json` native batch mode where the upstream has a real bulk endpoint, and
-any explicit TTL-bound result cache. Treat cache settings as evidence freshness
-policy, not only performance tuning. Sidecar result caches are bounded by
-`cache.max_entries`, defaulting to 10000 entries per source.
+manifest. The source connection must use static sidecar bearer auth through
+`token_env`. Do not configure target-service credentials in Notary; keep them
+in the sidecar environment or secret store. Configure performance and
+target-protection controls in the sidecar manifest: per-source `max_in_flight`,
+optional request rate and burst, `Retry-After` backoff handling, built-in
+adapter sequential or parallel lookup mode, `http_json` native batch mode where
+the upstream has a real bulk endpoint, and any explicit TTL-bound result cache.
+Treat cache settings as evidence freshness policy, not only performance tuning.
+Sidecar result caches are bounded by `cache.max_entries`, defaulting to 10000
+entries per source.
 
 For high-assurance deployments, pin the sidecar runtime that Notary is allowed
 to use with `expected_sidecar`. Notary reads the private sidecar assurance

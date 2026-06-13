@@ -21,13 +21,13 @@ whether a claim is true. Source connectors stay narrow; claim meaning stays in
 Notary config.
 
 Source adapter sidecars are source-read adapters, not embedded workflow engines
-inside Notary. The stable Notary connector value is `openfn_sidecar` for
-compatibility, but a sidecar source can run either the built-in `http_json`
-engine or a pinned OpenFn workflow. Notary owns caller policy, matching policy,
-minimization, audit, disclosure, and credential issuance. The sidecar owns
-target-service credentials, source comparison, normalization, request shaping,
-and, when OpenFn is used, worker isolation. Batch matching through a sidecar is
-only a way to combine compatible source reads; it does not change the matching,
+inside Notary. Notary owns caller policy, matching policy, minimization, audit,
+disclosure, and credential issuance. The sidecar owns request shaping,
+target-service credentials, source comparison, normalization, adapter runtime
+verification, and worker isolation when OpenFn is used. A sidecar source can use
+the built-in `http_json` engine, the built-in `http_flow` engine, or pinned
+OpenFn workflow execution. Batch matching through a sidecar is only a way to
+combine compatible source reads; it does not change the matching,
 authorization, disclosure, identity proof, or credential model.
 
 ## The request lifecycle

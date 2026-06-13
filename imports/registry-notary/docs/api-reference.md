@@ -61,9 +61,9 @@ that route.
 This section documents the private sidecar API that Registry Notary calls when a
 source binding uses the compatibility connector value
 `connector: openfn_sidecar`. It is not a caller-facing Registry Notary route.
-The sidecar can run the built-in `http_json` engine or a pinned OpenFn workflow.
-It must run on localhost or a private pod network and must not be publicly
-exposed.
+The sidecar can run the built-in `http_json` engine, the built-in `http_flow`
+engine, or a pinned OpenFn workflow. It must run on localhost or a private pod
+network and must not be publicly exposed.
 
 Single reads use the Registry Data API-shaped source route:
 
@@ -133,10 +133,10 @@ Contract rules:
 - A missing response item maps to `source.unavailable` for that item.
 - `data: []` maps to source not found, `data: [record]` maps to a successful
   source match, and `data` with two records maps to source ambiguous.
-- If the adapter returns more than two records for an item, the sidecar
+- If the worker returns more than two records for an item, the sidecar
   normalizes the result to two records before returning it to Notary, preserving
   the same cardinality rule used for single reads.
-- Returned records are projected to the requested `fields`; extra adapter output
+- Returned records are projected to the requested `fields`; extra worker output
   fields are not returned to Notary.
 - Documented per-item sidecar error codes are `target_auth` and
   `target_rate_limit`; unknown per-item error codes map to source unavailable.
@@ -180,10 +180,6 @@ for policy mapping. Map on `code`, not on prose. Safe fields for logs are
 | `relationship.attributes_insufficient` | Relationship |
 | `relationship.policy_rejected` | Relationship |
 | `relationship.purpose_not_allowed` | Relationship |
-| `source.target_auth` | Source |
-| `source.target_rate_limit` | Source |
-| `source.saturated` | Source |
-| `source.timeout` | Source |
 | `source.unavailable` | Source |
 | `claim.not_found` | Claim |
 | `claim.version_not_found` | Claim |

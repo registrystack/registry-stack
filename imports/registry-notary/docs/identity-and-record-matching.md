@@ -125,13 +125,14 @@ Matching is policy-driven and source-side. The source connector or sidecar
 performs the comparison; Notary core enforces a policy gate before the read and
 minimizes what it forwards.
 
-For sidecar sources, the same boundary applies to both single reads and batch
-matching. Notary decides which request paths may be used, collapses public
-matching errors when configured, audits the decision, and applies disclosure.
-The sidecar receives only the minimized source query terms, projected fields,
-purpose, correlation metadata, source id, dataset, entity, and sidecar-owned
-configuration needed to execute the adapter. It does not receive the full target,
-requester, relationship, assurance, claim config, or disclosure config.
+For source adapter sidecar sources, the same boundary applies to both single
+reads and batch matching. Notary decides which request paths may be used,
+collapses public matching errors when configured, audits the decision, and
+applies disclosure. The sidecar receives only the minimized source query terms,
+projected fields, purpose, correlation metadata, source id, dataset, entity, and
+sidecar-owned configuration needed to execute the adapter or workflow. It does
+not receive the full target, requester, relationship, assurance, claim config,
+or disclosure config.
 
 Two controls run before any source query leaves Notary:
 
