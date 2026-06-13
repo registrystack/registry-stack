@@ -391,6 +391,8 @@ pub struct BreakGlassState {
 pub struct BreakGlassAcceptance {
     pub accepted_at_unix_seconds: u64,
     pub approval_reference: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emergency_change_class: Option<String>,
     pub rate_limit_identity: String,
     pub sequence: u64,
     pub config_hash: String,
@@ -417,6 +419,8 @@ pub struct LocalApprovalAcceptance {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct LocalOperatorApproval {
     pub approved_by: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub approvers: Vec<String>,
     pub reason: String,
     pub approval_reference: String,
     pub change_class: String,
@@ -793,6 +797,7 @@ fn validate_local_approval(
     now_unix_seconds: u64,
 ) -> Result<(), AntiRollbackStoreError> {
     validate_local_approval_field("approved_by", &approval.approved_by)?;
+    validate_distinct_approvers(&approval.approved_by, &approval.approvers)?;
     validate_local_approval_field("reason", &approval.reason)?;
     validate_local_approval_field("approval_reference", &approval.approval_reference)?;
     validate_local_approval_field("change_class", &approval.change_class)?;
@@ -820,6 +825,30 @@ fn validate_local_approval_field(
 ) -> Result<(), AntiRollbackStoreError> {
     if value.trim().is_empty() {
         return Err(AntiRollbackStoreError::InvalidLocalApproval(name));
+    }
+    Ok(())
+}
+
+fn validate_distinct_approvers(
+    approved_by: &str,
+    approvers: &[String],
+) -> Result<(), AntiRollbackStoreError> {
+    let mut trimmed = Vec::with_capacity(approvers.len() + 1);
+    trimmed.push(approved_by.trim());
+    for approver in approvers {
+        let approver = approver.trim();
+        if approver.is_empty() {
+            return Err(AntiRollbackStoreError::InvalidLocalApproval("approvers"));
+        }
+        trimmed.push(approver);
+    }
+    for index in 0..trimmed.len() {
+        if trimmed[index + 1..]
+            .iter()
+            .any(|candidate| *candidate == trimmed[index])
+        {
+            return Err(AntiRollbackStoreError::InvalidLocalApproval("approvers"));
+        }
     }
     Ok(())
 }
@@ -905,6 +934,7 @@ fn enforce_break_glass_rate_limit(
     state.accepted.push(BreakGlassAcceptance {
         accepted_at_unix_seconds: now_unix_seconds,
         approval_reference: approval.approval_reference.clone(),
+        emergency_change_class: Some(approval.emergency_change_class.clone()),
         rate_limit_identity: approval.rate_limit_identity.clone(),
         sequence,
         config_hash: config_hash.to_string(),
