@@ -539,7 +539,7 @@ impl DoctorReport {
         let ok = checks.iter().all(|check| check.status != "failed")
             && findings
                 .iter()
-                .all(|finding| finding.severity != "startup_fail");
+                .all(|finding| !doctor_finding_fails(finding));
         Self {
             schema: "registry.validation.report.v1",
             product: "registry-relay",
@@ -551,6 +551,10 @@ impl DoctorReport {
             findings,
         }
     }
+}
+
+fn doctor_finding_fails(finding: &DoctorFinding) -> bool {
+    finding.status == "active" && matches!(finding.severity, "startup_fail" | "readiness_fail")
 }
 
 #[derive(Debug, Serialize)]
