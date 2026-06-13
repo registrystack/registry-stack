@@ -1,5 +1,6 @@
 ---
 import docsetsManifest from '../data/generated/docsets.json';
+import { mdHrefForPath } from '../lib/md-href';
 
 const activeDocsetId = process.env.DOCS_DOCSET || docsetsManifest.current;
 const activeDocset =
@@ -11,7 +12,15 @@ const head = isArchived
       ({ tag, attrs }) => !(tag === 'link' && attrs?.rel === 'sitemap'),
     )
   : Astro.locals.starlightRoute.head;
+
+// Machine-discoverability: the .md alternate link tells LLMs and other
+// consumers where to find the raw Markdown source for this page. Starlight's
+// built-in 404 has no docs entry (and thus no .md), so skip it there.
+const path = Astro.url.pathname.replace(import.meta.env.BASE_URL, '/');
+const is404 = path === '/404/' || path === '/404';
+const mdHref = mdHrefForPath(Astro.url.pathname, import.meta.env.BASE_URL);
 ---
 
 {head.map(({ tag: Tag, attrs, content }) => <Tag {...attrs} set:html={content} />)}
 {isArchived && <meta name="robots" content="noindex,follow" />}
+{!is404 && <link rel="alternate" type="text/markdown" href={mdHref} />}

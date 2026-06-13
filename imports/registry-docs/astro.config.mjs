@@ -3,7 +3,12 @@ import { readFileSync } from 'node:fs';
 import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
+import starlightLlmsTxt from 'starlight-llms-txt';
 import mermaid from 'astro-mermaid';
+// Single source of truth for the machine-discovery pointer. Reused as the
+// llms.txt `details` block so it can never drift from the header the per-page
+// .md endpoint prepends (src/pages/[...slug].md.ts).
+import { DISCOVERY_HEADER } from './src/lib/page-markdown.ts';
 
 // Marketing site that now owns the persuasion layer (the pitch). Old docs
 // routes that migrated there redirect to these pages.
@@ -112,7 +117,24 @@ export default defineConfig({
     }),
     starlight({
       title: 'Registry stack docs',
-      description: 'Documentation website for the registry stack.',
+      description: 'Documentation for Registry Stack: Registry Relay and Registry Notary, the runtime services that publish registry metadata, serve protected registry data, and issue evidence credentials.',
+      plugins: [
+        // Generates /llms.txt, /llms-full.txt, and /llms-small.txt for
+        // machine consumption. The `details` field carries the discovery
+        // pointer so LLM clients know where to find both corpus files.
+        // API reference pages (reference/apis/*) are Redoc HTML embeds with
+        // minimal prose; they are excluded from llms-small.txt to keep the
+        // compact version useful, but remain in llms-full.txt.
+        // Only registered for non-archived builds: base-path builds do not
+        // have a stable canonical site URL, and the plugin requires `site`.
+        ...(isArchivedBuild ? [] : [starlightLlmsTxt({
+          description: 'Documentation for Registry Stack: tutorials, product docs, explanation, and API reference for Registry Relay and Registry Notary.',
+          details: DISCOVERY_HEADER,
+          exclude: ['reference/apis/**'],
+          promote: ['index*', 'explanation/**'],
+          demote: ['reference/**', 'decisions/**'],
+        })]),
+      ],
       defaultLocale: 'root',
       locales: {
         root: {

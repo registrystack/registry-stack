@@ -14,6 +14,6 @@ const isArchived = activeDocset?.status === 'archived';
   <nav aria-label="Footer">
     <a href={`${base}accessibility/`}>Accessibility</a>
     {!isArchived && <a href={`${base}sitemap-index.xml`}>Sitemap</a>}
-    <a href={`${base}llms.txt`}>llms.txt</a>
+    {!isArchived && <a href={`${base}llms.txt`}>llms.txt</a>}
   </nav>
 </footer>
