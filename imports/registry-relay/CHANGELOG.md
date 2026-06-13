@@ -12,17 +12,21 @@
   durable multi-approver store; the default tier emits the emergency posture block
   without reason or identity material.
 
+### Security
+
+- Fail and redact `doctor` readiness-gate findings; preflight fail-closed admin
+  mutations; authorize admin JSON before parsing; and harden static-metadata server
+  concurrency (PR #143).
+
 ### Fixed
 
 - Release pipeline: verify release tag ancestry via the compare API (PR #122);
   neutralize a local-dev `ld64.lld` override in macOS binary builds (PR #123);
-  set `GH_REPO` so the release publish job resolves the repository (PR #125).
-- Bind the release-ancestry check to the protected `main` SHA (PR #142).
-- Fail and redact `doctor` readiness-gate findings; preflight fail-closed admin
-  mutations; authorize admin JSON before parsing; harden static-metadata server
-  concurrency; strengthen non-Unix file ETags; prefer the curated manifest for the
-  base DCAT; preserve `=` in perf env exports and the active shell in the perf gate
-  check (PR #143).
+  set `GH_REPO` so the release publish job resolves the repository (PR #125);
+  and bind the release-ancestry check to the protected `main` SHA (PR #142).
+- Strengthen non-Unix file ETags; prefer the curated manifest for the base DCAT;
+  and preserve `=` in perf env exports and the active shell in the perf gate check
+  (PR #143).
 
 ## 0.2.0 - 2026-06-12
 
