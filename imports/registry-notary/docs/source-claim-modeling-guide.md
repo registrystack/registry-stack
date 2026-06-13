@@ -26,7 +26,7 @@ Keep source connectors narrow and keep claim semantics in Notary config.
 | --- | --- | --- |
 | DCI | The upstream speaks a DCI-style search envelope | `connector: dci` |
 | Registry Data API | The upstream exposes `/v1/datasets/{dataset}/entities/{entity}/records` lookups | `connector: registry_data_api` |
-| Source adapter sidecar | A private sidecar must normalize a target system outside Notary, using built-in `http_json` or pinned OpenFn workflow execution | `connector: openfn_sidecar` |
+| Source adapter sidecar | A private sidecar must normalize a target system outside Notary, using built-in `http_json` or `http_flow`, or pinned OpenFn workflow execution | `connector: openfn_sidecar` |
 
 Prefer the simplest direct source. Add a sidecar when the target system needs
 private credentials, governed request shaping, output normalization, or OpenFn
@@ -179,7 +179,7 @@ Boundary rules:
 - Notary owns caller policy, matching policy, minimization, error collapsing,
   audit, disclosure, credential issuance, and the decision about whether a
   source result satisfies a claim.
-- The sidecar owns request shaping, target-service credentials, source
+- The sidecar owns adaptor execution, target-service credentials, source
   comparison, output normalization, adapter runtime verification, and worker
   isolation when OpenFn is used.
 - Sidecar batch matching is a source-read optimization. It is not a new
@@ -203,8 +203,8 @@ for sidecar manifest and worker details.
 
 ### Sidecar Batch Matching Contract
 
-Sidecar batch matching uses a dedicated POST contract. Notary calls this route
-when `bulk_mode: openfn_sidecar_batch` is set on a source connection and
+Sidecar batch matching uses a dedicated POST contract. Notary calls this
+route when `bulk_mode: openfn_sidecar_batch` is set on a source connection and
 the request contains multiple subjects. The contract is semantically equivalent
 to running the same source binding as single reads for each item. For the full
 request and response shapes, field rules, cardinality semantics, and HTTP error
@@ -471,14 +471,16 @@ Bulk source modes are separate from API batch evaluation:
   `POST /v1/datasets/{dataset}/entities/{entity}/records:batchMatch` with a
   shared `query_signature`.
 
+For sidecar sources, select the batch behavior in the sidecar manifest. Use
+`batch.mode: sequential_lookup` by default, `parallel_lookup` only when the
+upstream is proven safe for parallel reads, and `max_parallel` to cap fan-out.
+Use `native_batch` only when the upstream exposes a real bulk endpoint. `cache`
+may memoize exact matches and not-found responses with explicit TTLs and
+`cache.max_entries`.
+
 Do not enable bulk modes until contract tests prove response shape,
-cardinality, and source limits. For built-in HTTP sidecars, prefer sequential
-lookup first, then opt into `parallel_lookup` only with a bounded
-`batch.max_parallel`. Use `http_json` `native_batch` only when the upstream has
-a real bulk endpoint and configured response fan-out keys. Optional sidecar
-result caching must be TTL-bound and reviewed as an evidence freshness decision.
-Notary does not retry sidecar adapter execution failures; keep
-`retry_on_5xx: false` on sidecar connections.
+cardinality, and source limits. Notary does not retry sidecar adapter execution
+failures; keep `retry_on_5xx: false` on sidecar connections.
 
 ## Purpose Propagation
 

@@ -158,6 +158,19 @@ jobs:
             fi
           }
 
+          require_any_literal() {
+            file="$1"
+            shift
+            for literal in "$@"; do
+              if grep -Fq "$literal" "$file"; then
+                return 0
+              fi
+            done
+            echo "$file must contain one of:" >&2
+            printf '  %s\n' "$@" >&2
+            exit 1
+          }
+
           require_literal registry-notary/Dockerfile "FROM gcr.io/distroless/cc-debian12:nonroot@sha256:"
           require_literal registry-notary/Dockerfile 'HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/usr/local/bin/registry-notary", "healthcheck"]'
           require_literal registry-notary/Dockerfile 'ENTRYPOINT ["/usr/local/bin/registry-notary"]'
@@ -166,7 +179,9 @@ jobs:
             exit 1
           fi
 
-          require_literal registry-notary/Dockerfile.openfn-sidecar "FROM node:24-bookworm-slim@sha256:"
+          require_any_literal registry-notary/Dockerfile.openfn-sidecar \
+            "FROM node:24-bookworm-slim@sha256:" \
+            "FROM node:26-bookworm-slim@sha256:"
           require_literal registry-notary/Dockerfile.openfn-sidecar 'HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["node", "/opt/openfn/container-healthcheck.mjs"]'
           require_literal registry-notary/Dockerfile.openfn-sidecar 'ENTRYPOINT ["/usr/local/bin/registry-notary-openfn-sidecar"]'
       - name: Build release Docker image
