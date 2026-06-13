@@ -634,6 +634,12 @@ metadata:
         self.assertIssue(issues, "missing-shared-notary-client-hash")
         self.assertIssue(issues, "missing-shared-notary-source-token")
 
+    def test_rejects_lab_homepage_without_config_repo_ref(self) -> None:
+        compose = self._valid_registry_lab()
+        compose["services"]["lab-homepage"]["environment"].pop("CONFIG_REPO_REF", None)
+        issues = self._validate(compose, self._valid_esignet())
+        self.assertIssue(issues, "lab-homepage-missing-config-ref")
+
     def test_rejects_shared_notary_config_with_wrong_public_url(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1366,6 +1372,7 @@ cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
                     "image": "python:3.12.3-slim-bookworm",
                     "expose": ["8080"],
                     "environment": {
+                        "CONFIG_REPO_REF": "${CONFIG_REPO_REF:?set CONFIG_REPO_REF to the deployed registry-lab git ref}",
                         "CIVIL_EVIDENCE_URL": "http://civil-notary:8080",
                         "CIVIL_EVIDENCE_CLIENT_BEARER": "${CIVIL_EVIDENCE_CLIENT_BEARER:-}",
                         "SOCIAL_RELAY_URL": "http://social-protection-registry-relay:8080",

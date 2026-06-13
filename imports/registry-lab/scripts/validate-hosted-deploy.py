@@ -317,6 +317,7 @@ def validate_artifacts(
             )
         )
         issues.extend(validate_config_loader_ref(artifact, services))
+        issues.extend(validate_lab_homepage_config_ref(artifact, services))
         issues.extend(validate_config_loader_hosted_outputs(artifact, services))
         issues.extend(validate_hosted_yaml_files(artifact, root))
         issues.extend(validate_dhis2_programme_vc_contract(artifact, root))
@@ -1114,6 +1115,33 @@ def validate_config_loader_ref(artifact: str, services: dict[str, Any]) -> list[
             artifact,
             "services.config-loader.environment.CONFIG_REPO_REF",
             "hosted config-loader must require a deployed git ref, not a floating or stale branch",
+        )
+    ]
+
+
+def validate_lab_homepage_config_ref(artifact: str, services: dict[str, Any]) -> list[Issue]:
+    # lab-homepage-server.py imports lab_homepage_scenarios once at process
+    # start from the config-loader-populated cfg-static-scripts volume. A
+    # refreshed volume alone does not update an already-running process, so the
+    # service must carry CONFIG_REPO_REF too: that makes `docker compose up`
+    # recreate it whenever the deployed ref changes, after config-loader has
+    # repopulated the volume. Without it, a deploy reports success while the
+    # homepage keeps serving the previously imported scenario modules.
+    if artifact != "registry-lab":
+        return []
+    lab_homepage = services.get("lab-homepage")
+    if not isinstance(lab_homepage, dict):
+        return []
+    env = normalize_environment(lab_homepage.get("environment"))
+    value = env.get("CONFIG_REPO_REF")
+    if isinstance(value, str) and ("${CONFIG_REPO_REF" in value or re.fullmatch(r"[0-9a-f]{40}", value)):
+        return []
+    return [
+        Issue(
+            "lab-homepage-missing-config-ref",
+            artifact,
+            "services.lab-homepage.environment.CONFIG_REPO_REF",
+            "hosted lab-homepage must reference CONFIG_REPO_REF so docker compose recreates it when the deployed scenario code changes",
         )
     ]
 
