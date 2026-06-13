@@ -313,6 +313,15 @@ services:
     expose:
       - "8080"
     environment:
+      # lab-homepage-server.py imports lab_homepage_scenarios once at process
+      # start from the config-loader-populated cfg-static-scripts volume. A
+      # refreshed volume alone does not update an already-running process, so the
+      # ref must reach this service's environment too: a changed value makes
+      # `docker compose up` recreate lab-homepage (after config-loader repopulates
+      # the volume), which reimports the deployed scenario code. Without it a
+      # force=false deploy reports success while the homepage keeps serving the
+      # previously imported scenario modules.
+      CONFIG_REPO_REF: ${CONFIG_REPO_REF:?set CONFIG_REPO_REF to the deployed registry-lab git ref}
       CIVIL_EVIDENCE_URL: http://civil-notary:8080
       CIVIL_EVIDENCE_CLIENT_BEARER: ${CIVIL_EVIDENCE_CLIENT_BEARER:-}
       SOCIAL_RELAY_URL: http://social-protection-registry-relay:8080
