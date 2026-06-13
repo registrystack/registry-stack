@@ -57,7 +57,8 @@ allow_insecure_private_network: false
 
 The private-network escape hatch is useful for Docker Compose or lab
 topologies, but production source fetches should use HTTPS and a reviewed
-network path.
+network path. Cloud metadata addresses remain blocked, including IPv4-mapped
+IPv6 forms.
 
 ## Authentication And Authorization
 
