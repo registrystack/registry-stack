@@ -1567,6 +1567,7 @@ struct SidecarWorkerConfig {
 struct SidecarSourceConfig {
     dataset: String,
     entity: String,
+    engine: &'static str,
     workflow: SidecarWorkflowConfig,
     credential_env: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -1695,6 +1696,7 @@ fn build_openfn_sidecar_conversion(
         SidecarSourceConfig {
             dataset: options.dataset.clone(),
             entity: options.entity.clone(),
+            engine: "openfn",
             workflow: SidecarWorkflowConfig {
                 start,
                 batch_mode: options.batch_mode,
@@ -3755,6 +3757,55 @@ mod tests {
         assert!(!image.contains(":latest"));
     }
 
+    fn assert_no_local_demo_external_auth_deps(label: &str, contents: &str) {
+        let normalized = contents.to_ascii_lowercase();
+        for forbidden in [
+            "assisted access",
+            "assisted-access",
+            "assisted_access",
+            "esign",
+            "e-signet",
+            "oidc",
+            "oauth",
+            "openid",
+            "_sts",
+            "sts_",
+            "sts-url",
+            "sts url",
+            "sts.",
+            "sts:",
+            "/sts",
+            "security token service",
+            "security-token-service",
+            "security_token_service",
+            "transaction-token",
+            "transaction_token",
+            "transaction token",
+        ] {
+            assert!(
+                !normalized.contains(forbidden),
+                "{label} should not reference external auth dependency {forbidden:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn registryctl_manifest_has_no_external_auth_dependencies() {
+        let manifest =
+            fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")).unwrap();
+        assert_no_local_demo_external_auth_deps("registryctl Cargo.toml", &manifest);
+        for forbidden_dependency in [
+            "registry-platform-sts",
+            "registry-assisted-access",
+            "registry-platform-oidc",
+        ] {
+            assert!(
+                !manifest.contains(forbidden_dependency),
+                "registryctl must not depend on {forbidden_dependency}"
+            );
+        }
+    }
+
     fn openfn_options(temp: &TempDir) -> OpenFnConvertOptions {
         OpenFnConvertOptions {
             input: temp.path().join("openfn.yaml"),
@@ -3947,6 +3998,7 @@ workflows:
             manifest["sources"]["openfn_crvs"]["smoke_lookup"]["value"],
             "smoke-person"
         );
+        assert_eq!(manifest["sources"]["openfn_crvs"]["engine"], "openfn");
         assert_eq!(
             manifest["sources"]["openfn_crvs"]["workflow"]["batch_mode"],
             "per_item"
@@ -4448,6 +4500,52 @@ workflows:
         assert!(claims
             .iter()
             .any(|claim| claim.as_str() == Some("benefits-person-exists")));
+    }
+
+    #[test]
+    fn relay_plus_notary_local_demo_has_no_external_auth_dependencies() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("my-first-api");
+        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
+        add_notary(&project, NotarySource::LocalRelay, false).unwrap();
+
+        for path in [
+            "registryctl.yaml",
+            "compose.yaml",
+            "relay/config.yaml",
+            "notary/config.yaml",
+            "bruno/registry-api/environments/local.bru",
+            "bruno/registry-api/environments/local.example.bru",
+            "bruno/registry-api/Relay/List datasets.bru",
+            "bruno/registry-api/Relay/Read sample people.bru",
+            "bruno/registry-api/Notary/List claims.bru",
+            "bruno/registry-api/Notary/Evaluate person exists.bru",
+        ] {
+            let contents = fs::read_to_string(project.join(path)).unwrap();
+            assert_no_local_demo_external_auth_deps(path, &contents);
+        }
+
+        let relay_config: Value =
+            serde_yaml::from_str(&fs::read_to_string(project.join("relay/config.yaml")).unwrap())
+                .unwrap();
+        let notary_config: Value =
+            serde_yaml::from_str(&fs::read_to_string(project.join("notary/config.yaml")).unwrap())
+                .unwrap();
+        assert_eq!(relay_config["auth"]["mode"], "api_key");
+        assert_eq!(notary_config["auth"]["mode"], "api_key");
+        assert_eq!(
+            notary_config["evidence"]["source_connections"]["relay"]["base_url"],
+            "http://registry-relay:8080"
+        );
+        assert_eq!(
+            notary_config["evidence"]["source_connections"]["relay"]["token_env"],
+            "EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN"
+        );
+
+        let local_env = fs::read_to_string(project.join("secrets/local.env")).unwrap();
+        for key in parse_local_env(&local_env).keys() {
+            assert_no_local_demo_external_auth_deps("secrets/local.env key", key);
+        }
     }
 
     #[test]
