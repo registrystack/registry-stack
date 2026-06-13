@@ -27,6 +27,10 @@ const currentLabels = new Map([
 
 const parts = path.split('/').filter(Boolean);
 const isHome = path === '/';
+// Starlight's built-in 404 is the one route with no backing docs entry, so the
+// .md endpoint never generates /404.md. Skip the Markdown affordances there to
+// avoid a dangling link.
+const is404 = parts.length === 1 && parts[0] === '404';
 const section = parts[0] ? sectionLabels.get(parts[0]) : undefined;
 const current = currentLabels.get(path) ?? starlightRoute.entry.data.title;
 const isWide = starlightRoute.entry.data.wide === true;
@@ -66,6 +70,7 @@ const mdHref = mdHrefForPath(Astro.url.pathname, import.meta.env.BASE_URL);
      The .md URL follows the contract: strip trailing slash, append .md; root -> index.md.
      The click handler is bound in the <script> block below, re-attached on
      astro:page-load so it survives Starlight's client-side view transitions. -->
+{!is404 && (
 <div class="registry-md-actions">
   <button
     class="registry-md-btn"
@@ -79,6 +84,7 @@ const mdHref = mdHrefForPath(Astro.url.pathname, import.meta.env.BASE_URL);
     aria-label="View page source as Markdown in the browser"
   >View as Markdown</a>
 </div>
+)}
 
 <script>
   // Bind the "Copy as Markdown" button. Called on initial load and on every
