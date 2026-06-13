@@ -119,8 +119,17 @@ After drafting a config:
 2. Confirm every storage table, entity, relationship, scope, filter, and aggregate reference resolves.
 3. Confirm evidence-verification-only, aggregate-only, row, metadata, and admin scopes remain independent.
 4. Confirm hidden storage columns are not used as public filters, aggregate columns, evidence verification parameters, or documentation fields.
-5. If the user supplies loader errors or validation logs from a `registry-relay` deployment, map them back to the bundled contract and revise the YAML. Do not require repository access to complete the config draft.
-6. If env-backed API keys appear in examples, use placeholder environment variable names only. Do not print real secrets.
+5. Run product validation when the binary is available:
+
+   ```sh
+   registry-relay doctor --config <config.yaml> --env-file <env-file> --format json
+   ```
+
+   Add `--profile <local|hosted_lab|production|evidence_grade>` only for an explicit review override. Prefer a `deployment.profile` field in the final config.
+
+6. Treat `registry-relay doctor` JSON as the validation authority. If the command is unavailable, report that validation could not be completed and fall back to structural review only.
+7. If the user supplies loader errors or validation logs from a `registry-relay` deployment, map them back to the bundled contract and revise the YAML. Do not require repository access to complete the config draft.
+8. If env-backed API keys appear in examples, use placeholder environment variable names only. Do not print real secrets.
 
 ## Gotchas
 

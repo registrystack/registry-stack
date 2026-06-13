@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Deployment profile gates, posture findings, and audit write policy** (#128–#130,
+  PR #136): profile-aware gates, deployment posture findings, and a configurable
+  audit write policy (`availability_first` default, `fail_closed`). A `doctor`
+  command reports gate status (PR #137).
+
+### Fixed
+
+- Release pipeline: verify release tag ancestry via the compare API (PR #122);
+  neutralize a local-dev `ld64.lld` override in macOS binary builds (PR #123);
+  set `GH_REPO` so the release publish job resolves the repository (PR #125).
+
 ## 0.2.0 - 2026-06-12
 
 ### Changed
