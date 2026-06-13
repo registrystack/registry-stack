@@ -19,8 +19,11 @@ const TEST_SOURCE_TOKEN: &str = "doctor-source-token";
 struct TestConfigOptions<'a> {
     openapi_requires_auth: Option<bool>,
     source_base_url: Option<&'a str>,
+    source_allows_private_network: bool,
+    openfn_batch_without_expected_sidecar: bool,
     config_trust: bool,
     multi_instance: bool,
+    durable_audit: Option<bool>,
 }
 
 fn write_config(tmp: &TempDir) -> PathBuf {
@@ -55,7 +58,8 @@ fn write_config_with_options(tmp: &TempDir, options: TestConfigOptions<'_>) -> P
     } else {
         ""
     };
-    let audit = if options.config_trust {
+    let durable_audit = options.durable_audit.unwrap_or(options.config_trust);
+    let audit = if durable_audit {
         format!(
             r#"audit:
   sink: file
@@ -71,13 +75,26 @@ fn write_config_with_options(tmp: &TempDir, options: TestConfigOptions<'_>) -> P
 "#
         .to_string()
     };
-    let source_connections = options
-        .source_base_url
+    let source_base_url = options.source_base_url.or(options
+        .openfn_batch_without_expected_sidecar
+        .then_some("https://openfn.example.test"));
+    let source_private_network = if options.source_allows_private_network {
+        "      allow_insecure_private_network: true\n"
+    } else {
+        ""
+    };
+    let openfn_bulk_mode = if options.openfn_batch_without_expected_sidecar {
+        "      bulk_mode: openfn_sidecar_batch\n      retry_on_5xx: false\n"
+    } else {
+        ""
+    };
+    let source_connections = source_base_url
         .map(|base_url| {
             format!(
                 r#"  source_connections:
     profile_gate_test:
       base_url: "{base_url}"
+{source_private_network}{openfn_bulk_mode}
       token_env: TEST_DOCTOR_JSON_SOURCE_TOKEN
 "#
             )
@@ -480,6 +497,112 @@ fn doctor_json_production_in_memory_replay_high_risk_fails_readiness() {
     assert_eq!(report["result"], "failed");
     let diagnostic = diagnostic_with_code(&report, "notary.replay.in_memory_high_risk")
         .expect("high-risk replay finding");
+    assert_eq!(diagnostic["severity"], "readiness_fail");
+    assert_eq!(diagnostic["status"], "active");
+}
+
+#[test]
+fn doctor_json_production_missing_durable_audit_sink_fails_startup() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_config_with_options(
+        &tmp,
+        TestConfigOptions {
+            config_trust: true,
+            durable_audit: Some(false),
+            ..TestConfigOptions::default()
+        },
+    );
+    let env_file = write_env_file(&tmp);
+
+    let output = doctor_command(&config, Some(&env_file))
+        .args(["--profile", "production", "--format", "json"])
+        .output()
+        .expect("doctor runs");
+
+    assert!(
+        !output.status.success(),
+        "production without durable audit sink should fail startup\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
+    let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+
+    assert_eq!(report["ok"], json!(false));
+    assert_eq!(report["result"], "failed");
+    let diagnostic =
+        diagnostic_with_code(&report, "notary.audit.sink_missing").expect("audit sink finding");
+    assert_eq!(diagnostic["severity"], "startup_fail");
+    assert_eq!(diagnostic["status"], "active");
+}
+
+#[test]
+fn doctor_json_production_private_network_source_escape_reports_error() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_config_with_options(
+        &tmp,
+        TestConfigOptions {
+            source_base_url: Some("http://10.0.0.1:9000"),
+            source_allows_private_network: true,
+            config_trust: true,
+            ..TestConfigOptions::default()
+        },
+    );
+    let env_file = write_env_file(&tmp);
+
+    let output = doctor_command(&config, Some(&env_file))
+        .args(["--profile", "production", "--format", "json"])
+        .output()
+        .expect("doctor runs");
+
+    assert!(
+        output.status.success(),
+        "private-network source escape should be a finding_error under production\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
+    let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+
+    assert_eq!(report["ok"], json!(true));
+    assert_eq!(report["result"], "passed");
+    let diagnostic = diagnostic_with_code(&report, "notary.source.private_network_escape")
+        .expect("private-network source escape finding");
+    assert_eq!(diagnostic["severity"], "finding_error");
+    assert_eq!(diagnostic["status"], "active");
+}
+
+#[test]
+fn doctor_json_evidence_grade_openfn_without_expected_sidecar_fails_readiness() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_config_with_options(
+        &tmp,
+        TestConfigOptions {
+            openfn_batch_without_expected_sidecar: true,
+            config_trust: true,
+            ..TestConfigOptions::default()
+        },
+    );
+    let env_file = write_env_file(&tmp);
+
+    let output = doctor_command(&config, Some(&env_file))
+        .args(["--profile", "evidence_grade", "--format", "json"])
+        .output()
+        .expect("doctor runs");
+
+    assert!(
+        !output.status.success(),
+        "evidence_grade OpenFn batch without expected sidecar should fail readiness\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
+    let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+
+    assert_eq!(report["ok"], json!(false));
+    assert_eq!(report["result"], "failed");
+    let diagnostic = diagnostic_with_code(&report, "notary.sidecar.expected_sidecar_missing")
+        .expect("missing expected sidecar finding");
     assert_eq!(diagnostic["severity"], "readiness_fail");
     assert_eq!(diagnostic["status"], "active");
 }
