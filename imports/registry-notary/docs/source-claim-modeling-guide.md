@@ -26,11 +26,11 @@ Keep source connectors narrow and keep claim semantics in Notary config.
 | --- | --- | --- |
 | DCI | The upstream speaks a DCI-style search envelope | `connector: dci` |
 | Registry Data API | The upstream exposes `/v1/datasets/{dataset}/entities/{entity}/records` lookups | `connector: registry_data_api` |
-| OpenFn sidecar | A pinned OpenFn adaptor or workflow must execute outside Notary for single reads or batch matching | `connector: openfn_sidecar` |
+| Source adapter sidecar | A private sidecar must normalize a target system outside Notary, using built-in `http_json` or pinned OpenFn workflow execution | `connector: openfn_sidecar` |
 
-Prefer the simplest direct source. Add an OpenFn sidecar when the target system
-needs adaptor code, request shaping, credential handling, or normalization that
-does not belong inside Notary itself.
+Prefer the simplest direct source. Add a sidecar when the target system needs
+private credentials, governed request shaping, output normalization, or OpenFn
+workflow execution outside Notary.
 
 ## Source Connection Design
 
@@ -62,10 +62,13 @@ Design rules:
 - Configure exactly one of `token_env` or `source_auth`.
 - Use HTTPS source URLs in shared environments.
 - Keep `max_in_flight` below the upstream's safe concurrency limit.
+- For sidecar sources, also set sidecar `limits.requests_per_second` and
+  `limits.burst` when the upstream has a documented safe rate. The sidecar
+  honors target `Retry-After` responses and fails fast during the backoff window.
 - Leave `retry_on_5xx: true` for idempotent reads.
 - Set `retry_on_5xx: false` for sidecar worker flows that must not repeat.
 - Use `bulk_mode: none` until the source contract has been tested.
-- Use `bulk_mode: openfn_sidecar_batch` only for OpenFn sidecar batch matching,
+- Use `bulk_mode: openfn_sidecar_batch` only for sidecar batch matching,
   after the sidecar contract and per-item cardinality have been tested.
 - Keep `field_paths` and claim-level `fields` limited to what claims need.
 
@@ -109,11 +112,14 @@ Successful responses use:
 Use this connector when an upstream already has the shape or when an internal
 sidecar normalizes a target system into that shape.
 
-## OpenFn Sidecar Sources
+## Source Adapter Sidecar Sources
 
-The OpenFn sidecar is a separate process that runs pinned worker code and
-normalizes a target system into Notary's source-read contracts. Use the
-first-class connector for new configs:
+The source adapter sidecar is a separate private process that normalizes a target
+system into Notary's source-read contracts. The Notary connector value remains
+`openfn_sidecar` for compatibility. Inside the sidecar, a source can use the
+built-in `http_json` engine for straightforward HTTP JSON APIs or a pinned
+OpenFn workflow for adaptor-backed sources. Use the first-class connector for
+new configs:
 
 ```yaml
 evidence:
@@ -160,9 +166,11 @@ evidence:
 Use the sidecar when the target system needs:
 
 - An adaptor or workflow to fetch data.
+- A straightforward HTTP JSON lookup that can be expressed in signed config.
 - Credential material that should stay out of Notary config.
+- Governed request shaping and response mapping.
 - Output normalization.
-- A private worker process boundary.
+- A private worker process boundary when OpenFn is used.
 - Per-source smoke checks before Notary depends on it.
 
 Boundary rules:
@@ -170,39 +178,39 @@ Boundary rules:
 - Notary owns caller policy, matching policy, minimization, error collapsing,
   audit, disclosure, credential issuance, and the decision about whether a
   source result satisfies a claim.
-- The sidecar owns adaptor execution, target-service credentials, source
-  comparison, output normalization, runtime/adaptor pinning, and worker
-  isolation.
-- OpenFn sidecar batch matching is a source-read optimization. It is not a new
+- The sidecar owns request shaping, target-service credentials, source
+  comparison, output normalization, adapter runtime verification, and worker
+  isolation when OpenFn is used.
+- Sidecar batch matching is a source-read optimization. It is not a new
   matching model, authorization model, disclosure model, identity proof model,
   or credential issuance path. A batch match is semantically equivalent to
   running the same source binding as single reads for each item.
 - The sidecar must be reachable only over localhost or a private pod network
   from Notary. Do not expose it publicly or place it behind an internet-facing
   ingress.
-- Pin worker runtime and adaptor versions.
+- Pin worker runtime and adaptor versions for OpenFn sources.
 - Store sidecar target credentials in sidecar env, not in Notary config.
 - Return no more than two records for a lookup.
 - Return only normalized fields needed by Notary.
 - Do not put claim logic in the sidecar.
 - Set `retry_on_5xx: false` on the Notary source connection. Notary does not
-  retry OpenFn worker execution failures.
+  retry sidecar adapter execution failures.
 
 See
 [`../crates/registry-notary-openfn-sidecar/README.md`](../crates/registry-notary-openfn-sidecar/README.md)
 for sidecar manifest and worker details.
 
-### OpenFn Batch Matching Contract
+### Sidecar Batch Matching Contract
 
-OpenFn sidecar batch matching uses a dedicated POST contract. Notary calls this
-route when `bulk_mode: openfn_sidecar_batch` is set on a source connection and
+Sidecar batch matching uses a dedicated POST contract. Notary calls this route
+when `bulk_mode: openfn_sidecar_batch` is set on a source connection and
 the request contains multiple subjects. The contract is semantically equivalent
 to running the same source binding as single reads for each item. For the full
 request and response shapes, field rules, cardinality semantics, and HTTP error
 codes, see the
-[OpenFn Sidecar Source API section of the API reference](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/api-reference.md#openfn-sidecar-source-api).
+[Source Adapter Sidecar API section of the API reference](api-reference.md#source-adapter-sidecar-api).
 
-### OpenFn Batch Config
+### Sidecar Batch Config
 
 Use `bulk_mode: openfn_sidecar_batch` on the source connection and
 `connector: openfn_sidecar` on every binding that points to that connection.
@@ -458,13 +466,18 @@ Bulk source modes are separate from API batch evaluation:
 - `dci_batched_search`: DCI source supports a batched search envelope.
 - `rda_in_filter`: Registry Data API source supports an `in` style filter and
   the operator attests that each lookup is unique.
-- `openfn_sidecar_batch`: OpenFn sidecar source supports
+- `openfn_sidecar_batch`: source adapter sidecar supports
   `POST /v1/datasets/{dataset}/entities/{entity}/records:batchMatch` with a
   shared `query_signature`.
 
 Do not enable bulk modes until contract tests prove response shape,
-cardinality, and source limits. Notary does not retry OpenFn worker execution
-failures; keep `retry_on_5xx: false` on OpenFn sidecar connections.
+cardinality, and source limits. For `http_json` sidecars, prefer sequential
+lookup first, then opt into `parallel_lookup` only with a bounded
+`batch.max_parallel`, or `native_batch` only when the upstream has a real bulk
+endpoint and configured response fan-out keys. Optional sidecar result caching
+must be TTL-bound and reviewed as an evidence freshness decision. Notary does
+not retry sidecar adapter execution failures; keep `retry_on_5xx: false` on
+sidecar connections.
 
 ## Purpose Propagation
 
@@ -489,8 +502,8 @@ deployment's policy review, source-owner agreement, and audit review.
 - Disclosure defaults to the least revealing useful output.
 - Credential issuance is explicitly allowed by both claim and profile.
 - Batch and bulk modes are disabled until source contracts are tested.
-- OpenFn sidecars normalize data only and do not decide claims.
-- OpenFn sidecars run on localhost or a private pod network, never as a public
+- Source adapter sidecars normalize data only and do not decide claims.
+- Source adapter sidecars run on localhost or a private pod network, never as a public
   endpoint.
 - `doctor --live` passes against a controlled test target.
 

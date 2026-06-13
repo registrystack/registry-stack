@@ -224,21 +224,22 @@ Deployment checks:
   response shape and cardinality.
 - Keep `field_paths` and claim `fields` to the minimum data needed.
 
-When using OpenFn sidecars, isolate worker execution, pin adaptor versions, and
-avoid retrying non-idempotent jobs. The sidecar must be reachable only from
-Notary over localhost or a private pod network. Do not expose it publicly, put
-it behind an internet-facing ingress, or allow callers to invoke OpenFn worker
+When using source adapter sidecars, isolate worker execution when OpenFn is
+used, pin adaptor versions for OpenFn sources, and avoid retrying
+non-idempotent adapter calls. The sidecar must be reachable only from Notary
+over localhost or a private pod network. Do not expose it publicly, put it
+behind an internet-facing ingress, or allow callers to invoke OpenFn worker
 execution directly.
 
-Runbook gates for OpenFn sidecar source connections:
+Runbook gates for sidecar source connections:
 
-- Set `retry_on_5xx: false`. Notary does not retry OpenFn worker execution
+- Set `retry_on_5xx: false`. Notary does not retry sidecar adapter execution
   failures.
 - In governed deployments, set `expected_sidecar` on the source connection to
   fail closed on runtime identity or config-hash mismatch.
 
 For full sidecar config fields and examples, see the
-[OpenFn Sidecar Source Connections section of the configuration reference](operator-config-reference.md#openfn-sidecar-source-connections).
+[Source Adapter Sidecar Source Connections section of the configuration reference](operator-config-reference.md#source-adapter-sidecar-source-connections).
 
 ## Signing Keys
 

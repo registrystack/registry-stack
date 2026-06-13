@@ -25,9 +25,9 @@ Before editing YAML, decide these items:
 | Multi-instance deployment | More than one Notary process serves traffic | `replay.storage: redis`, usually `credential_status.storage: redis` |
 | Credential suspension or revocation | Verifiers need a live status URL | `credential_status.enabled: true` |
 | Audit retention | Operators need traceability without raw personal data | `audit` |
-| OpenFn sidecar reads | A target system needs pinned adaptor execution or normalization outside Notary | `connector: openfn_sidecar`, `retry_on_5xx: false` |
-| OpenFn sidecar assurance | Notary must fail closed unless it is talking to the approved sidecar runtime | `source_connections.<id>.expected_sidecar` |
-| OpenFn batch matching | Batch evaluation should share one OpenFn sidecar read across compatible items | `bulk_mode: openfn_sidecar_batch`, binding `query_fields` |
+| Source adapter sidecar reads | A target system needs governed HTTP JSON mapping, pinned adaptor execution, or normalization outside Notary | `connector: openfn_sidecar`, `retry_on_5xx: false` |
+| Sidecar assurance | Notary must fail closed unless it is talking to the approved sidecar runtime | `source_connections.<id>.expected_sidecar` |
+| Sidecar batch matching | Batch evaluation should share one sidecar read across compatible items | `bulk_mode: openfn_sidecar_batch`, binding `query_fields` |
 
 Start with one narrow claim, one source connection, one signing key, and one
 credential profile. Add federation, wallet issuance, and batch evaluation after
@@ -479,13 +479,20 @@ For production, leave `allow_insecure_localhost` and
 accepts the private network source. Local demos may use them for loopback or
 Docker Compose style setups.
 
-### OpenFn Sidecar Source Connections
+### Source Adapter Sidecar Source Connections
 
-Use `connector: openfn_sidecar` when a target system needs OpenFn adaptor
-execution, target credential handling, or output normalization outside Notary.
-The source connection must use static sidecar bearer auth through `token_env`.
-Do not configure target-service credentials in Notary; keep them in the sidecar
-environment or secret store.
+Use `connector: openfn_sidecar` when a target system needs governed HTTP JSON
+mapping, OpenFn adaptor execution, target credential handling, or output
+normalization outside Notary. The connector value remains `openfn_sidecar` for
+compatibility; the sidecar source chooses `engine: http_json` or
+`engine: openfn` in its own signed manifest. The source connection must use
+static sidecar bearer auth through `token_env`. Do not configure target-service
+credentials in Notary; keep them in the sidecar environment or secret store.
+Configure performance and target-protection controls in the sidecar manifest:
+per-source `max_in_flight`, optional request rate and burst, `Retry-After`
+backoff handling, `http_json` sequential/parallel/native batch mode, and any
+explicit TTL-bound result cache. Treat cache settings as evidence freshness
+policy, not only performance tuning.
 
 For high-assurance deployments, pin the sidecar runtime that Notary is allowed
 to use with `expected_sidecar`. Notary reads the private sidecar assurance
@@ -493,7 +500,7 @@ endpoint before source reads and fails closed when the product identity,
 environment, stream, `config_hash`, expression-hash verification, runtime
 verification, or smoke-check state does not match the pin.
 
-Single-read OpenFn sidecar example:
+Single-read sidecar example:
 
 ```yaml
 evidence:
@@ -546,7 +553,7 @@ evidence:
         field: birth_date
 ```
 
-OpenFn sidecar batch matching example with `query_fields`:
+Sidecar batch matching example with `query_fields`:
 
 ```yaml
 evidence:
@@ -635,15 +642,15 @@ evidence:
         source: crvs
 ```
 
-For OpenFn sidecar connections:
+For sidecar connections:
 
-- Set `retry_on_5xx: false`. Notary does not retry OpenFn worker execution
+- Set `retry_on_5xx: false`. Notary does not retry sidecar adapter execution
   failures.
 - Use `bulk_mode: openfn_sidecar_batch` only after sidecar contract tests cover
   per-item not found, exact match, ambiguous match, missing response item,
-  duplicate response item id, worker timeout, worker failure, and output
+  duplicate response item id, adapter timeout, adapter failure, and output
   projection.
-- In governed environments, set `expected_sidecar` on every OpenFn sidecar
+- In governed environments, set `expected_sidecar` on every sidecar
   connection. Local demos may omit it only when the assurance boundary is not
   part of the test.
 

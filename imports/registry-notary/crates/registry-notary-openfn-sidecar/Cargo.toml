@@ -12,8 +12,10 @@ publish = false
 axum.workspace = true
 chrono = { version = "0.4" }
 clap.workspace = true
+crosswalk-core.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_norway.workspace = true

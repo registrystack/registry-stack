@@ -71,11 +71,11 @@ and must be committed intentionally with review.
 
 ## Image signing status
 
-Published Registry Notary and OpenFn sidecar image tags are signed with keyless
-`cosign` from the container workflow after they are pushed to GHCR. The workflow
-verifies that each pushed alias resolves to the same digest as that image's
-`sha-<commit-sha>` tag and verifies the signature for every pushed ref before it
-completes.
+Published Registry Notary and source adapter sidecar image tags are signed with
+keyless `cosign` from the container workflow after they are pushed to GHCR. The
+workflow verifies that each pushed alias resolves to the same digest as that
+image's `sha-<commit-sha>` tag and verifies the signature for every pushed ref
+before it completes.
 
 Verify a release alias and its immutable SHA tag resolve to the same digest:
 

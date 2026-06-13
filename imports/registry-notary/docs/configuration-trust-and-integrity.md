@@ -2,8 +2,8 @@
 
 > **Page type:** Explanation · **Product:** Registry Notary · **Layer:** all · **Audience:** operator, integrator, security reviewer
 
-This page explains what Registry Notary and its OpenFn sidecar guarantee about
-the configuration they run, what you are responsible for, and what is
+This page explains what Registry Notary and its source adapter sidecar guarantee
+about the configuration they run, what you are responsible for, and what is
 deliberately out of scope. It is written for operators deciding how to deploy,
 integrators connecting a source, and security reviewers evaluating the trust
 model. For the exact configuration fields and commands, follow the links in
@@ -16,13 +16,14 @@ The strength of these guarantees rests on how you protect your signing keys.
 
 ## What you can rely on
 
-- **Signed before it runs.** In production the OpenFn sidecar starts from a
-  signed configuration bundle and verifies it before it serves any traffic. A
+- **Signed before it runs.** In production the sidecar starts from a signed
+  configuration bundle and verifies it before it serves any traffic. A
   bundle that is not signed by a key you authorized, has been tampered with, has
   expired, or is older than what is already accepted is refused.
 - **Fail closed, not degraded.** If the signature, signer authorization, file
-  hashes, pinned runtime versions, or startup readiness checks fail, the sidecar
-  refuses to serve. It does not start in a partial or best-effort state.
+  hashes, OpenFn runtime/adaptor checks when OpenFn sources are configured, or
+  startup readiness checks fail, the sidecar refuses to serve. It does not start
+  in a partial or best-effort state.
 - **No silent rollback.** A previously valid but superseded bundle cannot be
   replayed to move you back to an older configuration.
 - **Notary can pin the sidecar it trusts.** Registry Notary can record the exact
@@ -62,10 +63,11 @@ These guarantees are only as strong as the operational practices behind them.
 
 ## How configuration integrity works
 
-A configuration bundle is the runtime material (limits, pinned runtime and
-adaptor versions, worker definition, and source workflows) plus signed metadata
-that binds it to a specific product, instance, environment, and stream, gives it
-a sequence number, and records its content hash.
+A configuration bundle is the runtime material (limits, source definitions,
+`http_json` adapter mappings, and, when OpenFn is used, pinned runtime/adaptor
+versions, worker definition, and source workflows) plus signed metadata that
+binds it to a specific product, instance, environment, and stream, gives it a
+sequence number, and records its content hash.
 
 Before a bundle takes effect, the component checks, in order and failing closed
 on the first failure:
@@ -75,9 +77,11 @@ on the first failure:
 3. the signers are authorized for the change classes in the bundle, meeting the
    required signature threshold;
 4. the sequence is not older than what was last accepted (anti-rollback);
-5. the runtime material matches the recorded content hash, and every workflow
-   expression file matches its recorded SHA-256 hash;
-6. the pinned OpenFn runtime and adaptor versions match what is installed;
+5. the runtime material matches the recorded content hash, and every OpenFn
+   workflow expression file matches its recorded SHA-256 hash when OpenFn
+   sources are configured;
+6. the pinned OpenFn runtime and adaptor versions match what is installed when
+   OpenFn sources are configured;
 7. startup readiness (including a smoke lookup against the source) succeeds.
 
 Only after all readiness-critical checks pass is the bundle recorded as accepted
@@ -107,20 +111,22 @@ real token. The sidecar holds only a hash (fingerprint) of it and verifies
 presented tokens against that fingerprint, so the plaintext token never sits on
 the sidecar.
 
-**The target-service credential** is what the OpenFn workflow uses to read the
-upstream registry. Its value lives in an environment variable on the sidecar
-host. The signed bundle records only the variable's name and the base URLs that
-credential is allowed to target, never the value. At startup the sidecar loads
-the credential, checks its base URL against the allow-list, and holds it in
-memory.
+**The target-service credential** is what the sidecar uses to read the upstream
+registry. Its value lives in an environment variable on the sidecar host. The
+signed bundle records only the variable's name and the base URLs that credential
+is allowed to target, never the value. At startup the sidecar loads the
+credential, checks its base URL against the allow-list, and holds it in memory.
 
-The credential reaches a workflow only through the per-request input passed to
-the worker over a private channel, scoped to that single execution. The worker
-process runs with a cleared environment, so it does not inherit the sidecar
-host's secrets, and configured credential and token environment variable names
-are explicitly blocked from being passed into the worker. The credential is
-never returned to Notary, never logged, and never included in the assurance
-output.
+For OpenFn sources, the credential reaches a workflow only through the
+per-request input passed to the worker over a private channel, scoped to that
+single execution. The worker process runs with a cleared environment, so it does
+not inherit the sidecar host's secrets, and configured credential and token
+environment variable names are explicitly blocked from being passed into the
+worker. For `http_json` sources, only fields explicitly listed in
+`credential_public_fields` are available to CEL mappings, and secret values are
+available only through explicit adapter secret references. In both engines, the
+credential is never returned to Notary, never logged, and never included in the
+assurance output.
 
 Because the binding (which environment variable, which allowed base URLs) is
 part of the signed bundle, someone who can edit local files cannot repoint a
@@ -143,17 +149,18 @@ controls.
   the sidecar as a trusted component behind a private boundary, and rely on
   network controls and the bearer token for that boundary.
 - **Configuration integrity is not runtime-code integrity.** The signature
-  proves the configuration bundle is authentic, including the workflow
-  expression files, which are content-hashed. The OpenFn worker runtime and its
-  adaptors are pinned by version and verified against the installed versions, but
-  their contents are not hashed by the configuration signature. A compromised
-  dependency published at a pinned version is outside what the config signature
-  covers; manage that with your image build and supply-chain controls.
-- **The base-URL allow-list is not an egress sandbox.** `allowed_base_urls`
-  validates the configured credential targets at startup. It is not a general
-  JavaScript egress firewall for workflow code. Constrain outbound traffic with
-  deployment networking, for example a Kubernetes network policy or an internal
-  network.
+  proves the configuration bundle is authentic, including OpenFn workflow
+  expression files when they are present. For OpenFn sources, the worker runtime
+  and adaptors are pinned by version and verified against the installed
+  versions, but their contents are not hashed by the configuration signature. A
+  compromised dependency published at a pinned version is outside what the config
+  signature covers; manage that with your image build and supply-chain controls.
+- **The base-URL allow-list is not a complete egress sandbox.**
+  `allowed_base_urls` validates configured credential targets at startup and is
+  enforced by the built-in `http_json` adapter when it builds requests. For
+  OpenFn workflow code, it is not a general JavaScript egress firewall.
+  Constrain outbound traffic with deployment networking, for example a
+  Kubernetes network policy or an internal network.
 - **Verification is at apply time, not continuous.** The sidecar verifies its
   bundle at startup; Notary refreshes the sidecar's assurance on readiness checks
   and caches it for a short interval. Revoked keys or newly expired metadata are
@@ -176,11 +183,11 @@ path without production key custody.
 ## Where to go next
 
 - [Model sources and claims](source-claim-modeling-guide.md): configure the
-  OpenFn sidecar source connector and the claim boundary.
+  sidecar source connector and the claim boundary.
 - [Operator configuration reference](operator-config-reference.md): the exact
   configuration blocks, including the source connection and expected-sidecar
   pinning.
-- [OpenFn sidecar reference](../crates/registry-notary-openfn-sidecar/README.md):
+- [Source adapter sidecar reference](../crates/registry-notary-openfn-sidecar/README.md):
   the governed bundle layout and the commands that render, sign, and verify a
   bundle.
 - [Signing key providers](signing-key-provider.md): credential (SD-JWT VC)

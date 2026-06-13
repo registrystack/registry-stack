@@ -7,7 +7,8 @@
 - Added OpenID4VCI issuer primitives and HTTP routes for credential issuer
   metadata, SD-JWT VC Type Metadata at configured `vct` URLs, credential offers,
   nonce creation, and credential issuance.
-- Added the OpenFn sidecar source for isolated worker execution.
+- Added the source adapter sidecar path for private source reads, including
+  isolated OpenFn worker execution.
 - Kept CEL out of default builds while adding an opt-in CEL production image
   profile with hardened worker execution, startup expression preflight,
   declared result-type enforcement, and policy-hash worker protocol checks.
@@ -31,8 +32,8 @@
   must set `server.admin_listener.mode: shared_with_public` explicitly.
 - Added bounded HTTP serve defaults: `server.request_timeout: 30s`,
   `server.request_body_timeout: 10s`, `server.http1_header_read_timeout: 10s`,
-  and `server.max_connections: 1024`. The OpenFn sidecar mirrors the same
-  limits with millisecond-suffixed config keys.
+  and `server.max_connections: 1024`. The source adapter sidecar mirrors the
+  same limits with millisecond-suffixed config keys.
 - Changed `auth.api_keys[]` and `auth.bearer_tokens[]` to a committed
   `fingerprint` reference (`provider`, `name`, `commitment`) in place of
   `hash_env`, so signed config apply can govern caller-credential rotation.
