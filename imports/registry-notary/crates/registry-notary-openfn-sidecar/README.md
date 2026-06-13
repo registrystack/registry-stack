@@ -1,10 +1,10 @@
-# Registry Notary OpenFn Sidecar
+# Registry Notary Source Adapter Sidecar
 
-This crate exposes a synchronous Registry Data API-shaped source endpoint backed
-by a bounded pool of long-lived worker processes. The first intended worker
-implementation is a pinned OpenFn adaptor runner, but the Rust sidecar owns the
-HTTP contract, manifest validation, concurrency limits, timeouts, normalization,
-health checks, and credential non-disclosure boundary.
+This crate exposes a synchronous Registry Data API-shaped source endpoint. A
+source can run through the pinned OpenFn worker pool or through the built-in
+`http_json` adapter for straightforward HTTP JSON registries. In both cases the
+Rust sidecar owns the HTTP contract, manifest validation, concurrency limits,
+timeouts, normalization, health checks, and credential non-disclosure boundary.
 
 Registry Notary should connect to this sidecar with the `openfn_sidecar`
 source connector:
@@ -71,11 +71,13 @@ authorized, bound to the configured product/instance/environment/stream, marked
 `restart_required`, or accepted by anti-rollback after runtime checks pass.
 
 The signed target uses schema `registry.notary.openfn_sidecar.runtime.v1` and
-contains `limits`, `openfn`, `worker`, `jobs_root`, and `sources`. In governed
-mode every workflow expression path is relative to `jobs_root` and every step
-must include `expression_sha256`. Absolute paths, `..` traversal, symlink
-escapes, missing files, malformed hashes, and hash mismatches fail startup
-before the HTTP listener serves traffic.
+always contains `limits` and `sources`. It contains `openfn`, `worker`, and
+`jobs_root` only when at least one source uses `engine: openfn`; `http_json`-only
+targets omit the worker runtime fields. In governed mode every OpenFn workflow
+expression path is relative to `jobs_root` and every OpenFn step must include
+`expression_sha256`. Absolute paths, `..` traversal, symlink escapes, missing
+files, malformed hashes, and hash mismatches fail startup before the HTTP
+listener serves traffic.
 
 The sidecar exposes `GET /v1/assurance` with the verified product identity,
 TUF versions, signer kids, change classes, and `config_hash`. `GET /ready`
@@ -193,6 +195,7 @@ limits:
   max_request_bytes: 16384
   max_query_parameter_bytes: 1024
   max_batch_items: 100
+  batch_timeout_ms: 30000
   liveness_window_ms: 30000
   retry_after_seconds: 1
 openfn:
@@ -250,14 +253,15 @@ sources:
 ```
 
 At startup the sidecar checks that bearer-token fingerprints are loaded from
-`hash_env`, expression files exist, credentials are present as JSON in
-`credential_env`, configured credential `baseUrl` values match
-`allowed_base_urls` when present, the worker version output contains the exact
-configured OpenFn compiler/build tool, runtime, and adaptor pins, and every
-source has a smoke lookup that can execute. `auth.bearer_tokens[].token` is
-rejected; keep the raw sidecar bearer in the caller's secret store and expose
-only its `sha256:<hex>` fingerprint through the configured `hash_env`. Runtime
-execution must not fetch packages from the network.
+`hash_env`, credentials are present as JSON in `credential_env`, configured
+credential `baseUrl` values match `allowed_base_urls` when present, and every
+source has a smoke lookup that can execute. For OpenFn sources it also verifies
+that expression files exist and that the worker version output contains the
+exact configured OpenFn compiler/build tool, runtime, and adaptor pins.
+`auth.bearer_tokens[].token` is rejected; keep the raw sidecar bearer in the
+caller's secret store and expose only its `sha256:<hex>` fingerprint through the
+configured `hash_env`. Runtime execution must not fetch packages from the
+network.
 
 The worker reports adaptor pins as
 `@openfn/language-http@7.2.0:7.2.0=/path/to/package`. The sidecar verifies that
@@ -298,6 +302,66 @@ The worker compiles the configured OpenFn workflow steps, injects
 `@openfn/runtime`, and returns only an RDA-shaped `{ "data": [...] }` envelope
 to the Rust HTTP boundary.
 
+### Built-In HTTP JSON Adapter
+
+Use `engine: http_json` when a registry can be queried with a governed HTTP
+request and a small CEL mapping. This avoids a worker process for simple
+endpoints while keeping the same Notary-facing RDA route, bearer auth, source
+concurrency limit, startup smoke lookup, metrics, and governed config path.
+
+```yaml
+sources:
+  people_registry:
+    engine: http_json
+    dataset: civil_registry
+    entity: civil_person
+    credential_env: PEOPLE_REGISTRY_CREDENTIAL_JSON
+    credential_public_fields:
+      - baseUrl
+      - clientId
+    allowed_base_urls:
+      - https://registry.example.test
+    http_json:
+      method: GET
+      base_url:
+        cel: credential_public.baseUrl
+      path: /people
+      query:
+        id:
+          cel: lookup.value
+      headers:
+        x-client-id:
+          cel: credential_public.clientId
+      auth:
+        type: bearer
+        token:
+          secret: apiToken
+      response:
+        records:
+          cel: body.results
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields: ["national_id"]
+      purpose: startup-readiness-smoke
+```
+
+Only fields listed in `credential_public_fields` are available to CEL as
+`credential_public`. Secret material remains available only to explicit adapter
+secret references such as `http_json.auth.token.secret`,
+`http_json.auth.username.secret`, and `http_json.auth.password.secret`. Supported
+HTTP auth modes are `bearer` and `basic`; both read secret values from the
+sidecar credential, not from CEL. The adapter rejects a base URL that is not in
+`allowed_base_urls`, does not follow redirects, rejects plaintext HTTP to public
+hosts or public IP literals, and blocks loopback, private, link-local, and cloud
+metadata addresses unless the source opts into the matching development escape
+hatch. The private-network escape hatch still blocks cloud metadata addresses.
+When `base_url` includes a path prefix, such as a versioned DHIS2 play URL, the
+configured `path` is appended under that prefix; protocol-relative paths and
+`.`/`..` path segments are rejected before dispatch. Batch requests use
+sequential lookups unless a future adapter mode explicitly adds a native bulk
+mapping.
+
 ### Batch And Backpressure
 
 The sidecar exposes the RDA batch shape at:
@@ -329,6 +393,11 @@ worker request. This is separate from the global worker pool size and is intende
 to protect slower upstreams such as DHIS2, CRVS, or facility registries from one
 Notary batch consuming all local worker capacity or exceeding the target system's
 safe rate.
+
+`limits.batch_timeout_ms` is an optional whole-batch deadline. If it is unset,
+the sidecar computes the batch deadline as `worker_timeout_ms * item_count`; if
+it is set, the lower of the configured value and the computed value is used.
+Timeouts return `504` with code `source.timeout`.
 
 The `/metrics` endpoint reports worker capacity plus per-source outcomes,
 duration totals, and item totals:
@@ -446,17 +515,23 @@ cargo build -p registry-notary-openfn-sidecar
 crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-worker.sh
 crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-sidecar.sh
 crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-http-sidecar.sh
+crates/registry-notary-openfn-sidecar/scripts/smoke-http-json-dhis2-sidecar.sh
 ```
 
 For a live target canary against the DHIS2 play server, run:
 
 ```bash
-crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-dhis2-sidecar.sh
+HTTP_JSON_DHIS2_PASSWORD=... \
+  crates/registry-notary-openfn-sidecar/scripts/smoke-http-json-dhis2-sidecar.sh
+
+OPENFN_DHIS2_PASSWORD=... \
+  crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-dhis2-sidecar.sh
 ```
 
-The DHIS2 canary defaults to the public play instance URL and username. For
-local runs, provide `OPENFN_DHIS2_PASSWORD`, and override
-`OPENFN_DHIS2_HOST_URL` or `OPENFN_DHIS2_USERNAME` when needed. It is also
-available as the manual `OpenFn DHIS2 Canary` GitHub Actions workflow, where
-the password is read from the `OPENFN_DHIS2_PASSWORD` repository secret and the
-target host and username are fixed by the workflow.
+The http_json and OpenFn DHIS2 canaries default to the public play instance URL
+and username. For local runs, provide the matching password environment variable
+and override `HTTP_JSON_DHIS2_HOST_URL` / `HTTP_JSON_DHIS2_USERNAME` or
+`OPENFN_DHIS2_HOST_URL` / `OPENFN_DHIS2_USERNAME` when needed. The OpenFn canary
+is also available as the manual `OpenFn DHIS2 Canary` GitHub Actions workflow,
+where the password is read from the `OPENFN_DHIS2_PASSWORD` repository secret
+and the target host and username are fixed by the workflow.

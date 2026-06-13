@@ -5893,7 +5893,14 @@ async fn read_remote_openfn_sidecar_many_context(
 
 fn openfn_item_error(error: &Map<String, Value>) -> EvidenceError {
     match error.get("code").and_then(Value::as_str) {
-        Some("target_auth") | Some("target_rate_limit") => EvidenceError::SourceUnavailable,
+        Some(
+            "target_auth"
+            | "target_rate_limit"
+            | "source.target_auth"
+            | "source.target_rate_limit"
+            | "source.timeout"
+            | "source.unavailable",
+        ) => EvidenceError::SourceUnavailable,
         _ => EvidenceError::SourceUnavailable,
     }
 }
@@ -6796,6 +6803,7 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     use axum::body::Body;
+    use axum::extract::Query;
     use axum::response::Redirect;
     use axum::routing::{get, post};
     use axum_test::TestServer;
@@ -6839,7 +6847,9 @@ mod tests {
     const OPENFN_ENVIRONMENT: &str = "staging";
     const OPENFN_STREAM_ID: &str = "openfn-sidecar-runtime";
     const OPENFN_TARGET_NAME: &str = "openfn-sidecar-runtime.json";
+    const HTTP_JSON_CREDENTIAL_ENV: &str = "TEST_HTTP_JSON_READER_CREDENTIAL_JSON";
     const TEST_AUDIT_HASH_SECRET_ENV: &str = "REGISTRY_NOTARY_TEST_AUDIT_HASH_SECRET";
+    static HTTP_JSON_SIDECAR_ENV_LOCK: Mutex<()> = Mutex::const_new(());
     const TEST_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
     const TEST_ISSUER_JWK_WITH_KID: &str = r##"{"kty":"OKP","crv":"Ed25519","kid":"did:web:issuer.example#file-watch","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"##;
     const TEST_ROTATED_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"8jFBgUJxaaQimd4NjzxhvPYyNbcOnnZsqOntZbpP3Xk","x":"XvW-aWwJCWSYoYudTB9OZqNHURKElnnyGNa6DQNjzZk","alg":"EdDSA"}"#;
@@ -8257,11 +8267,111 @@ sources:
             .expect("sidecar test config parses")
     }
 
+    fn http_json_sidecar_test_manifest(upstream_url: &str) -> String {
+        std::env::set_var(OPENFN_SIDECAR_TOKEN_HASH_ENV, OPENFN_SIDECAR_TOKEN_HASH);
+        std::env::set_var(
+            HTTP_JSON_CREDENTIAL_ENV,
+            json!({
+                "baseUrl": upstream_url,
+                "clientId": "notary-test",
+                "apiToken": "http-json-target-token"
+            })
+            .to_string(),
+        );
+        format!(
+            r#"
+server:
+  bind: "127.0.0.1:0"
+auth:
+  bearer_tokens:
+    - id: notary
+      hash_env: "{OPENFN_SIDECAR_TOKEN_HASH_ENV}"
+limits:
+  max_workers: 2
+  worker_timeout_ms: 250
+  max_output_bytes: 4096
+  max_request_bytes: 2048
+  max_query_parameter_bytes: 128
+  liveness_window_ms: 30000
+  max_batch_items: 100
+sources:
+  openfn_crvs:
+    engine: http_json
+    dataset: civil_registry
+    entity: civil_person
+    credential_env: "{HTTP_JSON_CREDENTIAL_ENV}"
+    credential_public_fields:
+      - baseUrl
+      - clientId
+    allowed_base_urls:
+      - "{upstream_url}"
+    allow_insecure_localhost: true
+    http_json:
+      method: GET
+      base_url:
+        cel: credential_public.baseUrl
+      path: "/people"
+      query:
+        id:
+          cel: lookup.value
+      headers:
+        x-client-id:
+          cel: credential_public.clientId
+      auth:
+        type: bearer
+        token:
+          secret: apiToken
+      response:
+        records:
+          cel: body.results
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields:
+        - national_id
+      purpose: startup-smoke
+"#
+        )
+    }
+
     async fn fixed_openfn_batch_response_handler(
         State(response): State<Value>,
         Json(_request): Json<Value>,
     ) -> Response {
         Json(response).into_response()
+    }
+
+    async fn http_json_people_handler(
+        Query(query): Query<HashMap<String, String>>,
+        headers: HeaderMap,
+    ) -> Response {
+        let authorized = headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            == Some("Bearer http-json-target-token");
+        let client_id = headers
+            .get("x-client-id")
+            .and_then(|value| value.to_str().ok());
+        if !authorized || client_id != Some("notary-test") {
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+        let id = query.get("id").cloned().unwrap_or_default();
+        let results = match id.as_str() {
+            "person-123" | "smoke-person" => json!([
+                {
+                    "national_id": id,
+                    "birth_date": "1990-01-01",
+                    "ignored_extra": "notary must not depend on this"
+                }
+            ]),
+            _ => json!([]),
+        };
+        Json(json!({ "results": results })).into_response()
+    }
+
+    fn http_json_sidecar_test_config(upstream_url: &str) -> SidecarConfig {
+        serde_norway::from_str(&http_json_sidecar_test_manifest(upstream_url))
+            .expect("http_json sidecar test config parses")
     }
 
     async fn read_openfn_batch_from_fixed_response(
@@ -9032,6 +9142,77 @@ config_trust:
     }
 
     #[tokio::test]
+    async fn http_json_sidecar_rda_facade_can_source_single_item_attestation() {
+        let _env_guard = HTTP_JSON_SIDECAR_ENV_LOCK.lock().await;
+        std::env::set_var(OPENFN_SIDECAR_TOKEN_ENV, OPENFN_SIDECAR_TOKEN);
+        let upstream = TestServer::builder()
+            .http_transport()
+            .build(Router::new().route("/people", get(http_json_people_handler)));
+        let upstream_url = upstream
+            .server_address()
+            .expect("HTTP transport exposes upstream address")
+            .to_string()
+            .trim_end_matches('/')
+            .to_string();
+        let sidecar = sidecar_router(http_json_sidecar_test_config(&upstream_url))
+            .await
+            .expect("http_json sidecar router builds");
+        let server = TestServer::builder().http_transport().build(sidecar);
+        let evidence = Arc::new(openfn_sidecar_spike_config(
+            server
+                .server_address()
+                .expect("HTTP transport exposes sidecar address")
+                .as_str(),
+        ));
+        let source = Arc::new(
+            HttpEvidenceSources::from_config(&evidence, Arc::new(AppMetrics::default()))
+                .expect("source config"),
+        );
+        let principal = EvidencePrincipal {
+            principal_id: "caseworker".to_string(),
+            scopes: vec!["civil_registry:evidence_verification".to_string()],
+            access_mode: AccessMode::MachineClient,
+            verified_claims: None,
+        };
+
+        let results = crate::RegistryNotaryRuntime::new()
+            .evaluate(
+                Arc::clone(&evidence),
+                source,
+                &EvidenceStore::default(),
+                &principal,
+                EvaluateRequest {
+                    requester: None,
+                    target: Some(registry_notary_core::EvidenceEntity::from_subject_request(
+                        "Person",
+                        SubjectRequest {
+                            id: "person-123".to_string(),
+                            id_type: None,
+                        },
+                    )),
+                    relationship: None,
+                    on_behalf_of: None,
+                    claims: vec![registry_notary_core::ClaimRef::from("date-of-birth")],
+                    disclosure: Some("value".to_string()),
+                    format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+                    purpose: Some(OPENFN_SPIKE_PURPOSE.to_string()),
+                },
+                None,
+            )
+            .await
+            .expect("http_json sidecar facade sources the claim");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].claim_id, "date-of-birth");
+        assert_eq!(results[0].value, Some(json!("1990-01-01")));
+        assert_eq!(results[0].provenance.used.source_count, 1);
+        assert!(
+            results[0].provenance.used.source_runtimes.is_empty(),
+            "unsigned local sidecar has no pinned runtime summary"
+        );
+    }
+
+    #[tokio::test]
     async fn governed_openfn_sidecar_e2e_notary_pins_assurance_and_evaluates() {
         std::env::set_var(OPENFN_SIDECAR_TOKEN_ENV, OPENFN_SIDECAR_TOKEN);
         std::env::set_var(
@@ -9132,6 +9313,119 @@ config_trust:
         assert_eq!(runtimes[0].kind, SOURCE_RUNTIME_KIND_OPENFN_SIDECAR);
         assert_eq!(runtimes[0].config_hash, repo.config_hash);
         assert!(runtimes[0].config_hash.starts_with("sha256:"));
+        assert!(runtimes[0].assurance.pinned);
+        assert!(runtimes[0].assurance.expression_hashes_verified);
+        assert!(runtimes[0].assurance.runtime_verified);
+        assert!(runtimes[0].assurance.smoke_verified);
+    }
+
+    #[tokio::test]
+    async fn governed_http_json_sidecar_e2e_notary_pins_assurance_and_evaluates() {
+        let _env_guard = HTTP_JSON_SIDECAR_ENV_LOCK.lock().await;
+        std::env::set_var(OPENFN_SIDECAR_TOKEN_ENV, OPENFN_SIDECAR_TOKEN);
+        let upstream = TestServer::builder()
+            .http_transport()
+            .build(Router::new().route("/people", get(http_json_people_handler)));
+        let upstream_url = upstream
+            .server_address()
+            .expect("HTTP transport exposes upstream address")
+            .to_string()
+            .trim_end_matches('/')
+            .to_string();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let manifest = http_json_sidecar_test_manifest(&upstream_url);
+        let target_bytes = render_governed_runtime_target_json(&manifest, tmp.path())
+            .expect("governed http_json target renders");
+        let target_json: Value =
+            serde_json::from_slice(&target_bytes).expect("target is valid JSON");
+        assert!(target_json["openfn"].is_null());
+        assert!(target_json["worker"].is_null());
+        assert!(target_json["jobs_root"].is_null());
+        assert!(target_json["limits"]["max_worker_memory_mb"].is_null());
+
+        let previous_config_hash =
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+        let repo = signed_openfn_runtime_repo(&target_bytes, 13, previous_config_hash).await;
+        initialize_openfn_antirollback(&repo, previous_config_hash, 12);
+        let bootstrap = openfn_governed_bootstrap_yaml(&repo);
+        let sidecar_config = load_openfn_sidecar_startup_config(&bootstrap)
+            .await
+            .expect("governed http_json sidecar startup config loads");
+        let sidecar = sidecar_router(sidecar_config)
+            .await
+            .expect("governed http_json sidecar starts");
+        let server = TestServer::builder().http_transport().build(sidecar);
+
+        let ready = server.get("/ready").await;
+        ready.assert_status_ok();
+        let ready_body: Value = ready.json();
+        assert_eq!(ready_body["status"], "ready");
+        assert_eq!(ready_body["config_hash"], repo.config_hash);
+
+        let mut evidence = openfn_sidecar_spike_config(
+            server
+                .server_address()
+                .expect("HTTP transport exposes sidecar address")
+                .as_str(),
+        );
+        evidence
+            .source_connections
+            .get_mut("openfn_crvs")
+            .expect("connection exists")
+            .expected_sidecar = Some(expected_openfn_sidecar(&repo.config_hash));
+        let evidence = Arc::new(evidence);
+        let source = Arc::new(
+            HttpEvidenceSources::from_config(&evidence, Arc::new(AppMetrics::default()))
+                .expect("source config"),
+        );
+        assert!(source.check_ready().await);
+        let principal = EvidencePrincipal {
+            principal_id: "caseworker".to_string(),
+            scopes: vec!["civil_registry:evidence_verification".to_string()],
+            access_mode: AccessMode::MachineClient,
+            verified_claims: None,
+        };
+
+        let results = crate::RegistryNotaryRuntime::new()
+            .evaluate(
+                Arc::clone(&evidence),
+                source.clone(),
+                &EvidenceStore::default(),
+                &principal,
+                EvaluateRequest {
+                    requester: None,
+                    target: Some(registry_notary_core::EvidenceEntity::from_subject_request(
+                        "Person",
+                        SubjectRequest {
+                            id: "person-123".to_string(),
+                            id_type: None,
+                        },
+                    )),
+                    relationship: None,
+                    on_behalf_of: None,
+                    claims: vec![registry_notary_core::ClaimRef::from("date-of-birth")],
+                    disclosure: Some("value".to_string()),
+                    format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+                    purpose: Some(OPENFN_SPIKE_PURPOSE.to_string()),
+                },
+                None,
+            )
+            .await
+            .expect("governed http_json sidecar sources the claim");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].claim_id, "date-of-birth");
+        assert_eq!(results[0].value, Some(json!("1990-01-01")));
+        assert_eq!(
+            source
+                .observed_sidecar_config_hashes(&evidence, &["date-of-birth".to_string()])
+                .await,
+            vec![repo.config_hash.clone()]
+        );
+        let runtimes = &results[0].provenance.used.source_runtimes;
+        assert_eq!(runtimes.len(), 1, "one sidecar runtime summary expected");
+        assert_eq!(runtimes[0].kind, SOURCE_RUNTIME_KIND_OPENFN_SIDECAR);
+        assert_eq!(runtimes[0].config_hash, repo.config_hash);
         assert!(runtimes[0].assurance.pinned);
         assert!(runtimes[0].assurance.expression_hashes_verified);
         assert!(runtimes[0].assurance.runtime_verified);

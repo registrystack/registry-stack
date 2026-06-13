@@ -39,7 +39,7 @@ auth_status="$(
     "http://127.0.0.1:$sidecar_port/v1/datasets/civil_registry/entities/civil_person/records?national_id=target-auth&fields=national_id,birth_date&limit=2"
 )"
 test "$auth_status" = "502"
-jq -e '.code == "target_auth"' /tmp/openfn-http-auth.json >/dev/null
+jq -e '.code == "source.target_auth"' /tmp/openfn-http-auth.json >/dev/null
 
 rate_headers="/tmp/openfn-http-rate-limit.headers"
 rate_status="$(
@@ -49,7 +49,7 @@ rate_status="$(
     "http://127.0.0.1:$sidecar_port/v1/datasets/civil_registry/entities/civil_person/records?national_id=target-rate-limit&fields=national_id,birth_date&limit=2"
 )"
 test "$rate_status" = "503"
-jq -e '.code == "target_rate_limit"' /tmp/openfn-http-rate-limit.json >/dev/null
+jq -e '.code == "source.target_rate_limit"' /tmp/openfn-http-rate-limit.json >/dev/null
 grep -i '^retry-after: 5' "$rate_headers" >/dev/null
 
 printf 'OpenFn HTTP sidecar smoke passed\n'

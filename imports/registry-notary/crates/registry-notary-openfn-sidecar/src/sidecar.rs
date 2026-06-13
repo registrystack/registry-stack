@@ -9,6 +9,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{TimeDelta, Utc};
+use crosswalk_core::{MappingRuntime, RuntimeOptions, StandaloneExpressionInput};
 use hyper::service::service_fn;
 use hyper_util::{
     rt::{TokioExecutor, TokioIo, TokioTimer},
@@ -27,7 +28,7 @@ use std::{
     convert::Infallible,
     ffi::OsString,
     fmt,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     num::NonZeroU64,
     path::{Component, Path as FsPath, PathBuf},
     sync::Arc,
@@ -55,8 +56,10 @@ pub struct SidecarConfig {
     #[serde(default)]
     pub jobs_root: Option<PathBuf>,
     pub limits: LimitConfig,
-    pub openfn: OpenFnConfig,
-    pub worker: WorkerProcessConfig,
+    #[serde(default)]
+    pub openfn: Option<OpenFnConfig>,
+    #[serde(default)]
+    pub worker: Option<WorkerProcessConfig>,
     pub sources: BTreeMap<String, SourceConfig>,
     #[serde(skip)]
     pub assurance: Option<SidecarAssurance>,
@@ -131,6 +134,8 @@ pub struct LimitConfig {
     pub retry_after_seconds: u64,
     #[serde(default = "default_max_batch_items")]
     pub max_batch_items: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_timeout_ms: Option<u64>,
     pub max_worker_memory_mb: Option<u64>,
 }
 
@@ -153,8 +158,13 @@ pub struct WorkerProcessConfig {
 pub struct SourceConfig {
     pub dataset: String,
     pub entity: String,
-    pub workflow: SourceWorkflowConfig,
+    #[serde(default)]
+    pub engine: SourceEngine,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<SourceWorkflowConfig>,
     pub credential_env: String,
+    #[serde(default)]
+    pub credential_public_fields: Vec<String>,
     #[serde(default, skip_serializing_if = "SourceBatchConfig::is_default")]
     pub batch: SourceBatchConfig,
     #[serde(default, skip_serializing_if = "SourceRuntimeLimitConfig::is_default")]
@@ -162,7 +172,22 @@ pub struct SourceConfig {
     #[serde(default)]
     pub allowed_base_urls: Vec<String>,
     #[serde(default)]
+    pub allow_insecure_localhost: bool,
+    #[serde(default)]
+    pub allow_insecure_private_network: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_json: Option<HttpJsonSourceConfig>,
+    #[serde(default)]
     pub smoke_lookup: Option<SmokeLookupConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceEngine {
+    #[default]
+    #[serde(rename = "openfn", alias = "open_fn")]
+    OpenFn,
+    HttpJson,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -225,6 +250,63 @@ pub struct SourceWorkflowStepConfig {
     pub next: Option<SourceWorkflowNextConfig>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct HttpJsonSourceConfig {
+    #[serde(default)]
+    pub method: HttpJsonMethod,
+    pub base_url: HttpJsonCelExpression,
+    pub path: String,
+    #[serde(default)]
+    pub query: BTreeMap<String, HttpJsonCelExpression>,
+    #[serde(default)]
+    pub headers: BTreeMap<String, HttpJsonCelExpression>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<HttpJsonAuthConfig>,
+    pub response: HttpJsonResponseConfig,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum HttpJsonMethod {
+    #[default]
+    Get,
+    Post,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct HttpJsonCelExpression {
+    pub cel: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct HttpJsonAuthConfig {
+    #[serde(rename = "type")]
+    pub kind: HttpJsonAuthKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<HttpJsonSecretRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<HttpJsonSecretRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<HttpJsonSecretRef>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpJsonAuthKind {
+    Bearer,
+    Basic,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct HttpJsonSecretRef {
+    pub secret: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct HttpJsonResponseConfig {
+    pub records: HttpJsonCelExpression,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct SidecarAssurance {
     pub status: String,
@@ -260,9 +342,12 @@ struct GovernedAcceptance {
 struct GovernedRuntimeTarget {
     schema: String,
     limits: LimitConfig,
-    openfn: OpenFnConfig,
-    jobs_root: PathBuf,
-    worker: WorkerProcessConfig,
+    #[serde(default)]
+    openfn: Option<OpenFnConfig>,
+    #[serde(default)]
+    jobs_root: Option<PathBuf>,
+    #[serde(default)]
+    worker: Option<WorkerProcessConfig>,
     sources: BTreeMap<String, SourceConfig>,
 }
 
@@ -349,7 +434,7 @@ pub enum SidecarError {
         #[source]
         source: serde_json::Error,
     },
-    #[error("credential env {env} for source {source_id} has disallowed or missing baseUrl")]
+    #[error("credential env {env} for source {source_id} has disallowed or missing baseUrl for allowed_base_urls")]
     CredentialBaseUrl { source_id: String, env: String },
     #[error("auth token hash env {env} for bearer token {token_id} is missing")]
     MissingTokenHashEnv { token_id: String, env: String },
@@ -365,7 +450,7 @@ pub enum SidecarError {
 struct AppState {
     config: SidecarConfig,
     auth_tokens: Arc<Vec<ResolvedBearerToken>>,
-    pool: Arc<WorkerPool>,
+    pool: Option<Arc<WorkerPool>>,
     credentials: Arc<BTreeMap<String, Value>>,
     source_limiters: Arc<BTreeMap<String, Arc<Semaphore>>>,
     metrics: Arc<Mutex<BTreeMap<MetricKey, MetricValue>>>,
@@ -387,6 +472,23 @@ struct MetricValue {
     count: u64,
     duration_ms_total: u64,
     items_total: u64,
+}
+
+struct SourceExecution {
+    value: Value,
+    worker_id: String,
+}
+
+struct PreparedHttpJsonUrl {
+    url: reqwest::Url,
+    resolved_addrs: Vec<SocketAddr>,
+}
+
+enum SourceExecutionError {
+    Worker(WorkerError),
+    HttpJson,
+    HttpJsonBadRequest,
+    HttpJsonTimeout,
 }
 
 pub async fn load_startup_config(raw: &str) -> Result<SidecarConfig, SidecarError> {
@@ -469,16 +571,23 @@ pub fn render_governed_runtime_target_json(
 ) -> Result<Vec<u8>, SidecarError> {
     let config: SidecarConfig = serde_norway::from_str(raw_manifest)
         .map_err(|error| SidecarError::Config(error.to_string()))?;
-    let canonical_jobs_root = canonical_jobs_root(jobs_root)?;
+    let has_openfn_sources = has_openfn_sources(&config);
+    let canonical_jobs_root = if has_openfn_sources {
+        Some(canonical_jobs_root(jobs_root)?)
+    } else {
+        None
+    };
     let mut target = GovernedRuntimeTarget {
         schema: "registry.notary.openfn_sidecar.runtime.v1".to_string(),
         limits: config.limits,
         openfn: config.openfn,
-        jobs_root: jobs_root.to_path_buf(),
+        jobs_root: has_openfn_sources.then(|| jobs_root.to_path_buf()),
         worker: config.worker,
         sources: config.sources,
     };
-    populate_expression_hashes(&mut target, &canonical_jobs_root)?;
+    if let Some(canonical_jobs_root) = canonical_jobs_root.as_deref() {
+        populate_expression_hashes(&mut target, canonical_jobs_root)?;
+    }
     validate_governed_runtime_target(&target)?;
     let mut bytes = serde_json::to_vec_pretty(&target).map_err(|error| {
         SidecarError::Config(format!("target JSON could not be rendered: {error}"))
@@ -862,7 +971,7 @@ fn materialize_governed_config(
         server: bootstrap.server,
         auth: bootstrap.auth,
         config_trust: Some(bootstrap.config_trust.clone()),
-        jobs_root: Some(target.jobs_root),
+        jobs_root: target.jobs_root,
         limits: target.limits,
         openfn: target.openfn,
         worker: target.worker,
@@ -906,7 +1015,7 @@ fn validate_governed_runtime_target(target: &GovernedRuntimeTarget) -> Result<()
             }],
         },
         config_trust: None,
-        jobs_root: Some(target.jobs_root.clone()),
+        jobs_root: target.jobs_root.clone(),
         limits: target.limits.clone(),
         openfn: target.openfn.clone(),
         worker: target.worker.clone(),
@@ -922,7 +1031,15 @@ fn populate_expression_hashes(
     canonical_jobs_root: &FsPath,
 ) -> Result<(), SidecarError> {
     for (source_id, source) in &mut target.sources {
-        for step in &mut source.workflow.steps {
+        if source.engine != SourceEngine::OpenFn {
+            continue;
+        }
+        let workflow = source.workflow.as_mut().ok_or_else(|| {
+            SidecarError::Config(format!(
+                "source {source_id} workflow is required for OpenFn sources"
+            ))
+        })?;
+        for step in &mut workflow.steps {
             let (relative_expression, expression_hash) = resolve_render_expression(
                 source_id,
                 &format!("workflow step {} expression", step.id),
@@ -939,14 +1056,37 @@ fn populate_expression_hashes(
 fn expression_hashes_for_target(
     target: &GovernedRuntimeTarget,
 ) -> Result<BTreeMap<String, String>, SidecarError> {
-    let canonical_jobs_root = canonical_jobs_root(&target.jobs_root)?;
+    let has_openfn_sources = target
+        .sources
+        .values()
+        .any(|source| source.engine == SourceEngine::OpenFn);
+    let canonical_jobs_root = match (&target.jobs_root, has_openfn_sources) {
+        (Some(jobs_root), true) => Some(canonical_jobs_root(jobs_root)?),
+        (None, true) => {
+            return Err(SidecarError::Config(
+                "jobs_root is required when governed target contains OpenFn sources".to_string(),
+            ));
+        }
+        _ => None,
+    };
     let mut expression_hashes = BTreeMap::new();
     for (source_id, source) in &target.sources {
-        for step in &source.workflow.steps {
+        if source.engine != SourceEngine::OpenFn {
+            continue;
+        }
+        let workflow = source.workflow.as_ref().ok_or_else(|| {
+            SidecarError::Config(format!(
+                "source {source_id} workflow is required for OpenFn sources"
+            ))
+        })?;
+        let Some(canonical_jobs_root) = canonical_jobs_root.as_deref() else {
+            continue;
+        };
+        for step in &workflow.steps {
             let expression_path = resolve_jobs_root_expression(
                 source_id,
                 &format!("workflow step {} expression", step.id),
-                &canonical_jobs_root,
+                canonical_jobs_root,
                 &step.expression,
             )?;
             let bytes = std::fs::read(&expression_path).map_err(|error| {
@@ -1035,33 +1175,40 @@ fn metadata_report(metadata: &ConfigTargetMetadata) -> Value {
 
 pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarError> {
     validate_config(&config)?;
-    verify_openfn_runtime(&config).await?;
     let auth_tokens = resolve_auth_tokens(&config)?;
     let request_timeout = Duration::from_millis(config.server.request_timeout_ms);
     let request_body_timeout = Duration::from_millis(config.server.request_body_timeout_ms);
 
-    let mut command = WorkerCommand::new(config.worker.command.clone());
-    for arg in &config.worker.args {
-        command = command.arg(OsString::from(arg));
-    }
+    let pool = if has_openfn_sources(&config) {
+        verify_openfn_runtime(&config).await?;
+        let worker = worker_config(&config)?;
+        let mut command = WorkerCommand::new(worker.command.clone());
+        for arg in &worker.args {
+            command = command.arg(OsString::from(arg));
+        }
 
-    let pool = WorkerPool::new(WorkerPoolConfig {
-        command,
-        forbidden_env_names: sensitive_worker_env_names(&config),
-        max_workers: config.limits.max_workers,
-        request_timeout: Duration::from_millis(config.limits.worker_timeout_ms),
-        max_request_bytes: config.limits.max_request_bytes,
-        max_stdout_bytes: config.limits.max_output_bytes,
-        max_stderr_bytes: config.limits.max_output_bytes,
-        max_memory_bytes: config
-            .limits
-            .max_worker_memory_mb
-            .map(|megabytes| megabytes.saturating_mul(1024 * 1024)),
-        replacement_window: Duration::from_secs(60),
-        max_replacements_per_window: config.limits.max_workers.saturating_mul(4).max(4),
-        circuit_breaker_cooldown: Duration::from_secs(30),
-    })
-    .await?;
+        Some(Arc::new(
+            WorkerPool::new(WorkerPoolConfig {
+                command,
+                forbidden_env_names: sensitive_worker_env_names(&config),
+                max_workers: config.limits.max_workers,
+                request_timeout: Duration::from_millis(config.limits.worker_timeout_ms),
+                max_request_bytes: config.limits.max_request_bytes,
+                max_stdout_bytes: config.limits.max_output_bytes,
+                max_stderr_bytes: config.limits.max_output_bytes,
+                max_memory_bytes: config
+                    .limits
+                    .max_worker_memory_mb
+                    .map(|megabytes| megabytes.saturating_mul(1024 * 1024)),
+                replacement_window: Duration::from_secs(60),
+                max_replacements_per_window: config.limits.max_workers.saturating_mul(4).max(4),
+                circuit_breaker_cooldown: Duration::from_secs(30),
+            })
+            .await?,
+        ))
+    } else {
+        None
+    };
 
     let credentials = load_credentials(&config)?;
     let source_limiters = config
@@ -1078,7 +1225,7 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
     let state = Arc::new(AppState {
         config,
         auth_tokens: Arc::new(auth_tokens),
-        pool: Arc::new(pool),
+        pool,
         credentials: Arc::new(credentials),
         source_limiters: Arc::new(source_limiters),
         metrics: Arc::new(Mutex::new(BTreeMap::new())),
@@ -1351,11 +1498,12 @@ fn validate_config(config: &SidecarConfig) -> Result<(), SidecarError> {
             ));
         }
         Some(_) => {}
-        None => {
+        None if has_openfn_sources(config) => {
             return Err(SidecarError::Config(
                 "limits.max_worker_memory_mb must be pinned".to_string(),
             ));
         }
+        None => {}
     }
     if config.limits.max_output_bytes == 0
         || config.limits.max_request_bytes == 0
@@ -1366,10 +1514,19 @@ fn validate_config(config: &SidecarConfig) -> Result<(), SidecarError> {
             "byte limits must be greater than zero".to_string(),
         ));
     }
-    if config.openfn.cli_build_tool.trim().is_empty() || config.openfn.runtime.trim().is_empty() {
+    if config.limits.batch_timeout_ms == Some(0) {
         return Err(SidecarError::Config(
-            "openfn.cli_build_tool and openfn.runtime must be pinned".to_string(),
+            "limits.batch_timeout_ms must be greater than zero".to_string(),
         ));
+    }
+    if has_openfn_sources(config) {
+        let openfn = openfn_config(config)?;
+        if openfn.cli_build_tool.trim().is_empty() || openfn.runtime.trim().is_empty() {
+            return Err(SidecarError::Config(
+                "openfn.cli_build_tool and openfn.runtime must be pinned".to_string(),
+            ));
+        }
+        worker_config(config)?;
     }
     for (source_id, source) in &config.sources {
         if source.limits.max_in_flight == Some(0) {
@@ -1407,7 +1564,144 @@ fn validate_source_execution(
     source: &SourceConfig,
     canonical_jobs_root: Option<&FsPath>,
 ) -> Result<(), SidecarError> {
-    validate_source_workflow(source_id, &source.workflow, canonical_jobs_root)
+    match source.engine {
+        SourceEngine::OpenFn => {
+            let workflow = source.workflow.as_ref().ok_or_else(|| {
+                SidecarError::Config(format!(
+                    "source {source_id} workflow is required for OpenFn sources"
+                ))
+            })?;
+            validate_source_workflow(source_id, workflow, canonical_jobs_root)
+        }
+        SourceEngine::HttpJson => validate_http_json_source(source_id, source),
+    }
+}
+
+fn validate_http_json_source(source_id: &str, source: &SourceConfig) -> Result<(), SidecarError> {
+    if source.workflow.is_some() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} workflow is not valid for http_json sources"
+        )));
+    }
+    let http_json = source.http_json.as_ref().ok_or_else(|| {
+        SidecarError::Config(format!(
+            "source {source_id} http_json config is required when engine is http_json"
+        ))
+    })?;
+    if http_json.base_url.cel.trim().is_empty() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} http_json.base_url.cel must be non-empty"
+        )));
+    }
+    if http_json.path.trim().is_empty()
+        || !http_json.path.starts_with('/')
+        || http_json.path.starts_with("//")
+        || http_json
+            .path
+            .trim_start_matches('/')
+            .split('/')
+            .any(|segment| matches!(segment, "." | ".."))
+    {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} http_json.path must be an absolute path under the configured base_url"
+        )));
+    }
+    if http_json.response.records.cel.trim().is_empty() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} http_json.response.records.cel must be non-empty"
+        )));
+    }
+    if source.allowed_base_urls.is_empty() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} allowed_base_urls is required for http_json"
+        )));
+    }
+    for (name, expr) in &http_json.query {
+        validate_http_header_or_query_name(source_id, "query", name)?;
+        validate_http_json_cel(source_id, &format!("http_json.query.{name}"), expr)?;
+    }
+    for (name, expr) in &http_json.headers {
+        validate_http_header_or_query_name(source_id, "headers", name)?;
+        validate_http_json_cel(source_id, &format!("http_json.headers.{name}"), expr)?;
+    }
+    validate_http_json_cel(source_id, "http_json.base_url", &http_json.base_url)?;
+    validate_http_json_cel(
+        source_id,
+        "http_json.response.records",
+        &http_json.response.records,
+    )?;
+    if let Some(auth) = &http_json.auth {
+        match auth.kind {
+            HttpJsonAuthKind::Bearer => {
+                validate_http_json_secret_ref(
+                    source_id,
+                    "http_json.auth.token.secret",
+                    auth.token.as_ref(),
+                )?;
+            }
+            HttpJsonAuthKind::Basic => {
+                validate_http_json_secret_ref(
+                    source_id,
+                    "http_json.auth.username.secret",
+                    auth.username.as_ref(),
+                )?;
+                validate_http_json_secret_ref(
+                    source_id,
+                    "http_json.auth.password.secret",
+                    auth.password.as_ref(),
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_http_json_secret_ref(
+    source_id: &str,
+    label: &str,
+    secret_ref: Option<&HttpJsonSecretRef>,
+) -> Result<(), SidecarError> {
+    let secret_ref = secret_ref.ok_or_else(|| {
+        SidecarError::Config(format!(
+            "source {source_id} {label} must name one top-level credential field"
+        ))
+    })?;
+    if secret_ref.secret.trim().is_empty() || secret_ref.secret.contains('.') {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} {label} must name one top-level credential field"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_http_json_cel(
+    source_id: &str,
+    label: &str,
+    expr: &HttpJsonCelExpression,
+) -> Result<(), SidecarError> {
+    if expr.cel.trim().is_empty() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} {label}.cel must be non-empty"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_http_header_or_query_name(
+    source_id: &str,
+    section: &str,
+    name: &str,
+) -> Result<(), SidecarError> {
+    if name.trim().is_empty()
+        || name
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
+    {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} http_json.{section} contains an invalid name"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_source_workflow(
@@ -1698,9 +1992,30 @@ fn adaptor_pin_version(adaptor: &str) -> Option<&str> {
     Some(version)
 }
 
+fn has_openfn_sources(config: &SidecarConfig) -> bool {
+    config
+        .sources
+        .values()
+        .any(|source| source.engine == SourceEngine::OpenFn)
+}
+
+fn openfn_config(config: &SidecarConfig) -> Result<&OpenFnConfig, SidecarError> {
+    config.openfn.as_ref().ok_or_else(|| {
+        SidecarError::Config("openfn config is required when any source uses OpenFn".to_string())
+    })
+}
+
+fn worker_config(config: &SidecarConfig) -> Result<&WorkerProcessConfig, SidecarError> {
+    config.worker.as_ref().ok_or_else(|| {
+        SidecarError::Config("worker config is required when any source uses OpenFn".to_string())
+    })
+}
+
 async fn verify_openfn_runtime(config: &SidecarConfig) -> Result<(), SidecarError> {
-    let mut version_args = config.worker.version_args.clone().unwrap_or_else(|| {
-        let mut args = config.worker.args.clone();
+    let openfn = openfn_config(config)?;
+    let worker = worker_config(config)?;
+    let mut version_args = worker.version_args.clone().unwrap_or_else(|| {
+        let mut args = worker.args.clone();
         args.push("--version".to_string());
         args
     });
@@ -1709,7 +2024,7 @@ async fn verify_openfn_runtime(config: &SidecarConfig) -> Result<(), SidecarErro
     }
 
     let output = tokio::time::timeout(Duration::from_secs(5), async {
-        Command::new(&config.worker.command)
+        Command::new(&worker.command)
             .args(&version_args)
             .output()
             .await
@@ -1728,8 +2043,8 @@ async fn verify_openfn_runtime(config: &SidecarConfig) -> Result<(), SidecarErro
     combined.push_str(&String::from_utf8_lossy(&output.stderr));
     let reported = combined.split_whitespace().collect::<Vec<_>>();
     for expected in [
-        format!("cli_build_tool={}", config.openfn.cli_build_tool),
-        format!("runtime={}", config.openfn.runtime),
+        format!("cli_build_tool={}", openfn.cli_build_tool),
+        format!("runtime={}", openfn.runtime),
     ] {
         if !reported.iter().any(|reported| *reported == expected) {
             return Err(SidecarError::StartupCheck(format!(
@@ -1770,20 +2085,30 @@ async fn verify_openfn_runtime(config: &SidecarConfig) -> Result<(), SidecarErro
 fn source_adaptors(source: &SourceConfig) -> Vec<&str> {
     source
         .workflow
-        .steps
-        .iter()
-        .flat_map(|step| step.adaptors.iter().map(String::as_str))
-        .collect()
+        .as_ref()
+        .map(|workflow| {
+            workflow
+                .steps
+                .iter()
+                .flat_map(|step| step.adaptors.iter().map(String::as_str))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn add_source_execution(request: &mut Value, config: &SidecarConfig, source: &SourceConfig) {
+    if source.engine != SourceEngine::OpenFn {
+        return;
+    }
     let Some(object) = request.as_object_mut() else {
         return;
     };
-    object.insert(
-        "workflow".to_string(),
-        json!(workflow_for_worker(config, &source.workflow)),
-    );
+    if let Some(workflow) = &source.workflow {
+        object.insert(
+            "workflow".to_string(),
+            json!(workflow_for_worker(config, workflow)),
+        );
+    }
 }
 
 fn workflow_for_worker(
@@ -1800,6 +2125,523 @@ fn workflow_for_worker(
         }
     }
     workflow
+}
+
+async fn execute_source_json(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: Value,
+) -> Result<SourceExecution, SourceExecutionError> {
+    match source.engine {
+        SourceEngine::OpenFn => {
+            let Some(pool) = &state.pool else {
+                return Err(SourceExecutionError::HttpJson);
+            };
+            let execution = pool
+                .execute_json_with_metadata(request)
+                .await
+                .map_err(SourceExecutionError::Worker)?;
+            Ok(SourceExecution {
+                value: execution.value,
+                worker_id: execution.worker_id.to_string(),
+            })
+        }
+        SourceEngine::HttpJson => execute_http_json(state, source_id, source, request).await,
+    }
+}
+
+async fn execute_http_json(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: Value,
+) -> Result<SourceExecution, SourceExecutionError> {
+    if request.get("mode").and_then(Value::as_str) == Some("batch_match") {
+        let item_count = request
+            .get("items")
+            .and_then(Value::as_array)
+            .map_or(1, |items| items.len().max(1));
+        let value = tokio::time::timeout(
+            http_json_batch_timeout(&state.config.limits, item_count),
+            execute_http_json_batch(state, source_id, source, &request),
+        )
+        .await
+        .map_err(|_| SourceExecutionError::HttpJsonTimeout)??;
+        return Ok(SourceExecution {
+            value,
+            worker_id: "http_json".to_string(),
+        });
+    }
+    let data = execute_http_json_lookup(state, source_id, source, &request).await?;
+    if data.get("error").is_some() {
+        return Ok(SourceExecution {
+            value: data,
+            worker_id: "http_json".to_string(),
+        });
+    }
+    Ok(SourceExecution {
+        value: json!({ "data": data }),
+        worker_id: "http_json".to_string(),
+    })
+}
+
+async fn execute_http_json_batch(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: &Value,
+) -> Result<Value, SourceExecutionError> {
+    let query_signature = request
+        .get("query_signature")
+        .and_then(Value::as_array)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    if query_signature.len() != 1 {
+        return Err(SourceExecutionError::HttpJsonBadRequest);
+    }
+    let lookup_field = query_signature
+        .first()
+        .and_then(|term| term.get("field"))
+        .and_then(Value::as_str)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let items = request
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let mut responses = Vec::with_capacity(items.len());
+    for item in items {
+        let id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or(SourceExecutionError::HttpJson)?;
+        let lookup_value = item
+            .get("values")
+            .and_then(Value::as_array)
+            .and_then(|values| values.first())
+            .cloned()
+            .ok_or(SourceExecutionError::HttpJson)?;
+        let lookup_request = json!({
+            "source_id": source_id,
+            "dataset": request.get("dataset").cloned().unwrap_or(Value::Null),
+            "entity": request.get("entity").cloned().unwrap_or(Value::Null),
+            "lookup": {
+                "field": lookup_field,
+                "value": lookup_value,
+            },
+            "fields": request.get("fields").cloned().unwrap_or_else(|| json!([])),
+            "limit": 2,
+            "purpose": request.get("purpose").cloned().unwrap_or(Value::Null),
+            "correlation_id": request.get("correlation_id").cloned().unwrap_or(Value::Null),
+        });
+        let data = execute_http_json_lookup(state, source_id, source, &lookup_request).await?;
+        if let Some(error) = data.get("error") {
+            if shared_credential_error(error) {
+                return Ok(json!({ "error": error }));
+            }
+            responses.push(json!({ "id": id, "error": error }));
+        } else {
+            responses.push(json!({ "id": id, "data": data }));
+        }
+    }
+    Ok(json!({ "items": responses }))
+}
+
+fn http_json_batch_timeout(limits: &LimitConfig, item_count: usize) -> Duration {
+    let computed_ms = limits
+        .worker_timeout_ms
+        .saturating_mul(item_count.max(1) as u64);
+    let timeout_ms = limits
+        .batch_timeout_ms
+        .map_or(computed_ms, |configured| configured.min(computed_ms));
+    Duration::from_millis(timeout_ms.max(1))
+}
+
+fn shared_credential_error(error: &Value) -> bool {
+    matches!(
+        error.get("code").and_then(Value::as_str),
+        Some(
+            "target_auth" | "target_rate_limit" | "source.target_auth" | "source.target_rate_limit"
+        )
+    )
+}
+
+async fn execute_http_json_lookup(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: &Value,
+) -> Result<Value, SourceExecutionError> {
+    let http_json = source
+        .http_json
+        .as_ref()
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let credential = state
+        .credentials
+        .get(source_id)
+        .cloned()
+        .unwrap_or(Value::Null);
+    let public_credential = public_credential(source, &credential);
+    let bindings = http_json_bindings(request, &public_credential, None);
+    let base_url = eval_http_json_string(&http_json.base_url, bindings.clone())?;
+    let prepared_url = build_http_json_url(source_id, source, &base_url, &http_json.path).await?;
+    let host = prepared_url
+        .url
+        .host_str()
+        .ok_or(SourceExecutionError::HttpJson)?
+        .to_string();
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_millis(state.config.limits.worker_timeout_ms))
+        .resolve_to_addrs(&host, &prepared_url.resolved_addrs)
+        .build()
+        .map_err(|_| SourceExecutionError::HttpJson)?;
+    let mut builder = match http_json.method {
+        HttpJsonMethod::Get => client.get(prepared_url.url),
+        HttpJsonMethod::Post => client
+            .post(prepared_url.url)
+            .json(&http_json_request_body(request)),
+    };
+    for (name, expr) in &http_json.query {
+        let value = eval_http_json_string(expr, bindings.clone())?;
+        builder = builder.query(&[(name.as_str(), value)]);
+    }
+    for (name, expr) in &http_json.headers {
+        let value = eval_http_json_string(expr, bindings.clone())?;
+        builder = builder.header(name.as_str(), value);
+    }
+    if let Some(auth) = &http_json.auth {
+        match auth.kind {
+            HttpJsonAuthKind::Bearer => {
+                let token_ref = auth.token.as_ref().ok_or(SourceExecutionError::HttpJson)?;
+                let token = credential_secret(&credential, token_ref)?;
+                builder = builder.bearer_auth(token);
+            }
+            HttpJsonAuthKind::Basic => {
+                let username_ref = auth
+                    .username
+                    .as_ref()
+                    .ok_or(SourceExecutionError::HttpJson)?;
+                let password_ref = auth
+                    .password
+                    .as_ref()
+                    .ok_or(SourceExecutionError::HttpJson)?;
+                let username = credential_secret(&credential, username_ref)?;
+                let password = credential_secret(&credential, password_ref)?;
+                builder = builder.basic_auth(username, Some(password));
+            }
+        }
+    }
+    let response = builder.send().await.map_err(|error| {
+        if error.is_timeout() {
+            SourceExecutionError::HttpJsonTimeout
+        } else {
+            SourceExecutionError::HttpJson
+        }
+    })?;
+    let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return Ok(json!({ "error": { "code": "source.target_auth" } }));
+    }
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        let retry_after_seconds = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(state.config.limits.retry_after_seconds);
+        return Ok(json!({
+            "error": {
+                "code": "source.target_rate_limit",
+                "retry_after_seconds": retry_after_seconds
+            }
+        }));
+    }
+    if !status.is_success() {
+        return Ok(json!({ "error": { "code": "source.unavailable" } }));
+    }
+    let body = read_limited_json_response(response, state.config.limits.max_output_bytes).await?;
+    let records = eval_http_json_value(
+        &http_json.response.records,
+        http_json_bindings(request, &public_credential, Some(body)),
+    )?;
+    if !records.is_array() {
+        return Err(SourceExecutionError::HttpJson);
+    }
+    Ok(records)
+}
+
+fn credential_secret<'a>(
+    credential: &'a Value,
+    secret_ref: &HttpJsonSecretRef,
+) -> Result<&'a str, SourceExecutionError> {
+    credential
+        .get(&secret_ref.secret)
+        .and_then(Value::as_str)
+        .ok_or(SourceExecutionError::HttpJson)
+}
+
+fn http_json_request_body(request: &Value) -> Value {
+    json!({
+        "source_id": request.get("source_id").cloned().unwrap_or(Value::Null),
+        "dataset": request.get("dataset").cloned().unwrap_or(Value::Null),
+        "entity": request.get("entity").cloned().unwrap_or(Value::Null),
+        "lookup": request.get("lookup").cloned().unwrap_or(Value::Null),
+        "fields": request.get("fields").cloned().unwrap_or_else(|| json!([])),
+        "limit": request.get("limit").cloned().unwrap_or(Value::Null),
+        "purpose": request.get("purpose").cloned().unwrap_or(Value::Null),
+        "correlation_id": request.get("correlation_id").cloned().unwrap_or(Value::Null),
+    })
+}
+
+async fn read_limited_json_response(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Value, SourceExecutionError> {
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| {
+        if error.is_timeout() {
+            SourceExecutionError::HttpJsonTimeout
+        } else {
+            SourceExecutionError::HttpJson
+        }
+    })? {
+        if bytes.len().saturating_add(chunk.len()) > max_bytes {
+            return Err(SourceExecutionError::HttpJson);
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&bytes).map_err(|_| SourceExecutionError::HttpJson)
+}
+
+fn public_credential(source: &SourceConfig, credential: &Value) -> Value {
+    let Some(credential) = credential.as_object() else {
+        return Value::Object(Map::new());
+    };
+    let mut public = Map::new();
+    for field in &source.credential_public_fields {
+        if let Some(value) = credential.get(field) {
+            public.insert(field.clone(), value.clone());
+        }
+    }
+    Value::Object(public)
+}
+
+fn http_json_bindings(
+    request: &Value,
+    public_credential: &Value,
+    body: Option<Value>,
+) -> StandaloneExpressionInput {
+    let mut root_bindings = BTreeMap::new();
+    for key in [
+        "lookup",
+        "fields",
+        "limit",
+        "purpose",
+        "correlation_id",
+        "dataset",
+        "entity",
+        "source_id",
+    ] {
+        root_bindings.insert(
+            key.to_string(),
+            request.get(key).cloned().unwrap_or(Value::Null),
+        );
+    }
+    root_bindings.insert("credential_public".to_string(), public_credential.clone());
+    root_bindings.insert("body".to_string(), body.unwrap_or(Value::Null));
+    StandaloneExpressionInput::new(root_bindings)
+}
+
+fn eval_http_json_string(
+    expr: &HttpJsonCelExpression,
+    bindings: StandaloneExpressionInput,
+) -> Result<String, SourceExecutionError> {
+    match eval_http_json_value(expr, bindings)? {
+        Value::String(value) => Ok(value),
+        Value::Number(number) => Ok(number.to_string()),
+        Value::Bool(value) => Ok(value.to_string()),
+        _ => Err(SourceExecutionError::HttpJson),
+    }
+}
+
+fn eval_http_json_value(
+    expr: &HttpJsonCelExpression,
+    bindings: StandaloneExpressionInput,
+) -> Result<Value, SourceExecutionError> {
+    let runtime = MappingRuntime::new(RuntimeOptions::default());
+    runtime
+        .evaluate_cel_expression_with_input(&expr.cel, bindings)
+        .map_err(|_| SourceExecutionError::HttpJson)
+}
+
+async fn build_http_json_url(
+    source_id: &str,
+    source: &SourceConfig,
+    base_url: &str,
+    path: &str,
+) -> Result<PreparedHttpJsonUrl, SourceExecutionError> {
+    let base = reqwest::Url::parse(base_url).map_err(|_| SourceExecutionError::HttpJson)?;
+    ensure_allowed_base_url(source_id, source, &base)
+        .map_err(|_| SourceExecutionError::HttpJson)?;
+    let resolved_addrs = ensure_http_json_url_policy(&base, source)
+        .await
+        .map_err(|_| SourceExecutionError::HttpJson)?;
+    let url = append_http_json_path(&base, path).map_err(|_| SourceExecutionError::HttpJson)?;
+    ensure_same_origin(&base, &url).map_err(|_| SourceExecutionError::HttpJson)?;
+    Ok(PreparedHttpJsonUrl {
+        url,
+        resolved_addrs,
+    })
+}
+
+fn append_http_json_path(base: &reqwest::Url, path: &str) -> Result<reqwest::Url, ()> {
+    if path.starts_with("//") {
+        return Err(());
+    }
+    let suffix = path.trim_start_matches('/');
+    if suffix
+        .split('/')
+        .any(|segment| matches!(segment, "." | ".."))
+    {
+        return Err(());
+    }
+    let base_path = base.path().trim_end_matches('/');
+    let combined_path = if base_path.is_empty() || base_path == "/" {
+        format!("/{suffix}")
+    } else if suffix.is_empty() {
+        base_path.to_string()
+    } else {
+        format!("{base_path}/{suffix}")
+    };
+    let mut url = base.clone();
+    url.set_path(&combined_path);
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url)
+}
+
+fn ensure_allowed_base_url(
+    source_id: &str,
+    source: &SourceConfig,
+    base_url: &reqwest::Url,
+) -> Result<(), SidecarError> {
+    let normalized = base_url.as_str().trim_end_matches('/');
+    if source
+        .allowed_base_urls
+        .iter()
+        .map(|allowed| allowed.trim_end_matches('/'))
+        .any(|allowed| allowed == normalized)
+    {
+        Ok(())
+    } else {
+        Err(SidecarError::Config(format!(
+            "source {source_id} http_json base_url is not in allowed_base_urls"
+        )))
+    }
+}
+
+fn ensure_same_origin(base: &reqwest::Url, url: &reqwest::Url) -> Result<(), ()> {
+    if base.scheme() == url.scheme()
+        && base.host_str() == url.host_str()
+        && base.port_or_known_default() == url.port_or_known_default()
+    {
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
+async fn ensure_http_json_url_policy(
+    url: &reqwest::Url,
+    source: &SourceConfig,
+) -> Result<Vec<SocketAddr>, ()> {
+    let Some(host) = url.host_str() else {
+        return Err(());
+    };
+    let port = url.port_or_known_default().ok_or(())?;
+    if url.scheme() != "https" {
+        if url.scheme() != "http" {
+            return Err(());
+        }
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            ensure_ip_allowed(ip, source)?;
+            if !ip.is_loopback() && !is_private_or_link_local_ip(ip) {
+                return Err(());
+            }
+            return Ok(vec![SocketAddr::new(ip, port)]);
+        } else if is_localhost_host(host) {
+            if !source.allow_insecure_localhost {
+                return Err(());
+            }
+        } else {
+            return Err(());
+        }
+    }
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        ensure_ip_allowed(ip, source)?;
+        return Ok(vec![SocketAddr::new(ip, port)]);
+    }
+    if is_localhost_host(host) {
+        if source.allow_insecure_localhost || source.allow_insecure_private_network {
+            return Ok(vec![SocketAddr::new(IpAddr::from([127, 0, 0, 1]), port)]);
+        }
+        return Err(());
+    }
+    let mut resolved = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|_| ())?;
+    let mut addrs = Vec::new();
+    for address in &mut resolved {
+        ensure_ip_allowed(address.ip(), source)?;
+        addrs.push(address);
+    }
+    if addrs.is_empty() {
+        return Err(());
+    }
+    Ok(addrs)
+}
+
+fn ensure_ip_allowed(ip: IpAddr, source: &SourceConfig) -> Result<(), ()> {
+    if is_cloud_metadata_ip(ip) {
+        return Err(());
+    }
+    if ip.is_loopback() {
+        return if source.allow_insecure_localhost || source.allow_insecure_private_network {
+            Ok(())
+        } else {
+            Err(())
+        };
+    }
+    if is_private_or_link_local_ip(ip) {
+        return if source.allow_insecure_private_network {
+            Ok(())
+        } else {
+            Err(())
+        };
+    }
+    Ok(())
+}
+
+fn is_localhost_host(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "::1")
+}
+
+fn is_cloud_metadata_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => ip.octets() == [169, 254, 169, 254],
+        IpAddr::V6(ip) => {
+            ip.octets() == [0xfd, 0x00, 0xec, 0x2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xfe]
+        }
+    }
+}
+
+fn is_private_or_link_local_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            ip.is_private() || ip.is_link_local() || ip.is_unspecified() || ip.is_broadcast()
+        }
+        IpAddr::V6(ip) => ip.is_unique_local() || ip.is_unicast_link_local() || ip.is_unspecified(),
+    }
 }
 
 fn load_credentials(config: &SidecarConfig) -> Result<BTreeMap<String, Value>, SidecarError> {
@@ -1887,8 +2729,9 @@ async fn run_smoke_lookups(state: &Arc<AppState>) -> Result<(), SidecarError> {
                 "configuration": state.credentials.get(source_id).cloned().unwrap_or(Value::Null),
             });
             add_source_execution(&mut request, &state.config, source);
-            match state.pool.execute_json(request).await {
-                Ok(response) => {
+            match execute_source_json(state, source_id, source, request).await {
+                Ok(execution) => {
+                    let response = execution.value;
                     if let Some(records) = response.get("data").and_then(Value::as_array) {
                         if records.iter().any(|record| {
                             record
@@ -1915,7 +2758,7 @@ async fn run_smoke_lookups(state: &Arc<AppState>) -> Result<(), SidecarError> {
                     }
                 }
                 Err(error) => {
-                    last_reason = smoke_error_reason(&error);
+                    last_reason = smoke_execution_error_reason(&error);
                 }
             }
 
@@ -1930,6 +2773,15 @@ async fn run_smoke_lookups(state: &Arc<AppState>) -> Result<(), SidecarError> {
         }
     }
     Ok(())
+}
+
+fn smoke_execution_error_reason(error: &SourceExecutionError) -> String {
+    match error {
+        SourceExecutionError::Worker(error) => smoke_error_reason(error),
+        SourceExecutionError::HttpJson
+        | SourceExecutionError::HttpJsonBadRequest
+        | SourceExecutionError::HttpJsonTimeout => "source adapter execution failed".to_string(),
+    }
 }
 
 fn smoke_error_reason(error: &WorkerError) -> String {
@@ -1949,7 +2801,10 @@ fn smoke_error_reason(error: &WorkerError) -> String {
 }
 
 async fn healthz(State(state): State<Arc<AppState>>) -> Response {
-    let snapshot = state.pool.snapshot().await;
+    let Some(pool) = &state.pool else {
+        return (StatusCode::OK, Json(json!({ "status": "ok" }))).into_response();
+    };
+    let snapshot = pool.snapshot().await;
     if snapshot.idle_workers + snapshot.in_flight < snapshot.max_workers {
         return problem(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1973,7 +2828,11 @@ async fn healthz(State(state): State<Arc<AppState>>) -> Response {
 }
 
 async fn ready(State(state): State<Arc<AppState>>) -> Response {
-    if state.pool.check_ready().await {
+    let worker_ready = match &state.pool {
+        Some(pool) => pool.check_ready().await,
+        None => true,
+    };
+    if worker_ready {
         let mut body = json!({ "status": "ready" });
         if let Some(assurance) = &state.config.assurance {
             body["config_hash"] = json!(assurance.config_hash);
@@ -2004,27 +2863,30 @@ async fn assurance(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Re
 }
 
 async fn metrics(State(state): State<Arc<AppState>>) -> Response {
-    let snapshot = state.pool.snapshot().await;
-    let mut body = format!(
-        concat!(
-            "# TYPE registry_notary_openfn_sidecar_workers gauge\n",
-            "registry_notary_openfn_sidecar_workers{{state=\"max\"}} {}\n",
-            "registry_notary_openfn_sidecar_workers{{state=\"idle\"}} {}\n",
-            "registry_notary_openfn_sidecar_workers{{state=\"in_flight\"}} {}\n",
-            "# TYPE registry_notary_openfn_sidecar_worker_completions_total counter\n",
-            "registry_notary_openfn_sidecar_worker_completions_total {}\n",
-            "# TYPE registry_notary_openfn_sidecar_worker_replacements_total counter\n",
-            "registry_notary_openfn_sidecar_worker_replacements_total {}\n",
-            "# TYPE registry_notary_openfn_sidecar_worker_circuit_open gauge\n",
-            "registry_notary_openfn_sidecar_worker_circuit_open {}\n"
-        ),
-        snapshot.max_workers,
-        snapshot.idle_workers,
-        snapshot.in_flight,
-        snapshot.completed_total,
-        snapshot.replacements_total,
-        u8::from(snapshot.circuit_open)
-    );
+    let mut body = String::new();
+    if let Some(pool) = &state.pool {
+        let snapshot = pool.snapshot().await;
+        body.push_str(&format!(
+            concat!(
+                "# TYPE registry_notary_openfn_sidecar_workers gauge\n",
+                "registry_notary_openfn_sidecar_workers{{state=\"max\"}} {}\n",
+                "registry_notary_openfn_sidecar_workers{{state=\"idle\"}} {}\n",
+                "registry_notary_openfn_sidecar_workers{{state=\"in_flight\"}} {}\n",
+                "# TYPE registry_notary_openfn_sidecar_worker_completions_total counter\n",
+                "registry_notary_openfn_sidecar_worker_completions_total {}\n",
+                "# TYPE registry_notary_openfn_sidecar_worker_replacements_total counter\n",
+                "registry_notary_openfn_sidecar_worker_replacements_total {}\n",
+                "# TYPE registry_notary_openfn_sidecar_worker_circuit_open gauge\n",
+                "registry_notary_openfn_sidecar_worker_circuit_open {}\n"
+            ),
+            snapshot.max_workers,
+            snapshot.idle_workers,
+            snapshot.in_flight,
+            snapshot.completed_total,
+            snapshot.replacements_total,
+            u8::from(snapshot.circuit_open)
+        ));
+    }
     body.push_str("# TYPE registry_notary_openfn_sidecar_source_permits gauge\n");
     for (source_id, source) in &state.config.sources {
         let max_permits = source
@@ -2143,9 +3005,9 @@ async fn lookup(
         Ok(permit) => permit,
         Err(response) => return *response,
     };
-    let worker_execution = match state.pool.execute_json_with_metadata(request).await {
+    let source_execution = match execute_source_json(&state, source_id, source, request).await {
         Ok(execution) => execution,
-        Err(error) => {
+        Err(SourceExecutionError::Worker(error)) => {
             let worker_id = error.worker_id();
             record_metric_with_items(&state, source_id, "worker_error", started_at.elapsed(), 1)
                 .await;
@@ -2159,9 +3021,44 @@ async fn lookup(
             );
             return worker_error_response(error, state.config.limits.retry_after_seconds);
         }
+        Err(SourceExecutionError::HttpJson) => {
+            record_metric_with_items(&state, source_id, "source_error", started_at.elapsed(), 1)
+                .await;
+            warn!(
+                correlation_id = correlation_id.as_deref().unwrap_or(""),
+                source_id = source_id.as_str(),
+                outcome = "source_error",
+                worker_id = "http_json",
+                duration_ms = started_at.elapsed().as_millis() as u64,
+                "sidecar lookup failed"
+            );
+            return problem(StatusCode::BAD_GATEWAY, "source adapter execution failed");
+        }
+        Err(SourceExecutionError::HttpJsonTimeout) => {
+            record_metric_with_items(&state, source_id, "source_timeout", started_at.elapsed(), 1)
+                .await;
+            warn!(
+                correlation_id = correlation_id.as_deref().unwrap_or(""),
+                source_id = source_id.as_str(),
+                outcome = "source_timeout",
+                worker_id = "http_json",
+                duration_ms = started_at.elapsed().as_millis() as u64,
+                "sidecar lookup timed out"
+            );
+            return problem_with_code(
+                StatusCode::GATEWAY_TIMEOUT,
+                "source timeout",
+                "source.timeout",
+            );
+        }
+        Err(SourceExecutionError::HttpJsonBadRequest) => {
+            record_metric_with_items(&state, source_id, "source_error", started_at.elapsed(), 1)
+                .await;
+            return problem(StatusCode::BAD_REQUEST, "invalid source adapter request");
+        }
     };
 
-    let response = normalize_worker_response(worker_execution.value, &query.fields, query.limit);
+    let response = normalize_worker_response(source_execution.value, &query.fields, query.limit);
     let outcome = if response.status().is_success() {
         "success"
     } else {
@@ -2172,7 +3069,7 @@ async fn lookup(
         correlation_id = correlation_id.as_deref().unwrap_or(""),
         source_id = source_id.as_str(),
         outcome,
-        worker_id = worker_execution.worker_id,
+        worker_id = source_execution.worker_id,
         status = response.status().as_u16(),
         duration_ms = started_at.elapsed().as_millis() as u64,
         "sidecar lookup completed"
@@ -2248,9 +3145,9 @@ async fn batch_match(
         Ok(permit) => permit,
         Err(response) => return *response,
     };
-    let worker_execution = match state.pool.execute_json_with_metadata(request).await {
+    let source_execution = match execute_source_json(&state, source_id, source, request).await {
         Ok(execution) => execution,
-        Err(error) => {
+        Err(SourceExecutionError::Worker(error)) => {
             let worker_id = error.worker_id();
             record_metric_with_items(
                 &state,
@@ -2270,10 +3167,63 @@ async fn batch_match(
             );
             return worker_error_response(error, state.config.limits.retry_after_seconds);
         }
+        Err(SourceExecutionError::HttpJson) => {
+            record_metric_with_items(
+                &state,
+                source_id,
+                "batch_source_error",
+                started_at.elapsed(),
+                batch_item_count,
+            )
+            .await;
+            warn!(
+                correlation_id = correlation_id.as_deref().unwrap_or(""),
+                source_id = source_id.as_str(),
+                outcome = "batch_source_error",
+                worker_id = "http_json",
+                duration_ms = started_at.elapsed().as_millis() as u64,
+                "sidecar batch match failed"
+            );
+            return problem(StatusCode::BAD_GATEWAY, "source adapter execution failed");
+        }
+        Err(SourceExecutionError::HttpJsonTimeout) => {
+            record_metric_with_items(
+                &state,
+                source_id,
+                "batch_source_timeout",
+                started_at.elapsed(),
+                batch_item_count,
+            )
+            .await;
+            warn!(
+                correlation_id = correlation_id.as_deref().unwrap_or(""),
+                source_id = source_id.as_str(),
+                outcome = "batch_source_timeout",
+                worker_id = "http_json",
+                duration_ms = started_at.elapsed().as_millis() as u64,
+                "sidecar batch match timed out"
+            );
+            return problem_with_code(
+                StatusCode::GATEWAY_TIMEOUT,
+                "source timeout",
+                "source.timeout",
+            );
+        }
+        Err(SourceExecutionError::HttpJsonBadRequest) => {
+            record_metric_with_items(
+                &state,
+                source_id,
+                "batch_source_error",
+                started_at.elapsed(),
+                batch_item_count,
+            )
+            .await;
+            return problem(StatusCode::BAD_REQUEST, "invalid source adapter request");
+        }
     };
 
     let response = normalize_batch_worker_response(
-        worker_execution.value,
+        source_execution.value,
         &body.fields,
         &body
             .items
@@ -2298,7 +3248,7 @@ async fn batch_match(
         correlation_id = correlation_id.as_deref().unwrap_or(""),
         source_id = source_id.as_str(),
         outcome,
-        worker_id = worker_execution.worker_id,
+        worker_id = source_execution.worker_id,
         status = response.status().as_u16(),
         duration_ms = started_at.elapsed().as_millis() as u64,
         "sidecar batch match completed"
@@ -2728,8 +3678,8 @@ fn normalize_batch_worker_response(
 
 fn normalize_item_error(error: &Map<String, Value>) -> Value {
     match error.get("code").and_then(Value::as_str) {
-        Some("target_auth") => json!({ "code": "target_auth" }),
-        Some("target_rate_limit") => {
+        Some("target_auth" | "source.target_auth") => json!({ "code": "target_auth" }),
+        Some("target_rate_limit" | "source.target_rate_limit") => {
             let mut normalized = json!({ "code": "target_rate_limit" });
             if let Some(retry_after) = error.get("retry_after_seconds").and_then(Value::as_u64) {
                 normalized["retry_after_seconds"] = json!(retry_after);
@@ -2762,11 +3712,11 @@ fn project_record(record: &Value, fields: &[String]) -> Result<Value, Box<Respon
 
 fn target_error_response(error: &Map<String, Value>) -> Response {
     match error.get("code").and_then(Value::as_str) {
-        Some("target_rate_limit") => {
+        Some("target_rate_limit" | "source.target_rate_limit") => {
             let mut response = problem_with_code(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "target rate limited",
-                "target_rate_limit",
+                "source.target_rate_limit",
             );
             if let Some(seconds) = error
                 .get("retry_after_seconds")
@@ -2777,13 +3727,30 @@ fn target_error_response(error: &Map<String, Value>) -> Response {
             }
             response
         }
-        Some("target_auth") => {
-            problem_with_code(StatusCode::BAD_GATEWAY, "target auth failed", "target_auth")
-        }
-        _ => problem_with_code(
+        Some("target_auth" | "source.target_auth") => problem_with_code(
+            StatusCode::BAD_GATEWAY,
+            "target auth failed",
+            "source.target_auth",
+        ),
+        Some("source.timeout") => problem_with_code(
+            StatusCode::GATEWAY_TIMEOUT,
+            "source timeout",
+            "source.timeout",
+        ),
+        Some("source.unavailable" | "source_unavailable") => problem_with_code(
+            StatusCode::BAD_GATEWAY,
+            "source unavailable",
+            "source.unavailable",
+        ),
+        Some("openfn_execution") => problem_with_code(
             StatusCode::BAD_GATEWAY,
             "worker execution failed",
             "openfn_execution",
+        ),
+        _ => problem_with_code(
+            StatusCode::BAD_GATEWAY,
+            "source adapter execution failed",
+            "source.unavailable",
         ),
     }
 }
@@ -2924,23 +3891,25 @@ mod tests {
                 liveness_window_ms: default_liveness_window_ms(),
                 retry_after_seconds: default_retry_after_seconds(),
                 max_batch_items: default_max_batch_items(),
+                batch_timeout_ms: None,
                 max_worker_memory_mb: Some(256),
             },
-            openfn: OpenFnConfig {
+            openfn: Some(OpenFnConfig {
                 cli_build_tool: "1.2.5".to_string(),
                 runtime: "1.9.3".to_string(),
-            },
-            worker: WorkerProcessConfig {
+            }),
+            worker: Some(WorkerProcessConfig {
                 command: PathBuf::from("node"),
                 args: Vec::new(),
                 version_args: None,
-            },
+            }),
             sources: BTreeMap::from([(
                 "people".to_string(),
                 SourceConfig {
                     dataset: "civil_registry".to_string(),
                     entity: "person".to_string(),
-                    workflow: SourceWorkflowConfig {
+                    engine: SourceEngine::OpenFn,
+                    workflow: Some(SourceWorkflowConfig {
                         start: Some("lookup".to_string()),
                         batch_mode: SourceWorkflowBatchMode::PerItem,
                         steps: vec![SourceWorkflowStepConfig {
@@ -2950,11 +3919,15 @@ mod tests {
                             adaptors: vec!["@openfn/language-common@3.2.3".to_string()],
                             next: None,
                         }],
-                    },
+                    }),
                     credential_env: "TEST_OPENFN_SOURCE_CREDENTIAL".to_string(),
+                    credential_public_fields: Vec::new(),
                     batch: SourceBatchConfig::default(),
                     limits: SourceRuntimeLimitConfig::default(),
                     allowed_base_urls: Vec::new(),
+                    allow_insecure_localhost: false,
+                    allow_insecure_private_network: false,
+                    http_json: None,
                     smoke_lookup: Some(SmokeLookupConfig {
                         field: "national_id".to_string(),
                         value: "person-1".to_string(),
@@ -3000,6 +3973,19 @@ mod tests {
     }
 
     #[test]
+    fn batch_timeout_limit_must_be_nonzero_when_configured() {
+        let mut config = minimal_config();
+        config.limits.batch_timeout_ms = Some(0);
+
+        let error = validate_config(&config).expect_err("zero batch timeout is rejected");
+
+        assert!(
+            error.to_string().contains("limits.batch_timeout_ms"),
+            "expected batch timeout limit in {error}"
+        );
+    }
+
+    #[test]
     fn source_concurrency_limit_must_be_nonzero() {
         let mut config = minimal_config();
         config
@@ -3016,5 +4002,75 @@ mod tests {
             error.to_string().contains("limits.max_in_flight"),
             "expected source limit in {error}"
         );
+    }
+
+    #[test]
+    fn http_json_ip_policy_blocks_private_and_metadata_by_default() {
+        let mut source = minimal_config()
+            .sources
+            .remove("people")
+            .expect("source exists");
+        source.engine = SourceEngine::HttpJson;
+        source.allow_insecure_localhost = false;
+        source.allow_insecure_private_network = false;
+
+        assert!(ensure_ip_allowed("10.0.0.1".parse().unwrap(), &source).is_err());
+
+        source.allow_insecure_private_network = true;
+        assert!(ensure_ip_allowed("10.0.0.1".parse().unwrap(), &source).is_ok());
+        assert!(ensure_ip_allowed("169.254.169.254".parse().unwrap(), &source).is_err());
+
+        source.allow_insecure_private_network = false;
+        source.allow_insecure_localhost = true;
+        assert!(ensure_ip_allowed("127.0.0.1".parse().unwrap(), &source).is_ok());
+    }
+
+    #[tokio::test]
+    async fn http_json_url_policy_rejects_plain_http_public_hosts_even_with_private_network_escape()
+    {
+        let mut source = minimal_config()
+            .sources
+            .remove("people")
+            .expect("source exists");
+        source.engine = SourceEngine::HttpJson;
+        source.allow_insecure_localhost = true;
+        source.allow_insecure_private_network = true;
+
+        let public_http = reqwest::Url::parse("http://example.com").expect("url parses");
+        assert!(ensure_http_json_url_policy(&public_http, &source)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn http_json_url_policy_rejects_plain_http_public_ip_literals_even_with_private_network_escape(
+    ) {
+        let mut source = minimal_config()
+            .sources
+            .remove("people")
+            .expect("source exists");
+        source.engine = SourceEngine::HttpJson;
+        source.allow_insecure_localhost = true;
+        source.allow_insecure_private_network = true;
+
+        let public_http = reqwest::Url::parse("http://93.184.216.34").expect("url parses");
+        assert!(ensure_http_json_url_policy(&public_http, &source)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn http_json_url_policy_keeps_metadata_blocked_with_private_network_escape() {
+        let mut source = minimal_config()
+            .sources
+            .remove("people")
+            .expect("source exists");
+        source.engine = SourceEngine::HttpJson;
+        source.allow_insecure_private_network = true;
+
+        let metadata_http = reqwest::Url::parse("http://169.254.169.254").expect("url parses");
+        assert!(ensure_http_json_url_policy(&metadata_http, &source)
+            .await
+            .is_err());
     }
 }

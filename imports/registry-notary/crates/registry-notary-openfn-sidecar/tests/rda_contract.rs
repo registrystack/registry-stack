@@ -919,11 +919,11 @@ async fn target_auth_and_rate_limit_have_distinct_status_codes() {
 
     let auth = authorized_lookup(&harness.server, "target-auth").await;
     let auth_body = assert_problem_details(&auth, StatusCode::BAD_GATEWAY);
-    assert_eq!(auth_body["code"], json!("target_auth"));
+    assert_eq!(auth_body["code"], json!("source.target_auth"));
 
     let rate_limit = authorized_lookup(&harness.server, "target-rate-limit").await;
     let rate_limit_body = assert_problem_details(&rate_limit, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(rate_limit_body["code"], json!("target_rate_limit"));
+    assert_eq!(rate_limit_body["code"], json!("source.target_rate_limit"));
     assert_eq!(
         rate_limit
             .headers()
