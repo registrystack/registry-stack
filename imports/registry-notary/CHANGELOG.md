@@ -42,21 +42,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Compare release tags against the protected `main` SHA before publishing
-  (PRs #234, #235, #238).
-- Align `doctor` deployment gates with runtime behavior and make readiness gates
-  non-waivable (PRs #234, #235, #238).
-- Carry source runtime provenance through derived claims; honor OpenFn native
-  workflow batches; apply published config with antirollback accept; resolve
-  bundled approval integration (PRs #234, #235, #238).
+- **Release tag ancestry check** (PRs #234, #235, #238): compare release tags against
+  the protected `main` SHA before publishing.
+- **Doctor gate alignment** (PRs #234, #235, #238): align `doctor` deployment gates
+  with runtime behavior and make readiness gates non-waivable.
+- **Source provenance and workflow integrations** (PRs #234, #235, #238): carry source
+  runtime provenance through derived claims; honor OpenFn native workflow batches;
+  apply published config with antirollback accept; resolve bundled approval
+  integration.
 
 ### Security
 
-- Bind SD-JWT holder proofs to the verifier key-binding challenge (PRs #234, #235,
-  #238).
-- Isolate container OIDC from pull-request workflows, enforce workflow security
-  hardening, drop persisted credentials in the fuzz workflow, and modernize
-  gitleaks allowlists (PRs #234, #235, #238).
+- **SD-JWT holder-proof challenge binding** (PRs #234, #235, #238): bind SD-JWT holder
+  proofs to the verifier key-binding challenge.
+- **Workflow credential hardening** (PRs #234, #235, #238): isolate container OIDC from
+  pull-request workflows, enforce workflow security hardening, drop persisted
+  credentials in the fuzz workflow, and modernize gitleaks allowlists.
 
 ## [0.3.0] - 2026-06-12
 
