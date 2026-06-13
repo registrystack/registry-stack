@@ -248,6 +248,85 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.module.check_workflow_external_refs()
 
+    def write_hardened_workflows(self):
+        workflow_dir = self.root / ".github" / "workflows"
+        workflow_dir.mkdir(parents=True)
+        checkout = (
+            "      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd\n"
+            "        with:\n"
+            "          persist-credentials: false\n"
+        )
+        (workflow_dir / "fuzz.yml").write_text(
+            "name: Fuzz\n"
+            "on: [pull_request]\n"
+            "jobs:\n"
+            "  fuzz:\n"
+            "    steps:\n"
+            f"{checkout}"
+        )
+        (workflow_dir / "container.yml").write_text(
+            "name: Container Images\n"
+            "on: [pull_request, push]\n"
+            "jobs:\n"
+            "  pull-request-images:\n"
+            "    if: github.event_name == 'pull_request'\n"
+            "    permissions:\n"
+            "      contents: read\n"
+            "    steps:\n"
+            f"{checkout}"
+            "  images:\n"
+            "    if: github.event_name != 'pull_request'\n"
+            "    permissions:\n"
+            "      contents: read\n"
+            "      id-token: write\n"
+            "      packages: write\n"
+            "    steps:\n"
+            f"{checkout}"
+            "      - name: Verify release tag is protected-main reachable\n"
+            "        run: |\n"
+            "          protected_main_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+            "          gh api \"repos/${GITHUB_REPOSITORY}/compare/${GITHUB_SHA}...${protected_main_sha}\"\n"
+        )
+
+    def test_workflow_pull_request_hardening_accepts_expected_shape(self):
+        self.write_hardened_workflows()
+        self.module.check_workflow_pull_request_hardening()
+
+    def test_workflow_pull_request_hardening_rejects_persisted_checkout_credentials(self):
+        self.write_hardened_workflows()
+        fuzz = self.root / ".github" / "workflows" / "fuzz.yml"
+        fuzz.write_text(fuzz.read_text().replace("          persist-credentials: false\n", ""))
+
+        with self.assertRaises(SystemExit):
+            self.module.check_workflow_pull_request_hardening()
+
+    def test_workflow_pull_request_hardening_rejects_pr_oidc(self):
+        self.write_hardened_workflows()
+        container = self.root / ".github" / "workflows" / "container.yml"
+        container.write_text(
+            container.read_text().replace(
+                "      contents: read\n    steps:",
+                "      contents: read\n      id-token: write\n    steps:",
+                1,
+            )
+        )
+
+        with self.assertRaises(SystemExit):
+            self.module.check_workflow_pull_request_hardening()
+
+    def test_workflow_pull_request_hardening_rejects_mutable_main_compare(self):
+        self.write_hardened_workflows()
+        container = self.root / ".github" / "workflows" / "container.yml"
+        container.write_text(
+            container.read_text().replace(
+                "compare/${GITHUB_SHA}...${protected_main_sha}",
+                "compare/${GITHUB_SHA}...main",
+            )
+        )
+
+        with self.assertRaises(SystemExit):
+            self.module.check_workflow_pull_request_hardening()
+
     def test_extracts_literal_const_format_and_chained_methods(self):
         source = '''
 use axum::{routing::{get, post}, Router};

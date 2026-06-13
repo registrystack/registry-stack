@@ -481,6 +481,58 @@ def check_workflow_secret_boundaries() -> None:
             fail(f"OpenFn DHIS2 canary must not expose secret-boundary input: {pattern}")
 
 
+def check_workflow_pull_request_hardening() -> None:
+    fuzz = ROOT / ".github" / "workflows" / "fuzz.yml"
+    container = ROOT / ".github" / "workflows" / "container.yml"
+    for path in [fuzz, container]:
+        if not path.is_file():
+            fail(f"missing required workflow: {path.relative_to(ROOT)}")
+        check_checkout_steps_disable_persisted_credentials(path)
+
+    text = container.read_text(encoding="utf-8")
+    pr_job = workflow_job_block(text, "pull-request-images", container)
+    if "if: github.event_name == 'pull_request'" not in pr_job:
+        fail("container pull-request-images job must be restricted to pull_request")
+    for forbidden in ["id-token: write", "packages: write"]:
+        if re.search(rf"^\s+{re.escape(forbidden)}\s*$", pr_job, flags=re.M):
+            fail(f"container pull-request-images job must not grant {forbidden}")
+
+    image_job = workflow_job_block(text, "images", container)
+    if "if: github.event_name != 'pull_request'" not in image_job:
+        fail("container images publishing job must be skipped on pull_request")
+    for required in ["id-token: write", "packages: write"]:
+        if not re.search(rf"^\s+{re.escape(required)}\s*$", image_job, flags=re.M):
+            fail(f"container images publishing job must explicitly grant {required}")
+
+    if 'compare/${GITHUB_SHA}...${protected_main_sha}' not in text:
+        fail("container release ancestry check must compare tag SHA to protected main SHA")
+    if re.search(r"compare/\$\{GITHUB_SHA\}\.\.\.(?:origin/)?main\b", text):
+        fail("container release ancestry check must not compare against mutable main")
+
+
+def check_checkout_steps_disable_persisted_credentials(path: Path) -> None:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for index, line in enumerate(lines):
+        if "uses: actions/checkout@" not in line:
+            continue
+        window = lines[index + 1 : index + 9]
+        if not any(re.match(r"^\s+persist-credentials:\s*false\s*$", item) for item in window):
+            fail(
+                f"{path.relative_to(ROOT)}:{index + 1} checkout step must set "
+                "persist-credentials: false"
+            )
+
+
+def workflow_job_block(text: str, job_name: str, path: Path) -> str:
+    match = re.search(
+        rf"(?ms)^  {re.escape(job_name)}:\n(?P<body>.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+        text,
+    )
+    if not match:
+        fail(f"{path.relative_to(ROOT)} missing job {job_name}")
+    return match.group("body")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -494,6 +546,7 @@ def main() -> None:
             "openapi-coverage",
             "workflow-external-refs",
             "workflow-secret-boundaries",
+            "workflow-pull-request-hardening",
         ],
         default=None,
     )
@@ -504,6 +557,7 @@ def main() -> None:
         "openapi-baseline",
         "workflow-external-refs",
         "workflow-secret-boundaries",
+        "workflow-pull-request-hardening",
     ]
     if "manifest" in checks:
         validate_manifest()
@@ -519,6 +573,8 @@ def main() -> None:
         check_workflow_external_refs()
     if "workflow-secret-boundaries" in checks:
         check_workflow_secret_boundaries()
+    if "workflow-pull-request-hardening" in checks:
+        check_workflow_pull_request_hardening()
 
 
 if __name__ == "__main__":
