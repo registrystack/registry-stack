@@ -911,16 +911,18 @@ pub fn session_binding_mac(
 ) -> String {
     let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
         .expect("HMAC accepts any non-empty key length");
-    mac.update(session_id.as_bytes());
-    mac.update(b"\n");
-    mac.update(correlation_id.as_bytes());
-    mac.update(b"\n");
-    mac.update(verified_subject.as_bytes());
-    mac.update(b"\n");
-    mac.update(subject_id_hash.as_bytes());
-    mac.update(b"\n");
-    mac.update(actor_id_hash.as_bytes());
+    update_mac_field(&mut mac, session_id);
+    update_mac_field(&mut mac, correlation_id);
+    update_mac_field(&mut mac, verified_subject);
+    update_mac_field(&mut mac, subject_id_hash);
+    update_mac_field(&mut mac, actor_id_hash);
     format!("hmac-sha256:{}", hex_bytes(&mac.finalize().into_bytes()))
+}
+
+fn update_mac_field(mac: &mut HmacSha256, value: &str) {
+    mac.update(value.len().to_string().as_bytes());
+    mac.update(b":");
+    mac.update(value.as_bytes());
 }
 
 fn hmac_sha256_label(secret: &str, value: &str) -> String {
