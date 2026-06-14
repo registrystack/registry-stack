@@ -77,6 +77,10 @@ x-relay-common: &relay-common
   image: ${REGISTRY_RELAY_IMAGE:-ghcr.io/jeremi/registry-relay@sha256:f63ce341baff37f1d4ef2c4cc8d794269c3f166f2500238fef490574fb83092d}
   environment: &relay-env
     RUST_LOG: ${RUST_LOG:-info}
+    # Relay config and workbook fixtures are copied by config-loader into named
+    # volumes. Carrying the deployed ref in the service environment makes
+    # docker compose recreate relays when that mounted config/data changes.
+    CONFIG_REPO_REF: ${CONFIG_REPO_REF:?set CONFIG_REPO_REF to the deployed registry-lab git ref}
   restart: unless-stopped
   expose:
     - "8080"

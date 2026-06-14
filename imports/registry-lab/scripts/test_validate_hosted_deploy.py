@@ -998,6 +998,22 @@ evidence:
                 )
                 self.assertRegex(text, r"git -C /tmp/repo .*checkout .*FETCH_HEAD")
 
+    def test_hosted_relays_recreate_when_deployed_config_ref_changes(self) -> None:
+        compose = self.validator.load_yaml_mapping(SCRIPT_DIR.parent / "compose.coolify.yaml")
+        for service in (
+            "civil-registry-relay",
+            "social-protection-registry-relay",
+            "health-registry-relay",
+        ):
+            with self.subTest(service=service):
+                env = self.validator.normalize_environment(
+                    compose["services"][service]["environment"]
+                )
+                self.assertEqual(
+                    "${CONFIG_REPO_REF:?set CONFIG_REPO_REF to the deployed registry-lab git ref}",
+                    env.get("CONFIG_REPO_REF"),
+                )
+
     def test_rejects_esignet_issuer_mismatch(self) -> None:
         compose = self._valid_registry_lab()
         compose["services"]["citizen-civil-notary"]["environment"][
