@@ -17,7 +17,7 @@ fi
 if [[ "${REGISTRY_LAB_POSTGRES_SSL_FORCE:-0}" != "1" && -s "${key_path}" && -s "${cert_path}" ]]; then
   if openssl x509 -in "${cert_path}" -noout -checkend 86400 >/dev/null 2>&1 \
     && openssl x509 -in "${cert_path}" -noout -text | grep -q "Certificate Sign"; then
-    chmod 644 "${key_path}"
+    chmod 600 "${key_path}"
     chmod 644 "${cert_path}"
     exit 0
   fi
@@ -36,5 +36,5 @@ openssl req \
   -out "${cert_path}" \
   >/dev/null 2>&1
 
-chmod 644 "${key_path}"
+chmod 600 "${key_path}"
 chmod 644 "${cert_path}"
