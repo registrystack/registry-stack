@@ -8,6 +8,7 @@ import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urljoin
 
@@ -176,6 +177,47 @@ def observed_answer(item: dict[str, Any]) -> Any:
     if "satisfied" in item:
         return item.get("satisfied")
     return item.get("value")
+
+
+def attestation_response(
+    public_attestation: dict[str, Any],
+    *,
+    subject_type: str,
+    subject_id: str,
+    lookup_profile: str,
+    claim_id: str,
+    claim_value: Any,
+    match_method: str = "identifier_exact",
+    valid_until: str | None = None,
+) -> dict[str, Any]:
+    now = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    claims: list[dict[str, Any]] = [{"id": claim_id}]
+    if isinstance(claim_value, bool):
+        claims[0]["satisfied"] = claim_value
+    elif claim_value is not None:
+        claims[0]["value"] = claim_value
+    envelope = {
+        "attestation_id": public_attestation["offering_id"],
+        "display_name": public_attestation["display_name"],
+        "source_authority": public_attestation["source_authority"],
+        "jurisdiction": public_attestation["jurisdiction"],
+        "publicschema_anchor": public_attestation["publicschema_anchor"],
+        "subject": {"type": subject_type, "identifier": subject_id},
+        "match_method": match_method,
+        "matched_record_ref": "available in minimized Notary response or source provenance",
+        "as_of": now,
+        "source_observed_at": now,
+        "disclosure_profile": public_attestation["disclosure_profile"],
+        "claims": claims,
+        "proof": {
+            "type": "registry-notary-evaluation-response",
+            "status": "linked_raw_response",
+            "source": "response_source.http.body",
+        },
+    }
+    if valid_until:
+        envelope["valid_until"] = valid_until
+    return envelope
 
 
 def evaluation_body(subject: str, claim_id: str, id_scheme: str = "national_id", disclosure: str = "predicate") -> dict[str, Any]:

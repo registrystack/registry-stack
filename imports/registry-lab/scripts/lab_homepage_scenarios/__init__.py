@@ -7,6 +7,7 @@ import html
 from typing import Any
 
 from . import agriculture_voucher, civil_alive, combined_support, dhis2_programme, social_aggregate, wallet_vc
+from .attestations import public_label_violations
 
 
 SCENARIOS = [
@@ -38,12 +39,61 @@ def _attach_previews(story: dict[str, Any], module: Any, config: dict[str, Any])
     return {**story, "steps": enriched_steps}
 
 
+def _with_runtime_availability(story: dict[str, Any], lab_mode: str) -> dict[str, Any]:
+    item = dict(story)
+    availability = item.get("availability", "hosted")
+    runnable = _is_runnable(item, lab_mode)
+    label = "Hosted" if availability == "hosted" else "Local only"
+    item["availability_state"] = {
+        **dict(item.get("availability_state") or {}),
+        "state": availability,
+        "label": label,
+        "runnable": runnable,
+        "lab_mode": lab_mode,
+    }
+    return item
+
+
+def public_label_check(stories: list[dict[str, Any]] | None = None) -> list[str]:
+    """Return first-level public-label violations for scenario story metadata."""
+    return [
+        violation
+        for story in (stories or all_stories())
+        for violation in public_label_violations(
+            {
+                "title": story.get("title", ""),
+                "short_title": story.get("short_title", ""),
+                "proves": story.get("proves", ""),
+                "intro": story.get("intro", ""),
+                "actor": story.get("actor", ""),
+                "boundary": story.get("boundary", {}),
+                "steps": [
+                    {
+                        "label": step.get("label", ""),
+                        "prompt": step.get("prompt", ""),
+                        "button": step.get("button", ""),
+                        "request_summary": step.get("request_summary", ""),
+                        "reuses": step.get("reuses", []),
+                    }
+                    for step in story.get("steps", [])
+                ],
+                "receipt": story.get("receipt", []),
+                "requested_attestations": story.get("requested_attestations", []),
+                "lookup_profile": story.get("lookup_profile", {}),
+                "non_disclosure": story.get("non_disclosure", []),
+                "proof_facts": story.get("proof_facts", []),
+            },
+            story.get("id", "$"),
+        )
+    ]
+
+
 def scenario_payload(config: dict[str, Any], scenario_id: str | None = None, lab_mode: str = "hosted") -> dict[str, Any]:
     if scenario_id:
         module = STORY_BY_ID.get(scenario_id)
         if not module:
             return {"error": "unknown_scenario", "scenario_id": scenario_id}
-        story = _attach_previews(module.story(), module, config)
+        story = _with_runtime_availability(_attach_previews(module.story(), module, config), lab_mode)
         return {"story": story, "lab_mode": lab_mode, "runnable": _is_runnable(story, lab_mode)}
     return {
         "lab_mode": lab_mode,
@@ -56,7 +106,9 @@ def scenario_payload(config: dict[str, Any], scenario_id: str | None = None, lab
                 "proves": story["proves"],
                 "domain": story.get("domain", ""),
                 "availability": story.get("availability", "hosted"),
+                "availability_state": _with_runtime_availability(story, lab_mode)["availability_state"],
                 "availability_note": story.get("availability_note", ""),
+                "requested_attestations": story.get("requested_attestations", []),
                 "steps": len(story.get("steps", [])),
                 "runnable": _is_runnable(story, lab_mode),
             }

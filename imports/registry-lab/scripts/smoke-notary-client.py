@@ -98,6 +98,16 @@ def claim_ids(claims_response: dict[str, Any]) -> set[str]:
     return {item for item in ids if isinstance(item, str)}
 
 
+def claim_by_id(claims_response: dict[str, Any], claim_id: str) -> dict[str, Any]:
+    data = claims_response.get("data")
+    if not isinstance(data, list):
+        fail("/v1/claims response did not contain data[]")
+    for item in data:
+        if isinstance(item, dict) and item.get("id") == claim_id:
+            return item
+    fail(f"/v1/claims response did not include {claim_id}")
+
+
 def result_for(response: dict[str, Any], expected_claim: str) -> dict[str, Any]:
     results = response.get("results") or response.get("claim_results")
     if not isinstance(results, list) or not results:
@@ -116,6 +126,19 @@ def assert_boolean_result(response: dict[str, Any], expected_claim: str, expecte
     if actual is not expected:
         fail(f"{expected_claim} expected {expected}, got {actual!r}")
     return result
+
+
+def provenance_source_count(result: dict[str, Any]) -> int:
+    provenance = result.get("provenance")
+    if not isinstance(provenance, dict):
+        return 0
+    source_count = provenance.get("source_count")
+    if isinstance(source_count, int):
+        return source_count
+    used = provenance.get("used")
+    if isinstance(used, dict) and isinstance(used.get("source_count"), int):
+        return used["source_count"]
+    return 0
 
 
 def assert_service_document(response: dict[str, Any], expected_service: str) -> None:
@@ -191,6 +214,9 @@ def main() -> None:
     ids = claim_ids(claims)
     if "person-is-alive" not in ids:
         fail("civil claims list did not include person-is-alive")
+    alive_claim = claim_by_id(claims, "person-is-alive")
+    if alive_claim.get("title") != "Vital Status Attestation":
+        fail("civil person-is-alive claim did not expose the Vital Status Attestation title")
     record("civil claims list", {"claim_count": len(ids)})
 
     specific_claim = check(
@@ -199,7 +225,27 @@ def main() -> None:
     )
     if specific_claim.get("id") != "person-is-alive":
         fail("civil get claim returned the wrong claim")
-    record("civil get claim", {"claim_id": specific_claim.get("id")})
+    if specific_claim.get("title") != "Vital Status Attestation":
+        fail("civil get claim did not expose the Vital Status Attestation title")
+    record(
+        "civil get claim",
+        {"claim_id": specific_claim.get("id"), "title": specific_claim.get("title")},
+    )
+
+    shared_claims = check(
+        "shared claims list through client",
+        lambda: shared.list_claims(request_id=f"{correlation_id}-shared-claims"),
+    )
+    shared_expected_titles = {
+        "social-program-active": "Program Enrollment Attestation",
+        "health-service-available": "Service Availability Attestation",
+        "eligible-for-combined-support": "Combined Support Eligibility Attestation",
+    }
+    for claim_id, title in shared_expected_titles.items():
+        shared_claim = claim_by_id(shared_claims, claim_id)
+        if shared_claim.get("title") != title:
+            fail(f"{claim_id} expected title {title!r}, got {shared_claim.get('title')!r}")
+    record("shared attestation-facing claim metadata", {"claim_count": len(shared_expected_titles)})
 
     matrix_results = []
     for case in V1_MATRIX:
@@ -220,7 +266,7 @@ def main() -> None:
                 "claim_id": "person-is-alive",
                 "expected": case["alive"],
                 "observed": civil_result.get("satisfied") if civil_result.get("satisfied") is not None else civil_result.get("value"),
-                "provenance_source_count": civil_result.get("provenance", {}).get("source_count"),
+                "provenance_source_count": provenance_source_count(civil_result),
             }
         )
 
@@ -247,7 +293,7 @@ def main() -> None:
                 "claim_id": "health-service-available",
                 "expected": case["health"],
                 "observed": health_result.get("satisfied") if health_result.get("satisfied") is not None else health_result.get("value"),
-                "provenance_source_count": health_result.get("provenance", {}).get("source_count"),
+                "provenance_source_count": provenance_source_count(health_result),
             }
         )
 
@@ -268,7 +314,7 @@ def main() -> None:
             ),
         )
         shared_result = assert_boolean_result(shared_evaluation, "eligible-for-combined-support", case["combined"])
-        source_count = shared_result.get("provenance", {}).get("source_count", 0)
+        source_count = provenance_source_count(shared_result)
         if case["combined"] and (not isinstance(source_count, int) or source_count < 2):
             fail(f"shared evaluation expected at least 2 sources for {subject}, got {source_count!r}")
         matrix_results.append(

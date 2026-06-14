@@ -18,9 +18,6 @@ catalog:
       version: '3.0'
     - id: cpsv-ap
       version: 3.2.0
-profiles:
-  - id: service-first-discovery
-    version: '1'
 authorities:
   - id: civil_registration_authority
     iri: did:web:civil-registry.demo.example.gov
@@ -80,30 +77,45 @@ evaluation_profiles:
     claim_id: age_band
     subject_id_type: national_id
     max_source_observed_age_seconds: 86400
-  - id: person-is-alive-v1
-    ruleset: person-is-alive-v1
-    claim_id: person_is_alive
+  - id: vital-status-attestation-v1
+    ruleset: vital-status-attestation-v1
+    claim_id: vital_status_attestation
     subject_id_type: national_id
     max_source_observed_age_seconds: 86400
-  - id: program-enrollment-status-v1
-    ruleset: program-enrollment-status-v1
-    claim_id: program_enrollment_status
-    subject_id_type: id
-    max_source_observed_age_seconds: 86400
-  - id: beneficiary-active-v1
-    ruleset: beneficiary-active-v1
-    claim_id: beneficiary_active
+  - id: program-enrollment-attestation-v1
+    ruleset: program-enrollment-attestation-v1
+    claim_id: program_enrollment_attestation
     subject_id_type: national_id
     max_source_observed_age_seconds: 86400
-  - id: household-eligibility-band-v1
-    ruleset: household-eligibility-band-v1
-    claim_id: household_eligibility_band
+  - id: welfare-classification-attestation-v1
+    ruleset: welfare-classification-attestation-v1
+    claim_id: welfare_classification_attestation
     subject_id_type: national_id
     max_source_observed_age_seconds: 86400
-  - id: health-service-availability-v1
-    ruleset: health-service-availability-v1
-    claim_id: health_service_availability
-    subject_id_type: id
+  - id: household-composition-attestation-v1
+    ruleset: household-composition-attestation-v1
+    claim_id: household_composition_attestation
+    subject_id_type: national_id
+    max_source_observed_age_seconds: 86400
+  - id: caregiver-link-attestation-v1
+    ruleset: caregiver-link-attestation-v1
+    claim_id: caregiver_link_attestation
+    subject_id_type: national_id
+    max_source_observed_age_seconds: 86400
+  - id: disability-determination-attestation-v1
+    ruleset: disability-determination-attestation-v1
+    claim_id: disability_determination_attestation
+    subject_id_type: national_id
+    max_source_observed_age_seconds: 86400
+  - id: functioning-assessment-attestation-v1
+    ruleset: functioning-assessment-attestation-v1
+    claim_id: functioning_assessment_attestation
+    subject_id_type: national_id
+    max_source_observed_age_seconds: 86400
+  - id: service-availability-attestation-v1
+    ruleset: service-availability-attestation-v1
+    claim_id: service_availability_attestation
+    subject_id_type: national_id
     max_source_observed_age_seconds: 86400
   - id: farmer-registered-v1
     ruleset: farmer-registered-v1
@@ -135,10 +147,10 @@ evaluation_profiles:
     claim_id: eligible_for_livestock_movement
     subject_id_type: id
     max_source_observed_age_seconds: 86400
-  - id: eligible-for-combined-support-v1
-    ruleset: eligible-for-combined-support-v1
-    claim_id: eligible_for_combined_support
-    subject_id_type: id
+  - id: combined-support-eligibility-attestation-v1
+    ruleset: combined-support-eligibility-attestation-v1
+    claim_id: combined_support_eligibility_attestation
+    subject_id_type: national_id
     max_source_observed_age_seconds: 86400
 requirements:
   - id: child_identity_requirement
@@ -258,19 +270,48 @@ evidence_types:
       - combined_support_bundle_requirement
   - id: household_support_evidence
     iri: https://demo.example.gov/evidence-types/household-support
-    title: Household support evidence
+    title: Program Enrollment Attestation
+    description: Attestation that a social protection programme record supports household benefit review.
     proves:
       - household_support_requirement
       - combined_support_bundle_requirement
+  - id: household_composition_evidence
+    iri: https://demo.example.gov/evidence-types/household-composition
+    title: Household Composition Attestation
+    description: Attestation that returns a minimized household member count for benefit review.
+    proves:
+      - household_support_requirement
+      - combined_support_bundle_requirement
+  - id: caregiver_link_evidence
+    iri: https://demo.example.gov/evidence-types/caregiver-link
+    title: Parent Or Guardian Link Attestation
+    description: Attestation that confirms an active caregiver relationship for an applicant and child.
+    proves:
+      - household_support_requirement
+      - combined_support_bundle_requirement
+  - id: disability_determination_evidence
+    iri: https://demo.example.gov/evidence-types/disability-determination
+    title: Disability Determination Attestation
+    description: Attestation that returns a minimized disability support category for programme review.
+    proves:
+      - household_support_requirement
+  - id: functioning_assessment_evidence
+    iri: https://demo.example.gov/evidence-types/functioning-assessment
+    title: Functioning Assessment Attestation
+    description: Attestation that returns whether a functioning assessment meets the programme identifier threshold.
+    proves:
+      - household_support_requirement
   - id: health_service_availability_evidence
     iri: https://demo.example.gov/evidence-types/health-service-availability
-    title: Health service availability evidence
+    title: Service Availability Attestation
+    description: Attestation that the applicant context has an available licensed health service.
     proves:
       - health_linked_support_requirement
       - combined_support_bundle_requirement
   - id: combined_support_evidence
     iri: https://demo.example.gov/evidence-types/combined-support
-    title: Combined cross-authority support evidence
+    title: Combined Support Eligibility Attestation
+    description: Attestation that composes civil, social protection, and health facts for support review.
     proves:
       - combined_support_bundle_requirement
   - id: farmer_registration_evidence
@@ -526,7 +567,9 @@ datasets:
     evidence_offerings:
       - id: civil_child_status_evidence_service
         iri: https://demo.example.gov/evidence-offerings/civil-child-status
-        title: Civil vital status evidence service
+        title: Vital Status Attestation
+        description: Attestation that the civil registry currently records the subject as alive.
+        attestation_id: vital-status-attestation
         evidence_type: civil_child_status_evidence
         issuing_authority:
           id: civil_registration_authority
@@ -546,7 +589,7 @@ datasets:
           conforms_to: registry-notary-federation/v0.1
           endpoint_url: https://metadata.lab.registrystack.org/local-only/civil-notary
           discovery_url: https://metadata.lab.registrystack.org/local-only/civil-notary/.well-known/evidence-service
-          ruleset: civil-child-status-v1
+          ruleset: vital-status-attestation-v1
         policy:
           purpose:
             - https://demo.example.gov/purpose/child-support-eligibility
@@ -587,7 +630,9 @@ datasets:
     evidence_offerings:
       - id: household_support_evidence_service
         iri: https://demo.example.gov/evidence-offerings/household-support
-        title: Household support evidence service
+        title: Program Enrollment Attestation
+        description: Attestation that a programme MIS or social registry enrollment is active or exposes its minimized status.
+        attestation_id: program-enrollment-attestation
         evidence_type: household_support_evidence
         issuing_authority:
           id: social_protection_authority
@@ -605,14 +650,182 @@ datasets:
         access:
           kind: registry-notary
           conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://metadata.lab.registrystack.org/local-only/social-protection-notary
-          discovery_url: https://metadata.lab.registrystack.org/local-only/social-protection-notary/.well-known/evidence-service
-          ruleset: program-enrollment-status-v1
+          endpoint_url: https://social-notary.lab.registrystack.org
+          discovery_url: https://social-notary.lab.registrystack.org/.well-known/evidence-service
+          ruleset: program-enrollment-attestation-v1
+        policy:
+          purpose:
+            - https://demo.example.gov/purpose/social-protection-review
+            - https://demo.example.gov/purpose/decentralized-evidence-demo
+      - id: welfare_classification_attestation
+        iri: https://demo.example.gov/evidence-offerings/welfare-classification
+        title: Welfare Classification Attestation
+        description: Attestation that exposes the minimized household eligibility band without returning household rows.
+        attestation_id: welfare-classification-attestation
+        evidence_type: household_support_evidence
+        issuing_authority:
+          id: social_protection_authority
+          iri: did:web:social-protection.demo.example.gov
+          name: Social Protection Authority
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: household
+        lookup_keys:
+          - national_id
+        procedure_contexts:
+          - health_linked_child_support
+        access:
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://social-notary.lab.registrystack.org
+          discovery_url: https://social-notary.lab.registrystack.org/.well-known/evidence-service
+          ruleset: welfare-classification-attestation-v1
+        policy:
+          purpose:
+            - https://demo.example.gov/purpose/social-protection-review
+            - https://demo.example.gov/purpose/decentralized-evidence-demo
+      - id: household_composition_attestation
+        iri: https://demo.example.gov/evidence-offerings/household-composition
+        title: Household Composition Attestation
+        description: Attestation that returns the minimized household member count needed by a social protection MIS without exposing member rows.
+        attestation_id: household-composition-attestation
+        evidence_type: household_composition_evidence
+        issuing_authority:
+          id: social_protection_authority
+          iri: did:web:social-protection.demo.example.gov
+          name: Social Protection Authority
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: household
+        lookup_keys:
+          - national_id
+        procedure_contexts:
+          - health_linked_child_support
+        access:
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://social-notary.lab.registrystack.org
+          discovery_url: https://social-notary.lab.registrystack.org/.well-known/evidence-service
+          ruleset: household-composition-attestation-v1
+        policy:
+          purpose:
+            - https://demo.example.gov/purpose/social-protection-review
+            - https://demo.example.gov/purpose/decentralized-evidence-demo
+      - id: caregiver_link_attestation
+        iri: https://demo.example.gov/evidence-offerings/caregiver-link
+        title: Parent Or Guardian Link Attestation
+        description: Attestation that confirms a requester is an active caregiver in the target child's household.
+        attestation_id: caregiver-link-attestation
+        evidence_type: caregiver_link_evidence
+        issuing_authority:
+          id: social_protection_authority
+          iri: did:web:social-protection.demo.example.gov
+          name: Social Protection Authority
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: household_membership
+        lookup_keys:
+          - target_national_id
+          - requester_national_id
+        procedure_contexts:
+          - health_linked_child_support
+        access:
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://social-notary.lab.registrystack.org
+          discovery_url: https://social-notary.lab.registrystack.org/.well-known/evidence-service
+          ruleset: caregiver-link-attestation-v1
+        policy:
+          purpose:
+            - https://demo.example.gov/purpose/social-protection-review
+            - https://demo.example.gov/purpose/decentralized-evidence-demo
+      - id: disability_determination_attestation
+        iri: https://demo.example.gov/evidence-offerings/disability-determination
+        title: Disability Determination Attestation
+        description: Attestation that returns the minimized disability support category from a disability authority.
+        attestation_id: disability-determination-attestation
+        evidence_type: disability_determination_evidence
+        issuing_authority:
+          id: social_protection_authority
+          iri: did:web:social-protection.demo.example.gov
+          name: Social Protection Authority
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: disability_determination
+        lookup_keys:
+          - national_id
+        procedure_contexts:
+          - health_linked_child_support
+        access:
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://social-notary.lab.registrystack.org
+          discovery_url: https://social-notary.lab.registrystack.org/.well-known/evidence-service
+          ruleset: disability-determination-attestation-v1
+        policy:
+          purpose:
+            - https://demo.example.gov/purpose/social-protection-review
+            - https://demo.example.gov/purpose/decentralized-evidence-demo
+      - id: functioning_assessment_attestation
+        iri: https://demo.example.gov/evidence-offerings/functioning-assessment
+        title: Functioning Assessment Attestation
+        description: Attestation that returns whether a Washington Group-style functioning assessment meets the programme identifier threshold.
+        attestation_id: functioning-assessment-attestation
+        evidence_type: functioning_assessment_evidence
+        issuing_authority:
+          id: social_protection_authority
+          iri: did:web:social-protection.demo.example.gov
+          name: Social Protection Authority
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: functioning_profile
+        lookup_keys:
+          - national_id
+        procedure_contexts:
+          - health_linked_child_support
+        access:
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://social-notary.lab.registrystack.org
+          discovery_url: https://social-notary.lab.registrystack.org/.well-known/evidence-service
+          ruleset: functioning-assessment-attestation-v1
         policy:
           purpose:
             - https://demo.example.gov/purpose/social-protection-review
             - https://demo.example.gov/purpose/decentralized-evidence-demo
     entities:
+      - name: household
+        title: Household
+        description: Household enrolled or assessed for support.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: national_id
+            type: string
+            required: true
+          - name: district
+            type: string
+            required: true
+          - name: eligibility_band
+            type: string
+            required: true
+          - name: household_size
+            type: integer
+            required: true
       - name: program_enrollment
         title: Program Enrollment
         identifiers:
@@ -628,6 +841,75 @@ datasets:
           - name: enrollment_status
             type: string
             required: true
+      - name: household_membership
+        title: Household Membership
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: target_national_id
+            type: string
+            required: true
+          - name: requester_national_id
+            type: string
+            required: true
+          - name: household_id
+            type: string
+            required: true
+          - name: person_id
+            type: string
+            required: true
+          - name: relationship_type
+            type: string
+            required: true
+          - name: membership_status
+            type: string
+            required: true
+      - name: functioning_profile
+        title: Functioning Profile
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: national_id
+            type: string
+            required: true
+          - name: instrument_code
+            type: string
+            required: true
+          - name: disability_identifier_met
+            type: boolean
+            required: true
+          - name: domains_triggering_identifier
+            type: string
+            required: true
+      - name: disability_determination
+        title: Disability Determination
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: national_id
+            type: string
+            required: true
+          - name: determination_status
+            type: string
+            required: true
+          - name: support_category
+            type: string
+            required: true
+          - name: review_due
+            type: date
+            required: true
   - id: health_registry
     title: Applicant Service Availability Projection
     description: Static description of simulated facility licensing and service availability records.
@@ -642,8 +924,9 @@ datasets:
     evidence_offerings:
       - id: health_service_availability_evidence_service
         iri: https://demo.example.gov/evidence-offerings/health-service-availability
-        title: Applicant service availability evidence service
+        title: Service Availability Attestation
         description: Evidence Server endpoint that computes facility license and service availability.
+        attestation_id: service-availability-attestation
         evidence_type: health_service_availability_evidence
         issuing_authority:
           id: health_services_authority
@@ -663,7 +946,7 @@ datasets:
           conforms_to: registry-notary-federation/v0.1
           endpoint_url: https://metadata.lab.registrystack.org/local-only/shared-eligibility-notary
           discovery_url: https://metadata.lab.registrystack.org/local-only/shared-eligibility-notary/.well-known/evidence-service
-          ruleset: health-service-availability-v1
+          ruleset: service-availability-attestation-v1
         policy:
           purpose:
             - https://demo.example.gov/purpose/health-linked-support-eligibility
@@ -1147,8 +1430,9 @@ datasets:
     evidence_offerings:
       - id: combined_support_evidence_service
         iri: https://demo.example.gov/evidence-offerings/combined-support
-        title: Combined support evidence service
+        title: Combined Support Eligibility Attestation
         description: Shared Evidence Server claim that composes civil, social protection, and health registry facts.
+        attestation_id: combined-support-eligibility-attestation
         evidence_type: combined_support_evidence
         issuing_authority:
           id: interoperability_metadata_publisher
@@ -1168,7 +1452,7 @@ datasets:
           conforms_to: registry-notary-federation/v0.1
           endpoint_url: https://metadata.lab.registrystack.org/local-only/shared-eligibility-notary
           discovery_url: https://metadata.lab.registrystack.org/local-only/shared-eligibility-notary/.well-known/evidence-service
-          ruleset: eligible-for-combined-support-v1
+          ruleset: combined-support-eligibility-attestation-v1
         policy:
           purpose:
             - https://demo.example.gov/purpose/health-linked-support-eligibility

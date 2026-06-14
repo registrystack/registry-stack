@@ -98,7 +98,7 @@ ${audience_block}
     allowed_algorithms: [RS256, ES256, EdDSA]
     jwks_cache_ttl: 10m
     leeway: 60s
-    scope_claim: "urn:zitadel:iam:org:project:roles"
+    scope_claim: scope
     scope_map:
       "social-registry-reader": "social_protection_registry:rows"
       "social-registry-aggregate": "social_protection_registry:aggregate"

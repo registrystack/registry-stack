@@ -14,7 +14,7 @@ auth:
       fingerprint:
         provider: env
         name: DHIS2_EVIDENCE_CLIENT_TOKEN_HASH
-        commitment: sha256:54ea977bf2e0bd6e85df03a7559c8f630492f76fd58472ebe64cebac7f8d8170
+        commitment: sha256:28cd434938e78b69c5230a68ed518a42a17bc5d4c2a47093734940d8be7ed241
       scopes:
         - dhis2_health:evidence_verification
   bearer_tokens:
@@ -22,7 +22,7 @@ auth:
       fingerprint:
         provider: env
         name: DHIS2_EVIDENCE_CLIENT_BEARER_HASH
-        commitment: sha256:465cc6c36004ff6844f20a7cdcbc14f7cbf6411a9d06145e095cf3f5c4c882a8
+        commitment: sha256:ba534d6cc1d7257970047fc6fa4e77ab304fffbba9c4d12f74f7a25f5b1836a2
       scopes:
         - dhis2_health:evidence_verification
 
@@ -203,7 +203,7 @@ evidence:
         - dhis2_child_program_sd_jwt
         - dhis2_programme_participation_sd_jwt
     - id: dhis2-child-program-active
-      title: DHIS2 child programme active
+      title: Health Programme Participation Attestation
       version: 2026-05
       subject_type: person
       value:

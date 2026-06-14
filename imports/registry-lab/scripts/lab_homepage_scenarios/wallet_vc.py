@@ -6,6 +6,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from .attestations import attestation
 from .common import (
     http_json,
     joined_url,
@@ -23,24 +24,39 @@ SUBJECT_ID = "NID-2001"
 SUBJECT_NAME = "Maria Santos"
 CLAIM_ID = "person-is-alive"
 HOLDER_DID = "did:jwk:eyJrdHkiOiJFQyIsImNydiI6IlAtMjU2IiwieCI6ImxhYiIsInkiOiJ3YWxsZXQifQ"
+PUBLIC_ATTESTATION = attestation("vital-status-attestation")
 
 
 def story() -> dict[str, Any]:
     return {
         "id": SCENARIO_ID,
-        "title": "What would Maria see when an alive-status proof lands in her wallet?",
+        "title": "What would Maria see when a Vital Status credential lands in her wallet?",
         "short_title": "Wallet credential explorer",
         "proves": "A non-developer can inspect a credential as a wallet card, while developers can inspect issuer metadata and holder binding.",
         "domain": "Credentials",
         "availability": "hosted",
+        "availability_state": {"state": "hosted", "label": "Hosted", "runnable": True},
         "intro": (
             "Maria is an adult demo citizen. This scenario simulates the wallet client so the demo stays easy to run, "
             "then shows the credential in a friendly wallet-style viewer."
         ),
         "actor": "Demo citizen wallet",
         "subject": {"name": SUBJECT_NAME, "identifier": SUBJECT_ID},
+        "requester": {"name": "Maria's wallet", "purpose": "OID4VCI citizen credential preview"},
+        "requested_attestations": [PUBLIC_ATTESTATION],
+        "lookup_profile": {"id": "by-national-id", "label": "National ID lookup", "identifier_scheme": "national_id"},
+        "non_disclosure": [
+            "Full civil registry row",
+            "Wallet private key",
+            "Raw credential value in the friendly card",
+        ],
+        "proof_facts": [
+            "Credential is holder-bound to the wallet DID.",
+            "The playground hides holder proof material.",
+            "The issuer advertises the credential profile through OID4VCI metadata.",
+        ],
         "boundary": {
-            "allowed": "Issue a proof credential to Maria's wallet.",
+            "allowed": "Issue a Vital Status credential to Maria's wallet.",
             "not_allowed": "Expose the full civil registry record or wallet proof secret.",
         },
         "steps": [
@@ -56,10 +72,10 @@ def story() -> dict[str, Any]:
                 "label": "Build the credential offer",
                 "prompt": "Next, fetch the offer URL a wallet would import after login.",
                 "button": "Fetch offer",
-                "request_summary": "GET the OID4VCI credential-offer endpoint for the person-is-alive credential configuration.",
+                "request_summary": "GET the OID4VCI credential-offer endpoint for the Vital Status credential configuration.",
                 "reuses": [
                     {"label": "Issuer", "value": "Citizen Notary"},
-                    {"label": "Credential type", "value": "person_is_alive_sd_jwt"},
+                    {"label": "Credential type", "value": "Vital Status credential"},
                 ],
             },
             {
@@ -91,7 +107,7 @@ def story() -> dict[str, Any]:
         ],
         "receipt": [
             {"label": "Wallet subject", "value": f"{SUBJECT_NAME} ({SUBJECT_ID})"},
-            {"label": "Claim", "value": "person-is-alive"},
+            {"label": "Credential", "value": "Vital Status credential"},
             {"label": "Holder-bound", "value": "Yes"},
             {"label": "Private wallet key exposed", "value": "No"},
         ],
@@ -268,9 +284,9 @@ def _credential_preview(step_id: str, issuer: str, credential_config: str) -> di
             "message": "The friendly view shows the issuer, subject, claim, and holder binding without exposing a raw credential secret.",
             "status": "done",
             "facts": [
-                {"label": "Credential", "value": "Person is alive proof"},
+                {"label": "Credential", "value": "Vital Status credential"},
                 {"label": "Subject", "value": f"{SUBJECT_NAME} ({SUBJECT_ID})"},
-                {"label": "Claim", "value": "Alive = yes"},
+                {"label": "Vital status current", "value": "Yes"},
                 {"label": "Holder-bound", "value": "Yes"},
                 {"label": "Raw credential printed", "value": "No"},
             ],

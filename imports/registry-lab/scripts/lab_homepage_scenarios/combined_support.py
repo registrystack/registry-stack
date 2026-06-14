@@ -5,8 +5,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from .attestations import attestation
 from .common import (
     PURPOSE,
+    attestation_response,
     auth_header_pair,
     display_auth_header_pair,
     env_url,
@@ -31,6 +33,19 @@ DEFAULT_URL = "http://127.0.0.1:4323"
 POSITIVE_SUBJECT = "NID-1001"
 NEGATIVE_SUBJECT = "NID-1002"
 
+PUBLIC_ATTESTATIONS = [
+    attestation("vital-status-attestation"),
+    attestation("program-enrollment-attestation"),
+    attestation("service-availability-attestation"),
+]
+ATTESTATION_BY_STEP = {
+    "civil-subclaim": PUBLIC_ATTESTATIONS[0],
+    "social-subclaim": PUBLIC_ATTESTATIONS[1],
+    "health-subclaim": PUBLIC_ATTESTATIONS[2],
+    "final-positive": attestation("combined-support-eligibility-attestation"),
+    "negative-control": attestation("combined-support-eligibility-attestation"),
+}
+
 
 CLAIMS = {
     "civil-subclaim": ("civil-record-present", POSITIVE_SUBJECT, "Civil record found"),
@@ -44,58 +59,72 @@ CLAIMS = {
 def story() -> dict[str, Any]:
     return {
         "id": SCENARIO_ID,
-        "title": "Can a caseworker ask one eligibility question across civil, social, and health evidence?",
-        "short_title": "Combined support eligibility",
-        "proves": "A Notary can compose subclaims from multiple authorities into one decision-ready evidence result.",
+        "title": "Can an SP MIS assemble support evidence across civil, social, and health authorities?",
+        "short_title": "Combined Support Attestations",
+        "proves": "An SP MIS can combine source attestations into a local case-file decision without copying source rows.",
         "domain": "Social protection",
         "availability": "local-only",
+        "availability_state": {"state": "local-only", "label": "Local only", "runnable": False},
         "availability_note": "Runs on the local lab profile with the shared eligibility Notary on port 4323 (SHARED_EVIDENCE_CLIENT_BEARER).",
         "intro": (
-            "A caseworker reviews Miguel's support application. The final answer depends on civil status, an active social program, "
+            "A caseworker reviews Miguel's support application. The final answer depends on civil status, programme enrollment, "
             "and district service availability, but the caseworker should not receive source rows from every registry."
         ),
         "actor": "Caseworker",
         "subject": {"name": "Miguel Santos", "identifier": POSITIVE_SUBJECT},
+        "requester": {"name": "Social Protection MIS", "purpose": PURPOSE},
+        "requested_attestations": PUBLIC_ATTESTATIONS,
+        "lookup_profile": {"id": "by-national-id", "label": "National ID lookup", "identifier_scheme": "national_id"},
+        "non_disclosure": [
+            "Full civil record",
+            "Household or programme source rows",
+            "Facility registry rows and clinical records",
+        ],
+        "proof_facts": [
+            "Each source-backed sub-result is returned as minimized evidence.",
+            "The SP MIS owns the final eligibility decision.",
+            "Service availability is framed as a source projection, not clinical data.",
+        ],
         "boundary": {
-            "allowed": "Ask whether required subclaims are satisfied.",
+            "allowed": "Request the attestations needed for a support case file.",
             "not_allowed": "Copy civil, household, and health source rows into the response.",
         },
         "steps": [
             {
                 "id": "discover",
-                "label": "Discover combined evidence claims",
-                "prompt": "Start by asking the local Notary what claims it can evaluate.",
-                "button": "Discover claims",
-                "request_summary": "GET /v1/claims from the local shared eligibility Notary.",
+                "label": "Discover combined attestations",
+                "prompt": "Start by asking the local Notary what attestations it can evaluate.",
+                "button": "Discover attestations",
+                "request_summary": "GET the local shared eligibility Notary catalogue.",
             },
             {
                 "id": "civil-subclaim",
-                "label": "Evaluate civil subclaim",
-                "prompt": "Check that Miguel has a civil record for the combined decision.",
-                "button": "Run civil subclaim",
-                "request_summary": "POST a civil-record-present evaluation for NID-1001.",
+                "label": "Request civil status evidence",
+                "prompt": "Check that Miguel has civil evidence for the combined decision.",
+                "button": "Request civil evidence",
+                "request_summary": "POST the civil status evidence request for Miguel.",
             },
             {
                 "id": "social-subclaim",
-                "label": "Evaluate social subclaim",
-                "prompt": "Check whether Miguel has active program support.",
-                "button": "Run social subclaim",
-                "request_summary": "POST a social-program-active evaluation for NID-1001.",
+                "label": "Request programme enrollment evidence",
+                "prompt": "Check whether Miguel has active programme support.",
+                "button": "Request enrollment evidence",
+                "request_summary": "POST the programme enrollment evidence request for Miguel.",
                 "reuses": [{"label": "Subject", "value": POSITIVE_SUBJECT}],
             },
             {
                 "id": "health-subclaim",
-                "label": "Evaluate service-availability subclaim",
-                "prompt": "Check the applicant service-availability projection for Miguel's district.",
-                "button": "Run health subclaim",
-                "request_summary": "POST a health-service-available evaluation for NID-1001.",
+                "label": "Request service availability evidence",
+                "prompt": "Check the service availability projection for Miguel's district.",
+                "button": "Request availability evidence",
+                "request_summary": "POST the Service Availability Attestation request for Miguel's district projection.",
             },
             {
                 "id": "final-positive",
-                "label": "Evaluate final eligibility",
-                "prompt": "Ask the combined question after the subclaims are visible.",
-                "button": "Run combined check",
-                "request_summary": "POST eligible-for-combined-support for NID-1001.",
+                "label": "Assemble the SP MIS decision",
+                "prompt": "Ask the combined question after the attestations are visible.",
+                "button": "Assemble case file",
+                "request_summary": "POST the combined support decision request for Miguel.",
                 "reuses": [
                     {"label": "Civil", "value": "record present"},
                     {"label": "Social", "value": "program active"},
@@ -107,7 +136,7 @@ def story() -> dict[str, Any]:
                 "label": "Run a negative control",
                 "prompt": "Use a similar applicant whose health service availability is false.",
                 "button": "Run negative control",
-                "request_summary": "POST eligible-for-combined-support for NID-1002 and show why the final answer changes.",
+                "request_summary": "POST the combined support decision request for the negative control and show why the final answer changes.",
             },
         ],
         "receipt": [
@@ -168,12 +197,12 @@ def _discover(step_id: str) -> dict[str, Any]:
     return {
         "step_id": step_id,
         "friendly": {
-            "title": "The local Notary advertises combined claims." if ok_status(result.status) else "Claim discovery needs attention.",
-            "message": "This catalog tells the caseworker which subclaims and final claims can be evaluated.",
+            "title": "The local Notary advertises combined attestations." if ok_status(result.status) else "Attestation discovery needs attention.",
+            "message": "This catalog tells the caseworker which source evidence and final decision checks can be evaluated.",
             "status": "done" if ok_status(result.status) else "needs_attention",
             "facts": [
                 {"label": "HTTP status", "value": result.status if result.status is not None else "No response"},
-                {"label": "Claims advertised", "value": len(claims) if isinstance(claims, list) else "Check source"},
+                {"label": "Attestations advertised", "value": len(claims) if isinstance(claims, list) else "Check source"},
                 {"label": "Availability", "value": "Local-only"},
             ],
         },
@@ -210,11 +239,41 @@ def _evaluate(step_id: str, claim_id: str, subject: str, label: str) -> dict[str
             "facts": [
                 {"label": "HTTP status", "value": result.status if result.status is not None else "No response"},
                 {"label": "Subject", "value": subject},
-                {"label": "Claim", "value": claim_id},
+                {"label": "Requested evidence", "value": _public_evidence_name(step_id)},
                 {"label": "Answer", "value": "Yes" if answer is True else ("No" if answer is False else "Unknown")},
                 {"label": "Raw source rows included", "value": "No"},
             ],
         },
         "request_source": request_source("POST", url, display_headers, body, internal=True),
-        "response_source": source_response(result),
+        "response_source": {
+            "attestation_response": attestation_response(
+                ATTESTATION_BY_STEP[step_id],
+                subject_type="Person",
+                subject_id=subject,
+                lookup_profile="by-national-id",
+                claim_id=_public_claim_name(step_id),
+                claim_value=answer,
+            ),
+            "http": source_response(result),
+        },
     }
+
+
+def _public_evidence_name(step_id: str) -> str:
+    return {
+        "civil-subclaim": "Civil Status Evidence",
+        "social-subclaim": "Program Enrollment Attestation",
+        "health-subclaim": "Service Availability Attestation",
+        "final-positive": "SP MIS case-file decision",
+        "negative-control": "SP MIS case-file decision",
+    }.get(step_id, "Attestation")
+
+
+def _public_claim_name(step_id: str) -> str:
+    return {
+        "civil-subclaim": "civil_record_present",
+        "social-subclaim": "program_enrollment_active",
+        "health-subclaim": "service_available",
+        "final-positive": "combined_support_eligible",
+        "negative-control": "combined_support_eligible",
+    }.get(step_id, "attestation_satisfied")

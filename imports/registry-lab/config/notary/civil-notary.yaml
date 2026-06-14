@@ -14,7 +14,7 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_NOTARY_OPS_TOKEN_HASH
-        commitment: sha256:52b497e943584ba3a0cf7aed4de9b6ee8e3d47127f4a1af50a517580bd65d324
+        commitment: sha256:7eeebb6fa1eb637b40ad9fca93523ea8a11614c1436e770f3cc187e9644b4bc2
       scopes:
         - registry_notary:ops_read
         - registry_notary:metrics_read
@@ -22,7 +22,7 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_EVIDENCE_CLIENT_TOKEN_HASH
-        commitment: sha256:fa2014b3b398d898a8a25b2c92ecb8c0266af4d53a35ffd7ecc49f0b5445274e
+        commitment: sha256:618ea9eb9a15c2759a5ce7c7d30e934850921595e658505f18d20e93dcd1f1f7
       scopes:
         - civil_registry:evidence_verification
   bearer_tokens:
@@ -30,7 +30,7 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_EVIDENCE_CLIENT_BEARER_HASH
-        commitment: sha256:80719bfbc0b955f55d76921cc1b3d08c4bb623bab83cd765c26c071ac13db664
+        commitment: sha256:4611fef30e2ac77a06358de6687b78f9f47dc59872df90b522715d9350636f4f
       scopes:
         - civil_registry:evidence_verification
 
@@ -223,7 +223,7 @@ evidence:
       credential_profiles:
         - life_stage_sd_jwt
     - id: age-band
-      title: Age band
+      title: Age Eligibility Attestation
       version: 2026-05
       subject_type: person
       value:
@@ -263,7 +263,7 @@ evidence:
       credential_profiles:
         - life_stage_sd_jwt
     - id: person-is-alive
-      title: Person is alive
+      title: Vital Status Attestation
       version: 2026-05
       subject_type: person
       value:

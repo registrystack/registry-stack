@@ -32,6 +32,9 @@ EXPECTED_CLAIMS = [
     "dhis2-child-program-active",
     "dhis2-reconciliation-ref",
 ]
+EXPECTED_CLAIM_TITLES = {
+    "dhis2-child-program-active": "Health Programme Participation Attestation",
+}
 
 
 def read(path: Path) -> str:
@@ -88,6 +91,9 @@ class Dhis2ProgrammeVcConfigTest(unittest.TestCase):
         )
         for claim_id in EXPECTED_CLAIMS:
             self.assertIn(f"- {claim_id}", body)
+            expected_title = EXPECTED_CLAIM_TITLES.get(claim_id)
+            if expected_title is not None:
+                self.assertIn(f"title: {expected_title}", claim_block(body, claim_id))
             self.assertIn(
                 '- \'application/ld+json; profile="cccev"\'',
                 claim_block(body, claim_id),

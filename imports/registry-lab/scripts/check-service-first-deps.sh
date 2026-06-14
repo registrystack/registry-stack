@@ -53,31 +53,12 @@ manifest_path() {
   printf '%s\n' "${resolved}"
 }
 
-atlas_path() {
-  local raw="${REGISTRY_ATLAS_SOURCE_DIR:-}"
-  local resolved
-  if [[ -z "${raw}" ]]; then
-    raw="../registry-atlas"
-    resolved="$(resolve_dir "${raw}")"
-    if [[ ! -f "${resolved}/Cargo.toml" ]] || [[ ! -d "${resolved}/crates/semantic-asset-discovery-core" ]] || [[ ! -d "${resolved}/crates/semantic-asset-discovery-cli" ]]; then
-      raw="./vendor/registry-atlas"
-    fi
-  fi
-  resolved="$(resolve_dir "${raw}")"
-  if [[ ! -f "${resolved}/Cargo.toml" ]] || [[ ! -d "${resolved}/crates/semantic-asset-discovery-core" ]] || [[ ! -d "${resolved}/crates/semantic-asset-discovery-cli" ]]; then
-    diagnose_missing "registry-atlas" "REGISTRY_ATLAS_SOURCE_DIR" "${raw}" "${resolved}" \
-      "Cargo.toml plus crates/semantic-asset-discovery-core and crates/semantic-asset-discovery-cli"
-    return 1
-  fi
-  printf '%s\n' "${resolved}"
-}
-
 usage() {
   cat >&2 <<'EOF'
-usage: scripts/check-service-first-deps.sh manifest|atlas|all|manifest-path|atlas-path
+usage: scripts/check-service-first-deps.sh manifest|all|manifest-path
 
 Checks the sibling repositories needed by the service-first discovery demo.
-REGISTRY_MANIFEST_REPO and REGISTRY_ATLAS_SOURCE_DIR override the defaults.
+REGISTRY_MANIFEST_REPO overrides the default.
 EOF
 }
 
@@ -85,18 +66,11 @@ case "${1:-all}" in
   manifest)
     manifest_path >/dev/null
     ;;
-  atlas)
-    atlas_path >/dev/null
-    ;;
   all)
     manifest_path >/dev/null
-    atlas_path >/dev/null
     ;;
   manifest-path)
     manifest_path
-    ;;
-  atlas-path)
-    atlas_path
     ;;
   -h|--help|help)
     usage

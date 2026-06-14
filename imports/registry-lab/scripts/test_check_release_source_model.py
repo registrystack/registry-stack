@@ -131,7 +131,6 @@ def run_validator(
     extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
-    env["REGISTRY_LAB_CHECK_ATLAS"] = "0"
     if extra_env:
         env.update(extra_env)
     return subprocess.run(

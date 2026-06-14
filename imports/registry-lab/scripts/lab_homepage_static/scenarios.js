@@ -97,6 +97,53 @@ function renderFacts(facts) {
   return (facts || []).map((fact) => `<div class="fact"><span>${escapeHtml(fact.label)}</span><strong>${escapeHtml(fact.value)}</strong></div>`).join("");
 }
 
+function sentenceList(items) {
+  return (items || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+}
+
+function attestationNames(items) {
+  return (items || []).map((item) => item.display_name || item.offering_id).filter(Boolean);
+}
+
+function renderStoryMetadata(story) {
+  const attestations = attestationNames(story.requested_attestations || []);
+  const lookup = story.lookup_profile || {};
+  const availability = story.availability_state || {};
+  const requester = story.requester || {};
+  return `
+    <section class="story-setup">
+      <div>
+        <p class="eyebrow">SP MIS requirement</p>
+        <h2>${escapeHtml(story.short_title || story.title)}</h2>
+        <p>${escapeHtml(story.proves)}</p>
+        ${story.availability_note && state.runnable ? `<p class="meta">${escapeHtml(story.availability_note)}</p>` : ""}
+      </div>
+      <div class="setup-grid">
+        <div class="setup-item"><span>Actor</span><strong>${escapeHtml(story.actor || "")}</strong></div>
+        <div class="setup-item"><span>Requester</span><strong>${escapeHtml(requester.name || "")}</strong></div>
+        <div class="setup-item"><span>Subject</span><strong>${escapeHtml(story.subject.name)} · ${escapeHtml(story.subject.identifier)}</strong></div>
+        <div class="setup-item"><span>Lookup profile</span><strong>${escapeHtml(lookup.id || lookup.label || "")}</strong></div>
+        <div class="setup-item"><span>Availability</span><strong>${escapeHtml(availability.label || story.availability || "")}</strong></div>
+        <div class="setup-item"><span>Requested attestations</span><strong>${escapeHtml(attestations.join(", ") || "None")}</strong></div>
+        <div class="setup-item"><span>Allowed</span><strong>${escapeHtml(story.boundary.allowed)}</strong></div>
+        <div class="setup-item"><span>Not allowed</span><strong>${escapeHtml(story.boundary.not_allowed)}</strong></div>
+      </div>
+    </section>
+    <section class="story-setup">
+      <div>
+        <p class="eyebrow">Disclosure boundary</p>
+        <h2>What stays out of the case file</h2>
+        <ul>${sentenceList(story.non_disclosure || [])}</ul>
+      </div>
+      <div>
+        <p class="eyebrow">Proof facts</p>
+        <h2>What verification can rely on</h2>
+        <ul>${sentenceList(story.proof_facts || [])}</ul>
+      </div>
+    </section>
+  `;
+}
+
 function renderChooser(items, defaultId) {
   // Order: default story first, then remaining hosted-runnable, then local-only walkthroughs.
   const sorted = [
@@ -118,6 +165,7 @@ function renderChooser(items, defaultId) {
         <span class="availability ${escapeHtml(item.availability)}">${escapeHtml(item.availability === "local-only" ? "Local only" : "Hosted")}</span>
         ${item.domain ? `<span class="domain-tag">${escapeHtml(item.domain)}</span>` : ""}
         <div><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.proves)}</p></div>
+        ${attestationNames(item.requested_attestations || []).length ? `<p class="card-meta">${escapeHtml(attestationNames(item.requested_attestations || []).join(", "))}</p>` : ""}
         ${item.availability_note ? `<p class="card-meta">${escapeHtml(item.availability_note)}</p>` : ""}
         <p class="card-meta">${escapeHtml(item.steps)} steps</p>
         <div class="actions"><a class="button primary" href="/scenarios/${encodeURIComponent(item.id)}">${item.runnable ? "Open story" : "Read the walkthrough"}</a></div>
@@ -166,20 +214,7 @@ function renderStory(story, runnable) {
   byId("title").textContent = story.title;
   byId("subtitle").textContent = story.intro;
   byId("story").innerHTML = `
-    <section class="story-setup">
-      <div>
-        <p class="eyebrow">User story</p>
-        <h2>${escapeHtml(story.short_title || story.title)}</h2>
-        <p>${escapeHtml(story.proves)}</p>
-        ${story.availability_note && state.runnable ? `<p class="meta">${escapeHtml(story.availability_note)}</p>` : ""}
-      </div>
-      <div class="setup-grid">
-        <div class="setup-item"><span>Actor</span><strong>${escapeHtml(story.actor || "")}</strong></div>
-        <div class="setup-item"><span>Subject</span><strong>${escapeHtml(story.subject.name)} · ${escapeHtml(story.subject.identifier)}</strong></div>
-        <div class="setup-item"><span>Allowed</span><strong>${escapeHtml(story.boundary.allowed)}</strong></div>
-        <div class="setup-item"><span>Not allowed</span><strong>${escapeHtml(story.boundary.not_allowed)}</strong></div>
-      </div>
-    </section>
+    ${renderStoryMetadata(story)}
     ${!state.runnable ? renderLocalOnlyBlock(story) : ""}
     <div class="actions story-actions"><button type="button" data-reset-story>Reset story</button></div>
     <section class="step-list">${story.steps.map(renderStep).join("")}</section>

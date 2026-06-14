@@ -32,6 +32,7 @@ def story() -> dict[str, Any]:
         "proves": "Aggregate credentials can answer planning questions while row data remains separately governed.",
         "domain": "Social protection",
         "availability": "local-only",
+        "availability_state": {"state": "local-only", "label": "Local only", "runnable": False},
         "availability_note": "Runs on the local lab profile with the social Relay on port 4312.",
         "intro": (
             "A policy analyst needs district-level eligibility counts for planning. They do not need names, household rows, "
@@ -39,6 +40,19 @@ def story() -> dict[str, Any]:
         ),
         "actor": "Policy analyst",
         "subject": {"name": "Priority household planning", "identifier": "households_by_eligibility_band"},
+        "requester": {"name": "Planning unit", "purpose": PURPOSE},
+        "requested_attestations": [],
+        "lookup_profile": {"id": "aggregate-view", "label": "Aggregate planning view", "identifier_scheme": "dataset_view"},
+        "non_disclosure": [
+            "Household rows",
+            "Names and individual identifiers",
+            "Benefit records for individual families",
+        ],
+        "proof_facts": [
+            "Aggregate access is purpose-scoped.",
+            "Row access is tested as a separate permission boundary.",
+            "This story is a local-only governance walkthrough, not an attestation response.",
+        ],
         "boundary": {
             "allowed": "Read aggregate counts by eligibility band.",
             "not_allowed": "Read household rows with the aggregate credential.",

@@ -14,7 +14,7 @@ auth:
       fingerprint:
         provider: env
         name: SHARED_EVIDENCE_CLIENT_TOKEN_HASH
-        commitment: sha256:99145398f522c5c32559fcc15e428311dc5698cc2efdfa1704c01e4e28a3d42e
+        commitment: sha256:2e8fd424bf12098074a18bc19c2486561e0f71c22b382435129e8d64083f4738
       scopes:
         - civil_registry:evidence_verification
         - social_protection_registry:evidence_verification
@@ -24,7 +24,7 @@ auth:
       fingerprint:
         provider: env
         name: SHARED_EVIDENCE_CLIENT_BEARER_HASH
-        commitment: sha256:efbee67753060d0bec6e229979d7b4aa11c9dbb00cb14be16ad9c1ac2ed7f150
+        commitment: sha256:f274f24fecf42bc1e3ae6703bb5164b6876aa77b1fe80c10d5d61ce8c5f2f445
       scopes:
         - civil_registry:evidence_verification
         - social_protection_registry:evidence_verification
@@ -130,7 +130,7 @@ evidence:
       credential_profiles:
         - combined_support_sd_jwt
     - id: social-program-active
-      title: Social program active
+      title: Program Enrollment Attestation
       version: 2026-05
       subject_type: person
       value:
@@ -165,7 +165,7 @@ evidence:
       credential_profiles:
         - combined_support_sd_jwt
     - id: health-service-available
-      title: Health service available
+      title: Service Availability Attestation
       version: 2026-05
       subject_type: person
       value:
@@ -212,7 +212,7 @@ evidence:
       credential_profiles:
         - combined_support_sd_jwt
     - id: eligible-for-combined-support
-      title: Eligible for combined support
+      title: Combined Support Eligibility Attestation
       version: 2026-05
       subject_type: person
       value:

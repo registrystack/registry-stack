@@ -1,0 +1,17 @@
+person_id,national_id,given_name,surname,birth_date,sex,district,place_of_birth,life_stage,deceased,death_date
+CP-1001,NID-1001,Miguel,Santos,2016-01-15,M,north,North City,child,false,
+CP-1002,NID-1002,Maria,Dela Cruz,2018-01-15,F,south,South Town,child,false,
+CP-1003,NID-1003,Cara,Okafor,1957-02-14,F,central,Central City,adult,true,2025-11-02
+CP-1004,NID-1004,Rafael,Aquino,2019-01-15,M,east,East City,child,false,
+CP-1005,NID-1005,Rosalie,Bautista,2013-01-15,F,west,West City,child,false,
+CP-1006,NID-1006,Miguel,Martinez,2014-01-15,M,north,North City,child,false,
+CP-1007,NID-1007,Lola,Santos,1958-01-15,F,north,North City,elderly,false,
+CP-1008,NID-1008,Rosa,Garcia,1954-01-15,F,west,West City,elderly,false,
+CP-1009,NID-1009,Ana,Mendoza,1998-01-15,F,east,East City,adult,false,
+CP-1010,NID-1010,Pedro,Reyes,1971-01-15,M,central,Central City,adult,false,
+CP-2001,NID-2001,Maria,Santos,1984-01-15,F,north,North City,adult,false,
+CP-2002,NID-2002,Juan,Dela Cruz,1988-01-15,M,south,South Town,adult,false,
+CP-2004,NID-2004,Rosario,Aquino,1988-01-15,F,east,East City,adult,false,
+CP-2005,NID-2005,Eduardo,Bautista,1978-01-15,M,west,West City,adult,false,
+CP-2006,NID-2006,David,Martinez,1978-01-15,M,north,North City,adult,false,
+CP-1011,NID-1011,Miguel,Santos,2016-01-15,M,south,South Town,child,false,

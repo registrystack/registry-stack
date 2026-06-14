@@ -15,7 +15,7 @@ config_trust:
 metadata:
   source:
     path: social-protection-registry-relay.metadata.yaml
-    digest: sha256:6e9e9d5b2d81d4e9f0ab9bf69b6cd342f7678a259559e18b8d100eb921fdaf55
+    digest: sha256:c9dd6aecfaeb9884a1e64392636334e8f79fc8ce3987b85e8abf4829a6b3f72f
 
 catalog:
   title: Social Protection Registry Relay (Decentralized Demo)
@@ -33,14 +33,14 @@ auth:
       fingerprint:
         provider: env
         name: SOCIAL_METADATA_CLIENT_HASH
-        commitment: sha256:8f253ebd0f5b520a885fbf2de741dfb05fe921b7d9ad6eb63cae235fdb944aa3
+        commitment: sha256:128b4d9974f0d84a6cc4881ba9d363d6641abe1af3b56ad6cd2c5786418f5a5e
       scopes:
         - social_protection_registry:metadata
     - id: evidence_source
       fingerprint:
         provider: env
         name: SOCIAL_EVIDENCE_SOURCE_HASH
-        commitment: sha256:437cb39f127f7000f79fde087aa7e49a4e5b28c8617904080280185063931fc4
+        commitment: sha256:79a8912be10ebc7d786a2c280711d9aa551655b3c8b152af3c7efd114188353b
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:rows
@@ -49,7 +49,7 @@ auth:
       fingerprint:
         provider: env
         name: SOCIAL_EVIDENCE_ONLY_HASH
-        commitment: sha256:02c5ab45dffd458ce9362c4a9af72ca84d64e4494f0ae3c2e472a9bfefd4523d
+        commitment: sha256:4d8b956b084411190a51d9be36be85cbf25111074b52a4a3a8cf3f515a6d098c
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:evidence_verification
@@ -57,7 +57,7 @@ auth:
       fingerprint:
         provider: env
         name: SOCIAL_ROW_READER_HASH
-        commitment: sha256:2d828e8eadb135521bdac1936d7278e22e0f2ce5f0900a37cc65f2a3180d18dd
+        commitment: sha256:b51c75d452699c8f8fd8e8d4b96a32d1796b746a1b2cb1af42df29b6c161ff07
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:rows
@@ -65,7 +65,7 @@ auth:
       fingerprint:
         provider: env
         name: SOCIAL_AGGREGATE_READER_HASH
-        commitment: sha256:10d2d90acd07ae1d931376a0c0e91aa8c53a0162d2f84d3a5c605fb82f1f5bd2
+        commitment: sha256:27a4e61cbee18677fd2d0706366a649d6865066aea4a964741c10a6bc953d076
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:aggregate
@@ -73,7 +73,7 @@ auth:
       fingerprint:
         provider: env
         name: SHARED_SOCIAL_EVIDENCE_SOURCE_HASH
-        commitment: sha256:2244db0a6a6352fd81cfde9aa35f8a79fb843fe4e3b4b8ab6d76cfa18aa2361f
+        commitment: sha256:850b9c21647295ba3e778b74e7d31eda296c2a962c13a58b8baa247bab1505d0
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:rows
@@ -209,6 +209,295 @@ datasets:
             - name: enrolled_on
               type: date
               nullable: false
+      - id: group_memberships_table
+        materialization: snapshot
+        source:
+          type: file
+          path: /demo/data/social-protection/social-protection.xlsx
+          format:
+            xlsx:
+              sheet: GroupMemberships
+              header_row: 1
+        primary_key: membership_id
+        schema:
+          strict: true
+          fields:
+            - name: membership_id
+              type: string
+              nullable: false
+            - name: household_id
+              type: string
+              nullable: false
+            - name: person_id
+              type: string
+              nullable: false
+            - name: relationship_type
+              type: string
+              nullable: false
+            - name: start_date
+              type: date
+              nullable: false
+            - name: end_date
+              type: date
+              nullable: true
+            - name: membership_status
+              type: string
+              nullable: false
+      - id: socio_economic_profiles_table
+        materialization: snapshot
+        source:
+          type: file
+          path: /demo/data/social-protection/social-protection.xlsx
+          format:
+            xlsx:
+              sheet: SocioEconomicProfiles
+              header_row: 1
+        primary_key: profile_id
+        schema:
+          strict: true
+          fields:
+            - name: profile_id
+              type: string
+              nullable: false
+            - name: household_id
+              type: string
+              nullable: false
+            - name: observation_date
+              type: date
+              nullable: false
+            - name: instrument
+              type: string
+              nullable: false
+            - name: collected_by
+              type: string
+              nullable: false
+            - name: source_version
+              type: string
+              nullable: false
+            - name: profile_status
+              type: string
+              nullable: false
+      - id: scoring_events_table
+        materialization: snapshot
+        source:
+          type: file
+          path: /demo/data/social-protection/social-protection.xlsx
+          format:
+            xlsx:
+              sheet: ScoringEvents
+              header_row: 1
+        primary_key: scoring_id
+        schema:
+          strict: true
+          fields:
+            - name: scoring_id
+              type: string
+              nullable: false
+            - name: profile_id
+              type: string
+              nullable: false
+            - name: scoring_rule
+              type: string
+              nullable: false
+            - name: scoring_version
+              type: string
+              nullable: false
+            - name: score_band
+              type: string
+              nullable: false
+            - name: valid_from
+              type: date
+              nullable: false
+            - name: valid_until
+              type: date
+              nullable: false
+            - name: scoring_status
+              type: string
+              nullable: false
+      - id: programs_table
+        materialization: snapshot
+        source:
+          type: file
+          path: /demo/data/social-protection/social-protection.xlsx
+          format:
+            xlsx:
+              sheet: Programs
+              header_row: 1
+        primary_key: program_code
+        schema:
+          strict: true
+          fields:
+            - name: program_code
+              type: string
+              nullable: false
+            - name: display_name
+              type: string
+              nullable: false
+            - name: authority
+              type: string
+              nullable: false
+            - name: benefit_type
+              type: string
+              nullable: false
+      - id: entitlements_table
+        materialization: snapshot
+        source:
+          type: file
+          path: /demo/data/social-protection/social-protection.xlsx
+          format:
+            xlsx:
+              sheet: Entitlements
+              header_row: 1
+        primary_key: entitlement_id
+        schema:
+          strict: true
+          fields:
+            - name: entitlement_id
+              type: string
+              nullable: false
+            - name: enrollment_id
+              type: string
+              nullable: false
+            - name: benefit_modality
+              type: string
+              nullable: false
+            - name: amount
+              type: number
+              nullable: false
+            - name: amount_band
+              type: string
+              nullable: false
+            - name: currency
+              type: string
+              nullable: false
+            - name: coverage_start
+              type: date
+              nullable: false
+            - name: coverage_end
+              type: date
+              nullable: false
+            - name: entitlement_status
+              type: string
+              nullable: false
+      - id: payment_events_table
+        materialization: snapshot
+        source:
+          type: file
+          path: /demo/data/social-protection/social-protection.xlsx
+          format:
+            xlsx:
+              sheet: PaymentEvents
+              header_row: 1
+        primary_key: payment_id
+        schema:
+          strict: true
+          fields:
+            - name: payment_id
+              type: string
+              nullable: false
+            - name: entitlement_id
+              type: string
+              nullable: false
+            - name: cycle
+              type: string
+              nullable: false
+            - name: status
+              type: string
+              nullable: false
+            - name: delivery_channel
+              type: string
+              nullable: false
+            - name: payment_date
+              type: date
+              nullable: false
+            - name: reconciled
+              type: boolean
+              nullable: false
+      - id: functioning_profiles_table
+        materialization: snapshot
+        source:
+          type: file
+          path: /demo/data/social-protection/social-protection.xlsx
+          format:
+            xlsx:
+              sheet: FunctioningProfiles
+              header_row: 1
+        primary_key: profile_id
+        schema:
+          strict: true
+          fields:
+            - name: profile_id
+              type: string
+              nullable: false
+            - name: person_id
+              type: string
+              nullable: false
+            - name: national_id
+              type: string
+              nullable: false
+              sensitive: true
+            - name: instrument_code
+              type: string
+              nullable: false
+            - name: administration_date
+              type: date
+              nullable: false
+            - name: respondent_relationship
+              type: string
+              nullable: false
+            - name: domain_severities
+              type: string
+              nullable: false
+            - name: disability_identifier_met
+              type: boolean
+              nullable: false
+            - name: domains_triggering_identifier
+              type: string
+              nullable: false
+            - name: source_version
+              type: string
+              nullable: false
+      - id: disability_determinations_table
+        materialization: snapshot
+        source:
+          type: file
+          path: /demo/data/social-protection/social-protection.xlsx
+          format:
+            xlsx:
+              sheet: DisabilityDeterminations
+              header_row: 1
+        primary_key: determination_id
+        schema:
+          strict: true
+          fields:
+            - name: determination_id
+              type: string
+              nullable: false
+            - name: person_id
+              type: string
+              nullable: false
+            - name: national_id
+              type: string
+              nullable: false
+              sensitive: true
+            - name: authority
+              type: string
+              nullable: false
+            - name: determination_status
+              type: string
+              nullable: false
+            - name: support_category
+              type: string
+              nullable: false
+            - name: valid_from
+              type: date
+              nullable: false
+            - name: valid_until
+              type: date
+              nullable: false
+            - name: review_due
+              type: date
+              nullable: false
       - id: district_geometries_table
         materialization: snapshot
         source:
@@ -334,7 +623,7 @@ datasets:
         access:
           metadata_scope: social_protection_registry:metadata
           aggregate_scope: social_protection_registry:aggregate
-          read_scope: social_protection_registry:rows
+          read_scope: social_protection_registry:aggregate
           evidence_verification_scope: social_protection_registry:evidence_verification
         api:
           default_limit: 25
@@ -426,4 +715,267 @@ datasets:
             - field: program_code
               ops: [eq, in]
             - field: enrollment_status
+              ops: [eq, in]
+      - name: household_membership
+        title: Household Membership
+        description: Household membership record used for composition and caregiver attestations.
+        table: group_memberships_table
+        concept_uri: demo:GroupMembership
+        fields:
+          - name: id
+            from: membership_id
+          - name: household_id
+          - name: person_id
+          - name: relationship_type
+          - name: start_date
+          - name: end_date
+          - name: membership_status
+        access:
+          metadata_scope: social_protection_registry:metadata
+          aggregate_scope: social_protection_registry:aggregate
+          read_scope: social_protection_registry:rows
+          evidence_verification_scope: social_protection_registry:evidence_verification
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: household_id
+              ops: [eq, in]
+            - field: person_id
+              ops: [eq, in]
+            - field: relationship_type
+              ops: [eq, in]
+            - field: membership_status
+              ops: [eq, in]
+      - name: socio_economic_profile
+        title: Socio-Economic Profile
+        description: Household welfare assessment source record.
+        table: socio_economic_profiles_table
+        concept_uri: demo:SocioEconomicProfile
+        fields:
+          - name: id
+            from: profile_id
+          - name: household_id
+          - name: observation_date
+          - name: instrument
+          - name: collected_by
+          - name: source_version
+          - name: profile_status
+        access:
+          metadata_scope: social_protection_registry:metadata
+          aggregate_scope: social_protection_registry:aggregate
+          read_scope: social_protection_registry:rows
+          evidence_verification_scope: social_protection_registry:evidence_verification
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: household_id
+              ops: [eq, in]
+            - field: observation_date
+              ops: [eq, gte, lte]
+            - field: profile_status
+              ops: [eq, in]
+      - name: scoring_event
+        title: Scoring Event
+        description: Eligibility scoring event with validity and status.
+        table: scoring_events_table
+        concept_uri: demo:ScoringEvent
+        fields:
+          - name: id
+            from: scoring_id
+          - name: profile_id
+          - name: scoring_rule
+          - name: scoring_version
+          - name: score_band
+          - name: valid_from
+          - name: valid_until
+          - name: scoring_status
+        access:
+          metadata_scope: social_protection_registry:metadata
+          aggregate_scope: social_protection_registry:aggregate
+          read_scope: social_protection_registry:rows
+          evidence_verification_scope: social_protection_registry:evidence_verification
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: profile_id
+              ops: [eq, in]
+            - field: score_band
+              ops: [eq, in]
+            - field: scoring_status
+              ops: [eq, in]
+            - field: valid_until
+              ops: [eq, gte, lte]
+      - name: program
+        title: Program
+        description: Social protection programme reference record.
+        table: programs_table
+        concept_uri: demo:Program
+        fields:
+          - name: id
+            from: program_code
+          - name: display_name
+          - name: authority
+          - name: benefit_type
+        access:
+          metadata_scope: social_protection_registry:metadata
+          aggregate_scope: social_protection_registry:aggregate
+          read_scope: social_protection_registry:rows
+          evidence_verification_scope: social_protection_registry:evidence_verification
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: benefit_type
+              ops: [eq, in]
+      - name: entitlement
+        title: Entitlement
+        description: Benefit entitlement source record with coverage period and status.
+        table: entitlements_table
+        concept_uri: demo:Entitlement
+        fields:
+          - name: id
+            from: entitlement_id
+          - name: enrollment_id
+          - name: benefit_modality
+          - name: amount
+          - name: amount_band
+          - name: currency
+          - name: coverage_start
+          - name: coverage_end
+          - name: entitlement_status
+        access:
+          metadata_scope: social_protection_registry:metadata
+          aggregate_scope: social_protection_registry:aggregate
+          read_scope: social_protection_registry:rows
+          evidence_verification_scope: social_protection_registry:evidence_verification
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: enrollment_id
+              ops: [eq, in]
+            - field: entitlement_status
+              ops: [eq, in]
+            - field: coverage_end
+              ops: [eq, gte, lte]
+      - name: payment_event
+        title: Payment Event
+        description: Payment execution or hold event linked to an entitlement.
+        table: payment_events_table
+        concept_uri: demo:PaymentEvent
+        fields:
+          - name: id
+            from: payment_id
+          - name: entitlement_id
+          - name: cycle
+          - name: status
+          - name: delivery_channel
+          - name: payment_date
+          - name: reconciled
+        access:
+          metadata_scope: social_protection_registry:metadata
+          aggregate_scope: social_protection_registry:aggregate
+          read_scope: social_protection_registry:rows
+          evidence_verification_scope: social_protection_registry:evidence_verification
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: entitlement_id
+              ops: [eq, in]
+            - field: cycle
+              ops: [eq, in]
+            - field: status
+              ops: [eq, in]
+      - name: functioning_profile
+        title: Functioning Profile
+        description: Lightweight functioning assessment source record.
+        table: functioning_profiles_table
+        concept_uri: demo:FunctioningProfile
+        fields:
+          - name: id
+            from: profile_id
+          - name: person_id
+          - name: national_id
+          - name: instrument_code
+          - name: administration_date
+          - name: respondent_relationship
+          - name: domain_severities
+          - name: disability_identifier_met
+          - name: domains_triggering_identifier
+          - name: source_version
+        access:
+          metadata_scope: social_protection_registry:metadata
+          aggregate_scope: social_protection_registry:aggregate
+          read_scope: social_protection_registry:rows
+          evidence_verification_scope: social_protection_registry:evidence_verification
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: person_id
+              ops: [eq, in]
+            - field: national_id
+              ops: [eq, in]
+            - field: instrument_code
+              ops: [eq, in]
+      - name: disability_determination
+        title: Disability Determination
+        description: Disability support determination source record.
+        table: disability_determinations_table
+        concept_uri: demo:DisabilityDetermination
+        fields:
+          - name: id
+            from: determination_id
+          - name: person_id
+          - name: national_id
+          - name: authority
+          - name: determination_status
+          - name: support_category
+          - name: valid_from
+          - name: valid_until
+          - name: review_due
+        access:
+          metadata_scope: social_protection_registry:metadata
+          aggregate_scope: social_protection_registry:aggregate
+          read_scope: social_protection_registry:rows
+          evidence_verification_scope: social_protection_registry:evidence_verification
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: person_id
+              ops: [eq, in]
+            - field: national_id
+              ops: [eq, in]
+            - field: determination_status
+              ops: [eq, in]
+            - field: support_category
               ops: [eq, in]

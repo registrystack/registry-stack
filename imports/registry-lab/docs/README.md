@@ -14,20 +14,17 @@ flowchart TD
     Root["Root README<br/>setup, ports, just commands"]
     Ops["Operations posture lab contract<br/>admin posture and credentials"]
     Lab2["Lab 2 governed operations demo spec<br/>signed config verification and apply"]
-    Discovery["Service-first discovery<br/>metadata to evidence discovery"]
     Tutorials["First credential tutorials<br/>OpenCRVS, DHIS2, OpenFn"]
     Citizen["Citizen and wallet flows<br/>OID4VCI and subject binding"]
     Agri["Agriculture demo specs<br/>registry and consumer demos"]
     API["Public API workspace<br/>manual API exploration"]
 
     Root --> Ops
-    Root --> Discovery
     Root --> Tutorials
     Root --> Citizen
     Root --> Agri
     Root --> API
     Ops --> Lab2
-    Discovery --> Tutorials
     Tutorials --> API
 ```
 
@@ -48,6 +45,9 @@ flowchart TD
   security boundary.
 - [Wallet interop testing](wallet-interop-testing.md): test the citizen OID4VCI
   facade with wallet software after the scripted probe passes.
+- [Social protection attestation demo refresh spec](social-protection-attestation-demo-refresh-spec.md):
+  refresh hosted and local SP MIS scenarios around attestations, PublicSchema
+  anchors, and more realistic registry data models.
 - [Guided demo scenarios and data plan](guided-demo-scenarios-and-data-plan.md):
   plan fixture cleanup and the guided Relay, Notary, DHIS2, and wallet scenarios.
 
@@ -57,11 +57,6 @@ flowchart TD
   source-of-truth design for the agricultural registry demo.
 - [NAgDI consumer integration demo spec](nagdi-consumer-integration-demo-spec.md):
   source-of-truth design for the agriculture consumer demos.
-
-## Service discovery
-
-- [Service-first discovery](service-first-discovery.md): how the lab walks from
-  static metadata to service and evidence discovery.
 
 ## Operations
 

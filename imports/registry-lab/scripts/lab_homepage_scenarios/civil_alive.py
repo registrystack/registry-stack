@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Civil evidence scenario: prove alive status without row access."""
+"""Civil vital status attestation scenario."""
 
 from __future__ import annotations
 
 from typing import Any
 
+from .attestations import attestation
 from .common import (
     PURPOSE,
+    attestation_response,
     auth_header_pair,
     configured_credential,
     display_auth_header_pair,
@@ -29,49 +31,64 @@ SUBJECT_ID = "NID-1001"
 SUBJECT_NAME = "Miguel Santos"
 CLAIM_ID = "person-is-alive"
 EVIDENCE_SERVICE_NAME = "Civil vital status evidence service"
+PUBLIC_ATTESTATION = attestation("vital-status-attestation")
 DISCOVERY_REUSED = {
-    "evidence_service": EVIDENCE_SERVICE_NAME,
-    "lookup_key": "national_id",
-    "data_boundary": "evidence result only",
+    "attestation": PUBLIC_ATTESTATION["display_name"],
+    "lookup_profile": "by-national-id",
+    "data_boundary": "attestation result only",
 }
 
 
 def story() -> dict[str, Any]:
     return {
         "id": SCENARIO_ID,
-        "title": "Can a benefits service verify Miguel is alive without reading his civil registry record?",
-        "short_title": "Evidence without row access",
-        "proves": "A service can request a decision-ready fact while the raw civil record stays protected.",
+        "title": "Can an SP MIS request Miguel's vital status without reading his civil registry record?",
+        "short_title": "Vital Status Attestation",
+        "proves": "An SP MIS can request a narrowly scoped attestation while the raw civil record stays protected.",
         "domain": "Civil registry",
         "availability": "hosted",
+        "availability_state": {"state": "hosted", "label": "Hosted", "runnable": True},
         "intro": (
-            "You are a benefits service reviewing Miguel's application. You need one fact: whether Miguel is alive. "
-            "You should not receive his full civil registry record."
+            "You are an SP MIS reviewing Miguel's application. You need vital status evidence from the civil authority, "
+            "not a copy of his full civil registry record."
         ),
-        "actor": "Benefits service",
+        "actor": "Social Protection MIS",
         "subject": {"name": SUBJECT_NAME, "identifier": SUBJECT_ID},
+        "requester": {"name": "Social Protection MIS", "purpose": PURPOSE},
+        "requested_attestations": [PUBLIC_ATTESTATION],
+        "lookup_profile": {"id": "by-national-id", "label": "National ID lookup", "identifier_scheme": "national_id"},
+        "non_disclosure": [
+            "Full civil registry row",
+            "Birth record details",
+            "Household, address, and relationship records",
+        ],
+        "proof_facts": [
+            "Registry Notary signs the attestation response.",
+            "PublicSchema anchor: CivilStatusRecord.",
+            "Source freshness is shown as request-time evidence.",
+        ],
         "boundary": {
-            "allowed": "Ask for evidence that Miguel is alive.",
+            "allowed": "Request a Vital Status Attestation for Miguel.",
             "not_allowed": "Read Miguel's full civil registry row.",
         },
         "steps": [
             {
                 "id": "discover",
-                "label": "Find available evidence checks",
-                "prompt": "First, ask the Relay what civil evidence checks it advertises.",
+                "label": "Discover civil attestations",
+                "prompt": "First, ask the Relay what civil attestations it advertises.",
                 "button": "Run discovery",
-                "request_summary": "GET the civil evidence offerings using the public evidence-only demo credential.",
+                "request_summary": "GET the civil attestation offerings using the public demo credential.",
             },
             {
                 "id": "prepare-evidence",
-                "label": "Ask the alive question",
-                "prompt": "Next, reuse the discovered evidence service and lookup key to ask only the alive-status question.",
-                "button": "Check if Miguel is alive",
-                "request_summary": "POST a person-is-alive request for Miguel to the Notary, using national_id as the lookup key.",
+                "label": "Request the Vital Status Attestation",
+                "prompt": "Next, reuse the discovered attestation and lookup profile to ask only for Miguel's vital status.",
+                "button": "Request attestation",
+                "request_summary": "POST a Vital Status Attestation request for Miguel to the Notary, using the national ID lookup profile.",
                 "reuses": [
-                    {"label": "Evidence service", "value": EVIDENCE_SERVICE_NAME},
-                    {"label": "Lookup key", "value": "national_id"},
-                    {"label": "Boundary", "value": "Ask for evidence, not rows"},
+                    {"label": "Attestation", "value": PUBLIC_ATTESTATION["display_name"]},
+                    {"label": "Lookup profile", "value": "by-national-id"},
+                    {"label": "Boundary", "value": "Ask for an attestation, not rows"},
                 ],
             },
             {
@@ -83,8 +100,8 @@ def story() -> dict[str, Any]:
             },
         ],
         "receipt": [
-            {"label": "Needed answer", "value": "Is Miguel alive?"},
-            {"label": "Answer exposed", "value": "Yes"},
+            {"label": "MIS requirement", "value": "Current vital status"},
+            {"label": "Attestation returned", "value": PUBLIC_ATTESTATION["display_name"]},
             {"label": "Full registry row exposed", "value": "No"},
             {"label": "Access boundary tested", "value": "Denied as expected"},
         ],
@@ -161,6 +178,14 @@ def _run_evaluation(step_id: str) -> dict[str, Any]:
         ),
         "response_source": {
             "reused_from_discovery": DISCOVERY_REUSED,
+            "attestation_response": attestation_response(
+                PUBLIC_ATTESTATION,
+                subject_type="Person",
+                subject_id=SUBJECT_ID,
+                lookup_profile="by-national-id",
+                claim_id="vital_status",
+                claim_value=observed_answer(result_item(result.body, CLAIM_ID)),
+            ),
             "http": source_response(result),
         },
     }
@@ -198,9 +223,9 @@ def _summarize_discovery(body: Any, status: int | None) -> dict[str, Any]:
         "status": "done" if ok_status(status) else "needs_attention",
         "facts": [
             {"label": "HTTP status", "value": status if status is not None else "No response"},
-            {"label": "Evidence service", "value": first.get("title") or EVIDENCE_SERVICE_NAME},
-            {"label": "Lookup key", "value": ", ".join(first.get("lookup_keys", [])) or "national_id"},
-            {"label": "Reused next", "value": "Evidence service + lookup key"},
+            {"label": "Attestation", "value": first.get("display_name") or first.get("title") or PUBLIC_ATTESTATION["display_name"]},
+            {"label": "Lookup profile", "value": ", ".join(first.get("lookup_profiles", []) or first.get("lookup_keys", [])) or "by-national-id"},
+            {"label": "Reused next", "value": "Attestation + lookup profile"},
             {"label": "Raw person row returned", "value": "No"},
         ],
     }
@@ -211,20 +236,21 @@ def _summarize_evaluation(result) -> dict[str, Any]:
     answer = observed_answer(item)
     ok = ok_status(result.status)
     return {
-        "title": "Miguel passes the alive check." if ok and answer is True else "The alive check needs attention.",
+        "title": "Miguel's Vital Status Attestation is ready." if ok and answer is True else "The Vital Status Attestation needs attention.",
         "message": (
-            "The Notary returned the answer the service needed, without sending back the civil registry row."
+            "The Notary returned the minimized attestation the SP MIS needed, without sending back the civil registry row."
             if ok
-            else "The Notary request did not return the expected evidence result. Inspect the response source to see what happened."
+            else "The Notary request did not return the expected attestation result. Inspect the response source to see what happened."
         ),
         "status": "done" if ok else "needs_attention",
         "facts": [
             {"label": "HTTP status", "value": result.status if result.status is not None else "No response"},
-            {"label": "From Step 1", "value": EVIDENCE_SERVICE_NAME},
-            {"label": "Lookup key reused", "value": "national_id"},
+            {"label": "Requested attestation", "value": PUBLIC_ATTESTATION["display_name"]},
+            {"label": "Lookup profile", "value": "by-national-id"},
             {"label": "Subject", "value": f"{SUBJECT_NAME} ({SUBJECT_ID})"},
-            {"label": "Answer", "value": "Yes" if answer is True else ("No" if answer is False else "Unknown")},
-            {"label": "Not requested", "value": "Birth record, household, address, or raw civil row"},
+            {"label": "Vital status current", "value": "Yes" if answer is True else ("No" if answer is False else "Unknown")},
+            {"label": "Not disclosed", "value": "Birth record, household, address, or raw civil row"},
+            {"label": "Proof", "value": "Signed Notary response with CivilStatusRecord anchor"},
         ],
     }
 
