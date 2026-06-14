@@ -194,7 +194,7 @@ evidence:
         - dhis2_child_program_sd_jwt
         - dhis2_programme_participation_sd_jwt
     - id: dhis2-child-program-active
-      title: DHIS2 child programme active
+      title: Health Programme Participation Attestation
       version: 2026-05
       subject_type: person
       value:

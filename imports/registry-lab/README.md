@@ -23,6 +23,7 @@ Use this README for setup, service ports, and command reference. Use
 - [DHIS2 OpenFn Notary tutorial](docs/dhis2-openfn-notary-tutorial.md)
 - [Citizen self-attestation eSignet use case](docs/citizen-self-attestation-esignet-use-case.md)
 - [Wallet interop testing](docs/wallet-interop-testing.md)
+- [Social protection attestation demo refresh spec](docs/social-protection-attestation-demo-refresh-spec.md)
 - [Lab 2 governed operations demo spec](docs/lab2-governed-operations-demo-spec.md)
 
 ## Topology
@@ -69,13 +70,10 @@ just smoke
 just client
 ```
 
-The service-first story uses the `vendor/registry-manifest` submodule by
-default. Atlas-backed service graph checks are optional for the first release
-proof path and run when `REGISTRY_LAB_CHECK_ATLAS=1` or live stories are
-enabled. Override `REGISTRY_MANIFEST_REPO` and `REGISTRY_ATLAS_SOURCE_DIR` when
-you want to test sibling checkouts or other local paths. `just generate` fails
-early when `registry-manifest` is missing. `just smoke` fails early for Atlas
-only when Atlas checks are enabled.
+The service-first metadata path uses the `vendor/registry-manifest` submodule by
+default. Override `REGISTRY_MANIFEST_REPO` when you want to test a sibling
+checkout or another local path. `just generate` and `just smoke` fail early when
+`registry-manifest` is missing.
 
 `just generate` writes `.env`, fixture files, and static metadata. Run it before
 `just up` the first time, and run it again after pulling demo changes that add
@@ -120,11 +118,6 @@ For the first release, keep the two proof paths separate:
   `REGISTRY_LAB_RELEASE_SOURCE_MODE`. The script forces Platform, Relay, Notary,
   Manifest, and Crosswalk to the committed `vendor/` submodules even when
   sibling checkouts exist. This is the clean-clone/no-sibling release proof.
-
-Atlas is not part of the first release proof path unless explicitly opted in.
-Set `REGISTRY_LAB_CHECK_ATLAS=1` for the Atlas-backed smoke slice, and set both
-`REGISTRY_LAB_RUN_LIVE_STORIES=1` and `REGISTRY_LAB_CHECK_ATLAS=1` for the live
-story proof.
 
 ## Demo commands
 
@@ -180,7 +173,6 @@ just citizen-login  # print local eSignet login URL
 just citizen-code   # exchange returned code and run flow
 just citizen-token  # run flow with exported tokens
 just citizen-oid4vci-token # optional OID4VCI endpoint probe with exported tokens
-just live-stories    # print narrated discovery queries and write artifacts
 ```
 
 Run the NAgDI agricultural registries demo:
@@ -293,15 +285,6 @@ agricultural Relay config names differ.
 `just agri-smoke` writes artifacts to `output/agri-smoke/` and also runs the
 narrated client, which writes to `output/agri-client/`.
 
-Re-open explainability artifacts from `just live-stories`:
-
-```bash
-just story-page
-just briefing
-just case-file
-just conformance
-```
-
 Run the broader checks:
 
 ```bash
@@ -319,9 +302,8 @@ The `justfile` defaults `REGISTRY_RELAY_SOURCE_DIR`,
 `REGISTRY_NOTARY_SOURCE_DIR`, and `REGISTRY_PLATFORM_SOURCE_DIR` to sibling
 checkouts when present, otherwise to the pinned `vendor/` submodules.
 `REGISTRY_OPENFN_NOTARY_SOURCE_DIR` follows `REGISTRY_NOTARY_SOURCE_DIR` by
-default. `REGISTRY_ATLAS_SOURCE_DIR` follows the same sibling-then-vendor
-pattern for optional Atlas-backed service-first checks. Override those variables
-when you want to build from another local path.
+default. Override those variables when you want to build from another local
+path.
 
 ## Live Notary Redis checks
 
@@ -547,75 +529,9 @@ The smoke writes positive and negative predicate responses under
 `application/dc+sd-jwt` credential with profile `dhis2_child_program_sd_jwt` at
 `output/dhis2-openfn/smoke-dhis2-child-program-credential.json`.
 
-## Live-service story runner
-
-`scripts/demo-live-stories.sh` turns the default live services into narrated
-demo stories. The terminal output shows each discovery query, key response
-fields, and the conclusion being proved. Each run also writes artifacts under
-`output/live-stories/` and generates an interactive `index.html`,
-`briefing.md`, `case-file.json`, and `conformance-map.json` so the demo can be
-presented as a guided case file rather than a pile of API responses:
-
-1. **Service-first discovery through Atlas** publishes
-   `/.well-known/api-catalog` as an RFC 9727 Linkset, follows the advertised
-   CPSV-AP catalogue URL directly, uses the metadata index for the form schema,
-   invokes the Atlas semantic discovery CLI and `service-view` command, selects
-   the health-linked child support service, maps grouped CCCEV evidence options
-   to evidence types and providers, follows BRegDCAT/DCAT-style access-service
-   endpoints into Notary claim discovery, validates a sample form payload
-   against the published form JSON Schema, then evaluates the relevant Notary
-   claims in that service context.
-2. **Zitadel-issued JWT at a separate OIDC Relay node** starts a temporary
-   OIDC-protected Relay on port `4316`, mints a Zitadel machine-user token,
-   records the non-secret JWT claims, and shows both verified-but-denied and
-   verified-and-authorized Relay decisions.
-3. **Database-source cutover with live Postgres** starts a temporary
-   Postgres-backed Relay on port `4315`, reads benefit cases, inserts a new
-   database row, then proves the live Relay sees it without a restart.
-4. **OpenFn sidecar lookup behind Registry Notary** calls the default
-   OpenFn-backed Notary on port `4324` and records the date-of-birth claim
-   result while keeping the sidecar private to the Compose network.
-
-```bash
-just live-stories
-just story-page
-just briefing
-just case-file
-just conformance
-```
-
 Generated artifacts are written to `output/`. Generated static publication
 files are written under `static-metadata/`. Both directories keep only their
 `.gitignore` files in git.
-
-See `docs/service-first-discovery.md` for the Atlas-backed service-first story
-artifact contract.
-
-Definition of done for a live story run:
-
-- `just live-stories` exits successfully from a fresh `just up`.
-- The first service-first request is
-  `GET /.well-known/api-catalog`; CPSV-AP discovery follows the service
-  catalogue URL from that Linkset response, and form validation follows the
-  metadata index URL from that response.
-- Atlas `service-view` provides the public service, requirements, grouped
-  evidence options, providers, access services, source evidence, gaps, and
-  report summary without a Lab-local Rust helper.
-- Notary calls are derived from Atlas access-service `endpoint_url` values,
-  with only local Compose hostname-to-host-port translation.
-- The generated `output/live-stories/index.html` shows API responses and the
-  value from each response that drives the next call, plus important HTTP
-  response headers for discovery steps when captured.
-- No bearer tokens, client secrets, JWKS private keys, database credentials, or
-  unrelated row data are written to the terminal or artifacts.
-
-In the service-first story, Registry Notary dispatch uses access-service
-`endpoint_url` values discovered from Atlas output. The runner records the
-discovered endpoint and validates that the host URL used for the HTTP call is
-derived from it. The only local rewrite is Compose hostname-to-host-port
-translation, for example `http://shared-eligibility-notary:8080` to
-`http://127.0.0.1:4323`, so the host-side story runner can reach the same
-container service.
 
 This lab does not call OOTS Evidence Broker or Data Service Directory services.
 Those remain future cross-border integration points rather than hidden demo
@@ -669,8 +585,6 @@ submodules under `vendor/`:
 - `vendor/registry-notary`: Registry Notary source used by
   `Dockerfile.registry-notary`.
 - `vendor/registry-manifest`: static metadata publishing CLI and profiles.
-- `vendor/registry-atlas`: service-first discovery CLI used by optional
-  Atlas-backed smoke checks and live stories.
 
 The Compose build uses Docker named contexts so local source checkouts can be
 used without changing `compose.yaml`:
@@ -709,8 +623,7 @@ Relay, and Notary SHAs with the Lab `vendor/` pins and fails on mismatches or
 dirty source checkouts. Use `REGISTRY_LAB_ALLOW_PENDING_PINS=1` only while the
 final source commits are still waiting for the Lab submodule pin update.
 `scripts/check-release-source-model.sh vendor` proves that the selected release
-paths resolve to committed Lab pins and that Atlas is excluded unless explicitly
-enabled.
+paths resolve to committed Lab pins.
 
 `just notary-client` imports the Registry Notary Python client directly from a
 source checkout and runs it against the default lab Notary services. It looks at
@@ -726,15 +639,20 @@ the lab submodule pin has moved. This smoke is explicit and is not part of
 XLSX, and Parquet extracts. It writes a small but non-trivial fixture set:
 
 - civil registry CSV: children, caregivers, living adults, and deceased adults
-  across five districts;
-- social protection XLSX: households, household members, and enrollments with
-  active, inactive, suspended, and review-required cases;
-- health registry Parquet: active, suspended, pending-renewal, and
-  partially-serviceable facilities.
+  across five districts, plus event-level person details, identifiers, birth
+  events, death events, civil status records, certificates, and relationships;
+- social protection XLSX: households, household members, memberships,
+  socio-economic profiles, scoring events, programmes, enrollments,
+  entitlements, payments, functioning profiles, and disability determinations
+  with active, inactive, suspended, stale, expired, review-required, and
+  policy-denied cases;
+- health registry Parquet: an applicant service availability projection with
+  active, suspended, pending-renewal, and partially-serviceable facilities.
 
 The generator validates key coverage before writing files so the demo keeps a
-successful subject, failed predicates, deceased-member cases, cross-source
-subjects, and health-linked support cases.
+successful subject, failed predicates, ambiguous demographic matches, stale
+or expired source facts, policy-denied cases, deceased-member cases,
+cross-source subjects, and health-linked support cases.
 
 The shared OpenSPP and Registry Lab v1 subject matrix is:
 
@@ -762,8 +680,6 @@ Expected Registry Notary outcomes:
 Regenerate aligned local fixtures with `just generate`. For release validation,
 run `scripts/release-check.sh`. The release check runs the default smoke,
 federation, Notary client, narrated client, and selected live-service checks.
-Atlas-backed live stories are opt-in for the first release through
-`REGISTRY_LAB_RUN_LIVE_STORIES=1 REGISTRY_LAB_CHECK_ATLAS=1`.
 
 ## Credentials
 

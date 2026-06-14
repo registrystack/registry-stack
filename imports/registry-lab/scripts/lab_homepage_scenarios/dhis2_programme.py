@@ -6,7 +6,9 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from .attestations import attestation
 from .common import (
+    attestation_response,
     auth_header_pair,
     configured_credential,
     display_auth_header_pair,
@@ -41,38 +43,53 @@ PROGRAMME_CLAIMS = [
     "dhis2-child-program-active",
     "dhis2-reconciliation-ref",
 ]
+PUBLIC_ATTESTATION = attestation("health-programme-participation-attestation")
 
 
 def story() -> dict[str, Any]:
     return {
         "id": SCENARIO_ID,
         "title": "Can a DHIS2 programme record become holder-bound evidence without exposing tracker data?",
-        "short_title": "DHIS2 programme participation VC",
-        "proves": "A Notary can turn DHIS2 tracker facts into evidence, preview a holder-bound VC, and reconcile later with fresh online evidence.",
+        "short_title": "Health Programme Participation Attestation",
+        "proves": "A Notary can turn DHIS2 programme facts into attestations, preview a holder-bound VC, and reconcile later with fresh online evidence.",
         "domain": "Health",
         "availability": "hosted",
+        "availability_state": {"state": "hosted", "label": "Hosted", "runnable": True},
         "intro": (
             "A programme team needs to prove that a child is active in a DHIS2 programme. "
             "The service should see the specific evidence claims and holder-binding shape, not raw DHIS2 tracker records."
         ),
         "actor": "Programme service",
         "subject": {"name": "DHIS2 tracked entity", "identifier": SUBJECT_ID},
+        "requester": {"name": "Programme service", "purpose": PURPOSE},
+        "requested_attestations": [PUBLIC_ATTESTATION],
+        "lookup_profile": {"id": "by-source-record-id", "label": "DHIS2 tracked entity lookup", "identifier_scheme": "dhis2_tracked_entity"},
+        "non_disclosure": [
+            "Raw DHIS2 tracker row",
+            "Clinical records or diagnosis details",
+            "Holder private key and raw credential value",
+        ],
+        "proof_facts": [
+            "Credential preview is holder-bound to a DID.",
+            "PublicSchema anchor: Program.",
+            "Fresh reconciliation uses online Notary evidence.",
+        ],
         "boundary": {
-            "allowed": "Ask the DHIS2 Notary for programme participation evidence.",
+            "allowed": "Ask the DHIS2 Notary for a Health Programme Participation Attestation.",
             "not_allowed": "Export raw DHIS2 tracker data or wallet private keys.",
         },
         "steps": [
             {
                 "id": "discover",
-                "label": "Discover DHIS2 evidence claims",
-                "prompt": "Start with the Notary claim catalog so users can see what the DHIS2 demo supports.",
-                "button": "Discover claims",
-                "request_summary": "GET /v1/claims on the hosted DHIS2 Notary with the public demo bearer token.",
+                "label": "Discover DHIS2 attestations",
+                "prompt": "Start with the Notary catalogue so users can see what the DHIS2 demo supports.",
+                "button": "Discover attestations",
+                "request_summary": "GET the hosted DHIS2 Notary catalogue with the public demo bearer token.",
             },
             {
                 "id": "evaluate-programme",
-                "label": "Evaluate programme participation claims",
-                "prompt": "Ask for the six claims Bruno uses before creating the programme participation credential.",
+                "label": "Request programme participation evidence",
+                "prompt": "Ask for the minimized programme facts Bruno uses before creating the programme participation credential.",
                 "button": "Evaluate programme",
                 "request_summary": "POST the DHIS2 tracked entity id with value disclosure and SD-JWT VC format.",
                 "reuses": [
@@ -97,7 +114,7 @@ def story() -> dict[str, Any]:
                 "label": "Reconcile with fresh online evidence",
                 "prompt": "Use the reconciliation reference to ask the Notary for a fresh predicate answer.",
                 "button": "Reconcile evidence",
-                "request_summary": "POST dhis2-child-program-active with predicate disclosure using the reconciliation reference.",
+                "request_summary": "POST the Health Programme Participation Attestation request with predicate disclosure using the reconciliation reference.",
                 "reuses": [{"label": "Reconciliation ref", "value": RECONCILIATION_REF}],
             },
             {
@@ -105,7 +122,7 @@ def story() -> dict[str, Any]:
                 "label": "Run the inactive control",
                 "prompt": "Check the Bruno negative subject to prove the Notary is not returning a blanket yes.",
                 "button": "Run negative control",
-                "request_summary": "POST dhis2-child-program-active for vOxUH373fy5 and expect the claim to be false.",
+                "request_summary": "POST the Health Programme Participation Attestation request for vOxUH373fy5 and expect the result to be false.",
             },
             {
                 "id": "render-cccev",
@@ -235,13 +252,13 @@ def _discover(config: dict[str, Any], step_id: str) -> dict[str, Any]:
     return {
         "step_id": step_id,
         "friendly": {
-            "title": "The DHIS2 Notary advertises programme evidence claims." if ok_status(result.status) else "DHIS2 claim discovery needs attention.",
-            "message": "The catalogue shows the claims that can be computed from DHIS2 through the Notary.",
+            "title": "The DHIS2 Notary advertises programme attestations." if ok_status(result.status) else "DHIS2 discovery needs attention.",
+            "message": "The catalogue shows the minimized facts that can be computed from DHIS2 through the Notary.",
             "status": "done" if ok_status(result.status) else "needs_attention",
             "facts": [
                 {"label": "HTTP status", "value": result.status if result.status is not None else "No response"},
-                {"label": "Claims advertised", "value": len(claims) if isinstance(claims, list) else "Check source"},
-                {"label": "Programme claims present", "value": "Yes" if programme_claims_present else "Check source"},
+                {"label": "Catalogue items advertised", "value": len(claims) if isinstance(claims, list) else "Check source"},
+                {"label": "Programme participation available", "value": "Yes" if programme_claims_present else "Check source"},
                 {"label": "Token", "value": "Public DHIS2 demo bearer"},
             ],
         },
@@ -259,19 +276,30 @@ def _evaluate_programme(config: dict[str, Any], step_id: str) -> dict[str, Any]:
     return {
         "step_id": step_id,
         "friendly": {
-            "title": "The programme participation claims are ready." if ok_status(result.status) else "Programme evaluation needs attention.",
-            "message": "The response contains claim-level evidence for the credential workflow, without exposing the raw DHIS2 tracker row.",
+            "title": "The Health Programme Participation Attestation is ready." if ok_status(result.status) else "Programme evaluation needs attention.",
+            "message": "The response contains minimized programme evidence for the credential workflow, without exposing the raw DHIS2 tracker row.",
             "status": "done" if ok_status(result.status) else "needs_attention",
             "facts": [
                 {"label": "HTTP status", "value": result.status if result.status is not None else "No response"},
                 {"label": "Tracked entity", "value": SUBJECT_ID},
-                {"label": "Claims returned", "value": facts["claim_count"]},
+                {"label": "Minimized facts returned", "value": facts["claim_count"]},
                 {"label": "Programme active", "value": facts["active"]},
                 {"label": "Reconciliation ref", "value": facts["reconciliation_ref"]},
             ],
         },
         "request_source": request_source("POST", url, display_headers, body),
-        "response_source": source_response(result),
+        "response_source": {
+            "attestation_response": attestation_response(
+                PUBLIC_ATTESTATION,
+                subject_type="TrackedEntity",
+                subject_id=SUBJECT_ID,
+                lookup_profile="by-source-record-id",
+                claim_id="programme_participation_active",
+                claim_value=_programme_active_value(result.body),
+                match_method="source_record_id_exact",
+            ),
+            "http": source_response(result),
+        },
     }
 
 
@@ -285,6 +313,12 @@ def _programme_facts(body: Any) -> dict[str, Any]:
         "active": "Yes" if active is True else ("No" if active is False else "Unknown"),
         "reconciliation_ref": reconciliation_ref or RECONCILIATION_REF,
     }
+
+
+def _programme_active_value(body: Any) -> Any:
+    results = body.get("results", []) if isinstance(body, dict) else []
+    by_claim = {item.get("claim_id"): item for item in results if isinstance(item, dict)}
+    return observed_answer(by_claim.get("dhis2-child-program-active", {}))
 
 
 def _preview_vc(config: dict[str, Any], step_id: str) -> dict[str, Any]:
@@ -348,7 +382,7 @@ def _evaluate_single(config: dict[str, Any], step_id: str, subject: str, label: 
         "step_id": step_id,
         "friendly": {
             "title": f"{label}: {'active' if answer is True else 'not active' if answer is False else 'check source'}.",
-            "message": "The Notary recomputes the predicate from DHIS2-backed evidence and returns a decision-ready answer.",
+            "message": "The Notary recomputes the predicate from DHIS2-backed evidence and returns a decision-ready attestation answer.",
             "status": "done" if ok_status(result.status) and answer is expected else "needs_attention",
             "facts": [
                 {"label": "HTTP status", "value": result.status if result.status is not None else "No response"},
@@ -359,7 +393,18 @@ def _evaluate_single(config: dict[str, Any], step_id: str, subject: str, label: 
             ],
         },
         "request_source": request_source("POST", url, display_headers, body),
-        "response_source": source_response(result),
+        "response_source": {
+            "attestation_response": attestation_response(
+                PUBLIC_ATTESTATION,
+                subject_type="TrackedEntity",
+                subject_id=subject,
+                lookup_profile="by-source-record-id",
+                claim_id="programme_participation_active",
+                claim_value=answer,
+                match_method="source_record_id_exact",
+            ),
+            "http": source_response(result),
+        },
     }
 
 

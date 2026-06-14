@@ -35,6 +35,31 @@ HOMEPAGE_JS = _static_text("homepage.js")
 SCENARIOS_JS = _static_text("scenarios.js")
 
 
+ATTESTATION_RESPONSE_KEYS = {
+    "attestation_id",
+    "display_name",
+    "source_authority",
+    "jurisdiction",
+    "publicschema_anchor",
+    "subject",
+    "match_method",
+    "matched_record_ref",
+    "as_of",
+    "source_observed_at",
+    "disclosure_profile",
+    "claims",
+    "proof",
+}
+
+
+def assert_attestation_response(testcase: unittest.TestCase, envelope: dict, expected_id: str) -> None:
+    testcase.assertTrue(ATTESTATION_RESPONSE_KEYS.issubset(envelope), sorted(ATTESTATION_RESPONSE_KEYS - set(envelope)))
+    testcase.assertEqual(envelope["attestation_id"], expected_id)
+    testcase.assertIsInstance(envelope["claims"], list)
+    testcase.assertTrue(envelope["claims"])
+    testcase.assertEqual(envelope["proof"]["status"], "linked_raw_response")
+
+
 class ApplyEnvFileTest(unittest.TestCase):
     """apply_env_file must fill absent or empty vars, but never clobber a real value."""
 
@@ -354,15 +379,15 @@ class ScenarioPayloadTest(unittest.TestCase):
         }
         return server.scenario_payload(server.enrich_config(config))
 
-    def test_builds_one_guided_alive_proof_story(self) -> None:
+    def test_builds_one_guided_vital_status_story(self) -> None:
         story = server.scenario_payload(self._payload_config(), "alive-proof")["story"]
         self.assertEqual(story["id"], "alive-proof")
         self.assertIn("Miguel", story["title"])
         self.assertEqual(story["subject"], {"name": "Miguel Santos", "identifier": "NID-1001"})
         self.assertEqual([step["id"] for step in story["steps"]], ["discover", "prepare-evidence", "deny-row"])
-        self.assertEqual(story["steps"][1]["button"], "Check if Miguel is alive")
+        self.assertEqual(story["steps"][1]["button"], "Request attestation")
         self.assertIn("Read Miguel's full civil registry row", story["boundary"]["not_allowed"])
-        self.assertEqual(story["steps"][1]["reuses"][1], {"label": "Lookup key", "value": "national_id"})
+        self.assertEqual(story["steps"][1]["reuses"][1], {"label": "Lookup profile", "value": "by-national-id"})
 
     def _payload_config(self) -> dict:
         return server.enrich_config(
@@ -429,6 +454,72 @@ class ScenarioPayloadTest(unittest.TestCase):
         self.assertEqual(payload["scenarios"][3]["availability"], "hosted")
         self.assertEqual(payload["scenarios"][4]["availability"], "hosted")
 
+    def test_catalogue_exposes_attestation_metadata_and_availability_state(self) -> None:
+        payload = server.scenario_payload(self._payload_config(), lab_mode="hosted")
+        alive = next(item for item in payload["scenarios"] if item["id"] == "alive-proof")
+        self.assertEqual(alive["title"], "Vital Status Attestation")
+        self.assertEqual(alive["availability_state"]["state"], "hosted")
+        self.assertTrue(alive["availability_state"]["runnable"])
+        self.assertEqual(alive["requested_attestations"][0]["offering_id"], "vital-status-attestation")
+        self.assertEqual(alive["requested_attestations"][0]["lookup_profiles"], ["by-national-id"])
+
+    def test_story_exposes_requested_attestations_lookup_disclosure_and_proof(self) -> None:
+        story = server.scenario_payload(self._payload_config(), "alive-proof")["story"]
+        self.assertEqual(story["requested_attestations"][0]["display_name"], "Vital Status Attestation")
+        self.assertEqual(story["lookup_profile"]["id"], "by-national-id")
+        self.assertIn("Full civil registry row", story["non_disclosure"])
+        self.assertTrue(any("CivilStatusRecord" in fact for fact in story["proof_facts"]))
+        self.assertEqual(story["availability_state"]["label"], "Hosted")
+
+    def test_public_label_check_rejects_raw_compatibility_ids(self) -> None:
+        from lab_homepage_scenarios import public_label_check
+        from lab_homepage_scenarios.attestations import RAW_COMPATIBILITY_IDS
+
+        for raw_id in RAW_COMPATIBILITY_IDS:
+            with self.subTest(raw_id=raw_id):
+                self.assertEqual(
+                    public_label_check(
+                        [
+                            {
+                                "id": "bad-story",
+                                "title": raw_id,
+                                "short_title": "",
+                                "proves": "",
+                                "steps": [],
+                                "receipt": [],
+                            }
+                        ]
+                    ),
+                    [f"bad-story.title: {raw_id}"],
+                )
+
+    def test_public_attestation_metadata_omits_compatibility_aliases(self) -> None:
+        from lab_homepage_scenarios.attestations import attestation
+
+        metadata = attestation("vital-status-attestation")
+        self.assertEqual("Vital Status Attestation", metadata["display_name"])
+        self.assertNotIn("compatibility_claim_aliases", metadata)
+
+    def test_public_label_check_reports_path_for_raw_compatibility_ids(self) -> None:
+        from lab_homepage_scenarios import public_label_check
+        violations = public_label_check(
+            [
+                {
+                    "id": "bad-story",
+                    "title": "person-is-alive",
+                    "short_title": "",
+                    "proves": "",
+                    "steps": [],
+                    "receipt": [],
+                }
+            ]
+        )
+        self.assertEqual(violations, ["bad-story.title: person-is-alive"])
+
+    def test_public_scenario_labels_do_not_expose_raw_compatibility_ids(self) -> None:
+        from lab_homepage_scenarios import public_label_check
+        self.assertEqual(public_label_check(), [])
+
     def test_wallet_story_uses_adult_persona(self) -> None:
         story = server.scenario_payload(self._payload_config(), "wallet-credential")["story"]
         self.assertEqual(story["subject"], {"name": "Maria Santos", "identifier": "NID-2001"})
@@ -463,9 +554,14 @@ class ScenarioPayloadTest(unittest.TestCase):
 
         self.assertEqual(result["friendly"]["status"], "done")
         self.assertEqual(result["friendly"]["facts"][0], {"label": "HTTP status", "value": 200})
-        self.assertEqual(result["friendly"]["facts"][1], {"label": "From Step 1", "value": "Civil vital status evidence service"})
-        self.assertEqual(result["friendly"]["facts"][4], {"label": "Answer", "value": "Yes"})
-        self.assertEqual(result["response_source"]["reused_from_discovery"]["lookup_key"], "national_id")
+        self.assertEqual(result["friendly"]["facts"][1], {"label": "Requested attestation", "value": "Vital Status Attestation"})
+        self.assertEqual(result["friendly"]["facts"][4], {"label": "Vital status current", "value": "Yes"})
+        self.assertEqual(result["response_source"]["reused_from_discovery"]["lookup_profile"], "by-national-id")
+        assert_attestation_response(
+            self,
+            result["response_source"]["attestation_response"],
+            "vital-status-attestation",
+        )
         self.assertEqual(captured["req"].full_url, "https://notary.example/v1/evaluations")
         self.assertEqual(captured["req"].get_header("Authorization"), "Bearer notary-token")
         self.assertEqual(result["request_source"]["headers"]["Authorization"], "Bearer [runtime demo token hidden]")
@@ -646,9 +742,39 @@ class ScenarioPayloadTest(unittest.TestCase):
             result = server.run_scenario_step(self._payload_config(), "dhis2-programme-vc", "discover")
 
         facts = {item["label"]: item["value"] for item in result["friendly"]["facts"]}
-        self.assertEqual(facts["Claims advertised"], 6)
-        self.assertEqual(facts["Programme claims present"], "Yes")
+        self.assertEqual(facts["Catalogue items advertised"], 6)
+        self.assertEqual(facts["Programme participation available"], "Yes")
         self.assertEqual(captured["req"].get_header("Authorization"), "Bearer civil-token")
+
+    def test_dhis2_evaluation_exposes_attestation_response_envelope(self) -> None:
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps(
+                    {
+                        "results": [
+                            {"claim_id": "dhis2-child-program-active", "satisfied": True},
+                            {"claim_id": "dhis2-reconciliation-ref", "value": "dhis2:tracked-entity:PQfMcpmXeFE"},
+                        ]
+                    }
+                ).encode("utf-8")
+
+        with unittest.mock.patch("urllib.request.urlopen", lambda req, timeout=0: Resp()):
+            result = server.run_scenario_step(self._payload_config(), "dhis2-programme-vc", "evaluate-programme")
+
+        assert_attestation_response(
+            self,
+            result["response_source"]["attestation_response"],
+            "health-programme-participation-attestation",
+        )
 
     def test_dhis2_preview_vc_hides_holder_proof_and_raw_credential(self) -> None:
         result = server.run_scenario_step(self._payload_config(), "dhis2-programme-vc", "preview-vc")
@@ -717,6 +843,14 @@ class ScenarioPageHtmlTest(unittest.TestCase):
         self.assertIn("/api/scenarios/${encodeURIComponent(state.story.id)}/", SCENARIOS_JS)
         self.assertIn('data-active-scenario="alive-proof"', story_html)
         self.assertNotIn("Cell 1", SCENARIOS_JS)
+
+    def test_page_renders_attestation_metadata_sections(self) -> None:
+        self.assertIn("SP MIS requirement", SCENARIOS_JS)
+        self.assertIn("Requested attestations", SCENARIOS_JS)
+        self.assertIn("Lookup profile", SCENARIOS_JS)
+        self.assertIn("Disclosure boundary", SCENARIOS_JS)
+        self.assertIn("Proof facts", SCENARIOS_JS)
+        self.assertIn("attestationNames", SCENARIOS_JS)
 
 
 class LabModePayloadTest(unittest.TestCase):
@@ -1055,6 +1189,11 @@ class InternalRequestSourceTest(unittest.TestCase):
                 server.enrich_config({"credentials": []}), "combined-support", "civil-subclaim", lab_mode="local"
             )
         self.assertTrue(result["request_source"].get("internal"), "combined-support civil-subclaim must be internal")
+        assert_attestation_response(
+            self,
+            result["response_source"]["attestation_response"],
+            "vital-status-attestation",
+        )
 
     # ---- agriculture-voucher: all steps use runtime_bearer_credential -> internal ----
 
@@ -1101,6 +1240,11 @@ class InternalRequestSourceTest(unittest.TestCase):
                 server.enrich_config({"credentials": []}), "agriculture-voucher", "positive-voucher", lab_mode="local"
             )
         self.assertTrue(result["request_source"].get("internal"), "agriculture-voucher positive-voucher must be internal")
+        assert_attestation_response(
+            self,
+            result["response_source"]["attestation_response"],
+            "agricultural-entitlement-attestation",
+        )
 
     # ---- JS renderRequestSource: internal branch must be present in the page HTML ----
 
@@ -1240,7 +1384,7 @@ class ChooserAndMetadataTest(unittest.TestCase):
         self.assertIn("<title>Registry Lab Scenarios</title>", self._chooser_html)
 
     def test_story_page_title_uses_short_title(self) -> None:
-        self.assertIn("<title>Evidence without row access · Registry Lab</title>", self._alive_html)
+        self.assertIn("<title>Vital Status Attestation · Registry Lab</title>", self._alive_html)
 
     def test_story_page_has_meta_description(self) -> None:
         self.assertIn('<meta name="description"', self._alive_html)
@@ -1248,7 +1392,7 @@ class ChooserAndMetadataTest(unittest.TestCase):
 
     def test_story_page_has_og_title(self) -> None:
         self.assertIn('property="og:title"', self._alive_html)
-        self.assertIn("Evidence without row access", self._alive_html)
+        self.assertIn("Vital Status Attestation", self._alive_html)
 
     def test_story_page_has_og_description(self) -> None:
         self.assertIn('property="og:description"', self._alive_html)

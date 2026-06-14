@@ -16,6 +16,7 @@ import csv
 import datetime as dt
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -27,7 +28,6 @@ GENERATOR_PATH = SCRIPT_DIR / "generate-fixtures.py"
 AGRI_GENERATOR_PATH = SCRIPT_DIR / "generate-agri-fixtures.py"
 SCRIPT_MATRIX_PATHS = [
     SCRIPT_DIR / "demo-flow.py",
-    SCRIPT_DIR / "demo-live-stories.py",
     SCRIPT_DIR / "smoke-notary-client.py",
 ]
 
@@ -147,8 +147,8 @@ class GenerateFixturesTest(unittest.TestCase):
         for path in public_files:
             with self.subTest(path=path.relative_to(self.generator.ROOT)):
                 text = path.read_text(encoding="utf-8")
-                self.assertNotIn("civil_status", text)
-                self.assertNotIn("civil-status", text)
+                self.assertNotRegex(text, r"\bname:\s*civil_status\b")
+                self.assertNotRegex(text, r"\bcivil-status\b(?!-records)")
 
     def test_published_metadata_omits_private_notary_hostnames(self) -> None:
         public_metadata_paths = [
@@ -184,6 +184,111 @@ class GenerateFixturesTest(unittest.TestCase):
     def test_fixture_relationships_remain_valid(self) -> None:
         self.generator.validate_fixture_coverage()
 
+    def test_civil_refresh_model_has_event_records_and_controls(self) -> None:
+        person_by_nid = self._rows_by(self.generator.CIVIL_PERSON_DETAILS, "national_id")
+        records_by_id = self._rows_by(self.generator.CIVIL_STATUS_RECORDS, "record_id")
+        births_by_id = self._rows_by(self.generator.BIRTH_EVENTS, "event_id")
+        deaths_by_id = self._rows_by(self.generator.DEATH_EVENTS, "event_id")
+        certificates_by_record = self._rows_by(self.generator.CERTIFICATES, "record_id")
+        relationships_by_id = self._rows_by(self.generator.RELATIONSHIPS, "relationship_id")
+
+        self.assertEqual(person_by_nid["NID-1001"]["sex"], "M")
+        self.assertEqual(records_by_id["CSR-BIRTH-1001"]["event_id"], "BE-1001")
+        self.assertEqual(births_by_id["BE-1001"]["child_person_id"], "CP-1001")
+        self.assertEqual(certificates_by_record["CSR-BIRTH-1001"]["certificate_number"], "CERT-B-1001")
+        self.assertEqual(relationships_by_id["REL-1001-MOTHER"]["related_person_id"], "CP-2001")
+        self.assertEqual(records_by_id["CSR-DEATH-1003"]["event_id"], "DE-1003")
+        self.assertEqual(deaths_by_id["DE-1003"]["deceased_person_id"], "CP-1003")
+
+        ambiguous = [row for row in person_by_nid.values() if row["given_name"] == "Miguel" and row["surname"] == "Santos" and row["birth_date"] == "2016-01-15"]
+        self.assertEqual({row["national_id"] for row in ambiguous}, {"NID-1001", "NID-1011"})
+        self.assertEqual({row["place_of_birth"] for row in ambiguous}, {"North City", "South Town"})
+        self.assertFalse(any(row["subject_person_id"] == "CP-1011" for row in relationships_by_id.values()))
+
+    def test_social_refresh_model_splits_household_evidence_from_benefits(self) -> None:
+        self.assertEqual(
+            self.generator.HOUSEHOLDS[0],
+            ["household_id", "national_id", "district", "poverty_score", "eligibility_band", "household_size", "active_members", "deceased_member_count"],
+        )
+        self.assertEqual(
+            self.generator.ENROLLMENTS[0],
+            ["enrollment_id", "household_id", "person_id", "national_id", "program_code", "status", "benefit_amount", "enrolled_on"],
+        )
+
+        memberships_by_person = self._rows_by(self.generator.GROUP_MEMBERSHIPS, "person_id")
+        profiles_by_household = self._rows_by(self.generator.SOCIO_ECONOMIC_PROFILES, "household_id")
+        scoring_by_profile = self._rows_by(self.generator.SCORING_EVENTS, "profile_id")
+        programs_by_code = self._rows_by(self.generator.PROGRAMS, "program_code")
+        entitlements_by_enrollment = self._rows_by(self.generator.ENTITLEMENTS, "enrollment_id")
+        payments_by_entitlement = self._rows_by(self.generator.PAYMENT_EVENTS, "entitlement_id")
+        functioning_by_nid = self._rows_by(self.generator.FUNCTIONING_PROFILES, "national_id")
+        determinations_by_nid = self._rows_by(self.generator.DISABILITY_DETERMINATIONS, "national_id")
+
+        self.assertEqual(memberships_by_person["PER-1001"]["relationship_type"], "child")
+        self.assertEqual(profiles_by_household["HH-100"]["instrument"], "PMT-CHILD-2025")
+        self.assertEqual(scoring_by_profile["SEP-100"]["score_band"], "priority")
+        self.assertEqual(programs_by_code["CHILD_SUPPORT"]["display_name"], "Child Support Grant")
+        self.assertEqual(entitlements_by_enrollment["ENR-100"]["entitlement_status"], "active")
+        self.assertEqual(payments_by_entitlement["ENT-100"]["status"], "paid")
+        self.assertEqual(functioning_by_nid["NID-1006"]["instrument_code"], "WG-SS-2025")
+        self.assertIs(functioning_by_nid["NID-1006"]["disability_identifier_met"], True)
+        self.assertEqual(functioning_by_nid["NID-1006"]["domains_triggering_identifier"], "mobility;self_care")
+        self.assertEqual(determinations_by_nid["NID-1006"]["determination_status"], "approved")
+        self.assertEqual(determinations_by_nid["NID-1006"]["support_category"], "top_up")
+
+    def test_health_projection_is_reframed_for_applicant_key_compatibility(self) -> None:
+        self.assertEqual(self.generator.HEALTH_PROJECTION_NAME, "ApplicantServiceAvailabilityProjection")
+        self.assertIs(self.generator.HEALTH_ROWS, self.generator.APPLICANT_SERVICE_AVAILABILITY_PROJECTION)
+        self.assertTrue(all("national_id" in row for row in self.generator.HEALTH_ROWS))
+        self.assertTrue(all("facility_name" in row for row in self.generator.HEALTH_ROWS))
+
+    def test_refresh_persona_invariants_cover_source_outcomes(self) -> None:
+        personas = self.generator.FIXTURE_PERSONAS
+        self.assertEqual(
+            {persona["expected_outcome"] for persona in personas.values()},
+            {"positive", "negative", "ambiguous_match", "stale", "expired", "policy_denied"},
+        )
+
+        civil_by_record = self._rows_by(self.generator.CIVIL_STATUS_RECORDS, "record_id")
+        deaths_by_id = self._rows_by(self.generator.DEATH_EVENTS, "event_id")
+        scoring_by_id = self._rows_by(self.generator.SCORING_EVENTS, "scoring_id")
+        entitlements_by_id = self._rows_by(self.generator.ENTITLEMENTS, "entitlement_id")
+        enrollments_by_id = self._rows_by(self.generator.ENROLLMENTS, "enrollment_id")
+        relationships_by_id = self._rows_by(self.generator.RELATIONSHIPS, "relationship_id")
+        details_by_nid = self._rows_by(self.generator.CIVIL_PERSON_DETAILS, "national_id")
+
+        positive = personas["positive_child_benefit"]
+        self.assertEqual(enrollments_by_id[positive["enrollment_id"]]["person_id"], positive["person_id"])
+        self.assertEqual(civil_by_record[positive["civil_record_id"]]["registration_status"], "registered")
+        self.assertEqual(relationships_by_id[positive["relationship_id"]]["relationship_status"], "established")
+        self.assertEqual(scoring_by_id[positive["scoring_id"]]["scoring_status"], "current")
+        self.assertEqual(entitlements_by_id[positive["entitlement_id"]]["entitlement_status"], "active")
+
+        negative = personas["negative_deceased"]
+        self.assertEqual(deaths_by_id[negative["death_event_id"]]["deceased_person_id"], "CP-1003")
+        self.assertEqual(details_by_nid[negative["national_id"]]["deceased"], "true")
+
+        ambiguous = personas["ambiguous_demographic"]
+        self.assertNotEqual(
+            details_by_nid[ambiguous["national_id"]]["place_of_birth"],
+            details_by_nid[ambiguous["ambiguous_with"]]["place_of_birth"],
+        )
+        self.assertEqual(details_by_nid[ambiguous["national_id"]]["birth_date"], details_by_nid[ambiguous["ambiguous_with"]]["birth_date"])
+
+        stale = personas["stale_welfare"]
+        self.assertEqual(scoring_by_id[stale["scoring_id"]]["scoring_status"], "stale")
+        self.assertLess(scoring_by_id[stale["scoring_id"]]["valid_until"], dt.date(2026, 1, 1))
+
+        expired = personas["expired_entitlement"]
+        self.assertEqual(enrollments_by_id[expired["enrollment_id"]]["person_id"], expired["person_id"])
+        self.assertEqual(entitlements_by_id[expired["entitlement_id"]]["entitlement_status"], "expired")
+        self.assertLess(entitlements_by_id[expired["entitlement_id"]]["coverage_end"], dt.date(2026, 1, 1))
+
+        denied = personas["policy_denied"]
+        self.assertEqual(enrollments_by_id[denied["enrollment_id"]]["person_id"], denied["person_id"])
+        self.assertEqual(scoring_by_id[denied["scoring_id"]]["scoring_status"], "policy_denied")
+        self.assertEqual(entitlements_by_id[denied["entitlement_id"]]["entitlement_status"], "policy_denied")
+
     def test_generated_outputs_match_fixture_source(self) -> None:
         civil_path = self.generator.DATA_DIR / "civil" / "civil-persons.csv"
         social_path = self.generator.DATA_DIR / "social-protection" / "social-protection.xlsx"
@@ -213,6 +318,46 @@ class GenerateFixturesTest(unittest.TestCase):
         health_rows = health_table.to_pylist()
         self.assertEqual(health_rows, self.generator.HEALTH_ROWS)
 
+    def test_generator_writes_refreshed_fixture_model_outputs(self) -> None:
+        original_data_dir = self.generator.DATA_DIR
+        with tempfile.TemporaryDirectory() as tmp:
+            self.generator.DATA_DIR = Path(tmp)
+            try:
+                self.generator.main()
+                civil_dir = self.generator.DATA_DIR / "civil"
+                for filename, expected_rows in [
+                    ("civil-person-details.csv", self.generator.CIVIL_PERSON_DETAILS),
+                    ("civil-identifiers.csv", self.generator.CIVIL_IDENTIFIERS),
+                    ("birth-events.csv", self.generator.BIRTH_EVENTS),
+                    ("death-events.csv", self.generator.DEATH_EVENTS),
+                    ("civil-status-records.csv", self.generator.CIVIL_STATUS_RECORDS),
+                    ("certificates.csv", self.generator.CERTIFICATES),
+                    ("relationships.csv", self.generator.RELATIONSHIPS),
+                ]:
+                    with self.subTest(filename=filename):
+                        with (civil_dir / filename).open(newline="", encoding="utf-8") as handle:
+                            self.assertEqual(list(csv.reader(handle)), self._stringified_rows(expected_rows))
+
+                workbook = load_workbook(self.generator.DATA_DIR / "social-protection" / "social-protection.xlsx", data_only=True)
+                for sheet_name, expected_rows in {
+                    "GroupMemberships": self.generator.GROUP_MEMBERSHIPS,
+                    "SocioEconomicProfiles": self.generator.SOCIO_ECONOMIC_PROFILES,
+                    "ScoringEvents": self.generator.SCORING_EVENTS,
+                    "Programs": self.generator.PROGRAMS,
+                    "Entitlements": self.generator.ENTITLEMENTS,
+                    "PaymentEvents": self.generator.PAYMENT_EVENTS,
+                    "FunctioningProfiles": self.generator.FUNCTIONING_PROFILES,
+                    "DisabilityDeterminations": self.generator.DISABILITY_DETERMINATIONS,
+                }.items():
+                    with self.subTest(sheet_name=sheet_name):
+                        actual_rows = [
+                            [value.date() if isinstance(value, dt.datetime) else value for value in row]
+                            for row in workbook[sheet_name].iter_rows(values_only=True)
+                        ]
+                        self.assertEqual(actual_rows, expected_rows)
+            finally:
+                self.generator.DATA_DIR = original_data_dir
+
     def test_script_v1_matrices_match_fixture_outcomes(self) -> None:
         for path in SCRIPT_MATRIX_PATHS:
             with self.subTest(path=path.name):
@@ -241,6 +386,16 @@ class GenerateFixturesTest(unittest.TestCase):
             and row["pediatric_service_available"] is True
             and row["practitioner_credential_active"] is True
         )
+
+    @staticmethod
+    def _rows_by(rows: list[list[object]], key: str) -> dict[object, dict[str, object]]:
+        header = rows[0]
+        key_index = header.index(key)
+        return {row[key_index]: dict(zip(header, row)) for row in rows[1:]}
+
+    @staticmethod
+    def _stringified_rows(rows: list[list[object]]) -> list[list[str]]:
+        return [["" if value is None else str(value) for value in row] for row in rows]
 
     @staticmethod
     def _smoke_shell_matrix() -> dict[tuple[str, str], bool]:

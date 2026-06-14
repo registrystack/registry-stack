@@ -160,7 +160,7 @@ assert len(results) == 1, body
 result = results[0]
 assert result.get("claim_id") == "date-of-birth", body
 assert result.get("value") == "1990-01-01", body
-assert result.get("provenance", {}).get("source_count") == 1, body
+assert result.get("provenance", {}).get("used", {}).get("source_count") == 1, body
 
 vc_results = vc_evaluation_body.get("results") or []
 assert len(vc_results) == 1, vc_evaluation_body

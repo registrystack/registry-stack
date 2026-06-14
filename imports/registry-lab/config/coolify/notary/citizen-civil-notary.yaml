@@ -113,7 +113,7 @@ evidence:
           - predicate
   claims:
     - id: person-is-alive
-      title: Person is alive
+      title: Vital Status Attestation
       version: 2026-05
       subject_type: person
       purpose: citizen_self_attestation
@@ -246,13 +246,13 @@ oid4vci:
       format: dc+sd-jwt
       scope: person-is-alive
       vct: https://citizen-notary.lab.registrystack.org/credentials/citizen-civil-status/v1
-      display_name: Person is alive
+      display_name: Vital Status Attestation
       display:
         locale: en-US
         logo:
           url: https://registrystack.org/favicon.svg
           alt_text: Registry Stack logo
-        description: Proof that the civil registry currently records this person as alive.
+        description: Attestation that the civil registry currently records this person as alive.
         background_color: "#0057B8"
         text_color: "#FFFFFF"
         background_image:

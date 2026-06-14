@@ -1,0 +1,6 @@
+relationship_id,subject_person_id,related_person_id,relationship_type,source_record_id,effective_from,effective_until,relationship_status
+REL-1001-MOTHER,CP-1001,CP-2001,mother,CSR-BIRTH-1001,2016-01-15,,established
+REL-1002-FATHER,CP-1002,CP-2002,father,CSR-BIRTH-1002,2018-01-15,,established
+REL-1004-MOTHER,CP-1004,CP-2004,mother,CSR-BIRTH-1004,2019-01-15,,established
+REL-1005-FATHER,CP-1005,CP-2005,father,CSR-BIRTH-1005,2013-01-15,,established
+REL-1006-FATHER,CP-1006,CP-2006,father,CSR-BIRTH-1006,2014-01-15,,established

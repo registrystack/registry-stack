@@ -223,7 +223,7 @@ evidence:
       credential_profiles:
         - life_stage_sd_jwt
     - id: age-band
-      title: Age band
+      title: Age Eligibility Attestation
       version: 2026-05
       subject_type: person
       value:
@@ -263,7 +263,7 @@ evidence:
       credential_profiles:
         - life_stage_sd_jwt
     - id: person-is-alive
-      title: Person is alive
+      title: Vital Status Attestation
       version: 2026-05
       subject_type: person
       value:

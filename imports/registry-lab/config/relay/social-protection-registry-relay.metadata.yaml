@@ -196,5 +196,244 @@ datasets:
           - name: person
             target_entity: person
             cardinality: zero_or_one
+      - name: household_membership
+        title: Household Membership
+        description: Household membership record used for composition and caregiver attestations.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: household_id
+            type: string
+            required: true
+          - name: person_id
+            type: string
+            required: true
+          - name: relationship_type
+            type: string
+            required: true
+          - name: membership_status
+            type: string
+            required: true
+          - name: start_date
+            type: date
+            required: true
+          - name: end_date
+            type: date
+            required: false
+      - name: socio_economic_profile
+        title: Socio-Economic Profile
+        description: Household welfare assessment source record.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: household_id
+            type: string
+            required: true
+          - name: observation_date
+            type: date
+            required: true
+          - name: instrument
+            type: string
+            required: true
+          - name: profile_status
+            type: string
+            required: true
+          - name: collected_by
+            type: string
+            required: true
+          - name: source_version
+            type: string
+            required: true
+      - name: scoring_event
+        title: Scoring Event
+        description: Eligibility scoring event with validity and status.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: profile_id
+            type: string
+            required: true
+          - name: score_band
+            type: string
+            required: true
+          - name: scoring_rule
+            type: string
+            required: true
+          - name: scoring_version
+            type: string
+            required: true
+          - name: valid_from
+            type: date
+            required: true
+          - name: valid_until
+            type: date
+            required: true
+          - name: scoring_status
+            type: string
+            required: true
+      - name: program
+        title: Program
+        description: Social protection programme reference record.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: display_name
+            type: string
+            required: true
+          - name: benefit_type
+            type: string
+            required: true
+          - name: authority
+            type: string
+            required: true
+      - name: entitlement
+        title: Entitlement
+        description: Benefit entitlement source record with coverage period and status.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: enrollment_id
+            type: string
+            required: true
+          - name: benefit_modality
+            type: string
+            required: true
+          - name: amount
+            type: number
+            required: true
+          - name: amount_band
+            type: string
+            required: true
+          - name: currency
+            type: string
+            required: true
+          - name: coverage_start
+            type: date
+            required: true
+          - name: coverage_end
+            type: date
+            required: true
+          - name: entitlement_status
+            type: string
+            required: true
+      - name: payment_event
+        title: Payment Event
+        description: Payment execution or hold event linked to an entitlement.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: entitlement_id
+            type: string
+            required: true
+          - name: cycle
+            type: string
+            required: true
+          - name: delivery_channel
+            type: string
+            required: true
+          - name: payment_date
+            type: date
+            required: true
+          - name: status
+            type: string
+            required: true
+          - name: reconciled
+            type: boolean
+            required: true
+      - name: functioning_profile
+        title: Functioning Profile
+        description: Lightweight functioning assessment source record.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: person_id
+            type: string
+            required: true
+          - name: national_id
+            type: string
+            required: true
+          - name: instrument_code
+            type: string
+            required: true
+          - name: administration_date
+            type: date
+            required: true
+          - name: respondent_relationship
+            type: string
+            required: true
+          - name: domain_severities
+            type: string
+            required: true
+          - name: disability_identifier_met
+            type: boolean
+            required: true
+          - name: domains_triggering_identifier
+            type: string
+            required: true
+          - name: source_version
+            type: string
+            required: true
+      - name: disability_determination
+        title: Disability Determination
+        description: Disability support determination source record.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: person_id
+            type: string
+            required: true
+          - name: national_id
+            type: string
+            required: true
+          - name: determination_status
+            type: string
+            required: true
+          - name: support_category
+            type: string
+            required: true
+          - name: authority
+            type: string
+            required: true
+          - name: valid_from
+            type: date
+            required: true
+          - name: valid_until
+            type: date
+            required: true
+          - name: review_due
+            type: date
+            required: true
 vocabularies:
   registry_relay: https://registry-relay.dev/

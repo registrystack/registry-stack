@@ -1,0 +1,6 @@
+certificate_number,record_id,issue_date,issuing_office,certificate_type,valid_until
+CERT-B-1001,CSR-BIRTH-1001,2016-01-18,North Civil Office,birth,
+CERT-B-1002,CSR-BIRTH-1002,2018-01-17,South Civil Office,birth,
+CERT-B-1004,CSR-BIRTH-1004,2019-01-18,East Civil Office,birth,
+CERT-B-1011,CSR-BIRTH-1011,2016-01-21,South Civil Office,birth,
+CERT-D-1003,CSR-DEATH-1003,2025-11-04,Central Civil Office,death,

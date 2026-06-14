@@ -9,6 +9,8 @@ import importlib.util
 import sys
 import tempfile
 import unittest
+import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
@@ -544,6 +546,111 @@ metadata:
                 self.assertRegex(source.get("digest", ""), r"^sha256:[0-9a-f]{64}$")
                 self.assertTrue((path.parent / source["path"]).is_file())
 
+    def test_repo_relay_configs_expose_refreshed_attestation_source_surfaces(self) -> None:
+        expected = {
+            "civil-registry-relay.yaml": {
+                "tables": {
+                    "civil_person_details_table",
+                    "civil_identifiers_table",
+                    "birth_events_table",
+                    "death_events_table",
+                    "civil_status_records_table",
+                    "certificates_table",
+                    "relationships_table",
+                },
+                "entities": {
+                    "civil_person_detail",
+                    "civil_identifier",
+                    "birth_event",
+                    "death_event",
+                    "civil_status_record",
+                    "certificate",
+                    "relationship",
+                },
+            },
+            "social-protection-registry-relay.yaml": {
+                "tables": {
+                    "group_memberships_table",
+                    "socio_economic_profiles_table",
+                    "scoring_events_table",
+                    "programs_table",
+                    "entitlements_table",
+                    "payment_events_table",
+                    "functioning_profiles_table",
+                    "disability_determinations_table",
+                },
+                "entities": {
+                    "household_membership",
+                    "socio_economic_profile",
+                    "scoring_event",
+                    "program",
+                    "entitlement",
+                    "payment_event",
+                    "functioning_profile",
+                    "disability_determination",
+                },
+            },
+        }
+        for config_dir in (SCRIPT_DIR.parent / "config" / "relay", SCRIPT_DIR.parent / "config" / "coolify" / "relay"):
+            for filename, contract in expected.items():
+                with self.subTest(config_dir=config_dir.relative_to(SCRIPT_DIR.parent), filename=filename):
+                    config = self.validator.load_yaml_mapping_strict(config_dir / filename)
+                    dataset = config["datasets"][0]
+                    table_ids = {table["id"] for table in dataset.get("tables", [])}
+                    entity_names = {entity["name"] for entity in dataset.get("entities", [])}
+                    self.assertTrue(contract["tables"].issubset(table_ids), sorted(contract["tables"] - table_ids))
+                    self.assertTrue(contract["entities"].issubset(entity_names), sorted(contract["entities"] - entity_names))
+
+    def test_repo_relay_table_sources_exist_in_generated_fixture_data(self) -> None:
+        repo = SCRIPT_DIR.parent
+        for config_dir in (repo / "config" / "relay", repo / "config" / "coolify" / "relay"):
+            for path in sorted(config_dir.glob("*-registry-relay.yaml")):
+                config = self.validator.load_yaml_mapping_strict(path)
+                for dataset in config.get("datasets", []):
+                    for table in dataset.get("tables", []):
+                        with self.subTest(config=path.relative_to(repo), table=table.get("id")):
+                            source = table.get("source", {})
+                            source_path = self._fixture_path(repo, source.get("path", ""))
+                            self.assertTrue(source_path.is_file(), source_path)
+                            fmt = source.get("format", {})
+                            if "xlsx" in fmt:
+                                self.assertIn(fmt["xlsx"]["sheet"], self._xlsx_sheet_names(source_path))
+
+    def test_repo_relay_runtime_entities_and_fields_exist_in_metadata_manifests(self) -> None:
+        repo = SCRIPT_DIR.parent
+        for config_dir in (repo / "config" / "relay", repo / "config" / "coolify" / "relay"):
+            for path in sorted(config_dir.glob("*-registry-relay.yaml")):
+                config = self.validator.load_yaml_mapping_strict(path)
+                metadata_source = config.get("metadata", {}).get("source", {})
+                metadata_path = path.parent / metadata_source.get("path", "")
+                metadata = self.validator.load_yaml_mapping_strict(metadata_path)
+                metadata_datasets = {
+                    dataset.get("id"): dataset
+                    for dataset in metadata.get("datasets", [])
+                    if isinstance(dataset, dict)
+                }
+                for dataset in config.get("datasets", []):
+                    with self.subTest(config=path.relative_to(repo), dataset=dataset.get("id")):
+                        runtime_entities = {entity["name"] for entity in dataset.get("entities", [])}
+                        manifest_entities_by_name = {
+                            entity["name"]: entity
+                            for entity in metadata_datasets[dataset["id"]].get("entities", [])
+                        }
+                        manifest_entities = set(manifest_entities_by_name)
+                        self.assertTrue(runtime_entities.issubset(manifest_entities), sorted(runtime_entities - manifest_entities))
+                    for entity in dataset.get("entities", []):
+                        runtime_fields = {field["name"] for field in entity.get("fields", [])}
+                        manifest_fields = {
+                            field["name"]
+                            for field in manifest_entities_by_name[entity["name"]].get("fields", [])
+                        }
+                        with self.subTest(
+                            config=path.relative_to(repo),
+                            dataset=dataset.get("id"),
+                            entity=entity.get("name"),
+                        ):
+                            self.assertTrue(runtime_fields.issubset(manifest_fields), sorted(runtime_fields - manifest_fields))
+
     def test_hosted_workflow_does_not_skip_metadata_digest_pins(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         self.assertNotIn("--skip-metadata-digest-pins", workflow)
@@ -553,6 +660,66 @@ metadata:
         self.assertTrue(args.skip_metadata_digest_pins)
         args = self.validator.parse_args(["--manifest-cli", "/tmp/registry-manifest"])
         self.assertEqual(Path("/tmp/registry-manifest"), args.manifest_cli)
+
+    def test_repo_static_metadata_uses_public_attestation_labels(self) -> None:
+        issues = self.validator.validate_attestation_metadata_contract(
+            "registry-lab",
+            SCRIPT_DIR.parent,
+        )
+        self.assertEqual([], issues, [str(issue) for issue in issues])
+
+    def test_rejects_static_metadata_without_public_attestation_label(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata_dir = root / "config" / "static-metadata"
+            metadata_dir.mkdir(parents=True)
+            (metadata_dir / "metadata.yaml").write_text(
+                """
+datasets:
+  - id: civil_registry
+    evidence_offerings:
+      - id: civil_child_status_evidence_service
+        title: Civil vital status evidence service
+        attestation_id: vital-status-attestation
+        compatibility_claim_ids:
+          - person-is-alive
+""",
+                encoding="utf-8",
+            )
+
+            issues = self.validator.validate_attestation_metadata_contract(
+                "registry-lab",
+                root,
+            )
+
+        self.assertIssue(issues, "attestation-public-label")
+        self.assertIssue(issues, "attestation-raw-claim-ids-public")
+
+    def test_rejects_static_metadata_with_public_raw_claim_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata_dir = root / "config" / "static-metadata"
+            metadata_dir.mkdir(parents=True)
+            (metadata_dir / "metadata.yaml").write_text(
+                """
+datasets:
+  - id: civil_registry
+    evidence_offerings:
+      - id: civil_child_status_evidence_service
+        title: Vital Status Attestation
+        attestation_id: vital-status-attestation
+        compatibility_claim_ids:
+          - person-is-alive
+""",
+                encoding="utf-8",
+            )
+
+            issues = self.validator.validate_attestation_metadata_contract(
+                "registry-lab",
+                root,
+            )
+
+        self.assertIssue(issues, "attestation-raw-claim-ids-public")
 
     def test_rejects_localhost_public_urls(self) -> None:
         compose = self._valid_registry_lab()
@@ -639,6 +806,14 @@ metadata:
         compose["services"]["lab-homepage"]["environment"].pop("CONFIG_REPO_REF", None)
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "lab-homepage-missing-config-ref")
+
+    def test_accepts_lab_homepage_config_repo_ref_placeholder(self) -> None:
+        compose = self._valid_registry_lab()
+        compose["services"]["lab-homepage"]["environment"][
+            "CONFIG_REPO_REF"
+        ] = "hosted-validation-placeholder"
+        issues = self._validate(compose, self._valid_esignet())
+        self.assertNoIssue(issues, "lab-homepage-missing-config-ref")
 
     def test_rejects_shared_notary_config_with_wrong_public_url(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -822,6 +997,22 @@ evidence:
                     text,
                 )
                 self.assertRegex(text, r"git -C /tmp/repo .*checkout .*FETCH_HEAD")
+
+    def test_hosted_relays_recreate_when_deployed_config_ref_changes(self) -> None:
+        compose = self.validator.load_yaml_mapping(SCRIPT_DIR.parent / "compose.coolify.yaml")
+        for service in (
+            "civil-registry-relay",
+            "social-protection-registry-relay",
+            "health-registry-relay",
+        ):
+            with self.subTest(service=service):
+                env = self.validator.normalize_environment(
+                    compose["services"][service]["environment"]
+                )
+                self.assertEqual(
+                    "${CONFIG_REPO_REF:?set CONFIG_REPO_REF to the deployed registry-lab git ref}",
+                    env.get("CONFIG_REPO_REF"),
+                )
 
     def test_rejects_esignet_issuer_mismatch(self) -> None:
         compose = self._valid_registry_lab()
@@ -1208,6 +1399,23 @@ evidence:
         return self.validator.validate_artifacts({"walt": copy.deepcopy(walt)})
 
     @staticmethod
+    def _fixture_path(repo: Path, source_path: str) -> Path:
+        if source_path.startswith("/demo/"):
+            return repo / source_path.removeprefix("/demo/")
+        return repo / source_path
+
+    @staticmethod
+    def _xlsx_sheet_names(path: Path) -> set[str]:
+        ns = {"main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+        with zipfile.ZipFile(path) as archive:
+            workbook = ET.fromstring(archive.read("xl/workbook.xml"))
+        return {
+            item.attrib["name"]
+            for item in workbook.findall("main:sheets/main:sheet", ns)
+            if "name" in item.attrib
+        }
+
+    @staticmethod
     def _valid_registry_lab() -> dict:
         lab = "lab.registrystack.org"
         required_env = {
@@ -1226,8 +1434,15 @@ evidence:
             "CIVIL_ROW_READER_RAW": "${CIVIL_ROW_READER_RAW:-}",
             "SOCIAL_METADATA_CLIENT_RAW": "${SOCIAL_METADATA_CLIENT_RAW:-}",
             "SOCIAL_EVIDENCE_ONLY_RAW": "${SOCIAL_EVIDENCE_ONLY_RAW:-}",
+            "SOCIAL_EVIDENCE_CLIENT_BEARER": "${SOCIAL_EVIDENCE_CLIENT_BEARER:-}",
+            "SOCIAL_EVIDENCE_CLIENT_BEARER_HASH": "${SOCIAL_EVIDENCE_CLIENT_BEARER_HASH:-}",
+            "SOCIAL_EVIDENCE_CLIENT_TOKEN": "${SOCIAL_EVIDENCE_CLIENT_TOKEN:-}",
+            "SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH": "${SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH:-}",
+            "SOCIAL_EVIDENCE_SOURCE_RAW": "${SOCIAL_EVIDENCE_SOURCE_RAW:-}",
             "SOCIAL_ROW_READER_RAW": "${SOCIAL_ROW_READER_RAW:-}",
             "SOCIAL_AGGREGATE_READER_RAW": "${SOCIAL_AGGREGATE_READER_RAW:-}",
+            "SOCIAL_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET": "${SOCIAL_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET:-}",
+            "SOCIAL_FEDERATION_RESPONSE_JWK": "${SOCIAL_FEDERATION_RESPONSE_JWK:-}",
             "HEALTH_METADATA_CLIENT_RAW": "${HEALTH_METADATA_CLIENT_RAW:-}",
             "HEALTH_EVIDENCE_ONLY_RAW": "${HEALTH_EVIDENCE_ONLY_RAW:-}",
             "HEALTH_ROW_READER_RAW": "${HEALTH_ROW_READER_RAW:-}",
@@ -1291,6 +1506,7 @@ if [ ! -s "$openfn_antirollback" ]; then
   printf '%s\n' '{"key":{"product":"registry-notary-openfn-sidecar","instance_id":"hosted-dhis2-openfn-sidecar","environment":"hosted-lab","stream_id":"dhis2-openfn-sidecar-runtime"},"last_sequence":0,"last_config_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","root_version":1,"break_glass":{"accepted":[]},"local_approvals":{"accepted":[]}}' > "$openfn_antirollback"
 fi
 cp -a /tmp/repo/config/coolify/notary/civil-notary.yaml /out/notary/
+cp -a /tmp/repo/config/coolify/notary/social-protection-notary.yaml /out/notary/
 cp -a /tmp/repo/config/coolify/notary/shared-eligibility-notary.yaml /out/notary/
 cp -a /tmp/repo/scripts/lab_homepage_scenarios /out/static-scripts/
 cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
@@ -1315,6 +1531,25 @@ cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
                     "expose": ["8080"],
                     "environment": {
                         "CIVIL_EVIDENCE_CLIENT_BEARER_HASH": "${CIVIL_EVIDENCE_CLIENT_BEARER_HASH:-}",
+                    },
+                    "volumes": ["cfg-notary:/etc/registry-notary:ro"],
+                    "healthcheck": {
+                        "test": ["CMD", "registry-notary", "healthcheck"]
+                    },
+                },
+                "social-protection-notary": {
+                    "image": "${REGISTRY_NOTARY_IMAGE:-ghcr.io/registrystack/registry-notary@sha256:abc}",
+                    "command": [
+                        "--config",
+                        "/etc/registry-notary/social-protection-notary.yaml",
+                    ],
+                    "expose": ["8080"],
+                    "environment": {
+                        "SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH": "${SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH:-}",
+                        "SOCIAL_EVIDENCE_CLIENT_BEARER_HASH": "${SOCIAL_EVIDENCE_CLIENT_BEARER_HASH:-}",
+                        "SOCIAL_EVIDENCE_SOURCE_RAW": "${SOCIAL_EVIDENCE_SOURCE_RAW:-}",
+                        "SOCIAL_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET": "${SOCIAL_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET:-}",
+                        "SOCIAL_FEDERATION_RESPONSE_JWK": "${SOCIAL_FEDERATION_RESPONSE_JWK:-}",
                     },
                     "volumes": ["cfg-notary:/etc/registry-notary:ro"],
                     "healthcheck": {
@@ -1453,6 +1688,7 @@ cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
             },
             "x-hosted-domains": {
                 "citizen-civil-notary": f"citizen-notary.{lab}",
+                "social-protection-notary": f"social-notary.{lab}",
                 "civil-registry-relay": f"civil-relay.{lab}",
                 "social-protection-registry-relay": f"social-relay.{lab}",
                 "health-registry-relay": f"health-relay.{lab}",

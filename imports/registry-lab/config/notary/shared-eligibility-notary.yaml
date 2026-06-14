@@ -130,7 +130,7 @@ evidence:
       credential_profiles:
         - combined_support_sd_jwt
     - id: social-program-active
-      title: Social program active
+      title: Program Enrollment Attestation
       version: 2026-05
       subject_type: person
       value:
@@ -165,7 +165,7 @@ evidence:
       credential_profiles:
         - combined_support_sd_jwt
     - id: health-service-available
-      title: Health service available
+      title: Service Availability Attestation
       version: 2026-05
       subject_type: person
       value:
@@ -212,7 +212,7 @@ evidence:
       credential_profiles:
         - combined_support_sd_jwt
     - id: eligible-for-combined-support
-      title: Eligible for combined support
+      title: Combined Support Eligibility Attestation
       version: 2026-05
       subject_type: person
       value:

@@ -5,8 +5,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from .attestations import attestation
 from .common import (
     AGRI_PURPOSE,
+    attestation_response,
     auth_header_pair,
     display_auth_header_pair,
     env_url,
@@ -33,16 +35,21 @@ REASON_CLAIM_ID = "voucher-eligibility-reason-code"
 POSITIVE_SUBJECT = "FARMER-1001"
 PARCEL_CONTROL = "FARMER-1002"
 REDEEMED_CONTROL = "FARMER-1003"
+PUBLIC_ATTESTATIONS = [
+    attestation("agricultural-entitlement-attestation"),
+    attestation("benefit-conflict-attestation"),
+]
 
 
 def story() -> dict[str, Any]:
     return {
         "id": SCENARIO_ID,
-        "title": "Can a supplier check voucher evidence without exporting the agriculture workbook?",
-        "short_title": "Agriculture voucher evidence",
-        "proves": "Workbook-backed registries can become governed evidence APIs with positive and negative controls.",
+        "title": "Can a supplier request agricultural entitlement evidence without exporting the agriculture workbook?",
+        "short_title": "Agricultural Entitlement Attestation",
+        "proves": "Workbook-backed registries can produce governed attestations with positive and negative controls.",
         "domain": "Agriculture",
         "availability": "local-only",
+        "availability_state": {"state": "local-only", "label": "Local only", "runnable": False},
         "availability_note": "Runs on the local lab profile with the agriculture services started (AGRI_EVIDENCE_CLIENT_BEARER).",
         "intro": (
             "Amina Kone wants to redeem a climate-smart input voucher. The supplier needs eligibility evidence, "
@@ -50,46 +57,59 @@ def story() -> dict[str, Any]:
         ),
         "actor": "Input supplier",
         "subject": {"name": "Amina Kone", "identifier": POSITIVE_SUBJECT},
+        "requester": {"name": "Voucher redemption desk", "purpose": AGRI_PURPOSE},
+        "requested_attestations": PUBLIC_ATTESTATIONS,
+        "lookup_profile": {"id": "by-source-record-id", "label": "Farmer registry ID lookup", "identifier_scheme": "farmer_id"},
+        "non_disclosure": [
+            "Full farmer workbook",
+            "Unrelated parcel rows",
+            "Payment or redemption history beyond the requested conflict fact",
+        ],
+        "proof_facts": [
+            "The Notary returns entitlement and conflict facts as minimized evidence.",
+            "Negative controls prove the answer is not a blanket approval.",
+            "Agriculture remains local-only until hosted validation is available.",
+        ],
         "boundary": {
-            "allowed": "Check voucher eligibility and reason codes.",
+            "allowed": "Request entitlement and conflict attestations.",
             "not_allowed": "Export the agriculture workbook or unrelated farmer rows.",
         },
         "steps": [
             {
                 "id": "discover",
-                "label": "Discover agriculture claims",
-                "prompt": "Start by asking the local agriculture Notary what evidence it can evaluate.",
-                "button": "Discover claims",
-                "request_summary": "GET /v1/claims from the local Agriculture Notary.",
+                "label": "Discover agriculture attestations",
+                "prompt": "Start by asking the local agriculture Notary what attestations it can evaluate.",
+                "button": "Discover attestations",
+                "request_summary": "GET the local Agriculture Notary catalogue.",
             },
             {
                 "id": "positive-voucher",
-                "label": "Evaluate Amina's voucher eligibility",
+                "label": "Request Amina's entitlement attestation",
                 "prompt": "Check the positive control: Amina should be eligible for review.",
-                "button": "Evaluate Amina",
-                "request_summary": "POST eligible-for-climate-smart-input-voucher for FARMER-1001.",
-                "reuses": [{"label": "Lookup key", "value": "farmer_id"}, {"label": "Claim", "value": CLAIM_ID}],
+                "button": "Request attestation",
+                "request_summary": "POST an Agricultural Entitlement Attestation request for FARMER-1001.",
+                "reuses": [{"label": "Lookup profile", "value": "by-source-record-id"}, {"label": "Attestation", "value": "Agricultural Entitlement Attestation"}],
             },
             {
                 "id": "inactive-parcel-control",
                 "label": "Run inactive parcel control",
                 "prompt": "Check a farmer whose parcel status should block eligibility.",
                 "button": "Evaluate FARMER-1002",
-                "request_summary": "POST eligible-for-climate-smart-input-voucher for FARMER-1002.",
+                "request_summary": "POST an Agricultural Entitlement Attestation request for FARMER-1002.",
             },
             {
                 "id": "redeemed-control",
                 "label": "Run already-redeemed control",
                 "prompt": "Check a farmer whose voucher has already been redeemed.",
                 "button": "Evaluate FARMER-1003",
-                "request_summary": "POST eligible-for-climate-smart-input-voucher for FARMER-1003.",
+                "request_summary": "POST an Agricultural Entitlement Attestation request for FARMER-1003.",
             },
             {
                 "id": "reason-code",
                 "label": "Ask for the reason code",
                 "prompt": "For the failed redeemed case, ask for a friendly reason code.",
                 "button": "Get reason code",
-                "request_summary": "POST voucher-eligibility-reason-code for FARMER-1003 with value disclosure.",
+                "request_summary": "POST a Benefit Conflict Attestation request for FARMER-1003 with value disclosure.",
             },
         ],
         "receipt": [
@@ -166,12 +186,12 @@ def _discover(step_id: str) -> dict[str, Any]:
     return {
         "step_id": step_id,
         "friendly": {
-            "title": "The agriculture Notary advertises voucher claims." if ok_status(result.status) else "Agriculture discovery needs attention.",
-            "message": "The supplier can discover the claim catalog before asking about a farmer.",
+            "title": "The agriculture Notary advertises voucher attestations." if ok_status(result.status) else "Agriculture discovery needs attention.",
+            "message": "The supplier can discover the attestation catalogue before asking about a farmer.",
             "status": "done" if ok_status(result.status) else "needs_attention",
             "facts": [
                 {"label": "HTTP status", "value": result.status if result.status is not None else "No response"},
-                {"label": "Claims advertised", "value": len(claims) if isinstance(claims, list) else "Check source"},
+                {"label": "Attestations advertised", "value": len(claims) if isinstance(claims, list) else "Check source"},
                 {"label": "Availability", "value": "Local-only"},
             ],
         },
@@ -206,13 +226,24 @@ def _evaluate(step_id: str, claim_id: str, subject: str, label: str, disclosure:
             "facts": [
                 {"label": "HTTP status", "value": result.status if result.status is not None else "No response"},
                 {"label": "Farmer", "value": subject},
-                {"label": "Claim", "value": claim_id},
+                {"label": "Requested attestation", "value": _public_attestation_name(claim_id)},
                 {"label": "Answer", "value": _display_answer(answer)},
                 {"label": "Workbook rows exported", "value": "No"},
             ],
         },
         "request_source": request_source("POST", url, display_headers, body, internal=True),
-        "response_source": source_response(result),
+        "response_source": {
+            "attestation_response": attestation_response(
+                _public_attestation(claim_id),
+                subject_type="Farmer",
+                subject_id=subject,
+                lookup_profile="by-source-record-id",
+                claim_id=_public_claim_name(claim_id),
+                claim_value=answer,
+                match_method="source_record_id_exact",
+            ),
+            "http": source_response(result),
+        },
     }
 
 
@@ -224,3 +255,21 @@ def _display_answer(answer: Any) -> str:
     if answer is None:
         return "Unknown"
     return str(answer)
+
+
+def _public_attestation_name(claim_id: str) -> str:
+    if claim_id == REASON_CLAIM_ID:
+        return "Benefit Conflict Attestation"
+    return "Agricultural Entitlement Attestation"
+
+
+def _public_attestation(claim_id: str) -> dict[str, Any]:
+    if claim_id == REASON_CLAIM_ID:
+        return PUBLIC_ATTESTATIONS[1]
+    return PUBLIC_ATTESTATIONS[0]
+
+
+def _public_claim_name(claim_id: str) -> str:
+    if claim_id == REASON_CLAIM_ID:
+        return "benefit_conflict_reason"
+    return "agricultural_entitlement_active"

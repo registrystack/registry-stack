@@ -24,9 +24,6 @@ case "${source_mode}" in
     export REGISTRY_OPENFN_NOTARY_SOURCE_DIR="${REGISTRY_NOTARY_SOURCE_DIR}"
     export REGISTRY_RELAY_PLATFORM_SOURCE_DIR="${REGISTRY_PLATFORM_SOURCE_DIR}"
     export REGISTRY_NOTARY_PLATFORM_SOURCE_DIR="${REGISTRY_PLATFORM_SOURCE_DIR}"
-    if [[ "${REGISTRY_LAB_CHECK_ATLAS:-0}" == "1" || "${REGISTRY_LAB_RUN_LIVE_STORIES:-0}" == "1" ]]; then
-      export REGISTRY_ATLAS_SOURCE_DIR="${demo_dir}/vendor/registry-atlas"
-    fi
     ;;
   source)
     export REGISTRY_RELAY_SOURCE_DIR="${REGISTRY_RELAY_SOURCE_DIR:-"${demo_dir}/../registry-relay"}"
@@ -52,7 +49,6 @@ case "${source_mode}" in
 esac
 
 export REGISTRY_LAB_RELEASE_SOURCE_MODE="${source_mode}"
-export REGISTRY_LAB_CHECK_ATLAS="${REGISTRY_LAB_CHECK_ATLAS:-0}"
 
 cleanup() {
   docker compose -f "${demo_dir}/compose.yaml" down -v >/dev/null 2>&1 || true
@@ -88,10 +84,6 @@ fi
 
 if [[ "${REGISTRY_LAB_CHECK_OPENFN:-1}" == "1" ]]; then
   scripts/smoke-openfn.sh
-fi
-
-if [[ "${REGISTRY_LAB_RUN_LIVE_STORIES:-0}" == "1" ]]; then
-  scripts/demo-live-stories.sh
 fi
 
 echo "release check OK"

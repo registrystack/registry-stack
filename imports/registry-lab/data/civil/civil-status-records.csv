@@ -1,0 +1,8 @@
+record_id,record_type,registration_number,person_id,event_id,authority,registration_status,registration_date
+CSR-BIRTH-1001,birth,B-2016-N-1001,CP-1001,BE-1001,Civil Registry Authority,registered,2016-01-17
+CSR-BIRTH-1002,birth,B-2018-S-1002,CP-1002,BE-1002,Civil Registry Authority,registered,2018-01-16
+CSR-BIRTH-1004,birth,B-2019-E-1004,CP-1004,BE-1004,Civil Registry Authority,registered,2019-01-17
+CSR-BIRTH-1005,birth,B-2013-W-1005,CP-1005,BE-1005,Civil Registry Authority,registered,2013-01-18
+CSR-BIRTH-1006,birth,B-2014-N-1006,CP-1006,BE-1006,Civil Registry Authority,registered,2014-01-17
+CSR-BIRTH-1011,birth,B-2016-S-1011,CP-1011,BE-1011,Civil Registry Authority,registered,2016-01-20
+CSR-DEATH-1003,death,D-2025-C-1003,CP-1003,DE-1003,Civil Registry Authority,registered,2025-11-03

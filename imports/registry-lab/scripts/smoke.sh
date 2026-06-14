@@ -66,6 +66,27 @@ evaluation_payload() {
     }'
 }
 
+caregiver_link_payload() {
+  local child_national_id="$1"
+  local caregiver_national_id="$2"
+  jq -nc \
+    --arg child_national_id "${child_national_id}" \
+    --arg caregiver_national_id "${caregiver_national_id}" \
+    '{
+      requester: {
+        type: "Person",
+        identifiers: [{ scheme: "national_id", value: $caregiver_national_id }]
+      },
+      target: {
+        type: "Person",
+        identifiers: [{ scheme: "national_id", value: $child_national_id }]
+      },
+      claims: ["caregiver-link"],
+      disclosure: "predicate",
+      format: "application/vnd.registry-notary.claim-result+json"
+    }'
+}
+
 curl_json_api_key() {
   local method="$1"
   local url="$2"
@@ -193,56 +214,9 @@ if actual is not expected_value:
 PY
 }
 
-atlas_service_view() {
-  local atlas_root
-  atlas_root="$("${script_dir}/check-service-first-deps.sh" atlas-path)"
-  (
-    cd "${atlas_root}"
-    cargo run --quiet -p semantic-asset-discovery-cli --bin semantic-asset-discovery -- analyze \
-      --entry-url http://127.0.0.1:4331/metadata/cpsv-ap.jsonld \
-      "${output_dir}/smoke-static-cpsv-ap.jsonld" > "${output_dir}/smoke-atlas-service-report.json"
-    cargo run --quiet -p semantic-asset-discovery-cli --bin semantic-asset-discovery -- service-view \
-      https://demo.example.gov/services/health-linked-child-support \
-      --report "${output_dir}/smoke-atlas-service-report.json" > "${output_dir}/smoke-atlas-service-view.json"
-  )
-  python - "${output_dir}/smoke-atlas-service-view.json" <<'PY'
-import json
-import sys
-
-view = json.load(open(sys.argv[1], encoding="utf-8"))
-expected = {
-    "requirements": 1,
-    "accepted_evidence_types": 4,
-    "providers": 4,
-    "forms": 1,
-}
-for key, minimum in expected.items():
-    actual = len(view.get(key, []))
-    if actual < minimum:
-        raise SystemExit(f"{key} expected at least {minimum}, got {actual}")
-if view.get("gaps"):
-    raise SystemExit(f"service graph has gaps: {view['gaps']}")
-option_count = sum(len(req.get("evidence_options", [])) for req in view.get("requirements", []))
-if option_count < 2:
-    raise SystemExit(f"service graph expected grouped evidence options, got {option_count}")
-if not any(
-    option.get("satisfiable") is True and len(option.get("evidence_types", [])) == 1
-    for req in view.get("requirements", [])
-    for option in req.get("evidence_options", [])
-):
-    raise SystemExit("service graph did not preserve the satisfiable single-record evidence option")
-if not any(route.get("kind") == "evidence_access_service" for route in view.get("routes", [])):
-    raise SystemExit("service graph has no evidence access service route")
-PY
-}
-
 mkdir -p "${output_dir}"
 
-if [[ "${REGISTRY_LAB_CHECK_ATLAS:-1}" == "1" ]]; then
-  check "service-first sibling dependencies" "${script_dir}/check-service-first-deps.sh" all
-else
-  check "service-first manifest dependency" "${script_dir}/check-service-first-deps.sh" manifest
-fi
+check "service-first manifest dependency" "${script_dir}/check-service-first-deps.sh" manifest
 
 wait_http "civil relay health" http://127.0.0.1:4311/healthz "${CIVIL_METADATA_CLIENT_RAW}"
 wait_http "social relay health" http://127.0.0.1:4312/healthz "${SOCIAL_METADATA_CLIENT_RAW}"
@@ -345,10 +319,6 @@ form_schemas = index.get("form_schemas", [])
 if not any(item.get("form") == "health_linked_child_support_form" for item in form_schemas):
     raise SystemExit("metadata index does not link the service form JSON Schema")
 PY
-if [[ "${REGISTRY_LAB_CHECK_ATLAS:-1}" == "1" ]]; then
-  check "Atlas service graph discovery" atlas_service_view
-fi
-
 status="$(curl_status GET http://127.0.0.1:4312/v1/datasets/social_protection_registry/entities/household/records?limit=1 "${SOCIAL_EVIDENCE_ONLY_RAW}" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo")"
 [[ "${status}" == "403" ]] || fail "row denial with evidence-only credential expected 403, got ${status}"
 cp /tmp/decentralized-smoke-response.json "${output_dir}/smoke-row-denial.json"
@@ -368,6 +338,51 @@ check "aggregate denial stable error code" json_path_equals "${output_dir}/smoke
 check "civil evidence evaluation" curl_json POST http://127.0.0.1:4321/v1/evaluations "${CIVIL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-civil-evaluation.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data "$(evaluation_payload "NID-1001" "national_id" "person-is-alive")"
 check "civil evidence evaluation results" json_has_key "${output_dir}/smoke-civil-evaluation.json" results
 
+check "social household composition attestation" curl_json POST http://127.0.0.1:4322/v1/evaluations "${SOCIAL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-household-composition.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data "$(evaluation_payload "NID-1001" "national_id" "household-composition" "value")"
+check "social household composition value" python - "${output_dir}/smoke-household-composition.json" <<'PY'
+import json
+import sys
+body = json.load(open(sys.argv[1], encoding="utf-8"))
+results = body.get("results") or body.get("claim_results") or []
+result = next((item for item in results if item.get("claim_id") == "household-composition"), None)
+if not result:
+    raise SystemExit("household-composition result missing")
+value = result.get("value")
+if value != 5:
+    raise SystemExit(f"unexpected household composition: {value!r}")
+PY
+
+check "social caregiver link attestation" curl_json POST http://127.0.0.1:4322/v1/evaluations "${SOCIAL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-caregiver-link.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data "$(caregiver_link_payload "NID-1001" "NID-2001")"
+check "social caregiver link outcome" assert_claim_outcome "${output_dir}/smoke-caregiver-link.json" "caregiver-link" "true"
+
+check "social disability determination attestation" curl_json POST http://127.0.0.1:4322/v1/evaluations "${SOCIAL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-disability-determination.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data "$(evaluation_payload "NID-1006" "national_id" "disability-determination" "value")"
+check "social disability determination value" python - "${output_dir}/smoke-disability-determination.json" <<'PY'
+import json
+import sys
+body = json.load(open(sys.argv[1], encoding="utf-8"))
+results = body.get("results") or body.get("claim_results") or []
+result = next((item for item in results if item.get("claim_id") == "disability-determination"), None)
+if not result:
+    raise SystemExit("disability-determination result missing")
+value = result.get("value")
+if value != "top_up":
+    raise SystemExit(f"support category expected 'top_up', got {value!r}")
+PY
+
+check "social functioning assessment attestation" curl_json POST http://127.0.0.1:4322/v1/evaluations "${SOCIAL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-functioning-assessment.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data "$(evaluation_payload "NID-1006" "national_id" "functioning-assessment" "value")"
+check "social functioning assessment value" python - "${output_dir}/smoke-functioning-assessment.json" <<'PY'
+import json
+import sys
+body = json.load(open(sys.argv[1], encoding="utf-8"))
+results = body.get("results") or body.get("claim_results") or []
+result = next((item for item in results if item.get("claim_id") == "functioning-assessment"), None)
+if not result:
+    raise SystemExit("functioning-assessment result missing")
+value = result.get("value")
+if value is not True:
+    raise SystemExit(f"unexpected functioning assessment: {value!r}")
+PY
+
 check "health evidence evaluation" curl_json POST http://127.0.0.1:4323/v1/evaluations "${SHARED_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-health-evaluation.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data "$(evaluation_payload "NID-1001" "national_id" "health-service-available")"
 check "health evidence evaluation results" json_has_key "${output_dir}/smoke-health-evaluation.json" results
 
@@ -379,7 +394,8 @@ body = json.load(open(sys.argv[1], encoding="utf-8"))
 results = body.get("results") or body.get("claim_results") or []
 if not results:
     raise SystemExit(1)
-source_count = results[0].get("provenance", {}).get("source_count", 0)
+provenance = results[0].get("provenance", {})
+source_count = provenance.get("source_count", provenance.get("used", {}).get("source_count", 0))
 if source_count < 2:
     raise SystemExit(1)
 PY

@@ -48,7 +48,7 @@ evidence:
           deceased: /person/deceased
   claims:
     - id: person-is-alive
-      title: Person is alive
+      title: Vital Status Attestation
       version: 2026-05
       subject_type: person
       value:

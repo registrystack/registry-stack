@@ -171,10 +171,6 @@ compare_pin() {
 	fi
 }
 
-atlas_enabled() {
-	[[ "${REGISTRY_LAB_CHECK_ATLAS:-0}" == "1" || "${REGISTRY_LAB_RUN_LIVE_STORIES:-0}" == "1" ]]
-}
-
 has_custom_cel_mapping_source_dir() {
 	case "${CEL_MAPPING_SOURCE_DIR:-}" in
 	""|"./vendor/cel-mapping"|"vendor/cel-mapping"|"${lab_root}/vendor/cel-mapping")
@@ -188,7 +184,6 @@ vendor_platform="${lab_root}/vendor/registry-platform"
 vendor_relay="${lab_root}/vendor/registry-relay"
 vendor_notary="${lab_root}/vendor/registry-notary"
 vendor_manifest="${lab_root}/vendor/registry-manifest"
-vendor_atlas="${lab_root}/vendor/registry-atlas"
 # CEL_MAPPING_SOURCE_DIR is the deprecated name for CROSSWALK_SOURCE_DIR; the
 # fallback keeps old operator environments working until they migrate.
 vendor_crosswalk="${lab_root}/vendor/crosswalk"
@@ -210,11 +205,6 @@ vendor)
 	expect_vendor_path "registry-openfn-notary" "${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-${vendor_notary}}}" "${vendor_notary}"
 	expect_vendor_path "registry-manifest" "${REGISTRY_MANIFEST_REPO:-${vendor_manifest}}" "${vendor_manifest}"
 	expect_vendor_path "crosswalk" "${crosswalk_source_dir}" "${vendor_crosswalk}"
-	if atlas_enabled; then
-		expect_vendor_path "registry-atlas" "${REGISTRY_ATLAS_SOURCE_DIR:-${vendor_atlas}}" "${vendor_atlas}"
-	else
-		echo "release-source registry-atlas excluded"
-	fi
 	;;
 source)
 	platform_dir="$(resolve_dir "${REGISTRY_PLATFORM_SOURCE_DIR:-../registry-platform}")"
@@ -241,14 +231,6 @@ source)
 	compare_pin "registry-notary" "${notary_dir}" "${vendor_notary}"
 	printf 'release-source registry-manifest %s %s\n' "${manifest_dir}" "$(repo_head "${manifest_dir}")"
 	printf 'release-source crosswalk %s %s\n' "${crosswalk_dir}" "$(repo_head "${crosswalk_dir}")"
-
-	if atlas_enabled; then
-		atlas_dir="$(resolve_dir "${REGISTRY_ATLAS_SOURCE_DIR:-../registry-atlas}")"
-		require_cargo_repo "registry-atlas" "${atlas_dir}"
-		printf 'release-source registry-atlas %s %s\n' "${atlas_dir}" "$(repo_head "${atlas_dir}")"
-	else
-		echo "release-source registry-atlas excluded"
-	fi
 
 	if [[ "${pending}" != "0" && "${allow_pending_pins}" != "1" ]]; then
 		echo "release source model failed: source proof has pending Lab pin or dirty source state; set REGISTRY_LAB_ALLOW_PENDING_PINS=1 only before the final Lab pin/tag update" >&2

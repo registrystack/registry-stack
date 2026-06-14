@@ -105,6 +105,225 @@ datasets:
           - name: district
             type: string
             required: true
+      - name: civil_person_detail
+        title: Civil Person Detail
+        description: Event-linked person detail for identity and record matching demonstrations.
+        concept_uri: demo:Person
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: national_id
+            type: string
+            required: true
+          - name: given_name
+            type: string
+            required: true
+          - name: surname
+            type: string
+            required: true
+          - name: birth_date
+            type: date
+            required: true
+          - name: sex
+            type: string
+            required: true
+          - name: district
+            type: string
+            required: true
+          - name: place_of_birth
+            type: string
+            required: true
+          - name: life_stage
+            type: string
+            required: true
+          - name: deceased
+            type: boolean
+            required: true
+          - name: death_date
+            type: date
+            required: false
+      - name: civil_identifier
+        title: Civil Identifier
+        description: Identifier records linked to civil persons.
+        concept_uri: demo:Identifier
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: person_id
+            type: string
+            required: true
+          - name: scheme
+            type: string
+            required: true
+          - name: value
+            type: string
+            required: true
+          - name: status
+            type: string
+            required: true
+          - name: issued_on
+            type: date
+            required: true
+          - name: valid_until
+            type: date
+            required: false
+      - name: birth_event
+        title: Birth Event
+        description: Registered birth event source record.
+        concept_uri: demo:Birth
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: child_person_id
+            type: string
+            required: true
+          - name: mother_person_id
+            type: string
+            required: false
+          - name: father_person_id
+            type: string
+            required: false
+          - name: place_of_birth
+            type: string
+            required: true
+          - name: date_of_birth
+            type: date
+            required: true
+          - name: sex_at_birth
+            type: string
+            required: true
+          - name: attendant_or_place_type
+            type: string
+            required: true
+      - name: death_event
+        title: Death Event
+        description: Registered death event source record.
+        concept_uri: demo:Death
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: deceased_person_id
+            type: string
+            required: true
+          - name: date_of_death
+            type: date
+            required: true
+          - name: place_of_death
+            type: string
+            required: true
+          - name: registration_date
+            type: date
+            required: true
+          - name: authority
+            type: string
+            required: true
+      - name: civil_status_record
+        title: Civil Status Record
+        description: Registered civil status record linking a person to an event.
+        concept_uri: demo:CivilStatusRecord
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: record_type
+            type: string
+            required: true
+          - name: registration_number
+            type: string
+            required: true
+          - name: person_id
+            type: string
+            required: true
+          - name: event_id
+            type: string
+            required: true
+          - name: authority
+            type: string
+            required: true
+          - name: registration_status
+            type: string
+            required: true
+          - name: registration_date
+            type: date
+            required: true
+      - name: certificate
+        title: Certificate
+        description: Birth or death certificate issued from a civil status record.
+        concept_uri: demo:Certificate
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: record_id
+            type: string
+            required: true
+          - name: certificate_type
+            type: string
+            required: true
+          - name: issue_date
+            type: date
+            required: true
+          - name: issuing_office
+            type: string
+            required: true
+          - name: valid_until
+            type: date
+            required: false
+      - name: relationship
+        title: Relationship
+        description: Family relationship established from a civil status record.
+        concept_uri: demo:Relationship
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: subject_person_id
+            type: string
+            required: true
+          - name: related_person_id
+            type: string
+            required: true
+          - name: relationship_type
+            type: string
+            required: true
+          - name: source_record_id
+            type: string
+            required: true
+          - name: effective_from
+            type: date
+            required: true
+          - name: effective_until
+            type: date
+            required: false
+          - name: relationship_status
+            type: string
+            required: true
 vocabularies:
+  demo: https://demo.example.gov/vocab/
   spdci: https://schema.spdci.org/
   registry_relay: https://registry-relay.dev/

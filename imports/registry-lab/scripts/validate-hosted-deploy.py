@@ -28,6 +28,7 @@ REQUIRED_SERVICES = {
         "redis",
         "civil-notary",
         "citizen-civil-notary",
+        "social-protection-notary",
         "civil-registry-relay",
         "social-protection-registry-relay",
         "health-registry-relay",
@@ -57,6 +58,7 @@ REQUIRED_SERVICES = {
 REQUIRED_DOMAINS = {
     "registry-lab": {
         "citizen-civil-notary": f"citizen-notary.{LAB_DOMAIN}",
+        "social-protection-notary": f"social-notary.{LAB_DOMAIN}",
         "civil-registry-relay": f"civil-relay.{LAB_DOMAIN}",
         "social-protection-registry-relay": f"social-relay.{LAB_DOMAIN}",
         "health-registry-relay": f"health-relay.{LAB_DOMAIN}",
@@ -93,8 +95,15 @@ REQUIRED_HOSTED_VARIABLES = {
         "CIVIL_ROW_READER_RAW",
         "SOCIAL_METADATA_CLIENT_RAW",
         "SOCIAL_EVIDENCE_ONLY_RAW",
+        "SOCIAL_EVIDENCE_CLIENT_BEARER",
+        "SOCIAL_EVIDENCE_CLIENT_BEARER_HASH",
+        "SOCIAL_EVIDENCE_CLIENT_TOKEN",
+        "SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH",
+        "SOCIAL_EVIDENCE_SOURCE_RAW",
         "SOCIAL_ROW_READER_RAW",
         "SOCIAL_AGGREGATE_READER_RAW",
+        "SOCIAL_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET",
+        "SOCIAL_FEDERATION_RESPONSE_JWK",
         "HEALTH_METADATA_CLIENT_RAW",
         "HEALTH_EVIDENCE_ONLY_RAW",
         "HEALTH_ROW_READER_RAW",
@@ -226,6 +235,44 @@ DHIS2_PROGRAMME_CLAIMS = {
     "dhis2-child-program-active",
     "dhis2-reconciliation-ref",
 }
+ATTESTATION_METADATA_CONTRACT = {
+    "civil_child_status_evidence_service": {
+        "title": "Vital Status Attestation",
+        "attestation_id": "vital-status-attestation",
+    },
+    "household_support_evidence_service": {
+        "title": "Program Enrollment Attestation",
+        "attestation_id": "program-enrollment-attestation",
+    },
+    "welfare_classification_attestation": {
+        "title": "Welfare Classification Attestation",
+        "attestation_id": "welfare-classification-attestation",
+    },
+    "household_composition_attestation": {
+        "title": "Household Composition Attestation",
+        "attestation_id": "household-composition-attestation",
+    },
+    "caregiver_link_attestation": {
+        "title": "Parent Or Guardian Link Attestation",
+        "attestation_id": "caregiver-link-attestation",
+    },
+    "disability_determination_attestation": {
+        "title": "Disability Determination Attestation",
+        "attestation_id": "disability-determination-attestation",
+    },
+    "functioning_assessment_attestation": {
+        "title": "Functioning Assessment Attestation",
+        "attestation_id": "functioning-assessment-attestation",
+    },
+    "health_service_availability_evidence_service": {
+        "title": "Service Availability Attestation",
+        "attestation_id": "service-availability-attestation",
+    },
+    "combined_support_evidence_service": {
+        "title": "Combined Support Eligibility Attestation",
+        "attestation_id": "combined-support-eligibility-attestation",
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -321,6 +368,7 @@ def validate_artifacts(
         issues.extend(validate_config_loader_hosted_outputs(artifact, services))
         issues.extend(validate_hosted_yaml_files(artifact, root))
         issues.extend(validate_dhis2_programme_vc_contract(artifact, root))
+        issues.extend(validate_attestation_metadata_contract(artifact, root))
         if require_secret_values:
             issues.extend(validate_credential_commitments(artifact, root, env))
         if check_metadata_digest_pins:
@@ -1134,7 +1182,11 @@ def validate_lab_homepage_config_ref(artifact: str, services: dict[str, Any]) ->
         return []
     env = normalize_environment(lab_homepage.get("environment"))
     value = env.get("CONFIG_REPO_REF")
-    if isinstance(value, str) and ("${CONFIG_REPO_REF" in value or re.fullmatch(r"[0-9a-f]{40}", value)):
+    if isinstance(value, str) and (
+        "${CONFIG_REPO_REF" in value
+        or value == "hosted-validation-placeholder"
+        or re.fullmatch(r"[0-9a-f]{40}", value)
+    ):
         return []
     return [
         Issue(
@@ -1388,6 +1440,76 @@ def validate_dhis2_programme_vc_contract(artifact: str, root: Path) -> list[Issu
                     artifact,
                     f"config/coolify/notary/dhis2-health-notary.yaml:evidence.claims.{claim_id}",
                     f"claim {claim_id!r} must allow {DHIS2_PROGRAMME_PROFILE}",
+                )
+            )
+    return issues
+
+
+def validate_attestation_metadata_contract(artifact: str, root: Path) -> list[Issue]:
+    if artifact != "registry-lab":
+        return []
+    path = root / "config/static-metadata/metadata.yaml"
+    if not path.exists():
+        return []
+    try:
+        config = load_yaml_mapping(path)
+    except Exception as exc:
+        return [
+            Issue(
+                "unreadable-attestation-metadata",
+                artifact,
+                "config/static-metadata/metadata.yaml",
+                f"could not read static attestation metadata: {exc}",
+            )
+        ]
+
+    offerings: dict[str, dict[str, Any]] = {}
+    for dataset in config.get("datasets", []):
+        if not isinstance(dataset, dict):
+            continue
+        for offering in dataset.get("evidence_offerings", []):
+            if isinstance(offering, dict) and isinstance(offering.get("id"), str):
+                offerings[offering["id"]] = offering
+
+    issues: list[Issue] = []
+    for offering_id, expected in sorted(ATTESTATION_METADATA_CONTRACT.items()):
+        offering = offerings.get(offering_id)
+        path_prefix = f"config/static-metadata/metadata.yaml:evidence_offerings.{offering_id}"
+        if not isinstance(offering, dict):
+            issues.append(
+                Issue(
+                    "missing-attestation-offering",
+                    artifact,
+                    path_prefix,
+                    f"static metadata must publish {offering_id!r}",
+                )
+            )
+            continue
+        if offering.get("title") != expected["title"]:
+            issues.append(
+                Issue(
+                    "attestation-public-label",
+                    artifact,
+                    f"{path_prefix}.title",
+                    f"{offering_id!r} must use public label {expected['title']!r}",
+                )
+            )
+        if offering.get("attestation_id") != expected["attestation_id"]:
+            issues.append(
+                Issue(
+                    "attestation-id-mismatch",
+                    artifact,
+                    f"{path_prefix}.attestation_id",
+                    f"{offering_id!r} must declare attestation_id {expected['attestation_id']!r}",
+                )
+            )
+        if "compatibility_claim_ids" in offering:
+            issues.append(
+                Issue(
+                    "attestation-raw-claim-ids-public",
+                    artifact,
+                    f"{path_prefix}.compatibility_claim_ids",
+                    f"{offering_id!r} must not expose raw claim ids in public metadata",
                 )
             )
     return issues

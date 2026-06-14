@@ -61,6 +61,119 @@ CIVIL_ROWS = [
     ["NID-2006", "David", "Martinez", "1978-01-15", "adult", "false", "north"],
 ]
 
+# PublicSchema anchors:
+# Person / Identifier / CivilStatusRecord / Birth / Death / Certificate / Relationship.
+CIVIL_PERSON_DETAILS = [
+    [
+        "person_id",
+        "national_id",
+        "given_name",
+        "surname",
+        "birth_date",
+        "sex",
+        "district",
+        "place_of_birth",
+        "life_stage",
+        "deceased",
+        "death_date",
+    ],
+    ["CP-1001", "NID-1001", "Miguel", "Santos", "2016-01-15", "M", "north", "North City", "child", "false", ""],
+    ["CP-1002", "NID-1002", "Maria", "Dela Cruz", "2018-01-15", "F", "south", "South Town", "child", "false", ""],
+    ["CP-1003", "NID-1003", "Cara", "Okafor", "1957-02-14", "F", "central", "Central City", "adult", "true", "2025-11-02"],
+    ["CP-1004", "NID-1004", "Rafael", "Aquino", "2019-01-15", "M", "east", "East City", "child", "false", ""],
+    ["CP-1005", "NID-1005", "Rosalie", "Bautista", "2013-01-15", "F", "west", "West City", "child", "false", ""],
+    ["CP-1006", "NID-1006", "Miguel", "Martinez", "2014-01-15", "M", "north", "North City", "child", "false", ""],
+    ["CP-1007", "NID-1007", "Lola", "Santos", "1958-01-15", "F", "north", "North City", "elderly", "false", ""],
+    ["CP-1008", "NID-1008", "Rosa", "Garcia", "1954-01-15", "F", "west", "West City", "elderly", "false", ""],
+    ["CP-1009", "NID-1009", "Ana", "Mendoza", "1998-01-15", "F", "east", "East City", "adult", "false", ""],
+    ["CP-1010", "NID-1010", "Pedro", "Reyes", "1971-01-15", "M", "central", "Central City", "adult", "false", ""],
+    ["CP-2001", "NID-2001", "Maria", "Santos", "1984-01-15", "F", "north", "North City", "adult", "false", ""],
+    ["CP-2002", "NID-2002", "Juan", "Dela Cruz", "1988-01-15", "M", "south", "South Town", "adult", "false", ""],
+    ["CP-2004", "NID-2004", "Rosario", "Aquino", "1988-01-15", "F", "east", "East City", "adult", "false", ""],
+    ["CP-2005", "NID-2005", "Eduardo", "Bautista", "1978-01-15", "M", "west", "West City", "adult", "false", ""],
+    ["CP-2006", "NID-2006", "David", "Martinez", "1978-01-15", "M", "north", "North City", "adult", "false", ""],
+    ["CP-1011", "NID-1011", "Miguel", "Santos", "2016-01-15", "M", "south", "South Town", "child", "false", ""],
+]
+
+CIVIL_IDENTIFIERS = [
+    ["identifier_id", "person_id", "scheme", "value", "status", "issued_on", "valid_until"],
+    *[
+        [f"ID-{row[1][4:]}", row[0], "national_id", row[1], "active", "2020-01-01", ""]
+        for row in CIVIL_PERSON_DETAILS[1:]
+    ],
+]
+
+BIRTH_EVENTS = [
+    [
+        "event_id",
+        "child_person_id",
+        "mother_person_id",
+        "father_person_id",
+        "place_of_birth",
+        "date_of_birth",
+        "sex_at_birth",
+        "attendant_or_place_type",
+    ],
+    ["BE-1001", "CP-1001", "CP-2001", "", "North City", "2016-01-15", "M", "clinic"],
+    ["BE-1002", "CP-1002", "", "CP-2002", "South Town", "2018-01-15", "F", "clinic"],
+    ["BE-1004", "CP-1004", "CP-2004", "", "East City", "2019-01-15", "M", "clinic"],
+    ["BE-1005", "CP-1005", "", "CP-2005", "West City", "2013-01-15", "F", "clinic"],
+    ["BE-1006", "CP-1006", "", "CP-2006", "North City", "2014-01-15", "M", "clinic"],
+    ["BE-1011", "CP-1011", "", "", "South Town", "2016-01-15", "M", "clinic"],
+]
+
+DEATH_EVENTS = [
+    ["event_id", "deceased_person_id", "date_of_death", "place_of_death", "registration_date", "authority"],
+    ["DE-1003", "CP-1003", "2025-11-02", "Central City", "2025-11-03", "Civil Registry Authority"],
+]
+
+CIVIL_STATUS_RECORDS = [
+    [
+        "record_id",
+        "record_type",
+        "registration_number",
+        "person_id",
+        "event_id",
+        "authority",
+        "registration_status",
+        "registration_date",
+    ],
+    ["CSR-BIRTH-1001", "birth", "B-2016-N-1001", "CP-1001", "BE-1001", "Civil Registry Authority", "registered", "2016-01-17"],
+    ["CSR-BIRTH-1002", "birth", "B-2018-S-1002", "CP-1002", "BE-1002", "Civil Registry Authority", "registered", "2018-01-16"],
+    ["CSR-BIRTH-1004", "birth", "B-2019-E-1004", "CP-1004", "BE-1004", "Civil Registry Authority", "registered", "2019-01-17"],
+    ["CSR-BIRTH-1005", "birth", "B-2013-W-1005", "CP-1005", "BE-1005", "Civil Registry Authority", "registered", "2013-01-18"],
+    ["CSR-BIRTH-1006", "birth", "B-2014-N-1006", "CP-1006", "BE-1006", "Civil Registry Authority", "registered", "2014-01-17"],
+    ["CSR-BIRTH-1011", "birth", "B-2016-S-1011", "CP-1011", "BE-1011", "Civil Registry Authority", "registered", "2016-01-20"],
+    ["CSR-DEATH-1003", "death", "D-2025-C-1003", "CP-1003", "DE-1003", "Civil Registry Authority", "registered", "2025-11-03"],
+]
+
+CERTIFICATES = [
+    ["certificate_number", "record_id", "issue_date", "issuing_office", "certificate_type", "valid_until"],
+    ["CERT-B-1001", "CSR-BIRTH-1001", "2016-01-18", "North Civil Office", "birth", ""],
+    ["CERT-B-1002", "CSR-BIRTH-1002", "2018-01-17", "South Civil Office", "birth", ""],
+    ["CERT-B-1004", "CSR-BIRTH-1004", "2019-01-18", "East Civil Office", "birth", ""],
+    ["CERT-B-1011", "CSR-BIRTH-1011", "2016-01-21", "South Civil Office", "birth", ""],
+    ["CERT-D-1003", "CSR-DEATH-1003", "2025-11-04", "Central Civil Office", "death", ""],
+]
+
+RELATIONSHIPS = [
+    [
+        "relationship_id",
+        "subject_person_id",
+        "related_person_id",
+        "relationship_type",
+        "source_record_id",
+        "effective_from",
+        "effective_until",
+        "relationship_status",
+    ],
+    ["REL-1001-MOTHER", "CP-1001", "CP-2001", "mother", "CSR-BIRTH-1001", "2016-01-15", "", "established"],
+    ["REL-1002-FATHER", "CP-1002", "CP-2002", "father", "CSR-BIRTH-1002", "2018-01-15", "", "established"],
+    ["REL-1004-MOTHER", "CP-1004", "CP-2004", "mother", "CSR-BIRTH-1004", "2019-01-15", "", "established"],
+    ["REL-1005-FATHER", "CP-1005", "CP-2005", "father", "CSR-BIRTH-1005", "2013-01-15", "", "established"],
+    ["REL-1006-FATHER", "CP-1006", "CP-2006", "father", "CSR-BIRTH-1006", "2014-01-15", "", "established"],
+]
+
 HOUSEHOLDS = [
     ["household_id", "national_id", "district", "poverty_score", "eligibility_band", "household_size", "active_members", "deceased_member_count"],
     ["HH-100", "NID-1001", "north", 29.0, "priority", 5, 5, 0],
@@ -122,6 +235,106 @@ ENROLLMENTS = [
     ["ENR-1000", "HH-800", "PER-1010", "NID-1010", "COMMUNITY_REGISTRY", "none", 0.0, dt.date(2025, 5, 1)],
 ]
 
+# PublicSchema anchors:
+# Household / GroupMembership / SocioEconomicProfile / ScoringEvent /
+# Program / Enrollment / Entitlement / PaymentEvent.
+GROUP_MEMBERSHIPS = [
+    ["membership_id", "household_id", "person_id", "relationship_type", "start_date", "end_date", "membership_status"],
+    *[
+        [f"GM-{person[0][4:]}", person[1], person[0], person[3], dt.date(2025, 1, 1), None, "active" if person[5] else "ended_deceased"]
+        for person in PERSONS[1:]
+    ],
+]
+
+SOCIO_ECONOMIC_PROFILES = [
+    ["profile_id", "household_id", "observation_date", "instrument", "collected_by", "source_version", "profile_status"],
+    ["SEP-100", "HH-100", dt.date(2025, 12, 1), "PMT-CHILD-2025", "municipal_social_worker", "2025.4", "current"],
+    ["SEP-200", "HH-200", dt.date(2025, 11, 15), "PMT-CHILD-2025", "municipal_social_worker", "2025.4", "current"],
+    ["SEP-300", "HH-300", dt.date(2025, 10, 1), "PMT-ADULT-2025", "central_review_team", "2025.3", "current"],
+    ["SEP-400", "HH-400", dt.date(2025, 12, 10), "PMT-CHILD-2025", "municipal_social_worker", "2025.4", "current"],
+    ["SEP-500", "HH-500", dt.date(2024, 1, 10), "PMT-CHILD-2024", "municipal_social_worker", "2024.1", "stale"],
+    ["SEP-600", "HH-600", dt.date(2025, 12, 5), "PMT-DISABILITY-2025", "assessment_registry", "2025.4", "current"],
+    ["SEP-700", "HH-700", dt.date(2025, 3, 1), "PMT-ELDERLY-2025", "municipal_social_worker", "2025.2", "current"],
+    ["SEP-800", "HH-800", dt.date(2025, 7, 1), "PMT-COMMUNITY-2025", "central_review_team", "2025.2", "current"],
+]
+
+SCORING_EVENTS = [
+    ["scoring_id", "profile_id", "scoring_rule", "scoring_version", "score_band", "valid_from", "valid_until", "scoring_status"],
+    ["SCOR-100", "SEP-100", "child-benefit-priority", "2025.4", "priority", dt.date(2025, 12, 1), dt.date(2026, 12, 1), "current"],
+    ["SCOR-200", "SEP-200", "child-benefit-standard", "2025.4", "standard", dt.date(2025, 11, 15), dt.date(2026, 11, 15), "current"],
+    ["SCOR-300", "SEP-300", "death-review", "2025.3", "not_eligible", dt.date(2025, 10, 1), dt.date(2026, 10, 1), "current"],
+    ["SCOR-400", "SEP-400", "child-benefit-priority", "2025.4", "priority", dt.date(2025, 12, 10), dt.date(2026, 12, 10), "current"],
+    ["SCOR-500", "SEP-500", "child-benefit-standard", "2024.1", "standard", dt.date(2024, 1, 10), dt.date(2025, 1, 10), "stale"],
+    ["SCOR-600", "SEP-600", "disability-top-up", "2025.4", "priority", dt.date(2025, 12, 5), dt.date(2026, 12, 5), "current"],
+    ["SCOR-700", "SEP-700", "elderly-pension", "2025.2", "standard", dt.date(2025, 3, 1), dt.date(2025, 12, 31), "expired"],
+    ["SCOR-800", "SEP-800", "community-review", "2025.2", "not_eligible", dt.date(2025, 7, 1), dt.date(2026, 7, 1), "policy_denied"],
+]
+
+PROGRAMS = [
+    ["program_code", "display_name", "authority", "benefit_type"],
+    ["CHILD_SUPPORT", "Child Support Grant", "Social Protection Authority", "cash_transfer"],
+    ["HEALTH_LINKED_SUPPORT", "Health-Linked Support", "Social Protection Authority", "conditional_cash_transfer"],
+    ["DISABILITY_SUPPORT", "Disability Support Top-Up", "Disability Assessment Authority", "cash_top_up"],
+    ["ELDERLY_PENSION", "Elderly Pension", "Social Protection Authority", "pension"],
+    ["COMMUNITY_REGISTRY", "Community Registry", "Social Registry Authority", "registry_only"],
+]
+
+ENTITLEMENTS = [
+    [
+        "entitlement_id",
+        "enrollment_id",
+        "benefit_modality",
+        "amount",
+        "amount_band",
+        "currency",
+        "coverage_start",
+        "coverage_end",
+        "entitlement_status",
+    ],
+    ["ENT-100", "ENR-100", "cash", 85.50, "standard_child", "USD", dt.date(2026, 1, 1), dt.date(2026, 12, 31), "active"],
+    ["ENT-200", "ENR-200", "cash", 0.0, "none", "USD", dt.date(2024, 3, 1), dt.date(2024, 12, 31), "inactive"],
+    ["ENT-300", "ENR-300", "cash", 0.0, "review", "USD", dt.date(2025, 6, 1), dt.date(2026, 5, 31), "review_required"],
+    ["ENT-400", "ENR-400", "cash", 110.00, "priority_child", "USD", dt.date(2026, 1, 1), dt.date(2026, 12, 31), "active"],
+    ["ENT-500", "ENR-500", "cash", 60.00, "standard_child", "USD", dt.date(2025, 1, 1), dt.date(2025, 12, 31), "stale_source"],
+    ["ENT-600", "ENR-600", "cash", 175.00, "disability_top_up", "USD", dt.date(2026, 1, 1), dt.date(2026, 12, 31), "active"],
+    ["ENT-700", "ENR-700", "cash", 0.0, "elderly_pension", "USD", dt.date(2025, 9, 1), dt.date(2025, 12, 31), "expired"],
+    ["ENT-800", "ENR-800", "cash", 100.00, "elderly_pension", "USD", dt.date(2026, 1, 1), dt.date(2026, 12, 31), "active"],
+    ["ENT-900", "ENR-900", "none", 0.0, "none", "USD", dt.date(2025, 5, 1), dt.date(2026, 5, 1), "policy_denied"],
+]
+
+PAYMENT_EVENTS = [
+    ["payment_id", "entitlement_id", "cycle", "status", "delivery_channel", "payment_date", "reconciled"],
+    ["PAY-100-JAN", "ENT-100", "2026-01", "paid", "mobile_money", dt.date(2026, 1, 15), True],
+    ["PAY-400-JAN", "ENT-400", "2026-01", "paid", "bank_transfer", dt.date(2026, 1, 15), True],
+    ["PAY-500-DEC", "ENT-500", "2025-12", "held_stale_profile", "mobile_money", dt.date(2025, 12, 15), False],
+    ["PAY-600-JAN", "ENT-600", "2026-01", "paid", "cash_agent", dt.date(2026, 1, 16), True],
+    ["PAY-700-JAN", "ENT-700", "2026-01", "not_paid_expired", "cash_agent", dt.date(2026, 1, 16), False],
+    ["PAY-900-JAN", "ENT-900", "2026-01", "not_paid_policy_denied", "none", dt.date(2026, 1, 16), False],
+]
+
+FUNCTIONING_PROFILES = [
+    [
+        "profile_id",
+        "person_id",
+        "national_id",
+        "instrument_code",
+        "administration_date",
+        "respondent_relationship",
+        "domain_severities",
+        "disability_identifier_met",
+        "domains_triggering_identifier",
+        "source_version",
+    ],
+    ["FUNC-1006", "PER-1006", "NID-1006", "WG-SS-2025", dt.date(2025, 12, 5), "caregiver", "mobility=severe;self_care=moderate", True, "mobility;self_care", "2025.4"],
+    ["FUNC-1003", "PER-1003", "NID-1003", "WG-SS-2025", dt.date(2025, 6, 1), "self", "mobility=severe", True, "mobility", "2025.2"],
+]
+
+DISABILITY_DETERMINATIONS = [
+    ["determination_id", "person_id", "national_id", "authority", "determination_status", "support_category", "valid_from", "valid_until", "review_due"],
+    ["DIS-1006", "PER-1006", "NID-1006", "Disability Assessment Authority", "approved", "top_up", dt.date(2025, 12, 20), dt.date(2026, 12, 20), dt.date(2026, 10, 20)],
+    ["DIS-1003", "PER-1003", "NID-1003", "Disability Assessment Authority", "closed_deceased", "none", dt.date(2025, 6, 1), dt.date(2025, 11, 2), dt.date(2025, 11, 2)],
+]
+
 DISTRICT_GEOMETRIES = [
     ["district", "geometry"],
     ["north", '{"type":"Polygon","coordinates":[[[0,1],[1,1],[1,2],[0,2],[0,1]]]}'],
@@ -131,7 +344,9 @@ DISTRICT_GEOMETRIES = [
     ["west", '{"type":"Polygon","coordinates":[[[-1,0],[0,0],[0,1],[-1,1],[-1,0]]]}'],
 ]
 
-HEALTH_ROWS = [
+HEALTH_PROJECTION_NAME = "ApplicantServiceAvailabilityProjection"
+
+APPLICANT_SERVICE_AVAILABILITY_PROJECTION = [
     {
         "facility_id": "HF-10",
         "national_id": "NID-1001",
@@ -244,6 +459,69 @@ HEALTH_ROWS = [
     },
 ]
 
+# Compatibility alias for existing relay and notary configs.
+HEALTH_ROWS = APPLICANT_SERVICE_AVAILABILITY_PROJECTION
+
+FIXTURE_PERSONAS = {
+    "positive_child_benefit": {
+        "national_id": "NID-1001",
+        "person_id": "PER-1001",
+        "civil_record_id": "CSR-BIRTH-1001",
+        "relationship_id": "REL-1001-MOTHER",
+        "profile_id": "SEP-100",
+        "scoring_id": "SCOR-100",
+        "enrollment_id": "ENR-100",
+        "entitlement_id": "ENT-100",
+        "expected_outcome": "positive",
+    },
+    "negative_deceased": {
+        "national_id": "NID-1003",
+        "person_id": "PER-1003",
+        "civil_record_id": "CSR-DEATH-1003",
+        "death_event_id": "DE-1003",
+        "expected_outcome": "negative",
+    },
+    "ambiguous_demographic": {
+        "national_id": "NID-1011",
+        "ambiguous_with": "NID-1001",
+        "civil_record_id": "CSR-BIRTH-1011",
+        "expected_outcome": "ambiguous_match",
+    },
+    "stale_welfare": {
+        "national_id": "NID-1005",
+        "person_id": "PER-1005",
+        "profile_id": "SEP-500",
+        "scoring_id": "SCOR-500",
+        "entitlement_id": "ENT-500",
+        "expected_outcome": "stale",
+    },
+    "expired_entitlement": {
+        "national_id": "NID-1007",
+        "person_id": "PER-1007",
+        "enrollment_id": "ENR-700",
+        "entitlement_id": "ENT-700",
+        "expected_outcome": "expired",
+    },
+    "policy_denied": {
+        "national_id": "NID-1009",
+        "person_id": "PER-1009",
+        "profile_id": "SEP-800",
+        "scoring_id": "SCOR-800",
+        "enrollment_id": "ENR-900",
+        "entitlement_id": "ENT-900",
+        "expected_outcome": "policy_denied",
+    },
+    "disability_top_up": {
+        "national_id": "NID-1006",
+        "person_id": "PER-1006",
+        "functioning_profile_id": "FUNC-1006",
+        "determination_id": "DIS-1006",
+        "enrollment_id": "ENR-600",
+        "entitlement_id": "ENT-600",
+        "expected_outcome": "positive",
+    },
+}
+
 
 def data_rows(rows: list[list[object]]) -> list[list[object]]:
     return rows[1:]
@@ -257,20 +535,78 @@ def require_unique(rows: list[list[object]], column_name: str) -> None:
         raise ValueError(f"{column_name} values must be unique")
 
 
+def require_refs(
+    rows: list[list[object]],
+    column_name: str,
+    allowed_values: set[object],
+    target_name: str,
+) -> None:
+    header = rows[0]
+    index = header.index(column_name)
+    for row in data_rows(rows):
+        value = row[index]
+        if value in ("", None):
+            continue
+        if value not in allowed_values:
+            raise ValueError(f"{column_name} {value} is missing from {target_name}")
+
+
 def validate_fixture_coverage() -> None:
     require_unique(CIVIL_ROWS, "national_id")
+    require_unique(CIVIL_PERSON_DETAILS, "person_id")
+    require_unique(CIVIL_PERSON_DETAILS, "national_id")
+    require_unique(CIVIL_IDENTIFIERS, "identifier_id")
+    require_unique(BIRTH_EVENTS, "event_id")
+    require_unique(DEATH_EVENTS, "event_id")
+    require_unique(CIVIL_STATUS_RECORDS, "record_id")
+    require_unique(CIVIL_STATUS_RECORDS, "registration_number")
+    require_unique(CERTIFICATES, "certificate_number")
+    require_unique(RELATIONSHIPS, "relationship_id")
     require_unique(HOUSEHOLDS, "household_id")
     require_unique(PERSONS, "person_id")
     require_unique(ENROLLMENTS, "enrollment_id")
     require_unique(ENROLLMENTS, "national_id")
+    require_unique(GROUP_MEMBERSHIPS, "membership_id")
+    require_unique(SOCIO_ECONOMIC_PROFILES, "profile_id")
+    require_unique(SCORING_EVENTS, "scoring_id")
+    require_unique(PROGRAMS, "program_code")
+    require_unique(ENTITLEMENTS, "entitlement_id")
+    require_unique(PAYMENT_EVENTS, "payment_id")
+    require_unique(FUNCTIONING_PROFILES, "profile_id")
+    require_unique(DISABILITY_DETERMINATIONS, "determination_id")
     require_unique(DISTRICT_GEOMETRIES, "district")
     facility_ids = [row["facility_id"] for row in HEALTH_ROWS]
     if len(facility_ids) != len(set(facility_ids)):
         raise ValueError("facility_id values must be unique")
 
     civil_ids = {row[0] for row in data_rows(CIVIL_ROWS)}
+    civil_person_ids = {row[0] for row in data_rows(CIVIL_PERSON_DETAILS)}
+    birth_event_ids = {row[0] for row in data_rows(BIRTH_EVENTS)}
+    death_event_ids = {row[0] for row in data_rows(DEATH_EVENTS)}
+    civil_record_ids = {row[0] for row in data_rows(CIVIL_STATUS_RECORDS)}
     household_ids = {row[0] for row in data_rows(HOUSEHOLDS)}
     person_ids = {row[0] for row in data_rows(PERSONS)}
+    profile_ids = {row[0] for row in data_rows(SOCIO_ECONOMIC_PROFILES)}
+    program_codes = {row[0] for row in data_rows(PROGRAMS)}
+    enrollment_ids = {row[0] for row in data_rows(ENROLLMENTS)}
+    entitlement_ids = {row[0] for row in data_rows(ENTITLEMENTS)}
+
+    require_refs(CIVIL_IDENTIFIERS, "person_id", civil_person_ids, "CIVIL_PERSON_DETAILS.person_id")
+    require_refs(BIRTH_EVENTS, "child_person_id", civil_person_ids, "CIVIL_PERSON_DETAILS.person_id")
+    require_refs(BIRTH_EVENTS, "mother_person_id", civil_person_ids, "CIVIL_PERSON_DETAILS.person_id")
+    require_refs(BIRTH_EVENTS, "father_person_id", civil_person_ids, "CIVIL_PERSON_DETAILS.person_id")
+    require_refs(DEATH_EVENTS, "deceased_person_id", civil_person_ids, "CIVIL_PERSON_DETAILS.person_id")
+    require_refs(CIVIL_STATUS_RECORDS, "person_id", civil_person_ids, "CIVIL_PERSON_DETAILS.person_id")
+    for row in data_rows(CIVIL_STATUS_RECORDS):
+        event_id = row[4]
+        allowed_events = birth_event_ids if row[1] == "birth" else death_event_ids
+        if event_id not in allowed_events:
+            raise ValueError(f"civil status record {row[0]} references unknown {row[1]} event {event_id}")
+    require_refs(CERTIFICATES, "record_id", civil_record_ids, "CIVIL_STATUS_RECORDS.record_id")
+    require_refs(RELATIONSHIPS, "subject_person_id", civil_person_ids, "CIVIL_PERSON_DETAILS.person_id")
+    require_refs(RELATIONSHIPS, "related_person_id", civil_person_ids, "CIVIL_PERSON_DETAILS.person_id")
+    require_refs(RELATIONSHIPS, "source_record_id", civil_record_ids, "CIVIL_STATUS_RECORDS.record_id")
+
     for row in data_rows(HOUSEHOLDS):
         if row[1] not in civil_ids:
             raise ValueError(f"household anchor {row[1]} is missing from civil rows")
@@ -282,6 +618,18 @@ def validate_fixture_coverage() -> None:
             raise ValueError(f"enrollment {row[0]} references unknown household {row[1]}")
         if row[2] not in person_ids:
             raise ValueError(f"enrollment {row[0]} references unknown person {row[2]}")
+        if row[4] not in program_codes:
+            raise ValueError(f"enrollment {row[0]} references unknown program {row[4]}")
+    require_refs(GROUP_MEMBERSHIPS, "household_id", household_ids, "HOUSEHOLDS.household_id")
+    require_refs(GROUP_MEMBERSHIPS, "person_id", person_ids, "PERSONS.person_id")
+    require_refs(SOCIO_ECONOMIC_PROFILES, "household_id", household_ids, "HOUSEHOLDS.household_id")
+    require_refs(SCORING_EVENTS, "profile_id", profile_ids, "SOCIO_ECONOMIC_PROFILES.profile_id")
+    require_refs(ENTITLEMENTS, "enrollment_id", enrollment_ids, "ENROLLMENTS.enrollment_id")
+    require_refs(PAYMENT_EVENTS, "entitlement_id", entitlement_ids, "ENTITLEMENTS.entitlement_id")
+    require_refs(FUNCTIONING_PROFILES, "person_id", person_ids, "PERSONS.person_id")
+    require_refs(DISABILITY_DETERMINATIONS, "person_id", person_ids, "PERSONS.person_id")
+    require_refs(FUNCTIONING_PROFILES, "national_id", civil_ids, "CIVIL_ROWS.national_id")
+    require_refs(DISABILITY_DETERMINATIONS, "national_id", civil_ids, "CIVIL_ROWS.national_id")
     geometry_districts = {row[0] for row in data_rows(DISTRICT_GEOMETRIES)}
     household_districts = {row[2] for row in data_rows(HOUSEHOLDS)}
     if not household_districts.issubset(geometry_districts):
@@ -298,14 +646,35 @@ def validate_fixture_coverage() -> None:
         raise ValueError("enrollment fixture must include a non-active status")
     if not any(row["license_status"] != "active" for row in HEALTH_ROWS):
         raise ValueError("health fixture must include a non-active license")
+    if HEALTH_PROJECTION_NAME != "ApplicantServiceAvailabilityProjection":
+        raise ValueError("health national_id compatibility data must be framed as ApplicantServiceAvailabilityProjection")
+    expected_persona_outcomes = {"positive", "negative", "ambiguous_match", "stale", "expired", "policy_denied"}
+    actual_persona_outcomes = {row["expected_outcome"] for row in FIXTURE_PERSONAS.values()}
+    if not expected_persona_outcomes.issubset(actual_persona_outcomes):
+        missing = sorted(expected_persona_outcomes - actual_persona_outcomes)
+        raise ValueError(f"fixture personas missing expected outcomes: {missing}")
 
 
-def write_civil_csv() -> None:
-    path = DATA_DIR / "civil" / "civil-persons.csv"
+def write_csv(path: Path, rows: list[list[object]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle, lineterminator="\n")
-        writer.writerows(CIVIL_ROWS)
+        writer.writerows(rows)
+
+
+def write_civil_csv() -> None:
+    civil_dir = DATA_DIR / "civil"
+    for filename, rows in [
+        ("civil-persons.csv", CIVIL_ROWS),
+        ("civil-person-details.csv", CIVIL_PERSON_DETAILS),
+        ("civil-identifiers.csv", CIVIL_IDENTIFIERS),
+        ("birth-events.csv", BIRTH_EVENTS),
+        ("death-events.csv", DEATH_EVENTS),
+        ("civil-status-records.csv", CIVIL_STATUS_RECORDS),
+        ("certificates.csv", CERTIFICATES),
+        ("relationships.csv", RELATIONSHIPS),
+    ]:
+        write_csv(civil_dir / filename, rows)
 
 
 def canonicalize_xlsx(raw: bytes) -> bytes:
@@ -339,6 +708,14 @@ def write_social_xlsx() -> None:
         ("Households", HOUSEHOLDS),
         ("Persons", PERSONS),
         ("Enrollments", ENROLLMENTS),
+        ("GroupMemberships", GROUP_MEMBERSHIPS),
+        ("SocioEconomicProfiles", SOCIO_ECONOMIC_PROFILES),
+        ("ScoringEvents", SCORING_EVENTS),
+        ("Programs", PROGRAMS),
+        ("Entitlements", ENTITLEMENTS),
+        ("PaymentEvents", PAYMENT_EVENTS),
+        ("FunctioningProfiles", FUNCTIONING_PROFILES),
+        ("DisabilityDeterminations", DISABILITY_DETERMINATIONS),
         ("DistrictGeometries", DISTRICT_GEOMETRIES),
     ]:
         sheet = workbook.create_sheet(title)

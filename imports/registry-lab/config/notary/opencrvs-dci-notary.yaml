@@ -115,7 +115,7 @@ evidence:
           - value
   claims:
     - id: opencrvs-birth-record-exists
-      title: OpenCRVS birth record exists
+      title: Birth Registration Attestation
       version: 2026-05
       subject_type: person
       value:
@@ -220,7 +220,7 @@ evidence:
       credential_profiles:
         - opencrvs_birth_summary_sd_jwt
     - id: opencrvs-age-band
-      title: OpenCRVS age band
+      title: Age Eligibility Attestation
       version: 2026-05
       subject_type: person
       value:
