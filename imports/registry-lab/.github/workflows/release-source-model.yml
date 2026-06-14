@@ -5,10 +5,17 @@ on:
     paths:
       - ".github/workflows/release-source-model.yml"
       - ".gitmodules"
+      - "compose.lab2.yaml"
+      - "justfile"
       - "scripts/check-release-source-model.sh"
       - "scripts/check-service-first-deps.sh"
+      - "scripts/lab2-generate-governed-config.sh"
+      - "scripts/lab2-demo-story.sh"
+      - "scripts/lab2-doctor-profile.sh"
+      - "scripts/lab2_doctor_summary.py"
       - "scripts/release-check.sh"
       - "scripts/test_check_release_source_model.py"
+      - "scripts/test_lab2_main_features.py"
       - "vendor/**"
   push:
     branches:
@@ -18,10 +25,17 @@ on:
     paths:
       - ".github/workflows/release-source-model.yml"
       - ".gitmodules"
+      - "compose.lab2.yaml"
+      - "justfile"
       - "scripts/check-release-source-model.sh"
       - "scripts/check-service-first-deps.sh"
+      - "scripts/lab2-generate-governed-config.sh"
+      - "scripts/lab2-demo-story.sh"
+      - "scripts/lab2-doctor-profile.sh"
+      - "scripts/lab2_doctor_summary.py"
       - "scripts/release-check.sh"
       - "scripts/test_check_release_source_model.py"
+      - "scripts/test_lab2_main_features.py"
       - "vendor/**"
   workflow_dispatch:
 
@@ -59,7 +73,9 @@ jobs:
           git submodule status --recursive
 
       - name: Run source-model validator tests
-        run: python scripts/test_check_release_source_model.py
+        run: |
+          python scripts/test_check_release_source_model.py
+          python scripts/test_lab2_main_features.py
 
       - name: Prove vendor release source model
         run: scripts/check-release-source-model.sh vendor

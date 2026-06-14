@@ -13,7 +13,6 @@ from .common import (
     display_auth_header_pair,
     env_url,
     evaluation_body,
-    friendly_unavailable,
     http_json,
     observed_answer,
     ok_status,
@@ -63,9 +62,9 @@ def story() -> dict[str, Any]:
         "short_title": "Combined Support Attestations",
         "proves": "An SP MIS can combine source attestations into a local case-file decision without copying source rows.",
         "domain": "Social protection",
-        "availability": "local-only",
-        "availability_state": {"state": "local-only", "label": "Local only", "runnable": False},
-        "availability_note": "Runs on the local lab profile with the shared eligibility Notary on port 4323 (SHARED_EVIDENCE_CLIENT_BEARER).",
+        "availability": "hosted",
+        "availability_state": {"state": "hosted", "label": "Hosted", "runnable": True},
+        "availability_note": "",
         "intro": (
             "A caseworker reviews Miguel's support application. The final answer depends on civil status, programme enrollment, "
             "and district service availability, but the caseworker should not receive source rows from every registry."
@@ -93,9 +92,9 @@ def story() -> dict[str, Any]:
             {
                 "id": "discover",
                 "label": "Discover combined attestations",
-                "prompt": "Start by asking the local Notary what attestations it can evaluate.",
+                "prompt": "Start by asking the shared eligibility Notary what attestations it can evaluate.",
                 "button": "Discover attestations",
-                "request_summary": "GET the local shared eligibility Notary catalogue.",
+                "request_summary": "GET the shared eligibility Notary catalogue.",
             },
             {
                 "id": "civil-subclaim",
@@ -188,22 +187,22 @@ def _discover(step_id: str) -> dict[str, Any]:
     if not credential.get("token"):
         return {
             "step_id": step_id,
-            "friendly": friendly_unavailable(SERVICE_NAME, TOKEN_ENV, url),
+            "friendly": _friendly_missing_token(url),
             "request_source": request_source("GET", url, display_headers, internal=True),
-            "response_source": {"note": "No local token configured, so the request was not sent."},
+            "response_source": {"note": "No runtime token configured, so the request was not sent."},
         }
     result = http_json("GET", url, real_headers)
     claims = result.body.get("claims", []) if isinstance(result.body, dict) else []
     return {
         "step_id": step_id,
         "friendly": {
-            "title": "The local Notary advertises combined attestations." if ok_status(result.status) else "Attestation discovery needs attention.",
+            "title": "The Notary advertises combined attestations." if ok_status(result.status) else "Attestation discovery needs attention.",
             "message": "This catalog tells the caseworker which source evidence and final decision checks can be evaluated.",
             "status": "done" if ok_status(result.status) else "needs_attention",
             "facts": [
                 {"label": "HTTP status", "value": result.status if result.status is not None else "No response"},
                 {"label": "Attestations advertised", "value": len(claims) if isinstance(claims, list) else "Check source"},
-                {"label": "Availability", "value": "Local-only"},
+                {"label": "Availability", "value": "Hosted"},
             ],
         },
         "request_source": request_source("GET", url, display_headers, internal=True),
@@ -221,9 +220,9 @@ def _evaluate(step_id: str, claim_id: str, subject: str, label: str) -> dict[str
     if not credential.get("token"):
         return {
             "step_id": step_id,
-            "friendly": friendly_unavailable(SERVICE_NAME, TOKEN_ENV, url),
+            "friendly": _friendly_missing_token(url),
             "request_source": request_source("POST", url, display_headers, body, internal=True),
-            "response_source": {"note": "No local token configured, so the request was not sent."},
+            "response_source": {"note": "No runtime token configured, so the request was not sent."},
         }
     result = http_json("POST", url, real_headers, body)
     item = result_item(result.body, claim_id)
@@ -277,3 +276,19 @@ def _public_claim_name(step_id: str) -> str:
         "final-positive": "combined_support_eligible",
         "negative-control": "combined_support_eligible",
     }.get(step_id, "attestation_satisfied")
+
+
+def _friendly_missing_token(url: str) -> dict[str, Any]:
+    return {
+        "title": f"{SERVICE_NAME} token is not configured.",
+        "message": (
+            f"This scenario can run when {TOKEN_ENV} is set for the lab-homepage process. "
+            "The UI keeps the story visible so users can inspect the request shape while deployment wiring is checked."
+        ),
+        "status": "needs_attention",
+        "facts": [
+            {"label": "Endpoint", "value": url},
+            {"label": "Required token env", "value": TOKEN_ENV},
+            {"label": "Availability", "value": "Hosted"},
+        ],
+    }

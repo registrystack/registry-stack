@@ -35,7 +35,7 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_RELAY_OPS_HASH
-        commitment: sha256:47f6cbd8ccf3439991f499b962a5d06a817444e7cb3f7181fda959eb0bc89c81
+        commitment: sha256:92abaf4a7c39e44fb2868b1001c96c6f98c292e4fd4b5b59da946cbb48d9633f
       scopes:
         - registry_relay:ops_read
         - registry_relay:metrics_read
@@ -43,14 +43,14 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_METADATA_CLIENT_HASH
-        commitment: sha256:18c20eb1012c67359f5e3d5d77ef969056a8a8aed1a851d8621ba9d64cd2625b
+        commitment: sha256:c6ebe55270a87767c1557bce4195b54d0cb7431a7a147b465cdefc607a68710d
       scopes:
         - civil_registry:metadata
     - id: evidence_source
       fingerprint:
         provider: env
         name: CIVIL_EVIDENCE_SOURCE_HASH
-        commitment: sha256:46bc8978279cbaeff292c979901622bad8204738b49d71539475a4a2c5f39afc
+        commitment: sha256:98aea3e8475c2a4c034796c618649fe4fcfa8abf0efc7a5bfc481ea9b7942b83
       scopes:
         - civil_registry:metadata
         - civil_registry:rows
@@ -59,7 +59,7 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_EVIDENCE_ONLY_HASH
-        commitment: sha256:b757a3f8f65f95a37e3e5c99e7063d30fb11eac010faba8eaf5e8074a820b607
+        commitment: sha256:3a8d509aba60b1d7eeb05f08c5f92e8d0698c2366f72f29d7e5db9706a847bff
       scopes:
         - civil_registry:metadata
         - civil_registry:evidence_verification
@@ -67,7 +67,7 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_ROW_READER_HASH
-        commitment: sha256:899af9b2eb695cd7d9b5a8981c6bdf69dda76b5dc01d45c56b7ef6e2f7d5a461
+        commitment: sha256:86c87f8ec5e481fe0fdce16ea9787091c7314a3ae814142ea91a2c0230904a3c
       scopes:
         - civil_registry:metadata
         - civil_registry:rows
@@ -75,7 +75,7 @@ auth:
       fingerprint:
         provider: env
         name: SHARED_CIVIL_EVIDENCE_SOURCE_HASH
-        commitment: sha256:2803540ac8512732049258583580557a3e1a00d057e5294f8b7f80ee56e81bcf
+        commitment: sha256:3280f4ee00e245de80372e9b380214a300e5a59f168eb5834297d02b56456f20
       scopes:
         - civil_registry:metadata
         - civil_registry:rows

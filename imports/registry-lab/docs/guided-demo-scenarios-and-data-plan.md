@@ -255,9 +255,9 @@ The UI should include a credential explorer with friendly fields first:
 User story: a policy analyst needs district-level eligibility counts for
 planning, not household rows.
 
-Availability: local-only until hosted validation shows the aggregate route can
-return data with the aggregate reader credential. The current live hosted Relay
-returns `403` after an internal row-scoped read.
+Availability: hosted and local. Hosted runs through the lab homepage against
+the hosted social Relay while still displaying public hosted URLs in the
+technical request source.
 
 Steps:
 
@@ -497,6 +497,8 @@ Hosted checks:
 - Health scenario: minimal rename to applicant service-availability projection.
 - Agriculture scenario: visible as local-only until a hosted agriculture profile
   exists.
+- Social aggregate and combined support scenarios: hosted via the lab homepage,
+  with internal service URLs used only by the server-side runner.
 - `/scenarios`: chooser for the implemented stories. Each story has a
   dedicated route under `/scenarios/<scenario-id>`.
 - Deferred cleanup: generic `ZZ` and `demo.example.gov` identifiers remain in

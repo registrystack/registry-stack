@@ -465,14 +465,20 @@ note "Relay config source before apply: $(json_field "${evidence_dir}/07-relay-p
 note "Relay last_apply_result before apply: $(json_field "${evidence_dir}/07-relay-posture-before.json" configuration.last_apply_result)"
 pause
 
-narrate "## 4. A credential request uses the current Notary signing key"
+narrate "## 4. Deployment-profile doctor reports make lab posture visible"
+command_block 'LAB2_DOCTOR_PROFILE=hosted_lab just lab2-doctor'
+LAB2_DOCTOR_PROFILE=hosted_lab LAB2_DOCTOR_EVIDENCE_DIR="${evidence_dir}/doctor" just lab2-doctor > "${evidence_dir}/08a-doctor-profile.txt"
+note "Hosted-lab doctor summary: doctor/summary-hosted_lab.json"
+pause
+
+narrate "## 5. A credential request uses the current Notary signing key"
 issue_notary_credential \
   "did:web:civil-evidence.demo.example#civil-evidence-demo-key-1" \
   "${evidence_dir}/09-notary-credential-before-rotation.json"
 note "Credential before rotation used kid: $(json_field "${evidence_dir}/09-notary-credential-before-rotation.json" issuer_signed_jwt_header.kid)"
 pause
 
-narrate "## 5. Apply a signed Relay public_metadata bundle live"
+narrate "## 6. Apply a signed Relay public_metadata bundle live"
 diff -u \
   output/lab2/tuf-repo/relay-noop/source/civil-registry-relay.yaml \
   output/lab2/tuf-repo/relay-public-metadata/source/civil-registry-relay.yaml \
@@ -496,7 +502,7 @@ note "Relay posture owner after apply: $(json_field "${evidence_dir}/13-relay-po
 note "Relay config hash changed without container restart."
 pause
 
-narrate "## 6. Apply a signed Notary signing-key rotation"
+narrate "## 7. Apply a signed Notary signing-key rotation"
 diff -u \
   output/lab2/tuf-repo/notary-noop/source/civil-notary.yaml \
   output/lab2/tuf-repo/notary-signing-key-rotation/source/civil-notary.yaml \
@@ -516,7 +522,7 @@ note "Credential after rotation used kid: $(json_field "${evidence_dir}/23-notar
 note "Posture keeps old and new evidence signing kids ready during no-drop rotation."
 pause
 
-narrate "## 7. Guardrails reject under-authorized signed config"
+narrate "## 8. Guardrails reject under-authorized signed config"
 command_block 'registry-relay config apply-bundle ... /lab2/tuf-repo/relay-threshold-minus-one/...'
 apply_relay_bundle_may_fail relay-threshold-minus-one "${evidence_dir}/30-relay-threshold-minus-one.json" || true
 assert_json_field "${evidence_dir}/30-relay-threshold-minus-one.json" result rejected_threshold
@@ -528,7 +534,7 @@ note "Threshold-minus-one result: $(json_field "${evidence_dir}/30-relay-thresho
 note "Exact-threshold result: $(json_field "${evidence_dir}/31-relay-threshold-exact.json" result)"
 pause
 
-narrate "## 8. Break-glass is accepted once, then rate-limited across restart"
+narrate "## 9. Break-glass is accepted once, then rate-limited across restart"
 command_block 'curl -X POST http://127.0.0.1:4419/admin/v1/config/apply --data @signed-break-glass-request.json'
 post_break_glass relay-break-glass "/var/lib/registry-relay/cache/tuf-relay-break-glass" INC-LAB2-DEMO-BG "${evidence_dir}/40-relay-break-glass.json"
 assert_json_field "${evidence_dir}/40-relay-break-glass.json" result applied
@@ -553,6 +559,7 @@ cat >> "${story_file}" <<EOF
 - Generated artifact log: \`00-lab2-generate.txt\`
 - Rendered governed config scan: \`02-rendered-accepted-roots-scan.txt\`
 - Overlay setup logs: \`05a-lab2-down.txt\`, \`05b-lab2-up.txt\`
+- Deployment profile doctor: \`doctor/summary-hosted_lab.json\`, \`doctor/relay-doctor-hosted_lab.json\`, \`doctor/notary-doctor-hosted_lab.json\`
 - Relay baseline metadata: \`06-relay-metadata-before.json\`
 - Relay live apply: \`10-relay-public-metadata-config.diff\`, \`11-relay-public-metadata-apply.json\`, \`13-relay-posture-after-public-metadata-summary.json\`
 - Notary key rotation: \`09-notary-credential-before-rotation.json\`, \`20-notary-signing-key-rotation.diff\`, \`21-notary-signing-key-rotation-apply.json\`, \`23-notary-credential-after-rotation.json\`

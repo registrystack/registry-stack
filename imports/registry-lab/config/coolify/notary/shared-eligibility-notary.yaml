@@ -14,7 +14,7 @@ auth:
       fingerprint:
         provider: env
         name: SHARED_EVIDENCE_CLIENT_TOKEN_HASH
-        commitment: sha256:cc2b488b9347bd08f7645c9c77ad75977a4bc60a69c1e511f9b5e96c245628c1
+        commitment: sha256:1a2927edc408f2a0908750d5f988e73a09afb243d2f4fa5aea249af9fc89ea37
       scopes:
         - civil_registry:evidence_verification
         - social_protection_registry:evidence_verification
@@ -24,7 +24,7 @@ auth:
       fingerprint:
         provider: env
         name: SHARED_EVIDENCE_CLIENT_BEARER_HASH
-        commitment: sha256:f505544b0cc717233a2ee9ef3bd95486aa7df9200375af03f624fa113444cba4
+        commitment: sha256:3d0d1305cc6f1a4266dedf6c6a50dd8bc6c9631226ffca3cfd36ee416e565fbe
       scopes:
         - civil_registry:evidence_verification
         - social_protection_registry:evidence_verification
@@ -47,7 +47,7 @@ cel:
 evidence:
   enabled: true
   service_id: shared-eligibility-notary
-  api_base_url: http://shared-eligibility-notary:8080
+  api_base_url: https://shared-notary.lab.registrystack.org
   inline_batch_limit: 20
   source_connections:
     civil:
@@ -67,12 +67,12 @@ evidence:
       provider: local_jwk_env
       private_jwk_env: REGISTRY_NOTARY_ISSUER_JWK
       alg: EdDSA
-      kid: did:web:shared-eligibility-evidence.demo.example#shared-eligibility-evidence-demo-key-1
+      kid: did:web:shared-notary.lab.registrystack.org#shared-eligibility-evidence-demo-key-1
       status: active
   credential_profiles:
     combined_support_sd_jwt:
       format: application/dc+sd-jwt
-      issuer: did:web:shared-eligibility-evidence.demo.example
+      issuer: did:web:shared-notary.lab.registrystack.org
       signing_key: shared-eligibility-evidence-demo
       vct: https://demo.example/credentials/combined-support-eligibility/v1
       validity_seconds: 600
@@ -130,7 +130,7 @@ evidence:
       credential_profiles:
         - combined_support_sd_jwt
     - id: social-program-active
-      title: Program Enrollment Attestation
+      title: Social program active
       version: 2026-05
       subject_type: person
       value:
@@ -165,7 +165,7 @@ evidence:
       credential_profiles:
         - combined_support_sd_jwt
     - id: health-service-available
-      title: Service Availability Attestation
+      title: Health service available
       version: 2026-05
       subject_type: person
       value:
@@ -212,7 +212,7 @@ evidence:
       credential_profiles:
         - combined_support_sd_jwt
     - id: eligible-for-combined-support
-      title: Combined Support Eligibility Attestation
+      title: Eligible for combined support
       version: 2026-05
       subject_type: person
       value:

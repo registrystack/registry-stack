@@ -451,8 +451,8 @@ class ScenarioPayloadTest(unittest.TestCase):
         self.assertEqual(payload["default_scenario_id"], "alive-proof")
         self.assertEqual(len(payload["scenarios"]), 6)
         self.assertEqual(payload["scenarios"][2]["availability"], "hosted")
-        self.assertEqual(payload["scenarios"][3]["availability"], "local-only")
-        self.assertEqual(payload["scenarios"][4]["availability"], "local-only")
+        self.assertEqual(payload["scenarios"][3]["availability"], "hosted")
+        self.assertEqual(payload["scenarios"][4]["availability"], "hosted")
 
     def test_catalogue_exposes_attestation_metadata_and_availability_state(self) -> None:
         payload = server.scenario_payload(self._payload_config(), lab_mode="hosted")
@@ -637,14 +637,14 @@ class ScenarioPayloadTest(unittest.TestCase):
                     self.assertNotIn("notary-token", str(headers))
                     self.assertIn("[runtime demo token hidden]", str(headers))
 
-    def test_local_only_scenarios_report_required_token_before_execution(self) -> None:
+    def test_combined_support_reports_required_token_before_execution(self) -> None:
         os.environ.pop("SHARED_EVIDENCE_CLIENT_BEARER", None)
         result = server.run_scenario_step(server.enrich_config({"credentials": []}), "combined-support", "discover", lab_mode="local")
         self.assertEqual(result["friendly"]["status"], "needs_attention")
         self.assertIn("SHARED_EVIDENCE_CLIENT_BEARER", str(result["friendly"]["facts"]))
         self.assertIn("[runtime demo token missing]", str(result["request_source"]))
 
-    def test_social_aggregate_uses_local_relay_until_hosted_scope_passes(self) -> None:
+    def test_social_aggregate_uses_configured_display_url_and_request_url(self) -> None:
         class Resp:
             status = 200
             headers = {"Content-Type": "application/json"}
@@ -664,15 +664,20 @@ class ScenarioPayloadTest(unittest.TestCase):
             captured["req"] = req
             return Resp()
 
+        os.environ["SOCIAL_RELAY_URL"] = "http://social-protection-registry-relay:8080"
         with mock.patch.object(server.urllib.request, "urlopen", fake):
             result = server.run_scenario_step(self._payload_config(), "social-aggregate", "read-aggregate", lab_mode="local")
 
         self.assertEqual(result["friendly"]["status"], "done")
         self.assertEqual(
             captured["req"].full_url,
-            "http://127.0.0.1:4312/v1/datasets/social_protection_registry/aggregates/households_by_eligibility_band",
+            "http://social-protection-registry-relay:8080/v1/datasets/social_protection_registry/aggregates/households_by_eligibility_band",
         )
         self.assertEqual(captured["req"].get_header("Authorization"), "Bearer civil-token")
+        self.assertEqual(
+            result["request_source"]["url"],
+            "https://social.example/v1/datasets/social_protection_registry/aggregates/households_by_eligibility_band",
+        )
         self.assertEqual(result["request_source"]["headers"]["Authorization"], "Bearer civil-token")
         self.assertEqual(result["request_source"]["headers"]["Data-Purpose"], "https://demo.example.gov/purpose/decentralized-evidence-demo")
 
@@ -878,16 +883,17 @@ class LabModePayloadTest(unittest.TestCase):
 
     def test_catalogue_hosted_scenario_is_runnable_in_hosted_mode(self) -> None:
         payload = server.scenario_payload(self._config(), lab_mode="hosted")
-        item = next(s for s in payload["scenarios"] if s["id"] == "alive-proof")
-        self.assertTrue(item["runnable"])
+        for sid in ("alive-proof", "social-aggregate", "combined-support"):
+            item = next(s for s in payload["scenarios"] if s["id"] == sid)
+            self.assertTrue(item["runnable"], f"{sid} should be runnable in hosted mode")
 
     def test_catalogue_local_only_scenario_not_runnable_in_hosted_mode(self) -> None:
         payload = server.scenario_payload(self._config(), lab_mode="hosted")
-        for sid in ("social-aggregate", "combined-support", "agriculture-voucher"):
+        for sid in ("agriculture-voucher",):
             item = next(s for s in payload["scenarios"] if s["id"] == sid)
             self.assertFalse(item["runnable"], f"{sid} should not be runnable in hosted mode")
 
-    def test_catalogue_local_only_scenario_is_runnable_in_local_mode(self) -> None:
+    def test_catalogue_scenarios_are_runnable_in_local_mode(self) -> None:
         payload = server.scenario_payload(self._config(), lab_mode="local")
         for sid in ("social-aggregate", "combined-support", "agriculture-voucher"):
             item = next(s for s in payload["scenarios"] if s["id"] == sid)
@@ -900,10 +906,10 @@ class LabModePayloadTest(unittest.TestCase):
         self.assertEqual(payload["lab_mode"], "hosted")
         self.assertTrue(payload["runnable"])
 
-    def test_story_payload_local_only_not_runnable_in_hosted_mode(self) -> None:
+    def test_story_payload_promoted_scenario_runnable_in_hosted_mode(self) -> None:
         payload = server.scenario_payload(self._config(), "social-aggregate", lab_mode="hosted")
         self.assertEqual(payload["lab_mode"], "hosted")
-        self.assertFalse(payload["runnable"])
+        self.assertTrue(payload["runnable"])
 
     def test_story_payload_local_only_runnable_in_local_mode(self) -> None:
         payload = server.scenario_payload(self._config(), "social-aggregate", lab_mode="local")
@@ -912,17 +918,33 @@ class LabModePayloadTest(unittest.TestCase):
 
     # ---- run_scenario_step guard in hosted mode ----
 
-    def test_run_step_hosted_local_only_returns_local_only_status(self) -> None:
-        result = server.run_scenario_step(self._config(), "social-aggregate", "read-aggregate", lab_mode="hosted")
-        self.assertEqual(result["friendly"]["status"], "local_only")
+    def test_run_step_hosted_promoted_scenario_executes(self) -> None:
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/json"}
 
-    def test_run_step_hosted_local_only_has_correct_title(self) -> None:
-        result = server.run_scenario_step(self._config(), "social-aggregate", "read-aggregate", lab_mode="hosted")
-        self.assertIn("Aggregate versus row access", result["friendly"]["title"])
-        self.assertIn("local lab profile", result["friendly"]["title"])
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b'{"data":[{"eligibility_band":"priority","household_count":3}]}'
+
+        called = []
+
+        def fake(req, timeout=None):
+            called.append(req)
+            return Resp()
+
+        with mock.patch.object(server.urllib.request, "urlopen", fake):
+            result = server.run_scenario_step(self._config(), "social-aggregate", "read-aggregate", lab_mode="hosted")
+        self.assertEqual(result["friendly"]["status"], "done")
+        self.assertTrue(called)
 
     def test_run_step_hosted_local_only_has_message_and_facts(self) -> None:
-        result = server.run_scenario_step(self._config(), "combined-support", "discover", lab_mode="hosted")
+        result = server.run_scenario_step(self._config(), "agriculture-voucher", "discover", lab_mode="hosted")
         self.assertEqual(result["friendly"]["status"], "local_only")
         self.assertIn("hosted lab does not run", result["friendly"]["message"].lower())
         facts = {f["label"]: f["value"] for f in result["friendly"]["facts"]}
@@ -944,11 +966,11 @@ class LabModePayloadTest(unittest.TestCase):
         import lab_homepage_scenarios.common as _common
         with mock.patch.object(_common, "http_json", side_effect=fail_if_called):
             # Should NOT raise; if it does, the guard is missing.
-            result = server.run_scenario_step(self._config(), "social-aggregate", "read-aggregate", lab_mode="hosted")
+            result = server.run_scenario_step(self._config(), "agriculture-voucher", "discover", lab_mode="hosted")
         self.assertEqual(result["friendly"]["status"], "local_only")
 
-    def test_run_step_local_mode_local_only_still_executes(self) -> None:
-        """In local mode, a local-only scenario must follow its normal execution path."""
+    def test_run_step_local_mode_executes_scenario_path(self) -> None:
+        """In local mode, a scenario must follow its normal execution path."""
         class Resp:
             status = 200
             headers = {"Content-Type": "application/json"}

@@ -42,6 +42,15 @@ DHIS2_PROGRAMME_CLAIMS = [
 
 EXPECTED_STEPS = {
     "alive-proof": ["discover", "prepare-evidence", "deny-row"],
+    "social-aggregate": ["discover", "read-aggregate", "deny-row-with-aggregate", "read-row-with-row-token"],
+    "combined-support": [
+        "discover",
+        "civil-subclaim",
+        "social-subclaim",
+        "health-subclaim",
+        "final-positive",
+        "negative-control",
+    ],
     "dhis2-programme-vc": [
         "discover",
         "evaluate-programme",
@@ -56,6 +65,20 @@ EXPECTED_STEP_STATUSES = {
         "discover": "done",
         "prepare-evidence": "done",
         "deny-row": "denied_as_expected",
+    },
+    "social-aggregate": {
+        "discover": "done",
+        "read-aggregate": "done",
+        "deny-row-with-aggregate": "denied_as_expected",
+        "read-row-with-row-token": "done",
+    },
+    "combined-support": {
+        "discover": "done",
+        "civil-subclaim": "done",
+        "social-subclaim": "done",
+        "health-subclaim": "done",
+        "final-positive": "done",
+        "negative-control": "done",
     },
     "dhis2-programme-vc": {
         "discover": "done",
