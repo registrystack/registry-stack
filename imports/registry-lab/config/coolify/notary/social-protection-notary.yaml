@@ -54,8 +54,7 @@ federation:
   peers:
     - node_id: did:web:benefits.demo.example.gov
       issuer: https://benefits.demo.example.gov
-      jwks_uri: http://static-metadata-publisher:8080/federation/default-benefits-jwks.json
-      allow_insecure_private_network: true
+      jwks_uri: https://metadata.lab.registrystack.org/federation/default-benefits-jwks.json
       allowed_protocol_versions:
         - registry-notary-federation/v0.1
       allowed_purposes:
