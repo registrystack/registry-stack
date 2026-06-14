@@ -39,6 +39,11 @@ class CoolifyRequiredEnvTest(unittest.TestCase):
             )
             self.assertEqual(["TOKEN_A", "TOKEN_B"], self.script.required_env_keys(compose))
 
+    def test_registry_lab_gate_includes_social_notary_source_token(self) -> None:
+        compose = SCRIPT_DIR.parent / "compose.coolify.yaml"
+        keys = self.script.required_env_keys(compose)
+        self.assertIn("SOCIAL_EVIDENCE_SOURCE_RAW", keys)
+
     def test_collects_values_from_coolify_list_payload(self) -> None:
         values = self.script.collect_env_values(
             [
