@@ -36,7 +36,7 @@ post_shacl() {
     }' \
     > "${report}.request.json"
 
-  curl -sS \
+  curl -sS --connect-timeout 10 --max-time 60 \
     -H "Content-Type: application/json" \
     -H "Accept: application/json" \
     --data-binary @"${report}.request.json" \
@@ -71,7 +71,7 @@ post_json_schema() {
     }' \
     > "${report}.request.json"
 
-  curl -sS \
+  curl -sS --connect-timeout 10 --max-time 60 \
     -H "Content-Type: application/json" \
     -H "Accept: application/json" \
     --data-binary @"${report}.request.json" \
@@ -113,20 +113,23 @@ reports=()
 
 if [[ -n "${json_validator_url}" ]]; then
   json_schema_file="${report_dir}/json-schema-2020-12.json"
-  curl -sS -L -o "${json_schema_file}" "${json_schema_url}"
+  curl -sS --connect-timeout 10 --max-time 60 -L -o "${json_schema_file}" "${json_schema_url}"
 
-  while IFS= read -r schema_artifact; do
-    relative_artifact="${schema_artifact#"${out_dir}/"}"
-    report_name="$(printf '%s' "${relative_artifact}" | tr '/.' '--')"
-    report="${report_dir}/${report_name}.json"
-    post_json_schema \
-      "${schema_artifact}" \
-      "${json_validator_url}" \
-      "${json_schema_file}" \
-      "${report}"
-    assert_no_errors "${report}"
-    reports+=("${report}")
-  done < <(find "${out_dir}/schema" -name schema.json -type f | sort)
+  if [[ -d "${out_dir}/schema" ]]; then
+    while IFS= read -r schema_artifact; do
+      relative_artifact="${schema_artifact#"${out_dir}/"}"
+      report_name="${relative_artifact//\//-}"
+      report_name="${report_name//./-}"
+      report="${report_dir}/${report_name}.json"
+      post_json_schema \
+        "${schema_artifact}" \
+        "${json_validator_url}" \
+        "${json_schema_file}" \
+        "${report}"
+      assert_no_errors "${report}"
+      reports+=("${report}")
+    done < <(find "${out_dir}/schema" -name schema.json -type f | sort)
+  fi
 fi
 
 if [[ "${run_remote}" == "1" ]]; then
@@ -155,12 +158,14 @@ if [[ "${run_remote}" == "1" ]]; then
   reports+=("${report_dir}/bregdcat-ap-2.1.0.json")
 fi
 
-jq -r '
-  [
-    input_filename,
-    (.overview.profileID // "unknown-profile"),
-    (.result // "unknown-result"),
-    (.counters.nrOfErrors // 0),
-    (.counters.nrOfWarnings // 0)
-  ] | @tsv
-' "${reports[@]}"
+if [[ "${#reports[@]}" -gt 0 ]]; then
+  jq -r '
+    [
+      input_filename,
+      (.overview.profileID // "unknown-profile"),
+      (.result // "unknown-result"),
+      (.counters.nrOfErrors // 0),
+      (.counters.nrOfWarnings // 0)
+    ] | @tsv
+  ' "${reports[@]}"
+fi
