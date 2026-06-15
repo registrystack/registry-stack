@@ -95,6 +95,15 @@ services:
     volumes:
       - cfg-walt:/waltid-wallet-api/config:ro
       - walt-data:/waltid-wallet-api/data
+    healthcheck:
+      # Liveness only: curl without -f exits 0 on any HTTP response (the Ktor
+      # API may answer 404 at /), non-zero on connection-refused while the JVM
+      # is still booting. The image ships curl. Long start_period for JVM boot.
+      test: ["CMD", "curl", "-s", "-o", "/dev/null", "http://127.0.0.1:7001/"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     restart: unless-stopped
 
   waltid-demo-wallet:
