@@ -286,7 +286,7 @@ services:
       context: .
       dockerfile: Dockerfile.static-metadata
       args:
-        REGISTRY_MANIFEST_REF: a2e648aaac864563a3311b9d95b8143afa1b7334
+        REGISTRY_MANIFEST_REF: be2332cfe282238e11a502f4bb10c9aeba8c423f
         REGISTRY_RELAY_REF: 0d6b569397bf792678283c2c89a2d85d6424556e
     restart: unless-stopped
     expose:

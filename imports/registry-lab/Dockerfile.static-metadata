@@ -5,7 +5,7 @@ FROM rust:1-bookworm AS publisher
 WORKDIR /app
 
 ARG REGISTRY_MANIFEST_REPO_URL=https://github.com/jeremi/registry-manifest.git
-ARG REGISTRY_MANIFEST_REF=a2e648aaac864563a3311b9d95b8143afa1b7334
+ARG REGISTRY_MANIFEST_REF=be2332cfe282238e11a502f4bb10c9aeba8c423f
 ARG REGISTRY_RELAY_REPO_URL=https://github.com/jeremi/registry-relay.git
 ARG REGISTRY_RELAY_REF=0d6b569397bf792678283c2c89a2d85d6424556e
 
