@@ -1065,10 +1065,14 @@ def validate_shared_notary_hosted_config(root: Path) -> list[Issue]:
             )
         )
     source_connections = evidence.get("source_connections") if isinstance(evidence.get("source_connections"), dict) else {}
+    # shared-eligibility-notary runs in the per-track lab-social Coolify app, whose
+    # docker network is separate from the monolith. civil/health relays live in the
+    # monolith and must be reached over public HTTPS; the social relay is co-located
+    # in lab-social and stays on the internal docker network.
     expected_sources = {
-        "civil": ("http://civil-registry-relay:8080", "SHARED_CIVIL_EVIDENCE_SOURCE_RAW"),
+        "civil": (f"https://civil-relay.{LAB_DOMAIN}", "SHARED_CIVIL_EVIDENCE_SOURCE_RAW"),
         "social_protection": ("http://social-protection-registry-relay:8080", "SHARED_SOCIAL_EVIDENCE_SOURCE_RAW"),
-        "health": ("http://health-registry-relay:8080", "SHARED_HEALTH_EVIDENCE_SOURCE_RAW"),
+        "health": (f"https://health-relay.{LAB_DOMAIN}", "SHARED_HEALTH_EVIDENCE_SOURCE_RAW"),
     }
     for name, (base_url, token_env) in sorted(expected_sources.items()):
         connection = source_connections.get(name) if isinstance(source_connections, dict) else None
