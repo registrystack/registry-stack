@@ -387,7 +387,7 @@
   name: Universal DPI Safeguards Framework
   standards_body: United Nations DPI Safeguards initiative
   official_url: https://www.dpi-safeguards.org/
-  version_or_profile: Universal DPI Safeguards Framework (governance framework; no numbered technical version asserted)
+  version_or_profile: Universal DPI Safeguards Framework version 2.0 (governance framework; no numbered technical specification asserted)
   status: evaluated
   claim_level: compares_against
   adoption_mode: not adopted
@@ -397,17 +397,18 @@
     - registry-notary
     - registry-atlas
   surfaces:
-    - safeguards pillar comparison
+    - Framework 2.0 principle and pathway comparison
     - technical alignment positioning
   evidence_docs:
     - label: DPI safeguards alignment page
       url: https://docs.registrystack.org/explanation/dpi-safeguards-alignment/
-  last_checked: 2026-06-13
+  last_checked: 2026-06-15
   notes: >-
     The framework is a governance instrument, not a technical specification, so
     no conformance is claimed. The alignment page compares stack capabilities
-    against the safeguards pillars at the technical implementation layer and
-    states explicitly that alignment is not certification.
+    against selected Framework 2.0 principles and pathways at the technical
+    implementation layer and states explicitly that alignment is not
+    certification.
 - id: sp-dci
   name: Social Protection Digital Convergence Initiative
   standards_body: SP DCI
