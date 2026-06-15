@@ -21,7 +21,7 @@ No renderer makes network calls or reads files beyond the manifest input.
 | Catalog JSON | `catalog` |
 | DCAT JSON-LD | `dcat` |
 | CPSV-AP service catalogue JSON-LD | `cpsv-ap` |
-| BRegDCAT-AP 2.00 JSON-LD | `bregdcat-ap` |
+| BRegDCAT-AP JSON-LD | `bregdcat-ap` |
 | SHACL node shapes JSON-LD | `shacl` |
 | JSON Schema Draft 2020-12 | `json-schema` |
 | Form JSON Schema Draft 2020-12 | `form-json-schema` |
@@ -40,6 +40,8 @@ The `dcat` format dispatches based on an optional `--profile` flag: `--profile d
 `--profile dcat-ap` renders base Data Catalog Vocabulary (DCAT); `--profile bregdcat-ap`
 renders the Business Registers Extended DCAT Application Profile (BRegDCAT-AP) variant.
 Omitting `--profile` with `--format dcat` defaults to base DCAT.
+For external validator smoke checks and claim boundaries, see
+[ITB/SEMIC validation smoke checks](itb-semic-validation.md).
 
 ## When to use Registry Manifest
 

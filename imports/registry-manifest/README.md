@@ -100,6 +100,16 @@ the same schema and renderer contract before a commons release:
 scripts/check-contract-kernel.sh ../registry-lab/config/static-metadata/metadata.yaml
 ```
 
+Optional ITB/SEMIC smoke check for selected DCAT and BRegDCAT-AP artifacts:
+
+```sh
+scripts/itb-semic-smoke.sh
+ITB_SEMIC_REMOTE=1 scripts/itb-semic-smoke.sh
+```
+
+See [ITB/SEMIC validation smoke checks](docs/itb-semic-validation.md) for the
+claim boundary and known BRegDCAT-AP warning behavior.
+
 ## Supported Render Formats
 
 `registry-manifest render` supports:

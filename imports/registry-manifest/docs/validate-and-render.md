@@ -92,13 +92,17 @@ cargo run -p registry-manifest-cli -- render \
 To render the BRegDCAT-AP profile variant via `--format dcat`, pass `--profile bregdcat-ap`.
 Alternatively, use the `--format bregdcat-ap` shorthand:
 
-Render BRegDCAT-AP 2.00 JSON-LD:
+Render BRegDCAT-AP JSON-LD:
 
 ```sh
 cargo run -p registry-manifest-cli -- render \
   profiles/example-civil-registration/fixtures/metadata.yaml \
   --format bregdcat-ap
 ```
+
+For optional public ITB/SEMIC validator smoke checks against rendered DCAT and
+BRegDCAT-AP artifacts, see
+[ITB/SEMIC validation smoke checks](itb-semic-validation.md).
 
 Render SHACL (Shapes Constraint Language) node shapes:
 

@@ -55,15 +55,15 @@ Rights Language (ODRL).
 | `evidence-offering` | `--offering <id>` | Single evidence offering JSON |
 | `policies` | None | ODRL policy collection JSON-LD |
 | `policy` | `--dataset <id>` | Per-dataset ODRL policy document JSON-LD |
-| `dcat` | `--profile <id>` optional | Base DCAT JSON-LD. With `--profile bregdcat-ap`, renders the BRegDCAT-AP 2.00 variant. `--profile dcat` and `--profile dcat-ap` also render base DCAT. |
-| `bregdcat-ap` | None | BRegDCAT-AP 2.00 JSON-LD (shorthand; equivalent to `--format dcat --profile bregdcat-ap`) |
+| `dcat` | `--profile <id>` optional | Base DCAT JSON-LD. With `--profile bregdcat-ap`, renders the BRegDCAT-AP variant. `--profile dcat` and `--profile dcat-ap` also render base DCAT. |
+| `bregdcat-ap` | None | BRegDCAT-AP JSON-LD (shorthand; equivalent to `--format dcat --profile bregdcat-ap`) |
 | `cpsv-ap` | None | CPSV-AP 3.2.0 service catalogue JSON-LD |
 | `shacl` | None | SHACL node shapes JSON-LD |
 | `json-schema` | `--dataset <id>` and `--entity <name>` | JSON Schema Draft 2020-12 |
 | `form-json-schema` | `--form <id>` | Form JSON Schema Draft 2020-12 |
 | `ogc-records` | None | OGC API Records item bodies JSON |
 
-Valid `--profile` values for `--format dcat`: `dcat`, `dcat-ap` (both render base DCAT), and `bregdcat-ap` (renders BRegDCAT-AP 2.00).
+Valid `--profile` values for `--format dcat`: `dcat`, `dcat-ap` (both render base DCAT), and `bregdcat-ap` (renders BRegDCAT-AP JSON-LD).
 Use `--format cpsv-ap` for the service catalogue rather than `--format dcat --profile cpsv-ap`.
 
 ## Manifest top-level keys
