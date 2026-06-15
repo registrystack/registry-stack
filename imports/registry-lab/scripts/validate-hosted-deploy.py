@@ -1248,6 +1248,15 @@ def validate_config_loader_hosted_outputs(
                 "hosted config-loader must copy the lab_homepage_scenarios package used by lab-homepage-server.py",
             )
         )
+    if "cp -a /tmp/repo/scripts/lab_homepage_explorer /out/static-scripts/" not in command_text:
+        issues.append(
+            Issue(
+                "lab-homepage-explorer-not-copied",
+                artifact,
+                "services.config-loader.command",
+                "hosted config-loader must copy the lab_homepage_explorer package used by lab-homepage-server.py",
+            )
+        )
     if "cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/" not in command_text:
         issues.append(
             Issue(

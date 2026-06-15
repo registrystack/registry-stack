@@ -166,6 +166,8 @@ def top_nav_html(active: str = "") -> str:
     entries = (
         ("home", "/", "Home"),
         ("scenarios", "/scenarios", "Scenario demos"),
+        ("registry-explorer", "/registry-explorer", "Registry Explorer"),
+        ("claims-explorer", "/claims-explorer", "Claims Explorer"),
         ("wallet", "/#wallet", "Wallet test"),
         ("services", "/#services", "For developers"),
     )

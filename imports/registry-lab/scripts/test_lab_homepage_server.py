@@ -31,8 +31,11 @@ def _static_text(name: str) -> str:
 SHARED_CSS = _static_text("shared.css")
 HOMEPAGE_CSS = _static_text("homepage.css")
 SCENARIOS_CSS = _static_text("scenarios.css")
+EXPLORERS_CSS = _static_text("explorers.css")
 HOMEPAGE_JS = _static_text("homepage.js")
 SCENARIOS_JS = _static_text("scenarios.js")
+REGISTRY_EXPLORER_JS = _static_text("registry-explorer.js")
+CLAIMS_EXPLORER_JS = _static_text("claims-explorer.js")
 
 
 ATTESTATION_RESPONSE_KEYS = {
@@ -851,6 +854,346 @@ class ScenarioPageHtmlTest(unittest.TestCase):
         self.assertIn("Disclosure boundary", SCENARIOS_JS)
         self.assertIn("Proof facts", SCENARIOS_JS)
         self.assertIn("attestationNames", SCENARIOS_JS)
+
+
+class ExplorerPageHtmlTest(unittest.TestCase):
+    """Explorer pages load self-hosted assets and self-demonstrate before controls."""
+
+    ORIENTING_SENTENCE = (
+        "Relay shows what an authorized system can read. "
+        "Notary returns only the fact a service asked for."
+    )
+
+    def test_registry_explorer_page_shell(self) -> None:
+        page = server.explorer_page_html("registry").decode("utf-8")
+        self.assertIn("<title>Registry Explorer", page)
+        self.assertIn('id="registry-explorer-root"', page)
+        self.assertIn(self.ORIENTING_SENTENCE, page)
+        self.assertIn("/static/explorers.css", page)
+        self.assertIn("/static/registry-explorer.js", page)
+        self.assertIn('href="/registry-explorer" aria-current="page"', page)
+        self.assertNotIn("<script>", page)
+
+    def test_claims_explorer_page_shell(self) -> None:
+        page = server.explorer_page_html("claims").decode("utf-8")
+        self.assertIn("<title>Claims Explorer", page)
+        self.assertIn('id="claims-explorer-root"', page)
+        self.assertIn(self.ORIENTING_SENTENCE, page)
+        self.assertIn("/static/explorers.css", page)
+        self.assertIn("/static/claims-explorer.js", page)
+        self.assertIn('href="/claims-explorer" aria-current="page"', page)
+        self.assertNotIn("<script>", page)
+
+    def test_explorer_page_rejects_unknown_kind(self) -> None:
+        with self.assertRaises(ValueError):
+            server.explorer_page_html("unknown")
+
+    def test_registry_explorer_js_uses_same_origin_api_only(self) -> None:
+        self.assertIn("/api/explorer/registries.json", REGISTRY_EXPLORER_JS)
+        self.assertNotIn("http://", REGISTRY_EXPLORER_JS)
+        self.assertNotIn("https://", REGISTRY_EXPLORER_JS)
+
+    def test_registry_explorer_js_keeps_query_controls_primary(self) -> None:
+        controls = REGISTRY_EXPLORER_JS.index("registry-query-panel")
+        result = REGISTRY_EXPLORER_JS.index("Query context")
+        self.assertLess(controls, result)
+        self.assertIn("Filter and purpose", REGISTRY_EXPLORER_JS)
+        self.assertIn("filterQueryParams", REGISTRY_EXPLORER_JS)
+
+    def test_claims_explorer_js_uses_same_origin_api_only(self) -> None:
+        self.assertIn("/api/explorer/claims.json", CLAIMS_EXPLORER_JS)
+        self.assertNotIn("http://", CLAIMS_EXPLORER_JS)
+        self.assertNotIn("https://", CLAIMS_EXPLORER_JS)
+
+    def test_claims_explorer_js_keeps_minimization_secondary(self) -> None:
+        answer = CLAIMS_EXPLORER_JS.index("Answer")
+        minimization = CLAIMS_EXPLORER_JS.index("Minimization details")
+        raw_json = CLAIMS_EXPLORER_JS.index("Raw JSON")
+        self.assertLess(answer, minimization)
+        self.assertLess(minimization, raw_json)
+        self.assertIn("No source row returned.", CLAIMS_EXPLORER_JS)
+        self.assertNotIn("<h3>Data minimization</h3>", CLAIMS_EXPLORER_JS)
+        self.assertNotIn("<span>Relay fields used</span>", CLAIMS_EXPLORER_JS)
+
+
+class ExplorerApiPayloadTest(unittest.TestCase):
+    """Explorer APIs are allowlisted, bounded, and safe to render in the public lab."""
+
+    def setUp(self) -> None:
+        self.config = server.enrich_config(server.load_config(server.DEFAULT_CONFIG))
+
+    def test_registry_catalog_uses_exact_allowlist(self) -> None:
+        payload = server.registry_explorer.registry_catalog_payload(self.config)
+        self.assertEqual(
+            [item["id"] for item in payload["registries"]],
+            ["civil", "social-protection", "health", "agriculture"],
+        )
+
+    def test_claim_catalog_uses_exact_allowlist(self) -> None:
+        payload = server.claims_explorer.claim_catalog_payload(self.config)
+        self.assertEqual(
+            [item["id"] for item in payload["claim_services"]],
+            [
+                "civil-notary",
+                "social-protection-notary",
+                "shared-eligibility-notary",
+                "dhis2-notary",
+                "opencrvs-notary",
+                "agriculture-notary",
+            ],
+        )
+
+    def test_claim_metadata_tracks_pr65_public_labels_and_social_url(self) -> None:
+        civil = server.claims_explorer.claim_metadata_payload(self.config, "civil-notary")["claim_service"]
+        self.assertEqual(civil["claims"][0]["title"], "Vital Status Attestation")
+
+        social = server.claims_explorer.claim_metadata_payload(self.config, "social-protection-notary")["claim_service"]
+        self.assertEqual(social["base_url"], "https://social-notary.lab.registrystack.org")
+        self.assertEqual(social["availability"], "hosted")
+        self.assertEqual(
+            {claim["id"]: claim["title"] for claim in social["claims"]},
+            {
+                "program-enrollment-status": "Program Enrollment Attestation",
+                "household-eligibility-band": "Welfare Classification Attestation",
+                "beneficiary-active": "Program Enrollment Active Attestation",
+                "household-composition": "Household Composition Attestation",
+                "caregiver-link": "Parent Or Guardian Link Attestation",
+                "disability-determination": "Disability Determination Attestation",
+                "functioning-assessment": "Functioning Assessment Attestation",
+            },
+        )
+
+        shared = server.claims_explorer.claim_metadata_payload(self.config, "shared-eligibility-notary")["claim_service"]
+        self.assertEqual(shared["base_url"], "https://shared-notary.lab.registrystack.org")
+
+        dhis2 = server.claims_explorer.claim_metadata_payload(self.config, "dhis2-notary")["claim_service"]
+        dhis2_titles = {claim["id"]: claim["title"] for claim in dhis2["claims"]}
+        self.assertEqual(dhis2_titles["dhis2-child-program-active"], "Health Programme Participation Attestation")
+
+        opencrvs = server.claims_explorer.claim_metadata_payload(self.config, "opencrvs-notary")["claim_service"]
+        opencrvs_titles = {claim["id"]: claim["title"] for claim in opencrvs["claims"]}
+        self.assertEqual(opencrvs_titles["opencrvs-birth-record-exists"], "Birth Registration Attestation")
+        self.assertEqual(opencrvs_titles["opencrvs-age-band"], "Age Eligibility Attestation")
+
+    def test_registry_metadata_tracks_pr65_relay_entities(self) -> None:
+        civil = server.registry_explorer.registry_metadata_payload(self.config, "civil")["registry"]
+        civil_entities = set(civil["datasets"][0]["entities"])
+        self.assertTrue(
+            {
+                "civil_person",
+                "civil_person_detail",
+                "civil_identifier",
+                "birth_event",
+                "death_event",
+                "civil_status_record",
+                "certificate",
+                "relationship",
+            }.issubset(civil_entities)
+        )
+
+        social = server.registry_explorer.registry_metadata_payload(self.config, "social-protection")["registry"]
+        social_entities = set(social["datasets"][0]["entities"])
+        self.assertTrue(
+            {
+                "household",
+                "person",
+                "program_enrollment",
+                "household_membership",
+                "socio_economic_profile",
+                "scoring_event",
+                "program",
+                "entitlement",
+                "payment_event",
+                "functioning_profile",
+                "disability_determination",
+            }.issubset(social_entities)
+        )
+
+    def test_unknown_registry_id_returns_controlled_error(self) -> None:
+        payload = server.registry_explorer.registry_metadata_payload(self.config, "not-a-registry")
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"]["code"], "explorer.unknown_registry")
+
+    def test_unknown_claim_service_id_returns_controlled_error(self) -> None:
+        payload = server.claims_explorer.claim_metadata_payload(self.config, "not-a-service")
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"]["code"], "explorer.unknown_claim_service")
+
+    def test_record_query_rejects_excessive_limit(self) -> None:
+        with self.assertRaises(server.ExplorerInputError) as ctx:
+            server.registry_explorer.record_query_payload(
+                self.config,
+                "civil",
+                "civil_registry",
+                "civil_person",
+                limit="999",
+            )
+        self.assertEqual(ctx.exception.code, "explorer.invalid_limit")
+
+    def test_record_query_rejects_unknown_filter_field(self) -> None:
+        with self.assertRaises(server.ExplorerInputError) as ctx:
+            server.registry_explorer.record_query_payload(
+                self.config,
+                "civil",
+                "civil_registry",
+                "civil_person",
+                filters=[{"field": "secret_field", "op": "eq", "value": "x"}],
+            )
+        self.assertEqual(ctx.exception.code, "explorer.unsupported_filter_field")
+
+    def test_registry_defaults_return_preview_rows_for_every_dropdown_option(self) -> None:
+        for registry_id in server.registry_explorer.registry_ids():
+            registry = server.registry_explorer.registry_config(registry_id)
+            payload = server.registry_explorer.record_query_payload(
+                self.config,
+                registry_id,
+                registry["default_dataset"],
+                registry["default_entity"],
+                limit=1,
+            )
+            self.assertEqual(payload["status"], "preview", registry_id)
+            self.assertGreaterEqual(len(payload["records"]), 1, registry_id)
+
+    def test_registry_preview_filter_limits_returned_rows(self) -> None:
+        payload = server.registry_explorer.record_query_payload(
+            self.config,
+            "civil",
+            "civil_registry",
+            "civil_person",
+            limit=10,
+            filters=[{"field": "life_stage", "op": "eq", "value": "child"}],
+        )
+        self.assertGreaterEqual(len(payload["records"]), 1)
+        self.assertTrue(all(row["life_stage"] == "child" for row in payload["records"]))
+        self.assertEqual(payload["validated"]["filters"], [{"field": "life_stage", "op": "eq", "value": "child"}])
+
+    def test_registry_preview_filter_can_return_empty_result(self) -> None:
+        payload = server.registry_explorer.record_query_payload(
+            self.config,
+            "civil",
+            "civil_registry",
+            "civil_person",
+            limit=10,
+            filters=[{"field": "national_id", "op": "eq", "value": "NID-does-not-exist"}],
+        )
+        self.assertEqual(payload["records"], [])
+        self.assertEqual(payload["summary"]["records_returned"], 0)
+
+    def test_registry_preview_reads_pr65_civil_fixture_entity(self) -> None:
+        payload = server.registry_explorer.record_query_payload(
+            self.config,
+            "civil",
+            "civil_registry",
+            "relationship",
+            limit=1,
+        )
+        self.assertEqual(payload["records"][0]["id"], "REL-1001-MOTHER")
+        self.assertEqual(payload["records"][0]["relationship_type"], "mother")
+
+    def test_registry_preview_reads_pr65_social_fixture_entity(self) -> None:
+        payload = server.registry_explorer.record_query_payload(
+            self.config,
+            "social-protection",
+            "social_protection_registry",
+            "functioning_profile",
+            limit=1,
+            filters=[{"field": "national_id", "op": "eq", "value": "NID-1006"}],
+        )
+        self.assertEqual(payload["records"][0]["id"], "FUNC-1006")
+        self.assertTrue(payload["records"][0]["disability_identifier_met"])
+        self.assertEqual(payload["records"][0]["administration_date"], "2025-12-05")
+
+    def test_claim_evaluation_rejects_unexpected_key(self) -> None:
+        with self.assertRaises(server.ExplorerInputError) as ctx:
+            server._normalize_evaluation_body(
+                {
+                    "claim_id": "person-is-alive",
+                    "subject": {"scheme": "national_id", "value": "NID-1001"},
+                    "disclosure": "predicate",
+                    "format": server.claims_explorer.CLAIM_RESULT_FORMAT,
+                    "purpose": server.claims_explorer.PURPOSE,
+                    "extra": "nope",
+                }
+            )
+        self.assertEqual(ctx.exception.code, "explorer.unexpected_request_key")
+
+    def test_claim_evaluation_accepts_nested_subject_shape(self) -> None:
+        normalized = server._normalize_evaluation_body(
+            {
+                "claim_id": "person-is-alive",
+                "subject": {"scheme": "national_id", "value": "NID-1001"},
+                "disclosure": "predicate",
+                "format": server.claims_explorer.CLAIM_RESULT_FORMAT,
+                "purpose": server.claims_explorer.PURPOSE,
+            }
+        )
+        self.assertEqual(normalized["subject"], "NID-1001")
+        self.assertEqual(normalized["identifier_scheme"], "national_id")
+
+    def test_default_claim_result_minimization_precedes_raw_row_access(self) -> None:
+        payload = server.claims_explorer.run_evaluation(
+            self.config,
+            "civil-notary",
+            {
+                "claim_id": "person-is-alive",
+                "subject": "NID-1001",
+                "identifier_scheme": "national_id",
+                "disclosure": "predicate",
+                "format": server.claims_explorer.CLAIM_RESULT_FORMAT,
+                "purpose": server.claims_explorer.PURPOSE,
+            },
+        )
+        self.assertEqual(payload["data_minimization"]["Raw row returned"], "no")
+        self.assertEqual(payload["data_minimization"]["Returned to relying service"], 1)
+        self.assertEqual(payload["source"]["dataset"], "civil_registry")
+
+    def test_civil_preview_unknown_subject_is_not_satisfied(self) -> None:
+        payload = server.claims_explorer.run_evaluation(
+            self.config,
+            "civil-notary",
+            {
+                "claim_id": "person-is-alive",
+                "subject": "NID-1001ww",
+                "identifier_scheme": "national_id",
+                "disclosure": "predicate",
+                "format": server.claims_explorer.CLAIM_RESULT_FORMAT,
+                "purpose": server.claims_explorer.PURPOSE,
+            },
+        )
+        self.assertEqual(payload["mode"], "preview")
+        self.assertFalse(payload["answer"]["satisfied"])
+        self.assertFalse(payload["answer"]["subject_found"])
+        self.assertEqual(payload["answer"]["reason"], "subject_not_found")
+        self.assertFalse(payload["response_source"]["body"]["results"][0]["satisfied"])
+
+    def test_civil_preview_deceased_subject_is_not_alive(self) -> None:
+        payload = server.claims_explorer.run_evaluation(
+            self.config,
+            "civil-notary",
+            {
+                "claim_id": "person-is-alive",
+                "subject": "NID-1003",
+                "identifier_scheme": "national_id",
+                "disclosure": "predicate",
+                "format": server.claims_explorer.CLAIM_RESULT_FORMAT,
+                "purpose": server.claims_explorer.PURPOSE,
+            },
+        )
+        self.assertEqual(payload["mode"], "preview")
+        self.assertFalse(payload["answer"]["satisfied"])
+        self.assertTrue(payload["answer"]["subject_found"])
+        self.assertFalse(payload["response_source"]["body"]["results"][0]["satisfied"])
+
+    def test_explorer_payloads_do_not_expose_excluded_env_names(self) -> None:
+        body = json.dumps(
+            {
+                "registries": server.registry_explorer.registry_catalog_payload(self.config),
+                "claims": server.claims_explorer.claim_catalog_payload(self.config),
+            },
+            sort_keys=True,
+        )
+        for excluded in self.config.get("excluded_env", []):
+            self.assertNotIn(excluded["env"], body)
 
 
 class LabModePayloadTest(unittest.TestCase):
@@ -1870,7 +2213,7 @@ class StaticAssetRouteTest(unittest.TestCase):
         return sent_bytes, errors
 
     def test_css_assets_served_with_css_content_type(self) -> None:
-        for name in ("shared.css", "homepage.css", "scenarios.css"):
+        for name in ("shared.css", "homepage.css", "scenarios.css", "explorers.css"):
             with self.subTest(name=name):
                 sent, errors = self._drive_get(f"/static/{name}")
                 self.assertEqual(errors, [], f"{name} must not 404")
@@ -1880,7 +2223,7 @@ class StaticAssetRouteTest(unittest.TestCase):
                 self.assertEqual(ct, "text/css; charset=utf-8")
 
     def test_js_assets_served_with_javascript_content_type(self) -> None:
-        for name in ("homepage.js", "scenarios.js"):
+        for name in ("homepage.js", "scenarios.js", "registry-explorer.js", "claims-explorer.js"):
             with self.subTest(name=name):
                 sent, errors = self._drive_get(f"/static/{name}")
                 self.assertEqual(errors, [], f"{name} must not 404")
@@ -1926,6 +2269,8 @@ class StaticAssetRouteTest(unittest.TestCase):
             server.homepage_html("Registry Lab").decode("utf-8"),
             server.scenario_page_html().decode("utf-8"),
             server.scenario_page_html(scenario_id="alive-proof").decode("utf-8"),
+            server.explorer_page_html("registry").decode("utf-8"),
+            server.explorer_page_html("claims").decode("utf-8"),
         ]
         referenced = set()
         for page in pages:
@@ -2022,6 +2367,14 @@ class SecurityHeadersTest(unittest.TestCase):
         with self._get("/scenarios") as response:
             self._assert_security_headers(response)
 
+    def test_registry_explorer_page_carries_security_headers(self) -> None:
+        with self._get("/registry-explorer") as response:
+            self._assert_security_headers(response)
+
+    def test_claims_explorer_page_carries_security_headers(self) -> None:
+        with self._get("/claims-explorer") as response:
+            self._assert_security_headers(response)
+
     def test_api_response_carries_security_headers(self) -> None:
         with self._get("/healthz") as response:
             self._assert_security_headers(response)
@@ -2058,6 +2411,13 @@ class StrictCspCompatibilityTest(unittest.TestCase):
         page = server.homepage_html("Registry Lab").decode("utf-8")
         self.assertNotIn("<script>", page)
 
+    def test_explorer_pages_have_no_inline_script(self) -> None:
+        for kind in ("registry", "claims"):
+            with self.subTest(kind=kind):
+                page = server.explorer_page_html(kind).decode("utf-8")
+                self.assertNotIn("<script>", page)
+                self.assertIn(f'data-explorer-kind="{kind}"', page)
+
     def test_scenarios_js_reads_active_scenario_from_body_dataset(self) -> None:
         self.assertIn("document.body.dataset.activeScenario", SCENARIOS_JS)
 
@@ -2070,6 +2430,7 @@ class CivicPrintDesignTest(unittest.TestCase):
         for token in ("--registry-paper", "--registry-ink-band-deep", "--registry-stamp", "--registry-brass", "--registry-ease"):
             self.assertIn(token, HOMEPAGE_CSS)
             self.assertIn(token, SCENARIOS_CSS)
+            self.assertIn(token, EXPLORERS_CSS)
 
     def test_shared_css_disables_motion_for_reduced_motion_users(self) -> None:
         self.assertIn("prefers-reduced-motion", SHARED_CSS)
@@ -2079,6 +2440,8 @@ class CivicPrintDesignTest(unittest.TestCase):
         for page in (
             server.homepage_html("Registry Lab").decode("utf-8"),
             server.scenario_page_html().decode("utf-8"),
+            server.explorer_page_html("registry").decode("utf-8"),
+            server.explorer_page_html("claims").decode("utf-8"),
         ):
             self.assertIn('class="site-footer-inner"', page)
 
@@ -2128,6 +2491,8 @@ class HomepageHierarchyTest(unittest.TestCase):
     def test_nav_demotes_services_to_for_developers(self) -> None:
         nav = self.page.split("</nav>", 1)[0]
         self.assertIn(">For developers</a>", nav)
+        self.assertIn(">Registry Explorer</a>", nav)
+        self.assertIn(">Claims Explorer</a>", nav)
         self.assertNotIn("Services &amp; credentials", nav)
         self.assertLess(nav.index("Scenario demos"), nav.index("Wallet test"))
         self.assertLess(nav.index("Wallet test"), nav.index("For developers"))
@@ -2148,12 +2513,20 @@ class HomepageHierarchyTest(unittest.TestCase):
             return inner.replace(' aria-current="page"', "")
 
         scenarios_page = server.scenario_page_html().decode("utf-8")
+        registry_page = server.explorer_page_html("registry").decode("utf-8")
+        claims_page = server.explorer_page_html("claims").decode("utf-8")
         self.assertEqual(nav(self.page), nav(scenarios_page))
+        self.assertEqual(nav(self.page), nav(registry_page))
+        self.assertEqual(nav(self.page), nav(claims_page))
 
     def test_each_page_marks_its_own_nav_entry_current(self) -> None:
         self.assertIn('<a href="/" aria-current="page">Home</a>', self.page)
         scenarios_page = server.scenario_page_html().decode("utf-8")
         self.assertIn('<a href="/scenarios" aria-current="page">Scenario demos</a>', scenarios_page)
+        registry_page = server.explorer_page_html("registry").decode("utf-8")
+        self.assertIn('<a href="/registry-explorer" aria-current="page">Registry Explorer</a>', registry_page)
+        claims_page = server.explorer_page_html("claims").decode("utf-8")
+        self.assertIn('<a href="/claims-explorer" aria-current="page">Claims Explorer</a>', claims_page)
 
 
 if __name__ == "__main__":
