@@ -1492,7 +1492,7 @@ evidence:
                     },
                     "command": [
                         """
-for d in civil-cache social-cache health-cache; do
+for d in civil-cache health-cache; do
   mkdir -p "/out/$d"
   chown -R 65532:65532 "/out/$d"
 done

@@ -1215,7 +1215,6 @@ def validate_config_loader_hosted_outputs(
         has_service_volume(volumes, source, target)
         for source, target in (
             ("civil-registry-cache", "/out/civil-cache"),
-            ("social-protection-registry-cache", "/out/social-cache"),
             ("health-registry-cache", "/out/health-cache"),
             ("openfn-sidecar-tuf-state", "/out/openfn-tuf-state"),
             ("openfn-sidecar-config-state", "/out/openfn-config-state"),
@@ -1224,7 +1223,7 @@ def validate_config_loader_hosted_outputs(
         token in command_text
         for token in (
             "chown -R 65532:65532",
-            "civil-cache social-cache health-cache",
+            "civil-cache health-cache",
             "chown -R 1000:1000",
             "openfn-tuf-state openfn-config-state",
             "dhis2-openfn-sidecar-antirollback.json",
