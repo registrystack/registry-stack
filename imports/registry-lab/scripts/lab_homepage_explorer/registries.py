@@ -908,11 +908,16 @@ def _coerce_field_value(value: Any, field_type: str) -> Any:
         except ValueError:
             return value
     if field_type == "date" and str(value).replace(".", "", 1).isdigit():
-        return _excel_date_to_iso(float(str(value)))
+        try:
+            return _excel_date_to_iso(float(str(value)))
+        except (OverflowError, ValueError):
+            return value
     return value
 
 
 def _excel_date_to_iso(serial: float) -> str:
+    if serial < 1 or serial > 100000:
+        raise ValueError("Excel date serial is outside the supported demo fixture range.")
     return (datetime(1899, 12, 30) + timedelta(days=serial)).date().isoformat()
 
 
@@ -963,7 +968,7 @@ def _read_xlsx_rows(archive: ZipFile, sheet_path: str, shared_strings: list[str]
     if not rows:
         return []
     headers = [str(value) for value in rows[0]]
-    return [dict(zip(headers, row)) for row in rows[1 : limit + 1]]
+    return [{header: row[index] if index < len(row) else "" for index, header in enumerate(headers)} for row in rows[1 : limit + 1]]
 
 
 def _xlsx_column_index(ref: str) -> int:
@@ -1139,6 +1144,8 @@ def _record_matches_filter(row: dict[str, Any], field: str, op: str, value: str)
 
 
 def _compare_ordered(actual: Any, value: str, op: str) -> bool:
+    if actual in (None, ""):
+        return False
     actual_text = str(actual)
     try:
         actual_value: Any = float(actual_text)

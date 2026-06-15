@@ -45,7 +45,7 @@ async function explorerFetch(path, options = {}) {
   const response = await fetch(path, {cache: "no-store", ...options});
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const message = body.error || body.message || `HTTP ${response.status}`;
+    const message = (body.error && body.error.message) || body.error || body.message || `HTTP ${response.status}`;
     const error = new Error(message);
     error.status = response.status;
     error.body = body;
@@ -479,7 +479,7 @@ async function evaluateSelectedClaim(root) {
 }
 
 function wire(root) {
-  document.addEventListener("click", async (event) => {
+  root.addEventListener("click", async (event) => {
     const target = event.target instanceof Element ? event.target : null;
     const retry = target?.closest("[data-retry]");
     const run = target?.closest("[data-evaluate]");
@@ -497,7 +497,7 @@ function wire(root) {
       setTimeout(() => { copy.textContent = label || "Copy"; }, 1200);
     }
   });
-  document.addEventListener("change", async (event) => {
+  root.addEventListener("change", async (event) => {
     const serviceSelect = event.target instanceof Element ? event.target.closest("#service-select") : null;
     if (serviceSelect) {
       await loadSelectedService(root, serviceSelect.value).catch((error) => renderUnavailable(root, error));

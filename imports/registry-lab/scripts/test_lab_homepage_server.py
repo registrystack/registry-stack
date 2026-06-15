@@ -892,6 +892,11 @@ class ExplorerPageHtmlTest(unittest.TestCase):
         self.assertIn("/api/explorer/registries.json", REGISTRY_EXPLORER_JS)
         self.assertNotIn("http://", REGISTRY_EXPLORER_JS)
         self.assertNotIn("https://", REGISTRY_EXPLORER_JS)
+        self.assertIn("body.error && body.error.message", REGISTRY_EXPLORER_JS)
+        self.assertIn('root.addEventListener("click"', REGISTRY_EXPLORER_JS)
+        self.assertIn('root.addEventListener("change"', REGISTRY_EXPLORER_JS)
+        self.assertNotIn('document.addEventListener("click"', REGISTRY_EXPLORER_JS)
+        self.assertNotIn('document.addEventListener("change"', REGISTRY_EXPLORER_JS)
 
     def test_registry_explorer_js_keeps_query_controls_primary(self) -> None:
         controls = REGISTRY_EXPLORER_JS.index("registry-query-panel")
@@ -904,6 +909,11 @@ class ExplorerPageHtmlTest(unittest.TestCase):
         self.assertIn("/api/explorer/claims.json", CLAIMS_EXPLORER_JS)
         self.assertNotIn("http://", CLAIMS_EXPLORER_JS)
         self.assertNotIn("https://", CLAIMS_EXPLORER_JS)
+        self.assertIn("body.error && body.error.message", CLAIMS_EXPLORER_JS)
+        self.assertIn('root.addEventListener("click"', CLAIMS_EXPLORER_JS)
+        self.assertIn('root.addEventListener("change"', CLAIMS_EXPLORER_JS)
+        self.assertNotIn('document.addEventListener("click"', CLAIMS_EXPLORER_JS)
+        self.assertNotIn('document.addEventListener("change"', CLAIMS_EXPLORER_JS)
 
     def test_claims_explorer_js_keeps_minimization_secondary(self) -> None:
         answer = CLAIMS_EXPLORER_JS.index("Answer")
@@ -1103,6 +1113,44 @@ class ExplorerApiPayloadTest(unittest.TestCase):
         self.assertTrue(payload["records"][0]["disability_identifier_met"])
         self.assertEqual(payload["records"][0]["administration_date"], "2025-12-05")
 
+    def test_registry_date_coercion_leaves_unreasonable_numeric_dates_unconverted(self) -> None:
+        self.assertEqual(server.registry_explorer._coerce_field_value("20260515", "date"), "20260515")
+
+    def test_registry_ordered_comparison_rejects_missing_values(self) -> None:
+        self.assertFalse(server.registry_explorer._compare_ordered("", "10", "gte"))
+        self.assertFalse(server.registry_explorer._compare_ordered(None, "10", "lte"))
+
+    def test_registry_xlsx_reader_preserves_missing_trailing_cells(self) -> None:
+        import tempfile
+        from zipfile import ZipFile
+
+        sheet = """<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="inlineStr"><is><t>id</t></is></c>
+      <c r="B1" t="inlineStr"><is><t>name</t></is></c>
+      <c r="C1" t="inlineStr"><is><t>status</t></is></c>
+    </row>
+    <row r="2">
+      <c r="A2" t="inlineStr"><is><t>ROW-1</t></is></c>
+    </row>
+  </sheetData>
+</worksheet>
+"""
+        with tempfile.NamedTemporaryFile(suffix=".xlsx") as handle:
+            with ZipFile(handle.name, "w") as archive:
+                archive.writestr("xl/worksheets/sheet1.xml", sheet)
+            with ZipFile(handle.name) as archive:
+                rows = server.registry_explorer._read_xlsx_rows(
+                    archive,
+                    "xl/worksheets/sheet1.xml",
+                    [],
+                    {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"},
+                    1,
+                )
+        self.assertEqual(rows, [{"id": "ROW-1", "name": "", "status": ""}])
+
     def test_claim_evaluation_rejects_unexpected_key(self) -> None:
         with self.assertRaises(server.ExplorerInputError) as ctx:
             server._normalize_evaluation_body(
@@ -1165,6 +1213,28 @@ class ExplorerApiPayloadTest(unittest.TestCase):
         self.assertFalse(payload["answer"]["subject_found"])
         self.assertEqual(payload["answer"]["reason"], "subject_not_found")
         self.assertFalse(payload["response_source"]["body"]["results"][0]["satisfied"])
+
+    def test_civil_preview_missing_fixture_is_not_satisfied(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(server.claims_explorer, "REPO_ROOT", Path(tmp)):
+                payload = server.claims_explorer.run_evaluation(
+                    self.config,
+                    "civil-notary",
+                    {
+                        "claim_id": "person-is-alive",
+                        "subject": "NID-1001",
+                        "identifier_scheme": "national_id",
+                        "disclosure": "predicate",
+                        "format": server.claims_explorer.CLAIM_RESULT_FORMAT,
+                        "purpose": server.claims_explorer.PURPOSE,
+                    },
+                )
+        self.assertEqual(payload["mode"], "preview")
+        self.assertFalse(payload["answer"]["satisfied"])
+        self.assertFalse(payload["answer"]["subject_found"])
+        self.assertEqual(payload["answer"]["reason"], "subject_not_found")
 
     def test_civil_preview_deceased_subject_is_not_alive(self) -> None:
         payload = server.claims_explorer.run_evaluation(
@@ -2392,6 +2462,23 @@ class SecurityHeadersTest(unittest.TestCase):
             banner = response.headers.get("Server", "")
         self.assertNotIn("Python", banner)
         self.assertNotIn("BaseHTTP", banner)
+
+    def test_explorer_post_malformed_content_length_returns_controlled_error(self) -> None:
+        import http.client
+
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            conn.putrequest("POST", "/api/explorer/claims/civil-notary/evaluate.json")
+            conn.putheader("Content-Type", "application/json")
+            conn.putheader("Content-Length", "not-an-integer")
+            conn.endheaders()
+            response = conn.getresponse()
+            body = json.loads(response.read().decode("utf-8"))
+        finally:
+            conn.close()
+        self.assertEqual(response.status, 200)
+        self.assertFalse(body["ok"])
+        self.assertEqual(body["error"]["code"], "explorer.invalid_content_length")
 
 
 class StrictCspCompatibilityTest(unittest.TestCase):

@@ -414,7 +414,10 @@ def preview_evaluation_answer(service_id: str, claim_id: str, subject: str, iden
 
 
 def _civil_person_by_national_id(national_id: str) -> CivilRow | None:
-    with (REPO_ROOT / "data" / "civil" / "civil-persons.csv").open(newline="", encoding="utf-8") as handle:
+    path = REPO_ROOT / "data" / "civil" / "civil-persons.csv"
+    if not path.exists():
+        return None
+    with path.open(newline="", encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
             if row.get("national_id") == national_id:
                 return row

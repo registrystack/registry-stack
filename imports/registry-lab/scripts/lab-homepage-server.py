@@ -666,7 +666,10 @@ class LabHomepageHandler(BaseHTTPRequestHandler):
         print(f"{self.address_string()} - {fmt % args}", flush=True)
 
     def read_json_body(self) -> dict[str, Any]:
-        length = int(self.headers.get("Content-Length", "0") or "0")
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError as error:
+            raise ExplorerInputError("explorer.invalid_content_length", "Content-Length must be an integer.") from error
         if length <= 0:
             return {}
         raw = self.rfile.read(length)
