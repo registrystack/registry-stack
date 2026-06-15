@@ -227,6 +227,7 @@ export default defineConfig({
             },
             { label: 'Contracts', slug: 'reference/contracts' },
             { label: 'Standards', slug: 'reference/standards' },
+            { label: 'ITB and SEMIC evidence', slug: 'reference/itb-semic-evidence' },
             { label: 'Glossary', slug: 'reference/glossary' },
           ],
         },
