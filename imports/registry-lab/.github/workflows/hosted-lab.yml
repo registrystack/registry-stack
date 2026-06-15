@@ -7,6 +7,7 @@ on:
       - "Dockerfile.static-metadata"
       - "compose.coolify.yaml"
       - "compose.esignet-hosted.yaml"
+      - "compose.social-hosted.yaml"
       - "compose.walt-hosted.yaml"
       - "config/coolify/**"
       - "config/static-metadata/**"
@@ -46,6 +47,7 @@ on:
       - "Dockerfile.static-metadata"
       - "compose.coolify.yaml"
       - "compose.esignet-hosted.yaml"
+      - "compose.social-hosted.yaml"
       - "compose.walt-hosted.yaml"
       - "config/coolify/**"
       - "config/static-metadata/**"
@@ -104,6 +106,7 @@ jobs:
             Dockerfile.static-metadata \
             compose.coolify.yaml \
             compose.esignet-hosted.yaml \
+            compose.social-hosted.yaml \
             compose.walt-hosted.yaml \
             config/coolify \
             config/static-metadata \
@@ -140,6 +143,7 @@ jobs:
         run: |
           test -f compose.coolify.yaml
           test -f compose.esignet-hosted.yaml
+          test -f compose.social-hosted.yaml
           test -f compose.walt-hosted.yaml
 
       - name: Render Registry Lab hosted compose
@@ -147,6 +151,9 @@ jobs:
 
       - name: Render hosted eSignet compose
         run: docker compose -f compose.esignet-hosted.yaml config >/tmp/compose.esignet-hosted.config.yaml
+
+      - name: Render hosted social compose
+        run: docker compose -f compose.social-hosted.yaml config >/tmp/compose.social-hosted.config.yaml
 
       - name: Render hosted walt compose
         env:
@@ -205,6 +212,7 @@ jobs:
           COOLIFY_REGISTRY_LAB_APP_UUID: ${{ vars.COOLIFY_REGISTRY_LAB_APP_UUID }}
           COOLIFY_HOSTED_ESIGNET_APP_UUID: ${{ vars.COOLIFY_HOSTED_ESIGNET_APP_UUID }}
           COOLIFY_HOSTED_WALT_APP_UUID: ${{ vars.COOLIFY_HOSTED_WALT_APP_UUID }}
+          COOLIFY_HOSTED_SOCIAL_APP_UUID: ${{ vars.COOLIFY_HOSTED_SOCIAL_APP_UUID }}
         run: |
           set -euo pipefail
           if [ -z "$COOLIFY_API_TOKEN" ]; then
@@ -213,7 +221,7 @@ jobs:
           fi
 
           missing=0
-          for name in COOLIFY_API_BASE_URL COOLIFY_REGISTRY_LAB_APP_UUID COOLIFY_HOSTED_ESIGNET_APP_UUID COOLIFY_HOSTED_WALT_APP_UUID; do
+          for name in COOLIFY_API_BASE_URL COOLIFY_REGISTRY_LAB_APP_UUID COOLIFY_HOSTED_ESIGNET_APP_UUID COOLIFY_HOSTED_WALT_APP_UUID COOLIFY_HOSTED_SOCIAL_APP_UUID; do
             if [ -z "${!name:-}" ]; then
               echo "::error::${name} is not configured."
               missing=1
@@ -229,8 +237,13 @@ jobs:
             --api-base-url "${api_base}" \
             --app-uuid "${COOLIFY_REGISTRY_LAB_APP_UUID}"
 
+          python3 scripts/check-coolify-required-env.py \
+            --compose compose.social-hosted.yaml \
+            --api-base-url "${api_base}" \
+            --app-uuid "${COOLIFY_HOSTED_SOCIAL_APP_UUID}"
+
           deployments_file="$(mktemp)"
-          for app in "$COOLIFY_REGISTRY_LAB_APP_UUID" "$COOLIFY_HOSTED_ESIGNET_APP_UUID" "$COOLIFY_HOSTED_WALT_APP_UUID"; do
+          for app in "$COOLIFY_REGISTRY_LAB_APP_UUID" "$COOLIFY_HOSTED_ESIGNET_APP_UUID" "$COOLIFY_HOSTED_WALT_APP_UUID" "$COOLIFY_HOSTED_SOCIAL_APP_UUID"; do
             python3 -c 'import json, os; print(json.dumps({"key": "CONFIG_REPO_REF", "value": os.environ["GITHUB_SHA"], "is_preview": False}))' \
               | curl -fsS -X PATCH \
                   -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
