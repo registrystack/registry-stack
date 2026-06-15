@@ -826,13 +826,13 @@ evidence:
   api_base_url: http://shared-eligibility-notary:8080
   source_connections:
     civil:
-      base_url: http://civil-registry-relay:8080
+      base_url: https://civil-relay.lab.registrystack.org
       token_env: SHARED_CIVIL_EVIDENCE_SOURCE_RAW
     social_protection:
       base_url: http://social-protection-registry-relay:8080
       token_env: SHARED_SOCIAL_EVIDENCE_SOURCE_RAW
     health:
-      base_url: http://health-registry-relay:8080
+      base_url: https://health-relay.lab.registrystack.org
       token_env: SHARED_HEALTH_EVIDENCE_SOURCE_RAW
   credential_profiles:
     combined_support_sd_jwt:
