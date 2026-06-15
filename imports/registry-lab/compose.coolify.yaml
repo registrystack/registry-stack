@@ -150,7 +150,7 @@ services:
         cp -a /tmp/repo/scripts/lab_homepage_scenarios /out/static-scripts/
         cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
         cp -a /tmp/repo/config/lab-homepage/. /out/lab-homepage/
-        for d in civil-cache social-cache health-cache; do
+        for d in civil-cache health-cache; do
           mkdir -p "/out/$$d"
           chown -R 65532:65532 "/out/$$d"
         done
@@ -174,7 +174,6 @@ services:
       - cfg-static-scripts:/out/static-scripts
       - cfg-lab-homepage:/out/lab-homepage
       - civil-registry-cache:/out/civil-cache
-      - social-protection-registry-cache:/out/social-cache
       - health-registry-cache:/out/health-cache
       - openfn-sidecar-tuf-state:/out/openfn-tuf-state
       - openfn-sidecar-config-state:/out/openfn-config-state
