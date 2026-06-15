@@ -242,8 +242,65 @@ jobs:
             --api-base-url "${api_base}" \
             --app-uuid "${COOLIFY_HOSTED_SOCIAL_APP_UUID}"
 
+          # App deploy targets: "uuid|label|health_url|probe_attempts".
+          # Health URLs mirror the x-hosted-domains headers in each compose file;
+          # keep them in sync if a public domain changes. JVM-heavy apps get a
+          # longer post-deploy probe budget (Coolify can report "finished" a bit
+          # before the service binds its port). The social probe hits the relay
+          # only, as a representative endpoint for that app's three domains.
+          apps=(
+            "${COOLIFY_REGISTRY_LAB_APP_UUID}|monolith|https://lab.registrystack.org|18"
+            "${COOLIFY_HOSTED_ESIGNET_APP_UUID}|esignet|https://esignet.lab.registrystack.org|18"
+            "${COOLIFY_HOSTED_WALT_APP_UUID}|walt|https://wallet.lab.registrystack.org|12"
+            "${COOLIFY_HOSTED_SOCIAL_APP_UUID}|social|https://social-relay.lab.registrystack.org|18"
+          )
+
+          # Pre-flight, per app, before mutating anything:
+          #  (a) Warn if Coolify's rendered compose is approaching the kernel
+          #      single-arg limit (MAX_ARG_STRLEN, 131072 bytes after base64).
+          #      Coolify execs the rendered compose as one base64 argument, so
+          #      crossing that cliff fails the deploy with E2BIG. This reads the
+          #      *stored* render (Coolify's last parse), so it flags gradual
+          #      growth early; an acute jump is still caught non-destructively at
+          #      deploy time (see the E2BIG branch below). Warn-only: a shrink PR
+          #      must never be blocked by a stale-high reading.
+          #  (b) Snapshot the current rollback target (config ref + image pins)
+          #      so a bad deploy can be reverted from the uploaded artifact.
+          #      Allow-list only non-secret keys; never persist hashes/keys/raws.
+          #      Best-effort: a failed snapshot warns but never blocks the deploy.
+          : > rollback-targets.jsonl
+          arg_limit=131072
+          for entry in "${apps[@]}"; do
+            IFS='|' read -r app label health_url _ <<<"$entry"
+
+            render_bytes="$(
+              curl -fsS -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+                "${api_base}/applications/${app}" \
+                | python3 -c 'import json,sys; print(len((json.load(sys.stdin).get("docker_compose") or "")))'
+            )" || render_bytes=0
+            # base64 size is 4*ceil(n/3): divide-then-multiply is intentional
+            # (the SC2017 "a*c/b" rewrite over-counts unless n+2 divides by 3).
+            # shellcheck disable=SC2017
+            b64_bytes=$(( (render_bytes + 2) / 3 * 4 ))
+            pct=$(( b64_bytes * 100 / arg_limit ))
+            echo "render app=${label} raw=${render_bytes} base64=${b64_bytes} limit=${arg_limit} util=${pct}%"
+            if [ "$pct" -ge 80 ]; then
+              echo "::warning::${label}: rendered compose is at ${pct}% of the Coolify arg-size limit (${b64_bytes}/${arg_limit} bytes after base64). Approaching the E2BIG cliff; plan to split a track or trim per-service env soon."
+            fi
+
+            if curl -fsS -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+                  "${api_base}/applications/${app}/envs" \
+                  | python3 -c 'import json, sys; rows=[e for e in json.load(sys.stdin) if not e.get("is_preview")]; keep={e.get("key"): e.get("value") for e in rows if e.get("key") == "CONFIG_REPO_REF" or str(e.get("key", "")).endswith("_IMAGE")}; print(json.dumps({"app": sys.argv[1], "uuid": sys.argv[2], "targets": keep}))' \
+                      "$label" "$app" >> rollback-targets.jsonl; then
+              echo "captured rollback target label=${label}"
+            else
+              echo "::warning::could not capture rollback target for ${label}"
+            fi
+          done
+
           deployments_file="$(mktemp)"
-          for app in "$COOLIFY_REGISTRY_LAB_APP_UUID" "$COOLIFY_HOSTED_ESIGNET_APP_UUID" "$COOLIFY_HOSTED_WALT_APP_UUID" "$COOLIFY_HOSTED_SOCIAL_APP_UUID"; do
+          for entry in "${apps[@]}"; do
+            IFS='|' read -r app label health_url probe_attempts <<<"$entry"
             python3 -c 'import json, os; print(json.dumps({"key": "CONFIG_REPO_REF", "value": os.environ["GITHUB_SHA"], "is_preview": False}))' \
               | curl -fsS -X PATCH \
                   -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
@@ -256,11 +313,11 @@ jobs:
                 "${api_base}/deploy?uuid=${app}&force=false" \
                 | python3 -c 'import json, sys; print(json.load(sys.stdin)["deployments"][0]["deployment_uuid"])'
             )"
-            printf '%s\t%s\n' "$app" "$deployment_uuid" >> "$deployments_file"
-            echo "triggered app=${app} deployment_uuid=${deployment_uuid}"
+            printf '%s\t%s\t%s\t%s\t%s\n' "$app" "$label" "$health_url" "$probe_attempts" "$deployment_uuid" >> "$deployments_file"
+            echo "triggered app=${label} (${app}) deployment_uuid=${deployment_uuid}"
           done
 
-          while IFS="$(printf '\t')" read -r app deployment_uuid; do
+          while IFS="$(printf '\t')" read -r app label health_url probe_attempts deployment_uuid; do
             deadline=$((SECONDS + 1200))
             while true; do
               status="$(
@@ -269,13 +326,17 @@ jobs:
                   "${api_base}/deployments/${deployment_uuid}" \
                   | python3 -c 'import json, sys; data=json.load(sys.stdin); print((data.get("status") or data.get("deployment", {}).get("status") or "").lower())'
               )"
-              echo "status app=${app} deployment_uuid=${deployment_uuid} status=${status}"
+              echo "status app=${label} (${app}) deployment_uuid=${deployment_uuid} status=${status}"
               case "$status" in
                 finished)
                   break
                   ;;
                 failed|cancelled|canceled|error)
-                  echo "::error::Coolify deployment failed for ${app}: ${status}"
+                  echo "::error::Coolify deployment failed for ${label} (${app}): ${status}"
+                  detail="$(curl -fsS -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" "${api_base}/deployments/${deployment_uuid}" 2>/dev/null || true)"
+                  if printf '%s' "$detail" | grep -qE 'E2BIG|posix_spawn|Argument list too long'; then
+                    echo "::error::${label}: the rendered compose hit the kernel single-arg limit (E2BIG, ~128 KiB after base64). Coolify execs the whole compose as one base64 argument; shrink it by splitting services into a separate compose app or trimming per-service env."
+                  fi
                   exit 1
                   ;;
               esac
@@ -285,7 +346,38 @@ jobs:
               fi
               sleep 15
             done
+
+            # Coolify reported "finished"; confirm the app actually serves HTTP
+            # before moving on, so a crash-on-boot fails fast with clear
+            # attribution rather than surfacing only in the aggregate smoke.
+            # Liveness only: any HTTP status (2xx/3xx/4xx) means the listener is
+            # up; 5xx/000 (edge proxy with no backend, or refused) keeps retrying.
+            ok=0
+            for attempt in $(seq 1 "${probe_attempts}"); do
+              code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${health_url}" || true)"
+              case "$code" in
+                2*|3*|4*)
+                  echo "health ok app=${label} url=${health_url} http=${code} (attempt ${attempt}/${probe_attempts})"
+                  ok=1
+                  break
+                  ;;
+              esac
+              echo "health pending app=${label} url=${health_url} http=${code:-000} (attempt ${attempt}/${probe_attempts})"
+              sleep 10
+            done
+            if [ "$ok" -ne 1 ]; then
+              echo "::error::${label}: deployment finished but ${health_url} did not return a healthy HTTP status (2xx/3xx/4xx) after ${probe_attempts} attempts."
+              exit 1
+            fi
           done < "$deployments_file"
+
+      - name: Upload rollback targets
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rollback-targets
+          path: rollback-targets.jsonl
+          if-no-files-found: warn
 
       - name: Run hosted smoke
         env:
