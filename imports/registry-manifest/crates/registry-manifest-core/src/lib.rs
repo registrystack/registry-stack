@@ -702,6 +702,8 @@ pub struct EvidenceOfferingManifest {
     pub title: LocalizedText,
     #[serde(default)]
     pub description: Option<LocalizedText>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attestation_id: Option<String>,
     pub evidence_type: String,
     pub issuing_authority: IssuingAuthorityManifest,
     #[serde(default)]
