@@ -1,15 +1,18 @@
 name: registry-lab
 
+# The three social-protection services (social-protection-registry-relay,
+# social-protection-notary, shared-eligibility-notary) run in the per-track
+# lab-social Coolify app (compose.social-hosted.yaml). They are intentionally
+# absent here: the monolith's rendered compose exceeded the Linux
+# MAX_ARG_STRLEN limit Coolify v4.1.1 hits when it writes the decoded file, and
+# moving them out keeps the monolith under the limit.
 x-hosted-domains:
   lab-homepage: lab.registrystack.org
   citizen-civil-notary: citizen-notary.lab.registrystack.org
-  social-protection-notary: social-notary.lab.registrystack.org
   civil-registry-relay: civil-relay.lab.registrystack.org
-  social-protection-registry-relay: social-relay.lab.registrystack.org
   health-registry-relay: health-relay.lab.registrystack.org
   static-metadata-publisher: metadata.lab.registrystack.org
   zitadel: zitadel.lab.registrystack.org
-  shared-eligibility-notary: shared-notary.lab.registrystack.org
   dhis2-health-notary: dhis2-notary.lab.registrystack.org
   opencrvs-dci-notary: opencrvs-notary.lab.registrystack.org
 
@@ -136,9 +139,7 @@ services:
         cp -a /tmp/repo/config/coolify/relay/. /out/relay/
         cp -a /tmp/repo/config/coolify/notary/civil-notary.yaml /out/notary/
         cp -a /tmp/repo/config/coolify/notary/citizen-civil-notary.yaml /out/notary/
-        cp -a /tmp/repo/config/coolify/notary/shared-eligibility-notary.yaml /out/notary/
         cp -a /tmp/repo/config/coolify/notary/dhis2-health-notary.yaml /out/notary/
-        cp -a /tmp/repo/config/coolify/notary/social-protection-notary.yaml /out/notary/
         cp -a /tmp/repo/config/coolify/notary/opencrvs-dci-notary.yaml /out/notary/opencrvs-dci-notary.yaml.template
         cp -a /tmp/repo/data/. /out/data/
         cp -a /tmp/repo/config/postgres/init.sql /out/pginit/
@@ -269,17 +270,6 @@ services:
       - cfg-data:/demo/data:ro
       - civil-registry-cache:/var/lib/registry-relay/cache
 
-  social-protection-registry-relay:
-    <<: *relay-common
-    command: ["--config", "/etc/registry-relay/social-protection-registry-relay.yaml"]
-    depends_on:
-      config-loader:
-        condition: service_completed_successfully
-    volumes:
-      - cfg-relay:/etc/registry-relay:ro
-      - cfg-data:/demo/data:ro
-      - social-protection-registry-cache:/var/lib/registry-relay/cache
-
   health-registry-relay:
     <<: *relay-common
     command: ["--config", "/etc/registry-relay/health-registry-relay.yaml"]
@@ -337,17 +327,15 @@ services:
       CONFIG_REPO_REF: ${CONFIG_REPO_REF:?set CONFIG_REPO_REF to the deployed registry-lab git ref}
       CIVIL_EVIDENCE_URL: http://civil-notary:8080
       CIVIL_EVIDENCE_CLIENT_BEARER: ${CIVIL_EVIDENCE_CLIENT_BEARER:-}
-      SOCIAL_RELAY_URL: http://social-protection-registry-relay:8080
-      SHARED_EVIDENCE_URL: http://shared-eligibility-notary:8080
+      # The social relay and shared Notary run in the lab-social Coolify app, on a
+      # separate docker network, so the homepage reaches them over public HTTPS.
+      SOCIAL_RELAY_URL: https://social-relay.lab.registrystack.org
+      SHARED_EVIDENCE_URL: https://shared-notary.lab.registrystack.org
       SHARED_EVIDENCE_CLIENT_BEARER: ${SHARED_EVIDENCE_CLIENT_BEARER:-}
     depends_on:
       config-loader:
         condition: service_completed_successfully
-      social-protection-registry-relay:
-        condition: service_healthy
       civil-notary:
-        condition: service_healthy
-      shared-eligibility-notary:
         condition: service_healthy
     volumes:
       - cfg-static-scripts:/opt/lab-scripts:ro
@@ -379,27 +367,6 @@ services:
       civil-registry-relay:
         condition: service_healthy
 
-  social-protection-notary:
-    <<: *notary-common
-    command: ["--config", "/etc/registry-notary/social-protection-notary.yaml"]
-    environment:
-      <<: *notary-env
-      SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH: ${SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH:-}
-      SOCIAL_EVIDENCE_CLIENT_BEARER_HASH: ${SOCIAL_EVIDENCE_CLIENT_BEARER_HASH:-}
-      SOCIAL_EVIDENCE_SOURCE_RAW: ${SOCIAL_EVIDENCE_SOURCE_RAW:-}
-      SOCIAL_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET: ${SOCIAL_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET:-}
-      SOCIAL_FEDERATION_RESPONSE_JWK: ${SOCIAL_FEDERATION_RESPONSE_JWK:-}
-    volumes:
-      - cfg-notary:/etc/registry-notary:ro
-      - notary-config-state:/var/lib/registry-notary/config-state
-    depends_on:
-      config-loader:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-      social-protection-registry-relay:
-        condition: service_healthy
-
   citizen-civil-notary:
     <<: *notary-common
     command: ["--config", "/etc/registry-notary/citizen-civil-notary.yaml"]
@@ -412,31 +379,6 @@ services:
       redis:
         condition: service_healthy
       civil-registry-relay:
-        condition: service_healthy
-
-  shared-eligibility-notary:
-    <<: *notary-common
-    command: ["--config", "/etc/registry-notary/shared-eligibility-notary.yaml"]
-    environment:
-      <<: *notary-env
-      SHARED_EVIDENCE_CLIENT_TOKEN_HASH: ${SHARED_EVIDENCE_CLIENT_TOKEN_HASH:-}
-      SHARED_EVIDENCE_CLIENT_BEARER_HASH: ${SHARED_EVIDENCE_CLIENT_BEARER_HASH:-}
-      SHARED_CIVIL_EVIDENCE_SOURCE_RAW: ${SHARED_CIVIL_EVIDENCE_SOURCE_RAW:-}
-      SHARED_SOCIAL_EVIDENCE_SOURCE_RAW: ${SHARED_SOCIAL_EVIDENCE_SOURCE_RAW:-}
-      SHARED_HEALTH_EVIDENCE_SOURCE_RAW: ${SHARED_HEALTH_EVIDENCE_SOURCE_RAW:-}
-    volumes:
-      - cfg-notary:/etc/registry-notary:ro
-      - notary-config-state:/var/lib/registry-notary/config-state
-    depends_on:
-      config-loader:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-      civil-registry-relay:
-        condition: service_healthy
-      social-protection-registry-relay:
-        condition: service_healthy
-      health-registry-relay:
         condition: service_healthy
 
   openfn-dhis2-sidecar:
@@ -519,7 +461,6 @@ volumes:
   redis-data:
   zitadel-seed:
   civil-registry-cache:
-  social-protection-registry-cache:
   health-registry-cache:
   cfg-relay:
   cfg-notary:

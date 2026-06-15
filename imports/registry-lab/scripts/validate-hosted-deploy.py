@@ -28,14 +28,11 @@ REQUIRED_SERVICES = {
         "redis",
         "civil-notary",
         "citizen-civil-notary",
-        "social-protection-notary",
         "civil-registry-relay",
-        "social-protection-registry-relay",
         "health-registry-relay",
         "static-metadata-publisher",
         "lab-homepage",
         "zitadel",
-        "shared-eligibility-notary",
         "openfn-dhis2-sidecar",
         "dhis2-health-notary",
         "opencrvs-dci-notary",
@@ -58,14 +55,11 @@ REQUIRED_SERVICES = {
 REQUIRED_DOMAINS = {
     "registry-lab": {
         "citizen-civil-notary": f"citizen-notary.{LAB_DOMAIN}",
-        "social-protection-notary": f"social-notary.{LAB_DOMAIN}",
         "civil-registry-relay": f"civil-relay.{LAB_DOMAIN}",
-        "social-protection-registry-relay": f"social-relay.{LAB_DOMAIN}",
         "health-registry-relay": f"health-relay.{LAB_DOMAIN}",
         "static-metadata-publisher": f"metadata.{LAB_DOMAIN}",
         "lab-homepage": LAB_DOMAIN,
         "zitadel": f"zitadel.{LAB_DOMAIN}",
-        "shared-eligibility-notary": f"shared-notary.{LAB_DOMAIN}",
         "dhis2-health-notary": f"dhis2-notary.{LAB_DOMAIN}",
         "opencrvs-dci-notary": f"opencrvs-notary.{LAB_DOMAIN}",
     },
@@ -944,9 +938,11 @@ def validate_hosted_social_combined_scenario_contract(
 
     if isinstance(lab_homepage, dict):
         env = normalize_environment(lab_homepage.get("environment"))
+        # The social relay and shared Notary moved to the per-track lab-social
+        # Coolify app, so the monolith homepage reaches them over public HTTPS.
         expected_homepage_env = {
-            "SOCIAL_RELAY_URL": "http://social-protection-registry-relay:8080",
-            "SHARED_EVIDENCE_URL": "http://shared-eligibility-notary:8080",
+            "SOCIAL_RELAY_URL": f"https://social-relay.{LAB_DOMAIN}",
+            "SHARED_EVIDENCE_URL": f"https://shared-notary.{LAB_DOMAIN}",
         }
         for variable, expected in sorted(expected_homepage_env.items()):
             if env.get(variable) != expected:
