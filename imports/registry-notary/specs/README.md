@@ -20,6 +20,9 @@ that still tracks open work.
 - [`federated-notary-manifest-spec.md`](federated-notary-manifest-spec.md):
   manifest-backed federation, trust, delegated evaluation, credential issuance,
   and audit checkpoint design. **[archived: diverges from code]**
+- [`gitb-conformance-suite.md`](gitb-conformance-suite.md):
+  target GITB runtime scenario suite and first runnable slice for Notary
+  interoperability evidence. **[active: suite design]**
 - [`evidence-request-subject-model-spec.md`](evidence-request-subject-model-spec.md):
   breaking evaluation request model for requester, target, relationship,
   provider-side matching, and non-person evidence subjects.

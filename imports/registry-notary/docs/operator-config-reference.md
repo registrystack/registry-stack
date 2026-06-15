@@ -396,6 +396,10 @@ evidence:
 ```
 
 `server.openapi_requires_auth` defaults to `true`. Set it to `false` only for local testing or controlled tooling environments that need unauthenticated access to `/openapi.json`.
+This switch does not affect `/.well-known/evidence-service`; that route remains
+authenticated because it exposes configured Notary capability metadata. Hosted
+lab and demo deployments returning `401` for unauthenticated discovery are
+therefore aligned with the default policy.
 
 ## Authentication
 

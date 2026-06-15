@@ -27,6 +27,7 @@ For application and wallet developers calling the API or the SDKs.
 - [SD-JWT VC conformance](sd-jwt-vc-conformance-profile.md): the supported credential wire contract and the explicit non-support list.
 - [OpenCRVS DCI tutorial](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/opencrvs-dci-standalone-tutorial.md): issue local demo SD-JWT VCs from OpenCRVS birth-record evidence.
 - [Scenario patterns](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/notary-scenario-patterns.md): reusable evaluation, federation, and issuance flows with sequence diagrams.
+- [GITB conformance suite design](../specs/gitb-conformance-suite.md): target runtime scenarios and claim boundary for ITB/GITB interoperability evidence.
 
 ## Operate
 
