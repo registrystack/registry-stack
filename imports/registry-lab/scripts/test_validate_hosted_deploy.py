@@ -1002,7 +1002,6 @@ evidence:
         compose = self.validator.load_yaml_mapping(SCRIPT_DIR.parent / "compose.coolify.yaml")
         for service in (
             "civil-registry-relay",
-            "social-protection-registry-relay",
             "health-registry-relay",
         ):
             with self.subTest(service=service):
@@ -1493,7 +1492,7 @@ evidence:
                     },
                     "command": [
                         """
-for d in civil-cache social-cache health-cache; do
+for d in civil-cache health-cache; do
   mkdir -p "/out/$d"
   chown -R 65532:65532 "/out/$d"
 done
@@ -1613,8 +1612,8 @@ cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
                         "CONFIG_REPO_REF": "${CONFIG_REPO_REF:?set CONFIG_REPO_REF to the deployed registry-lab git ref}",
                         "CIVIL_EVIDENCE_URL": "http://civil-notary:8080",
                         "CIVIL_EVIDENCE_CLIENT_BEARER": "${CIVIL_EVIDENCE_CLIENT_BEARER:-}",
-                        "SOCIAL_RELAY_URL": "http://social-protection-registry-relay:8080",
-                        "SHARED_EVIDENCE_URL": "http://shared-eligibility-notary:8080",
+                        "SOCIAL_RELAY_URL": "https://social-relay.lab.registrystack.org",
+                        "SHARED_EVIDENCE_URL": "https://shared-notary.lab.registrystack.org",
                         "SHARED_EVIDENCE_CLIENT_BEARER": "${SHARED_EVIDENCE_CLIENT_BEARER:-}",
                     },
                 },
