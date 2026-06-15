@@ -147,6 +147,7 @@ services:
         cp -a /tmp/repo/config/openfn/jobs/. /out/openfn-jobs/
         cp -a /tmp/repo/scripts/static-metadata-server.py /out/static-scripts/
         cp -a /tmp/repo/scripts/lab-homepage-server.py /out/static-scripts/
+        cp -a /tmp/repo/scripts/lab_homepage_explorer /out/static-scripts/
         cp -a /tmp/repo/scripts/lab_homepage_scenarios /out/static-scripts/
         cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
         cp -a /tmp/repo/config/lab-homepage/. /out/lab-homepage/
@@ -411,6 +412,8 @@ services:
     command: ["--config", "/etc/registry-notary/dhis2-health-notary.yaml"]
     environment:
       <<: *notary-env
+      DHIS2_EVIDENCE_CLIENT_TOKEN_HASH: ${DHIS2_EVIDENCE_CLIENT_TOKEN_HASH:-}
+      DHIS2_EVIDENCE_CLIENT_BEARER_HASH: ${DHIS2_EVIDENCE_CLIENT_BEARER_HASH:-}
     volumes:
       - cfg-notary:/etc/registry-notary:ro
       - notary-config-state:/var/lib/registry-notary/config-state

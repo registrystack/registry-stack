@@ -15,8 +15,11 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import parse_qs, urljoin, urlparse
 
+from lab_homepage_explorer import claims as claims_explorer
+from lab_homepage_explorer import registries as registry_explorer
+from lab_homepage_explorer.common import ExplorerInputError, parse_filter_params
 from lab_homepage_scenarios import (
     run_alive_proof_step,
     run_scenario_step,
@@ -45,8 +48,11 @@ STATIC_ASSETS: dict[str, str] = {
     "shared.css": "text/css; charset=utf-8",
     "homepage.css": "text/css; charset=utf-8",
     "scenarios.css": "text/css; charset=utf-8",
+    "explorers.css": "text/css; charset=utf-8",
     "homepage.js": "application/javascript; charset=utf-8",
     "scenarios.js": "application/javascript; charset=utf-8",
+    "registry-explorer.js": "application/javascript; charset=utf-8",
+    "claims-explorer.js": "application/javascript; charset=utf-8",
 }
 
 
@@ -259,6 +265,30 @@ def status_checks(config: dict[str, Any], timeout: float) -> dict[str, Any]:
     return {"generated_at_unix_ms": int(time.time() * 1000), "checks": checks}
 
 
+def _single_query_value(query: dict[str, list[str]], name: str) -> str:
+    values = query.get(name, [])
+    return values[0] if values else ""
+
+
+def _normalize_evaluation_body(body: dict[str, Any]) -> dict[str, Any]:
+    allowed = {"claim_id", "subject", "identifier_scheme", "disclosure", "format", "purpose"}
+    unexpected = sorted(set(body) - allowed)
+    if unexpected:
+        raise ExplorerInputError(
+            "explorer.unexpected_request_key",
+            "Request contains unsupported keys.",
+            field=unexpected[0],
+            allowed=sorted(allowed),
+        )
+    normalized = dict(body)
+    subject = normalized.get("subject")
+    if isinstance(subject, dict):
+        normalized["subject"] = str(subject.get("value", ""))
+        if "identifier_scheme" not in normalized:
+            normalized["identifier_scheme"] = str(subject.get("scheme", ""))
+    return normalized
+
+
 def homepage_html(title: str, lab_mode: str = "hosted") -> bytes:
     safe_title = html.escape(title)
     return f"""<!doctype html>
@@ -343,6 +373,79 @@ def homepage_html(title: str, lab_mode: str = "hosted") -> bytes:
 """.encode("utf-8")
 
 
+def explorer_page_html(kind: str) -> bytes:
+    if kind == "registry":
+        page_title = "Registry Explorer"
+        active = "registry-explorer"
+        eyebrow = "Registry data"
+        title = "Registry Explorer"
+        subtitle = "Relay shows what an authorized system can read. Notary returns only the fact a service asked for."
+        script = "registry-explorer.js"
+        root_id = "registry-explorer-root"
+    elif kind == "claims":
+        page_title = "Claims Explorer"
+        active = "claims-explorer"
+        eyebrow = "Minimized claims"
+        title = "Claims Explorer"
+        subtitle = "Relay shows what an authorized system can read. Notary returns only the fact a service asked for."
+        script = "claims-explorer.js"
+        root_id = "claims-explorer-root"
+    else:
+        raise ValueError(f"unknown explorer kind: {kind}")
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{html.escape(page_title)} · Registry Lab</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/static/shared.css">
+  <link rel="stylesheet" href="/static/explorers.css">
+</head>
+<body data-explorer-kind="{html.escape(kind, quote=True)}">
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="Registry Lab home">
+      <span class="brand-mark" aria-hidden="true">RS</span>
+      <span>Registry Lab</span>
+    </a>
+    <nav class="top-nav" aria-label="Lab navigation">
+      {top_nav_html(active)}
+    </nav>
+  </header>
+  <main>
+    <section class="explorer-intro" aria-labelledby="title">
+      <div class="explorer-inner">
+        <p class="eyebrow">{html.escape(eyebrow)}</p>
+        <h1 id="title">{html.escape(title)}</h1>
+        <p class="subtitle">{html.escape(subtitle)}</p>
+      </div>
+    </section>
+    <section class="band">
+      <div class="band-inner">
+        <div id="{html.escape(root_id)}" class="explorer-root" aria-live="polite">
+          <div class="explorer-loading">Loading Civil example</div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <footer class="site-footer">
+    <div class="site-footer-inner">
+      <div>
+        <strong>Registry Stack</strong>
+        <p class="meta">Public demo environment for governed registry services.</p>
+      </div>
+      <nav aria-label="Footer links">
+        <a href="https://registrystack.org/">Registry Stack</a>
+        <a href="https://docs.registrystack.org/">Docs</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="/static/{html.escape(script, quote=True)}"></script>
+</body>
+</html>
+""".encode("utf-8")
+
+
 
 
 # Browser-hardening headers on every response (parity with the relay's
@@ -401,6 +504,12 @@ class LabHomepageHandler(BaseHTTPRequestHandler):
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
             return
+        if path == "/registry-explorer":
+            self.send_bytes(explorer_page_html("registry"), "text/html; charset=utf-8")
+            return
+        if path == "/claims-explorer":
+            self.send_bytes(explorer_page_html("claims"), "text/html; charset=utf-8")
+            return
         if path == "/scenarios":
             self.send_bytes(scenario_page_html(), "text/html; charset=utf-8")
             return
@@ -428,10 +537,25 @@ class LabHomepageHandler(BaseHTTPRequestHandler):
         if path == "/api/status.json":
             self.send_json(status_checks(self.config, self.status_timeout))
             return
+        if path == "/api/explorer/registries.json":
+            self.send_json(registry_explorer.registry_catalog_payload(enrich_config(self.config)))
+            return
+        if path.startswith("/api/explorer/registries/"):
+            self.send_json(self.registry_explorer_payload())
+            return
+        if path == "/api/explorer/claims.json":
+            self.send_json(claims_explorer.claim_catalog_payload(enrich_config(self.config)))
+            return
+        if path.startswith("/api/explorer/claims/"):
+            self.send_json(self.claims_explorer_get_payload())
+            return
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0]
+        if path.startswith("/api/explorer/claims/"):
+            self.send_json(self.claims_explorer_post_payload())
+            return
         prefix = "/api/scenarios/alive-proof/"
         if path.startswith(prefix):
             step_id = path.removeprefix(prefix)
@@ -445,6 +569,80 @@ class LabHomepageHandler(BaseHTTPRequestHandler):
                 self.send_json(run_scenario_step(enrich_config(self.config), scenario_id, step_id, lab_mode=self.lab_mode))
                 return
         self.send_error(HTTPStatus.NOT_FOUND)
+
+    def registry_explorer_payload(self) -> Any:
+        parsed = urlparse(self.path)
+        path = parsed.path
+        query = parse_qs(parsed.query)
+        rest = path.removeprefix("/api/explorer/registries/")
+        registry_id, sep, route = rest.partition("/")
+        if not sep or not registry_id:
+            return registry_explorer.registry_error_payload(registry_id)
+        config = enrich_config(self.config)
+        try:
+            if route == "metadata.json":
+                return registry_explorer.registry_metadata_payload(config, registry_id)
+            if route == "entity-schema.json":
+                return registry_explorer.entity_schema_payload(
+                    registry_id,
+                    _single_query_value(query, "dataset"),
+                    _single_query_value(query, "entity"),
+                )
+            if route == "records.json":
+                return registry_explorer.record_query_payload(
+                    config,
+                    registry_id,
+                    _single_query_value(query, "dataset"),
+                    _single_query_value(query, "entity"),
+                    limit=_single_query_value(query, "limit"),
+                    filters=parse_filter_params(query),
+                    credential_id=_single_query_value(query, "credential_id"),
+                    purpose=_single_query_value(query, "purpose"),
+                )
+            if route == "aggregates.json":
+                return registry_explorer.aggregates_payload(
+                    registry_id,
+                    _single_query_value(query, "dataset"),
+                )
+            if route == "aggregate.json":
+                return registry_explorer.aggregate_payload(
+                    config,
+                    registry_id,
+                    _single_query_value(query, "dataset"),
+                    _single_query_value(query, "aggregate"),
+                    filters=parse_filter_params(query),
+                    purpose=_single_query_value(query, "purpose"),
+                )
+        except ExplorerInputError as error:
+            return error.payload()
+        return registry_explorer.registry_error_payload(registry_id)
+
+    def claims_explorer_get_payload(self) -> Any:
+        parsed = urlparse(self.path)
+        path = parsed.path
+        rest = path.removeprefix("/api/explorer/claims/")
+        service_id, sep, route = rest.partition("/")
+        if not sep or not service_id:
+            return claims_explorer.claim_service_error_payload(service_id)
+        config = enrich_config(self.config)
+        if route == "metadata.json":
+            return claims_explorer.claim_metadata_payload(config, service_id)
+        return claims_explorer.claim_service_error_payload(service_id)
+
+    def claims_explorer_post_payload(self) -> Any:
+        parsed = urlparse(self.path)
+        path = parsed.path
+        rest = path.removeprefix("/api/explorer/claims/")
+        service_id, sep, route = rest.partition("/")
+        if not sep or not service_id:
+            return claims_explorer.claim_service_error_payload(service_id)
+        if route != "evaluate.json":
+            return claims_explorer.claim_service_error_payload(service_id)
+        try:
+            body = _normalize_evaluation_body(self.read_json_body())
+            return claims_explorer.run_evaluation(enrich_config(self.config), service_id, body)
+        except ExplorerInputError as error:
+            return error.payload()
 
     def send_json(self, value: Any) -> None:
         body = json.dumps(value, indent=2, sort_keys=True).encode("utf-8")
@@ -466,6 +664,22 @@ class LabHomepageHandler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt: str, *args: object) -> None:
         print(f"{self.address_string()} - {fmt % args}", flush=True)
+
+    def read_json_body(self) -> dict[str, Any]:
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError as error:
+            raise ExplorerInputError("explorer.invalid_content_length", "Content-Length must be an integer.") from error
+        if length <= 0:
+            return {}
+        raw = self.rfile.read(length)
+        try:
+            value = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ExplorerInputError("explorer.invalid_json", "Request body must be JSON.") from error
+        if not isinstance(value, dict):
+            raise ExplorerInputError("explorer.invalid_json", "Request body must be a JSON object.")
+        return value
 
 
 def verify_static_assets() -> None:
