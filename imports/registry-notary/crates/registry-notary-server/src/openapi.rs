@@ -899,6 +899,11 @@ fn build_openapi_document() -> Value {
         ("EvidenceRelationship", evidence_relationship_schema()),
         ("EvidenceOnBehalfOf", evidence_on_behalf_of_schema()),
         ("EvidenceActor", evidence_actor_schema()),
+        ("ListClaimsResponse", list_claims_response_schema()),
+        ("ClaimSummary", claim_summary_schema()),
+        ("ClaimTargetInputMethod", claim_target_input_method_schema()),
+        ("ClaimTargetInputGroup", claim_target_input_group_schema()),
+        ("ClaimTargetInput", claim_target_input_schema()),
         ("EvaluationResponse", evaluation_response_schema()),
         ("ClaimResultView", claim_result_view_schema()),
         ("BatchEvaluateResponse", batch_evaluate_response_schema()),
@@ -918,6 +923,20 @@ fn build_openapi_document() -> Value {
     for (name, schema) in schema_overrides.iter() {
         document_value["components"]["schemas"][*name] = schema.clone();
     }
+    set_json_response_schema(
+        &mut document_value,
+        "/v1/claims",
+        "get",
+        "200",
+        "#/components/schemas/ListClaimsResponse",
+    );
+    set_json_response_schema(
+        &mut document_value,
+        "/v1/claims/{claim_id}",
+        "get",
+        "200",
+        "#/components/schemas/ClaimSummary",
+    );
     set_json_response_schema(
         &mut document_value,
         "/v1/evaluations",
@@ -1954,6 +1973,141 @@ fn evidence_actor_schema() -> Value {
                 "type": "string",
                 "description": "Optional assurance level of the actor (for example an acr value)."
             }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn list_claims_response_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["data"],
+        "properties": {
+            "data": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/ClaimSummary" }
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn claim_summary_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["id", "title", "version", "subject_type", "operations", "formats", "disclosure"],
+        "properties": {
+            "id": { "type": "string" },
+            "title": { "type": "string" },
+            "version": { "type": "string" },
+            "subject_type": { "type": "string" },
+            "evidence_type": { "type": "string" },
+            "evidence_type_iri": { "type": "string", "format": "uri" },
+            "operations": {
+                "type": "object",
+                "required": ["evaluate", "batch_evaluate"],
+                "properties": {
+                    "evaluate": { "type": "boolean" },
+                    "batch_evaluate": { "type": "boolean" }
+                },
+                "additionalProperties": false
+            },
+            "formats": {
+                "type": "array",
+                "items": { "type": "string" }
+            },
+            "disclosure": {
+                "type": "object",
+                "required": ["default", "allowed", "downgrade"],
+                "properties": {
+                    "default": { "type": "string" },
+                    "allowed": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "downgrade": { "type": "string" }
+                },
+                "additionalProperties": false
+            },
+            "target_inputs": {
+                "type": "array",
+                "description": "Safe request-input metadata for building evaluation targets. It exposes target-side paths and matching method labels, never connector, connection, dataset, entity, or source-field details.",
+                "items": { "$ref": "#/components/schemas/ClaimTargetInputMethod" }
+            },
+            "cccev": {
+                "oneOf": [
+                    { "type": "null" },
+                    { "type": "object", "additionalProperties": true }
+                ]
+            },
+            "oots": {
+                "oneOf": [
+                    { "type": "null" },
+                    { "type": "object", "additionalProperties": true }
+                ]
+            }
+        },
+        "additionalProperties": true
+    })
+}
+
+fn claim_target_input_method_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["target_type", "method", "confidence", "groups"],
+        "properties": {
+            "policy_id": {
+                "type": "string",
+                "description": "Stable target-matching policy identifier when configured."
+            },
+            "target_type": { "type": "string" },
+            "method": {
+                "type": "string",
+                "description": "Configured target-matching method label."
+            },
+            "confidence": {
+                "type": "string",
+                "description": "Policy-asserted confidence label for this target-input method."
+            },
+            "groups": {
+                "type": "array",
+                "description": "OR-of-AND input groups. A request needs to satisfy one group.",
+                "items": { "$ref": "#/components/schemas/ClaimTargetInputGroup" }
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn claim_target_input_group_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["inputs"],
+        "properties": {
+            "inputs": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/ClaimTargetInput" }
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn claim_target_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["path", "kind", "name", "label"],
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Target-side request path, for example target.identifiers.national_id or target.attributes.birthdate."
+            },
+            "kind": {
+                "type": "string",
+                "enum": ["id", "identifier", "attribute"]
+            },
+            "name": { "type": "string" },
+            "label": { "type": "string" }
         },
         "additionalProperties": false
     })
@@ -3279,6 +3433,48 @@ fn farmer_under_4ha_claim_example() -> Value {
             "allowed": ["predicate", "redacted"],
             "downgrade": "deny"
         },
+        "target_inputs": [
+            {
+                "policy_id": "smallholder-demographic-v1",
+                "target_type": "Person",
+                "method": "exact_name_birthdate",
+                "confidence": "high",
+                "groups": [
+                    {
+                        "inputs": [
+                            {
+                                "path": "target.identifiers.farmer_id",
+                                "kind": "identifier",
+                                "name": "farmer_id",
+                                "label": "Farmer id"
+                            }
+                        ]
+                    },
+                    {
+                        "inputs": [
+                            {
+                                "path": "target.attributes.given_name",
+                                "kind": "attribute",
+                                "name": "given_name",
+                                "label": "Given name"
+                            },
+                            {
+                                "path": "target.attributes.family_name",
+                                "kind": "attribute",
+                                "name": "family_name",
+                                "label": "Family name"
+                            },
+                            {
+                                "path": "target.attributes.birthdate",
+                                "kind": "attribute",
+                                "name": "birthdate",
+                                "label": "Birthdate"
+                            }
+                        ]
+                    }
+                ]
+            }
+        ],
         "cccev": {
             "requirement_type": "InformationRequirement",
             "evidence_type": "smallholder_farmer_evidence",

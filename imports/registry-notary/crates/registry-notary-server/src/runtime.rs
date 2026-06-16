@@ -2117,6 +2117,10 @@ pub fn claim_summary(claim: &ClaimDefinition) -> Value {
         "cccev": claim.cccev,
         "oots": oots,
     });
+    let target_inputs = claim_target_inputs(claim);
+    if !target_inputs.is_empty() {
+        summary["target_inputs"] = json!(target_inputs);
+    }
     if let Some(cccev) = &claim.cccev {
         if let Some(evidence_type) = &cccev.evidence_type {
             summary["evidence_type"] = json!(evidence_type);
@@ -2126,6 +2130,124 @@ pub fn claim_summary(claim: &ClaimDefinition) -> Value {
         }
     }
     summary
+}
+
+fn claim_target_inputs(claim: &ClaimDefinition) -> Vec<Value> {
+    claim
+        .source_bindings
+        .values()
+        .filter_map(|binding| {
+            let matching = &binding.matching;
+            let configured_matching = matching.policy_id.is_some()
+                || matching.method.is_some()
+                || matching.target_type.is_some()
+                || matching.confidence.is_some()
+                || !matching.sufficient_target_inputs.is_empty()
+                || !matching.allowed_target_inputs.is_empty();
+            if !configured_matching {
+                return None;
+            }
+
+            let groups: Vec<Vec<String>> = if matching.sufficient_target_inputs.is_empty() {
+                let mut paths = if binding.query_fields.is_empty() {
+                    vec![binding.lookup.input.clone()]
+                } else {
+                    binding
+                        .query_fields
+                        .iter()
+                        .map(|query_field| query_field.input.clone())
+                        .collect()
+                };
+                paths.sort();
+                paths.dedup();
+                vec![paths]
+            } else {
+                matching.sufficient_target_inputs.clone()
+            };
+
+            let groups: Vec<Value> = groups
+                .into_iter()
+                .filter_map(|group| {
+                    let inputs: Option<Vec<Value>> = group
+                        .into_iter()
+                        .map(|path| public_target_input(&path))
+                        .collect();
+                    let inputs = inputs?;
+                    if inputs.is_empty() {
+                        None
+                    } else {
+                        Some(json!({ "inputs": inputs }))
+                    }
+                })
+                .collect();
+            if groups.is_empty() {
+                return None;
+            }
+
+            let mut method = json!({
+                "target_type": matching
+                    .target_type
+                    .clone()
+                    .unwrap_or_else(|| claim.subject_type.clone()),
+                "method": matching
+                    .method
+                    .clone()
+                    .unwrap_or_else(|| "configured_lookup".to_string()),
+                "confidence": matching
+                    .confidence
+                    .clone()
+                    .unwrap_or_else(|| "high".to_string()),
+                "groups": groups,
+            });
+            if let Some(policy_id) = &matching.policy_id {
+                method["policy_id"] = json!(policy_id);
+            }
+            Some(method)
+        })
+        .collect()
+}
+
+fn public_target_input(path: &str) -> Option<Value> {
+    let (kind, name, label) = if path == "target.id" {
+        ("id", "id", "ID".to_string())
+    } else {
+        let (kind, name) = path
+            .strip_prefix("target.identifiers.")
+            .map(|name| ("identifier", name))
+            .or_else(|| {
+                path.strip_prefix("target.attributes.")
+                    .map(|name| ("attribute", name))
+            })?;
+        (kind, name, input_label(name))
+    };
+    if name.is_empty() || name.contains('*') {
+        return None;
+    }
+    Some(json!({
+        "path": path,
+        "kind": kind,
+        "name": name,
+        "label": label,
+    }))
+}
+
+fn input_label(name: &str) -> String {
+    let mut label = String::new();
+    for part in name.split('_').filter(|part| !part.is_empty()) {
+        if !label.is_empty() {
+            label.push(' ');
+        }
+        let mut chars = part.chars();
+        if let Some(first) = chars.next() {
+            label.extend(first.to_uppercase());
+            label.push_str(chars.as_str());
+        }
+    }
+    if label.is_empty() {
+        name.to_string()
+    } else {
+        label
+    }
 }
 
 pub fn formats(config: &EvidenceConfig) -> Vec<EvidenceFormat> {
@@ -4128,6 +4250,171 @@ mod tests {
             summary["cccev"]["evidence_type_iri"],
             "https://demo.example.gov/evidence-types/civil-child-status"
         );
+    }
+
+    #[test]
+    fn claim_summary_advertises_safe_target_inputs_for_demographic_matching() {
+        let mut claim = test_claim("birth-record-exists", Vec::new(), true);
+        let binding = claim
+            .source_bindings
+            .get_mut("src")
+            .expect("test claim has a source binding");
+        binding.connector = registry_notary_core::SourceConnectorKind::Dci;
+        binding.connection = Some("opencrvs_private_connection".to_string());
+        binding.dataset = "civil_registry".to_string();
+        binding.entity = "birth_registration".to_string();
+        binding.lookup.input = "target.attributes.given_name".to_string();
+        binding.lookup.field = "childFirstNames".to_string();
+        binding.query_fields = vec![
+            registry_notary_core::SourceQueryFieldConfig {
+                input: "target.attributes.given_name".to_string(),
+                field: "childFirstNames".to_string(),
+                op: "eq".to_string(),
+            },
+            registry_notary_core::SourceQueryFieldConfig {
+                input: "target.attributes.family_name".to_string(),
+                field: "childLastName".to_string(),
+                op: "eq".to_string(),
+            },
+            registry_notary_core::SourceQueryFieldConfig {
+                input: "target.attributes.birthdate".to_string(),
+                field: "childDoB".to_string(),
+                op: "eq".to_string(),
+            },
+        ];
+        binding.matching.policy_id = Some("opencrvs-demographic-v1".to_string());
+        binding.matching.method = Some("exact_name_birthdate".to_string());
+        binding.matching.target_type = Some("Person".to_string());
+        binding.matching.confidence = Some("high".to_string());
+        binding.matching.sufficient_target_inputs = vec![vec![
+            "target.attributes.given_name".to_string(),
+            "target.attributes.family_name".to_string(),
+            "target.attributes.birthdate".to_string(),
+        ]];
+        binding.matching.allowed_target_inputs = vec![
+            "target.attributes.given_name".to_string(),
+            "target.attributes.family_name".to_string(),
+            "target.attributes.birthdate".to_string(),
+        ];
+
+        let summary = claim_summary(&claim);
+
+        let target_inputs = summary["target_inputs"]
+            .as_array()
+            .expect("target inputs are advertised");
+        assert_eq!(target_inputs.len(), 1);
+        let method = &target_inputs[0];
+        assert_eq!(method["policy_id"], "opencrvs-demographic-v1");
+        assert_eq!(method["method"], "exact_name_birthdate");
+        assert_eq!(method["target_type"], "Person");
+        assert_eq!(method["confidence"], "high");
+        assert_eq!(
+            method["groups"][0]["inputs"],
+            json!([
+                {
+                    "path": "target.attributes.given_name",
+                    "kind": "attribute",
+                    "name": "given_name",
+                    "label": "Given name",
+                },
+                {
+                    "path": "target.attributes.family_name",
+                    "kind": "attribute",
+                    "name": "family_name",
+                    "label": "Family name",
+                },
+                {
+                    "path": "target.attributes.birthdate",
+                    "kind": "attribute",
+                    "name": "birthdate",
+                    "label": "Birthdate",
+                }
+            ])
+        );
+        let discovery_text = serde_json::to_string(&summary).expect("summary serializes");
+        for private_detail in [
+            "opencrvs_private_connection",
+            "civil_registry",
+            "birth_registration",
+            "childFirstNames",
+            "childLastName",
+            "childDoB",
+        ] {
+            assert!(
+                !discovery_text.contains(private_detail),
+                "claim discovery leaked {private_detail}"
+            );
+        }
+    }
+
+    #[test]
+    fn claim_summary_advertises_alternate_identifier_and_attribute_input_groups() {
+        let mut claim = test_claim("person-is-alive", Vec::new(), true);
+        let binding = claim
+            .source_bindings
+            .get_mut("src")
+            .expect("test claim has a source binding");
+        binding.matching.policy_id = Some("civil-person-match-v1".to_string());
+        binding.matching.method = Some("identifier_or_demographic".to_string());
+        binding.matching.target_type = Some("Person".to_string());
+        binding.matching.sufficient_target_inputs = vec![
+            vec!["target.identifiers.national_id".to_string()],
+            vec![
+                "target.attributes.given_name".to_string(),
+                "target.attributes.family_name".to_string(),
+                "target.attributes.birthdate".to_string(),
+            ],
+        ];
+
+        let summary = claim_summary(&claim);
+
+        assert_eq!(
+            summary["target_inputs"][0]["groups"][0]["inputs"],
+            json!([
+                {
+                    "path": "target.identifiers.national_id",
+                    "kind": "identifier",
+                    "name": "national_id",
+                    "label": "National id",
+                }
+            ])
+        );
+        assert_eq!(
+            summary["target_inputs"][0]["groups"][1]["inputs"][0],
+            json!({
+                "path": "target.attributes.given_name",
+                "kind": "attribute",
+                "name": "given_name",
+                "label": "Given name",
+            })
+        );
+    }
+
+    #[test]
+    fn claim_summary_does_not_publish_partial_target_input_groups() {
+        let mut claim = test_claim("person-is-alive", Vec::new(), true);
+        let binding = claim
+            .source_bindings
+            .get_mut("src")
+            .expect("test claim has a source binding");
+        binding.matching.policy_id = Some("mixed-unsupported-v1".to_string());
+        binding.matching.sufficient_target_inputs = vec![vec![
+            "target.attributes.given_name".to_string(),
+            "requester.attributes.case_id".to_string(),
+        ]];
+
+        let summary = claim_summary(&claim);
+
+        assert!(summary.get("target_inputs").is_none());
+    }
+
+    #[test]
+    fn claim_summary_omits_target_inputs_without_configured_matching_policy() {
+        let claim = test_claim("date-of-birth", Vec::new(), true);
+
+        let summary = claim_summary(&claim);
+
+        assert!(summary.get("target_inputs").is_none());
     }
 
     #[test]
