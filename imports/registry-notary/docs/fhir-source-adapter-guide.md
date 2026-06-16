@@ -33,19 +33,33 @@ The adapter runtime never returns raw FHIR Bundles to Notary. It returns:
 
 Notary then evaluates ordinary claim rules over that projected row.
 
-The current governed prototype covers these claim profiles with synthetic
-fixtures:
+The current governed prototype keeps a compact, use-case-led claim set with
+synthetic fixtures:
 
+Eligibility and intake:
 - `patient-record-exists`
 - `not-recorded-deceased`, including explicit `true`, explicit `false`, and
   missing `deceased[x]`
 - `age-over-18`
 - `coverage-active`
-- `coverage-class-confirmed`
-- `consent-valid-for-purpose`, with a configured FHIR purpose code
+- `coverage-eligibility-confirmed`
+- `enrolled-in-program`
+
+Care navigation and service routing:
 - `provider-affiliated-with-facility`
 - `facility-offers-service`
 - `requester-guardian-confirmed`
+- `referral-active`
+- `appointment-booked`
+
+Service completion and follow-up:
+- `encounter-completed`
+- `lab-result-available`
+- `vaccination-recorded`
+
+Payer and assurance workflows:
+- `prior-authorization-approved`
+- `source-trace-available`, using FHIR `Provenance`
 
 For batch evaluation, Notary sends the existing source adapter batch contract
 with a `query_signature` and ordered item values. The adapter maps those values

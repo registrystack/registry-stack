@@ -2450,15 +2450,19 @@ fn validate_fhir_base_url_policy(
                         "source {source_id} fhir.base_url requires allow_insecure_localhost for loopback http"
                     )));
                 }
-            } else {
+            } else if !source.allow_insecure_private_network {
                 return Err(SidecarError::Config(format!(
-                    "source {source_id} fhir.base_url must use https or explicitly allowed loopback http"
+                    "source {source_id} fhir.base_url must use https or explicitly allowed private-network http"
                 )));
+            } else {
+                // Runtime request preparation resolves the hostname and applies
+                // the private-network and metadata-service IP policy before any
+                // outbound request is sent.
             }
         }
         _ => {
             return Err(SidecarError::Config(format!(
-                "source {source_id} fhir.base_url must use https or explicitly allowed loopback http"
+                "source {source_id} fhir.base_url must use https or explicitly allowed private-network http"
             )));
         }
     }
@@ -4880,8 +4884,11 @@ async fn ensure_http_json_url_policy(
             if !source.allow_insecure_localhost {
                 return Err(());
             }
-        } else {
+        } else if !source.allow_insecure_private_network {
             return Err(());
+        } else {
+            // Resolve below and allow only private/link-local addresses for
+            // plain HTTP service names.
         }
     }
     if let Ok(ip) = host.parse::<IpAddr>() {
@@ -4899,7 +4906,11 @@ async fn ensure_http_json_url_policy(
         .map_err(|_| ())?;
     let mut addrs = Vec::new();
     for address in &mut resolved {
-        ensure_ip_allowed(address.ip(), source)?;
+        let ip = canonical_ip(address.ip());
+        ensure_ip_allowed(ip, source)?;
+        if url.scheme() == "http" && !ip.is_loopback() && !is_private_or_link_local_ip(ip) {
+            return Err(());
+        }
         addrs.push(address);
     }
     if addrs.is_empty() {
@@ -6827,5 +6838,28 @@ mod tests {
         assert!(ensure_http_json_url_policy(&metadata_mapped_http, &source)
             .await
             .is_err());
+    }
+
+    #[test]
+    fn fhir_base_url_policy_allows_private_network_http_service_names_only_with_escape() {
+        let mut source = minimal_config()
+            .sources
+            .remove("people")
+            .expect("source exists");
+        source.engine = SourceEngine::Fhir;
+        source.allow_insecure_localhost = false;
+        source.allow_insecure_private_network = false;
+
+        let docker_service =
+            reqwest::Url::parse("http://fhir-fixture-server:8080/fhir").expect("url parses");
+        assert!(validate_fhir_base_url_policy("fhir", &source, &docker_service).is_err());
+
+        source.allow_insecure_private_network = true;
+        validate_fhir_base_url_policy("fhir", &source, &docker_service)
+            .expect("private network escape allows docker service names");
+
+        let metadata =
+            reqwest::Url::parse("http://metadata.google.internal/fhir").expect("url parses");
+        assert!(validate_fhir_base_url_policy("fhir", &source, &metadata).is_err());
     }
 }

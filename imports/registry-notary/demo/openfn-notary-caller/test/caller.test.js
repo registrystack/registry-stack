@@ -60,6 +60,30 @@ test("buildEvaluationRequest sends auth, purpose, request id, and current Notary
   });
 });
 
+test("buildEvaluationRequest accepts OpenFn credential token field", () => {
+  const state = buildEvaluationRequest(
+    {
+      ...baseState,
+      configuration: {
+        notary_base_url: "https://notary.example",
+        token: "openfn-token",
+        openfn_request_fingerprint_key: "test-key",
+      },
+    },
+    {
+      claimId: "benefits-person-exists",
+      purpose: "benefits_eligibility",
+      target: {
+        type: "Person",
+        identifiers: [{ scheme: "national_id", valueFrom: "national_id", issuer: "civil_registry" }],
+      },
+    },
+  );
+
+  assert.equal(state.data.notary_request.headers.Authorization, "Bearer openfn-token");
+  assert.equal(typeof state.data.notary_context.target_fingerprint, "string");
+});
+
 test("buildEvaluationRequest normalizes relationship aliases to the wire shape", () => {
   const state = buildEvaluationRequest(baseState, {
     claimId: "benefits-person-exists",
@@ -196,6 +220,77 @@ test("handleEvaluationSuccess supports not_satisfied and all-claims policy", () 
   assert.deepEqual(state.data.notary.claims.map((claim) => [claim.claim, claim.satisfied]), [
     ["claim-a", true],
     ["claim-b", false],
+  ]);
+});
+
+test("handleEvaluationSuccess preserves value claim results", () => {
+  const prepared = buildEvaluationRequest(baseState, {
+    claimId: "farmed-land-size-hectares",
+    purpose: "benefits_eligibility",
+    target: { type: "Person", identifiers: [{ scheme: "national_id", valueFrom: "national_id" }] },
+  });
+
+  const state = handleEvaluationSuccess(
+    {
+      ...prepared,
+      response: {
+        body: {
+          results: [
+            {
+              claim_id: "farmed-land-size-hectares",
+              evaluation_id: "eval-1",
+              satisfied: null,
+              value: 1.8,
+            },
+          ],
+        },
+      },
+    },
+    { claimId: "farmed-land-size-hectares" },
+  );
+
+  assert.deepEqual(state.data.notary, {
+    branch: "satisfied",
+    claim: "farmed-land-size-hectares",
+    evaluation_id: "eval-1",
+    purpose: "benefits_eligibility",
+    request_id: "wf-req-1",
+    target_fingerprint: state.data.notary.target_fingerprint,
+    value: 1.8,
+  });
+});
+
+test("handleEvaluationSuccess supports mixed predicate and value claims", () => {
+  const prepared = buildEvaluationRequest(baseState, {
+    claimIds: ["farmer-registered", "farmed-land-size-hectares"],
+    purpose: "benefits_eligibility",
+    target: { type: "Person", identifiers: [{ scheme: "national_id", valueFrom: "national_id" }] },
+  });
+
+  const state = handleEvaluationSuccess(
+    {
+      ...prepared,
+      response: {
+        body: {
+          results: [
+            { claim_id: "farmer-registered", evaluation_id: "eval-1", satisfied: true },
+            {
+              claim_id: "farmed-land-size-hectares",
+              evaluation_id: "eval-1",
+              satisfied: null,
+              value: 1.8,
+            },
+          ],
+        },
+      },
+    },
+    { claimIds: ["farmer-registered", "farmed-land-size-hectares"] },
+  );
+
+  assert.equal(state.data.notary.branch, "satisfied");
+  assert.deepEqual(state.data.notary.claims, [
+    { claim: "farmer-registered", branch: "satisfied", evaluation_id: "eval-1", satisfied: true },
+    { claim: "farmed-land-size-hectares", branch: "satisfied", evaluation_id: "eval-1", value: 1.8 },
   ]);
 });
 

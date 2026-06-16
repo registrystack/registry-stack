@@ -45,7 +45,7 @@ export function buildEvaluationRequest(state, options = {}) {
   const target = buildTarget(data, options.target);
   const targetFingerprint = fingerprintTarget(configuration, target, options);
   const baseUrl = trimTrailingSlash(requireString(configuration.notary_base_url, "configuration.notary_base_url"));
-  const token = requireString(configuration.notary_token, "configuration.notary_token");
+  const token = requireString(configuration.token ?? configuration.notary_token, "configuration.token");
   const headers = {
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/json",
@@ -178,17 +178,19 @@ export function handleEvaluationSuccess(state, options = {}) {
         satisfied: false,
       };
     }
-    const satisfied = result.satisfied === true;
+    const hasValue = Object.prototype.hasOwnProperty.call(result, "value") && result.value !== null;
+    const satisfied = typeof result.satisfied === "boolean" ? result.satisfied : undefined;
     return {
       claim: claimId,
-      branch: satisfied ? "satisfied" : "not_satisfied",
+      branch: satisfied === false ? "not_satisfied" : "satisfied",
       evaluation_id: stringOrUndefined(result.evaluation_id),
-      satisfied,
+      ...(satisfied !== undefined ? { satisfied } : {}),
+      ...(hasValue ? { value: result.value } : {}),
     };
   });
   const branch = context.multi_claim_policy === "per_claim_routing"
     ? "per_claim_routing"
-    : claims.every((claim) => claim.satisfied) ? "satisfied" : "not_satisfied";
+    : claims.every((claim) => claim.branch === "satisfied") ? "satisfied" : "not_satisfied";
   const selected = claims[0];
 
   return redactFinishedState(state, {
@@ -197,7 +199,8 @@ export function handleEvaluationSuccess(state, options = {}) {
       ? {
           claim: selected.claim,
           evaluation_id: selected.evaluation_id,
-          satisfied: selected.satisfied,
+          ...(selected.satisfied !== undefined ? { satisfied: selected.satisfied } : {}),
+          ...(Object.prototype.hasOwnProperty.call(selected, "value") ? { value: selected.value } : {}),
         }
       : {
           claims,
@@ -520,7 +523,12 @@ function fingerprintTarget(configuration, target, options) {
   if (typeof options.targetFingerprint === "string" && options.targetFingerprint.length > 0) {
     return options.targetFingerprint;
   }
-  const key = requireString(configuration.notary_target_fingerprint_key, "configuration.notary_target_fingerprint_key");
+  const key = requireString(
+    configuration.openfn_target_fingerprint_key
+      ?? configuration.openfn_request_fingerprint_key
+      ?? configuration.notary_target_fingerprint_key,
+    "configuration.openfn_target_fingerprint_key",
+  );
   return createHmac("sha256", key)
     .update(JSON.stringify(target))
     .digest("hex");

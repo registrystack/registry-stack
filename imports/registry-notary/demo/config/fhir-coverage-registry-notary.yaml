@@ -68,85 +68,12 @@ evidence:
               field: coverage_status
               type: string
               required: true
-      rule:
-        type: cel
-        expression: source.coverage.coverage_status == 'active'
-      disclosure:
-        default: value
-        allowed:
-          - value
-      formats:
-        - application/vnd.registry-notary.claim-result+json
-    - id: coverage-class-confirmed
-      title: Coverage class confirmed
-      version: 2026-06
-      subject_type: person
-      value:
-        type: boolean
-      source_bindings:
-        coverage:
-          connector: openfn_sidecar
-          connection: fhir_sidecar
-          required_scope: health_registry:evidence_verification
-          dataset: health_registry
-          entity: coverage
-          lookup:
-            input: target.id
-            field: national_id
-            op: eq
-            cardinality: one
-          fields:
-            coverage_status:
-              field: coverage_status
-              type: string
-              required: true
             coverage_class:
               field: coverage_class
               type: string
-              required: true
       rule:
         type: cel
-        expression: source.coverage.coverage_status == 'active' && source.coverage.coverage_class == 'gold'
-      disclosure:
-        default: value
-        allowed:
-          - value
-      formats:
-        - application/vnd.registry-notary.claim-result+json
-    - id: consent-valid-for-purpose
-      title: Consent valid for configured FHIR purpose
-      version: 2026-06
-      subject_type: person
-      value:
-        type: boolean
-      source_bindings:
-        consent:
-          connector: openfn_sidecar
-          connection: fhir_sidecar
-          required_scope: health_registry:evidence_verification
-          dataset: health_registry
-          entity: consent
-          lookup:
-            input: target.id
-            field: national_id
-            op: eq
-            cardinality: one
-          fields:
-            consent_status:
-              field: consent_status
-              type: string
-              required: true
-            consent_purpose:
-              field: consent_purpose
-              type: string
-              required: true
-          matching:
-            target_type: Person
-            allowed_purposes:
-              - https://purpose.example.test/coverage
-      rule:
-        type: cel
-        expression: source.consent.consent_status == 'active' && source.consent.consent_purpose == 'TREAT'
+        expression: source.coverage.coverage_status == 'active'
       disclosure:
         default: value
         allowed:
@@ -248,6 +175,12 @@ evidence:
               field: patient_id
               type: string
               required: true
+            birth_date:
+              field: birth_date
+              type: date
+            deceased:
+              field: deceased
+              type: boolean
       rule:
         type: exists
         source: patient
@@ -280,9 +213,15 @@ evidence:
               field: birth_date
               type: date
               required: true
+            patient_id:
+              field: patient_id
+              type: string
+            deceased:
+              field: deceased
+              type: boolean
       rule:
         type: cel
-        expression: source.patient.birth_date <= '2008-06-16'
+        expression: date.age_on(source.patient.birth_date, ctx.today) >= 18
       disclosure:
         default: value
         allowed:
@@ -312,9 +251,347 @@ evidence:
               field: deceased
               type: boolean
               required: true
+            patient_id:
+              field: patient_id
+              type: string
+            birth_date:
+              field: birth_date
+              type: date
       rule:
         type: cel
         expression: source.patient.deceased == false
+      disclosure:
+        default: value
+        allowed:
+          - value
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+    - id: coverage-eligibility-confirmed
+      title: Coverage eligibility confirmed
+      version: 2026-06
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        eligibility:
+          connector: openfn_sidecar
+          connection: fhir_sidecar
+          required_scope: health_registry:evidence_verification
+          dataset: health_registry
+          entity: eligibility
+          lookup:
+            input: target.id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            eligibility_status:
+              field: eligibility_status
+              type: string
+              required: true
+            eligibility_outcome:
+              field: eligibility_outcome
+              type: string
+              required: true
+            service_type:
+              field: service_type
+              type: string
+              required: true
+      rule:
+        type: cel
+        expression: source.eligibility.eligibility_status == 'active' && source.eligibility.eligibility_outcome == 'complete' && source.eligibility.service_type == 'general-practice'
+      disclosure:
+        default: value
+        allowed:
+          - value
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+    - id: enrolled-in-program
+      title: Enrolled in program
+      version: 2026-06
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        enrollment:
+          connector: openfn_sidecar
+          connection: fhir_sidecar
+          required_scope: health_registry:evidence_verification
+          dataset: health_registry
+          entity: program_enrollment
+          lookup:
+            input: target.id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            enrollment_status:
+              field: enrollment_status
+              type: string
+              required: true
+            program_code:
+              field: program_code
+              type: string
+              required: true
+      rule:
+        type: cel
+        expression: source.enrollment.enrollment_status == 'active' && source.enrollment.program_code == 'tb-program'
+      disclosure:
+        default: value
+        allowed:
+          - value
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+    - id: encounter-completed
+      title: Encounter completed
+      version: 2026-06
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        encounter:
+          connector: openfn_sidecar
+          connection: fhir_sidecar
+          required_scope: health_registry:evidence_verification
+          dataset: health_registry
+          entity: encounter
+          lookup:
+            input: target.id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            encounter_status:
+              field: encounter_status
+              type: string
+              required: true
+            encounter_type:
+              field: encounter_type
+              type: string
+              required: true
+      rule:
+        type: cel
+        expression: source.encounter.encounter_status == 'finished' && source.encounter.encounter_type == 'annual-wellness'
+      disclosure:
+        default: value
+        allowed:
+          - value
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+    - id: referral-active
+      title: Referral active
+      version: 2026-06
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        referral:
+          connector: openfn_sidecar
+          connection: fhir_sidecar
+          required_scope: health_registry:evidence_verification
+          dataset: health_registry
+          entity: referral
+          lookup:
+            input: target.id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            referral_status:
+              field: referral_status
+              type: string
+              required: true
+            referral_code:
+              field: referral_code
+              type: string
+              required: true
+      rule:
+        type: cel
+        expression: source.referral.referral_status == 'active' && source.referral.referral_code == 'general-referral'
+      disclosure:
+        default: value
+        allowed:
+          - value
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+    - id: appointment-booked
+      title: Appointment booked
+      version: 2026-06
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        appointment:
+          connector: openfn_sidecar
+          connection: fhir_sidecar
+          required_scope: health_registry:evidence_verification
+          dataset: health_registry
+          entity: appointment
+          lookup:
+            input: target.id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            appointment_status:
+              field: appointment_status
+              type: string
+              required: true
+            appointment_service_type:
+              field: appointment_service_type
+              type: string
+              required: true
+      rule:
+        type: cel
+        expression: source.appointment.appointment_status == 'booked' && source.appointment.appointment_service_type == 'general-practice'
+      disclosure:
+        default: value
+        allowed:
+          - value
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+    - id: lab-result-available
+      title: Lab result available
+      version: 2026-06
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        lab_report:
+          connector: openfn_sidecar
+          connection: fhir_sidecar
+          required_scope: health_registry:evidence_verification
+          dataset: health_registry
+          entity: lab_report
+          lookup:
+            input: target.id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            diagnostic_report_status:
+              field: diagnostic_report_status
+              type: string
+              required: true
+            diagnostic_report_code:
+              field: diagnostic_report_code
+              type: string
+              required: true
+      rule:
+        type: cel
+        expression: source.lab_report.diagnostic_report_status == 'final' && source.lab_report.diagnostic_report_code == 'viral-load-panel'
+      disclosure:
+        default: value
+        allowed:
+          - value
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+    - id: vaccination-recorded
+      title: Vaccination recorded
+      version: 2026-06
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        immunization:
+          connector: openfn_sidecar
+          connection: fhir_sidecar
+          required_scope: health_registry:evidence_verification
+          dataset: health_registry
+          entity: immunization
+          lookup:
+            input: target.id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            immunization_status:
+              field: immunization_status
+              type: string
+              required: true
+            vaccine_code:
+              field: vaccine_code
+              type: string
+              required: true
+      rule:
+        type: cel
+        expression: source.immunization.immunization_status == 'completed' && source.immunization.vaccine_code == '03'
+      disclosure:
+        default: value
+        allowed:
+          - value
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+    - id: prior-authorization-approved
+      title: Prior authorization approved
+      version: 2026-06
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        authorization:
+          connector: openfn_sidecar
+          connection: fhir_sidecar
+          required_scope: health_registry:evidence_verification
+          dataset: health_registry
+          entity: prior_authorization
+          lookup:
+            input: target.id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            authorization_status:
+              field: authorization_status
+              type: string
+              required: true
+            authorization_outcome:
+              field: authorization_outcome
+              type: string
+              required: true
+            authorization_disposition:
+              field: authorization_disposition
+              type: string
+              required: true
+      rule:
+        type: cel
+        expression: source.authorization.authorization_status == 'active' && source.authorization.authorization_outcome == 'complete' && source.authorization.authorization_disposition == 'approved'
+      disclosure:
+        default: value
+        allowed:
+          - value
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+    - id: source-trace-available
+      title: Source trace available
+      version: 2026-06
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        source_trace:
+          connector: openfn_sidecar
+          connection: fhir_sidecar
+          required_scope: health_registry:evidence_verification
+          dataset: health_registry
+          entity: source_trace
+          lookup:
+            input: target.id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            trace_id:
+              field: trace_id
+              type: string
+              required: true
+            trace_activity:
+              field: trace_activity
+              type: string
+              required: true
+      rule:
+        type: cel
+        expression: source.source_trace.trace_id != '' && source.source_trace.trace_activity == 'verify'
       disclosure:
         default: value
         allowed:

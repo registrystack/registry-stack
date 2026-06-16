@@ -21,7 +21,7 @@ Pick your path below. New to Registry Notary? Start with the hosted walkthrough 
 For application and wallet developers calling the API or the SDKs.
 
 - [Client SDK guide](client-sdk-guide.md): evaluate claims and issue credentials from Rust, Python, and Node.js.
-- [Call Notary from OpenFn](openfn-notary-caller-guide.md): branch an OpenFn workflow on a minimized Registry Notary claim result.
+- [Call Notary from OpenFn](openfn-notary-caller-guide.md): use the Registry Stack OpenFn Notary adaptor to branch a workflow on a minimized claim result or certified value claim.
 - [API reference](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/api-reference.md): the route-to-client-method matrix and the stable problem-code registry.
 - [Wallet interop with OID4VCI](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/oid4vci-wallet-interop.md): the OpenID4VCI wallet facade contract and compatibility checklist.
 - [SD-JWT VC conformance](sd-jwt-vc-conformance-profile.md): the supported credential wire contract and the explicit non-support list.

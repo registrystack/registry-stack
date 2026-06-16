@@ -62,6 +62,26 @@ OIDC credential. The unauthenticated well-known exceptions are the public issuer
 JWKS, OID4VCI issuer metadata, and SD-JWT VC type-metadata routes documented in
 the security allowlist.
 
+## Claim Discovery Target Inputs
+
+`GET /v1/claims` and `GET /v1/claims/{id}` may include `target_inputs` when a
+claim has configured target matching. This block is request-contract metadata
+for clients that build evaluation forms. It is separate from CCCEV and OOTS:
+those describe evidence semantics and interoperability context, while
+`target_inputs` describes the target-side request paths a Notary evaluation can
+accept.
+
+Each entry contains a matching method label, optional policy id, target type,
+confidence label, and OR-of-AND input groups. A client should collect one full
+group and submit only those target paths. For example, one group may contain
+`target.identifiers.national_id`, while another may contain
+`target.attributes.given_name`, `target.attributes.family_name`, and
+`target.attributes.birthdate`.
+
+The block is intentionally minimized. It can expose target-side paths and
+friendly labels, but it does not expose connector names, connection ids,
+dataset/entity names, source field names, or raw source binding configuration.
+
 ## Source Adapter Sidecar API
 
 This section documents the private sidecar API that Registry Notary calls when a

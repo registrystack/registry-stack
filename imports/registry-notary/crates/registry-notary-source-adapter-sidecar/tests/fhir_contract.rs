@@ -159,25 +159,6 @@ async fn fhir_lookup_projects_administrative_p0_claim_facts() {
         })
     );
 
-    let consent = sidecar
-        .get("/v1/datasets/health_registry/entities/consent/records")
-        .add_header("authorization", format!("Bearer {TOKEN}"))
-        .add_header("data-purpose", PURPOSE)
-        .add_query_param("national_id", "person-123")
-        .add_query_param("fields", "national_id,consent_status,consent_purpose")
-        .await;
-    consent.assert_status_ok();
-    assert_eq!(
-        consent.json::<Value>(),
-        json!({
-            "data": [{
-                "national_id": "person-123",
-                "consent_status": "active",
-                "consent_purpose": "TREAT"
-            }]
-        })
-    );
-
     let provider = sidecar
         .get("/v1/datasets/health_registry/entities/provider_affiliation/records")
         .add_header("authorization", format!("Bearer {TOKEN}"))
@@ -222,6 +203,116 @@ async fn fhir_lookup_projects_administrative_p0_claim_facts() {
             }]
         })
     );
+}
+
+#[tokio::test]
+async fn fhir_lookup_projects_remaining_spec_claim_family_facts() {
+    let upstream = fhir_fixture_server();
+    let sidecar = fhir_sidecar(upstream.server_address().unwrap().as_str()).await;
+
+    let cases = [
+        (
+            "eligibility",
+            "fields=national_id,eligibility_status,eligibility_outcome,service_type",
+            json!({
+                "national_id": "person-123",
+                "eligibility_status": "active",
+                "eligibility_outcome": "complete",
+                "service_type": "general-practice"
+            }),
+        ),
+        (
+            "program_enrollment",
+            "fields=national_id,enrollment_status,program_code",
+            json!({
+                "national_id": "person-123",
+                "enrollment_status": "active",
+                "program_code": "tb-program"
+            }),
+        ),
+        (
+            "encounter",
+            "fields=national_id,encounter_status,encounter_type",
+            json!({
+                "national_id": "person-123",
+                "encounter_status": "finished",
+                "encounter_type": "annual-wellness"
+            }),
+        ),
+        (
+            "referral",
+            "fields=national_id,referral_status,referral_code",
+            json!({
+                "national_id": "person-123",
+                "referral_status": "active",
+                "referral_code": "general-referral"
+            }),
+        ),
+        (
+            "appointment",
+            "fields=national_id,appointment_status,appointment_service_type",
+            json!({
+                "national_id": "person-123",
+                "appointment_status": "booked",
+                "appointment_service_type": "general-practice"
+            }),
+        ),
+        (
+            "lab_report",
+            "fields=national_id,diagnostic_report_status,diagnostic_report_code",
+            json!({
+                "national_id": "person-123",
+                "diagnostic_report_status": "final",
+                "diagnostic_report_code": "viral-load-panel"
+            }),
+        ),
+        (
+            "immunization",
+            "fields=national_id,immunization_status,vaccine_code",
+            json!({
+                "national_id": "person-123",
+                "immunization_status": "completed",
+                "vaccine_code": "03"
+            }),
+        ),
+        (
+            "source_trace",
+            "fields=national_id,trace_id,trace_activity,trace_recorded",
+            json!({
+                "national_id": "person-123",
+                "trace_id": "provenance-person-123",
+                "trace_activity": "verify",
+                "trace_recorded": "2026-06-16T00:00:00Z"
+            }),
+        ),
+        (
+            "prior_authorization",
+            "fields=national_id,authorization_status,authorization_outcome,authorization_disposition",
+            json!({
+                "national_id": "person-123",
+                "authorization_status": "active",
+                "authorization_outcome": "complete",
+                "authorization_disposition": "approved"
+            }),
+        ),
+    ];
+
+    for (entity, fields_query, expected_row) in cases {
+        let response = sidecar
+            .get(&format!(
+                "/v1/datasets/health_registry/entities/{entity}/records?national_id=person-123&{fields_query}"
+            ))
+            .add_header("authorization", format!("Bearer {TOKEN}"))
+            .add_header("data-purpose", PURPOSE)
+            .await;
+
+        response.assert_status_ok();
+        assert_eq!(
+            response.json::<Value>(),
+            json!({ "data": [expected_row] }),
+            "unexpected projection for {entity}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -436,7 +527,6 @@ fn fhir_fixture_server() -> TestServer {
         Router::new()
             .route("/fhir/Patient", axum::routing::get(patient_search))
             .route("/fhir/Coverage", axum::routing::get(coverage_search))
-            .route("/fhir/Consent", axum::routing::get(consent_search))
             .route(
                 "/fhir/Practitioner",
                 axum::routing::get(practitioner_search),
@@ -457,7 +547,43 @@ fn fhir_fixture_server() -> TestServer {
             .route(
                 "/fhir/RelatedPerson",
                 axum::routing::get(related_person_search),
-            ),
+            )
+            .route(
+                "/fhir/CoverageEligibilityResponse",
+                axum::routing::get(eligibility_response_search),
+            )
+            .route(
+                "/fhir/EpisodeOfCare",
+                axum::routing::get(episode_of_care_search),
+            )
+            .route("/fhir/Encounter", axum::routing::get(encounter_search))
+            .route(
+                "/fhir/ServiceRequest",
+                axum::routing::get(service_request_search),
+            )
+            .route("/fhir/Appointment", axum::routing::get(appointment_search))
+            .route(
+                "/fhir/MedicationRequest",
+                axum::routing::get(medication_request_search),
+            )
+            .route(
+                "/fhir/DiagnosticReport",
+                axum::routing::get(diagnostic_report_search),
+            )
+            .route("/fhir/Observation", axum::routing::get(observation_search))
+            .route(
+                "/fhir/Immunization",
+                axum::routing::get(immunization_search),
+            )
+            .route("/fhir/Provenance", axum::routing::get(provenance_search))
+            .route("/fhir/Condition", axum::routing::get(condition_search))
+            .route("/fhir/CarePlan", axum::routing::get(care_plan_search))
+            .route("/fhir/Procedure", axum::routing::get(procedure_search))
+            .route(
+                "/fhir/ClaimResponse",
+                axum::routing::get(claim_response_search),
+            )
+            .route("/fhir/AuditEvent", axum::routing::get(audit_event_search)),
     )
 }
 
@@ -520,43 +646,6 @@ async fn coverage_search(
             fhir_entry(coverage("cov-b", beneficiary, "cancelled")),
         ],
         "Patient/smoke-person" => vec![fhir_entry(coverage("cov-smoke", beneficiary, "active"))],
-        _ => Vec::new(),
-    };
-    Json(fhir_bundle(entries))
-}
-
-async fn consent_search(
-    headers: HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
-) -> Json<Value> {
-    assert_fhir_headers(&headers);
-    let patient = query.get("patient").map(String::as_str).unwrap_or("");
-    let purpose = query.get("purpose").map(String::as_str).unwrap_or("");
-    let entries = match (patient, purpose) {
-        ("Patient/person-123", "TREAT") => {
-            vec![fhir_entry(consent(
-                "consent-person-123",
-                patient,
-                "active",
-                purpose,
-            ))]
-        }
-        ("Patient/inactive-person", "TREAT") => {
-            vec![fhir_entry(consent(
-                "consent-inactive-person",
-                patient,
-                "inactive",
-                purpose,
-            ))]
-        }
-        ("Patient/smoke-person", "TREAT") => {
-            vec![fhir_entry(consent(
-                "consent-smoke",
-                patient,
-                "active",
-                purpose,
-            ))]
-        }
         _ => Vec::new(),
     };
     Json(fhir_bundle(entries))
@@ -699,6 +788,479 @@ async fn related_person_search(
     Json(fhir_bundle(entries))
 }
 
+async fn eligibility_response_search(
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    assert_fhir_headers(&headers);
+    let patient = query.get("patient").map(String::as_str).unwrap_or("");
+    let service_type = query.get("service-type").map(String::as_str).unwrap_or("");
+    let entries = match (patient, service_type) {
+        ("Patient/person-123", "general-practice") => {
+            vec![fhir_entry(coverage_eligibility_response(
+                "eligibility-person-123",
+                patient,
+                "active",
+                "complete",
+                service_type,
+            ))]
+        }
+        ("Patient/smoke-person", "general-practice") => {
+            vec![fhir_entry(coverage_eligibility_response(
+                "eligibility-smoke",
+                patient,
+                "active",
+                "complete",
+                service_type,
+            ))]
+        }
+        _ => Vec::new(),
+    };
+    Json(fhir_bundle(entries))
+}
+
+async fn episode_of_care_search(
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    assert_fhir_headers(&headers);
+    let patient = query.get("patient").map(String::as_str).unwrap_or("");
+    let episode_type = query.get("type").map(String::as_str).unwrap_or("");
+    let entries = match (patient, episode_type) {
+        ("Patient/person-123", "tb-program") => {
+            vec![fhir_entry(episode_of_care(
+                "episode-person-123",
+                patient,
+                "active",
+                episode_type,
+            ))]
+        }
+        ("Patient/smoke-person", "tb-program") => {
+            vec![fhir_entry(episode_of_care(
+                "episode-smoke",
+                patient,
+                "active",
+                episode_type,
+            ))]
+        }
+        _ => Vec::new(),
+    };
+    Json(fhir_bundle(entries))
+}
+
+async fn encounter_search(
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    assert_fhir_headers(&headers);
+    let patient = query.get("patient").map(String::as_str).unwrap_or("");
+    let encounter_type = query.get("type").map(String::as_str).unwrap_or("");
+    let entries = match (patient, encounter_type) {
+        ("Patient/person-123", "annual-wellness") => {
+            vec![fhir_entry(encounter(
+                "encounter-person-123",
+                patient,
+                "finished",
+                encounter_type,
+            ))]
+        }
+        ("Patient/smoke-person", "annual-wellness") => {
+            vec![fhir_entry(encounter(
+                "encounter-smoke",
+                patient,
+                "finished",
+                encounter_type,
+            ))]
+        }
+        _ => Vec::new(),
+    };
+    Json(fhir_bundle(entries))
+}
+
+async fn service_request_search(
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    assert_fhir_headers(&headers);
+    let subject = query.get("subject").map(String::as_str).unwrap_or("");
+    let code = query.get("code").map(String::as_str).unwrap_or("");
+    let entries = match (subject, code) {
+        ("Patient/person-123", "general-referral") => {
+            vec![fhir_entry(service_request(
+                "referral-person-123",
+                subject,
+                "active",
+                code,
+            ))]
+        }
+        ("Patient/smoke-person", "general-referral") => {
+            vec![fhir_entry(service_request(
+                "referral-smoke",
+                subject,
+                "active",
+                code,
+            ))]
+        }
+        _ => Vec::new(),
+    };
+    Json(fhir_bundle(entries))
+}
+
+async fn appointment_search(
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    assert_fhir_headers(&headers);
+    let patient = query.get("patient").map(String::as_str).unwrap_or("");
+    let service_type = query.get("service-type").map(String::as_str).unwrap_or("");
+    let entries = match (patient, service_type) {
+        ("Patient/person-123", "general-practice") => {
+            vec![fhir_entry(appointment(
+                "appointment-person-123",
+                patient,
+                "booked",
+                service_type,
+            ))]
+        }
+        ("Patient/smoke-person", "general-practice") => {
+            vec![fhir_entry(appointment(
+                "appointment-smoke",
+                patient,
+                "booked",
+                service_type,
+            ))]
+        }
+        _ => Vec::new(),
+    };
+    Json(fhir_bundle(entries))
+}
+
+async fn medication_request_search(
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    assert_fhir_headers(&headers);
+    let subject = query.get("subject").map(String::as_str).unwrap_or("");
+    let code = query.get("code").map(String::as_str).unwrap_or("");
+    let entries = match (subject, code) {
+        ("Patient/person-123", "example-medication") => {
+            vec![fhir_entry(medication_request(
+                "medication-person-123",
+                subject,
+                "active",
+                code,
+            ))]
+        }
+        ("Patient/smoke-person", "example-medication") => {
+            vec![fhir_entry(medication_request(
+                "medication-smoke",
+                subject,
+                "active",
+                code,
+            ))]
+        }
+        _ => Vec::new(),
+    };
+    Json(fhir_bundle(entries))
+}
+
+async fn diagnostic_report_search(
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    assert_fhir_headers(&headers);
+    let patient = query.get("patient").map(String::as_str).unwrap_or("");
+    let code = query.get("code").map(String::as_str).unwrap_or("");
+    let entries = match (patient, code) {
+        ("Patient/person-123", "viral-load-panel") => {
+            vec![fhir_entry(diagnostic_report(
+                "report-person-123",
+                patient,
+                "final",
+                code,
+            ))]
+        }
+        ("Patient/smoke-person", "viral-load-panel") => {
+            vec![fhir_entry(diagnostic_report(
+                "report-smoke",
+                patient,
+                "final",
+                code,
+            ))]
+        }
+        ("Patient/person-123", "diagnostic-panel") => {
+            vec![fhir_entry(diagnostic_report(
+                "diagnostic-report-person-123",
+                patient,
+                "final",
+                code,
+            ))]
+        }
+        ("Patient/smoke-person", "diagnostic-panel") => {
+            vec![fhir_entry(diagnostic_report(
+                "diagnostic-report-smoke",
+                patient,
+                "final",
+                code,
+            ))]
+        }
+        _ => Vec::new(),
+    };
+    Json(fhir_bundle(entries))
+}
+
+async fn observation_search(
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    assert_fhir_headers(&headers);
+    let subject = query.get("subject").map(String::as_str).unwrap_or("");
+    let code = query.get("code").map(String::as_str).unwrap_or("");
+    let entries = match (subject, code) {
+        ("Patient/person-123", "viral-load") => {
+            vec![fhir_entry(observation_quantity(
+                "observation-person-123",
+                subject,
+                "final",
+                code,
+                120,
+            ))]
+        }
+        ("Patient/person-123", "pregnancy-status") => {
+            vec![fhir_entry(observation_code(
+                "pregnancy-person-123",
+                subject,
+                "final",
+                code,
+                "pregnant",
+            ))]
+        }
+        ("Patient/person-123", "blood-pressure") => {
+            vec![fhir_entry(observation_quantity(
+                "blood-pressure-person-123",
+                subject,
+                "final",
+                code,
+                120,
+            ))]
+        }
+        ("Patient/smoke-person", "viral-load") => {
+            vec![fhir_entry(observation_quantity(
+                "observation-smoke",
+                subject,
+                "final",
+                code,
+                120,
+            ))]
+        }
+        ("Patient/smoke-person", "pregnancy-status") => {
+            vec![fhir_entry(observation_code(
+                "pregnancy-smoke",
+                subject,
+                "final",
+                code,
+                "pregnant",
+            ))]
+        }
+        ("Patient/smoke-person", "blood-pressure") => {
+            vec![fhir_entry(observation_quantity(
+                "blood-pressure-smoke",
+                subject,
+                "final",
+                code,
+                120,
+            ))]
+        }
+        _ => Vec::new(),
+    };
+    Json(fhir_bundle(entries))
+}
+
+async fn immunization_search(
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    assert_fhir_headers(&headers);
+    let patient = query.get("patient").map(String::as_str).unwrap_or("");
+    let vaccine_code = query.get("vaccine-code").map(String::as_str).unwrap_or("");
+    let entries = match (patient, vaccine_code) {
+        ("Patient/person-123", "http://hl7.org/fhir/sid/cvx|03") => {
+            vec![fhir_entry(immunization(
+                "immunization-person-123",
+                patient,
+                "completed",
+                "03",
+            ))]
+        }
+        ("Patient/smoke-person", "http://hl7.org/fhir/sid/cvx|03") => {
+            vec![fhir_entry(immunization(
+                "immunization-smoke",
+                patient,
+                "completed",
+                "03",
+            ))]
+        }
+        _ => Vec::new(),
+    };
+    Json(fhir_bundle(entries))
+}
+
+async fn provenance_search(
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    assert_fhir_headers(&headers);
+    let target = query.get("target").map(String::as_str).unwrap_or("");
+    let entries = match target {
+        "Patient/person-123" => vec![fhir_entry(provenance(
+            "provenance-person-123",
+            target,
+            "2026-06-16T00:00:00Z",
+            "verify",
+        ))],
+        "Patient/smoke-person" => vec![fhir_entry(provenance(
+            "provenance-smoke",
+            target,
+            "2026-06-16T00:00:00Z",
+            "verify",
+        ))],
+        _ => Vec::new(),
+    };
+    Json(fhir_bundle(entries))
+}
+
+async fn condition_search(
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    assert_fhir_headers(&headers);
+    let subject = query.get("subject").map(String::as_str).unwrap_or("");
+    let code = query.get("code").map(String::as_str).unwrap_or("");
+    let entries = match (subject, code) {
+        ("Patient/person-123", "tb-register") => {
+            vec![fhir_entry(condition(
+                "condition-person-123",
+                subject,
+                "active",
+                code,
+            ))]
+        }
+        ("Patient/smoke-person", "tb-register") => {
+            vec![fhir_entry(condition(
+                "condition-smoke",
+                subject,
+                "active",
+                code,
+            ))]
+        }
+        _ => Vec::new(),
+    };
+    Json(fhir_bundle(entries))
+}
+
+async fn care_plan_search(
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    assert_fhir_headers(&headers);
+    let subject = query.get("subject").map(String::as_str).unwrap_or("");
+    let category = query.get("category").map(String::as_str).unwrap_or("");
+    let entries = match (subject, category) {
+        ("Patient/person-123", "tb-program") => {
+            vec![fhir_entry(care_plan(
+                "care-plan-person-123",
+                subject,
+                "active",
+                category,
+            ))]
+        }
+        ("Patient/smoke-person", "tb-program") => {
+            vec![fhir_entry(care_plan(
+                "care-plan-smoke",
+                subject,
+                "active",
+                category,
+            ))]
+        }
+        _ => Vec::new(),
+    };
+    Json(fhir_bundle(entries))
+}
+
+async fn procedure_search(
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    assert_fhir_headers(&headers);
+    let subject = query.get("subject").map(String::as_str).unwrap_or("");
+    let code = query.get("code").map(String::as_str).unwrap_or("");
+    let entries = match (subject, code) {
+        ("Patient/person-123", "procedure-general") => {
+            vec![fhir_entry(procedure(
+                "procedure-person-123",
+                subject,
+                "completed",
+                code,
+            ))]
+        }
+        ("Patient/smoke-person", "procedure-general") => {
+            vec![fhir_entry(procedure(
+                "procedure-smoke",
+                subject,
+                "completed",
+                code,
+            ))]
+        }
+        _ => Vec::new(),
+    };
+    Json(fhir_bundle(entries))
+}
+
+async fn claim_response_search(
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    assert_fhir_headers(&headers);
+    let patient = query.get("patient").map(String::as_str).unwrap_or("");
+    let request = query.get("request").map(String::as_str).unwrap_or("");
+    let entries = match (patient, request) {
+        ("Patient/person-123", "ServiceRequest/referral-person-123") => {
+            vec![fhir_entry(claim_response(
+                "claim-response-person-123",
+                patient,
+                "active",
+                "complete",
+                "approved",
+            ))]
+        }
+        ("Patient/smoke-person", "ServiceRequest/referral-person-123") => {
+            vec![fhir_entry(claim_response(
+                "claim-response-smoke",
+                patient,
+                "active",
+                "complete",
+                "approved",
+            ))]
+        }
+        _ => Vec::new(),
+    };
+    Json(fhir_bundle(entries))
+}
+
+async fn audit_event_search(
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    assert_fhir_headers(&headers);
+    let patient = query.get("patient").map(String::as_str).unwrap_or("");
+    let entries = match patient {
+        "Patient/person-123" => vec![fhir_entry(audit_event("audit-person-123", patient, "R"))],
+        "Patient/smoke-person" => vec![fhir_entry(audit_event("audit-smoke", patient, "R"))],
+        _ => Vec::new(),
+    };
+    Json(fhir_bundle(entries))
+}
+
 fn assert_fhir_headers(headers: &HeaderMap) {
     assert_eq!(
         headers
@@ -771,23 +1333,6 @@ fn coverage(id: &str, beneficiary: &str, status: &str) -> Value {
     })
 }
 
-fn consent(id: &str, patient: &str, status: &str, purpose: &str) -> Value {
-    json!({
-        "resourceType": "Consent",
-        "id": id,
-        "status": status,
-        "patient": { "reference": patient },
-        "provision": {
-            "purpose": [{
-                "coding": [{
-                    "system": "http://terminology.hl7.org/CodeSystem/v3-ActReason",
-                    "code": purpose
-                }]
-            }]
-        }
-    })
-}
-
 fn practitioner(provider_id: &str) -> Value {
     json!({
         "resourceType": "Practitioner",
@@ -839,6 +1384,284 @@ fn healthcare_service(id: &str, location_ref: &str, active: bool, service_type: 
                 "system": "http://terminology.hl7.org/CodeSystem/service-type",
                 "code": service_type
             }]
+        }]
+    })
+}
+
+fn coverage_eligibility_response(
+    id: &str,
+    patient: &str,
+    status: &str,
+    outcome: &str,
+    service_type: &str,
+) -> Value {
+    json!({
+        "resourceType": "CoverageEligibilityResponse",
+        "id": id,
+        "status": status,
+        "outcome": outcome,
+        "patient": { "reference": patient },
+        "insurance": [{
+            "item": [{
+                "category": {
+                    "coding": [{
+                        "system": "http://terminology.hl7.org/CodeSystem/service-type",
+                        "code": service_type
+                    }]
+                }
+            }]
+        }]
+    })
+}
+
+fn episode_of_care(id: &str, patient: &str, status: &str, program_code: &str) -> Value {
+    json!({
+        "resourceType": "EpisodeOfCare",
+        "id": id,
+        "status": status,
+        "patient": { "reference": patient },
+        "type": [{
+            "coding": [{
+                "system": "https://example.gov/fhir/program-code",
+                "code": program_code
+            }]
+        }]
+    })
+}
+
+fn encounter(id: &str, patient: &str, status: &str, encounter_type: &str) -> Value {
+    json!({
+        "resourceType": "Encounter",
+        "id": id,
+        "status": status,
+        "subject": { "reference": patient },
+        "type": [{
+            "coding": [{
+                "system": "https://example.gov/fhir/encounter-type",
+                "code": encounter_type
+            }]
+        }]
+    })
+}
+
+fn service_request(id: &str, subject: &str, status: &str, code: &str) -> Value {
+    json!({
+        "resourceType": "ServiceRequest",
+        "id": id,
+        "status": status,
+        "intent": "order",
+        "subject": { "reference": subject },
+        "code": {
+            "coding": [{
+                "system": "https://example.gov/fhir/referral-code",
+                "code": code
+            }]
+        }
+    })
+}
+
+fn appointment(id: &str, patient: &str, status: &str, service_type: &str) -> Value {
+    json!({
+        "resourceType": "Appointment",
+        "id": id,
+        "status": status,
+        "participant": [{
+            "actor": { "reference": patient },
+            "status": "accepted"
+        }],
+        "serviceType": [{
+            "coding": [{
+                "system": "http://terminology.hl7.org/CodeSystem/service-type",
+                "code": service_type
+            }]
+        }]
+    })
+}
+
+fn medication_request(id: &str, subject: &str, status: &str, code: &str) -> Value {
+    json!({
+        "resourceType": "MedicationRequest",
+        "id": id,
+        "status": status,
+        "intent": "order",
+        "subject": { "reference": subject },
+        "medicationCodeableConcept": {
+            "coding": [{
+                "system": "https://example.gov/fhir/medication-code",
+                "code": code
+            }]
+        }
+    })
+}
+
+fn diagnostic_report(id: &str, patient: &str, status: &str, code: &str) -> Value {
+    json!({
+        "resourceType": "DiagnosticReport",
+        "id": id,
+        "status": status,
+        "subject": { "reference": patient },
+        "code": {
+            "coding": [{
+                "system": "https://loinc.org",
+                "code": code
+            }]
+        }
+    })
+}
+
+fn observation_quantity(id: &str, subject: &str, status: &str, code: &str, value: i64) -> Value {
+    json!({
+        "resourceType": "Observation",
+        "id": id,
+        "status": status,
+        "subject": { "reference": subject },
+        "code": {
+            "coding": [{
+                "system": "https://loinc.org",
+                "code": code
+            }]
+        },
+        "valueQuantity": {
+            "value": value,
+            "unit": "copies/mL"
+        },
+        "effectiveDateTime": "2026-06-01T00:00:00Z"
+    })
+}
+
+fn observation_code(id: &str, subject: &str, status: &str, code: &str, value_code: &str) -> Value {
+    json!({
+        "resourceType": "Observation",
+        "id": id,
+        "status": status,
+        "subject": { "reference": subject },
+        "code": {
+            "coding": [{
+                "system": "https://loinc.org",
+                "code": code
+            }]
+        },
+        "valueCodeableConcept": {
+            "coding": [{
+                "system": "https://example.gov/fhir/observation-value",
+                "code": value_code
+            }]
+        },
+        "effectiveDateTime": "2026-06-01T00:00:00Z"
+    })
+}
+
+fn immunization(id: &str, patient: &str, status: &str, vaccine_code: &str) -> Value {
+    json!({
+        "resourceType": "Immunization",
+        "id": id,
+        "status": status,
+        "patient": { "reference": patient },
+        "vaccineCode": {
+            "coding": [{
+                "system": "http://hl7.org/fhir/sid/cvx",
+                "code": vaccine_code
+            }]
+        },
+        "occurrenceDateTime": "2026-01-15T00:00:00Z"
+    })
+}
+
+fn provenance(id: &str, target: &str, recorded: &str, activity_code: &str) -> Value {
+    json!({
+        "resourceType": "Provenance",
+        "id": id,
+        "target": [{ "reference": target }],
+        "recorded": recorded,
+        "activity": {
+            "coding": [{
+                "system": "https://example.gov/fhir/provenance-activity",
+                "code": activity_code
+            }]
+        }
+    })
+}
+
+fn condition(id: &str, subject: &str, status: &str, code: &str) -> Value {
+    json!({
+        "resourceType": "Condition",
+        "id": id,
+        "subject": { "reference": subject },
+        "clinicalStatus": {
+            "coding": [{
+                "system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
+                "code": status
+            }]
+        },
+        "code": {
+            "coding": [{
+                "system": "https://example.gov/fhir/condition-code",
+                "code": code
+            }]
+        }
+    })
+}
+
+fn care_plan(id: &str, subject: &str, status: &str, category: &str) -> Value {
+    json!({
+        "resourceType": "CarePlan",
+        "id": id,
+        "status": status,
+        "intent": "plan",
+        "subject": { "reference": subject },
+        "category": [{
+            "coding": [{
+                "system": "https://example.gov/fhir/care-plan-category",
+                "code": category
+            }]
+        }]
+    })
+}
+
+fn procedure(id: &str, subject: &str, status: &str, code: &str) -> Value {
+    json!({
+        "resourceType": "Procedure",
+        "id": id,
+        "status": status,
+        "subject": { "reference": subject },
+        "code": {
+            "coding": [{
+                "system": "https://example.gov/fhir/procedure-code",
+                "code": code
+            }]
+        }
+    })
+}
+
+fn claim_response(
+    id: &str,
+    patient: &str,
+    status: &str,
+    outcome: &str,
+    disposition: &str,
+) -> Value {
+    json!({
+        "resourceType": "ClaimResponse",
+        "id": id,
+        "status": status,
+        "outcome": outcome,
+        "patient": { "reference": patient },
+        "disposition": disposition
+    })
+}
+
+fn audit_event(id: &str, patient: &str, action: &str) -> Value {
+    json!({
+        "resourceType": "AuditEvent",
+        "id": id,
+        "type": {
+            "system": "http://terminology.hl7.org/CodeSystem/audit-event-type",
+            "code": "rest"
+        },
+        "action": action,
+        "recorded": "2026-06-16T00:00:00Z",
+        "entity": [{
+            "what": { "reference": patient }
         }]
     })
 }
@@ -1077,52 +1900,6 @@ sources:
       fields:
         - national_id
       purpose: startup-smoke
-  fhir_consent:
-    dataset: health_registry
-    entity: consent
-    engine: fhir
-    allow_insecure_localhost: true
-    allowed_base_urls:
-      - {fhir_url}
-    fhir:
-      base_url: {fhir_url}
-      bearer_token_env: {upstream_token_env}
-      anchor:
-        id: patient
-        resource_type: Patient
-        cardinality: one
-        search:
-          - param: identifier
-            type: token
-            system: https://example.gov/id/national-id
-            value_from_lookup: true
-      relations:
-        - id: consent
-          resource_type: Consent
-          cardinality: one
-          search:
-            - param: patient
-              type: reference
-              value_from_node: patient.reference
-            - param: purpose
-              type: code
-              value: TREAT
-      project:
-        national_id:
-          node: patient
-          pointer: /identifier/0/value
-        consent_status:
-          node: consent
-          pointer: /status
-        consent_purpose:
-          node: consent
-          pointer: /provision/purpose/0/coding/0/code
-    smoke_lookup:
-      field: national_id
-      value: smoke-person
-      fields:
-        - national_id
-      purpose: startup-smoke
   fhir_provider_affiliation:
     dataset: health_registry
     entity: provider_affiliation
@@ -1224,6 +2001,426 @@ sources:
       value: smoke-facility
       fields:
         - organization_id
+      purpose: startup-smoke
+  fhir_eligibility:
+    dataset: health_registry
+    entity: eligibility
+    engine: fhir
+    allow_insecure_localhost: true
+    allowed_base_urls:
+      - {fhir_url}
+    fhir:
+      base_url: {fhir_url}
+      bearer_token_env: {upstream_token_env}
+      anchor:
+        id: patient
+        resource_type: Patient
+        cardinality: one
+        search:
+          - param: identifier
+            type: token
+            system: https://example.gov/id/national-id
+            value_from_lookup: true
+      relations:
+        - id: eligibility
+          resource_type: CoverageEligibilityResponse
+          cardinality: one
+          search:
+            - param: patient
+              type: reference
+              value_from_node: patient.reference
+            - param: service-type
+              type: code
+              value: general-practice
+      project:
+        national_id:
+          node: patient
+          pointer: /identifier/0/value
+        eligibility_status:
+          node: eligibility
+          pointer: /status
+        eligibility_outcome:
+          node: eligibility
+          pointer: /outcome
+        service_type:
+          node: eligibility
+          pointer: /insurance/0/item/0/category/coding/0/code
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields:
+        - national_id
+      purpose: startup-smoke
+  fhir_program_enrollment:
+    dataset: health_registry
+    entity: program_enrollment
+    engine: fhir
+    allow_insecure_localhost: true
+    allowed_base_urls:
+      - {fhir_url}
+    fhir:
+      base_url: {fhir_url}
+      bearer_token_env: {upstream_token_env}
+      anchor:
+        id: patient
+        resource_type: Patient
+        cardinality: one
+        search:
+          - param: identifier
+            type: token
+            system: https://example.gov/id/national-id
+            value_from_lookup: true
+      relations:
+        - id: episode
+          resource_type: EpisodeOfCare
+          cardinality: one
+          search:
+            - param: patient
+              type: reference
+              value_from_node: patient.reference
+            - param: type
+              type: code
+              value: tb-program
+      project:
+        national_id:
+          node: patient
+          pointer: /identifier/0/value
+        enrollment_status:
+          node: episode
+          pointer: /status
+        program_code:
+          node: episode
+          pointer: /type/0/coding/0/code
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields:
+        - national_id
+      purpose: startup-smoke
+  fhir_encounter:
+    dataset: health_registry
+    entity: encounter
+    engine: fhir
+    allow_insecure_localhost: true
+    allowed_base_urls:
+      - {fhir_url}
+    fhir:
+      base_url: {fhir_url}
+      bearer_token_env: {upstream_token_env}
+      anchor:
+        id: patient
+        resource_type: Patient
+        cardinality: one
+        search:
+          - param: identifier
+            type: token
+            system: https://example.gov/id/national-id
+            value_from_lookup: true
+      relations:
+        - id: encounter
+          resource_type: Encounter
+          cardinality: one
+          search:
+            - param: patient
+              type: reference
+              value_from_node: patient.reference
+            - param: type
+              type: code
+              value: annual-wellness
+      project:
+        national_id:
+          node: patient
+          pointer: /identifier/0/value
+        encounter_status:
+          node: encounter
+          pointer: /status
+        encounter_type:
+          node: encounter
+          pointer: /type/0/coding/0/code
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields:
+        - national_id
+      purpose: startup-smoke
+  fhir_referral:
+    dataset: health_registry
+    entity: referral
+    engine: fhir
+    allow_insecure_localhost: true
+    allowed_base_urls:
+      - {fhir_url}
+    fhir:
+      base_url: {fhir_url}
+      bearer_token_env: {upstream_token_env}
+      anchor:
+        id: patient
+        resource_type: Patient
+        cardinality: one
+        search:
+          - param: identifier
+            type: token
+            system: https://example.gov/id/national-id
+            value_from_lookup: true
+      relations:
+        - id: referral
+          resource_type: ServiceRequest
+          cardinality: one
+          search:
+            - param: subject
+              type: reference
+              value_from_node: patient.reference
+            - param: code
+              type: code
+              value: general-referral
+      project:
+        national_id:
+          node: patient
+          pointer: /identifier/0/value
+        referral_status:
+          node: referral
+          pointer: /status
+        referral_code:
+          node: referral
+          pointer: /code/coding/0/code
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields:
+        - national_id
+      purpose: startup-smoke
+  fhir_appointment:
+    dataset: health_registry
+    entity: appointment
+    engine: fhir
+    allow_insecure_localhost: true
+    allowed_base_urls:
+      - {fhir_url}
+    fhir:
+      base_url: {fhir_url}
+      bearer_token_env: {upstream_token_env}
+      anchor:
+        id: patient
+        resource_type: Patient
+        cardinality: one
+        search:
+          - param: identifier
+            type: token
+            system: https://example.gov/id/national-id
+            value_from_lookup: true
+      relations:
+        - id: appointment
+          resource_type: Appointment
+          cardinality: one
+          search:
+            - param: patient
+              type: reference
+              value_from_node: patient.reference
+            - param: service-type
+              type: code
+              value: general-practice
+      project:
+        national_id:
+          node: patient
+          pointer: /identifier/0/value
+        appointment_status:
+          node: appointment
+          pointer: /status
+        appointment_service_type:
+          node: appointment
+          pointer: /serviceType/0/coding/0/code
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields:
+        - national_id
+      purpose: startup-smoke
+  fhir_lab_report:
+    dataset: health_registry
+    entity: lab_report
+    engine: fhir
+    allow_insecure_localhost: true
+    allowed_base_urls:
+      - {fhir_url}
+    fhir:
+      base_url: {fhir_url}
+      bearer_token_env: {upstream_token_env}
+      anchor:
+        id: patient
+        resource_type: Patient
+        cardinality: one
+        search:
+          - param: identifier
+            type: token
+            system: https://example.gov/id/national-id
+            value_from_lookup: true
+      relations:
+        - id: diagnostic_report
+          resource_type: DiagnosticReport
+          cardinality: one
+          search:
+            - param: patient
+              type: reference
+              value_from_node: patient.reference
+            - param: code
+              type: code
+              value: viral-load-panel
+      project:
+        national_id:
+          node: patient
+          pointer: /identifier/0/value
+        diagnostic_report_status:
+          node: diagnostic_report
+          pointer: /status
+        diagnostic_report_code:
+          node: diagnostic_report
+          pointer: /code/coding/0/code
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields:
+        - national_id
+      purpose: startup-smoke
+  fhir_immunization:
+    dataset: health_registry
+    entity: immunization
+    engine: fhir
+    allow_insecure_localhost: true
+    allowed_base_urls:
+      - {fhir_url}
+    fhir:
+      base_url: {fhir_url}
+      bearer_token_env: {upstream_token_env}
+      anchor:
+        id: patient
+        resource_type: Patient
+        cardinality: one
+        search:
+          - param: identifier
+            type: token
+            system: https://example.gov/id/national-id
+            value_from_lookup: true
+      relations:
+        - id: immunization
+          resource_type: Immunization
+          cardinality: one
+          search:
+            - param: patient
+              type: reference
+              value_from_node: patient.reference
+            - param: vaccine-code
+              type: token
+              value: http://hl7.org/fhir/sid/cvx|03
+      project:
+        national_id:
+          node: patient
+          pointer: /identifier/0/value
+        immunization_status:
+          node: immunization
+          pointer: /status
+        vaccine_code:
+          node: immunization
+          pointer: /vaccineCode/coding/0/code
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields:
+        - national_id
+      purpose: startup-smoke
+  fhir_source_trace:
+    dataset: health_registry
+    entity: source_trace
+    engine: fhir
+    allow_insecure_localhost: true
+    allowed_base_urls:
+      - {fhir_url}
+    fhir:
+      base_url: {fhir_url}
+      bearer_token_env: {upstream_token_env}
+      anchor:
+        id: patient
+        resource_type: Patient
+        cardinality: one
+        search:
+          - param: identifier
+            type: token
+            system: https://example.gov/id/national-id
+            value_from_lookup: true
+      relations:
+        - id: provenance
+          resource_type: Provenance
+          cardinality: one
+          search:
+            - param: target
+              type: reference
+              value_from_node: patient.reference
+      project:
+        national_id:
+          node: patient
+          pointer: /identifier/0/value
+        trace_id:
+          node: provenance
+          pointer: /id
+        trace_activity:
+          node: provenance
+          pointer: /activity/coding/0/code
+        trace_recorded:
+          node: provenance
+          pointer: /recorded
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields:
+        - national_id
+      purpose: startup-smoke
+  fhir_prior_authorization:
+    dataset: health_registry
+    entity: prior_authorization
+    engine: fhir
+    allow_insecure_localhost: true
+    allowed_base_urls:
+      - {fhir_url}
+    fhir:
+      base_url: {fhir_url}
+      bearer_token_env: {upstream_token_env}
+      anchor:
+        id: patient
+        resource_type: Patient
+        cardinality: one
+        search:
+          - param: identifier
+            type: token
+            system: https://example.gov/id/national-id
+            value_from_lookup: true
+      relations:
+        - id: authorization
+          resource_type: ClaimResponse
+          cardinality: one
+          search:
+            - param: patient
+              type: reference
+              value_from_node: patient.reference
+            - param: request
+              type: reference
+              value: ServiceRequest/referral-person-123
+      project:
+        national_id:
+          node: patient
+          pointer: /identifier/0/value
+        authorization_status:
+          node: authorization
+          pointer: /status
+        authorization_outcome:
+          node: authorization
+          pointer: /outcome
+        authorization_disposition:
+          node: authorization
+          pointer: /disposition
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields:
+        - national_id
       purpose: startup-smoke
 "#,
         token_hash_env = yaml_string(TOKEN_HASH_ENV),
