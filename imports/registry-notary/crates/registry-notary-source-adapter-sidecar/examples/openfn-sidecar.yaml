@@ -28,10 +28,10 @@ worker:
   command: "node"
   args:
     - "--experimental-vm-modules"
-    - "./crates/registry-notary-openfn-sidecar/workers/openfn_worker.mjs"
+    - "./crates/registry-notary-source-adapter-sidecar/workers/openfn_worker.mjs"
   version_args:
     - "--experimental-vm-modules"
-    - "./crates/registry-notary-openfn-sidecar/workers/openfn_worker.mjs"
+    - "./crates/registry-notary-source-adapter-sidecar/workers/openfn_worker.mjs"
     - "--version"
     - "--require-adaptor"
     - "@openfn/language-common@3.2.3"
@@ -44,19 +44,19 @@ sources:
       batch_mode: per_item
       steps:
         - id: prepare_lookup
-          expression: ./crates/registry-notary-openfn-sidecar/examples/jobs/common-prepare-lookup.js
+          expression: ./crates/registry-notary-source-adapter-sidecar/examples/jobs/common-prepare-lookup.js
           adaptors:
             - "@openfn/language-common@3.2.3"
           next:
             filter_records: true
         - id: filter_records
-          expression: ./crates/registry-notary-openfn-sidecar/examples/jobs/common-filter-records.js
+          expression: ./crates/registry-notary-source-adapter-sidecar/examples/jobs/common-filter-records.js
           adaptors:
             - "@openfn/language-common@3.2.3"
           next:
             return_rda: true
         - id: return_rda
-          expression: ./crates/registry-notary-openfn-sidecar/examples/jobs/common-return-rda.js
+          expression: ./crates/registry-notary-source-adapter-sidecar/examples/jobs/common-return-rda.js
           adaptors:
             - "@openfn/language-common@3.2.3"
     credential_env: EXAMPLE_PERSON_LOOKUP_CREDENTIAL_JSON

@@ -35,6 +35,7 @@ For operators deploying, configuring, and running a Registry Notary.
 
 - [Configuration reference](operator-config-reference.md): the config blocks for auth, evidence, sources, replay, status, self-attestation, OID4VCI, and federation.
 - [Model sources and claims](source-claim-modeling-guide.md): design source connectors, source adapter sidecars, claim boundaries, disclosure, and batch reads.
+- [FHIR source adapter](fhir-source-adapter-guide.md): project bounded FHIR R4 graphs into Notary-ready source facts without exposing raw FHIR Bundles.
 - [Signing key providers](signing-key-provider.md): SD-JWT VC signing-key configuration, rotation, and PKCS#11 setup.
 - [Self-attestation](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/self-attestation-operator-guide.md): citizen OIDC subject binding, token policy, allow-lists, and rollout.
 - [Federated evaluation](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/federated-evaluation-operator-guide.md): static-peer setup, environment variables, and the replay limitation.

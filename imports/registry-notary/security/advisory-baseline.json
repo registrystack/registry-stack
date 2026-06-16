@@ -16,7 +16,7 @@
   "reviewed_findings": [
     {
       "tool": "grype",
-      "fingerprint": "grype|registry-notary-openfn-sidecar-image|CVE-2023-45853|zlib1g|1:1.2.13.dfsg-1|deb",
+      "fingerprint": "grype|registry-notary-source-adapter-sidecar-image|CVE-2023-45853|zlib1g|1:1.2.13.dfsg-1|deb",
       "rule_id": "CVE-2023-45853",
       "severity": "critical",
       "status": "false_positive",

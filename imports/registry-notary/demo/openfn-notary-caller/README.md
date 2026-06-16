@@ -4,7 +4,7 @@ Demo integration package for OpenFn workflows that call Registry Notary as a
 trust decision service. This is not an official OpenFn adaptor.
 
 This package is intentionally separate from the OpenFn source-sidecar helper in
-`crates/registry-notary-openfn-sidecar/workers/adaptors/registry-notary`.
+`crates/registry-notary-source-adapter-sidecar/workers/adaptors/registry-notary`.
 
 ## Template
 

@@ -1,0 +1,377 @@
+# SPDX-License-Identifier: Apache-2.0
+# Registry Notary config for a FHIR source adapter sidecar that exposes
+# Notary-ready facts through the Registry Data API-style sidecar contract.
+# Point fhir_sidecar.base_url at registry-notary-source-adapter-sidecar with FHIR
+# source profiles for the datasets and entities referenced below.
+
+server:
+  bind: 127.0.0.1:4256
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: verification_service
+      fingerprint:
+        provider: env
+        name: REGISTRY_NOTARY_API_KEY_HASH
+        commitment: sha256:29b82cfd026f8458578c9df2b34766e42b7211af160d4c5c2c9608531103b224
+      scopes:
+        - health_registry:evidence_verification
+
+audit:
+  sink: file
+  path: demo/var/fhir-coverage-registry-notary-audit.jsonl
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+
+evidence:
+  enabled: true
+  service_id: fhir.registry-notary
+  api_base_url: http://127.0.0.1:4256
+  source_connections:
+    fhir_sidecar:
+      base_url: http://127.0.0.1:9191
+      allow_insecure_localhost: true
+      token_env: FHIR_SIDECAR_TOKEN
+      retry_on_5xx: false
+      bulk_mode: openfn_sidecar_batch
+      expected_sidecar:
+        product: registry-notary-source-adapter-sidecar
+        instance_id: demo
+        environment: staging
+        stream_id: fhir-source-adapter-runtime
+        config_hash: sha256:0000000000000000000000000000000000000000000000000000000000000000
+        require_expression_hashes_verified: true
+        require_runtime_verified: true
+        require_smoke_verified: true
+        assurance_ttl_ms: 60000
+  claims:
+    - id: coverage-active
+      title: Coverage active
+      version: 2026-06
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        coverage:
+          connector: openfn_sidecar
+          connection: fhir_sidecar
+          required_scope: health_registry:evidence_verification
+          dataset: health_registry
+          entity: coverage
+          lookup:
+            input: target.id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            coverage_status:
+              field: coverage_status
+              type: string
+              required: true
+      rule:
+        type: cel
+        expression: source.coverage.coverage_status == 'active'
+      disclosure:
+        default: value
+        allowed:
+          - value
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+    - id: coverage-class-confirmed
+      title: Coverage class confirmed
+      version: 2026-06
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        coverage:
+          connector: openfn_sidecar
+          connection: fhir_sidecar
+          required_scope: health_registry:evidence_verification
+          dataset: health_registry
+          entity: coverage
+          lookup:
+            input: target.id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            coverage_status:
+              field: coverage_status
+              type: string
+              required: true
+            coverage_class:
+              field: coverage_class
+              type: string
+              required: true
+      rule:
+        type: cel
+        expression: source.coverage.coverage_status == 'active' && source.coverage.coverage_class == 'gold'
+      disclosure:
+        default: value
+        allowed:
+          - value
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+    - id: consent-valid-for-purpose
+      title: Consent valid for configured FHIR purpose
+      version: 2026-06
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        consent:
+          connector: openfn_sidecar
+          connection: fhir_sidecar
+          required_scope: health_registry:evidence_verification
+          dataset: health_registry
+          entity: consent
+          lookup:
+            input: target.id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            consent_status:
+              field: consent_status
+              type: string
+              required: true
+            consent_purpose:
+              field: consent_purpose
+              type: string
+              required: true
+          matching:
+            target_type: Person
+            allowed_purposes:
+              - https://purpose.example.test/coverage
+      rule:
+        type: cel
+        expression: source.consent.consent_status == 'active' && source.consent.consent_purpose == 'TREAT'
+      disclosure:
+        default: value
+        allowed:
+          - value
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+    - id: provider-affiliated-with-facility
+      title: Provider affiliated with facility
+      version: 2026-06
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        affiliation:
+          connector: openfn_sidecar
+          connection: fhir_sidecar
+          required_scope: health_registry:evidence_verification
+          dataset: health_registry
+          entity: provider_affiliation
+          lookup:
+            input: target.id
+            field: provider_id
+            op: eq
+            cardinality: one
+          fields:
+            organization_ref:
+              field: organization_ref
+              type: string
+              required: true
+          matching:
+            target_type: Person
+            allowed_purposes:
+              - https://purpose.example.test/coverage
+      rule:
+        type: cel
+        expression: source.affiliation.organization_ref == 'Organization/org-1'
+      disclosure:
+        default: value
+        allowed:
+          - value
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+    - id: facility-offers-service
+      title: Facility offers service
+      version: 2026-06
+      subject_type: organization
+      value:
+        type: boolean
+      source_bindings:
+        facility_service:
+          connector: openfn_sidecar
+          connection: fhir_sidecar
+          required_scope: health_registry:evidence_verification
+          dataset: health_registry
+          entity: facility_service
+          lookup:
+            input: target.id
+            field: organization_id
+            op: eq
+            cardinality: one
+          fields:
+            service_active:
+              field: service_active
+              type: boolean
+              required: true
+          matching:
+            target_type: Organization
+            allowed_purposes:
+              - https://purpose.example.test/coverage
+      rule:
+        type: cel
+        expression: source.facility_service.service_active == true
+      disclosure:
+        default: value
+        allowed:
+          - value
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+    - id: patient-record-exists
+      title: Patient record exists
+      version: 2026-06
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        patient:
+          connector: openfn_sidecar
+          connection: fhir_sidecar
+          required_scope: health_registry:evidence_verification
+          dataset: health_registry
+          entity: patient
+          lookup:
+            input: target.id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            patient_id:
+              field: patient_id
+              type: string
+              required: true
+      rule:
+        type: exists
+        source: patient
+      disclosure:
+        default: value
+        allowed:
+          - value
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+    - id: age-over-18
+      title: Age over 18
+      version: 2026-06
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        patient:
+          connector: openfn_sidecar
+          connection: fhir_sidecar
+          required_scope: health_registry:evidence_verification
+          dataset: health_registry
+          entity: patient
+          lookup:
+            input: target.id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+      rule:
+        type: cel
+        expression: source.patient.birth_date <= '2008-06-16'
+      disclosure:
+        default: value
+        allowed:
+          - value
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+    - id: not-recorded-deceased
+      title: Not recorded deceased
+      version: 2026-06
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        patient:
+          connector: openfn_sidecar
+          connection: fhir_sidecar
+          required_scope: health_registry:evidence_verification
+          dataset: health_registry
+          entity: patient
+          lookup:
+            input: target.id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            deceased:
+              field: deceased
+              type: boolean
+              required: true
+      rule:
+        type: cel
+        expression: source.patient.deceased == false
+      disclosure:
+        default: value
+        allowed:
+          - value
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+    - id: requester-guardian-confirmed
+      title: Requester guardian confirmed
+      version: 2026-06
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        guardian:
+          connector: openfn_sidecar
+          connection: fhir_sidecar
+          required_scope: health_registry:evidence_verification
+          dataset: health_registry
+          entity: guardian
+          lookup:
+            input: target.id
+            field: national_id
+            op: eq
+            cardinality: one
+          query_fields:
+            - input: target.id
+              field: national_id
+              op: eq
+            - input: requester.id
+              field: requester_id
+              op: eq
+          fields:
+            relationship_code:
+              field: relationship_code
+              type: string
+              required: true
+          matching:
+            policy_id: fhir-guardian-v1
+            method: fhir_related_person_exact
+            target_type: Person
+            requester_type: Person
+            allowed_purposes:
+              - https://purpose.example.test/coverage
+            allowed_relationships:
+              - guardian
+            collapse_matching_errors: true
+            allowed_target_inputs:
+              - target.id
+            allowed_requester_inputs:
+              - requester.id
+            confidence: high
+      rule:
+        type: cel
+        expression: source.guardian.relationship_code == 'GUARD'
+      disclosure:
+        default: value
+        allowed:
+          - value
+      formats:
+        - application/vnd.registry-notary.claim-result+json

@@ -20,7 +20,7 @@ updates:
         patterns:
           - "*"
   - package-ecosystem: npm
-    directory: /crates/registry-notary-openfn-sidecar/workers
+    directory: /crates/registry-notary-source-adapter-sidecar/workers
     schedule:
       interval: weekly
     open-pull-requests-limit: 5

@@ -1,24 +1,24 @@
 #!/bin/sh
 set -eu
 
-crate_dir="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-repo_dir="$(CDPATH= cd -- "$crate_dir/../.." && pwd)"
-port="${HTTP_JSON_DHIS2_CANARY_PORT:-19396}"
-smoke_dir="$repo_dir/target/http-json-dhis2-sidecar-smoke-$port"
-manifest="$smoke_dir/http-json-dhis2-sidecar.yaml"
+crate_dir="$(unset CDPATH && cd -- "$(dirname -- "$0")/.." && pwd)"
+repo_dir="$(unset CDPATH && cd -- "$crate_dir/../.." && pwd)"
+port="${HTTP_FLOW_DHIS2_CANARY_PORT:-19397}"
+smoke_dir="$repo_dir/target/http-flow-dhis2-sidecar-smoke-$port"
+manifest="$smoke_dir/http-flow-dhis2-sidecar.yaml"
 log="$smoke_dir/sidecar.log"
 response_json="$smoke_dir/batch-response.json"
 metrics_txt="$smoke_dir/metrics.txt"
 
-dhis2_base_url="${HTTP_JSON_DHIS2_HOST_URL:-https://play.im.dhis2.org/stable-2-43-0}"
+dhis2_base_url="${HTTP_FLOW_DHIS2_HOST_URL:-https://play.im.dhis2.org/stable-2-43-0}"
 dhis2_base_url="${dhis2_base_url%/}"
-dhis2_username="${HTTP_JSON_DHIS2_USERNAME:-admin}"
-dhis2_password="${HTTP_JSON_DHIS2_PASSWORD:-}"
+dhis2_username="${HTTP_FLOW_DHIS2_USERNAME:-admin}"
+dhis2_password="${HTTP_FLOW_DHIS2_PASSWORD:-}"
 if [ -z "$dhis2_password" ]; then
-  printf 'HTTP_JSON_DHIS2_PASSWORD is required for the live DHIS2 http_json canary\n' >&2
+  printf 'HTTP_FLOW_DHIS2_PASSWORD is required for the live DHIS2 http_flow canary\n' >&2
   exit 2
 fi
-sidecar_token="${HTTP_JSON_DHIS2_CANARY_SIDECAR_TOKEN:-http-json-dhis2-canary-$$-$(date +%s)}"
+sidecar_token="${HTTP_FLOW_DHIS2_CANARY_SIDECAR_TOKEN:-http-flow-dhis2-canary-$$-$(date +%s)}"
 if command -v sha256sum >/dev/null 2>&1; then
   sidecar_token_digest="$(printf '%s' "$sidecar_token" | sha256sum | awk '{print $1}')"
 else
@@ -35,7 +35,7 @@ server:
 auth:
   bearer_tokens:
     - id: notary
-      hash_env: HTTP_JSON_DHIS2_CANARY_SIDECAR_TOKEN_HASH
+      hash_env: HTTP_FLOW_DHIS2_CANARY_SIDECAR_TOKEN_HASH
 limits:
   max_workers: 2
   worker_timeout_ms: 15000
@@ -49,35 +49,67 @@ limits:
   batch_timeout_ms: 30000
 sources:
   dhis2_org_units:
-    engine: http_json
+    engine: http_flow
     dataset: dhis2
     entity: organisationUnit
-    credential_env: HTTP_JSON_DHIS2_CREDENTIAL_JSON
+    credential_env: HTTP_FLOW_DHIS2_CREDENTIAL_JSON
     credential_public_fields:
       - baseUrl
     allowed_base_urls:
       - "$dhis2_base_url"
-    http_json:
-      method: GET
-      base_url:
-        cel: credential_public.baseUrl
-      path: "/api/organisationUnits.json"
-      query:
-        filter:
-          cel: lookup.field + ":eq:" + lookup.value
-        fields:
-          cel: '"id,name,level"'
-        paging:
-          cel: '"false"'
-      auth:
-        type: basic
-        username:
-          secret: username
-        password:
-          secret: password
-      response:
+    http_flow:
+      timeout_ms: 15000
+      max_steps: 2
+      steps:
+        - id: find_org_unit
+          request:
+            method: GET
+            base_url: "$dhis2_base_url"
+            path: "/api/organisationUnits.json"
+            query:
+              filter:
+                cel: 'lookup.field + ":eq:" + lookup.value'
+              fields:
+                cel: '"id,name,level"'
+              paging:
+                cel: '"false"'
+            auth:
+              type: basic
+              username:
+                secret: username
+              password:
+                secret: password
+          response:
+            bind:
+              org_unit_id:
+                cel: "size(body.organisationUnits) == 0 ? null : body.organisationUnits[0].id"
+        - id: fetch_org_unit
+          when:
+            cel: org_unit_id != null
+          request:
+            method: GET
+            base_url: "$dhis2_base_url"
+            path: "/api/organisationUnits.json"
+            query:
+              filter:
+                cel: '"id:eq:" + org_unit_id'
+              fields:
+                cel: '"id,name,level"'
+              paging:
+                cel: '"false"'
+            auth:
+              type: basic
+              username:
+                secret: username
+              password:
+                secret: password
+          response:
+            bind:
+              org_units:
+                cel: body.organisationUnits
+      output:
         records:
-          cel: body.organisationUnits
+          cel: "org_units == null ? [] : org_units"
     smoke_lookup:
       field: name
       value: Sierra Leone
@@ -92,18 +124,19 @@ redact_log() {
     "$log"
 }
 
-export HTTP_JSON_DHIS2_CANARY_SIDECAR_TOKEN_HASH="$sidecar_token_hash"
-if [ -z "${HTTP_JSON_DHIS2_CREDENTIAL_JSON:-}" ]; then
-  export HTTP_JSON_DHIS2_CREDENTIAL_JSON="$(
+export HTTP_FLOW_DHIS2_CANARY_SIDECAR_TOKEN_HASH="$sidecar_token_hash"
+if [ -z "${HTTP_FLOW_DHIS2_CREDENTIAL_JSON:-}" ]; then
+  HTTP_FLOW_DHIS2_CREDENTIAL_JSON="$(
     jq -cn \
       --arg baseUrl "$dhis2_base_url" \
       --arg username "$dhis2_username" \
       --arg password "$dhis2_password" \
       '{baseUrl:$baseUrl,username:$username,password:$password}'
   )"
+  export HTTP_FLOW_DHIS2_CREDENTIAL_JSON
 fi
 
-cargo run -p registry-notary-openfn-sidecar --bin registry-notary-openfn-sidecar -- \
+cargo run -p registry-notary-source-adapter-sidecar --bin registry-notary-source-adapter-sidecar -- \
   --config "$manifest" \
   --allow-unsigned-dev-config >"$log" 2>&1 &
 sidecar_pid="$!"
@@ -135,7 +168,7 @@ fi
 curl -fsS \
   -H "Authorization: Bearer $sidecar_token" \
   -H "Data-Purpose: live-dhis2-canary" \
-  -H "X-Correlation-Id: http-json-dhis2-canary-correlation" \
+  -H "X-Correlation-Id: http-flow-dhis2-canary-correlation" \
   -H "Content-Type: application/json" \
   -d '{"fields":["id","name","level"],"query_signature":[{"field":"name","op":"eq"}],"items":[{"id":"hit","values":["Sierra Leone"]},{"id":"miss","values":["Not A Real Org Unit"]}]}' \
   "http://127.0.0.1:$port/v1/datasets/dhis2/entities/organisationUnit/records:batchMatch" >"$response_json"
@@ -152,13 +185,13 @@ jq -e '
 ' "$response_json" >/dev/null
 
 curl -fsS "http://127.0.0.1:$port/metrics" >"$metrics_txt"
-grep 'registry_notary_openfn_sidecar_lookup_total{source_id="dhis2_org_units",outcome="batch_success"}' "$metrics_txt" >/dev/null
+grep 'registry_notary_source_adapter_sidecar_lookup_total{source_id="dhis2_org_units",outcome="batch_success"}' "$metrics_txt" >/dev/null
 
-for secret in "$dhis2_password" "$sidecar_token" "http-json-dhis2-canary-correlation"; do
+for secret in "$dhis2_password" "$sidecar_token" "http-flow-dhis2-canary-correlation"; do
   if grep -F "$secret" "$response_json" "$metrics_txt" "$log" >/dev/null 2>&1; then
-    printf 'secret-like value leaked in DHIS2 http_json sidecar smoke artifacts\n' >&2
+    printf 'secret-like value leaked in DHIS2 http_flow sidecar smoke artifacts\n' >&2
     exit 1
   fi
 done
 
-printf 'http_json DHIS2 sidecar smoke passed\n'
+printf 'http_flow DHIS2 sidecar smoke passed\n'

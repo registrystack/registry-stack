@@ -31,4 +31,4 @@ jobs:
         with:
           workspaces: registry-notary -> target
       - name: Run live DHIS2 sidecar canary
-        run: crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-dhis2-sidecar.sh
+        run: crates/registry-notary-source-adapter-sidecar/scripts/smoke-openfn-dhis2-sidecar.sh

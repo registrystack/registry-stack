@@ -6888,7 +6888,7 @@ mod tests {
     };
     #[cfg(feature = "pkcs11")]
     use registry_notary_core::{ClaimProvenance, ClaimResultView, TargetRefView};
-    use registry_notary_openfn_sidecar::{
+    use registry_notary_source_adapter_sidecar::{
         load_startup_config as load_openfn_sidecar_startup_config,
         render_governed_runtime_target_json, sidecar_router, SidecarConfig,
     };
@@ -6910,7 +6910,7 @@ mod tests {
     const OPENFN_SIDECAR_TOKEN_HASH: &str =
         "sha256:42f3b7ab760b221b8a166aad9d82b76286e310f878e2d6cbac7583586ca1e225";
     const OPENFN_SPIKE_PURPOSE: &str = "https://purpose.example.test/eligibility";
-    const OPENFN_PRODUCT: &str = "registry-notary-openfn-sidecar";
+    const OPENFN_PRODUCT: &str = "registry-notary-source-adapter-sidecar";
     const OPENFN_INSTANCE_ID: &str = "demo";
     const OPENFN_ENVIRONMENT: &str = "staging";
     const OPENFN_STREAM_ID: &str = "openfn-sidecar-runtime";
@@ -8375,7 +8375,7 @@ claims:
     fn openfn_sidecar_test_manifest(attempt_log: std::path::PathBuf) -> String {
         std::env::set_var(OPENFN_SIDECAR_TOKEN_HASH_ENV, OPENFN_SIDECAR_TOKEN_HASH);
         let sidecar_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../registry-notary-openfn-sidecar");
+            .join("../registry-notary-source-adapter-sidecar");
         let worker = sidecar_root.join("tests/fixtures/contract_worker.sh");
         let job = sidecar_root.join("tests/fixtures/jobs/opencrvs-person-lookup.js");
         format!(
@@ -8604,7 +8604,7 @@ sources:
         fixture.assurance_count.fetch_add(1, Ordering::SeqCst);
         Json(json!({
             "status": "ready",
-            "product": "registry-notary-openfn-sidecar",
+            "product": "registry-notary-source-adapter-sidecar",
             "instance_id": "demo",
             "environment": "staging",
             "stream_id": "openfn-sidecar-runtime",
@@ -9388,7 +9388,7 @@ config_trust:
         let attempt_log = tmp.path().join("attempts.jsonl");
         let manifest = openfn_sidecar_test_manifest(attempt_log);
         let sidecar_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../registry-notary-openfn-sidecar");
+            .join("../registry-notary-source-adapter-sidecar");
         let jobs_root = sidecar_root.join("tests/fixtures/jobs");
         let target_bytes = render_governed_runtime_target_json(&manifest, &jobs_root)
             .expect("governed target renders");

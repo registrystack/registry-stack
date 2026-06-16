@@ -150,7 +150,7 @@ if [ -z "${OPENFN_DHIS2_DEMO_CREDENTIAL_JSON:-}" ]; then
   )"
 fi
 
-cargo run -p registry-notary-openfn-sidecar --bin registry-notary-openfn-sidecar -- \
+cargo run -p registry-notary-source-adapter-sidecar --bin registry-notary-source-adapter-sidecar -- \
   --config "$manifest" \
   --allow-unsigned-dev-config >"$log" 2>&1 &
 sidecar_pid="$!"
@@ -198,7 +198,7 @@ jq -e '
 ' "$response_json" >/dev/null
 
 curl -fsS "http://127.0.0.1:$port/metrics" >"$metrics_txt"
-grep 'registry_notary_openfn_sidecar_lookup_total{source_id="dhis2_org_units",outcome="batch_success"}' "$metrics_txt" >/dev/null
+grep 'registry_notary_source_adapter_sidecar_lookup_total{source_id="dhis2_org_units",outcome="batch_success"}' "$metrics_txt" >/dev/null
 
 for secret in "$dhis2_password" "$sidecar_token" "dhis2-canary-correlation"; do
   if grep -F "$secret" "$response_json" "$metrics_txt" "$log" >/dev/null 2>&1; then

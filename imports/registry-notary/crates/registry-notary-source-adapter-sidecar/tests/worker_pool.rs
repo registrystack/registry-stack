@@ -1,4 +1,6 @@
-use registry_notary_openfn_sidecar::{WorkerCommand, WorkerError, WorkerPool, WorkerPoolConfig};
+use registry_notary_source_adapter_sidecar::{
+    WorkerCommand, WorkerError, WorkerPool, WorkerPoolConfig,
+};
 use serde_json::json;
 use std::{
     collections::BTreeSet,
@@ -260,7 +262,7 @@ fn unique_state_path() -> PathBuf {
         .unwrap()
         .as_nanos();
     std::env::temp_dir().join(format!(
-        "registry-notary-openfn-sidecar-worker-fixture-{nanos}.state"
+        "registry-notary-source-adapter-sidecar-worker-fixture-{nanos}.state"
     ))
 }
 

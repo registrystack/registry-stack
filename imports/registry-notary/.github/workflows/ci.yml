@@ -64,15 +64,15 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: registry-notary/crates/registry-notary-openfn-sidecar/workers/package-lock.json
+          cache-dependency-path: registry-notary/crates/registry-notary-source-adapter-sidecar/workers/package-lock.json
       - name: Install worker dependencies
-        run: npm ci --ignore-scripts --no-audit --no-fund --prefix crates/registry-notary-openfn-sidecar/workers
+        run: npm ci --ignore-scripts --no-audit --no-fund --prefix crates/registry-notary-source-adapter-sidecar/workers
       - name: Syntax-check OpenFn worker
-        run: node --check crates/registry-notary-openfn-sidecar/workers/openfn_worker.mjs
+        run: node --check crates/registry-notary-source-adapter-sidecar/workers/openfn_worker.mjs
       - name: Syntax-check sidecar container healthcheck
-        run: node --check crates/registry-notary-openfn-sidecar/scripts/container-healthcheck.mjs
+        run: node --check crates/registry-notary-source-adapter-sidecar/scripts/container-healthcheck.mjs
       - name: Smoke-test OpenFn worker
-        run: crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-worker.sh
+        run: crates/registry-notary-source-adapter-sidecar/scripts/smoke-openfn-worker.sh
 
   rust:
     runs-on: ubuntu-latest
@@ -183,7 +183,7 @@ jobs:
             "FROM node:24-bookworm-slim@sha256:" \
             "FROM node:26-bookworm-slim@sha256:"
           require_literal registry-notary/Dockerfile.openfn-sidecar 'HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["node", "/opt/openfn/container-healthcheck.mjs"]'
-          require_literal registry-notary/Dockerfile.openfn-sidecar 'ENTRYPOINT ["/usr/local/bin/registry-notary-openfn-sidecar"]'
+          require_literal registry-notary/Dockerfile.openfn-sidecar 'ENTRYPOINT ["/usr/local/bin/registry-notary-source-adapter-sidecar"]'
       - name: Build release Docker image
         working-directory: ${{ github.workspace }}
         run: docker build --build-context registry-platform=registry-platform --build-context crosswalk=crosswalk --build-arg REGISTRY_NOTARY_FEATURES=registry-notary-cel,pkcs11 --file registry-notary/Dockerfile --tag registry-notary:ci registry-notary
@@ -215,4 +215,4 @@ jobs:
           PY
       - name: Build OpenFn sidecar Docker image
         working-directory: ${{ github.workspace }}
-        run: docker build --build-context registry-platform=registry-platform --build-context crosswalk=crosswalk --file registry-notary/Dockerfile.openfn-sidecar --tag registry-notary-openfn-sidecar:ci registry-notary
+        run: docker build --build-context registry-platform=registry-platform --build-context crosswalk=crosswalk --file registry-notary/Dockerfile.openfn-sidecar --tag registry-notary-source-adapter-sidecar:ci registry-notary

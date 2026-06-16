@@ -48,9 +48,9 @@ That path creates a standalone Notary project and points it at an API you operat
 - [`crates/registry-notary-bin`](crates/registry-notary-bin/README.md):
   process startup, config loading, bind address, tracing, graceful shutdown, and
   OpenAPI generation.
-- [`crates/registry-notary-openfn-sidecar`](crates/registry-notary-openfn-sidecar/README.md):
-  synchronous Registry Data API-shaped sidecar for running pinned OpenFn adaptor
-  jobs behind Registry Notary source lookups.
+- [`crates/registry-notary-source-adapter-sidecar`](crates/registry-notary-source-adapter-sidecar/README.md):
+  synchronous Registry Data API-shaped sidecar for governed OpenFn, HTTP JSON,
+  HTTP flow, and FHIR source lookups.
 - [`bindings/python`](bindings/python): `registry-notary` sync and async
   dictionary-friendly Python wrapper.
 - [`bindings/node`](bindings/node): `@registry-notary/client` Promise client
@@ -60,8 +60,8 @@ That path creates a standalone Notary project and points it at an API you operat
   `demo/config/`.
 - [`specs/`](specs/README.md): design specifications and implementation traces for
   self-attestation, static-peer federation, manifest-backed federation,
-  the `/v1` REST route cleanup, OpenID4VCI wallet facade, OpenFn sidecar source
-  integration, and scalability.
+  the `/v1` REST route cleanup, OpenID4VCI wallet facade, source adapter
+  sidecar integration, and scalability.
 
 ## Credential Conformance
 
@@ -184,8 +184,8 @@ Default builds compile CEL and PKCS#11 into one release-capable image; runtime
 behavior remains config-gated. Release images publish to
 `ghcr.io/jeremi/registry-notary` from stable `vX.Y.Z` tags and
 `registry-stack-technical-preview-<date-or-version>` tags; deployments should
-consume release tags or immutable digests. The OpenFn sidecar image builds from
-`Dockerfile.openfn-sidecar` with the same named contexts.
+consume release tags or immutable digests. The source adapter sidecar image
+builds from `Dockerfile.openfn-sidecar` with the same named contexts.
 
 See [`docs/deployment-hardening-runbook.md`](docs/deployment-hardening-runbook.md)
 for listener, admin port, healthcheck, config expansion, and rollback guidance.

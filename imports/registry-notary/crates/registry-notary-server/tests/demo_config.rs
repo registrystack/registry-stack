@@ -488,3 +488,73 @@ fn opencrvs_rda_demographic_demo_config_loads_validates_and_builds_router() {
     let _ = standalone_router(config)
         .expect("OpenCRVS RDA demographic config builds standalone router");
 }
+
+#[test]
+fn fhir_coverage_demo_config_loads_validates_and_builds_router() {
+    let _guard = common::issuer_jwk_guard();
+
+    unsafe {
+        std::env::set_var(
+            "REGISTRY_NOTARY_API_KEY_HASH",
+            "sha256:b41153a98b372cb2ec4735b53df68a344dabe5a6664f7f49264fb30f385959ea",
+        );
+        std::env::set_var("FHIR_SIDECAR_TOKEN", "test-fhir-sidecar-token");
+        std::env::set_var("REGISTRY_NOTARY_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
+    }
+
+    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let config_path = manifest_dir
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("workspace root")
+        .join("demo/config/fhir-coverage-registry-notary.yaml");
+    let raw = std::fs::read_to_string(config_path).expect("FHIR demo config is readable");
+    let mut config: StandaloneRegistryNotaryConfig =
+        serde_norway::from_str(&raw).expect("FHIR demo config deserializes");
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    config.audit.path = Some(
+        temp.path()
+            .join("fhir-coverage-registry-notary-audit.jsonl")
+            .to_string_lossy()
+            .into_owned(),
+    );
+
+    config.validate().expect("FHIR demo config validates");
+    let source = config
+        .evidence
+        .source_connections
+        .get("fhir_sidecar")
+        .expect("FHIR sidecar source exists");
+    assert_eq!(source.bulk_mode, BulkMode::OpenFnSidecarBatch);
+    assert!(!source.retry_on_5xx);
+    assert!(source.allow_insecure_localhost);
+    let expected_sidecar = source
+        .expected_sidecar
+        .as_ref()
+        .expect("FHIR sidecar assurance is pinned");
+    assert!(expected_sidecar.require_expression_hashes_verified);
+    assert!(expected_sidecar.require_runtime_verified);
+    assert!(expected_sidecar.require_smoke_verified);
+
+    let coverage = config
+        .evidence
+        .claims
+        .iter()
+        .find(|claim| claim.id == "coverage-active")
+        .expect("coverage-active claim exists");
+    let coverage_binding = coverage
+        .source_bindings
+        .get("coverage")
+        .expect("coverage binding exists");
+    assert_eq!(
+        coverage_binding.connector,
+        SourceConnectorKind::OpenFnSidecar
+    );
+    assert_eq!(coverage_binding.connection.as_deref(), Some("fhir_sidecar"));
+    assert_eq!(coverage_binding.lookup.input, "target.id");
+    assert_eq!(coverage_binding.lookup.field, "national_id");
+    assert!(coverage_binding.fields.contains_key("coverage_status"));
+    assert!(matches!(coverage.rule, RuleConfig::Cel { .. }));
+
+    let _ = standalone_router(config).expect("FHIR demo config builds standalone router");
+}

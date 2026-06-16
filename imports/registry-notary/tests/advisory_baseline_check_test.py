@@ -298,10 +298,10 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
     def test_grype_review_scope_ignores_other_image_subjects(self):
         sidecar_finding = self.module.Finding(
             tool="grype",
-            fingerprint="grype|registry-notary-openfn-sidecar-image|CVE-2026-0004|zlib1g|1.0|deb",
+            fingerprint="grype|registry-notary-source-adapter-sidecar-image|CVE-2026-0004|zlib1g|1.0|deb",
             rule_id="CVE-2026-0004",
             severity="critical",
-            location="registry-notary-openfn-sidecar-image",
+            location="registry-notary-source-adapter-sidecar-image",
             summary="CVE-2026-0004 in zlib1g 1.0",
         )
         self.write_baseline([self.review(sidecar_finding)])

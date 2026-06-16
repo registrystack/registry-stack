@@ -2,7 +2,7 @@
 
 use axum::http::StatusCode;
 use axum_test::{TestResponse, TestServer};
-use registry_notary_openfn_sidecar::{sidecar_router, SidecarConfig};
+use registry_notary_source_adapter_sidecar::{sidecar_router, SidecarConfig};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -2906,7 +2906,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "registry-notary-openfn-sidecar"
+name = "registry-notary-source-adapter-sidecar"
 version = "0.3.0"
 dependencies = [
  "axum",
@@ -2954,7 +2954,7 @@ dependencies = [
  "jsonwebtoken",
  "registry-notary-client",
  "registry-notary-core",
- "registry-notary-openfn-sidecar",
+ "registry-notary-source-adapter-sidecar",
  "registry-notary-worker-harness",
  "registry-platform-audit",
  "registry-platform-authcommon",

@@ -28,7 +28,7 @@ env:
   CROSSWALK_REPOSITORY: PublicSchema/crosswalk
   CROSSWALK_REF: 54e0f537830837fcd0c9efa87990987b1846931c
   NOTARY_IMAGE: ghcr.io/jeremi/registry-notary
-  OPENFN_SIDECAR_IMAGE: ghcr.io/jeremi/registry-notary-openfn-sidecar
+  OPENFN_SIDECAR_IMAGE: ghcr.io/jeremi/registry-notary-source-adapter-sidecar
 
 jobs:
   pull-request-images:
@@ -109,7 +109,7 @@ jobs:
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$PWD/registry-notary/target/security:/out" \
             anchore/syft:v1.18.1@sha256:b8c170b8e51bfc4779ec3ef4399942c57290f5ce76a9c3af564c9d00d4946a6b "$OPENFN_SIDECAR_IMAGE:ci-${GITHUB_SHA}" \
-            -o spdx-json=/out/registry-notary-openfn-sidecar-image.spdx.json
+            -o spdx-json=/out/registry-notary-source-adapter-sidecar-image.spdx.json
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$PWD/registry-notary/target/security:/out" \
             anchore/grype:v0.85.0@sha256:8d7a54c4281e334a60c2d1616269411a940efad44c2cc1533ddc76689b9268af "$NOTARY_IMAGE:ci-${GITHUB_SHA}" \
@@ -120,10 +120,10 @@ jobs:
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$PWD/registry-notary/target/security:/out" \
             anchore/grype:v0.85.0@sha256:8d7a54c4281e334a60c2d1616269411a940efad44c2cc1533ddc76689b9268af "$OPENFN_SIDECAR_IMAGE:ci-${GITHUB_SHA}" \
-            -o json > registry-notary/target/security/registry-notary-openfn-sidecar-image-vulnerabilities.json
+            -o json > registry-notary/target/security/registry-notary-source-adapter-sidecar-image-vulnerabilities.json
           python3 registry-notary/scripts/check_advisory_baselines.py grype \
-            registry-notary/target/security/registry-notary-openfn-sidecar-image-vulnerabilities.json \
-            --subject registry-notary-openfn-sidecar-image
+            registry-notary/target/security/registry-notary-source-adapter-sidecar-image-vulnerabilities.json \
+            --subject registry-notary-source-adapter-sidecar-image
       - name: Upload image security evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -370,7 +370,7 @@ jobs:
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$PWD/registry-notary/target/security:/out" \
             anchore/syft:v1.18.1@sha256:b8c170b8e51bfc4779ec3ef4399942c57290f5ce76a9c3af564c9d00d4946a6b "$sidecar_image_ref" \
-            -o spdx-json=/out/registry-notary-openfn-sidecar-image.spdx.json
+            -o spdx-json=/out/registry-notary-source-adapter-sidecar-image.spdx.json
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$PWD/registry-notary/target/security:/out" \
             anchore/grype:v0.85.0@sha256:8d7a54c4281e334a60c2d1616269411a940efad44c2cc1533ddc76689b9268af "$notary_image_ref" \
@@ -381,10 +381,10 @@ jobs:
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$PWD/registry-notary/target/security:/out" \
             anchore/grype:v0.85.0@sha256:8d7a54c4281e334a60c2d1616269411a940efad44c2cc1533ddc76689b9268af "$sidecar_image_ref" \
-            -o json > registry-notary/target/security/registry-notary-openfn-sidecar-image-vulnerabilities.json
+            -o json > registry-notary/target/security/registry-notary-source-adapter-sidecar-image-vulnerabilities.json
           python3 registry-notary/scripts/check_advisory_baselines.py grype \
-            registry-notary/target/security/registry-notary-openfn-sidecar-image-vulnerabilities.json \
-            --subject registry-notary-openfn-sidecar-image
+            registry-notary/target/security/registry-notary-source-adapter-sidecar-image-vulnerabilities.json \
+            --subject registry-notary-source-adapter-sidecar-image
       - name: Upload image security evidence
         if: always() && steps.channel.outputs.build == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -801,7 +801,7 @@
       "notes": "OpenFn sidecar assurance route. Bearer auth protects verified runtime and config hash state used by Notary expected-sidecar checks.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-openfn-sidecar/tests/governed_runtime_validation.rs::governed_startup_loads_signed_tuf_target_reports_assurance_and_accepts_antirollback"
+        "crates/registry-notary-source-adapter-sidecar/tests/governed_runtime_validation.rs::governed_startup_loads_signed_tuf_target_reports_assurance_and_accepts_antirollback"
       ],
       "waiver": null
     },
@@ -824,8 +824,8 @@
       "notes": "OpenFn sidecar route.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-openfn-sidecar/tests/rda_contract.rs::health_ready_and_metrics_are_available_without_secret_disclosure",
-        "crates/registry-notary-openfn-sidecar/tests/rda_contract.rs::missing_purpose_is_rejected_before_worker_dispatch"
+        "crates/registry-notary-source-adapter-sidecar/tests/rda_contract.rs::health_ready_and_metrics_are_available_without_secret_disclosure",
+        "crates/registry-notary-source-adapter-sidecar/tests/rda_contract.rs::missing_purpose_is_rejected_before_worker_dispatch"
       ],
       "waiver": null
     },
@@ -848,8 +848,8 @@
       "notes": "OpenFn sidecar batch-match route. Bearer auth, data-purpose validation, request minimization, and worker-dispatch guards are enforced before source access.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-openfn-sidecar/tests/rda_contract.rs::batch_match_returns_per_item_projected_rda_data_and_sends_minimized_worker_request",
-        "crates/registry-notary-openfn-sidecar/tests/rda_contract.rs::batch_match_requires_auth_and_purpose_before_worker_dispatch"
+        "crates/registry-notary-source-adapter-sidecar/tests/rda_contract.rs::batch_match_returns_per_item_projected_rda_data_and_sends_minimized_worker_request",
+        "crates/registry-notary-source-adapter-sidecar/tests/rda_contract.rs::batch_match_requires_auth_and_purpose_before_worker_dispatch"
       ],
       "waiver": null
     }
