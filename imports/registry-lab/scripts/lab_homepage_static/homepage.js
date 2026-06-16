@@ -1,6 +1,72 @@
 const text = (value) => value == null ? "" : String(value);
 const byId = (id) => document.getElementById(id);
 
+const journeyTargets = new Map([
+  ["registrystack.org", "marketing"],
+  ["docs.registrystack.org", "docs"],
+  ["github.com", "github"],
+  ["wallet.lab.registrystack.org", "wallet"],
+  ["citizen-notary.lab.registrystack.org", "notary"],
+]);
+
+function track(eventName, data = {}) {
+  if (!window.umami?.track) return;
+  window.umami.track(eventName, data);
+}
+
+function linkText(node) {
+  return text(node.textContent).replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
+function journeyUrl(anchor, targetSite) {
+  const url = new URL(anchor.href);
+  if (targetSite === "marketing" || targetSite === "docs") {
+    url.searchParams.set("utm_source", "registry_lab");
+    url.searchParams.set("utm_medium", "lab");
+    url.searchParams.set("utm_campaign", "cross_site");
+    url.searchParams.set("utm_content", window.location.pathname);
+  }
+  return url;
+}
+
+function prepareJourneyLinks() {
+  document.querySelectorAll("a[href]").forEach((anchor) => {
+    try {
+      const url = new URL(anchor.href);
+      const targetSite = journeyTargets.get(url.hostname);
+      if (!targetSite) return;
+      anchor.href = journeyUrl(anchor, targetSite).toString();
+    } catch (_error) {}
+  });
+}
+
+function wireJourneyTracking() {
+  document.addEventListener("click", (event) => {
+    const anchor = event.target instanceof Element ? event.target.closest("a[href]") : null;
+    if (!anchor) return;
+    try {
+      const url = new URL(anchor.href);
+      const scenarioMatch = url.origin === window.location.origin && url.pathname.startsWith("/scenarios/");
+      if (scenarioMatch) {
+        track("lab_scenario_open", {
+          scenario_id: decodeURIComponent(url.pathname.replace("/scenarios/", "").replace(/\/$/, "")),
+          source_path: window.location.pathname,
+          link_text: linkText(anchor),
+        });
+        return;
+      }
+      const targetSite = journeyTargets.get(url.hostname);
+      if (!targetSite) return;
+      track("lab_link_click", {
+        target_site: targetSite,
+        target_path: url.pathname,
+        source_path: window.location.pathname,
+        link_text: linkText(anchor),
+      });
+    } catch (_error) {}
+  });
+}
+
 function escapeHtml(value) {
   return text(value).replace(/[&<>"']/g, (char) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
@@ -9,6 +75,10 @@ function escapeHtml(value) {
 
 async function copyValue(value, button) {
   await navigator.clipboard.writeText(value);
+  track("lab_copy", {
+    source_path: window.location.pathname,
+    copy_label: linkText(button),
+  });
   const previous = button.textContent;
   button.textContent = "Copied";
   setTimeout(() => button.textContent = previous, 1200);
@@ -137,10 +207,12 @@ async function start() {
     renderServices(data.services || []);
     renderWallet(data.wallet || {});
     wireCopyButtons();
+    prepareJourneyLinks();
     loadStatus();
   } catch (err) {
     console.error("Lab configuration failed to load:", err);
     byId("subtitle").textContent = "The lab configuration did not load. Reload the page to try again.";
   }
 }
+wireJourneyTracking();
 start();

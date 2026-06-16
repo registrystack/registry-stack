@@ -4,6 +4,60 @@ const ACTIVE_SCENARIO = document.body.dataset.activeScenario || "";
 const text = (value) => value == null ? "" : String(value);
 const byId = (id) => document.getElementById(id);
 const state = { completed: new Set(), story: null, runnable: true };
+const journeyTargets = new Map([
+  ["registrystack.org", "marketing"],
+  ["docs.registrystack.org", "docs"],
+  ["github.com", "github"],
+]);
+
+function track(eventName, data = {}) {
+  if (!window.umami?.track) return;
+  window.umami.track(eventName, data);
+}
+
+function linkText(node) {
+  return text(node.textContent).replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
+function journeyUrl(anchor, targetSite) {
+  const url = new URL(anchor.href);
+  if (targetSite === "marketing" || targetSite === "docs") {
+    url.searchParams.set("utm_source", "registry_lab");
+    url.searchParams.set("utm_medium", "lab");
+    url.searchParams.set("utm_campaign", "cross_site");
+    url.searchParams.set("utm_content", window.location.pathname);
+  }
+  return url;
+}
+
+function prepareJourneyLinks() {
+  document.querySelectorAll("a[href]").forEach((anchor) => {
+    try {
+      const url = new URL(anchor.href);
+      const targetSite = journeyTargets.get(url.hostname);
+      if (!targetSite) return;
+      anchor.href = journeyUrl(anchor, targetSite).toString();
+    } catch (_error) {}
+  });
+}
+
+function wireJourneyTracking() {
+  document.addEventListener("click", (event) => {
+    const anchor = event.target instanceof Element ? event.target.closest("a[href]") : null;
+    if (!anchor) return;
+    try {
+      const url = new URL(anchor.href);
+      const targetSite = journeyTargets.get(url.hostname);
+      if (!targetSite) return;
+      track("lab_link_click", {
+        target_site: targetSite,
+        target_path: url.pathname,
+        source_path: window.location.pathname,
+        link_text: linkText(anchor),
+      });
+    } catch (_error) {}
+  });
+}
 
 function escapeHtml(value) {
   return text(value).replace(/[&<>"']/g, (char) => ({
@@ -168,7 +222,7 @@ function renderChooser(items, defaultId) {
         ${attestationNames(item.requested_attestations || []).length ? `<p class="card-meta">${escapeHtml(attestationNames(item.requested_attestations || []).join(", "))}</p>` : ""}
         ${item.availability_note ? `<p class="card-meta">${escapeHtml(item.availability_note)}</p>` : ""}
         <p class="card-meta">${escapeHtml(item.steps)} steps</p>
-        <div class="actions"><a class="button primary" href="/scenarios/${encodeURIComponent(item.id)}">${item.runnable ? "Open story" : "Read the walkthrough"}</a></div>
+        <div class="actions"><a class="button primary" href="/scenarios/${encodeURIComponent(item.id)}" data-scenario-link="${escapeHtml(item.id)}">${item.runnable ? "Open story" : "Read the walkthrough"}</a></div>
       </article>`;
     }).join("")}
     </section>`;
@@ -209,6 +263,12 @@ function renderLocalOnlyBlock(story) {
 function renderStory(story, runnable) {
   state.story = story;
   state.runnable = runnable !== false;
+  track("lab_scenario_view", {
+    scenario_id: story.id,
+    runnable: state.runnable,
+    availability: story.availability || "hosted",
+    source_path: window.location.pathname,
+  });
   byId("chooser").innerHTML = "";
   byId("eyebrow").textContent = story.availability === "local-only" ? "Guided demo · local only" : "Guided demo";
   byId("title").textContent = story.title;
@@ -236,8 +296,8 @@ function renderStep(step, index) {
         <div class="request-text"><strong>What this request will do:</strong> ${escapeHtml(step.request_summary)}</div>
         ${renderReuse(step.reuses || [])}
         <p class="meta">This step runs on the local lab profile.</p>
-        <details><summary>Show technical request</summary><div data-request-source-for="${escapeHtml(step.id)}">${sourceBlock({ note: LOCAL_ONLY_NOTE })}</div></details>
-        <details><summary>Show technical response</summary><div data-response-source-for="${escapeHtml(step.id)}">${sourceBlock({ note: LOCAL_ONLY_NOTE })}</div></details>
+        <details data-source-toggle data-source-kind="request" data-source-step="${escapeHtml(step.id)}"><summary>Show technical request</summary><div data-request-source-for="${escapeHtml(step.id)}">${sourceBlock({ note: LOCAL_ONLY_NOTE })}</div></details>
+        <details data-source-toggle data-source-kind="response" data-source-step="${escapeHtml(step.id)}"><summary>Show technical response</summary><div data-response-source-for="${escapeHtml(step.id)}">${sourceBlock({ note: LOCAL_ONLY_NOTE })}</div></details>
       </div>
     </article>`;
   }
@@ -260,10 +320,21 @@ function renderStep(step, index) {
       ${lockedHint}
       <div class="actions"><button class="primary" type="button" data-run-step="${escapeHtml(step.id)}" data-run-label="${escapeHtml(step.button)}" ${ariaDisabled}>${escapeHtml(step.button)}</button></div>
       <div class="friendly-response" aria-live="polite" data-friendly-for="${escapeHtml(step.id)}"></div>
-      <details><summary>Show technical request</summary><div data-request-source-for="${escapeHtml(step.id)}">${previewHtml}</div></details>
-      <details><summary>Show technical response</summary><div data-response-source-for="${escapeHtml(step.id)}">${sourceBlock({ note: "Run this step to capture the response source." })}</div></details>
+      <details data-source-toggle data-source-kind="request" data-source-step="${escapeHtml(step.id)}"><summary>Show technical request</summary><div data-request-source-for="${escapeHtml(step.id)}">${previewHtml}</div></details>
+      <details data-source-toggle data-source-kind="response" data-source-step="${escapeHtml(step.id)}"><summary>Show technical response</summary><div data-response-source-for="${escapeHtml(step.id)}">${sourceBlock({ note: "Run this step to capture the response source." })}</div></details>
     </div>
   </article>`;
+}
+
+function wireScenarioLinks() {
+  document.addEventListener("click", (event) => {
+    const anchor = event.target instanceof Element ? event.target.closest("[data-scenario-link]") : null;
+    if (!anchor) return;
+    track("lab_scenario_open", {
+      scenario_id: anchor.getAttribute("data-scenario-link") || "",
+      source_path: window.location.pathname,
+    });
+  });
 }
 
 function wireStepButtons() {
@@ -304,6 +375,12 @@ function wireCurlCopyButtons() {
     try {
       await copyText(button.getAttribute("data-copy-curl") || "");
       button.textContent = "Copied";
+      const source = button.closest("[data-source-toggle]");
+      track("lab_copy_curl", {
+        scenario_id: state.story?.id || ACTIVE_SCENARIO,
+        step_id: source?.getAttribute("data-source-step") || "",
+        source_path: window.location.pathname,
+      });
     } catch (_error) {
       button.textContent = "Copy failed";
     }
@@ -353,6 +430,10 @@ function loadProgress(scenarioId) {
 }
 
 function resetProgress(scenarioId) {
+  track("lab_scenario_reset", {
+    scenario_id: scenarioId,
+    source_path: window.location.pathname,
+  });
   try {
     sessionStorage.removeItem(progressKey(scenarioId));
   } catch (err) {
@@ -364,6 +445,22 @@ function resetProgress(scenarioId) {
 function wireResetButton() {
   const btn = document.querySelector("[data-reset-story]");
   if (btn) btn.addEventListener("click", () => resetProgress(ACTIVE_SCENARIO));
+}
+
+function wireSourceToggles() {
+  document.querySelectorAll("[data-source-toggle]").forEach((details) => {
+    if (details.dataset.sourceWired === "true") return;
+    details.dataset.sourceWired = "true";
+    details.addEventListener("toggle", () => {
+      if (!details.open) return;
+      track("lab_source_open", {
+        scenario_id: state.story?.id || ACTIVE_SCENARIO,
+        step_id: details.getAttribute("data-source-step") || "",
+        source_kind: details.getAttribute("data-source-kind") || "",
+        source_path: window.location.pathname,
+      });
+    });
+  });
 }
 
 function unlockNextSteps(completedStepId, restoring) {
@@ -416,20 +513,51 @@ function restoreCompleted(story) {
 async function runStep(stepId, button) {
   button.setAttribute("aria-disabled", "true");
   updateStatus(stepId, "running");
-  const response = await fetch(`/api/scenarios/${encodeURIComponent(state.story.id)}/${encodeURIComponent(stepId)}`, {method: "POST"});
-  const data = await response.json();
-  renderFriendly(stepId, data.friendly || {});
-  setSource(stepId, "request", data.request_source || {});
-  setSource(stepId, "response", data.response_source || {});
-  const status = data.friendly?.status || "done";
-  updateStatus(stepId, status);
-  if (status === "done" || status === "denied_as_expected") {
-    state.completed.add(stepId);
-    saveProgress(state.story.id);
-    setTimeout(() => unlockNextSteps(stepId, false), 80);
-  } else {
+  track("lab_step_run", {
+    scenario_id: state.story.id,
+    step_id: stepId,
+    source_path: window.location.pathname,
+  });
+  try {
+    const response = await fetch(`/api/scenarios/${encodeURIComponent(state.story.id)}/${encodeURIComponent(stepId)}`, {method: "POST"});
+    const data = await response.json();
+    renderFriendly(stepId, data.friendly || {});
+    setSource(stepId, "request", data.request_source || {});
+    setSource(stepId, "response", data.response_source || {});
+    const status = data.friendly?.status || "done";
+    updateStatus(stepId, status);
+    track("lab_step_result", {
+      scenario_id: state.story.id,
+      step_id: stepId,
+      status,
+      http_status: response.status,
+      source_path: window.location.pathname,
+    });
+    wireSourceToggles();
+    if (status === "done" || status === "denied_as_expected") {
+      state.completed.add(stepId);
+      saveProgress(state.story.id);
+      setTimeout(() => unlockNextSteps(stepId, false), 80);
+    } else {
+      button.removeAttribute("aria-disabled");
+      if (status === "needs_attention") button.textContent = "Try again";
+    }
+  } catch (error) {
+    updateStatus(stepId, "needs_attention");
+    renderFriendly(stepId, {
+      status: "needs_attention",
+      title: "Step failed.",
+      message: "The lab API did not respond. Try the step again.",
+      facts: [],
+    });
+    track("lab_step_error", {
+      scenario_id: state.story.id,
+      step_id: stepId,
+      error: error instanceof Error ? error.name : "unknown",
+      source_path: window.location.pathname,
+    });
     button.removeAttribute("aria-disabled");
-    if (status === "needs_attention") button.textContent = "Try again";
+    button.textContent = "Try again";
   }
 }
 
@@ -451,10 +579,14 @@ async function start() {
     wireStepButtons();
     wireCurlCopyButtons();
     wireResetButton();
+    wireSourceToggles();
   } catch (err) {
     console.error("Scenario data failed to load:", err);
     const target = byId(ACTIVE_SCENARIO ? "story" : "chooser");
     target.innerHTML = `<div class="story-setup"><h2>The scenarios did not load</h2><p>The lab API did not respond. Reload the page to try again.</p></div>`;
   }
 }
+wireScenarioLinks();
+wireJourneyTracking();
+prepareJourneyLinks();
 start();

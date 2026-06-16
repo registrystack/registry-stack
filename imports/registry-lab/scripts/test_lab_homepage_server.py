@@ -866,6 +866,24 @@ class UmamiAnalyticsTest(unittest.TestCase):
         self.assertIn("x=&quot;", script)
         self.assertIn("lab.registrystack.org,&quot;bad&quot;", script)
 
+    def test_lab_tracks_outbound_and_copy_actions(self) -> None:
+        self.assertIn("lab_link_click", HOMEPAGE_JS)
+        self.assertIn("lab_copy", HOMEPAGE_JS)
+        self.assertIn("utm_source", HOMEPAGE_JS)
+        self.assertIn("registry_lab", HOMEPAGE_JS)
+
+    def test_scenarios_track_story_and_step_actions(self) -> None:
+        self.assertIn("lab_link_click", SCENARIOS_JS)
+        self.assertIn("registry_lab", SCENARIOS_JS)
+        self.assertIn("lab_scenario_open", SCENARIOS_JS)
+        self.assertIn("lab_scenario_view", SCENARIOS_JS)
+        self.assertIn("lab_step_run", SCENARIOS_JS)
+        self.assertIn("lab_step_result", SCENARIOS_JS)
+        self.assertIn("lab_step_error", SCENARIOS_JS)
+        self.assertIn("lab_source_open", SCENARIOS_JS)
+        self.assertIn("lab_copy_curl", SCENARIOS_JS)
+        self.assertIn("lab_scenario_reset", SCENARIOS_JS)
+
 
 class ScenarioPageHtmlTest(unittest.TestCase):
     """The dedicated scenario page has a chooser plus progressive story pages."""
