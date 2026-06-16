@@ -456,6 +456,7 @@ class ScenarioPayloadTest(unittest.TestCase):
         self.assertEqual(payload["scenarios"][2]["availability"], "hosted")
         self.assertEqual(payload["scenarios"][3]["availability"], "hosted")
         self.assertEqual(payload["scenarios"][4]["availability"], "hosted")
+        self.assertEqual(payload["scenarios"][5]["availability"], "hosted")
 
     def test_catalogue_exposes_attestation_metadata_and_availability_state(self) -> None:
         payload = server.scenario_payload(self._payload_config(), lab_mode="hosted")
@@ -1296,15 +1297,13 @@ class LabModePayloadTest(unittest.TestCase):
 
     def test_catalogue_hosted_scenario_is_runnable_in_hosted_mode(self) -> None:
         payload = server.scenario_payload(self._config(), lab_mode="hosted")
-        for sid in ("alive-proof", "social-aggregate", "combined-support"):
+        for sid in ("alive-proof", "social-aggregate", "combined-support", "agriculture-voucher"):
             item = next(s for s in payload["scenarios"] if s["id"] == sid)
             self.assertTrue(item["runnable"], f"{sid} should be runnable in hosted mode")
 
-    def test_catalogue_local_only_scenario_not_runnable_in_hosted_mode(self) -> None:
+    def test_catalogue_has_no_local_only_scenarios_in_hosted_mode(self) -> None:
         payload = server.scenario_payload(self._config(), lab_mode="hosted")
-        for sid in ("agriculture-voucher",):
-            item = next(s for s in payload["scenarios"] if s["id"] == sid)
-            self.assertFalse(item["runnable"], f"{sid} should not be runnable in hosted mode")
+        self.assertFalse([item for item in payload["scenarios"] if item["availability"] == "local-only"])
 
     def test_catalogue_scenarios_are_runnable_in_local_mode(self) -> None:
         payload = server.scenario_payload(self._config(), lab_mode="local")
@@ -1357,29 +1356,60 @@ class LabModePayloadTest(unittest.TestCase):
         self.assertTrue(called)
 
     def test_run_step_hosted_local_only_has_message_and_facts(self) -> None:
-        result = server.run_scenario_step(self._config(), "agriculture-voucher", "discover", lab_mode="hosted")
-        self.assertEqual(result["friendly"]["status"], "local_only")
-        self.assertIn("hosted lab does not run", result["friendly"]["message"].lower())
-        facts = {f["label"]: f["value"] for f in result["friendly"]["facts"]}
-        self.assertEqual(facts["Availability"], "Local only")
-        self.assertIn("github.com/jeremi/registry-lab", facts["Run it locally"])
+        local_only = [item for item in server.scenario_payload(self._config(), lab_mode="hosted")["scenarios"] if item["availability"] == "local-only"]
+        self.assertEqual(local_only, [])
 
-    def test_run_step_hosted_local_only_has_note_sources(self) -> None:
-        result = server.run_scenario_step(self._config(), "agriculture-voucher", "discover", lab_mode="hosted")
-        self.assertIn("note", result["request_source"])
-        self.assertIn("local lab profile", result["request_source"]["note"])
-        self.assertIn("note", result["response_source"])
-        self.assertIn("local lab profile", result["response_source"]["note"])
+    def test_run_step_hosted_agriculture_scenario_executes(self) -> None:
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/json"}
 
-    def test_run_step_hosted_local_only_makes_no_http_call(self) -> None:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b'{"claims":[{"id":"eligible-for-climate-smart-input-voucher"}]}'
+
+        called = []
+
+        def fake(req, timeout=None):
+            called.append(req)
+            return Resp()
+
+        os.environ["AGRI_EVIDENCE_CLIENT_BEARER"] = "agri-token"
+        os.environ["AGRI_EVIDENCE_URL"] = "https://agriculture-notary.lab.registrystack.org"
+        try:
+            with mock.patch.object(server.urllib.request, "urlopen", fake):
+                result = server.run_scenario_step(self._config(), "agriculture-voucher", "discover", lab_mode="hosted")
+        finally:
+            os.environ.pop("AGRI_EVIDENCE_CLIENT_BEARER", None)
+            os.environ.pop("AGRI_EVIDENCE_URL", None)
+        self.assertEqual(result["friendly"]["status"], "done")
+        self.assertTrue(called)
+        self.assertEqual(called[0].full_url, "https://agriculture-notary.lab.registrystack.org/v1/claims")
+
+    def test_run_step_unknown_local_only_story_makes_no_http_call(self) -> None:
         """urllib.request.urlopen must not be called for a local-only step in hosted mode."""
         def fail_if_called(*_args, **_kwargs):
             raise AssertionError("urlopen must not be called in hosted mode for local-only scenario")
 
+        import lab_homepage_scenarios
         import lab_homepage_scenarios.common as _common
+        original_story_by_id = lab_homepage_scenarios.STORY_BY_ID
+        class LocalOnlyModule:
+            @staticmethod
+            def story():
+                return {"id": "local-only-test", "short_title": "Local Only Test", "availability": "local-only"}
+
+        lab_homepage_scenarios.STORY_BY_ID = {**original_story_by_id, "local-only-test": LocalOnlyModule}
         with mock.patch.object(_common, "http_json", side_effect=fail_if_called):
-            # Should NOT raise; if it does, the guard is missing.
-            result = server.run_scenario_step(self._config(), "agriculture-voucher", "discover", lab_mode="hosted")
+            try:
+                result = server.run_scenario_step(self._config(), "local-only-test", "discover", lab_mode="hosted")
+            finally:
+                lab_homepage_scenarios.STORY_BY_ID = original_story_by_id
         self.assertEqual(result["friendly"]["status"], "local_only")
 
     def test_run_step_local_mode_executes_scenario_path(self) -> None:
@@ -2584,8 +2614,10 @@ class HomepageHierarchyTest(unittest.TestCase):
         self.assertLess(nav.index("Scenario demos"), nav.index("Wallet test"))
         self.assertLess(nav.index("Wallet test"), nav.index("For developers"))
 
-    def test_local_only_cards_read_as_walkthroughs_in_hosted_mode(self) -> None:
-        self.assertIn("Read the walkthrough", self.page)
+    def test_hosted_homepage_has_no_local_only_walkthrough_cards(self) -> None:
+        self.assertIn("Local-only", self.page)
+        self.assertNotIn("Read the walkthrough", self.page)
+        self.assertNotIn('availability local-only', self.page)
         local_page = server.homepage_html("Registry Lab", lab_mode="local").decode("utf-8")
         self.assertNotIn("Read the walkthrough", local_page)
 
