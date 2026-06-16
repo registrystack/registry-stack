@@ -1736,6 +1736,9 @@ sources:
     dataset: health_registry
     entity: coverage
     engine: fhir
+    batch:
+      mode: parallel_lookup
+      max_parallel: 2
     allow_insecure_localhost: true
     allowed_base_urls:
       - {fhir_url}

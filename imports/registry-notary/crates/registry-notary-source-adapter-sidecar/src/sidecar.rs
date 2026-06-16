@@ -597,14 +597,14 @@ struct BatchMatchRequest {
     items: Vec<BatchMatchItem>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct BatchQueryTerm {
     field: String,
     op: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct BatchMatchItem {
     id: String,
@@ -644,6 +644,7 @@ pub enum SidecarError {
 struct AppState {
     config: Arc<SidecarConfig>,
     auth_tokens: Arc<Vec<ResolvedBearerToken>>,
+    fhir_bearer_tokens: Arc<BTreeMap<String, String>>,
     pool: Option<Arc<WorkerPool>>,
     credentials: Arc<BTreeMap<String, Value>>,
     source_limiters: Arc<BTreeMap<String, Arc<Semaphore>>>,
@@ -1435,6 +1436,7 @@ fn metadata_report(metadata: &ConfigTargetMetadata) -> Value {
 pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarError> {
     validate_config(&config)?;
     let auth_tokens = resolve_auth_tokens(&config)?;
+    let fhir_bearer_tokens = resolve_fhir_bearer_tokens(&config)?;
     let request_timeout = Duration::from_millis(config.server.request_timeout_ms);
     let request_body_timeout = Duration::from_millis(config.server.request_body_timeout_ms);
 
@@ -1491,6 +1493,7 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
     let state = Arc::new(AppState {
         config: Arc::new(config),
         auth_tokens: Arc::new(auth_tokens),
+        fhir_bearer_tokens: Arc::new(fhir_bearer_tokens),
         pool,
         credentials: Arc::new(credentials),
         source_limiters: Arc::new(source_limiters),
@@ -2865,6 +2868,35 @@ fn resolve_auth_tokens(config: &SidecarConfig) -> Result<Vec<ResolvedBearerToken
     Ok(tokens)
 }
 
+fn resolve_fhir_bearer_tokens(
+    config: &SidecarConfig,
+) -> Result<BTreeMap<String, String>, SidecarError> {
+    let mut tokens = BTreeMap::new();
+    for (source_id, source) in &config.sources {
+        if source.engine != SourceEngine::Fhir {
+            continue;
+        }
+        let Some(env) = source
+            .fhir
+            .as_ref()
+            .and_then(|fhir| fhir.bearer_token_env.as_ref())
+        else {
+            continue;
+        };
+        if tokens.contains_key(env) {
+            continue;
+        }
+        let token = std::env::var(env).ok().filter(|token| !token.is_empty());
+        let Some(token) = token else {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} fhir.bearer_token_env {env} is missing or empty"
+            )));
+        };
+        tokens.insert(env.clone(), token);
+    }
+    Ok(tokens)
+}
+
 fn adaptor_pin_version(adaptor: &str) -> Option<&str> {
     let module_specifier = adaptor
         .split_once('=')
@@ -3223,9 +3255,9 @@ async fn search_fhir_node(
         request = request.header("data-purpose", purpose);
     }
     if let Some(env) = &fhir.bearer_token_env {
-        let token = std::env::var(env)
-            .ok()
-            .filter(|token| !token.is_empty())
+        let token = state
+            .fhir_bearer_tokens
+            .get(env)
             .ok_or(SourceExecutionError::HttpJson)?;
         request = request.bearer_auth(token);
     }
@@ -3429,6 +3461,25 @@ async fn execute_fhir_batch_match(
     source: &SourceConfig,
     request: &Value,
 ) -> Result<Value, SourceExecutionError> {
+    match source.batch.mode {
+        SourceBatchMode::SequentialLookup => {
+            execute_fhir_sequential_batch_match(state, source_id, source, request).await
+        }
+        SourceBatchMode::ParallelLookup => {
+            execute_fhir_parallel_batch_match(state, source_id, source, request).await
+        }
+        SourceBatchMode::WorkflowBatch | SourceBatchMode::NativeBatch => {
+            Err(SourceExecutionError::HttpJsonBadRequest)
+        }
+    }
+}
+
+async fn execute_fhir_sequential_batch_match(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: &Value,
+) -> Result<Value, SourceExecutionError> {
     let query_signature = request
         .get("query_signature")
         .cloned()
@@ -3471,6 +3522,109 @@ async fn execute_fhir_batch_match(
                 "id": item.id,
                 "error": { "code": "source_unavailable" }
             })),
+        }
+    }
+    Ok(json!({ "items": output }))
+}
+
+async fn execute_fhir_parallel_batch_match(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: &Value,
+) -> Result<Value, SourceExecutionError> {
+    let query_signature = request
+        .get("query_signature")
+        .cloned()
+        .ok_or(SourceExecutionError::HttpJsonBadRequest)?;
+    let query_signature: Vec<BatchQueryTerm> =
+        serde_json::from_value(query_signature).map_err(|_| SourceExecutionError::HttpJson)?;
+    let items = request
+        .get("items")
+        .cloned()
+        .ok_or(SourceExecutionError::HttpJsonBadRequest)?;
+    let items: Vec<BatchMatchItem> =
+        serde_json::from_value(items).map_err(|_| SourceExecutionError::HttpJson)?;
+    let fields = Arc::new(request_fields(request)?);
+    let purpose = Arc::new(
+        request
+            .get("purpose")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+    );
+    let max_parallel = source
+        .batch
+        .max_parallel
+        .unwrap_or(1)
+        .min(items.len().max(1));
+    let semaphore = Arc::new(Semaphore::new(max_parallel));
+    let state = Arc::new(state.clone());
+    let source = Arc::new(source.clone());
+    let source_id = source_id.to_string();
+    let query_signature = Arc::new(query_signature);
+    let mut tasks = JoinSet::new();
+    let requested_ids = items.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
+    for (idx, item) in items.into_iter().enumerate() {
+        let permit = semaphore.clone();
+        let task_state = Arc::clone(&state);
+        let task_source = Arc::clone(&source);
+        let task_source_id = source_id.clone();
+        let task_query_signature = Arc::clone(&query_signature);
+        let task_fields = Arc::clone(&fields);
+        let task_purpose = Arc::clone(&purpose);
+        tasks.spawn(async move {
+            let _permit = permit
+                .acquire_owned()
+                .await
+                .map_err(|_| SourceExecutionError::HttpJson)?;
+            let id = item.id.clone();
+            let response = match fhir_batch_item_query(
+                task_source.as_ref(),
+                task_query_signature.as_ref(),
+                &item,
+            ) {
+                Ok((lookup_field, lookup_value, query_values)) => {
+                    match execute_fhir_lookup(
+                        &task_state,
+                        &task_source_id,
+                        task_source.as_ref(),
+                        &lookup_field,
+                        Value::String(lookup_value),
+                        &query_values,
+                        task_fields.as_ref(),
+                        2,
+                        task_purpose.as_ref(),
+                    )
+                    .await
+                    {
+                        Ok(data) => json!({ "id": id, "data": data }),
+                        Err(_) => json!({
+                            "id": id,
+                            "error": { "code": "source_unavailable" }
+                        }),
+                    }
+                }
+                Err(_) => json!({
+                    "id": id,
+                    "error": { "code": "source_unavailable" }
+                }),
+            };
+            Ok::<_, SourceExecutionError>((idx, response))
+        });
+    }
+
+    let mut output = vec![Value::Null; requested_ids.len()];
+    while let Some(joined) = tasks.join_next().await {
+        let (idx, response) = joined.map_err(|_| SourceExecutionError::HttpJson)??;
+        output[idx] = response;
+    }
+    for (idx, response) in output.iter_mut().enumerate() {
+        if response.is_null() {
+            *response = json!({
+                "id": requested_ids[idx],
+                "error": { "code": "source_unavailable" }
+            });
         }
     }
     Ok(json!({ "items": output }))
