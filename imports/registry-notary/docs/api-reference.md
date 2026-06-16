@@ -56,6 +56,12 @@ that route.
 | `POST /oid4vci/credential` | `oid4vci_credential` | `oid4vci_credential` | `oid4vciCredential` |
 | `POST /federation/v1/evaluations` | `federation_evaluate_jws` | `federation_evaluate_jws` | `federationEvaluateJws` |
 
+`/.well-known/evidence-service` is discovery metadata, but it is protected
+discovery metadata. Callers must send the configured API key, bearer token, or
+OIDC credential. The unauthenticated well-known exceptions are the public issuer
+JWKS, OID4VCI issuer metadata, and SD-JWT VC type-metadata routes documented in
+the security allowlist.
+
 ## Source Adapter Sidecar API
 
 This section documents the private sidecar API that Registry Notary calls when a

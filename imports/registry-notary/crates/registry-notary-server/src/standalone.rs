@@ -7658,6 +7658,32 @@ credential_profiles:
         })
     }
 
+    #[test]
+    fn evidence_service_discovery_is_not_auth_exempt() {
+        let protected_openapi = AuthExemptionPolicy {
+            openapi_requires_auth: true,
+        };
+        assert!(
+            !is_auth_exempt_path("/.well-known/evidence-service", protected_openapi),
+            "service discovery exposes configured capability metadata and must stay authenticated"
+        );
+        assert!(is_auth_exempt_path("/healthz", protected_openapi));
+        assert!(is_auth_exempt_path(
+            "/.well-known/evidence/jwks.json",
+            protected_openapi
+        ));
+        assert!(!is_auth_exempt_path("/openapi.json", protected_openapi));
+
+        let public_openapi = AuthExemptionPolicy {
+            openapi_requires_auth: false,
+        };
+        assert!(is_auth_exempt_path("/openapi.json", public_openapi));
+        assert!(
+            !is_auth_exempt_path("/.well-known/evidence-service", public_openapi),
+            "server.openapi_requires_auth only affects /openapi.json"
+        );
+    }
+
     fn public_jwk_with_kid(public_jwk: &str, kid: &str) -> String {
         let mut value: Value = serde_json::from_str(public_jwk).expect("public JWK parses");
         value["kid"] = json!(kid);

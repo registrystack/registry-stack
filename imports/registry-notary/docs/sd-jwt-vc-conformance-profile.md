@@ -110,6 +110,10 @@ the same constants listed in this profile:
 
 The metadata is Registry Notary capability metadata. It is not a claim of full
 OpenID4VCI issuer conformance.
+The route is authenticated by default; clients use the same configured Notary
+API key, bearer token, or OIDC credential they use for claim evaluation. Public
+discovery for verifiers and wallets is limited to the issuer JWKS, OID4VCI
+issuer metadata, and SD-JWT VC type-metadata routes.
 
 When OID4VCI is enabled, Registry Notary serves SD-JWT VC Type Metadata at the
 well-known location derived from each configured HTTPS `vct`. Per the SD-JWT VC

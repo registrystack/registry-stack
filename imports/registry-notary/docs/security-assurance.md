@@ -126,6 +126,14 @@ Some routes deviate from the `/v1/` versioning convention by design. These
 exceptions are recorded in `security/exposure-manifest.json` (per-entry
 `notes`) and `security/auth-none-allowlist.yml` (per-entry `reason`).
 
+### Protected evidence-service discovery
+
+`GET /.well-known/evidence-service` is intentionally unversioned because it is
+a discovery route, but it is not on the unauthenticated allowlist. It exposes
+configured Notary capability metadata and requires normal Notary caller
+credentials. `server.openapi_requires_auth` only controls `/openapi.json`; it
+does not make evidence-service discovery public.
+
 ### Bare VCT type-metadata routes
 
 `GET /credentials/{*vct_path}` and `GET /.well-known/vct/{*vct_path}` are
