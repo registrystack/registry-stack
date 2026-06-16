@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urlencode, urljoin
 
 
 DEFAULT_BASE_URL = "https://lab.registrystack.org"
@@ -26,6 +26,7 @@ DEFAULT_DHIS2_SERVICE_ID = "dhis2-health-notary"
 PERSON_ALIVE_CONFIGURATION = "person_is_alive_sd_jwt"
 DHIS2_CREDENTIAL_PROFILE = "dhis2_programme_participation_sd_jwt"
 DHIS2_FORMAT = "application/dc+sd-jwt"
+CLAIM_RESULT_FORMAT = "application/vnd.registry-notary.claim-result+json"
 DHIS2_PURPOSE = "https://demo.example.gov/purpose/dhis2-openfn-health-evidence"
 DHIS2_SUBJECT_ID = "PQfMcpmXeFE"
 DHIS2_RECONCILIATION_REF = f"dhis2:tracked-entity:{DHIS2_SUBJECT_ID}"
@@ -42,6 +43,15 @@ DHIS2_PROGRAMME_CLAIMS = [
 
 EXPECTED_STEPS = {
     "alive-proof": ["discover", "prepare-evidence", "deny-row"],
+    "wallet-credential": ["issuer-metadata", "credential-offer", "holder-key", "nonce", "credential-preview"],
+    "dhis2-programme-vc": [
+        "discover",
+        "evaluate-programme",
+        "preview-vc",
+        "reconcile",
+        "negative-control",
+        "render-cccev",
+    ],
     "social-aggregate": ["discover", "read-aggregate", "deny-row-with-aggregate", "read-row-with-row-token"],
     "combined-support": [
         "discover",
@@ -51,13 +61,12 @@ EXPECTED_STEPS = {
         "final-positive",
         "negative-control",
     ],
-    "dhis2-programme-vc": [
+    "agriculture-voucher": [
         "discover",
-        "evaluate-programme",
-        "preview-vc",
-        "reconcile",
-        "negative-control",
-        "render-cccev",
+        "positive-voucher",
+        "inactive-parcel-control",
+        "redeemed-control",
+        "reason-code",
     ],
 }
 EXPECTED_STEP_STATUSES = {
@@ -65,6 +74,21 @@ EXPECTED_STEP_STATUSES = {
         "discover": "done",
         "prepare-evidence": "done",
         "deny-row": "denied_as_expected",
+    },
+    "wallet-credential": {
+        "issuer-metadata": "done",
+        "credential-offer": "done",
+        "holder-key": "done",
+        "nonce": "done",
+        "credential-preview": "done",
+    },
+    "dhis2-programme-vc": {
+        "discover": "done",
+        "evaluate-programme": "done",
+        "preview-vc": "done",
+        "reconcile": "done",
+        "negative-control": "done",
+        "render-cccev": "done",
     },
     "social-aggregate": {
         "discover": "done",
@@ -80,14 +104,21 @@ EXPECTED_STEP_STATUSES = {
         "final-positive": "done",
         "negative-control": "done",
     },
-    "dhis2-programme-vc": {
+    "agriculture-voucher": {
         "discover": "done",
-        "evaluate-programme": "done",
-        "preview-vc": "done",
-        "reconcile": "done",
-        "negative-control": "done",
-        "render-cccev": "done",
+        "positive-voucher": "done",
+        "inactive-parcel-control": "done",
+        "redeemed-control": "done",
+        "reason-code": "done",
     },
+}
+
+DEFAULT_EVALUATED_CLAIM_SERVICES = {
+    "civil-notary",
+    "social-protection-notary",
+    "shared-eligibility-notary",
+    "dhis2-notary",
+    "agriculture-notary",
 }
 
 SENSITIVE_KEYS = {
@@ -300,6 +331,13 @@ def scenario_step_ids(story_payload: Any) -> list[str]:
     return [step.get("id") for step in steps if isinstance(step, dict)]
 
 
+def items_from(body: Any, key: str) -> list[Any]:
+    if not isinstance(body, dict):
+        return []
+    items = body.get(key)
+    return items if isinstance(items, list) else []
+
+
 def friendly_status(step_payload: Any) -> str:
     if not isinstance(step_payload, dict):
         return ""
@@ -318,6 +356,23 @@ def health_body_ok(body: Any) -> bool:
     return body.get("status") == "ok"
 
 
+def query_path(path: str, params: dict[str, Any]) -> str:
+    query = urlencode({key: value for key, value in params.items() if value not in (None, "")})
+    return f"{path}?{query}" if query else path
+
+
+def require_no_error_payload(body: Any, code: str, context: dict[str, Any]) -> None:
+    require(not (isinstance(body, dict) and body.get("ok") is False and "error" in body), code, {**context, "body": body})
+
+
+def claim_answer_available(answer: Any) -> bool:
+    if not isinstance(answer, dict):
+        return False
+    if answer.get("satisfied") is not None or answer.get("value") is not None:
+        return True
+    return answer.get("preview") is True and answer.get("subject_found") is True
+
+
 def run_smoke(config: SmokeConfig) -> dict[str, Any]:
     base_url = config.base_url.rstrip("/")
     client = JsonClient(config.timeout)
@@ -329,8 +384,12 @@ def run_smoke(config: SmokeConfig) -> dict[str, Any]:
     catalogue = client.get(joined_url(base_url, "/api/scenarios.json"))
     require_ok(catalogue, "scenario-catalogue-unavailable")
     catalogue_ids = scenario_catalogue_ids(catalogue.body)
-    for scenario_id in EXPECTED_STEPS:
-        require(scenario_id in catalogue_ids, "scenario-missing", {"scenario": scenario_id, "seen": catalogue_ids})
+    expected_catalogue_ids = list(EXPECTED_STEPS)
+    require(
+        catalogue_ids == expected_catalogue_ids,
+        "scenario-catalogue-mismatch",
+        {"expected": expected_catalogue_ids, "actual": catalogue_ids},
+    )
 
     lab = client.get(joined_url(base_url, "/api/lab.json"))
     require_ok(lab, "lab-metadata-unavailable")
@@ -384,10 +443,21 @@ def run_smoke(config: SmokeConfig) -> dict[str, Any]:
             )
             step_summaries[scenario_id][step_id] = actual_status
 
+    explorer_summary = run_explorer_smoke(client, base_url)
+
     summary: dict[str, Any] = {
         "base_url": base_url,
-        "checks": 1 + 1 + 1 + 1 + sum(len(steps) for steps in EXPECTED_STEP_STATUSES.values()) + len(EXPECTED_STEPS),
+        "checks": (
+            1
+            + 1
+            + 1
+            + 1
+            + sum(len(steps) for steps in EXPECTED_STEP_STATUSES.values())
+            + len(EXPECTED_STEPS)
+            + explorer_summary["checks"]
+        ),
         "credential_smoke": "skipped",
+        "explorers": explorer_summary,
         "scenarios": step_summaries,
         "stories": {key: len(value) for key, value in story_summaries.items()},
         "wallet_configuration": PERSON_ALIVE_CONFIGURATION,
@@ -395,6 +465,128 @@ def run_smoke(config: SmokeConfig) -> dict[str, Any]:
     if config.credential_smoke:
         summary["credential_smoke"] = run_credential_smoke(client, lab.body)
     return summary
+
+
+def run_explorer_smoke(client: JsonClient, base_url: str) -> dict[str, Any]:
+    registry_catalog = client.get(joined_url(base_url, "/api/explorer/registries.json"))
+    require_ok(registry_catalog, "registry-explorer-catalogue-unavailable")
+    registries = items_from(registry_catalog.body, "registries")
+    require(bool(registries), "registry-explorer-catalogue-empty", registry_catalog.body)
+
+    registry_summary: dict[str, Any] = {}
+    checks = 1
+    for registry in registries:
+        if not isinstance(registry, dict):
+            continue
+        registry_id = str(registry.get("id", ""))
+        dataset_id = str(registry.get("default_dataset", ""))
+        entity_id = str(registry.get("default_entity", ""))
+        default_limit = registry.get("default_limit", 1)
+        require(registry_id and dataset_id and entity_id, "registry-explorer-defaults-missing", registry)
+
+        metadata = client.get(joined_url(base_url, f"/api/explorer/registries/{registry_id}/metadata.json"))
+        require_ok(metadata, "registry-explorer-metadata-unavailable")
+        require_no_error_payload(metadata.body, "registry-explorer-metadata-error", {"registry": registry_id})
+
+        schema_path = query_path(
+            f"/api/explorer/registries/{registry_id}/entity-schema.json",
+            {"dataset": dataset_id, "entity": entity_id},
+        )
+        schema = client.get(joined_url(base_url, schema_path))
+        require_ok(schema, "registry-explorer-schema-unavailable")
+        require_no_error_payload(schema.body, "registry-explorer-schema-error", {"registry": registry_id})
+        fields = items_from(schema.body, "fields")
+        require(bool(fields), "registry-explorer-schema-empty", {"registry": registry_id, "body": schema.body})
+
+        records_path = query_path(
+            f"/api/explorer/registries/{registry_id}/records.json",
+            {"dataset": dataset_id, "entity": entity_id, "limit": default_limit},
+        )
+        records = client.get(joined_url(base_url, records_path))
+        require_ok(records, "registry-explorer-records-unavailable")
+        require_no_error_payload(records.body, "registry-explorer-records-error", {"registry": registry_id})
+        rows = items_from(records.body, "records")
+        require(bool(rows), "registry-explorer-records-empty", {"registry": registry_id, "body": records.body})
+        checks += 3
+
+        aggregate_count = 0
+        aggregate_id = str(registry.get("default_aggregate", ""))
+        if aggregate_id:
+            aggregates_path = query_path(
+                f"/api/explorer/registries/{registry_id}/aggregates.json",
+                {"dataset": dataset_id},
+            )
+            aggregates = client.get(joined_url(base_url, aggregates_path))
+            require_ok(aggregates, "registry-explorer-aggregates-unavailable")
+            require_no_error_payload(aggregates.body, "registry-explorer-aggregates-error", {"registry": registry_id})
+            require(bool(items_from(aggregates.body, "aggregates")), "registry-explorer-aggregates-empty", {"registry": registry_id})
+
+            aggregate_path_value = query_path(
+                f"/api/explorer/registries/{registry_id}/aggregate.json",
+                {"dataset": dataset_id, "aggregate": aggregate_id},
+            )
+            aggregate = client.get(joined_url(base_url, aggregate_path_value))
+            require_ok(aggregate, "registry-explorer-aggregate-unavailable")
+            require_no_error_payload(aggregate.body, "registry-explorer-aggregate-error", {"registry": registry_id})
+            aggregate_rows = items_from(aggregate.body, "records") or items_from(aggregate.body, "observations")
+            require(bool(aggregate_rows), "registry-explorer-aggregate-empty", {"registry": registry_id, "aggregate": aggregate_id})
+            aggregate_count = len(aggregate_rows)
+            checks += 2
+
+        registry_summary[registry_id] = {"records": len(rows), "aggregate_records": aggregate_count}
+
+    claims_catalog = client.get(joined_url(base_url, "/api/explorer/claims.json"))
+    require_ok(claims_catalog, "claims-explorer-catalogue-unavailable")
+    services = items_from(claims_catalog.body, "claim_services")
+    require(bool(services), "claims-explorer-catalogue-empty", claims_catalog.body)
+    default_format = claims_catalog.body.get("default_format") if isinstance(claims_catalog.body, dict) else CLAIM_RESULT_FORMAT
+    checks += 1
+
+    claim_summary: dict[str, Any] = {}
+    for service in services:
+        if not isinstance(service, dict):
+            continue
+        service_id = str(service.get("id", ""))
+        require(service_id, "claims-explorer-service-id-missing", service)
+        metadata = client.get(joined_url(base_url, f"/api/explorer/claims/{service_id}/metadata.json"))
+        require_ok(metadata, "claims-explorer-metadata-unavailable")
+        require_no_error_payload(metadata.body, "claims-explorer-metadata-error", {"service": service_id})
+        claim_service = metadata.body.get("claim_service") if isinstance(metadata.body, dict) else None
+        require(isinstance(claim_service, dict), "claims-explorer-metadata-shape", {"service": service_id, "body": metadata.body})
+        claims = items_from(claim_service, "claims")
+        require(bool(claims), "claims-explorer-claims-empty", {"service": service_id})
+        checks += 1
+
+        mode = "metadata"
+        if service_id in DEFAULT_EVALUATED_CLAIM_SERVICES:
+            default_claim = str(claim_service.get("default_claim", ""))
+            selected_claim = next((claim for claim in claims if isinstance(claim, dict) and claim.get("id") == default_claim), {})
+            require(bool(selected_claim), "claims-explorer-default-claim-missing", {"service": service_id, "default_claim": default_claim})
+            evaluation_body = {
+                "claim_id": default_claim,
+                "subject": claim_service.get("default_subject"),
+                "identifier_scheme": claim_service.get("default_identifier_scheme"),
+                "disclosure": selected_claim.get("default_disclosure"),
+                "format": default_format,
+                "purpose": claim_service.get("default_purpose"),
+            }
+            evaluation = client.post(
+                joined_url(base_url, f"/api/explorer/claims/{service_id}/evaluate.json"),
+                evaluation_body,
+            )
+            require_ok(evaluation, "claims-explorer-evaluation-unavailable")
+            require_no_error_payload(evaluation.body, "claims-explorer-evaluation-error", {"service": service_id})
+            answer = evaluation.body.get("answer") if isinstance(evaluation.body, dict) else {}
+            require(
+                claim_answer_available(answer),
+                "claims-explorer-evaluation-empty",
+                {"service": service_id, "body": evaluation.body},
+            )
+            mode = str(evaluation.body.get("mode", "unknown")) if isinstance(evaluation.body, dict) else "unknown"
+            checks += 1
+        claim_summary[service_id] = {"claims": len(claims), "default_evaluation": mode}
+
+    return {"checks": checks, "registries": registry_summary, "claims": claim_summary}
 
 
 def scenario_catalogue_ids(body: Any) -> list[str]:

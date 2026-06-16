@@ -88,9 +88,11 @@ def base_routes() -> dict[tuple[str, str], Any]:
                 "default_scenario_id": "alive-proof",
                 "scenarios": [
                     {"id": "alive-proof", "steps": 3},
+                    {"id": "wallet-credential", "steps": 5},
+                    {"id": "dhis2-programme-vc", "steps": 6},
                     {"id": "social-aggregate", "steps": 4},
                     {"id": "combined-support", "steps": 6},
-                    {"id": "dhis2-programme-vc", "steps": 6},
+                    {"id": "agriculture-voucher", "steps": 5},
                 ],
             },
         ),
@@ -108,6 +110,20 @@ def base_routes() -> dict[tuple[str, str], Any]:
         ("GET", "/api/scenarios/alive-proof.json"): (
             200,
             {"story": {"steps": [{"id": "discover"}, {"id": "prepare-evidence"}, {"id": "deny-row"}]}},
+        ),
+        ("GET", "/api/scenarios/wallet-credential.json"): (
+            200,
+            {
+                "story": {
+                    "steps": [
+                        {"id": "issuer-metadata"},
+                        {"id": "credential-offer"},
+                        {"id": "holder-key"},
+                        {"id": "nonce"},
+                        {"id": "credential-preview"},
+                    ]
+                }
+            },
         ),
         ("GET", "/api/scenarios/dhis2-programme-vc.json"): (
             200,
@@ -152,7 +168,117 @@ def base_routes() -> dict[tuple[str, str], Any]:
                 }
             },
         ),
+        ("GET", "/api/scenarios/agriculture-voucher.json"): (
+            200,
+            {
+                "story": {
+                    "steps": [
+                        {"id": "discover"},
+                        {"id": "positive-voucher"},
+                        {"id": "inactive-parcel-control"},
+                        {"id": "redeemed-control"},
+                        {"id": "reason-code"},
+                    ]
+                }
+            },
+        ),
+        ("GET", "/api/explorer/registries.json"): (
+            200,
+            {
+                "registries": [
+                    {
+                        "id": "civil",
+                        "default_dataset": "civil_registry",
+                        "default_entity": "civil_person",
+                        "default_limit": 1,
+                    },
+                    {
+                        "id": "social-protection",
+                        "default_dataset": "social_protection_registry",
+                        "default_entity": "household",
+                        "default_aggregate": "households_by_eligibility_band",
+                        "default_limit": 1,
+                    },
+                ]
+            },
+        ),
+        ("GET", "/api/explorer/registries/civil/metadata.json"): (200, {"ok": True, "registry": {"id": "civil"}}),
+        ("GET", "/api/explorer/registries/civil/entity-schema.json?dataset=civil_registry&entity=civil_person"): (
+            200,
+            {"fields": [{"name": "national_id"}]},
+        ),
+        ("GET", "/api/explorer/registries/civil/records.json?dataset=civil_registry&entity=civil_person&limit=1"): (
+            200,
+            {"records": [{"national_id": "NID-1001"}]},
+        ),
+        ("GET", "/api/explorer/registries/social-protection/metadata.json"): (
+            200,
+            {"ok": True, "registry": {"id": "social-protection"}},
+        ),
+        (
+            "GET",
+            "/api/explorer/registries/social-protection/entity-schema.json?dataset=social_protection_registry&entity=household",
+        ): (200, {"fields": [{"name": "household_id"}]}),
+        (
+            "GET",
+            "/api/explorer/registries/social-protection/records.json?dataset=social_protection_registry&entity=household&limit=1",
+        ): (200, {"records": [{"household_id": "HH-1001"}]}),
+        ("GET", "/api/explorer/registries/social-protection/aggregates.json?dataset=social_protection_registry"): (
+            200,
+            {"aggregates": [{"id": "households_by_eligibility_band"}]},
+        ),
+        (
+            "GET",
+            "/api/explorer/registries/social-protection/aggregate.json?dataset=social_protection_registry&aggregate=households_by_eligibility_band",
+        ): (200, {"records": [{"eligibility_band": "priority", "household_count": 3}]}),
+        ("GET", "/api/explorer/claims.json"): (
+            200,
+            {
+                "default_format": "application/vnd.registry-notary.claim-result+json",
+                "claim_services": [
+                    {"id": "civil-notary"},
+                    {"id": "social-protection-notary"},
+                    {"id": "shared-eligibility-notary"},
+                    {"id": "dhis2-notary"},
+                    {"id": "opencrvs-notary"},
+                    {"id": "agriculture-notary"},
+                ],
+            },
+        ),
     }
+    for service_id, default_claim, subject, scheme in [
+        ("civil-notary", "person-is-alive", "NID-1001", "national_id"),
+        ("social-protection-notary", "beneficiary-active", "NID-1001", "national_id"),
+        ("shared-eligibility-notary", "eligible-for-combined-support", "NID-1001", "national_id"),
+        ("dhis2-notary", "dhis2-child-program-active", "PQfMcpmXeFE", "dhis2_tracked_entity"),
+        ("opencrvs-notary", "opencrvs-birth-record-exists", "BIRTH-1001", "birth_registration_id"),
+        ("agriculture-notary", "eligible-for-climate-smart-input-voucher", "FARMER-1001", "farmer_id"),
+    ]:
+        routes[("GET", f"/api/explorer/claims/{service_id}/metadata.json")] = (
+            200,
+            {
+                "ok": True,
+                "claim_service": {
+                    "id": service_id,
+                    "default_claim": default_claim,
+                    "default_subject": subject,
+                    "default_identifier_scheme": scheme,
+                    "default_purpose": "https://demo.example.gov/purpose/decentralized-evidence-demo",
+                    "claims": [
+                        {
+                            "id": default_claim,
+                            "default_disclosure": "predicate",
+                            "formats": ["application/vnd.registry-notary.claim-result+json"],
+                        }
+                    ],
+                },
+            },
+        )
+        if service_id in hosted_smoke.DEFAULT_EVALUATED_CLAIM_SERVICES:
+            routes[("POST", f"/api/explorer/claims/{service_id}/evaluate.json")] = (
+                200,
+                {"mode": "live", "answer": {"claim_id": default_claim, "satisfied": True}},
+            )
     for scenario, steps in hosted_smoke.EXPECTED_STEP_STATUSES.items():
         for step, status in steps.items():
             routes[("POST", f"/api/scenarios/{scenario}/{step}")] = (
@@ -191,11 +317,19 @@ class HostedSmokeTest(unittest.TestCase):
         self.assertEqual(summary["scenarios"]["alive-proof"]["deny-row"], "denied_as_expected")
         self.assertEqual(summary["scenarios"]["social-aggregate"]["deny-row-with-aggregate"], "denied_as_expected")
         self.assertEqual(summary["scenarios"]["combined-support"]["final-positive"], "done")
+        self.assertEqual(summary["scenarios"]["agriculture-voucher"]["positive-voucher"], "done")
+        self.assertEqual(summary["explorers"]["claims"]["agriculture-notary"]["default_evaluation"], "live")
+        self.assertEqual(summary["explorers"]["claims"]["opencrvs-notary"]["default_evaluation"], "metadata")
+        self.assertEqual(summary["explorers"]["registries"]["social-protection"]["aggregate_records"], 1)
         requested_paths = [path for _, path, _ in server.requests]
         self.assertIn("/api/scenarios/alive-proof/discover", requested_paths)
+        self.assertIn("/api/scenarios/wallet-credential/credential-preview", requested_paths)
         self.assertIn("/api/scenarios/social-aggregate/read-aggregate", requested_paths)
         self.assertIn("/api/scenarios/combined-support/final-positive", requested_paths)
         self.assertIn("/api/scenarios/dhis2-programme-vc/render-cccev", requested_paths)
+        self.assertIn("/api/scenarios/agriculture-voucher/positive-voucher", requested_paths)
+        self.assertIn("/api/explorer/registries/civil/records.json?dataset=civil_registry&entity=civil_person&limit=1", requested_paths)
+        self.assertIn("/api/explorer/claims/agriculture-notary/evaluate.json", requested_paths)
         self.assertIn("/.well-known/openid-credential-issuer", requested_paths)
 
     def test_missing_story_step_fails_with_clear_contract_error(self) -> None:

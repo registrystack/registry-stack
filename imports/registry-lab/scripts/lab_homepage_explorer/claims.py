@@ -12,6 +12,7 @@ from .common import (
     CLAIM_RESULT_FORMAT,
     PURPOSE,
     ExplorerInputError,
+    auth_header_pair,
     credential_display,
     credential_for_execution,
     display_auth_header_pair,
@@ -229,9 +230,9 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
         "service_id": "dhis2-notary",
         "base_url": "https://dhis2-notary.lab.registrystack.org",
         "client_credential_id": "dhis2-bearer",
-        "default_subject": "TEI-1001",
+        "default_subject": "PQfMcpmXeFE",
         "default_identifier_scheme": "dhis2_tracked_entity",
-        "default_purpose": PURPOSE,
+        "default_purpose": "https://demo.example.gov/purpose/dhis2-openfn-health-evidence",
         "related_registry_ids": ["health"],
         "availability": "hosted",
         "default_claim": "dhis2-child-program-active",
@@ -663,7 +664,7 @@ def _execution_headers(config: dict[str, Any], service: dict[str, Any], display_
         service["client_credential_id"],
         runtime_env=service.get("runtime_token_env", ""),
     )
-    auth_name, auth_value = display_auth_header_pair(credential)
+    auth_name, auth_value = auth_header_pair(credential)
     if credential.get("display_policy") == "public" and credential.get("auth_header"):
         auth_name, auth_value = credential["auth_header"].split(": ", 1)
     headers = dict(display_headers)
