@@ -33,3 +33,60 @@ const umamiDomains = import.meta.env.PUBLIC_UMAMI_DOMAINS?.trim() || 'docs.regis
     <script is:inline defer src={umamiScriptSrc} data-website-id={umamiWebsiteId} data-domains={umamiDomains}></script>
   )
 }
+{
+  umamiWebsiteId && (
+    <script is:inline>
+      {`
+        const docsJourneyTargets = new Map([
+          ['registrystack.org', 'marketing'],
+          ['lab.registrystack.org', 'lab'],
+          ['github.com', 'github'],
+        ]);
+
+        const docsLinkText = (node) => (node.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
+
+        const docsJourneyUrl = (anchor, targetSite) => {
+          const url = new URL(anchor.href);
+          if (targetSite === 'marketing' || targetSite === 'lab') {
+            url.searchParams.set('utm_source', 'registry_docs');
+            url.searchParams.set('utm_medium', 'docs');
+            url.searchParams.set('utm_campaign', 'cross_site');
+            url.searchParams.set('utm_content', window.location.pathname);
+          }
+          return url;
+        };
+
+        const prepareDocsJourneyLinks = () => document.querySelectorAll('a[href]').forEach((anchor) => {
+          try {
+            const url = new URL(anchor.href);
+            const targetSite = docsJourneyTargets.get(url.hostname);
+            if (!targetSite) return;
+            anchor.href = docsJourneyUrl(anchor, targetSite).toString();
+          } catch (_error) {}
+        });
+
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', prepareDocsJourneyLinks, { once: true });
+        } else {
+          prepareDocsJourneyLinks();
+        }
+
+        document.addEventListener('click', (event) => {
+          const anchor = event.target instanceof Element ? event.target.closest('a[href]') : null;
+          if (!anchor) return;
+          try {
+            const url = new URL(anchor.href);
+            const targetSite = docsJourneyTargets.get(url.hostname);
+            if (!targetSite || !window.umami?.track) return;
+            window.umami.track('docs_link_click', {
+              target_site: targetSite,
+              target_path: url.pathname,
+              source_path: window.location.pathname,
+              link_text: docsLinkText(anchor),
+            });
+          } catch (_error) {}
+        });
+      `}
+    </script>
+  )
+}
