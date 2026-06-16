@@ -19,8 +19,17 @@ const head = isArchived
 const path = Astro.url.pathname.replace(import.meta.env.BASE_URL, '/');
 const is404 = path === '/404/' || path === '/404';
 const mdHref = mdHrefForPath(Astro.url.pathname, import.meta.env.BASE_URL);
+const umamiWebsiteId = isArchived ? '' : import.meta.env.PUBLIC_UMAMI_WEBSITE_ID?.trim();
+const umamiScriptSrc =
+  import.meta.env.PUBLIC_UMAMI_SCRIPT_SRC?.trim() || 'https://stats.registrystack.org/script.js';
+const umamiDomains = import.meta.env.PUBLIC_UMAMI_DOMAINS?.trim() || 'docs.registrystack.org';
 ---
 
 {head.map(({ tag: Tag, attrs, content }) => <Tag {...attrs} set:html={content} />)}
 {isArchived && <meta name="robots" content="noindex,follow" />}
 {!is404 && <link rel="alternate" type="text/markdown" href={mdHref} />}
+{
+  umamiWebsiteId && (
+    <script is:inline defer src={umamiScriptSrc} data-website-id={umamiWebsiteId} data-domains={umamiDomains}></script>
+  )
+}
