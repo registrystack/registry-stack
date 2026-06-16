@@ -958,6 +958,8 @@ evidence:
         self.assertIn("${{ vars.COOLIFY_REGISTRY_LAB_APP_UUID }}", workflow)
         self.assertIn("${{ vars.COOLIFY_HOSTED_ESIGNET_APP_UUID }}", workflow)
         self.assertIn("${{ vars.COOLIFY_HOSTED_WALT_APP_UUID }}", workflow)
+        self.assertIn("${{ vars.COOLIFY_HOSTED_SOCIAL_APP_UUID }}", workflow)
+        self.assertIn("${{ vars.COOLIFY_HOSTED_AGRI_APP_UUID }}", workflow)
         self.assertIn("/applications/${app}/envs", workflow)
         self.assertIn('"key": "CONFIG_REPO_REF"', workflow)
         self.assertIn('os.environ["GITHUB_SHA"]', workflow)
@@ -995,6 +997,8 @@ evidence:
         for path in (
             SCRIPT_DIR.parent / "compose.coolify.yaml",
             SCRIPT_DIR.parent / "compose.esignet-hosted.yaml",
+            SCRIPT_DIR.parent / "compose.social-hosted.yaml",
+            SCRIPT_DIR.parent / "compose.agri-hosted.yaml",
             SCRIPT_DIR.parent / "compose.walt-hosted.yaml",
         ):
             with self.subTest(path=path.name):
@@ -1430,6 +1434,11 @@ evidence:
     def _valid_registry_lab() -> dict:
         lab = "lab.registrystack.org"
         required_env = {
+            "AGRI_AGGREGATE_READER_RAW": "${AGRI_AGGREGATE_READER_RAW:-}",
+            "AGRI_EVIDENCE_CLIENT_BEARER": "${AGRI_EVIDENCE_CLIENT_BEARER:-}",
+            "AGRI_EVIDENCE_ONLY_RAW": "${AGRI_EVIDENCE_ONLY_RAW:-}",
+            "AGRI_METADATA_CLIENT_RAW": "${AGRI_METADATA_CLIENT_RAW:-}",
+            "AGRI_ROW_READER_RAW": "${AGRI_ROW_READER_RAW:-}",
             "REGISTRY_LAB_POSTGRES_PASSWORD": "${REGISTRY_LAB_POSTGRES_PASSWORD:-}",
             "CONFIG_REPO_REF": "${CONFIG_REPO_REF:?set CONFIG_REPO_REF}",
             "ZITADEL_MASTERKEY": "${ZITADEL_MASTERKEY:-}",
@@ -1628,6 +1637,12 @@ cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
                         "SOCIAL_RELAY_URL": "https://social-relay.lab.registrystack.org",
                         "SHARED_EVIDENCE_URL": "https://shared-notary.lab.registrystack.org",
                         "SHARED_EVIDENCE_CLIENT_BEARER": "${SHARED_EVIDENCE_CLIENT_BEARER:-}",
+                        "AGRI_EVIDENCE_URL": "https://agriculture-notary.lab.registrystack.org",
+                        "AGRI_EVIDENCE_CLIENT_BEARER": "${AGRI_EVIDENCE_CLIENT_BEARER:-}",
+                        "AGRI_METADATA_CLIENT_RAW": "${AGRI_METADATA_CLIENT_RAW:-}",
+                        "AGRI_EVIDENCE_ONLY_RAW": "${AGRI_EVIDENCE_ONLY_RAW:-}",
+                        "AGRI_ROW_READER_RAW": "${AGRI_ROW_READER_RAW:-}",
+                        "AGRI_AGGREGATE_READER_RAW": "${AGRI_AGGREGATE_READER_RAW:-}",
                     },
                 },
                 "shared-eligibility-notary": {

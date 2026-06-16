@@ -272,7 +272,7 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
         "default_identifier_scheme": "id",
         "default_purpose": "https://demo.example.gov/purpose/nagdi/climate-smart-input-support",
         "related_registry_ids": ["agriculture"],
-        "availability": "runtime",
+        "availability": "hosted",
         "default_claim": "eligible-for-climate-smart-input-voucher",
         "claims": {
             "farmer-registered": _claim("farmer-registered", "Farmer registered", ["predicate", "redacted"], ["registration_status"], _source("NAgDI Agricultural Registries", "agri_registry", "farmer", "id", "agri_registry:evidence_verification", "registry_data_api")),

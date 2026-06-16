@@ -410,10 +410,15 @@ def resolve_service_base_url(metadata_url: str, transport_override: str | None) 
         "nagdi-agriculture-notary",
         "agri-static-metadata-publisher",
     }
+    hosted_metadata_hosts = {
+        "metadata.lab.registrystack.org",
+    }
     local_hosts = {"127.0.0.1", "localhost", "::1"}
     if metadata.hostname in compose_names and override.hostname in local_hosts:
         return transport_override.rstrip("/")
     if metadata.hostname == override.hostname and metadata.hostname in compose_names:
+        return transport_override.rstrip("/")
+    if metadata.hostname in hosted_metadata_hosts:
         return transport_override.rstrip("/")
     return metadata_base
 
@@ -430,10 +435,19 @@ def aggregate_rows(response: Any) -> list[Any]:
     return rows if isinstance(rows, list) else []
 
 
+def suppressed_count(disclosure: Any) -> int | None:
+    if not isinstance(disclosure, dict):
+        return None
+    value = disclosure.get("suppressed_rows")
+    if value is None:
+        value = disclosure.get("suppressed_observations")
+    return value if isinstance(value, int) else None
+
+
 def aggregate_summary(response: Any) -> dict[str, Any]:
     rows = aggregate_rows(response)
     disclosure = response.get("disclosure_control") if isinstance(response, dict) else None
-    suppressed_rows = disclosure.get("suppressed_rows") if isinstance(disclosure, dict) else None
+    suppressed_rows = suppressed_count(disclosure)
     return {
         "artifact_type": "nagdi.agricultural-market-sizing-summary.v1",
         "correlation_id": CORRELATION_ID,
@@ -517,12 +531,12 @@ def scenario_summary(
             "aggregate_rows_seen": aggregate_summary_doc.get("aggregate_rows_seen"),
             "suppressed_rows": aggregate_summary_doc.get("suppressed_rows"),
             "filtered_rows_seen": len(aggregate_rows(filtered_body)) if isinstance(filtered_body, dict) else None,
-            "filtered_suppressed_rows": filtered_disclosure.get("suppressed_rows"),
+            "filtered_suppressed_rows": suppressed_count(filtered_disclosure),
             "row_export_allowed": False,
         },
         "livestock_planning": {
             "aggregate_rows_seen": len(aggregate_rows(livestock_aggregate)) if isinstance(livestock_aggregate, dict) else None,
-            "suppressed_rows": livestock_disclosure.get("suppressed_rows") if isinstance(livestock_disclosure, dict) else None,
+            "suppressed_rows": suppressed_count(livestock_disclosure),
             "contains_individual_animal_rows": False,
             "row_export_allowed": False,
         },
@@ -937,9 +951,9 @@ def main() -> int:
     if not isinstance(livestock_rows, list) or not livestock_rows:
         raise DemoError(f"livestock herd aggregate expected publishable rows, got {livestock_rows!r}")
     livestock_disclosure = livestock_aggregate.get("disclosure_control") if isinstance(livestock_aggregate, dict) else None
-    livestock_suppressed_rows = livestock_disclosure.get("suppressed_rows") if isinstance(livestock_disclosure, dict) else None
+    livestock_suppressed_rows = suppressed_count(livestock_disclosure)
     if not isinstance(livestock_suppressed_rows, int) or livestock_suppressed_rows <= 0:
-        raise DemoError(f"livestock herd aggregate expected suppressed_rows > 0, got {livestock_suppressed_rows!r}")
+        raise DemoError(f"livestock herd aggregate expected suppression count > 0, got {livestock_suppressed_rows!r}")
     add_transcript(transcript, "Livestock planning used herd-count aggregates while row access to herds and animal records stayed blocked.")
     step += 1
 
@@ -951,9 +965,9 @@ def main() -> int:
     )
     save(out, step, "positive-market-sizing-aggregate", aggregate)
     disclosure = aggregate.get("disclosure_control") if isinstance(aggregate, dict) else None
-    suppressed_rows = disclosure.get("suppressed_rows") if isinstance(disclosure, dict) else None
+    suppressed_rows = suppressed_count(disclosure)
     if not isinstance(suppressed_rows, int) or suppressed_rows <= 0:
-        raise DemoError(f"market sizing aggregate expected suppressed_rows > 0, got {suppressed_rows!r}")
+        raise DemoError(f"market sizing aggregate expected suppression count > 0, got {suppressed_rows!r}")
     step += 1
     summary = aggregate_summary(aggregate)
     save(out, step, "market-sizing-summary", summary)
@@ -984,9 +998,9 @@ def main() -> int:
     if suppressed.status != 200:
         raise DemoError(f"suppressed aggregate expected 200 with suppressed_groups, got {suppressed.status}")
     disclosure = suppressed.body.get("disclosure_control") if isinstance(suppressed.body, dict) else None
-    suppressed_rows = disclosure.get("suppressed_rows") if isinstance(disclosure, dict) else None
+    suppressed_rows = suppressed_count(disclosure)
     if not isinstance(suppressed_rows, int) or suppressed_rows <= 0:
-        raise DemoError(f"suppressed aggregate expected suppressed_rows > 0, got {suppressed_rows!r}")
+        raise DemoError(f"suppressed aggregate expected suppression count > 0, got {suppressed_rows!r}")
     filtered_rows = aggregate_rows(suppressed.body)
     if filtered_rows:
         raise DemoError(f"suppressed aggregate filter expected no publishable rows, got {filtered_rows!r}")

@@ -86,6 +86,17 @@ curl_status() {
   curl "${args[@]}"
 }
 
+is_local_url() {
+  case "$1" in
+    http://127.0.0.1:*|http://localhost:*|http://[::1]:*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 evaluation_payload() {
   local target_id="$1"
   local identifier_scheme="$2"
@@ -242,9 +253,13 @@ import sys
 with open(sys.argv[1], encoding="utf-8") as fh:
     body = json.load(fh)
 disclosure = body.get("disclosure_control") if isinstance(body, dict) else None
-suppressed = disclosure.get("suppressed_rows") if isinstance(disclosure, dict) else None
+suppressed = None
+if isinstance(disclosure, dict):
+    suppressed = disclosure.get("suppressed_rows")
+    if suppressed is None:
+        suppressed = disclosure.get("suppressed_observations")
 if not isinstance(suppressed, int) or suppressed <= 0:
-    raise SystemExit(f"expected disclosure_control.suppressed_rows > 0, got {suppressed!r}: {body}")
+    raise SystemExit(f"expected disclosure_control suppression count > 0, got {suppressed!r}: {body}")
 PY
 }
 
@@ -278,9 +293,13 @@ else:
 if not isinstance(rows, list) or not rows:
     raise SystemExit(f"expected livestock aggregate to publish at least one row, got {rows!r}")
 disclosure = body.get("disclosure_control") if isinstance(body, dict) else None
-suppressed = disclosure.get("suppressed_rows") if isinstance(disclosure, dict) else None
+suppressed = None
+if isinstance(disclosure, dict):
+    suppressed = disclosure.get("suppressed_rows")
+    if suppressed is None:
+        suppressed = disclosure.get("suppressed_observations")
 if not isinstance(suppressed, int) or suppressed <= 0:
-    raise SystemExit(f"expected livestock aggregate suppressed_rows > 0, got {suppressed!r}")
+    raise SystemExit(f"expected livestock aggregate suppression count > 0, got {suppressed!r}")
 for row in rows:
     for forbidden in ("herd_id", "farmer_id", "animal_id", "tag_id", "livestock_holding_id"):
         if forbidden in row:
@@ -595,7 +614,7 @@ credential_artifact="$(find "${demo_dir}/output/agri-client" -maxdepth 1 -name "
 check "agricultural client issued credential artifact" json_has_key "${credential_artifact}" credential
 
 log_file="${output_dir}/agri-service-logs.txt"
-if docker compose -f "${compose_file}" logs --no-color agri-registry-relay nagdi-agriculture-notary > "${log_file}" 2>/dev/null; then
+if is_local_url "${relay_url}" && is_local_url "${notary_url}" && docker compose -f "${compose_file}" logs --no-color agri-registry-relay nagdi-agriculture-notary > "${log_file}" 2>/dev/null; then
   grep '"error_code":"auth.scope_denied"' "${log_file}" >/dev/null || fail "Relay denied audit event"
   grep '"decision":"evaluate"' "${log_file}" >/dev/null || fail "Notary evaluation audit event"
 else

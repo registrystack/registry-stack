@@ -17,6 +17,11 @@ x-hosted-domains:
   opencrvs-dci-notary: opencrvs-notary.lab.registrystack.org
 
 x-coolify-required-env:
+  - AGRI_AGGREGATE_READER_RAW
+  - AGRI_EVIDENCE_CLIENT_BEARER
+  - AGRI_EVIDENCE_ONLY_RAW
+  - AGRI_METADATA_CLIENT_RAW
+  - AGRI_ROW_READER_RAW
   - CIVIL_EVIDENCE_ONLY_HASH
   - CIVIL_EVIDENCE_ONLY_RAW
   - CIVIL_EVIDENCE_CLIENT_BEARER
@@ -332,6 +337,12 @@ services:
       SOCIAL_RELAY_URL: https://social-relay.lab.registrystack.org
       SHARED_EVIDENCE_URL: https://shared-notary.lab.registrystack.org
       SHARED_EVIDENCE_CLIENT_BEARER: ${SHARED_EVIDENCE_CLIENT_BEARER:-}
+      AGRI_EVIDENCE_URL: https://agriculture-notary.lab.registrystack.org
+      AGRI_EVIDENCE_CLIENT_BEARER: ${AGRI_EVIDENCE_CLIENT_BEARER:-}
+      AGRI_METADATA_CLIENT_RAW: ${AGRI_METADATA_CLIENT_RAW:-}
+      AGRI_EVIDENCE_ONLY_RAW: ${AGRI_EVIDENCE_ONLY_RAW:-}
+      AGRI_ROW_READER_RAW: ${AGRI_ROW_READER_RAW:-}
+      AGRI_AGGREGATE_READER_RAW: ${AGRI_AGGREGATE_READER_RAW:-}
     depends_on:
       config-loader:
         condition: service_completed_successfully

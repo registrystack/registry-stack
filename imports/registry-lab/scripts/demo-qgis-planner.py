@@ -58,7 +58,11 @@ def rows(body: Any) -> list[dict[str, Any]]:
 
 def disclosure_suppressed(body: Any) -> int:
     disclosure = body.get("disclosure_control") if isinstance(body, dict) else None
-    value = disclosure.get("suppressed_rows") if isinstance(disclosure, dict) else 0
+    value = 0
+    if isinstance(disclosure, dict):
+        value = disclosure.get("suppressed_rows")
+        if value is None:
+            value = disclosure.get("suppressed_observations")
     return value if isinstance(value, int) else 0
 
 

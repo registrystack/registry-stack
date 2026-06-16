@@ -44,6 +44,19 @@ REQUIRED_SERVICES = {
         "esignet",
         "esignet-ui",
     },
+    "social": {
+        "config-loader",
+        "redis",
+        "shared-eligibility-notary",
+        "social-protection-notary",
+        "social-protection-registry-relay",
+    },
+    "agri": {
+        "config-loader",
+        "redis",
+        "agri-registry-relay",
+        "nagdi-agriculture-notary",
+    },
     "walt": {
         "walt-postgres",
         "wallet-api",
@@ -67,6 +80,15 @@ REQUIRED_DOMAINS = {
         "esignet": f"esignet.{LAB_DOMAIN}",
         "esignet-ui": f"esignet-ui.{LAB_DOMAIN}",
     },
+    "social": {
+        "shared-eligibility-notary": f"shared-notary.{LAB_DOMAIN}",
+        "social-protection-notary": f"social-notary.{LAB_DOMAIN}",
+        "social-protection-registry-relay": f"social-relay.{LAB_DOMAIN}",
+    },
+    "agri": {
+        "agri-registry-relay": f"agri-relay.{LAB_DOMAIN}",
+        "nagdi-agriculture-notary": f"agriculture-notary.{LAB_DOMAIN}",
+    },
     "walt": {
         "caddy": f"wallet.{LAB_DOMAIN}",
     },
@@ -74,6 +96,11 @@ REQUIRED_DOMAINS = {
 
 REQUIRED_HOSTED_VARIABLES = {
     "registry-lab": {
+        "AGRI_AGGREGATE_READER_RAW",
+        "AGRI_EVIDENCE_CLIENT_BEARER",
+        "AGRI_EVIDENCE_ONLY_RAW",
+        "AGRI_METADATA_CLIENT_RAW",
+        "AGRI_ROW_READER_RAW",
         "REGISTRY_LAB_POSTGRES_PASSWORD",
         "CONFIG_REPO_REF",
         "ZITADEL_MASTERKEY",
@@ -142,6 +169,42 @@ REQUIRED_HOSTED_VARIABLES = {
     "esignet": {
         "REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD",
         "REGISTRY_LAB_ESIGNET_CLIENT_REDIRECT_URIS_JSON",
+    },
+    "social": {
+        "REGISTRY_NOTARY_AUDIT_HASH_SECRET",
+        "REGISTRY_NOTARY_ISSUER_JWK",
+        "REGISTRY_RELAY_AUDIT_HASH_SECRET",
+        "SHARED_CIVIL_EVIDENCE_SOURCE_RAW",
+        "SHARED_EVIDENCE_CLIENT_BEARER_HASH",
+        "SHARED_EVIDENCE_CLIENT_TOKEN_HASH",
+        "SHARED_HEALTH_EVIDENCE_SOURCE_RAW",
+        "SHARED_SOCIAL_EVIDENCE_SOURCE_HASH",
+        "SHARED_SOCIAL_EVIDENCE_SOURCE_RAW",
+        "SOCIAL_AGGREGATE_READER_HASH",
+        "SOCIAL_EVIDENCE_CLIENT_BEARER_HASH",
+        "SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH",
+        "SOCIAL_EVIDENCE_ONLY_HASH",
+        "SOCIAL_EVIDENCE_SOURCE_HASH",
+        "SOCIAL_EVIDENCE_SOURCE_RAW",
+        "SOCIAL_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET",
+        "SOCIAL_FEDERATION_RESPONSE_JWK",
+        "SOCIAL_METADATA_CLIENT_HASH",
+        "SOCIAL_ROW_READER_HASH",
+    },
+    "agri": {
+        "AGRI_AGGREGATE_READER_HASH",
+        "AGRI_EVIDENCE_CLIENT_BEARER_HASH",
+        "AGRI_EVIDENCE_CLIENT_TOKEN_HASH",
+        "AGRI_EVIDENCE_ONLY_HASH",
+        "AGRI_EVIDENCE_SOURCE_HASH",
+        "AGRI_EVIDENCE_SOURCE_RAW",
+        "AGRI_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET",
+        "AGRI_FEDERATION_RESPONSE_JWK",
+        "AGRI_METADATA_CLIENT_HASH",
+        "AGRI_ROW_READER_HASH",
+        "REGISTRY_NOTARY_AUDIT_HASH_SECRET",
+        "REGISTRY_NOTARY_ISSUER_JWK",
+        "REGISTRY_RELAY_AUDIT_HASH_SECRET",
     },
     "walt": {
         "WALT_DB_PASSWORD",
@@ -1145,7 +1208,7 @@ def service_block_references_variable(raw_text: str, service: str, variable: str
 
 
 def validate_config_loader_ref(artifact: str, services: dict[str, Any]) -> list[Issue]:
-    if artifact not in {"registry-lab", "esignet", "walt"}:
+    if artifact not in {"registry-lab", "esignet", "social", "agri", "walt"}:
         return []
     config_loader = services.get("config-loader")
     if not isinstance(config_loader, dict):
@@ -2602,6 +2665,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="hosted eSignet compose file",
     )
     parser.add_argument(
+        "--social-compose",
+        type=Path,
+        default=Path("compose.social-hosted.yaml"),
+        help="hosted social-protection compose file",
+    )
+    parser.add_argument(
+        "--agri-compose",
+        type=Path,
+        default=Path("compose.agri-hosted.yaml"),
+        help="hosted agriculture compose file",
+    )
+    parser.add_argument(
         "--walt-compose",
         type=Path,
         default=Path("compose.walt-hosted.yaml"),
@@ -2647,6 +2722,8 @@ def main(argv: list[str]) -> int:
     for artifact, path in (
         ("registry-lab", args.registry_lab_compose),
         ("esignet", args.esignet_compose),
+        ("social", args.social_compose),
+        ("agri", args.agri_compose),
         ("walt", args.walt_compose),
     ):
         if not path.exists():
