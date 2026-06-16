@@ -127,7 +127,7 @@ function comparisonPanel() {
 }
 
 function claimItems() {
-  const raw = state.metadata?.claim_service?.claims || state.metadata?.claims || state.metadata?.service?.claims || [];
+  const raw = state.metadata?.claim_service?.claims || state.metadata?.claim_service?.data || state.metadata?.claims || state.metadata?.data || state.metadata?.service?.claims || state.metadata?.service?.data || [];
   const items = normalizeCollection(raw);
   if (items.length) return items;
   return [{id: CIVIL_NOTARY_DEFAULT.claimId, label: "Vital Status Attestation"}];

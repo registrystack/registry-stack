@@ -146,6 +146,24 @@ def source_response(result: StepHttpResult) -> dict[str, Any]:
     }
 
 
+def claim_catalog_items(body: Any) -> list[Any]:
+    if not isinstance(body, dict):
+        return []
+    claims = body.get("claims")
+    if isinstance(claims, list):
+        return claims
+    data = body.get("data")
+    if isinstance(data, list):
+        return data
+    claim_service = body.get("claim_service")
+    if isinstance(claim_service, dict) and isinstance(claim_service.get("claims"), list):
+        return claim_service["claims"]
+    service = body.get("service")
+    if isinstance(service, dict) and isinstance(service.get("claims"), list):
+        return service["claims"]
+    return []
+
+
 def simulated_response(body: Any) -> dict[str, Any]:
     return {
         "status": "simulated",

@@ -10,6 +10,7 @@ from .common import (
     AGRI_PURPOSE,
     attestation_response,
     auth_header_pair,
+    claim_catalog_items,
     display_auth_header_pair,
     env_url,
     evaluation_body,
@@ -182,16 +183,17 @@ def _discover(step_id: str) -> dict[str, Any]:
             "response_source": {"note": "No local agriculture token configured, so the request was not sent."},
         }
     result = http_json("GET", url, real_headers)
-    claims = result.body.get("claims", []) if isinstance(result.body, dict) else []
+    claims = claim_catalog_items(result.body)
+    ok = ok_status(result.status) and bool(claims)
     return {
         "step_id": step_id,
         "friendly": {
-            "title": "The agriculture Notary advertises voucher attestations." if ok_status(result.status) else "Agriculture discovery needs attention.",
+            "title": "The agriculture Notary advertises voucher attestations." if ok else "Agriculture discovery needs attention.",
             "message": "The supplier can discover the attestation catalogue before asking about a farmer.",
-            "status": "done" if ok_status(result.status) else "needs_attention",
+            "status": "done" if ok else "needs_attention",
             "facts": [
                 {"label": "HTTP status", "value": result.status if result.status is not None else "No response"},
-                {"label": "Attestations advertised", "value": len(claims) if isinstance(claims, list) else "Check source"},
+                {"label": "Attestations advertised", "value": len(claims)},
                 {"label": "Availability", "value": "Hosted"},
             ],
         },

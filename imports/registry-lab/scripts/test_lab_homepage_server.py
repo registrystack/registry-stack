@@ -916,6 +916,11 @@ class ExplorerPageHtmlTest(unittest.TestCase):
         self.assertNotIn('document.addEventListener("click"', CLAIMS_EXPLORER_JS)
         self.assertNotIn('document.addEventListener("change"', CLAIMS_EXPLORER_JS)
 
+    def test_claims_explorer_js_accepts_data_catalogue_shape(self) -> None:
+        self.assertIn("state.metadata?.claim_service?.data", CLAIMS_EXPLORER_JS)
+        self.assertIn("state.metadata?.data", CLAIMS_EXPLORER_JS)
+        self.assertIn("state.metadata?.service?.data", CLAIMS_EXPLORER_JS)
+
     def test_claims_explorer_js_keeps_minimization_secondary(self) -> None:
         answer = CLAIMS_EXPLORER_JS.index("Answer")
         minimization = CLAIMS_EXPLORER_JS.index("Minimization details")
@@ -985,6 +990,12 @@ class ExplorerApiPayloadTest(unittest.TestCase):
         opencrvs_titles = {claim["id"]: claim["title"] for claim in opencrvs["claims"]}
         self.assertEqual(opencrvs_titles["opencrvs-birth-record-exists"], "Birth Registration Attestation")
         self.assertEqual(opencrvs_titles["opencrvs-age-band"], "Age Eligibility Attestation")
+
+        agriculture = server.claims_explorer.claim_metadata_payload(self.config, "agriculture-notary")["claim_service"]
+        self.assertEqual(agriculture["default_identifier_scheme"], "farmer_id")
+        self.assertEqual(agriculture["default_subject"], "FARMER-1001")
+        agri_claims = {claim["id"]: claim for claim in agriculture["claims"]}
+        self.assertEqual(agri_claims["eligible-for-climate-smart-input-voucher"]["source"]["lookup_field"], "farmer_id")
 
     def test_registry_metadata_tracks_pr65_relay_entities(self) -> None:
         civil = server.registry_explorer.registry_metadata_payload(self.config, "civil")["registry"]
@@ -1371,7 +1382,7 @@ class LabModePayloadTest(unittest.TestCase):
                 return False
 
             def read(self):
-                return b'{"claims":[{"id":"eligible-for-climate-smart-input-voucher"}]}'
+                return b'{"data":[{"id":"eligible-for-climate-smart-input-voucher"},{"id":"voucher-eligibility-reason-code"}]}'
 
         called = []
 
@@ -1388,6 +1399,8 @@ class LabModePayloadTest(unittest.TestCase):
             os.environ.pop("AGRI_EVIDENCE_CLIENT_BEARER", None)
             os.environ.pop("AGRI_EVIDENCE_URL", None)
         self.assertEqual(result["friendly"]["status"], "done")
+        advertised = next(fact["value"] for fact in result["friendly"]["facts"] if fact["label"] == "Attestations advertised")
+        self.assertEqual(advertised, 2)
         self.assertTrue(called)
         self.assertEqual(called[0].full_url, "https://agriculture-notary.lab.registrystack.org/v1/claims")
 
@@ -1603,12 +1616,15 @@ class InternalRequestSourceTest(unittest.TestCase):
                 return False
 
             def read(self):
-                return b'{"claims":["civil-record-present","eligible-for-combined-support"]}'
+                return b'{"data":["civil-record-present","eligible-for-combined-support"]}'
 
         with mock.patch.object(server.urllib.request, "urlopen", lambda req, timeout=None: Resp()):
             result = server.run_scenario_step(
                 server.enrich_config({"credentials": []}), "combined-support", "discover", lab_mode="local"
             )
+        self.assertEqual(result["friendly"]["status"], "done")
+        advertised = next(fact["value"] for fact in result["friendly"]["facts"] if fact["label"] == "Attestations advertised")
+        self.assertEqual(advertised, 2)
         self.assertTrue(result["request_source"].get("internal"), "combined-support discover must be internal")
 
     def test_combined_support_evaluate_step_request_source_is_internal(self) -> None:

@@ -10,6 +10,7 @@ from .attestations import attestation
 from .common import (
     attestation_response,
     auth_header_pair,
+    claim_catalog_items,
     configured_credential,
     display_auth_header_pair,
     http_json,
@@ -244,9 +245,7 @@ def _discover(config: dict[str, Any], step_id: str) -> dict[str, Any]:
     url = _url(config, "/v1/claims")
     real_headers, display_headers = _headers(config)
     result = http_json("GET", url, real_headers)
-    claims = []
-    if isinstance(result.body, dict):
-        claims = result.body.get("claims") or result.body.get("data") or []
+    claims = claim_catalog_items(result.body)
     claim_ids = {item.get("id") for item in claims if isinstance(item, dict)}
     programme_claims_present = all(claim in claim_ids for claim in PROGRAMME_CLAIMS)
     return {

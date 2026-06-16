@@ -10,6 +10,7 @@ from .common import (
     PURPOSE,
     attestation_response,
     auth_header_pair,
+    claim_catalog_items,
     display_auth_header_pair,
     env_url,
     evaluation_body,
@@ -192,16 +193,17 @@ def _discover(step_id: str) -> dict[str, Any]:
             "response_source": {"note": "No runtime token configured, so the request was not sent."},
         }
     result = http_json("GET", url, real_headers)
-    claims = result.body.get("claims", []) if isinstance(result.body, dict) else []
+    claims = claim_catalog_items(result.body)
+    ok = ok_status(result.status) and bool(claims)
     return {
         "step_id": step_id,
         "friendly": {
-            "title": "The Notary advertises combined attestations." if ok_status(result.status) else "Attestation discovery needs attention.",
+            "title": "The Notary advertises combined attestations." if ok else "Attestation discovery needs attention.",
             "message": "This catalog tells the caseworker which source evidence and final decision checks can be evaluated.",
-            "status": "done" if ok_status(result.status) else "needs_attention",
+            "status": "done" if ok else "needs_attention",
             "facts": [
                 {"label": "HTTP status", "value": result.status if result.status is not None else "No response"},
-                {"label": "Attestations advertised", "value": len(claims) if isinstance(claims, list) else "Check source"},
+                {"label": "Attestations advertised", "value": len(claims)},
                 {"label": "Availability", "value": "Hosted"},
             ],
         },
