@@ -74,7 +74,8 @@ assert_all_satisfied() {
 import json
 import sys
 
-body = json.load(open(sys.argv[1], encoding="utf-8"))
+with open(sys.argv[1], encoding="utf-8") as f:
+    body = json.load(f)
 results = body.get("claim_results") or body.get("results") or []
 if not results:
     raise SystemExit("no claim results in evaluation response")
