@@ -48,9 +48,9 @@ def story() -> dict[str, Any]:
         "short_title": "Agricultural Entitlement Attestation",
         "proves": "Workbook-backed registries can produce governed attestations with positive and negative controls.",
         "domain": "Agriculture",
-        "availability": "local-only",
-        "availability_state": {"state": "local-only", "label": "Local only", "runnable": False},
-        "availability_note": "Runs on the local lab profile with the agriculture services started (AGRI_EVIDENCE_CLIENT_BEARER).",
+        "availability": "hosted",
+        "availability_state": {"state": "hosted", "label": "Hosted", "runnable": True},
+        "availability_note": "",
         "intro": (
             "Amina Kone wants to redeem a climate-smart input voucher. The supplier needs eligibility evidence, "
             "not copies of farmer, parcel, entitlement, and redemption rows."
@@ -68,7 +68,7 @@ def story() -> dict[str, Any]:
         "proof_facts": [
             "The Notary returns entitlement and conflict facts as minimized evidence.",
             "Negative controls prove the answer is not a blanket approval.",
-            "Agriculture remains local-only until hosted validation is available.",
+            "Hosted agriculture endpoints are validated through the lab deploy smoke.",
         ],
         "boundary": {
             "allowed": "Request entitlement and conflict attestations.",
@@ -116,7 +116,7 @@ def story() -> dict[str, Any]:
             {"label": "Positive control", "value": "FARMER-1001 eligible"},
             {"label": "Negative control", "value": "FARMER-1003 already redeemed"},
             {"label": "Workbook exported", "value": "No"},
-            {"label": "Scenario availability", "value": "Local-only"},
+            {"label": "Scenario availability", "value": "Hosted"},
         ],
     }
 
@@ -192,7 +192,7 @@ def _discover(step_id: str) -> dict[str, Any]:
             "facts": [
                 {"label": "HTTP status", "value": result.status if result.status is not None else "No response"},
                 {"label": "Attestations advertised", "value": len(claims) if isinstance(claims, list) else "Check source"},
-                {"label": "Availability", "value": "Local-only"},
+                {"label": "Availability", "value": "Hosted"},
             ],
         },
         "request_source": request_source("GET", url, display_headers, internal=True),
