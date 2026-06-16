@@ -332,6 +332,9 @@ services:
       CONFIG_REPO_REF: ${CONFIG_REPO_REF:?set CONFIG_REPO_REF to the deployed registry-lab git ref}
       CIVIL_EVIDENCE_URL: http://civil-notary:8080
       CIVIL_EVIDENCE_CLIENT_BEARER: ${CIVIL_EVIDENCE_CLIENT_BEARER:-}
+      REGISTRY_LAB_UMAMI_WEBSITE_ID: ${REGISTRY_LAB_UMAMI_WEBSITE_ID:-}
+      REGISTRY_LAB_UMAMI_SCRIPT_SRC: ${REGISTRY_LAB_UMAMI_SCRIPT_SRC:-https://stats.registrystack.org/script.js}
+      REGISTRY_LAB_UMAMI_DOMAINS: ${REGISTRY_LAB_UMAMI_DOMAINS:-lab.registrystack.org}
       # The social relay and shared Notary run in the lab-social Coolify app, on a
       # separate docker network, so the homepage reaches them over public HTTPS.
       SOCIAL_RELAY_URL: https://social-relay.lab.registrystack.org

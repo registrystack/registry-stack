@@ -217,7 +217,7 @@ def scenario_cards_html(lab_mode: str = "hosted") -> str:
     )
 
 
-def scenario_page_html(scenario_id: str | None = None) -> bytes:
+def scenario_page_html(scenario_id: str | None = None, analytics_html: str = "") -> bytes:
     # The active scenario travels as a body data attribute (read by
     # scenarios.js) instead of an inline <script>, so the strict
     # script-src 'self' CSP holds.
@@ -286,6 +286,7 @@ def scenario_page_html(scenario_id: str | None = None) -> bytes:
       </nav>
     </div>
   </footer>
+{analytics_html}
   <script src="/static/scenarios.js"></script>
 </body>
 </html>

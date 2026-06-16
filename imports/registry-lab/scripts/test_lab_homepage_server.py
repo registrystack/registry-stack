@@ -818,6 +818,55 @@ class HomepageHtmlTest(unittest.TestCase):
         self.assertNotIn('id="scenario-grid"', self.html)
 
 
+class UmamiAnalyticsTest(unittest.TestCase):
+    """Umami is opt-in at runtime and keeps the default CSP locked down."""
+
+    def setUp(self) -> None:
+        self._saved = dict(os.environ)
+        for key in (
+            server.UMAMI_WEBSITE_ID_ENV,
+            server.UMAMI_SCRIPT_SRC_ENV,
+            server.UMAMI_DOMAINS_ENV,
+        ):
+            os.environ.pop(key, None)
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._saved)
+
+    def _csp(self) -> str:
+        return dict(server.security_headers())["Content-Security-Policy"]
+
+    def test_umami_script_is_absent_without_website_id(self) -> None:
+        self.assertEqual(server.umami_script_html(), "")
+        self.assertNotIn("stats.registrystack.org", server.homepage_html("Registry Lab").decode("utf-8"))
+        self.assertEqual(
+            self._csp(),
+            "default-src 'none'; style-src 'self'; script-src 'self'; "
+            "img-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
+            "base-uri 'none'; form-action 'none'",
+        )
+
+    def test_umami_script_uses_defaults_when_enabled(self) -> None:
+        os.environ[server.UMAMI_WEBSITE_ID_ENV] = "lab-site-id"
+        script = server.umami_script_html()
+        self.assertIn('src="https://stats.registrystack.org/script.js"', script)
+        self.assertIn('data-website-id="lab-site-id"', script)
+        self.assertIn('data-domains="lab.registrystack.org"', script)
+        csp = self._csp()
+        self.assertIn("script-src 'self' https://stats.registrystack.org", csp)
+        self.assertIn("connect-src 'self' https://stats.registrystack.org", csp)
+
+    def test_umami_values_are_escaped(self) -> None:
+        os.environ[server.UMAMI_WEBSITE_ID_ENV] = 'site-"id"'
+        os.environ[server.UMAMI_SCRIPT_SRC_ENV] = "https://stats.registrystack.org/script.js?x=\""
+        os.environ[server.UMAMI_DOMAINS_ENV] = 'lab.registrystack.org,"bad"'
+        script = server.umami_script_html()
+        self.assertIn("site-&quot;id&quot;", script)
+        self.assertIn("x=&quot;", script)
+        self.assertIn("lab.registrystack.org,&quot;bad&quot;", script)
+
+
 class ScenarioPageHtmlTest(unittest.TestCase):
     """The dedicated scenario page has a chooser plus progressive story pages."""
 
@@ -2458,6 +2507,13 @@ class SecurityHeadersTest(unittest.TestCase):
         import threading
         from http.server import ThreadingHTTPServer
 
+        cls._saved_env = dict(os.environ)
+        for key in (
+            server.UMAMI_WEBSITE_ID_ENV,
+            server.UMAMI_SCRIPT_SRC_ENV,
+            server.UMAMI_DOMAINS_ENV,
+        ):
+            os.environ.pop(key, None)
         cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.LabHomepageHandler)
         cls.port = cls.httpd.server_address[1]
         cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
@@ -2467,6 +2523,8 @@ class SecurityHeadersTest(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.httpd.shutdown()
         cls.httpd.server_close()
+        os.environ.clear()
+        os.environ.update(cls._saved_env)
 
     def _get(self, path: str):
         return urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=5)

@@ -55,6 +55,12 @@ STATIC_ASSETS: dict[str, str] = {
     "claims-explorer.js": "application/javascript; charset=utf-8",
 }
 
+DEFAULT_UMAMI_SCRIPT_SRC = "https://stats.registrystack.org/script.js"
+DEFAULT_UMAMI_DOMAINS = "lab.registrystack.org"
+UMAMI_WEBSITE_ID_ENV = "REGISTRY_LAB_UMAMI_WEBSITE_ID"
+UMAMI_SCRIPT_SRC_ENV = "REGISTRY_LAB_UMAMI_SCRIPT_SRC"
+UMAMI_DOMAINS_ENV = "REGISTRY_LAB_UMAMI_DOMAINS"
+
 
 def static_asset_bytes(name: str) -> bytes:
     """Read an allowlisted static asset by basename. Raises KeyError if not allowlisted."""
@@ -73,6 +79,32 @@ def favicon_svg() -> bytes:
         b' text-anchor="middle" fill="#ffffff">RS</text>'
         b"</svg>"
     )
+
+
+def umami_script_html() -> str:
+    website_id = os.environ.get(UMAMI_WEBSITE_ID_ENV, "").strip()
+    if not website_id:
+        return ""
+    script_src = os.environ.get(UMAMI_SCRIPT_SRC_ENV, DEFAULT_UMAMI_SCRIPT_SRC).strip() or DEFAULT_UMAMI_SCRIPT_SRC
+    domains = os.environ.get(UMAMI_DOMAINS_ENV, DEFAULT_UMAMI_DOMAINS).strip()
+    attrs = [
+        "defer",
+        f'src="{html.escape(script_src, quote=True)}"',
+        f'data-website-id="{html.escape(website_id, quote=True)}"',
+    ]
+    if domains:
+        attrs.append(f'data-domains="{html.escape(domains, quote=True)}"')
+    return "  <script " + " ".join(attrs) + "></script>\n"
+
+
+def umami_csp_origin() -> str:
+    if not os.environ.get(UMAMI_WEBSITE_ID_ENV, "").strip():
+        return ""
+    script_src = os.environ.get(UMAMI_SCRIPT_SRC_ENV, DEFAULT_UMAMI_SCRIPT_SRC).strip() or DEFAULT_UMAMI_SCRIPT_SRC
+    parsed = urlparse(script_src)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return ""
+    return f"{parsed.scheme}://{parsed.netloc}"
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -367,6 +399,7 @@ def homepage_html(title: str, lab_mode: str = "hosted") -> bytes:
       </nav>
     </div>
   </footer>
+{umami_script_html()}
   <script src="/static/homepage.js"></script>
 </body>
 </html>
@@ -448,21 +481,25 @@ def explorer_page_html(kind: str) -> bytes:
 
 
 
-# Browser-hardening headers on every response (parity with the relay's
-# restrictive CSP, registry-relay#87). The pages self-host all CSS/JS under
-# /static/ and fetch only same-origin /api/ endpoints, so 'self' covers
-# everything they need; anything else stays denied.
-SECURITY_HEADERS = (
-    (
-        "Content-Security-Policy",
-        "default-src 'none'; style-src 'self'; script-src 'self'; "
-        "img-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
-        "base-uri 'none'; form-action 'none'",
-    ),
-    ("X-Content-Type-Options", "nosniff"),
-    ("X-Frame-Options", "DENY"),
-    ("Referrer-Policy", "no-referrer"),
-)
+def security_headers() -> tuple[tuple[str, str], ...]:
+    # Browser-hardening headers on every response (parity with the relay's
+    # restrictive CSP, registry-relay#87). When Umami is disabled, the pages
+    # self-host all CSS/JS under /static/ and fetch only same-origin /api/
+    # endpoints. When Umami is enabled, add only the tracker origin.
+    umami_origin = umami_csp_origin()
+    script_src = "'self'" + (f" {umami_origin}" if umami_origin else "")
+    connect_src = "'self'" + (f" {umami_origin}" if umami_origin else "")
+    return (
+        (
+            "Content-Security-Policy",
+            "default-src 'none'; style-src 'self'; "
+            f"script-src {script_src}; img-src 'self'; connect-src {connect_src}; "
+            "frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+        ),
+        ("X-Content-Type-Options", "nosniff"),
+        ("X-Frame-Options", "DENY"),
+        ("Referrer-Policy", "no-referrer"),
+    )
 
 
 class LabHomepageHandler(BaseHTTPRequestHandler):
@@ -475,7 +512,7 @@ class LabHomepageHandler(BaseHTTPRequestHandler):
     sys_version = ""
 
     def end_headers(self) -> None:
-        for name, value in SECURITY_HEADERS:
+        for name, value in security_headers():
             self.send_header(name, value)
         super().end_headers()
 
@@ -511,13 +548,13 @@ class LabHomepageHandler(BaseHTTPRequestHandler):
             self.send_bytes(explorer_page_html("claims"), "text/html; charset=utf-8")
             return
         if path == "/scenarios":
-            self.send_bytes(scenario_page_html(), "text/html; charset=utf-8")
+            self.send_bytes(scenario_page_html(analytics_html=umami_script_html()), "text/html; charset=utf-8")
             return
         if path.startswith("/scenarios/"):
             scenario_id = path.removeprefix("/scenarios/").strip("/")
             if scenario_id:
                 self.send_bytes(
-                    scenario_page_html(scenario_id=scenario_id),
+                    scenario_page_html(scenario_id=scenario_id, analytics_html=umami_script_html()),
                     "text/html; charset=utf-8",
                 )
                 return
