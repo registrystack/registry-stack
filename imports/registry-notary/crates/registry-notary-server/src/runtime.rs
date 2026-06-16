@@ -2218,11 +2218,11 @@ fn public_target_input(path: &str) -> Option<Value> {
                 path.strip_prefix("target.attributes.")
                     .map(|name| ("attribute", name))
             })?;
+        if name.is_empty() || name.contains('*') {
+            return None;
+        }
         (kind, name, input_label(name))
     };
-    if name.is_empty() || name.contains('*') {
-        return None;
-    }
     Some(json!({
         "path": path,
         "kind": kind,
@@ -2233,13 +2233,17 @@ fn public_target_input(path: &str) -> Option<Value> {
 
 fn input_label(name: &str) -> String {
     let mut label = String::new();
-    for part in name.split('_').filter(|part| !part.is_empty()) {
+    for (index, part) in name.split('_').filter(|part| !part.is_empty()).enumerate() {
         if !label.is_empty() {
             label.push(' ');
         }
         let mut chars = part.chars();
         if let Some(first) = chars.next() {
-            label.extend(first.to_uppercase());
+            if index == 0 {
+                label.extend(first.to_uppercase());
+            } else {
+                label.push(first);
+            }
             label.push_str(chars.as_str());
         }
     }

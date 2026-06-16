@@ -64,9 +64,9 @@ the security allowlist.
 
 ## Claim Discovery Target Inputs
 
-`GET /v1/claims` and `GET /v1/claims/{id}` may include `target_inputs` when a
-claim has configured target matching. This block is request-contract metadata
-for clients that build evaluation forms. It is separate from CCCEV and OOTS:
+`GET /v1/claims` and `GET /v1/claims/{claim_id}` may include `target_inputs`
+when a claim has configured target matching. This block is request-contract
+metadata for clients that build evaluation forms. It is separate from CCCEV and OOTS:
 those describe evidence semantics and interoperability context, while
 `target_inputs` describes the target-side request paths a Notary evaluation can
 accept.
