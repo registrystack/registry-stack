@@ -2392,6 +2392,55 @@ fn dcat_profiles_render_separate_artifacts() {
 }
 
 #[test]
+fn breg_dcat_corporate_body_publisher_renders_controlled_scheme_reference() {
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(
+        r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: corporate-body-publisher
+  base_url: https://data.example.test
+  title: Corporate Body Publisher
+  publisher:
+    name: Directorate-General for Digital Services
+    iri: http://publications.europa.eu/resource/authority/corporate-body/DIGIT
+    authority_type: http://purl.org/adms/publishertype/NonProfitOrganisation
+datasets:
+  - id: dataset
+    title: Dataset
+    entities: []
+"#,
+    )
+    .expect("manifest parses");
+    let compiled = compile_manifest(&manifest).expect("compile");
+    let breg = render_breg_dcat_ap(&compiled);
+
+    assert_eq!(
+        breg["dcterms:publisher"]["@id"],
+        json!("http://publications.europa.eu/resource/authority/corporate-body/DIGIT")
+    );
+    assert_eq!(
+        breg["dcterms:publisher"]["skos:inScheme"],
+        json!("http://publications.europa.eu/resource/authority/corporate-body"),
+        "BRegDCAT-AP validator profiles expect MDR corporate-body publishers to carry their controlled scheme"
+    );
+}
+
+#[test]
+fn breg_dcat_declares_both_catalog_theme_taxonomies_for_semic_smoke_checks() {
+    let compiled = compile_manifest(&fixture("example-civil-registration")).expect("compile");
+    let breg = render_breg_dcat_ap(&compiled);
+
+    assert_eq!(
+        breg["dcat:themeTaxonomy"],
+        json!([
+            "http://publications.europa.eu/resource/authority/data-theme",
+            "http://eurovoc.europa.eu/100141"
+        ]),
+        "The BRegDCAT-AP smoke artifact intentionally exposes both EU data-theme and EuroVoc concept schemes"
+    );
+}
+
+#[test]
 fn compiled_metadata_filter_prunes_hidden_codelists() {
     let manifest = manifest_with_body(
         r#"
