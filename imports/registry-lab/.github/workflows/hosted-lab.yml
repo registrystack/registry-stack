@@ -6,6 +6,7 @@ on:
       - ".github/workflows/hosted-lab.yml"
       - "Dockerfile.static-metadata"
       - "compose.coolify.yaml"
+      - "compose.agri-hosted.yaml"
       - "compose.esignet-hosted.yaml"
       - "compose.social-hosted.yaml"
       - "compose.walt-hosted.yaml"
@@ -46,6 +47,7 @@ on:
       - ".github/workflows/hosted-lab.yml"
       - "Dockerfile.static-metadata"
       - "compose.coolify.yaml"
+      - "compose.agri-hosted.yaml"
       - "compose.esignet-hosted.yaml"
       - "compose.social-hosted.yaml"
       - "compose.walt-hosted.yaml"
@@ -105,6 +107,7 @@ jobs:
             .github/workflows/hosted-lab.yml \
             Dockerfile.static-metadata \
             compose.coolify.yaml \
+            compose.agri-hosted.yaml \
             compose.esignet-hosted.yaml \
             compose.social-hosted.yaml \
             compose.walt-hosted.yaml \
@@ -142,6 +145,7 @@ jobs:
       - name: Require hosted compose artifacts
         run: |
           test -f compose.coolify.yaml
+          test -f compose.agri-hosted.yaml
           test -f compose.esignet-hosted.yaml
           test -f compose.social-hosted.yaml
           test -f compose.walt-hosted.yaml
@@ -154,6 +158,9 @@ jobs:
 
       - name: Render hosted social compose
         run: docker compose -f compose.social-hosted.yaml config >/tmp/compose.social-hosted.config.yaml
+
+      - name: Render hosted agriculture compose
+        run: docker compose -f compose.agri-hosted.yaml config >/tmp/compose.agri-hosted.config.yaml
 
       - name: Render hosted walt compose
         env:
@@ -213,6 +220,7 @@ jobs:
           COOLIFY_HOSTED_ESIGNET_APP_UUID: ${{ vars.COOLIFY_HOSTED_ESIGNET_APP_UUID }}
           COOLIFY_HOSTED_WALT_APP_UUID: ${{ vars.COOLIFY_HOSTED_WALT_APP_UUID }}
           COOLIFY_HOSTED_SOCIAL_APP_UUID: ${{ vars.COOLIFY_HOSTED_SOCIAL_APP_UUID }}
+          COOLIFY_HOSTED_AGRI_APP_UUID: ${{ vars.COOLIFY_HOSTED_AGRI_APP_UUID }}
         run: |
           set -euo pipefail
           if [ -z "$COOLIFY_API_TOKEN" ]; then
@@ -221,7 +229,7 @@ jobs:
           fi
 
           missing=0
-          for name in COOLIFY_API_BASE_URL COOLIFY_REGISTRY_LAB_APP_UUID COOLIFY_HOSTED_ESIGNET_APP_UUID COOLIFY_HOSTED_WALT_APP_UUID COOLIFY_HOSTED_SOCIAL_APP_UUID; do
+          for name in COOLIFY_API_BASE_URL COOLIFY_REGISTRY_LAB_APP_UUID COOLIFY_HOSTED_ESIGNET_APP_UUID COOLIFY_HOSTED_WALT_APP_UUID COOLIFY_HOSTED_SOCIAL_APP_UUID COOLIFY_HOSTED_AGRI_APP_UUID; do
             if [ -z "${!name:-}" ]; then
               echo "::error::${name} is not configured."
               missing=1
@@ -242,6 +250,11 @@ jobs:
             --api-base-url "${api_base}" \
             --app-uuid "${COOLIFY_HOSTED_SOCIAL_APP_UUID}"
 
+          python3 scripts/check-coolify-required-env.py \
+            --compose compose.agri-hosted.yaml \
+            --api-base-url "${api_base}" \
+            --app-uuid "${COOLIFY_HOSTED_AGRI_APP_UUID}"
+
           # App deploy targets: "uuid|label|health_url|probe_attempts".
           # Health URLs mirror the x-hosted-domains headers in each compose file;
           # keep them in sync if a public domain changes. JVM-heavy apps get a
@@ -253,6 +266,7 @@ jobs:
             "${COOLIFY_HOSTED_ESIGNET_APP_UUID}|esignet|https://esignet.lab.registrystack.org|18"
             "${COOLIFY_HOSTED_WALT_APP_UUID}|walt|https://wallet.lab.registrystack.org|12"
             "${COOLIFY_HOSTED_SOCIAL_APP_UUID}|social|https://social-relay.lab.registrystack.org|18"
+            "${COOLIFY_HOSTED_AGRI_APP_UUID}|agri|https://agri-relay.lab.registrystack.org|18"
           )
 
           # Pre-flight, per app, before mutating anything:
