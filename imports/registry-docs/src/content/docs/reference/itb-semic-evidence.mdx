@@ -1,0 +1,69 @@
+---
+title: ITB and SEMIC evidence
+description: External ITB and SEMIC validation evidence for selected Registry Manifest and Registry Notary artifacts.
+wide: true
+status: current
+owner: registry-docs
+source_repos:
+  - registry-manifest
+  - registry-notary
+last_reviewed: "2026-06-15"
+doc_type: reference
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - shacl
+  - json-schema
+  - openapi
+---
+
+This page summarizes selected external validation evidence for Registry Manifest and Registry Notary.
+It is not a certification statement, and it does not claim every generated artifact or every runtime deployment has been tested.
+
+## Summary
+
+| Product | Artifact | External check | Result | Boundary |
+| --- | --- | --- | --- | --- |
+| Registry Manifest | Generated JSON Schema Draft 2020-12 files for the civil-registration fixture | ITB JSON validator, `any` domain, with the Draft 2020-12 metaschema embedded | `SUCCESS`, 0 errors, 0 warnings | Selected generated schemas only |
+| Registry Manifest | Generated DCAT JSON-LD for the civil-registration fixture | Public ITB/SEMIC SHACL validator, `dcatap.3_0_1_base0` | `SUCCESS`, 0 errors, 0 warnings | Selected DCAT artifact only |
+| Registry Manifest | Generated BRegDCAT-AP JSON-LD for the civil-registration fixture | Public ITB/SEMIC SHACL validator, `bregdcatap.2_0_0` and `bregdcatap.2_1_0` | `SUCCESS`, 0 errors, 2 warnings per profile | Passes with warnings; see the owning Manifest PR |
+| Registry Notary | Generated OpenAPI 3.1 document | ITB JSON validator against the OpenAPI 3.1 schema | `SUCCESS`, 0 errors, 0 warnings | OpenAPI hygiene only, not runtime GITB coverage |
+
+## Source links
+
+- Registry Manifest records the repeatable smoke path and warning boundary in
+  [jeremi/registry-manifest#27](https://github.com/jeremi/registry-manifest/pull/27).
+- Registry Notary records the protected discovery policy and GITB runtime-suite target in
+  [jeremi/registry-notary#245](https://github.com/jeremi/registry-notary/pull/245).
+- The Manifest follow-up issues for BRegDCAT warnings are
+  [publisher CorporateBodyRestriction](https://github.com/jeremi/registry-manifest/issues/23) and
+  [`dcat:themeTaxonomy`](https://github.com/jeremi/registry-manifest/issues/24).
+
+## What is not covered
+
+- Registry Notary runtime behavior has not been validated by a GITB scenario suite.
+- Registry Notary OpenAPI validation proves that the generated API document is structurally valid; it does not prove authenticated evaluation, credential issuance, federation replay handling, or SD-JWT VC verification.
+- Registry Manifest BRegDCAT-AP output passes the selected public validators with warnings.
+  The warning profiles differ on `dcat:themeTaxonomy`, so the warnings are documented rather than hidden.
+- The evidence applies to selected fixtures and profiles, not to every possible operator manifest or deployment.
+
+## Public wording
+
+Use restrained wording:
+
+- "Registry Manifest has external validation evidence for selected generated JSON Schema, DCAT, and BRegDCAT-AP artifacts."
+- "The selected BRegDCAT-AP artifact passes the public ITB/SEMIC validator profiles with warnings."
+- "Registry Notary OpenAPI validates as OpenAPI 3.1, but runtime GITB scenarios are not yet covered."
+
+Avoid:
+
+- "EU certified"
+- "Officially validated"
+- "Fully compliant"
+- Unqualified "conformant"
+
+## Next
+
+- Review the [standards register](../standards/) for the broader claim-level model.
+- Review the [contracts register](../contracts/) for machine-readable surfaces and their owning repos.
