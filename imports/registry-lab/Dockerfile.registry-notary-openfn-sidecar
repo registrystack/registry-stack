@@ -17,7 +17,7 @@ COPY --from=notary_src . .
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/workspace/target \
-    CARGO_TARGET_DIR=/workspace/target cargo build --release --locked -p registry-notary-openfn-sidecar \
+    CARGO_TARGET_DIR=/workspace/target cargo build --release --locked -p registry-notary-source-adapter-sidecar --bin registry-notary-openfn-sidecar \
     && cp /workspace/target/release/registry-notary-openfn-sidecar /usr/local/bin/registry-notary-openfn-sidecar
 
 FROM node:22-bookworm-slim AS runtime
@@ -27,14 +27,14 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/openfn
-COPY --from=notary_src crates/registry-notary-openfn-sidecar/workers/package.json ./package.json
-COPY --from=notary_src crates/registry-notary-openfn-sidecar/workers/package-lock.json ./package-lock.json
+COPY --from=notary_src crates/registry-notary-source-adapter-sidecar/workers/package.json ./package.json
+COPY --from=notary_src crates/registry-notary-source-adapter-sidecar/workers/package-lock.json ./package-lock.json
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 
 COPY --from=builder /usr/local/bin/registry-notary-openfn-sidecar /usr/local/bin/registry-notary-openfn-sidecar
-COPY --from=notary_src crates/registry-notary-openfn-sidecar/workers/openfn_worker.mjs ./openfn_worker.mjs
-COPY --from=notary_src crates/registry-notary-openfn-sidecar/examples/jobs/http-person-lookup.js ./jobs/http-person-lookup.js
-COPY --from=notary_src crates/registry-notary-openfn-sidecar/examples/mock-registry-server.mjs ./mock-registry-server.mjs
+COPY --from=notary_src crates/registry-notary-source-adapter-sidecar/workers/openfn_worker.mjs ./openfn_worker.mjs
+COPY --from=notary_src crates/registry-notary-source-adapter-sidecar/examples/jobs/http-person-lookup.js ./jobs/http-person-lookup.js
+COPY --from=notary_src crates/registry-notary-source-adapter-sidecar/examples/mock-registry-server.mjs ./mock-registry-server.mjs
 COPY config/openfn/jobs/dhis2-*.js ./jobs/
 
 USER node
