@@ -13,10 +13,17 @@ standards_referenced:
   - openapi
 ---
 
-Use this tutorial when you want to see how Registry Notary can evaluate claims
-from FHIR-shaped health data. You will run the Registry Lab FHIR profile, call
-the Notary evaluation API, and inspect the claim results produced from a local
-FHIR R4 fixture server.
+Use this tutorial when you want to inspect the full Registry Lab FHIR profile:
+the local FHIR fixture API, the private source adapter, and Registry Notary
+working together. You will call the Notary evaluation API and inspect the claim
+results produced from a local FHIR R4 fixture server.
+
+This is a lab topology walkthrough, not the shortest adopter quickstart. For a
+normal local project generated without cloning product repositories, use the
+[`registryctl` Registry API tutorial](../publish-spreadsheet-secured-registry-api/)
+or the [`registryctl` Notary tutorial](../verify-claim-registry-api/). The FHIR
+source-adapter profile is not scaffolded by `registryctl` yet, so this tutorial
+uses `registry-lab` directly.
 
 The FHIR path is useful when a health system already exposes FHIR resources and
 a delivery system needs a narrow answer, such as "coverage is active" or "this
@@ -35,7 +42,8 @@ You need:
 - A Registry Lab checkout with submodules.
 - Local demo credentials generated with the lab's fixture command.
 
-Clone Registry Lab if you do not already have it:
+Clone Registry Lab if you do not already have it. This is only needed for this
+full FHIR lab profile:
 
 ```sh
 git clone --recurse-submodules https://github.com/jeremi/registry-lab.git
@@ -212,6 +220,7 @@ just fhir-down
 
 ## Next
 
+- [Publish a secured registry API with `registryctl`](../publish-spreadsheet-secured-registry-api/)
+- [Verify a claim with Registry Notary and `registryctl`](../verify-claim-registry-api/)
 - [First run with Registry Lab](../first-run-with-registry-lab/)
-- [Verify a claim with Registry Notary](../verify-claim-registry-api/)
 - [Integration patterns](../../explanation/integration-patterns/)
