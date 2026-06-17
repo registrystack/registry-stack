@@ -44,7 +44,7 @@
           {
             "id": "lookup",
             "expression": "dhis2-health-lookup.js",
-            "expression_sha256": "sha256:c11a1a4db49e847e067c3f67d2879c8ca2a51e33a8e10bd4c1fe33846182f9f6",
+            "expression_sha256": "sha256:245161afe436d38318fbcf65a3685ac86d16ad96debe818410046be01f5000da",
             "adaptors": [
               "@openfn/language-http@7.3.1"
             ]

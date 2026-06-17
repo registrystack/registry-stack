@@ -18,11 +18,16 @@ execute(
       const trackedEntityId = lookupValue.startsWith(TRACKED_ENTITY_REF_PREFIX)
         ? lookupValue.slice(TRACKED_ENTITY_REF_PREFIX.length)
         : lookupValue;
-      return `/api/tracker/trackedEntities/${encodeURIComponent(trackedEntityId)}?fields=trackedEntity,orgUnit,attributes[attribute,value],enrollments[enrollment,program,status,enrolledAt,events[event,programStage,status,occurredAt,scheduledAt]]`;
+      return `/api/tracker/trackedEntities/${encodeURIComponent(trackedEntityId)}`;
     },
     {
-      headers: (state) => ({
-        Authorization: `Basic ${Buffer.from(`${state.configuration.username}:${state.configuration.password}`).toString('base64')}`,
+      query: {
+        fields:
+          'trackedEntity,orgUnit,attributes[attribute,value],enrollments[enrollment,program,status,enrolledAt,events[event,programStage,status,occurredAt,scheduledAt]]',
+      },
+      authentication: (state) => ({
+        username: state.configuration?.username,
+        password: state.configuration?.password,
       }),
       parseAs: 'json',
     },
