@@ -1407,7 +1407,11 @@ async fn startup_retries_smoke_lookup_within_liveness_window() {
         .expect("router should retry a transient smoke lookup response");
 
     let attempts = fs::read_to_string(attempt_log).expect("attempt log exists");
-    assert_eq!(attempts.matches("flaky-smoke").count(), 2);
+    let attempt_count = attempts
+        .lines()
+        .filter(|line| line.contains("flaky-smoke"))
+        .count();
+    assert_eq!(attempt_count, 2);
 }
 
 #[tokio::test]
