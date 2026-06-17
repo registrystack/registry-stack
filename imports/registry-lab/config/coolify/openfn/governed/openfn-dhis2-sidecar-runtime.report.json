@@ -15,7 +15,7 @@
     "config_hash": "sha256:bee640a8fac3b8dd8c87c75fd21a6c550742e1d7889b9d0015aa79a41900a561",
     "environment": "hosted-lab",
     "instance_id": "hosted-dhis2-openfn-sidecar",
-    "previous_config_hash": "sha256:3677335ccc50be1957a2fd076f1c1a7329d3be63f839afd4f5d123b4f6d107e4",
+    "previous_config_hash": "sha256:0069fbfebf5ad5ffcd7b46b28eccc470302ac4b0e1d62c81bf1e5d22c6adea4f",
     "product": "registry-notary-openfn-sidecar",
     "sequence": 2,
     "signer_kids": [
