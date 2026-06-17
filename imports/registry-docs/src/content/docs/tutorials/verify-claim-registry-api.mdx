@@ -75,6 +75,8 @@ my-first-api/
 `registryctl` keeps Relay and Notary credentials in `secrets/local.env`.
 The Relay and Notary runtime configs contain only fingerprint references, commitments, and
 environment variable names.
+This local demo uses generated API keys only; it does not require OIDC, eSignet, or an
+assisted-access service.
 
 The generated Compose file also starts a local Redis replay store for Notary readiness.
 It is part of the local demo runtime and does not require manual configuration.
