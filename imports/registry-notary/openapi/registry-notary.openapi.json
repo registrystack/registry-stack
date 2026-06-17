@@ -401,6 +401,193 @@
         ],
         "type": "object"
       },
+      "ClaimSummary": {
+        "additionalProperties": true,
+        "properties": {
+          "cccev": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            ]
+          },
+          "disclosure": {
+            "additionalProperties": false,
+            "properties": {
+              "allowed": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "default": {
+                "type": "string"
+              },
+              "downgrade": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "default",
+              "allowed",
+              "downgrade"
+            ],
+            "type": "object"
+          },
+          "evidence_type": {
+            "type": "string"
+          },
+          "evidence_type_iri": {
+            "format": "uri",
+            "type": "string"
+          },
+          "formats": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "oots": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            ]
+          },
+          "operations": {
+            "additionalProperties": false,
+            "properties": {
+              "batch_evaluate": {
+                "type": "boolean"
+              },
+              "evaluate": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "evaluate",
+              "batch_evaluate"
+            ],
+            "type": "object"
+          },
+          "subject_type": {
+            "type": "string"
+          },
+          "target_inputs": {
+            "description": "Safe request-input metadata for building evaluation targets. It exposes target-side paths and matching method labels, never connector, connection, dataset, entity, or source-field details.",
+            "items": {
+              "$ref": "#/components/schemas/ClaimTargetInputMethod"
+            },
+            "type": "array"
+          },
+          "title": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "version",
+          "subject_type",
+          "operations",
+          "formats",
+          "disclosure"
+        ],
+        "type": "object"
+      },
+      "ClaimTargetInput": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "id",
+              "identifier",
+              "attribute"
+            ],
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "description": "Target-side request path, for example target.identifiers.national_id or target.attributes.birthdate.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "kind",
+          "name",
+          "label"
+        ],
+        "type": "object"
+      },
+      "ClaimTargetInputGroup": {
+        "additionalProperties": false,
+        "properties": {
+          "inputs": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimTargetInput"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "inputs"
+        ],
+        "type": "object"
+      },
+      "ClaimTargetInputMethod": {
+        "additionalProperties": false,
+        "properties": {
+          "confidence": {
+            "description": "Policy-asserted confidence label for this target-input method.",
+            "type": "string"
+          },
+          "groups": {
+            "description": "OR-of-AND input groups. A request needs to satisfy one group.",
+            "items": {
+              "$ref": "#/components/schemas/ClaimTargetInputGroup"
+            },
+            "type": "array"
+          },
+          "method": {
+            "description": "Configured target-matching method label.",
+            "type": "string"
+          },
+          "policy_id": {
+            "description": "Stable target-matching policy identifier when configured.",
+            "type": "string"
+          },
+          "target_type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_type",
+          "method",
+          "confidence",
+          "groups"
+        ],
+        "type": "object"
+      },
       "ConfigApplyRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1011,6 +1198,21 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "ListClaimsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
         "type": "object"
       },
       "LocalTufConfigTargetRequest": {
@@ -3505,10 +3707,55 @@
                         "evaluate": true
                       },
                       "subject_type": "person",
+                      "target_inputs": [
+                        {
+                          "confidence": "high",
+                          "groups": [
+                            {
+                              "inputs": [
+                                {
+                                  "kind": "identifier",
+                                  "label": "Farmer id",
+                                  "name": "farmer_id",
+                                  "path": "target.identifiers.farmer_id"
+                                }
+                              ]
+                            },
+                            {
+                              "inputs": [
+                                {
+                                  "kind": "attribute",
+                                  "label": "Given name",
+                                  "name": "given_name",
+                                  "path": "target.attributes.given_name"
+                                },
+                                {
+                                  "kind": "attribute",
+                                  "label": "Family name",
+                                  "name": "family_name",
+                                  "path": "target.attributes.family_name"
+                                },
+                                {
+                                  "kind": "attribute",
+                                  "label": "Birthdate",
+                                  "name": "birthdate",
+                                  "path": "target.attributes.birthdate"
+                                }
+                              ]
+                            }
+                          ],
+                          "method": "exact_name_birthdate",
+                          "policy_id": "smallholder-demographic-v1",
+                          "target_type": "Person"
+                        }
+                      ],
                       "title": "Farmer under four hectares",
                       "version": "2026-05"
                     }
                   ]
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ListClaimsResponse"
                 }
               }
             },
@@ -3580,8 +3827,53 @@
                     "evaluate": true
                   },
                   "subject_type": "person",
+                  "target_inputs": [
+                    {
+                      "confidence": "high",
+                      "groups": [
+                        {
+                          "inputs": [
+                            {
+                              "kind": "identifier",
+                              "label": "Farmer id",
+                              "name": "farmer_id",
+                              "path": "target.identifiers.farmer_id"
+                            }
+                          ]
+                        },
+                        {
+                          "inputs": [
+                            {
+                              "kind": "attribute",
+                              "label": "Given name",
+                              "name": "given_name",
+                              "path": "target.attributes.given_name"
+                            },
+                            {
+                              "kind": "attribute",
+                              "label": "Family name",
+                              "name": "family_name",
+                              "path": "target.attributes.family_name"
+                            },
+                            {
+                              "kind": "attribute",
+                              "label": "Birthdate",
+                              "name": "birthdate",
+                              "path": "target.attributes.birthdate"
+                            }
+                          ]
+                        }
+                      ],
+                      "method": "exact_name_birthdate",
+                      "policy_id": "smallholder-demographic-v1",
+                      "target_type": "Person"
+                    }
+                  ],
                   "title": "Farmer under four hectares",
                   "version": "2026-05"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimSummary"
                 }
               }
             },
