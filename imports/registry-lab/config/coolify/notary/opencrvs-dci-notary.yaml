@@ -36,10 +36,10 @@ evidence:
   inline_batch_limit: 20
   source_connections:
     opencrvs_crvs:
-      base_url: https://register.farajaland-integration.opencrvs.dev
+      base_url: https://dci-crvs-api.farajaland-integration.opencrvs.dev
       source_auth:
         type: oauth2_client_credentials
-        token_url: https://register.farajaland-integration.opencrvs.dev/oauth2/client/token
+        token_url: https://dci-crvs-api.farajaland-integration.opencrvs.dev/oauth2/client/token
         client_id_env: OPENCRVS_DCI_CLIENT_ID
         client_secret_env: OPENCRVS_DCI_CLIENT_SECRET
         request_format: json
@@ -57,10 +57,10 @@ evidence:
           child_birth_date: /birth_date
           child_place_of_birth: /birth_place
     opencrvs_crvs_demographic:
-      base_url: https://register.farajaland-integration.opencrvs.dev
+      base_url: https://dci-crvs-api.farajaland-integration.opencrvs.dev
       source_auth:
         type: oauth2_client_credentials
-        token_url: https://register.farajaland-integration.opencrvs.dev/oauth2/client/token
+        token_url: https://dci-crvs-api.farajaland-integration.opencrvs.dev/oauth2/client/token
         client_id_env: OPENCRVS_DCI_CLIENT_ID
         client_secret_env: OPENCRVS_DCI_CLIENT_SECRET
         request_format: json

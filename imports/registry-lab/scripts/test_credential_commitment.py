@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
@@ -258,6 +259,37 @@ class CredentialCommitmentTest(unittest.TestCase):
             with self.subTest(config_path=config_path):
                 text = config_path.read_text(encoding="utf-8")
                 self.assertIn(f"commitment: {commitment}", text)
+
+    def test_opencrvs_hosted_config_uses_dci_api_host(self) -> None:
+        dci_api_host = "https://dci-crvs-api.farajaland-integration.opencrvs.dev"
+        old_host = "https://register.farajaland-integration.opencrvs.dev"
+
+        def leaf_values(value: object):
+            if isinstance(value, dict):
+                for nested in value.values():
+                    yield from leaf_values(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    yield from leaf_values(nested)
+            else:
+                yield str(value)
+
+        for config_path in (
+            REPO_ROOT / "config/notary/opencrvs-dci-notary.yaml",
+            REPO_ROOT / "config/coolify/notary/opencrvs-dci-notary.yaml",
+        ):
+            with self.subTest(config_path=config_path):
+                parsed = subprocess.run(
+                    ["ruby", "-ryaml", "-rjson", "-e", "puts JSON.dump(YAML.load_file(ARGV[0]))", str(config_path)],
+                    check=False,
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(parsed.returncode, 0, parsed.stderr)
+                config = json.loads(parsed.stdout)
+                values = list(leaf_values(config))
+                self.assertIn(dci_api_host, values)
+                self.assertNotIn(old_host, values)
 
 
 if __name__ == "__main__":
