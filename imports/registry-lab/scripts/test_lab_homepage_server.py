@@ -17,6 +17,7 @@ _spec = importlib.util.spec_from_file_location("lab_homepage_server", MODULE_PAT
 assert _spec and _spec.loader
 server = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(server)
+from lab_homepage_scenarios import common as scenario_common
 
 # The CSS/JS that used to be inlined in the page templates now lives in real static asset
 # files served from /static/<name>. Tests that assert on that CSS/JS read the asset files
@@ -188,6 +189,95 @@ class AuthSchemeTest(unittest.TestCase):
     def test_curl_example_defaults_to_bearer(self) -> None:
         cred = {"service_url": "https://n.example", "example": {"method": "GET", "path": "/p"}}
         self.assertIn("Authorization: Bearer tok", server.curl_example(cred, "tok"))
+
+
+class ClaimTargetInputMetadataTest(unittest.TestCase):
+    """Explorer request previews derive target shapes from Notary claim metadata."""
+
+    CLAIMS_BODY = {
+        "data": [
+            {
+                "id": "person-is-alive",
+                "target_inputs": [
+                    {
+                        "target_type": "Person",
+                        "method": "identifier_or_demographic",
+                        "confidence": "high",
+                        "groups": [
+                            {
+                                "inputs": [
+                                    {
+                                        "path": "target.identifiers.national_id",
+                                        "kind": "identifier",
+                                        "name": "national_id",
+                                        "label": "National id",
+                                    }
+                                ]
+                            },
+                            {
+                                "inputs": [
+                                    {
+                                        "path": "target.attributes.given_name",
+                                        "kind": "attribute",
+                                        "name": "given_name",
+                                        "label": "Given name",
+                                    },
+                                    {
+                                        "path": "target.attributes.family_name",
+                                        "kind": "attribute",
+                                        "name": "family_name",
+                                        "label": "Family name",
+                                    },
+                                    {
+                                        "path": "target.attributes.birthdate",
+                                        "kind": "attribute",
+                                        "name": "birthdate",
+                                        "label": "Birthdate",
+                                    },
+                                ]
+                            },
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+
+    def test_target_input_facts_render_discovered_options(self) -> None:
+        facts = scenario_common.target_input_facts(self.CLAIMS_BODY, ["person-is-alive"])
+        self.assertEqual(facts[0]["label"], "Target inputs")
+        self.assertEqual(facts[0]["value"], "National id OR Given name + Family name + Birthdate")
+        self.assertEqual(facts[1]["value"], "Published by Notary claim discovery")
+
+    def test_evaluation_body_uses_demographic_group_when_identifier_is_not_available(self) -> None:
+        profile = scenario_common.person_profile(
+            "",
+            attributes={"given_name": "Miguel", "family_name": "Santos", "birthdate": "2016-01-15"},
+        )
+        body, selection = scenario_common.evaluation_body_from_claim_metadata(
+            self.CLAIMS_BODY,
+            profile,
+            ["person-is-alive"],
+        )
+
+        self.assertEqual(selection["source"], "target_inputs")
+        self.assertEqual(selection["group"], "Given name + Family name + Birthdate")
+        self.assertEqual(
+            body["target"]["attributes"],
+            {"given_name": "Miguel", "family_name": "Santos", "birthdate": "2016-01-15"},
+        )
+        self.assertNotIn("identifiers", body["target"])
+
+    def test_evaluation_body_falls_back_for_legacy_notary_claims(self) -> None:
+        profile = scenario_common.person_profile("NID-1001")
+        body, selection = scenario_common.evaluation_body_from_claim_metadata(
+            {"claims": [{"id": "person-is-alive"}]},
+            profile,
+            ["person-is-alive"],
+        )
+
+        self.assertEqual(selection["source"], "identifier_fallback")
+        self.assertEqual(body["target"]["identifiers"], [{"scheme": "national_id", "value": "NID-1001"}])
 
 
 class StatusProbeHeaderTest(unittest.TestCase):
@@ -444,6 +534,7 @@ class ScenarioPayloadTest(unittest.TestCase):
             scenario_ids,
             [
                 "alive-proof",
+                "opencrvs-birth-demographics",
                 "wallet-credential",
                 "dhis2-programme-vc",
                 "social-aggregate",
@@ -452,11 +543,13 @@ class ScenarioPayloadTest(unittest.TestCase):
             ],
         )
         self.assertEqual(payload["default_scenario_id"], "alive-proof")
-        self.assertEqual(len(payload["scenarios"]), 6)
+        self.assertEqual(len(payload["scenarios"]), 7)
+        self.assertEqual(payload["scenarios"][1]["availability"], "hosted")
         self.assertEqual(payload["scenarios"][2]["availability"], "hosted")
         self.assertEqual(payload["scenarios"][3]["availability"], "hosted")
         self.assertEqual(payload["scenarios"][4]["availability"], "hosted")
         self.assertEqual(payload["scenarios"][5]["availability"], "hosted")
+        self.assertEqual(payload["scenarios"][6]["availability"], "hosted")
 
     def test_catalogue_exposes_attestation_metadata_and_availability_state(self) -> None:
         payload = server.scenario_payload(self._payload_config(), lab_mode="hosted")
@@ -786,6 +879,167 @@ class ScenarioPayloadTest(unittest.TestCase):
         self.assertEqual(result["request_source"]["method"], "SIMULATE")
         self.assertIn("[Ed25519 holder proof generated by Bruno, hidden in this playground]", str(result["request_source"]))
         self.assertIn("[holder-bound SD-JWT VC hidden]", str(result["response_source"]))
+
+
+class OpenCrvsBirthDemographicsScenarioTest(unittest.TestCase):
+    """OpenCRVS demographic lookup story: discover target_inputs, then evaluate without an ID."""
+
+    CLAIMS_BODY = {
+        "data": [
+            {
+                "id": "opencrvs-birth-record-exists-by-demographics",
+                "target_inputs": [
+                    {
+                        "target_type": "Person",
+                        "method": "configured_demographic_lookup",
+                        "groups": [
+                            {
+                                "inputs": [
+                                    {
+                                        "path": "target.attributes.given_name",
+                                        "kind": "attribute",
+                                        "name": "given_name",
+                                        "label": "Given name",
+                                    },
+                                    {
+                                        "path": "target.attributes.family_name",
+                                        "kind": "attribute",
+                                        "name": "family_name",
+                                        "label": "Family name",
+                                    },
+                                    {
+                                        "path": "target.attributes.birthdate",
+                                        "kind": "attribute",
+                                        "name": "birthdate",
+                                        "label": "Birthdate",
+                                    },
+                                ]
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+
+    def setUp(self) -> None:
+        self._saved = dict(os.environ)
+        os.environ["OPENCRVS_EVIDENCE_CLIENT_TOKEN"] = "opencrvs-token"
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._saved)
+
+    def _config(self) -> dict:
+        return server.enrich_config(
+            {
+                "credentials": [
+                    {
+                        "id": "opencrvs-api-key",
+                        "label": "OpenCRVS DCI Notary API key",
+                        "env": "OPENCRVS_EVIDENCE_CLIENT_TOKEN",
+                        "auth_scheme": "api_key",
+                        "service_url": "https://opencrvs.example",
+                        "example": {"method": "GET", "path": "/v1/claims"},
+                    }
+                ]
+            }
+        )
+
+    @staticmethod
+    def _json_resp(payload: dict, status: int = 200):
+        class Resp:
+            headers = {"Content-Type": "application/json"}
+
+            def __init__(self, body: dict, code: int):
+                self._body = body
+                self.status = code
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return json.dumps(self._body).encode("utf-8")
+
+        return Resp(payload, status)
+
+    def test_story_shape_is_hosted_opencrvs_demographic_flow(self) -> None:
+        story = server.scenario_payload(self._config(), "opencrvs-birth-demographics")["story"]
+        self.assertEqual(story["id"], "opencrvs-birth-demographics")
+        self.assertEqual(story["availability"], "hosted")
+        self.assertEqual([step["id"] for step in story["steps"]], ["discover", "lookup"])
+        self.assertEqual(story["lookup_profile"]["id"], "by-demographics")
+        preview = story["steps"][1]["request_preview"]
+        self.assertEqual(preview["target_input_selection"]["group"], "Given name + Family name + Birthdate")
+        self.assertEqual(
+            preview["body"]["target"]["attributes"],
+            {"given_name": "Miguel", "family_name": "Santos", "birthdate": "2016-01-15"},
+        )
+        self.assertNotIn("identifiers", preview["body"]["target"])
+
+    def test_discover_step_reports_name_and_dob_contract(self) -> None:
+        captured = {}
+
+        def fake(req, timeout=None):
+            captured["req"] = req
+            return self._json_resp(self.CLAIMS_BODY)
+
+        with mock.patch.object(server.urllib.request, "urlopen", fake):
+            result = server.run_scenario_step(self._config(), "opencrvs-birth-demographics", "discover")
+
+        self.assertEqual(result["friendly"]["status"], "done")
+        self.assertEqual(captured["req"].full_url, "https://opencrvs.example/v1/claims")
+        self.assertEqual(captured["req"].get_header("X-api-key"), "opencrvs-token")
+        facts = {item["label"]: item["value"] for item in result["friendly"]["facts"]}
+        self.assertEqual(facts["Target inputs"], "Given name + Family name + Birthdate")
+        self.assertEqual(facts["Input metadata"], "Published by Notary claim discovery")
+
+    def test_lookup_step_posts_demographic_attributes_without_identifier(self) -> None:
+        captured = []
+
+        def fake(req, timeout=None):
+            captured.append(req)
+            if req.full_url.endswith("/v1/claims"):
+                return self._json_resp(self.CLAIMS_BODY)
+            return self._json_resp(
+                {"results": [{"claim_id": "opencrvs-birth-record-exists-by-demographics", "value": True}]}
+            )
+
+        with mock.patch.object(server.urllib.request, "urlopen", fake):
+            result = server.run_scenario_step(self._config(), "opencrvs-birth-demographics", "lookup")
+
+        self.assertEqual(result["friendly"]["status"], "done")
+        self.assertEqual([req.full_url for req in captured], ["https://opencrvs.example/v1/claims", "https://opencrvs.example/v1/evaluations"])
+        self.assertEqual(captured[1].get_header("X-api-key"), "opencrvs-token")
+        body = json.loads(captured[1].data.decode("utf-8"))
+        self.assertEqual(body["claims"], ["opencrvs-birth-record-exists-by-demographics"])
+        self.assertEqual(body["disclosure"], "value")
+        self.assertEqual(
+            body["target"]["attributes"],
+            {"given_name": "Miguel", "family_name": "Santos", "birthdate": "2016-01-15"},
+        )
+        self.assertNotIn("identifiers", body["target"])
+        facts = {item["label"]: item["value"] for item in result["friendly"]["facts"]}
+        self.assertEqual(facts["Identifier sent"], "No")
+
+    def test_lookup_step_does_not_post_without_published_target_inputs(self) -> None:
+        captured = []
+
+        def fake(req, timeout=None):
+            captured.append(req)
+            return self._json_resp({"data": [{"id": "opencrvs-birth-record-exists-by-demographics"}]})
+
+        with mock.patch.object(server.urllib.request, "urlopen", fake):
+            result = server.run_scenario_step(self._config(), "opencrvs-birth-demographics", "lookup")
+
+        self.assertEqual(result["friendly"]["status"], "needs_attention")
+        self.assertEqual([req.full_url for req in captured], ["https://opencrvs.example/v1/claims"])
+        facts = {item["label"]: item["value"] for item in result["friendly"]["facts"]}
+        self.assertEqual(facts["Evaluation sent"], "No")
+        self.assertEqual(facts["Target inputs"], "Legacy identifier fallback")
 
 
 class HomepageHtmlTest(unittest.TestCase):
@@ -1776,6 +2030,9 @@ class InternalRequestSourceTest(unittest.TestCase):
 
     def test_scenario_page_html_contains_internal_note_branch(self) -> None:
         self.assertIn("value.internal", SCENARIOS_JS, "renderRequestSource must branch on value.internal")
+        self.assertIn("target_input_selection", SCENARIOS_JS, "renderRequestSource must show target input metadata")
+        self.assertIn("renderInputContract", SCENARIOS_JS, "renderStep must show the target input contract outside JSON")
+        self.assertIn("data-input-contract-for", SCENARIOS_JS, "runStep must be able to refresh the visible input contract")
         self.assertIn("Internal lab call.", SCENARIOS_JS, "renderRequestSource must render the internal-note text")
 
     def test_scenario_page_html_internal_branch_suppresses_curl_button(self) -> None:
