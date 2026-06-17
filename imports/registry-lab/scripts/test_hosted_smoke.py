@@ -88,7 +88,7 @@ def base_routes() -> dict[tuple[str, str], Any]:
                 "default_scenario_id": "alive-proof",
                 "scenarios": [
                     {"id": "alive-proof", "steps": 3},
-                    {"id": "opencrvs-birth-demographics", "steps": 2},
+                    {"id": "civil-birth-demographics", "steps": 2},
                     {"id": "wallet-credential", "steps": 5},
                     {"id": "dhis2-programme-vc", "steps": 6},
                     {"id": "social-aggregate", "steps": 4},
@@ -112,7 +112,7 @@ def base_routes() -> dict[tuple[str, str], Any]:
             200,
             {"story": {"steps": [{"id": "discover"}, {"id": "prepare-evidence"}, {"id": "deny-row"}]}},
         ),
-        ("GET", "/api/scenarios/opencrvs-birth-demographics.json"): (
+        ("GET", "/api/scenarios/civil-birth-demographics.json"): (
             200,
             {"story": {"steps": [{"id": "discover"}, {"id": "lookup"}]}},
         ),
@@ -320,7 +320,7 @@ class HostedSmokeTest(unittest.TestCase):
 
         self.assertEqual(summary["credential_smoke"], "skipped")
         self.assertEqual(summary["scenarios"]["alive-proof"]["deny-row"], "denied_as_expected")
-        self.assertEqual(summary["scenarios"]["opencrvs-birth-demographics"]["lookup"], "done")
+        self.assertEqual(summary["scenarios"]["civil-birth-demographics"]["lookup"], "done")
         self.assertEqual(summary["scenarios"]["social-aggregate"]["deny-row-with-aggregate"], "denied_as_expected")
         self.assertEqual(summary["scenarios"]["combined-support"]["final-positive"], "done")
         self.assertEqual(summary["scenarios"]["agriculture-voucher"]["positive-voucher"], "done")
@@ -329,7 +329,7 @@ class HostedSmokeTest(unittest.TestCase):
         self.assertEqual(summary["explorers"]["registries"]["social-protection"]["aggregate_records"], 1)
         requested_paths = [path for _, path, _ in server.requests]
         self.assertIn("/api/scenarios/alive-proof/discover", requested_paths)
-        self.assertIn("/api/scenarios/opencrvs-birth-demographics/lookup", requested_paths)
+        self.assertIn("/api/scenarios/civil-birth-demographics/lookup", requested_paths)
         self.assertIn("/api/scenarios/wallet-credential/credential-preview", requested_paths)
         self.assertIn("/api/scenarios/social-aggregate/read-aggregate", requested_paths)
         self.assertIn("/api/scenarios/combined-support/final-positive", requested_paths)
@@ -349,7 +349,7 @@ class HostedSmokeTest(unittest.TestCase):
         with StubServer(routes) as server:
             summary = hosted_smoke.run_smoke(hosted_smoke.SmokeConfig(base_url=server.url))
 
-        self.assertEqual(summary["stories"]["opencrvs-birth-demographics"], 2)
+        self.assertEqual(summary["stories"]["civil-birth-demographics"], 2)
 
     def test_none_registry_defaults_fail_without_none_url_requests(self) -> None:
         routes = base_routes()

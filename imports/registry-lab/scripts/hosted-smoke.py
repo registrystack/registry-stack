@@ -43,7 +43,7 @@ DHIS2_PROGRAMME_CLAIMS = [
 
 EXPECTED_STEPS = {
     "alive-proof": ["discover", "prepare-evidence", "deny-row"],
-    "opencrvs-birth-demographics": ["discover", "lookup"],
+    "civil-birth-demographics": ["discover", "lookup"],
     "wallet-credential": ["issuer-metadata", "credential-offer", "holder-key", "nonce", "credential-preview"],
     "dhis2-programme-vc": [
         "discover",
@@ -76,7 +76,7 @@ EXPECTED_STEP_STATUSES = {
         "prepare-evidence": "done",
         "deny-row": "denied_as_expected",
     },
-    "opencrvs-birth-demographics": {
+    "civil-birth-demographics": {
         "discover": "done",
         "lookup": "done",
     },

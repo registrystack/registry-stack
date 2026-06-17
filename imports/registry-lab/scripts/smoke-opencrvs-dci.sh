@@ -191,7 +191,6 @@ wait_http "OpenCRVS DCI notary discovery" "${notary_url}/.well-known/evidence-se
 
 evaluation_body="${output_dir}/evaluation.json"
 summary_body="${output_dir}/summary.json"
-demographic_body="${output_dir}/demographic-evaluation.json"
 vc_evaluation_body="${output_dir}/vc-evaluation.json"
 credential_body="${output_dir}/credential.json"
 credential_summary_body="${output_dir}/credential-summary.json"
@@ -267,48 +266,6 @@ json.dump(summary, open(target, "w", encoding="utf-8"), indent=2)
 PY
 
 cat "${summary_body}"
-
-child_given_name="$(jq -er '.claims[] | select(.claim_id == "opencrvs-child-given-name") | .value' "${summary_body}")"
-child_family_name="$(jq -er '.claims[] | select(.claim_id == "opencrvs-child-family-name") | .value' "${summary_body}")"
-child_birthdate="$(jq -er '.claims[] | select(.claim_id == "opencrvs-child-date-of-birth") | .value' "${summary_body}")"
-demographic_payload="$(
-  jq -nc \
-    --arg given_name "${child_given_name}" \
-    --arg family_name "${child_family_name}" \
-    --arg birthdate "${child_birthdate}" \
-    '{
-      target: {
-        type: "Person",
-        attributes: {
-          given_name: $given_name,
-          family_name: $family_name,
-          birthdate: $birthdate
-        }
-      },
-      claims: ["opencrvs-birth-record-exists-by-demographics"],
-      disclosure: "value",
-      format: "application/vnd.registry-notary.claim-result+json"
-    }'
-)"
-demographic_http_status="$(
-  curl -sS \
-  -X POST "${notary_url}/v1/evaluations" \
-  -H "x-api-key: ${OPENCRVS_EVIDENCE_CLIENT_TOKEN}" \
-  -H "content-type: application/json" \
-  -H "data-purpose: https://demo.example.gov/purpose/opencrvs-dci-lab" \
-  -H "x-request-id: ${correlation_id}-demographic" \
-  -o "${demographic_body}" \
-    -w "%{http_code}" \
-  --data-raw "${demographic_payload}"
-)"
-if [[ "${demographic_http_status}" =~ ^2[0-9][0-9]$ ]]; then
-  jq -er '
-    .results[0].claim_id == "opencrvs-birth-record-exists-by-demographics"
-    and .results[0].value == true
-  ' "${demographic_body}" >/dev/null
-else
-  printf "\nOpenCRVS demographic lookup returned HTTP %s; continuing to VC issuance. See %s.\n" "${demographic_http_status}" "${demographic_body}"
-fi
 
 vc_payload="$(
   jq -nc --arg subject "${subject_uin}" '{

@@ -46,6 +46,16 @@ evidence:
         field_paths:
           national_id: /person/national_id
           deceased: /person/deceased
+    civil_demographic:
+      base_url: http://civil-registry-relay:8080
+      allow_insecure_private_network: true
+      token_env: CIVIL_EVIDENCE_SOURCE_RAW
+      dci:
+        search_path: /dci/crvs/registry/sync/search
+        query_type: expression
+        records_path: /message/search_response/0/data/reg_records
+        field_paths:
+          deceased: /person/deceased
   claims:
     - id: person-is-alive
       title: Vital Status Attestation
@@ -65,6 +75,60 @@ evidence:
             field: NATIONAL_ID
             op: eq
             cardinality: one
+          fields:
+            deceased:
+              field: deceased
+              type: boolean
+              required: true
+      rule:
+        type: cel
+        expression: "source.civil.deceased == false"
+      disclosure:
+        default: predicate
+        allowed:
+          - predicate
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+    - id: civil-person-is-alive-by-demographics
+      title: Vital Status Attestation by demographics
+      version: 2026-05
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        civil:
+          connector: dci
+          connection: civil_demographic
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person
+          lookup:
+            input: target.attributes.given_name
+            field: given_name
+            op: eq
+            cardinality: one
+          query_fields:
+            - input: target.attributes.given_name
+              field: given_name
+              op: eq
+            - input: target.attributes.family_name
+              field: surname
+              op: eq
+            - input: target.attributes.birthdate
+              field: birth_date
+              op: eq
+          matching:
+            target_type: Person
+            method: configured_demographic_lookup
+            sufficient_target_inputs:
+              - - target.attributes.given_name
+                - target.attributes.family_name
+                - target.attributes.birthdate
+            allowed_target_inputs:
+              - target.attributes.given_name
+              - target.attributes.family_name
+              - target.attributes.birthdate
           fields:
             deceased:
               field: deceased

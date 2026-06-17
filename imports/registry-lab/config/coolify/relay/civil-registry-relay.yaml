@@ -85,6 +85,8 @@ standards:
           UIN: national_id
           NIN: national_id
         expression_fields:
+          given_name: given_name
+          surname: surname
           birth_date: birth_date
           life_stage: life_stage
           deceased: deceased

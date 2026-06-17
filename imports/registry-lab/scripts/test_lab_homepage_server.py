@@ -534,7 +534,7 @@ class ScenarioPayloadTest(unittest.TestCase):
             scenario_ids,
             [
                 "alive-proof",
-                "opencrvs-birth-demographics",
+                "civil-birth-demographics",
                 "wallet-credential",
                 "dhis2-programme-vc",
                 "social-aggregate",
@@ -881,13 +881,13 @@ class ScenarioPayloadTest(unittest.TestCase):
         self.assertIn("[holder-bound SD-JWT VC hidden]", str(result["response_source"]))
 
 
-class OpenCrvsBirthDemographicsScenarioTest(unittest.TestCase):
-    """OpenCRVS demographic lookup story: discover target_inputs, then evaluate without an ID."""
+class CivilBirthDemographicsScenarioTest(unittest.TestCase):
+    """Civil Relay demographic lookup story: discover target_inputs, then evaluate without an ID."""
 
     CLAIMS_BODY = {
         "data": [
             {
-                "id": "opencrvs-birth-record-exists-by-demographics",
+                "id": "civil-person-is-alive-by-demographics",
                 "target_inputs": [
                     {
                         "target_type": "Person",
@@ -924,7 +924,8 @@ class OpenCrvsBirthDemographicsScenarioTest(unittest.TestCase):
 
     def setUp(self) -> None:
         self._saved = dict(os.environ)
-        os.environ["OPENCRVS_EVIDENCE_CLIENT_TOKEN"] = "opencrvs-token"
+        os.environ["CIVIL_EVIDENCE_CLIENT_BEARER"] = "notary-token"
+        os.environ["CIVIL_EVIDENCE_URL"] = "https://notary.example"
 
     def tearDown(self) -> None:
         os.environ.clear()
@@ -935,11 +936,11 @@ class OpenCrvsBirthDemographicsScenarioTest(unittest.TestCase):
             {
                 "credentials": [
                     {
-                        "id": "opencrvs-api-key",
-                        "label": "OpenCRVS DCI Notary API key",
-                        "env": "OPENCRVS_EVIDENCE_CLIENT_TOKEN",
-                        "auth_scheme": "api_key",
-                        "service_url": "https://opencrvs.example",
+                        "id": "civil-notary-evidence",
+                        "label": "Civil Notary evidence bearer",
+                        "env": "CIVIL_EVIDENCE_CLIENT_BEARER",
+                        "auth_scheme": "bearer",
+                        "service_url": "https://notary.example",
                         "example": {"method": "GET", "path": "/v1/claims"},
                     }
                 ]
@@ -966,9 +967,9 @@ class OpenCrvsBirthDemographicsScenarioTest(unittest.TestCase):
 
         return Resp(payload, status)
 
-    def test_story_shape_is_hosted_opencrvs_demographic_flow(self) -> None:
-        story = server.scenario_payload(self._config(), "opencrvs-birth-demographics")["story"]
-        self.assertEqual(story["id"], "opencrvs-birth-demographics")
+    def test_story_shape_is_hosted_civil_demographic_flow(self) -> None:
+        story = server.scenario_payload(self._config(), "civil-birth-demographics")["story"]
+        self.assertEqual(story["id"], "civil-birth-demographics")
         self.assertEqual(story["availability"], "hosted")
         self.assertEqual([step["id"] for step in story["steps"]], ["discover", "lookup"])
         self.assertEqual(story["lookup_profile"]["id"], "by-demographics")
@@ -988,11 +989,11 @@ class OpenCrvsBirthDemographicsScenarioTest(unittest.TestCase):
             return self._json_resp(self.CLAIMS_BODY)
 
         with mock.patch.object(server.urllib.request, "urlopen", fake):
-            result = server.run_scenario_step(self._config(), "opencrvs-birth-demographics", "discover")
+            result = server.run_scenario_step(self._config(), "civil-birth-demographics", "discover")
 
         self.assertEqual(result["friendly"]["status"], "done")
-        self.assertEqual(captured["req"].full_url, "https://opencrvs.example/v1/claims")
-        self.assertEqual(captured["req"].get_header("X-api-key"), "opencrvs-token")
+        self.assertEqual(captured["req"].full_url, "https://notary.example/v1/claims")
+        self.assertEqual(captured["req"].get_header("Authorization"), "Bearer notary-token")
         facts = {item["label"]: item["value"] for item in result["friendly"]["facts"]}
         self.assertEqual(facts["Target inputs"], "Given name + Family name + Birthdate")
         self.assertEqual(facts["Input metadata"], "Published by Notary claim discovery")
@@ -1005,18 +1006,18 @@ class OpenCrvsBirthDemographicsScenarioTest(unittest.TestCase):
             if req.full_url.endswith("/v1/claims"):
                 return self._json_resp(self.CLAIMS_BODY)
             return self._json_resp(
-                {"results": [{"claim_id": "opencrvs-birth-record-exists-by-demographics", "value": True}]}
+                {"results": [{"claim_id": "civil-person-is-alive-by-demographics", "satisfied": True}]}
             )
 
         with mock.patch.object(server.urllib.request, "urlopen", fake):
-            result = server.run_scenario_step(self._config(), "opencrvs-birth-demographics", "lookup")
+            result = server.run_scenario_step(self._config(), "civil-birth-demographics", "lookup")
 
         self.assertEqual(result["friendly"]["status"], "done")
-        self.assertEqual([req.full_url for req in captured], ["https://opencrvs.example/v1/claims", "https://opencrvs.example/v1/evaluations"])
-        self.assertEqual(captured[1].get_header("X-api-key"), "opencrvs-token")
+        self.assertEqual([req.full_url for req in captured], ["https://notary.example/v1/claims", "https://notary.example/v1/evaluations"])
+        self.assertEqual(captured[1].get_header("Authorization"), "Bearer notary-token")
         body = json.loads(captured[1].data.decode("utf-8"))
-        self.assertEqual(body["claims"], ["opencrvs-birth-record-exists-by-demographics"])
-        self.assertEqual(body["disclosure"], "value")
+        self.assertEqual(body["claims"], ["civil-person-is-alive-by-demographics"])
+        self.assertEqual(body["disclosure"], "predicate")
         self.assertEqual(
             body["target"]["attributes"],
             {"given_name": "Miguel", "family_name": "Santos", "birthdate": "2016-01-15"},
@@ -1030,13 +1031,13 @@ class OpenCrvsBirthDemographicsScenarioTest(unittest.TestCase):
 
         def fake(req, timeout=None):
             captured.append(req)
-            return self._json_resp({"data": [{"id": "opencrvs-birth-record-exists-by-demographics"}]})
+            return self._json_resp({"data": [{"id": "civil-person-is-alive-by-demographics"}]})
 
         with mock.patch.object(server.urllib.request, "urlopen", fake):
-            result = server.run_scenario_step(self._config(), "opencrvs-birth-demographics", "lookup")
+            result = server.run_scenario_step(self._config(), "civil-birth-demographics", "lookup")
 
         self.assertEqual(result["friendly"]["status"], "needs_attention")
-        self.assertEqual([req.full_url for req in captured], ["https://opencrvs.example/v1/claims"])
+        self.assertEqual([req.full_url for req in captured], ["https://notary.example/v1/claims"])
         facts = {item["label"]: item["value"] for item in result["friendly"]["facts"]}
         self.assertEqual(facts["Evaluation sent"], "No")
         self.assertEqual(facts["Target inputs"], "Legacy identifier fallback")
