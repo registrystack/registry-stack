@@ -49,7 +49,7 @@ sources:
             - "@openfn/language-http@7.3.1"
     credential_env: OPENFN_DHIS2_DEMO_CREDENTIAL_JSON
     allowed_base_urls:
-      - https://play.im.dhis2.org/stable-2-43-0
+      - https://play.im.dhis2.org/stable-2-43-0-1
     smoke_lookup:
       field: tracked_entity
       value: PQfMcpmXeFE
