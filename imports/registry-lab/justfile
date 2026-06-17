@@ -137,6 +137,22 @@ openfn:
 dhis2-openfn:
     scripts/smoke-dhis2-openfn.sh
 
+# Build the local deterministic FHIR source-adapter profile.
+fhir-build:
+    docker compose -f compose.yaml --profile fhir build fhir-fixture-server fhir-source-adapter-sidecar fhir-health-notary
+
+# Start the local deterministic FHIR source-adapter profile.
+fhir-up:
+    docker compose -f compose.yaml --profile fhir up -d fhir-fixture-server fhir-source-adapter-sidecar fhir-health-notary
+
+# Run the local deterministic FHIR source-adapter smoke.
+fhir-smoke:
+    scripts/smoke-fhir.sh
+
+# Stop the local deterministic FHIR source-adapter profile.
+fhir-down:
+    docker compose -f compose.yaml --profile fhir rm -sf fhir-fixture-server fhir-source-adapter-sidecar fhir-health-notary
+
 # Run the live OpenCRVS DCI-backed Notary smoke.
 opencrvs-dci:
     scripts/smoke-opencrvs-dci.sh

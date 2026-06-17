@@ -372,6 +372,77 @@ services:
       openfn-dhis2-sidecar:
         condition: service_healthy
 
+  fhir-fixture-server:
+    image: python:3.12.3-slim-bookworm
+    profiles: ["fhir"]
+    command: ["python", "/workspace/scripts/fhir-fixture-server.py"]
+    ports:
+      - "${FHIR_FIXTURE_SERVER_PORT:-4361}:8080"
+    volumes:
+      - ./scripts/fhir-fixture-server.py:/workspace/scripts/fhir-fixture-server.py:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8080/ready\", timeout=2)'"
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  fhir-source-adapter-sidecar:
+    image: registry-notary-openfn-sidecar:demo
+    profiles: ["fhir"]
+    build:
+      context: .
+      dockerfile: Dockerfile.registry-notary-openfn-sidecar
+      additional_contexts:
+        notary_src: ${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-./vendor/registry-notary}}
+        registry_platform_src: ${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
+        crosswalk_src: ${CROSSWALK_SOURCE_DIR:-${CEL_MAPPING_SOURCE_DIR:-./vendor/crosswalk}}
+    env_file:
+      - .env
+    environment:
+      RUST_LOG: info
+      FHIR_SIDECAR_TOKEN_HASH: ${FHIR_SIDECAR_TOKEN_HASH:-}
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - |
+        : "$${FHIR_SIDECAR_TOKEN_HASH:?missing FHIR_SIDECAR_TOKEN_HASH; run scripts/generate-demo-secrets.py}"
+        exec registry-notary-openfn-sidecar \
+          --config /etc/registry-notary-fhir/fhir-source-adapter-sidecar.yaml.template \
+          --allow-unsigned-dev-config
+    ports:
+      - "${FHIR_SOURCE_ADAPTER_PORT:-4360}:8080"
+    volumes:
+      - ./config/fhir/fhir-source-adapter-sidecar.yaml.template:/etc/registry-notary-fhir/fhir-source-adapter-sidecar.yaml.template:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "node -e 'fetch(\"http://127.0.0.1:8080/ready\").then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));'"
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    depends_on:
+      fhir-fixture-server:
+        condition: service_healthy
+
+  fhir-health-notary:
+    <<: *notary-common
+    profiles: ["fhir"]
+    command: ["--config", "/etc/registry-notary/fhir-health-notary.yaml"]
+    environment:
+      RUST_LOG: info
+      REGISTRY_NOTARY_REDIS_URL: redis://redis:6379/
+      REGISTRY_PLATFORM_REDIS_TEST_URL: redis://redis:6379/
+      FHIR_SIDECAR_TOKEN_RAW: ${FHIR_SIDECAR_TOKEN_RAW:-}
+    ports:
+      - "${FHIR_HEALTH_NOTARY_PORT:-4362}:8080"
+    volumes:
+      - ./config/notary/fhir-health-notary.yaml:/etc/registry-notary/fhir-health-notary.yaml:ro
+      - notary-config-state:/var/lib/registry-notary/config-state
+    depends_on:
+      fhir-source-adapter-sidecar:
+        condition: service_healthy
+
   opencrvs-dci-notary:
     image: registry-notary:demo
     build:
