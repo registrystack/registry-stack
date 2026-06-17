@@ -21,9 +21,10 @@ results produced from a local FHIR R4 fixture server.
 This is a lab topology walkthrough, not the shortest adopter quickstart. For a
 normal local project generated without cloning product repositories, use the
 [`registryctl` Registry API tutorial](../publish-spreadsheet-secured-registry-api/)
-or the [`registryctl` Notary tutorial](../verify-claim-registry-api/). The FHIR
-source-adapter profile is not scaffolded by `registryctl` yet, so this tutorial
-uses `registry-lab` directly.
+or the [`registryctl` Notary tutorial](../verify-claim-registry-api/).
+`registryctl` can scaffold a standalone Notary project for an existing FHIR
+source-adapter sidecar, but this tutorial uses `registry-lab` directly because
+it also starts deterministic FHIR fixture data and the source adapter.
 
 The FHIR path is useful when a health system already exposes FHIR resources and
 a delivery system needs a narrow answer, such as "coverage is active" or "this
@@ -48,6 +49,13 @@ full FHIR lab profile:
 ```sh
 git clone --recurse-submodules https://github.com/jeremi/registry-lab.git
 cd registry-lab
+```
+
+If you already have a FHIR source-adapter sidecar running and only need a
+generated Notary project, use:
+
+```sh
+registryctl init notary my-fhir-notary --source-kind fhir-sidecar
 ```
 
 For an existing checkout, update submodules before running the profile:
