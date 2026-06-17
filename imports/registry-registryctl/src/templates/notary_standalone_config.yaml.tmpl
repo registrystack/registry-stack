@@ -30,14 +30,14 @@ evidence:
   api_base_url: http://127.0.0.1:4255
   inline_batch_limit: 10
   source_connections:
-    source_api:
+    {{source_connection}}:
       base_url: {{source_url}}
       allow_insecure_localhost: true
       allow_insecure_private_network: true
       token_env: {{source_token_env}}
       max_in_flight: 4
-      retry_on_5xx: true
-      bulk_mode: none
+      retry_on_5xx: {{source_retry_on_5xx}}
+      bulk_mode: {{source_bulk_mode}}
   signing_keys:
     {{issuer_key_id}}:
       provider: local_jwk_env
@@ -49,16 +49,16 @@ evidence:
     - id: {{source_claim}}
       title: {{source_claim_title}}
       version: 2026-06
-      subject_type: person
+      subject_type: {{source_entity}}
       value:
         type: boolean
       inputs:
         - name: target.id
           type: string
       source_bindings:
-        person:
-          connector: registry_data_api
-          connection: source_api
+        {{source_binding}}:
+          connector: {{source_connector}}
+          connection: {{source_connection}}
           required_scope: source:evidence_verification
           dataset: {{source_dataset}}
           entity: {{source_entity}}
@@ -70,7 +70,7 @@ evidence:
           fields: {}
       rule:
         type: exists
-        source: person
+        source: {{source_binding}}
       disclosure:
         default: predicate
         allowed:

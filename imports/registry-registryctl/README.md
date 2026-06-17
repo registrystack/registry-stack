@@ -32,6 +32,18 @@ For the full walkthroughs, use the Registry Docs tutorials:
 - [Verify a claim from your registry API](https://docs.registrystack.org/tutorials/verify-claim-registry-api/)
 - [Verify a claim from your own API](https://docs.registrystack.org/tutorials/verify-claim-own-api/)
 
+To scaffold a standalone Notary project for an existing FHIR source-adapter
+sidecar:
+
+```sh
+registryctl init notary my-fhir-notary --source-kind fhir-sidecar
+```
+
+This generates a starter `patient-record-exists` claim using the Notary
+source-adapter contract and defaults the sidecar URL to
+`http://host.docker.internal:4360`. It does not start a FHIR server or the
+FHIR sidecar for you.
+
 The installer defaults to `v0.1.0`. To install a different pinned release, set
 `REGISTRYCTL_VERSION`:
 
