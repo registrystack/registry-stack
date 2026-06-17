@@ -792,7 +792,8 @@ struct CelEvaluationContext<'a> {
     bindings: &'a CelBindingsConfig,
     claims: &'a BTreeMap<String, ClaimResultInternal>,
     sources: &'a BTreeMap<String, Value>,
-    subject: &'a SubjectRequest,
+    subject: Option<&'a SubjectRequest>,
+    target: &'a EvidenceEntity,
     purpose: &'a str,
     today: String,
     #[cfg(feature = "registry-notary-cel")]
@@ -1828,10 +1829,7 @@ async fn evaluate_claim_task(
             bindings,
         } => {
             let snapshot = prior.lock().expect("prior mutex is not poisoned").clone();
-            let target_subject = ctx
-                .context
-                .target_subject()
-                .ok_or(EvidenceError::TargetAttributesInsufficient)?;
+            let target_subject = ctx.context.target_subject();
             #[cfg(feature = "registry-notary-cel")]
             let _cel_permit = if let Some(cel_concurrency) = ctx.cel_concurrency.as_ref() {
                 Some(
@@ -1850,7 +1848,8 @@ async fn evaluate_claim_task(
                 bindings,
                 claims: &snapshot,
                 sources: &sources,
-                subject: &target_subject,
+                subject: target_subject.as_ref(),
+                target: &ctx.context.target,
                 purpose: ctx.purpose.as_str(),
                 today: ctx.now.date().to_string(),
                 #[cfg(feature = "registry-notary-cel")]
@@ -3333,6 +3332,10 @@ fn cel_preflight_root_bindings(
             json!({
                 "purpose": "preflight",
                 "subject": { "id": "preflight-subject" },
+                "target": {
+                    "type": "Person",
+                    "id": "preflight-subject"
+                },
                 "today": "2026-06-16",
             }),
         ),
@@ -3452,6 +3455,12 @@ fn cel_root_bindings(
             }),
         );
     }
+    let subject = ctx
+        .subject
+        .map(|subject| json!({ "id": subject.id }))
+        .unwrap_or(Value::Null);
+    let target =
+        serde_json::to_value(ctx.target).map_err(|_| EvidenceError::RuleEvaluationFailed)?;
     let root_bindings = BTreeMap::from([
         (
             "source".to_string(),
@@ -3462,7 +3471,8 @@ fn cel_root_bindings(
             "ctx".to_string(),
             json!({
                 "purpose": ctx.purpose,
-                "subject": { "id": ctx.subject.id },
+                "subject": subject,
+                "target": target,
                 "today": ctx.today,
             }),
         ),

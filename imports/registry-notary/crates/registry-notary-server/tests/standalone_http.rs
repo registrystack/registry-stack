@@ -1082,6 +1082,46 @@ async fn dci_source(
     .into_response()
 }
 
+#[cfg(feature = "registry-notary-cel")]
+async fn civil_demographic_dci_source(
+    State(observed): State<Arc<Mutex<Option<Value>>>>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    if headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        != Some("Bearer source-token")
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if headers
+        .get("data-purpose")
+        .and_then(|value| value.to_str().ok())
+        != Some("https://purpose.example.test/eligibility")
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    *observed.lock().expect("observed request lock") = Some(body.clone());
+    Json(json!({
+        "message": {
+            "search_response": [{
+                "data": {
+                    "reg_records": [{
+                        "person": {
+                            "given_name": "Miguel",
+                            "surname": "Santos",
+                            "birth_date": "2016-01-15",
+                            "deceased": false
+                        }
+                    }]
+                }
+            }]
+        }
+    }))
+    .into_response()
+}
+
 fn config(
     base_url: &str,
     audit_path: &str,
@@ -1715,6 +1755,118 @@ credential_configurations:
 #[cfg(feature = "registry-notary-cel")]
 fn dci_config(base_url: &str, audit_path: &str) -> StandaloneRegistryNotaryConfig {
     config(base_url, audit_path, "dci", "farmed_land_size_hectares")
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn civil_demographic_dci_config(
+    base_url: &str,
+    audit_path: &str,
+) -> StandaloneRegistryNotaryConfig {
+    set_audit_secret();
+    let raw = format!(
+        r#"
+server:
+  bind: 127.0.0.1:0
+auth:
+  mode: api_key
+  api_keys:
+    - id: caseworker
+      fingerprint:
+        provider: env
+        name: TEST_EVIDENCE_API_KEY_HASH
+        commitment: sha256:6c1874c8df397cc85277166d01625853a21afb53a4cff37e66fc108a0fc8cffb
+      scopes: [civil_registry:evidence_verification]
+audit:
+  sink: file
+  path: "{audit_path}"
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+evidence:
+  enabled: true
+  service_id: evidence.test
+  api_base_url: https://evidence.example.test
+  source_connections:
+    civil_registry:
+      base_url: "{base_url}"
+      allow_insecure_localhost: true
+      token_env: TEST_EVIDENCE_SOURCE_TOKEN
+      dci:
+        search_path: /dci/fr/registry/sync/search
+        query_type: predicate
+        registry_event_type: birth
+        records_path: /message/search_response/0/data/reg_records
+        field_paths:
+          given_name: /person/given_name
+          surname: /person/surname
+          birth_date: /person/birth_date
+          deceased: /person/deceased
+  claims:
+    - id: civil-person-is-alive-by-demographics
+      title: Civil person is alive by demographics
+      version: 2026-06
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        birth_record:
+          connector: dci
+          connection: civil_registry
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: birth_record
+          lookup:
+            input: target.attributes.given_name
+            field: given_name
+            op: eq
+            cardinality: one
+          query_fields:
+            - input: target.attributes.given_name
+              field: given_name
+              op: eq
+            - input: target.attributes.surname
+              field: surname
+              op: eq
+            - input: target.attributes.birth_date
+              field: birth_date
+              op: eq
+          fields:
+            given_name:
+              field: given_name
+              type: string
+              required: true
+            surname:
+              field: surname
+              type: string
+              required: true
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+            deceased:
+              field: deceased
+              type: boolean
+              required: true
+          matching:
+            target_type: Person
+            method: configured_demographic_lookup
+            sufficient_target_inputs:
+              - - target.attributes.given_name
+                - target.attributes.surname
+                - target.attributes.birth_date
+            allowed_target_inputs:
+              - target.attributes.given_name
+              - target.attributes.surname
+              - target.attributes.birth_date
+      rule:
+        type: cel
+        expression: source.birth_record.deceased == false
+      disclosure:
+        default: predicate
+        allowed: [predicate, redacted]
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+"#
+    );
+    serde_norway::from_str(&raw).expect("Civil demographic DCI config deserializes")
 }
 
 fn no_cel_config(base_url: &str, audit_path: &str) -> StandaloneRegistryNotaryConfig {
@@ -10556,6 +10708,94 @@ async fn standalone_server_reads_dci_source_and_evaluates_cel_claim() {
     assert_eq!(
         observed["message"]["search_request"][0]["search_criteria"]["query"]["value"],
         "person-1"
+    );
+}
+
+#[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
+async fn standalone_server_reads_dci_source_by_demographic_target_attributes() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let observed = Arc::new(Mutex::new(None));
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route(
+                "/dci/fr/registry/sync/search",
+                post(civil_demographic_dci_source),
+            )
+            .with_state(Arc::clone(&observed)),
+    );
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+
+    let app = standalone_router(civil_demographic_dci_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let response = server
+        .post("/v1/evaluations")
+        .add_header("x-api-key", "api-token")
+        .add_header("data-purpose", "https://purpose.example.test/eligibility")
+        .json(&json!({
+            "target": {
+                "type": "Person",
+                "attributes": {
+                    "given_name": "Miguel",
+                    "surname": "Santos",
+                    "birth_date": "2016-01-15"
+                }
+            },
+            "claims": ["civil-person-is-alive-by-demographics"],
+            "disclosure": "predicate"
+        }))
+        .await;
+
+    response.assert_status_ok();
+    let body: Value = response.json();
+    assert_eq!(body["results"][0]["value"], json!(true));
+    assert_eq!(
+        body["results"][0]["provenance"]["used"]["source_count"],
+        json!(1)
+    );
+
+    let observed = observed
+        .lock()
+        .expect("observed request lock")
+        .clone()
+        .expect("DCI request captured");
+    let criteria = &observed["message"]["search_request"][0]["search_criteria"];
+    assert_eq!(criteria["query_type"], json!("predicate"));
+    assert_eq!(criteria["reg_event_type"], json!("birth"));
+    let query = criteria["query"]
+        .as_array()
+        .expect("predicate query is an array of expressions");
+    assert_eq!(
+        query[0]["expression1"]["attribute_name"],
+        json!("given_name")
+    );
+    assert_eq!(query[0]["expression1"]["operator"], json!("eq"));
+    assert_eq!(query[0]["expression1"]["attribute_value"], json!("Miguel"));
+    assert_eq!(query[1]["expression2"]["attribute_name"], json!("surname"));
+    assert_eq!(query[1]["expression2"]["attribute_value"], json!("Santos"));
+    assert_eq!(
+        query[2]["expression3"]["attribute_name"],
+        json!("birth_date")
+    );
+    assert_eq!(
+        query[2]["expression3"]["attribute_value"],
+        json!("2016-01-15")
     );
 }
 
