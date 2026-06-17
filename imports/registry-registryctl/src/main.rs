@@ -4,8 +4,8 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 use registryctl::{
-    DeploymentProfile, DoctorFormat, NotaryInitOptions, NotarySource, OpenFnBatchMode,
-    OpenFnConvertOptions, OpenFnImportOptions, Sample,
+    DeploymentProfile, DoctorFormat, NotaryInitOptions, NotaryInitSourceKind, NotarySource,
+    OpenFnBatchMode, OpenFnConvertOptions, OpenFnImportOptions, Sample,
 };
 
 fn main() -> Result<()> {
@@ -25,6 +25,7 @@ fn main() -> Result<()> {
             }
             InitCommand::Notary {
                 dir,
+                source_kind,
                 source_url,
                 source_token_from_env,
                 source_token_env,
@@ -34,19 +35,32 @@ fn main() -> Result<()> {
                 source_network,
                 source_claim,
                 source_claim_title,
+                smoke_target_id,
             } => {
                 registryctl::init_notary_project(
                     &dir,
                     NotaryInitOptions {
-                        source_url,
+                        source_kind,
+                        source_url: source_url
+                            .unwrap_or_else(|| source_kind.default_source_url().to_string()),
                         source_token_from_env,
-                        source_token_env,
-                        source_dataset,
-                        source_entity,
-                        source_lookup_field,
+                        source_token_env: source_token_env
+                            .unwrap_or_else(|| source_kind.default_source_token_env().to_string()),
+                        source_dataset: source_dataset
+                            .unwrap_or_else(|| source_kind.default_source_dataset().to_string()),
+                        source_entity: source_entity
+                            .unwrap_or_else(|| source_kind.default_source_entity().to_string()),
+                        source_lookup_field: source_lookup_field.unwrap_or_else(|| {
+                            source_kind.default_source_lookup_field().to_string()
+                        }),
                         source_network,
-                        source_claim,
-                        source_claim_title,
+                        source_claim: source_claim
+                            .unwrap_or_else(|| source_kind.default_source_claim().to_string()),
+                        source_claim_title: source_claim_title.unwrap_or_else(|| {
+                            source_kind.default_source_claim_title().to_string()
+                        }),
+                        smoke_target_id: smoke_target_id
+                            .unwrap_or_else(|| source_kind.default_smoke_target_id().to_string()),
                     },
                 )?;
             }
@@ -331,6 +345,37 @@ mod tests {
     }
 
     #[test]
+    fn notary_init_cli_accepts_fhir_source_kind() {
+        let cli = Cli::try_parse_from([
+            "registryctl",
+            "init",
+            "notary",
+            "my-fhir-notary",
+            "--source-kind",
+            "fhir-sidecar",
+        ])
+        .unwrap();
+
+        let Commands::Init { command } = cli.command else {
+            panic!("expected init command");
+        };
+        let InitCommand::Notary {
+            source_kind,
+            source_url,
+            source_token_env,
+            smoke_target_id,
+            ..
+        } = *command
+        else {
+            panic!("expected init notary command");
+        };
+        assert_eq!(source_kind, NotaryInitSourceKind::FhirSidecar);
+        assert_eq!(source_url, None);
+        assert_eq!(source_token_env, None);
+        assert_eq!(smoke_target_id, None);
+    }
+
+    #[test]
     fn doctor_skips_automatic_update_check() {
         let cli = Cli::try_parse_from(["registryctl", "doctor"]).unwrap();
 
@@ -370,33 +415,39 @@ enum InitCommand {
     Notary {
         /// Directory to create.
         dir: PathBuf,
-        /// Source Registry Data API base URL as seen from the Notary container.
-        #[arg(long, default_value = "https://api.example.test")]
-        source_url: String,
+        /// Source kind to use for the starter Notary project.
+        #[arg(long, value_enum, default_value_t = NotaryInitSourceKind::RegistryDataApi)]
+        source_kind: NotaryInitSourceKind,
+        /// Source API base URL as seen from the Notary container.
+        #[arg(long)]
+        source_url: Option<String>,
         /// Read the source API bearer token from this process environment variable.
         #[arg(long)]
         source_token_from_env: Option<String>,
         /// Env var name Notary should read for the source API bearer token.
-        #[arg(long, default_value = "EVIDENCE_SOURCE_API_TOKEN")]
-        source_token_env: String,
+        #[arg(long)]
+        source_token_env: Option<String>,
         /// Source dataset used by the starter claim.
-        #[arg(long, default_value = "benefits_casework")]
-        source_dataset: String,
+        #[arg(long)]
+        source_dataset: Option<String>,
         /// Source entity used by the starter claim.
-        #[arg(long, default_value = "person")]
-        source_entity: String,
+        #[arg(long)]
+        source_entity: Option<String>,
         /// Source field used by the starter claim lookup.
-        #[arg(long, default_value = "id")]
-        source_lookup_field: String,
+        #[arg(long)]
+        source_lookup_field: Option<String>,
         /// Docker Compose network to join when the source API runs in another local Compose project.
         #[arg(long)]
         source_network: Option<String>,
         /// Starter claim id to generate.
-        #[arg(long, default_value = "benefits-person-exists")]
-        source_claim: String,
+        #[arg(long)]
+        source_claim: Option<String>,
         /// Starter claim title to generate.
-        #[arg(long, default_value = "Benefits person exists")]
-        source_claim_title: String,
+        #[arg(long)]
+        source_claim_title: Option<String>,
+        /// Target id used by generated smoke and Bruno evaluation requests.
+        #[arg(long)]
+        smoke_target_id: Option<String>,
     },
 }
 

@@ -54,8 +54,115 @@ pub enum NotarySource {
     LocalRelay,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum NotaryInitSourceKind {
+    RegistryDataApi,
+    FhirSidecar,
+}
+
+impl NotaryInitSourceKind {
+    fn source_label(self) -> &'static str {
+        match self {
+            Self::RegistryDataApi => "registry_data_api",
+            Self::FhirSidecar => "fhir_source_adapter_sidecar",
+        }
+    }
+
+    fn connection_id(self) -> &'static str {
+        match self {
+            Self::RegistryDataApi => "source_api",
+            Self::FhirSidecar => "fhir_sidecar",
+        }
+    }
+
+    fn connector(self) -> &'static str {
+        match self {
+            Self::RegistryDataApi => "registry_data_api",
+            Self::FhirSidecar => "openfn_sidecar",
+        }
+    }
+
+    fn source_binding(self) -> &'static str {
+        match self {
+            Self::RegistryDataApi => "person",
+            Self::FhirSidecar => "patient",
+        }
+    }
+
+    pub fn default_source_url(self) -> &'static str {
+        match self {
+            Self::RegistryDataApi => "https://api.example.test",
+            Self::FhirSidecar => "http://host.docker.internal:4360",
+        }
+    }
+
+    pub fn default_source_token_env(self) -> &'static str {
+        match self {
+            Self::RegistryDataApi => "EVIDENCE_SOURCE_API_TOKEN",
+            Self::FhirSidecar => "FHIR_SIDECAR_TOKEN",
+        }
+    }
+
+    pub fn default_source_dataset(self) -> &'static str {
+        match self {
+            Self::RegistryDataApi => "benefits_casework",
+            Self::FhirSidecar => "health_registry",
+        }
+    }
+
+    pub fn default_source_entity(self) -> &'static str {
+        match self {
+            Self::RegistryDataApi => "person",
+            Self::FhirSidecar => "patient",
+        }
+    }
+
+    pub fn default_source_lookup_field(self) -> &'static str {
+        match self {
+            Self::RegistryDataApi => "id",
+            Self::FhirSidecar => "national_id",
+        }
+    }
+
+    pub fn default_source_claim(self) -> &'static str {
+        match self {
+            Self::RegistryDataApi => "benefits-person-exists",
+            Self::FhirSidecar => "patient-record-exists",
+        }
+    }
+
+    pub fn default_source_claim_title(self) -> &'static str {
+        match self {
+            Self::RegistryDataApi => "Benefits person exists",
+            Self::FhirSidecar => "Patient record exists",
+        }
+    }
+
+    pub fn default_smoke_target_id(self) -> &'static str {
+        match self {
+            Self::RegistryDataApi => "per-2001",
+            Self::FhirSidecar => "person-123",
+        }
+    }
+
+    fn retry_on_5xx(self) -> &'static str {
+        match self {
+            Self::RegistryDataApi => "true",
+            Self::FhirSidecar => "false",
+        }
+    }
+
+    fn bulk_mode(self) -> &'static str {
+        match self {
+            Self::RegistryDataApi => "none",
+            Self::FhirSidecar => "openfn_sidecar_batch",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct NotaryInitOptions {
+    pub source_kind: NotaryInitSourceKind,
     pub source_url: String,
     pub source_token_from_env: Option<String>,
     pub source_token_env: String,
@@ -65,6 +172,7 @@ pub struct NotaryInitOptions {
     pub source_network: Option<String>,
     pub source_claim: String,
     pub source_claim_title: String,
+    pub smoke_target_id: String,
 }
 
 #[derive(Debug)]
@@ -652,8 +760,24 @@ pub fn notary_smoke_project(project_dir: &Path) -> Result<()> {
     validate_notary_fingerprint(project_dir, &project)?;
     let notary_base_url = project.notary_base_url()?.to_string();
     let claim_id = project.notary_claim_id();
+    let smoke_target_id = project
+        .notary
+        .as_ref()
+        .map(notary_smoke_target_id)
+        .unwrap_or("per-2001");
+    let smoke_target_type = project
+        .notary
+        .as_ref()
+        .and_then(|notary| notary.source_entity.as_deref())
+        .unwrap_or("person");
     let secrets = LocalEnv::load(&project_dir.join(&project.local.secrets_env))?;
-    let report = run_notary_smoke_checks(&notary_base_url, &secrets, &claim_id);
+    let report = run_notary_smoke_checks(
+        &notary_base_url,
+        &secrets,
+        &claim_id,
+        smoke_target_type,
+        smoke_target_id,
+    );
     let output_path = project_dir
         .join(&project.local.output_dir)
         .join("notary-smoke-results.json");
@@ -2440,6 +2564,9 @@ fn bruno_notary_files(project: &Project, _secrets: &LocalEnv) -> Result<Vec<Gene
         .first()
         .map(String::as_str)
         .unwrap_or(NOTARY_TUTORIAL_CLAIM);
+    let smoke_target_id = notary_smoke_target_id(notary);
+    let missing_smoke_target_id = format!("{smoke_target_id}-missing");
+    let source_entity = notary.source_entity.as_deref().unwrap_or("person");
     let source_url = notary
         .source_url
         .as_deref()
@@ -2490,8 +2617,8 @@ fn bruno_notary_files(project: &Project, _secrets: &LocalEnv) -> Result<Vec<Gene
             &format!(
                 r#"{{
   "target": {{
-    "type": "person",
-    "id": "per-2001"
+    "type": "{source_entity}",
+    "id": "{smoke_target_id}"
   }},
   "claims": ["{claim_id}"],
   "disclosure": "predicate",
@@ -2512,8 +2639,8 @@ fn bruno_notary_files(project: &Project, _secrets: &LocalEnv) -> Result<Vec<Gene
             &format!(
                 r#"{{
   "target": {{
-    "type": "person",
-    "id": "per-missing"
+    "type": "{source_entity}",
+    "id": "{missing_smoke_target_id}"
   }},
   "claims": ["{claim_id}"],
   "disclosure": "predicate",
@@ -2539,6 +2666,16 @@ fn bruno_notary_files(project: &Project, _secrets: &LocalEnv) -> Result<Vec<Gene
             ),
         ),
     ])
+}
+
+fn notary_smoke_target_id(notary: &ProjectNotary) -> &str {
+    notary.smoke_target_id.as_deref().unwrap_or_else(|| {
+        if notary.source == "fhir_source_adapter_sidecar" {
+            "person-123"
+        } else {
+            "per-2001"
+        }
+    })
 }
 
 fn bruno_get(
@@ -2694,6 +2831,8 @@ struct ProjectNotary {
     source_network: Option<String>,
     #[serde(default)]
     claims: Vec<String>,
+    #[serde(default)]
+    smoke_target_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3178,6 +3317,8 @@ struct NotarySection<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     source_network: Option<&'a str>,
     claims: Vec<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    smoke_target_id: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -3227,10 +3368,11 @@ fn registryctl_manifest(dir: &Path, kind: ProjectManifestKind<'_>) -> Result<Str
             source_lookup_field: Some("id"),
             source_network: None,
             claims: vec![NOTARY_TUTORIAL_CLAIM],
+            smoke_target_id: Some("per-2001"),
         }),
         ProjectManifestKind::StandaloneNotary { options } => Some(NotarySection {
             config: "notary/config.yaml",
-            source: "registry_data_api",
+            source: options.source_kind.source_label(),
             source_relay_service_url: None,
             source_url: Some(&options.source_url),
             source_token_env: Some(&options.source_token_env),
@@ -3239,6 +3381,7 @@ fn registryctl_manifest(dir: &Path, kind: ProjectManifestKind<'_>) -> Result<Str
             source_lookup_field: Some(&options.source_lookup_field),
             source_network: options.source_network.as_deref(),
             claims: vec![&options.source_claim],
+            smoke_target_id: Some(&options.smoke_target_id),
         }),
         ProjectManifestKind::Relay => None,
     };
@@ -3332,8 +3475,16 @@ fn notary_config_for_source(evaluator: &Credential, options: &NotaryInitOptions)
         .replace("{{evaluator_commitment}}", &evaluator.commitment)
         .replace("{{issuer_key_id}}", NOTARY_DEMO_ISSUER_KEY_ID)
         .replace("{{issuer_kid}}", NOTARY_DEMO_ISSUER_KID)
+        .replace("{{source_connection}}", options.source_kind.connection_id())
+        .replace("{{source_connector}}", options.source_kind.connector())
+        .replace("{{source_binding}}", options.source_kind.source_binding())
         .replace("{{source_url}}", &options.source_url)
         .replace("{{source_token_env}}", &options.source_token_env)
+        .replace(
+            "{{source_retry_on_5xx}}",
+            options.source_kind.retry_on_5xx(),
+        )
+        .replace("{{source_bulk_mode}}", options.source_kind.bulk_mode())
         .replace("{{source_dataset}}", &options.source_dataset)
         .replace("{{source_entity}}", &options.source_entity)
         .replace("{{source_lookup_field}}", &options.source_lookup_field)
@@ -3457,13 +3608,19 @@ fn run_smoke_checks(base_url: &str, secrets: &LocalEnv) -> SmokeReport {
     }
 }
 
-fn run_notary_smoke_checks(base_url: &str, secrets: &LocalEnv, claim_id: &str) -> SmokeReport {
+fn run_notary_smoke_checks(
+    base_url: &str,
+    secrets: &LocalEnv,
+    claim_id: &str,
+    smoke_target_type: &str,
+    smoke_target_id: &str,
+) -> SmokeReport {
     let mut checks = Vec::new();
     let api_key = secrets.value("REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW");
     let evaluation_body = serde_json::json!({
         "target": {
-            "type": "person",
-            "id": "per-2001"
+            "type": smoke_target_type,
+            "id": smoke_target_id
         },
         "claims": [claim_id],
         "disclosure": "predicate",
@@ -3525,7 +3682,7 @@ fn run_notary_smoke_checks(base_url: &str, secrets: &LocalEnv, claim_id: &str) -
     record_notary_evaluation_check(
         &mut checks,
         base_url,
-        "notary evaluator can verify benefits person exists",
+        "notary evaluator can verify starter claim",
         "/v1/evaluations",
         &[
             api_key_header(api_key),
@@ -4309,6 +4466,7 @@ workflows:
         init_notary_project(
             &project,
             NotaryInitOptions {
+                source_kind: NotaryInitSourceKind::RegistryDataApi,
                 source_url: "http://registry-relay:8080".to_string(),
                 source_token_from_env: None,
                 source_token_env: "EVIDENCE_SOURCE_API_TOKEN".to_string(),
@@ -4318,6 +4476,7 @@ workflows:
                 source_network: Some("my-first-api_default".to_string()),
                 source_claim: "benefits-person-exists".to_string(),
                 source_claim_title: "Benefits person exists".to_string(),
+                smoke_target_id: "per-2001".to_string(),
             },
         )
         .unwrap();
@@ -4372,6 +4531,101 @@ workflows:
             "EVIDENCE_SOURCE_API_TOKEN={STANDALONE_SOURCE_TOKEN_PLACEHOLDER}"
         )));
         assert!(!config.contains(STANDALONE_SOURCE_TOKEN_PLACEHOLDER));
+    }
+
+    #[test]
+    fn standalone_notary_init_can_target_fhir_sidecar() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("my-fhir-notary");
+        init_notary_project(
+            &project,
+            NotaryInitOptions {
+                source_kind: NotaryInitSourceKind::FhirSidecar,
+                source_url: "http://host.docker.internal:4360".to_string(),
+                source_token_from_env: None,
+                source_token_env: "FHIR_SIDECAR_TOKEN".to_string(),
+                source_dataset: "health_registry".to_string(),
+                source_entity: "patient".to_string(),
+                source_lookup_field: "national_id".to_string(),
+                source_network: None,
+                source_claim: "patient-record-exists".to_string(),
+                source_claim_title: "Patient record exists".to_string(),
+                smoke_target_id: "person-123".to_string(),
+            },
+        )
+        .unwrap();
+
+        let manifest: Value =
+            serde_yaml::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["notary"]["source"], "fhir_source_adapter_sidecar");
+        assert_eq!(
+            manifest["notary"]["source_url"],
+            "http://host.docker.internal:4360"
+        );
+        assert_eq!(manifest["notary"]["source_token_env"], "FHIR_SIDECAR_TOKEN");
+        assert_eq!(manifest["notary"]["source_dataset"], "health_registry");
+        assert_eq!(manifest["notary"]["source_entity"], "patient");
+        assert_eq!(manifest["notary"]["source_lookup_field"], "national_id");
+        assert_eq!(manifest["notary"]["claims"][0], "patient-record-exists");
+        assert_eq!(manifest["notary"]["smoke_target_id"], "person-123");
+
+        let config_yaml: Value =
+            serde_yaml::from_str(&fs::read_to_string(project.join("notary/config.yaml")).unwrap())
+                .unwrap();
+        assert_eq!(
+            config_yaml["evidence"]["source_connections"]["fhir_sidecar"]["base_url"],
+            "http://host.docker.internal:4360"
+        );
+        assert_eq!(
+            config_yaml["evidence"]["source_connections"]["fhir_sidecar"]["token_env"],
+            "FHIR_SIDECAR_TOKEN"
+        );
+        assert_eq!(
+            config_yaml["evidence"]["source_connections"]["fhir_sidecar"]["retry_on_5xx"],
+            false
+        );
+        assert_eq!(
+            config_yaml["evidence"]["claims"][0]["subject_type"],
+            "patient"
+        );
+        assert_eq!(
+            config_yaml["evidence"]["claims"][0]["source_bindings"]["patient"]["connector"],
+            "openfn_sidecar"
+        );
+        assert_eq!(
+            config_yaml["evidence"]["claims"][0]["source_bindings"]["patient"]["connection"],
+            "fhir_sidecar"
+        );
+        assert_eq!(
+            config_yaml["evidence"]["source_connections"]["fhir_sidecar"]["bulk_mode"],
+            "openfn_sidecar_batch"
+        );
+        assert_eq!(
+            config_yaml["evidence"]["claims"][0]["source_bindings"]["patient"]["dataset"],
+            "health_registry"
+        );
+        assert_eq!(
+            config_yaml["evidence"]["claims"][0]["source_bindings"]["patient"]["entity"],
+            "patient"
+        );
+        assert_eq!(
+            config_yaml["evidence"]["claims"][0]["source_bindings"]["patient"]["lookup"]["field"],
+            "national_id"
+        );
+
+        let env = fs::read_to_string(project.join("secrets/local.env")).unwrap();
+        assert!(env.contains(&format!(
+            "FHIR_SIDECAR_TOKEN={STANDALONE_SOURCE_TOKEN_PLACEHOLDER}"
+        )));
+
+        let bruno = fs::read_to_string(
+            project.join("bruno/registry-api/Notary/Evaluate person exists.bru"),
+        )
+        .unwrap();
+        assert!(bruno.contains(r#""type": "patient""#));
+        assert!(bruno.contains(r#""id": "person-123""#));
+        assert!(bruno.contains(r#""claims": ["patient-record-exists"]"#));
     }
 
     #[test]
@@ -5237,6 +5491,7 @@ workflows:
 
     fn default_notary_options() -> NotaryInitOptions {
         NotaryInitOptions {
+            source_kind: NotaryInitSourceKind::RegistryDataApi,
             source_url: "https://api.example.test".to_string(),
             source_token_from_env: None,
             source_token_env: "EVIDENCE_SOURCE_API_TOKEN".to_string(),
@@ -5246,6 +5501,7 @@ workflows:
             source_network: None,
             source_claim: "benefits-person-exists".to_string(),
             source_claim_title: "Benefits person exists".to_string(),
+            smoke_target_id: "per-2001".to_string(),
         }
     }
 

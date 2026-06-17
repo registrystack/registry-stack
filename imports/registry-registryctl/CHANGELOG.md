@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Added
+
+- `registryctl init notary <dir> --source-kind fhir-sidecar` - scaffold a standalone Notary
+  project pointing at an existing FHIR source-adapter sidecar, with a starter
+  `patient-record-exists` claim and generated smoke request target.
+
 ## [0.1.0] - 2026-06-12
 
 First tagged release of the `registryctl` CLI for Registry Commons.
