@@ -223,16 +223,16 @@ class ClaimTargetInputMetadataTest(unittest.TestCase):
                                         "label": "Given name",
                                     },
                                     {
-                                        "path": "target.attributes.family_name",
+                                        "path": "target.attributes.surname",
                                         "kind": "attribute",
-                                        "name": "family_name",
-                                        "label": "Family name",
+                                        "name": "surname",
+                                        "label": "Surname",
                                     },
                                     {
-                                        "path": "target.attributes.birthdate",
+                                        "path": "target.attributes.birth_date",
                                         "kind": "attribute",
-                                        "name": "birthdate",
-                                        "label": "Birthdate",
+                                        "name": "birth_date",
+                                        "label": "Birth date",
                                     },
                                 ]
                             },
@@ -246,13 +246,13 @@ class ClaimTargetInputMetadataTest(unittest.TestCase):
     def test_target_input_facts_render_discovered_options(self) -> None:
         facts = scenario_common.target_input_facts(self.CLAIMS_BODY, ["person-is-alive"])
         self.assertEqual(facts[0]["label"], "Target inputs")
-        self.assertEqual(facts[0]["value"], "National id OR Given name + Family name + Birthdate")
+        self.assertEqual(facts[0]["value"], "National id OR Given name + Surname + Birth date")
         self.assertEqual(facts[1]["value"], "Published by Notary claim discovery")
 
     def test_evaluation_body_uses_demographic_group_when_identifier_is_not_available(self) -> None:
         profile = scenario_common.person_profile(
             "",
-            attributes={"given_name": "Miguel", "family_name": "Santos", "birthdate": "2016-01-15"},
+            attributes={"given_name": "Miguel", "surname": "Santos", "birth_date": "2016-01-15"},
         )
         body, selection = scenario_common.evaluation_body_from_claim_metadata(
             self.CLAIMS_BODY,
@@ -261,10 +261,10 @@ class ClaimTargetInputMetadataTest(unittest.TestCase):
         )
 
         self.assertEqual(selection["source"], "target_inputs")
-        self.assertEqual(selection["group"], "Given name + Family name + Birthdate")
+        self.assertEqual(selection["group"], "Given name + Surname + Birth date")
         self.assertEqual(
             body["target"]["attributes"],
-            {"given_name": "Miguel", "family_name": "Santos", "birthdate": "2016-01-15"},
+            {"given_name": "Miguel", "surname": "Santos", "birth_date": "2016-01-15"},
         )
         self.assertNotIn("identifiers", body["target"])
 
@@ -902,16 +902,16 @@ class CivilBirthDemographicsScenarioTest(unittest.TestCase):
                                         "label": "Given name",
                                     },
                                     {
-                                        "path": "target.attributes.family_name",
+                                        "path": "target.attributes.surname",
                                         "kind": "attribute",
-                                        "name": "family_name",
-                                        "label": "Family name",
+                                        "name": "surname",
+                                        "label": "Surname",
                                     },
                                     {
-                                        "path": "target.attributes.birthdate",
+                                        "path": "target.attributes.birth_date",
                                         "kind": "attribute",
-                                        "name": "birthdate",
-                                        "label": "Birthdate",
+                                        "name": "birth_date",
+                                        "label": "Birth date",
                                     },
                                 ]
                             }
@@ -974,10 +974,10 @@ class CivilBirthDemographicsScenarioTest(unittest.TestCase):
         self.assertEqual([step["id"] for step in story["steps"]], ["discover", "lookup"])
         self.assertEqual(story["lookup_profile"]["id"], "by-demographics")
         preview = story["steps"][1]["request_preview"]
-        self.assertEqual(preview["target_input_selection"]["group"], "Given name + Family name + Birthdate")
+        self.assertEqual(preview["target_input_selection"]["group"], "Given name + Surname + Birth date")
         self.assertEqual(
             preview["body"]["target"]["attributes"],
-            {"given_name": "Miguel", "family_name": "Santos", "birthdate": "2016-01-15"},
+            {"given_name": "Miguel", "surname": "Santos", "birth_date": "2016-01-15"},
         )
         self.assertNotIn("identifiers", preview["body"]["target"])
 
@@ -995,7 +995,7 @@ class CivilBirthDemographicsScenarioTest(unittest.TestCase):
         self.assertEqual(captured["req"].full_url, "https://notary.example/v1/claims")
         self.assertEqual(captured["req"].get_header("Authorization"), "Bearer notary-token")
         facts = {item["label"]: item["value"] for item in result["friendly"]["facts"]}
-        self.assertEqual(facts["Target inputs"], "Given name + Family name + Birthdate")
+        self.assertEqual(facts["Target inputs"], "Given name + Surname + Birth date")
         self.assertEqual(facts["Input metadata"], "Published by Notary claim discovery")
 
     def test_lookup_step_posts_demographic_attributes_without_identifier(self) -> None:
@@ -1020,7 +1020,7 @@ class CivilBirthDemographicsScenarioTest(unittest.TestCase):
         self.assertEqual(body["disclosure"], "predicate")
         self.assertEqual(
             body["target"]["attributes"],
-            {"given_name": "Miguel", "family_name": "Santos", "birthdate": "2016-01-15"},
+            {"given_name": "Miguel", "surname": "Santos", "birth_date": "2016-01-15"},
         )
         self.assertNotIn("identifiers", body["target"])
         facts = {item["label"]: item["value"] for item in result["friendly"]["facts"]}

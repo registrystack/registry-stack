@@ -115,10 +115,10 @@ evidence:
             - input: target.attributes.given_name
               field: given_name
               op: eq
-            - input: target.attributes.family_name
+            - input: target.attributes.surname
               field: surname
               op: eq
-            - input: target.attributes.birthdate
+            - input: target.attributes.birth_date
               field: birth_date
               op: eq
           matching:
@@ -126,13 +126,25 @@ evidence:
             method: configured_demographic_lookup
             sufficient_target_inputs:
               - - target.attributes.given_name
-                - target.attributes.family_name
-                - target.attributes.birthdate
+                - target.attributes.surname
+                - target.attributes.birth_date
             allowed_target_inputs:
               - target.attributes.given_name
-              - target.attributes.family_name
-              - target.attributes.birthdate
+              - target.attributes.surname
+              - target.attributes.birth_date
           fields:
+            given_name:
+              field: given_name
+              type: string
+              required: true
+            surname:
+              field: surname
+              type: string
+              required: true
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
             deceased:
               field: deceased
               type: boolean
