@@ -779,6 +779,8 @@ struct ClaimEvaluationContext {
     #[cfg(feature = "registry-notary-cel")]
     cel_worker: Option<Arc<CelWorker>>,
     #[cfg(feature = "registry-notary-cel")]
+    cel_concurrency: Option<Arc<Semaphore>>,
+    #[cfg(feature = "registry-notary-cel")]
     cel_config: Arc<RegistryNotaryCelConfig>,
 }
 
@@ -792,6 +794,7 @@ struct CelEvaluationContext<'a> {
     sources: &'a BTreeMap<String, Value>,
     subject: &'a SubjectRequest,
     purpose: &'a str,
+    today: String,
     #[cfg(feature = "registry-notary-cel")]
     worker: Option<&'a CelWorker>,
     #[cfg(feature = "registry-notary-cel")]
@@ -1177,6 +1180,11 @@ impl RegistryNotaryRuntime {
         let evaluation_id = Ulid::new().to_string();
         let now = OffsetDateTime::now_utc();
         let binding_concurrency = Arc::new(Semaphore::new(evidence.concurrency.bindings));
+        #[cfg(feature = "registry-notary-cel")]
+        let cel_concurrency = self
+            .cel_worker
+            .as_ref()
+            .map(|_| Arc::new(Semaphore::new(self.cel_config.worker_count.max(1))));
         let policy = evaluation_policy_from_self_attestation(self_attestation.as_ref());
         let internal = self
             .evaluate_claims_dag(
@@ -1193,6 +1201,8 @@ impl RegistryNotaryRuntime {
                 binding_concurrency,
                 source_capability,
                 None, // single-subject evaluate: no cross-subject memo needed
+                #[cfg(feature = "registry-notary-cel")]
+                cel_concurrency,
                 correlation_id,
                 policy,
             )
@@ -1293,6 +1303,11 @@ impl RegistryNotaryRuntime {
         let mut succeeded = 0usize;
         let mut failed = 0usize;
         let subject_concurrency = Arc::new(Semaphore::new(evidence.concurrency.subjects));
+        #[cfg(feature = "registry-notary-cel")]
+        let cel_concurrency = self
+            .cel_worker
+            .as_ref()
+            .map(|_| Arc::new(Semaphore::new(self.cel_config.worker_count.max(1))));
         // Per-batch memoization table shared across all concurrent subject
         // tasks. Scoped to this `batch_evaluate` call; dropped when the call
         // returns, so no state leaks between batches. Tests can pre-create the
@@ -1344,6 +1359,8 @@ impl RegistryNotaryRuntime {
             let principal_scopes = principal.scopes.clone();
             let memo_for_task = Arc::clone(&fetch_memo);
             let source_capability = source_capability.clone();
+            #[cfg(feature = "registry-notary-cel")]
+            let cel_concurrency = cel_concurrency.as_ref().map(Arc::clone);
             join_set.spawn(async move {
                 let _permit = match permit_semaphore.acquire_owned().await {
                     Ok(permit) => permit,
@@ -1375,6 +1392,8 @@ impl RegistryNotaryRuntime {
                         eval,
                         purpose_for_task.as_str(),
                         memo_for_task,
+                        #[cfg(feature = "registry-notary-cel")]
+                        cel_concurrency,
                     )
                     .await;
                 (input_index, result)
@@ -1515,6 +1534,7 @@ impl RegistryNotaryRuntime {
         request: EvaluateRequest,
         purpose_override: &str,
         fetch_memo: FetchMemo,
+        #[cfg(feature = "registry-notary-cel")] cel_concurrency: Option<Arc<Semaphore>>,
     ) -> Result<Vec<ClaimResultView>, EvidenceError> {
         ensure_source_capability_matches_principal(principal, &source_capability)?;
         if request.claims.is_empty() {
@@ -1559,6 +1579,8 @@ impl RegistryNotaryRuntime {
                 binding_concurrency,
                 source_capability,
                 Some(fetch_memo),
+                #[cfg(feature = "registry-notary-cel")]
+                cel_concurrency,
                 None,
                 // Batch evaluation is a machine-client flow with no named
                 // evaluation policy; the policy fields stay unset.
@@ -1601,6 +1623,7 @@ impl RegistryNotaryRuntime {
         binding_concurrency: Arc<Semaphore>,
         source_capability: SourceCapability,
         fetch_memo: Option<FetchMemo>,
+        #[cfg(feature = "registry-notary-cel")] cel_concurrency: Option<Arc<Semaphore>>,
         correlation_id: Option<BoundedCorrelationId>,
         policy: EvaluationPolicy,
     ) -> Result<BTreeMap<String, ClaimResultInternal>, EvidenceError> {
@@ -1635,6 +1658,8 @@ impl RegistryNotaryRuntime {
                     claim_versions: claim_versions.clone(),
                     #[cfg(feature = "registry-notary-cel")]
                     cel_worker: self.cel_worker.as_ref().map(Arc::clone),
+                    #[cfg(feature = "registry-notary-cel")]
+                    cel_concurrency: cel_concurrency.as_ref().map(Arc::clone),
                     #[cfg(feature = "registry-notary-cel")]
                     cel_config: Arc::clone(&self.cel_config),
                 };
@@ -1807,6 +1832,17 @@ async fn evaluate_claim_task(
                 .context
                 .target_subject()
                 .ok_or(EvidenceError::TargetAttributesInsufficient)?;
+            #[cfg(feature = "registry-notary-cel")]
+            let _cel_permit = if let Some(cel_concurrency) = ctx.cel_concurrency.as_ref() {
+                Some(
+                    Arc::clone(cel_concurrency)
+                        .acquire_owned()
+                        .await
+                        .map_err(|_| EvidenceError::RuleEvaluationFailed)?,
+                )
+            } else {
+                None
+            };
             let value = evaluate_cel_expression(&CelEvaluationContext {
                 evidence: &ctx.evidence,
                 claim: &claim,
@@ -1816,6 +1852,7 @@ async fn evaluate_claim_task(
                 sources: &sources,
                 subject: &target_subject,
                 purpose: ctx.purpose.as_str(),
+                today: ctx.now.date().to_string(),
                 #[cfg(feature = "registry-notary-cel")]
                 worker: ctx.cel_worker.as_deref(),
                 #[cfg(feature = "registry-notary-cel")]
@@ -3296,6 +3333,7 @@ fn cel_preflight_root_bindings(
             json!({
                 "purpose": "preflight",
                 "subject": { "id": "preflight-subject" },
+                "today": "2026-06-16",
             }),
         ),
         (
@@ -3425,6 +3463,7 @@ fn cel_root_bindings(
             json!({
                 "purpose": ctx.purpose,
                 "subject": { "id": ctx.subject.id },
+                "today": ctx.today,
             }),
         ),
         (
@@ -5446,14 +5485,12 @@ mod tests {
         );
 
         let mut claim = test_claim("age-band", Vec::new(), false);
-        claim.value.value_type = "string".to_string();
         claim.source_bindings = BTreeMap::from([("civil".to_string(), source_binding)]);
         claim.rule = RuleConfig::Cel {
-            expression: "source.civil.birth_date == vars.as_of_date ? 'same' : 'different'"
-                .to_string(),
+            expression: "date.age_on(source.civil.birth_date, ctx.today) >= 18".to_string(),
             bindings: CelBindingsConfig {
                 claims: BTreeMap::new(),
-                vars: BTreeMap::from([("as_of_date".to_string(), json!("2000-01-01"))]),
+                vars: BTreeMap::new(),
             },
         };
         let evidence = EvidenceConfig {

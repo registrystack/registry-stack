@@ -198,7 +198,7 @@ Boundary rules:
   retry sidecar adapter execution failures.
 
 See
-[`../crates/registry-notary-openfn-sidecar/README.md`](../crates/registry-notary-openfn-sidecar/README.md)
+[`../crates/registry-notary-source-adapter-sidecar/README.md`](../crates/registry-notary-source-adapter-sidecar/README.md)
 for sidecar manifest and worker details.
 
 ### Sidecar Batch Matching Contract

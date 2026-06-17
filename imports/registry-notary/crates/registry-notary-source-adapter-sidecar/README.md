@@ -2,9 +2,8 @@
 
 This crate exposes a synchronous Registry Data API-shaped source endpoint. A
 source can run through the pinned OpenFn worker pool or through the built-in
-`http_json` and `http_flow` adapters for governed HTTP JSON registries. In all
-cases the
-Rust sidecar owns the HTTP contract, manifest validation, concurrency limits,
+`http_json`, `http_flow`, and `fhir` adapters for governed source reads. In all
+cases the Rust sidecar owns the HTTP contract, manifest validation, concurrency limits,
 timeouts, normalization, health checks, and credential non-disclosure boundary.
 
 Registry Notary should connect to this sidecar with the `openfn_sidecar`
@@ -52,16 +51,16 @@ auth:
     - id: notary
       hash_env: OPENFN_SIDECAR_TOKEN_HASH
 config_trust:
-  product: registry-notary-openfn-sidecar
+  product: registry-notary-source-adapter-sidecar
   instance_id: demo
   environment: staging
   stream_id: openfn-sidecar-runtime
-  root_path: /etc/registry-notary-openfn-sidecar/tuf/root.json
-  metadata_dir: /etc/registry-notary-openfn-sidecar/tuf/metadata
-  targets_dir: /etc/registry-notary-openfn-sidecar/tuf/targets
-  datastore_dir: /var/lib/registry-notary-openfn-sidecar/tuf
+  root_path: /etc/registry-notary-source-adapter-sidecar/tuf/root.json
+  metadata_dir: /etc/registry-notary-source-adapter-sidecar/tuf/metadata
+  targets_dir: /etc/registry-notary-source-adapter-sidecar/tuf/targets
+  datastore_dir: /var/lib/registry-notary-source-adapter-sidecar/tuf
   target_name: openfn-sidecar-runtime.json
-  antirollback_state_path: /var/lib/registry-notary-openfn-sidecar/config-trust/antirollback.json
+  antirollback_state_path: /var/lib/registry-notary-source-adapter-sidecar/config-trust/antirollback.json
   accepted_roots: []
 ```
 
@@ -89,17 +88,17 @@ contents, raw smoke lookup payloads, or environment details.
 Release helpers render, locally sign, and verify governed runtime material:
 
 ```bash
-cargo run -p registry-notary-openfn-sidecar -- \
+cargo run -p registry-notary-source-adapter-sidecar -- \
   config render-target \
   --manifest /path/to/openfn-sidecar.yaml \
   --jobs-root /opt/openfn/jobs \
   --output /tmp/openfn-sidecar-runtime.json
 
-cargo run -p registry-notary-openfn-sidecar -- \
+cargo run -p registry-notary-source-adapter-sidecar -- \
   config print-expression-hashes \
   --target /tmp/openfn-sidecar-runtime.json
 
-cargo run -p registry-notary-openfn-sidecar -- \
+cargo run -p registry-notary-source-adapter-sidecar -- \
   config verify-bundle \
   --target /tmp/openfn-sidecar-runtime.json
 ```
@@ -109,7 +108,7 @@ the rendered target. This helper uses the supplied root and signing key. It is
 not a substitute for production key custody or approval workflow.
 
 ```bash
-cargo run -p registry-notary-openfn-sidecar -- \
+cargo run -p registry-notary-source-adapter-sidecar -- \
   config create-local-tuf-repo \
   --target /tmp/openfn-sidecar-runtime.json \
   --target-name openfn-sidecar-runtime.json \
@@ -117,7 +116,7 @@ cargo run -p registry-notary-openfn-sidecar -- \
   --signing-key-path /path/to/tuf/targets-signing-key.pem \
   --metadata-dir /tmp/openfn-sidecar-tuf/metadata \
   --targets-dir /tmp/openfn-sidecar-tuf/targets \
-  --product registry-notary-openfn-sidecar \
+  --product registry-notary-source-adapter-sidecar \
   --instance-id demo \
   --environment staging \
   --stream-id openfn-sidecar-runtime \
@@ -132,16 +131,16 @@ To verify an already signed local TUF repository, omit `--target` and provide
 the local TUF coordinates plus the expected identity:
 
 ```bash
-cargo run -p registry-notary-openfn-sidecar -- \
+cargo run -p registry-notary-source-adapter-sidecar -- \
   config verify-bundle \
-  --product registry-notary-openfn-sidecar \
+  --product registry-notary-source-adapter-sidecar \
   --instance-id demo \
   --environment staging \
   --stream-id openfn-sidecar-runtime \
-  --root-path /etc/registry-notary-openfn-sidecar/tuf/root.json \
-  --metadata-dir /etc/registry-notary-openfn-sidecar/tuf/metadata \
-  --targets-dir /etc/registry-notary-openfn-sidecar/tuf/targets \
-  --datastore-dir /var/lib/registry-notary-openfn-sidecar/tuf \
+  --root-path /etc/registry-notary-source-adapter-sidecar/tuf/root.json \
+  --metadata-dir /etc/registry-notary-source-adapter-sidecar/tuf/metadata \
+  --targets-dir /etc/registry-notary-source-adapter-sidecar/tuf/targets \
+  --datastore-dir /var/lib/registry-notary-source-adapter-sidecar/tuf \
   --target-name openfn-sidecar-runtime.json
 ```
 
@@ -158,7 +157,7 @@ source_connections:
     token_env: OPENFN_SIDECAR_TOKEN
     allow_insecure_localhost: true
     expected_sidecar:
-      product: registry-notary-openfn-sidecar
+      product: registry-notary-source-adapter-sidecar
       instance_id: demo
       environment: staging
       stream_id: openfn-sidecar-runtime
@@ -518,10 +517,10 @@ The `/metrics` endpoint reports worker capacity plus per-source outcomes,
 duration totals, and item totals:
 
 ```text
-registry_notary_openfn_sidecar_lookup_total{source_id="openfn_crvs",outcome="batch_success"} 1
-registry_notary_openfn_sidecar_lookup_items_total{source_id="openfn_crvs",outcome="batch_success"} 3
-registry_notary_openfn_sidecar_source_permits{source_id="openfn_crvs",state="in_flight"} 0
-registry_notary_openfn_sidecar_http_json_clients{source_id="http_people"} 1
+registry_notary_source_adapter_sidecar_lookup_total{source_id="openfn_crvs",outcome="batch_success"} 1
+registry_notary_source_adapter_sidecar_lookup_items_total{source_id="openfn_crvs",outcome="batch_success"} 3
+registry_notary_source_adapter_sidecar_source_permits{source_id="openfn_crvs",state="in_flight"} 0
+registry_notary_source_adapter_sidecar_http_json_clients{source_id="http_people"} 1
 ```
 
 Metrics labels intentionally include only `source_id` and outcome. They must not
@@ -552,8 +551,8 @@ and smoke scripts.
 ```bash
 export OPENCRVS_READER_CREDENTIAL_JSON='{"baseUrl":"https://example.test","apiToken":"dev"}'
 export DEV_SIDECAR_TOKEN_HASH='sha256:<sha256-hex-of-your-sidecar-token>'
-REGISTRY_NOTARY_OPENFN_SIDECAR_CONFIG=/path/to/sidecar.yaml \
-  cargo run -p registry-notary-openfn-sidecar -- \
+REGISTRY_NOTARY_SOURCE_ADAPTER_SIDECAR_CONFIG=/path/to/sidecar.yaml \
+  cargo run -p registry-notary-source-adapter-sidecar -- \
     --config /path/to/sidecar.yaml \
     --allow-unsigned-dev-config
 ```
@@ -572,14 +571,14 @@ PY
 To try the full HTTP adaptor path locally:
 
 ```bash
-crates/registry-notary-openfn-sidecar/scripts/run-openfn-http-demo.sh start
+crates/registry-notary-source-adapter-sidecar/scripts/run-openfn-http-demo.sh start
 
 curl -sS \
   -H "Authorization: Bearer dev-sidecar-token" \
   -H "Data-Purpose: demo" \
   "http://127.0.0.1:19191/v1/datasets/civil_registry/entities/civil_person/records?national_id=person-123&fields=national_id,birth_date&limit=2" | jq
 
-crates/registry-notary-openfn-sidecar/scripts/run-openfn-http-demo.sh stop
+crates/registry-notary-source-adapter-sidecar/scripts/run-openfn-http-demo.sh stop
 ```
 
 The sidecar is intended for localhost or private pod-network traffic from
@@ -609,14 +608,14 @@ docker build \
   --build-context registry-platform=../registry-platform \
   --build-context crosswalk=../crosswalk \
   -f Dockerfile.openfn-sidecar \
-  -t registry-notary-openfn-sidecar .
+  -t registry-notary-source-adapter-sidecar .
 ```
 
 The container healthcheck runs
 [scripts/container-healthcheck.mjs](scripts/container-healthcheck.mjs) with
 Node's built-in `fetch`, so the image does not need curl. It probes
 `http://127.0.0.1:9191/healthz` by default; set
-`REGISTRY_NOTARY_OPENFN_SIDECAR_HEALTHCHECK_URL` when the sidecar binds a
+`REGISTRY_NOTARY_SOURCE_ADAPTER_SIDECAR_HEALTHCHECK_URL` when the sidecar binds a
 different listener.
 
 ## Verification
@@ -624,16 +623,16 @@ different listener.
 The focused sidecar checks are:
 
 ```bash
-cargo test -p registry-notary-openfn-sidecar
-cargo clippy -p registry-notary-openfn-sidecar --all-targets -- -D warnings
+cargo test -p registry-notary-source-adapter-sidecar
+cargo clippy -p registry-notary-source-adapter-sidecar --all-targets -- -D warnings
 cargo fmt --all -- --check
-cargo build -p registry-notary-openfn-sidecar
-crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-worker.sh
-crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-sidecar.sh
-crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-http-sidecar.sh
-crates/registry-notary-openfn-sidecar/scripts/smoke-http-json-dhis2-sidecar.sh
-crates/registry-notary-openfn-sidecar/scripts/smoke-http-flow-dhis2-sidecar.sh
-crates/registry-notary-openfn-sidecar/scripts/load-http-json-sidecar.sh
+cargo build -p registry-notary-source-adapter-sidecar
+crates/registry-notary-source-adapter-sidecar/scripts/smoke-openfn-worker.sh
+crates/registry-notary-source-adapter-sidecar/scripts/smoke-openfn-sidecar.sh
+crates/registry-notary-source-adapter-sidecar/scripts/smoke-openfn-http-sidecar.sh
+crates/registry-notary-source-adapter-sidecar/scripts/smoke-http-json-dhis2-sidecar.sh
+crates/registry-notary-source-adapter-sidecar/scripts/smoke-http-flow-dhis2-sidecar.sh
+crates/registry-notary-source-adapter-sidecar/scripts/load-http-json-sidecar.sh
 ```
 
 For repeatable local load checks against the built-in `http_json` engine, run:
@@ -641,7 +640,7 @@ For repeatable local load checks against the built-in `http_json` engine, run:
 ```bash
 LOAD_HTTP_JSON_REQUESTS=200 \
 LOAD_HTTP_JSON_CONCURRENCY=16 \
-  crates/registry-notary-openfn-sidecar/scripts/load-http-json-sidecar.sh
+  crates/registry-notary-source-adapter-sidecar/scripts/load-http-json-sidecar.sh
 
 LOAD_HTTP_JSON_SCENARIO=batch \
 LOAD_HTTP_JSON_BATCH_MODE=parallel_lookup \
@@ -649,19 +648,19 @@ LOAD_HTTP_JSON_REQUESTS=100 \
 LOAD_HTTP_JSON_BATCH_SIZE=20 \
 LOAD_HTTP_JSON_CONCURRENCY=8 \
 LOAD_HTTP_JSON_MAX_PARALLEL=4 \
-  crates/registry-notary-openfn-sidecar/scripts/load-http-json-sidecar.sh
+  crates/registry-notary-source-adapter-sidecar/scripts/load-http-json-sidecar.sh
 
 LOAD_HTTP_JSON_SCENARIO=batch \
 LOAD_HTTP_JSON_BATCH_MODE=native_batch \
 LOAD_HTTP_JSON_REQUESTS=100 \
 LOAD_HTTP_JSON_BATCH_SIZE=20 \
 LOAD_HTTP_JSON_CONCURRENCY=8 \
-  crates/registry-notary-openfn-sidecar/scripts/load-http-json-sidecar.sh
+  crates/registry-notary-source-adapter-sidecar/scripts/load-http-json-sidecar.sh
 
 LOAD_HTTP_JSON_SCENARIO=cache \
 LOAD_HTTP_JSON_REQUESTS=200 \
 LOAD_HTTP_JSON_CONCURRENCY=16 \
-  crates/registry-notary-openfn-sidecar/scripts/load-http-json-sidecar.sh
+  crates/registry-notary-source-adapter-sidecar/scripts/load-http-json-sidecar.sh
 ```
 
 Set `LOAD_HTTP_JSON_RELEASE=1` for capacity baselines. Without it the harness
@@ -679,13 +678,13 @@ For a live target canary against the DHIS2 play server, run:
 
 ```bash
 HTTP_JSON_DHIS2_PASSWORD=... \
-  crates/registry-notary-openfn-sidecar/scripts/smoke-http-json-dhis2-sidecar.sh
+  crates/registry-notary-source-adapter-sidecar/scripts/smoke-http-json-dhis2-sidecar.sh
 
 HTTP_FLOW_DHIS2_PASSWORD=... \
-  crates/registry-notary-openfn-sidecar/scripts/smoke-http-flow-dhis2-sidecar.sh
+  crates/registry-notary-source-adapter-sidecar/scripts/smoke-http-flow-dhis2-sidecar.sh
 
 OPENFN_DHIS2_PASSWORD=... \
-  crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-dhis2-sidecar.sh
+  crates/registry-notary-source-adapter-sidecar/scripts/smoke-openfn-dhis2-sidecar.sh
 ```
 
 The http_json, http_flow, and OpenFn DHIS2 canaries default to the public play

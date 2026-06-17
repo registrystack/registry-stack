@@ -8226,7 +8226,7 @@ evidence:
       retry_on_5xx: false
       bulk_mode: openfn_sidecar_batch
       expected_sidecar:
-        product: registry-notary-openfn-sidecar
+        product: registry-notary-source-adapter-sidecar
         instance_id: demo
         environment: staging
         stream_id: openfn-sidecar-runtime
@@ -8312,7 +8312,7 @@ evidence:
                 token_env: "OPENFN_SIDECAR_TOKEN".to_string(),
                 source_auth: None,
                 expected_sidecar: Some(ExpectedSidecarConfig {
-                    product: "registry-notary-openfn-sidecar".to_string(),
+                    product: "registry-notary-source-adapter-sidecar".to_string(),
                     instance_id: "demo".to_string(),
                     environment: "staging".to_string(),
                     stream_id: "openfn-sidecar-runtime".to_string(),

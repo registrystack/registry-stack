@@ -3,7 +3,7 @@
 use axum::http::StatusCode;
 use axum_test::TestServer;
 use chrono::{TimeDelta, Utc};
-use registry_notary_openfn_sidecar::{
+use registry_notary_source_adapter_sidecar::{
     create_local_tuf_demo_repo_report_json, load_startup_config, load_startup_config_with_options,
     print_expression_hashes_report_json, render_governed_runtime_target_json, sidecar_router,
     verify_governed_bundle_report_json, CreateLocalTufRepoOptions, LocalTufBundleVerifyOptions,
@@ -30,7 +30,7 @@ const TOKEN_HASH_ENV: &str = "OPENFN_GOVERNED_VALIDATION_TOKEN_HASH";
 const TOKEN: &str = "contract-sidecar-token";
 const TOKEN_HASH: &str = "sha256:98808b694f3b431dcc2459db07bbfb61b8e3287ad0ab7364a2ff510d35e21418";
 const CREDENTIAL_ENV: &str = "OPENFN_GOVERNED_VALIDATION_CREDENTIAL_JSON";
-const PRODUCT: &str = "registry-notary-openfn-sidecar";
+const PRODUCT: &str = "registry-notary-source-adapter-sidecar";
 const INSTANCE_ID: &str = "demo";
 const ENVIRONMENT: &str = "staging";
 const STREAM_ID: &str = "openfn-sidecar-runtime";

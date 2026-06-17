@@ -136,6 +136,30 @@ async fn cel_worker_evaluates_through_bounded_process_protocol() {
 }
 
 #[tokio::test]
+async fn cel_worker_evaluates_date_age_against_context_today() {
+    let worker = CelWorker::new(config()).await.expect("worker starts");
+
+    let value = worker
+        .evaluate(
+            "date.age_on(source.patient.birth_date, ctx.today) >= 18",
+            json!({
+                "source": { "patient": { "birth_date": "2000-06-16" } },
+                "vars": {},
+                "claims": {},
+                "ctx": {
+                    "purpose": "test",
+                    "today": "2026-06-16"
+                },
+                "meta": {}
+            }),
+        )
+        .await
+        .expect("CEL evaluates");
+
+    assert_eq!(value, json!(true));
+}
+
+#[tokio::test]
 async fn cel_worker_snapshot_reports_ready_capacity() {
     let worker = CelWorker::new(CelWorkerConfig {
         max_workers: 2,

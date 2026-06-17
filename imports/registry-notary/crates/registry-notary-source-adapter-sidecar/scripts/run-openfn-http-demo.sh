@@ -155,7 +155,7 @@ fi
 
 export OPENFN_HTTP_DEMO_CREDENTIAL_JSON="{\"baseUrl\":\"http://127.0.0.1:$registry_port\",\"apiToken\":\"demo-target-token\"}"
 export DEV_SIDECAR_TOKEN_HASH='sha256:a61cb2a28977890d2e95d2eb9f5355b184d48dc2aec23252bdeb08eca7f42544'
-nohup cargo run -p registry-notary-openfn-sidecar --bin registry-notary-openfn-sidecar -- \
+nohup cargo run -p registry-notary-source-adapter-sidecar --bin registry-notary-source-adapter-sidecar -- \
   --config "$manifest" \
   --allow-unsigned-dev-config >"$sidecar_log" 2>&1 &
 sidecar_pid="$!"

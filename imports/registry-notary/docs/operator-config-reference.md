@@ -489,8 +489,8 @@ Use `connector: openfn_sidecar` when a target system needs governed HTTP JSON
 mapping, a short dependent HTTP JSON flow, OpenFn adaptor execution, target
 credential handling, or output normalization outside Notary. The connector
 value remains `openfn_sidecar` for compatibility; the sidecar source chooses
-`engine: http_json`, `engine: http_flow`, or `engine: openfn` in its own signed
-manifest. The source connection must use static sidecar bearer auth through
+`engine: http_json`, `engine: http_flow`, `engine: fhir`, or `engine: openfn`
+in its own signed manifest. The source connection must use static sidecar bearer auth through
 `token_env`. Do not configure target-service credentials in Notary; keep them
 in the sidecar environment or secret store. Configure performance and
 target-protection controls in the sidecar manifest: per-source `max_in_flight`,
@@ -519,7 +519,7 @@ evidence:
       retry_on_5xx: false
       bulk_mode: none
       expected_sidecar:
-        product: registry-notary-openfn-sidecar
+        product: registry-notary-source-adapter-sidecar
         instance_id: civil-registry-sidecar
         environment: production
         stream_id: openfn-sidecar-runtime
@@ -573,7 +573,7 @@ evidence:
       bulk_mode: openfn_sidecar_batch
       bulk_timeout_max_ms: 30000
       expected_sidecar:
-        product: registry-notary-openfn-sidecar
+        product: registry-notary-source-adapter-sidecar
         instance_id: civil-registry-sidecar
         environment: production
         stream_id: openfn-sidecar-runtime

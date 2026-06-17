@@ -9,7 +9,7 @@ on:
       - "Cargo.toml"
       - "crates/registry-notary-core/**"
       - "crates/registry-notary-server/**"
-      - "crates/registry-notary-openfn-sidecar/**"
+      - "crates/registry-notary-source-adapter-sidecar/**"
       - "fuzz/**"
   schedule:
     - cron: "17 3 * * *"

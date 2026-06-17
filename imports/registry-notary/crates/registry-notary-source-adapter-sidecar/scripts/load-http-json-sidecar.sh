@@ -210,9 +210,9 @@ fi
 
 export LOAD_HTTP_JSON_SIDECAR_TOKEN_HASH="$sidecar_token_hash"
 export LOAD_HTTP_JSON_CREDENTIAL_JSON="{\"baseUrl\":\"http://127.0.0.1:$registry_port\",\"apiToken\":\"$target_token\"}"
-cargo_args="run -p registry-notary-openfn-sidecar --bin registry-notary-openfn-sidecar"
+cargo_args="run -p registry-notary-source-adapter-sidecar --bin registry-notary-source-adapter-sidecar"
 if [ "$release" = "1" ]; then
-  cargo_args="run --release -p registry-notary-openfn-sidecar --bin registry-notary-openfn-sidecar"
+  cargo_args="run --release -p registry-notary-source-adapter-sidecar --bin registry-notary-source-adapter-sidecar"
 fi
 cargo $cargo_args -- \
   --config "$manifest" \
@@ -245,7 +245,7 @@ curl -fsS "http://127.0.0.1:$sidecar_port/metrics" >"$metrics_txt"
 curl -fsS "http://127.0.0.1:$registry_port/stats" >"$registry_stats_json"
 
 if [ "$scenario" = "cache" ]; then
-  grep 'registry_notary_openfn_sidecar_lookup_total{source_id="http_people",outcome="source_cache_hit"}' "$metrics_txt" >/dev/null
+  grep 'registry_notary_source_adapter_sidecar_lookup_total{source_id="http_people",outcome="source_cache_hit"}' "$metrics_txt" >/dev/null
 fi
 
 for secret in "$sidecar_token" "$target_token"; do

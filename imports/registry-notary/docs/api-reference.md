@@ -87,9 +87,9 @@ dataset/entity names, source field names, or raw source binding configuration.
 This section documents the private sidecar API that Registry Notary calls when a
 source binding uses the compatibility connector value
 `connector: openfn_sidecar`. It is not a caller-facing Registry Notary route.
-The sidecar can run the built-in `http_json` engine, the built-in `http_flow`
-engine, or a pinned OpenFn workflow. It must run on localhost or a private pod
-network and must not be publicly exposed.
+The sidecar can run the built-in `http_json`, `http_flow`, and `fhir` engines,
+or a pinned OpenFn workflow. It must run on localhost or a private pod network
+and must not be publicly exposed.
 
 Single reads use the Registry Data API-shaped source route:
 

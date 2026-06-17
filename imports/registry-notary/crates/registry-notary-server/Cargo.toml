@@ -58,7 +58,7 @@ axum-test = { version = "20" }
 chrono = { version = "0.4" }
 registry-notary-client = { version = "0.3.0", path = "../registry-notary-client", features = ["verifier"] }
 registry-platform-testing = { workspace = true, features = ["test-utils"] }
-registry-notary-openfn-sidecar = { version = "0.3.0", path = "../registry-notary-openfn-sidecar" }
+registry-notary-source-adapter-sidecar = { version = "0.3.0", path = "../registry-notary-source-adapter-sidecar" }
 jsonschema.workspace = true
 tempfile = { version = "3" }
 tough = { version = "0.22.0" }

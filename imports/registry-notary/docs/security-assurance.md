@@ -3,7 +3,7 @@
 Registry Notary's container workflow publishes release images from stable
 `vX.Y.Z` tags and `registry-stack-technical-preview-<date-or-version>` tags to
 `ghcr.io/jeremi/registry-notary` and
-`ghcr.io/jeremi/registry-notary-openfn-sidecar`. Every release publishes
+`ghcr.io/jeremi/registry-notary-source-adapter-sidecar`. Every release publishes
 `sha-<commit-sha>` as the immutable image tag for both images. Stable releases
 also update `vX.Y.Z`, `vX.Y`, `vX`, and `latest`; `latest` means latest stable
 release. Technical-preview releases publish the matching
@@ -82,8 +82,8 @@ Verify a release alias and its immutable SHA tag resolve to the same digest:
 ```sh
 docker buildx imagetools inspect ghcr.io/jeremi/registry-notary:sha-<commit-sha>
 docker buildx imagetools inspect ghcr.io/jeremi/registry-notary:<release-alias>
-docker buildx imagetools inspect ghcr.io/jeremi/registry-notary-openfn-sidecar:sha-<commit-sha>
-docker buildx imagetools inspect ghcr.io/jeremi/registry-notary-openfn-sidecar:<release-alias>
+docker buildx imagetools inspect ghcr.io/jeremi/registry-notary-source-adapter-sidecar:sha-<commit-sha>
+docker buildx imagetools inspect ghcr.io/jeremi/registry-notary-source-adapter-sidecar:<release-alias>
 ```
 
 Verify the cosign signature for a tag using the triggering Git release tag:
@@ -97,7 +97,7 @@ cosign verify \
 cosign verify \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity "https://github.com/jeremi/registry-notary/.github/workflows/container.yml@refs/tags/<git-tag>" \
-  ghcr.io/jeremi/registry-notary-openfn-sidecar:<tag>
+  ghcr.io/jeremi/registry-notary-source-adapter-sidecar:<tag>
 ```
 
 The certificate identity is the Git tag that triggered the workflow, not
@@ -117,7 +117,7 @@ cosign verify \
 cosign verify \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity-regexp '^https://github.com/jeremi/registry-notary/\.github/workflows/container\.yml@refs/tags/(v[0-9]+\.[0-9]+\.[0-9]+|registry-stack-technical-preview-[0-9A-Za-z][0-9A-Za-z._-]*)$' \
-  ghcr.io/jeremi/registry-notary-openfn-sidecar:<moving-tag>
+  ghcr.io/jeremi/registry-notary-source-adapter-sidecar:<moving-tag>
 ```
 
 ## Deliberate route posture exceptions

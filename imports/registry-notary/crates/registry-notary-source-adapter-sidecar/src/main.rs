@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Synchronous adaptor source sidecar entrypoint.
+// Registry Notary source adapter sidecar entrypoint.
 
-use std::path::PathBuf;
+use std::{env, path::PathBuf};
 
 use clap::{Parser, Subcommand};
-use registry_notary_openfn_sidecar::{
+use registry_notary_source_adapter_sidecar::{
     create_local_tuf_demo_repo_report_json, load_startup_config_with_options,
     print_expression_hashes_report_json, render_governed_runtime_target_json, run,
     verify_governed_bundle_report_json, CreateLocalTufRepoOptions, LocalTufBundleVerifyOptions,
@@ -12,15 +12,22 @@ use registry_notary_openfn_sidecar::{
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
-#[command(author, version, about = "Run the Registry Notary OpenFn sidecar")]
+#[command(
+    author,
+    version,
+    about = "Run the Registry Notary source adapter sidecar"
+)]
 struct Args {
     #[command(subcommand)]
     command: Option<Command>,
     /// YAML sidecar config path.
-    #[arg(short, long, env = "REGISTRY_NOTARY_OPENFN_SIDECAR_CONFIG")]
+    #[arg(short, long, env = "REGISTRY_NOTARY_SOURCE_ADAPTER_SIDECAR_CONFIG")]
     config: Option<PathBuf>,
     /// Permit legacy unsigned manifests for local development only.
-    #[arg(long, env = "REGISTRY_NOTARY_OPENFN_SIDECAR_ALLOW_UNSIGNED_DEV_CONFIG")]
+    #[arg(
+        long,
+        env = "REGISTRY_NOTARY_SOURCE_ADAPTER_SIDECAR_ALLOW_UNSIGNED_DEV_CONFIG"
+    )]
     allow_unsigned_dev_config: bool,
 }
 
@@ -29,10 +36,13 @@ enum Command {
     /// Run the sidecar HTTP server.
     Serve {
         /// YAML sidecar config path.
-        #[arg(short, long, env = "REGISTRY_NOTARY_OPENFN_SIDECAR_CONFIG")]
-        config: PathBuf,
+        #[arg(short, long, env = "REGISTRY_NOTARY_SOURCE_ADAPTER_SIDECAR_CONFIG")]
+        config: Option<PathBuf>,
         /// Permit legacy unsigned manifests for local development only.
-        #[arg(long, env = "REGISTRY_NOTARY_OPENFN_SIDECAR_ALLOW_UNSIGNED_DEV_CONFIG")]
+        #[arg(
+            long,
+            env = "REGISTRY_NOTARY_SOURCE_ADAPTER_SIDECAR_ALLOW_UNSIGNED_DEV_CONFIG"
+        )]
         allow_unsigned_dev_config: bool,
     },
     /// Build and verify governed runtime target material.
@@ -140,22 +150,44 @@ struct VerifyBundleArgs {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,registry_notary_openfn_sidecar=debug")),
-        )
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            EnvFilter::new("info,registry_notary_source_adapter_sidecar=debug")
+        }))
         .init();
     match args.command {
         Some(Command::Serve {
             config,
             allow_unsigned_dev_config,
-        }) => serve(config, allow_unsigned_dev_config).await,
+        }) => {
+            let config = resolve_config(config)?;
+            serve(
+                config,
+                allow_unsigned_dev_config || legacy_allow_unsigned_dev_config(),
+            )
+            .await
+        }
         Some(Command::Config { command }) => config_command(*command).await,
         None => {
-            let config = args.config.ok_or("missing --config or subcommand")?;
-            serve(config, args.allow_unsigned_dev_config).await
+            let config = resolve_config(args.config)?;
+            serve(
+                config,
+                args.allow_unsigned_dev_config || legacy_allow_unsigned_dev_config(),
+            )
+            .await
         }
     }
+}
+
+fn resolve_config(config: Option<PathBuf>) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    config
+        .or_else(|| env::var_os("REGISTRY_NOTARY_OPENFN_SIDECAR_CONFIG").map(PathBuf::from))
+        .ok_or_else(|| "missing --config or subcommand".into())
+}
+
+fn legacy_allow_unsigned_dev_config() -> bool {
+    env::var("REGISTRY_NOTARY_OPENFN_SIDECAR_ALLOW_UNSIGNED_DEV_CONFIG")
+        .ok()
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
 }
 
 async fn serve(

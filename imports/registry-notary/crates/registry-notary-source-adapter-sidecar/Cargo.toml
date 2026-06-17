@@ -1,9 +1,9 @@
 [package]
-name = "registry-notary-openfn-sidecar"
+name = "registry-notary-source-adapter-sidecar"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Registry Notary OpenFn sidecar worker process protocol and execution pool."
+description = "Registry Notary governed source adapter sidecar runtime."
 readme = "README.md"
 repository.workspace = true
 publish = false
@@ -39,11 +39,21 @@ axum-test = { version = "20" }
 tempfile = { version = "3" }
 
 [[bin]]
+name = "registry-notary-source-adapter-sidecar"
+path = "src/main.rs"
+test = false
+
+[[bin]]
+name = "registry-notary-openfn-sidecar"
+path = "src/bin/registry_notary_openfn_sidecar.rs"
+test = false
+
+[[bin]]
 name = "openfn-sidecar-worker-fixture"
 path = "src/bin/openfn_sidecar_worker_fixture.rs"
 test = false
 
 [[bin]]
-name = "registry-notary-openfn-sidecar-test-worker"
+name = "registry-notary-source-adapter-sidecar-test-worker"
 path = "src/bin/test_worker.rs"
 test = false

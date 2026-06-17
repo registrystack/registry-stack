@@ -4,8 +4,9 @@
 //
 // Expected secrets/configuration:
 //   state.configuration.notary_base_url
-//   state.configuration.notary_token
-//   state.configuration.notary_target_fingerprint_key
+//   state.configuration.token
+//   state.configuration.openfn_request_fingerprint_key
+//   state.configuration.openfn_target_fingerprint_key (optional)
 //
 // This template intentionally does not use @openfn/language-http for the
 // Notary call. In @openfn/language-http@7.3.1, non-2xx responses can log the

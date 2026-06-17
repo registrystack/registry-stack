@@ -12,21 +12,21 @@ COPY --from=crosswalk Cargo.toml /workspace/crosswalk/
 COPY --from=crosswalk crates /workspace/crosswalk/crates
 COPY . .
 
-ARG REGISTRY_NOTARY_OPENFN_SIDECAR_FEATURES=""
+ARG REGISTRY_NOTARY_SOURCE_ADAPTER_SIDECAR_FEATURES=""
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/workspace/target \
-    if [ -n "$REGISTRY_NOTARY_OPENFN_SIDECAR_FEATURES" ]; then \
-        CARGO_TARGET_DIR=/workspace/target cargo build --release --locked -p registry-notary-openfn-sidecar --bin registry-notary-openfn-sidecar --features "$REGISTRY_NOTARY_OPENFN_SIDECAR_FEATURES"; \
+    if [ -n "$REGISTRY_NOTARY_SOURCE_ADAPTER_SIDECAR_FEATURES" ]; then \
+        CARGO_TARGET_DIR=/workspace/target cargo build --release --locked -p registry-notary-source-adapter-sidecar --bin registry-notary-source-adapter-sidecar --features "$REGISTRY_NOTARY_SOURCE_ADAPTER_SIDECAR_FEATURES"; \
     else \
-        CARGO_TARGET_DIR=/workspace/target cargo build --release --locked -p registry-notary-openfn-sidecar --bin registry-notary-openfn-sidecar; \
+        CARGO_TARGET_DIR=/workspace/target cargo build --release --locked -p registry-notary-source-adapter-sidecar --bin registry-notary-source-adapter-sidecar; \
     fi \
-    && cp /workspace/target/release/registry-notary-openfn-sidecar /usr/local/bin/registry-notary-openfn-sidecar
+    && cp /workspace/target/release/registry-notary-source-adapter-sidecar /usr/local/bin/registry-notary-source-adapter-sidecar
 
 FROM node:26-bookworm-slim@sha256:3fe807a03a4436e7bc76b7e84e6861899cd75c9028ae99bc00581940141ae150 AS node-deps
 
 WORKDIR /opt/openfn
-COPY crates/registry-notary-openfn-sidecar/workers/package.json crates/registry-notary-openfn-sidecar/workers/package-lock.json ./
-COPY crates/registry-notary-openfn-sidecar/workers/adaptors ./adaptors
+COPY crates/registry-notary-source-adapter-sidecar/workers/package.json crates/registry-notary-source-adapter-sidecar/workers/package-lock.json ./
+COPY crates/registry-notary-source-adapter-sidecar/workers/adaptors ./adaptors
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 
@@ -36,18 +36,18 @@ RUN --mount=type=cache,target=/root/.npm \
 FROM node:26-bookworm-slim@sha256:3fe807a03a4436e7bc76b7e84e6861899cd75c9028ae99bc00581940141ae150 AS runtime
 
 ENV NODE_ENV=production \
-    REGISTRY_NOTARY_OPENFN_SIDECAR_CONFIG=/etc/registry-notary-openfn-sidecar/sidecar.yaml
+    REGISTRY_NOTARY_SOURCE_ADAPTER_SIDECAR_CONFIG=/etc/registry-notary-source-adapter-sidecar/sidecar.yaml
 WORKDIR /opt/openfn
 
 COPY --from=node-deps /opt/openfn/package.json /opt/openfn/package-lock.json ./
 COPY --from=node-deps /opt/openfn/node_modules ./node_modules
-COPY crates/registry-notary-openfn-sidecar/workers/openfn_worker.mjs ./openfn_worker.mjs
-COPY crates/registry-notary-openfn-sidecar/scripts/container-healthcheck.mjs ./container-healthcheck.mjs
-COPY --from=builder /usr/local/bin/registry-notary-openfn-sidecar /usr/local/bin/registry-notary-openfn-sidecar
+COPY crates/registry-notary-source-adapter-sidecar/workers/openfn_worker.mjs ./openfn_worker.mjs
+COPY crates/registry-notary-source-adapter-sidecar/scripts/container-healthcheck.mjs ./container-healthcheck.mjs
+COPY --from=builder /usr/local/bin/registry-notary-source-adapter-sidecar /usr/local/bin/registry-notary-source-adapter-sidecar
 
 USER node
 EXPOSE 9191
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["node", "/opt/openfn/container-healthcheck.mjs"]
 
-ENTRYPOINT ["/usr/local/bin/registry-notary-openfn-sidecar"]
+ENTRYPOINT ["/usr/local/bin/registry-notary-source-adapter-sidecar"]

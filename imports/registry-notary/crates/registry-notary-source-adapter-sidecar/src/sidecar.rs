@@ -162,6 +162,7 @@ pub struct SourceConfig {
     pub engine: SourceEngine,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<SourceWorkflowConfig>,
+    #[serde(default)]
     pub credential_env: String,
     #[serde(default)]
     pub credential_public_fields: Vec<String>,
@@ -180,6 +181,8 @@ pub struct SourceConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_flow: Option<HttpFlowSourceConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fhir: Option<FhirSourceConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache: Option<SourceCacheConfig>,
     #[serde(default)]
     pub smoke_lookup: Option<SmokeLookupConfig>,
@@ -193,6 +196,7 @@ pub enum SourceEngine {
     OpenFn,
     HttpJson,
     HttpFlow,
+    Fhir,
 }
 
 impl SourceEngine {
@@ -201,8 +205,85 @@ impl SourceEngine {
             SourceEngine::OpenFn => "openfn",
             SourceEngine::HttpJson => "http_json",
             SourceEngine::HttpFlow => "http_flow",
+            SourceEngine::Fhir => "fhir",
         }
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FhirSourceConfig {
+    #[serde(default = "default_fhir_version")]
+    pub version: String,
+    pub base_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bearer_token_env: Option<String>,
+    #[serde(default = "default_true")]
+    pub forward_data_purpose: bool,
+    #[serde(default = "default_fhir_search_method")]
+    pub search_method: String,
+    #[serde(default = "default_fhir_prefer_handling")]
+    pub prefer_handling: String,
+    #[serde(default = "default_fhir_accept")]
+    pub accept: String,
+    #[serde(default = "default_fhir_max_search_results")]
+    pub max_search_results: usize,
+    #[serde(default = "default_fhir_max_source_bundle_bytes")]
+    pub max_source_bundle_bytes: usize,
+    pub anchor: FhirNodeConfig,
+    #[serde(default)]
+    pub relations: Vec<FhirRelationConfig>,
+    #[serde(default)]
+    pub project: BTreeMap<String, FhirProjectionConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FhirNodeConfig {
+    pub id: String,
+    pub resource_type: String,
+    #[serde(default = "default_fhir_cardinality_one")]
+    pub cardinality: String,
+    #[serde(default)]
+    pub search: Vec<FhirSearchParamConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FhirRelationConfig {
+    pub id: String,
+    pub resource_type: String,
+    #[serde(default = "default_fhir_cardinality_one")]
+    pub cardinality: String,
+    #[serde(default)]
+    pub search: Vec<FhirSearchParamConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FhirSearchParamConfig {
+    pub param: String,
+    #[serde(rename = "type")]
+    pub search_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_from_lookup: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_from_query: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_from_node: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FhirProjectionConfig {
+    pub node: String,
+    pub pointer: String,
+    #[serde(default, rename = "default", skip_serializing_if = "Option::is_none")]
+    pub default_value: Option<Value>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -501,6 +582,8 @@ pub struct SmokeLookupConfig {
     pub field: String,
     pub value: String,
     #[serde(default)]
+    pub query_values: BTreeMap<String, String>,
+    #[serde(default)]
     pub fields: Vec<String>,
     #[serde(default = "default_smoke_purpose")]
     pub purpose: String,
@@ -514,14 +597,14 @@ struct BatchMatchRequest {
     items: Vec<BatchMatchItem>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct BatchQueryTerm {
     field: String,
     op: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct BatchMatchItem {
     id: String,
@@ -561,6 +644,7 @@ pub enum SidecarError {
 struct AppState {
     config: Arc<SidecarConfig>,
     auth_tokens: Arc<Vec<ResolvedBearerToken>>,
+    fhir_bearer_tokens: Arc<BTreeMap<String, String>>,
     pool: Option<Arc<WorkerPool>>,
     credentials: Arc<BTreeMap<String, Value>>,
     source_limiters: Arc<BTreeMap<String, Arc<Semaphore>>>,
@@ -1352,6 +1436,7 @@ fn metadata_report(metadata: &ConfigTargetMetadata) -> Value {
 pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarError> {
     validate_config(&config)?;
     let auth_tokens = resolve_auth_tokens(&config)?;
+    let fhir_bearer_tokens = resolve_fhir_bearer_tokens(&config)?;
     let request_timeout = Duration::from_millis(config.server.request_timeout_ms);
     let request_body_timeout = Duration::from_millis(config.server.request_body_timeout_ms);
 
@@ -1408,6 +1493,7 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
     let state = Arc::new(AppState {
         config: Arc::new(config),
         auth_tokens: Arc::new(auth_tokens),
+        fhir_bearer_tokens: Arc::new(fhir_bearer_tokens),
         pool,
         credentials: Arc::new(credentials),
         source_limiters: Arc::new(source_limiters),
@@ -1456,6 +1542,7 @@ fn sensitive_worker_env_names(config: &SidecarConfig) -> BTreeSet<OsString> {
     config
         .sources
         .values()
+        .filter(|source| !source.credential_env.trim().is_empty())
         .map(|source| OsString::from(&source.credential_env))
         .chain(
             config
@@ -1490,7 +1577,7 @@ pub async fn run(config: SidecarConfig) -> Result<(), Box<dyn std::error::Error>
         request_timeout_ms,
         request_body_timeout_ms,
         http1_header_read_timeout_ms = %http1_header_read_timeout.as_millis(),
-        "registry notary OpenFn sidecar listening"
+        "registry notary source adapter sidecar listening"
     );
 
     loop {
@@ -1503,7 +1590,9 @@ pub async fn run(config: SidecarConfig) -> Result<(), Box<dyn std::error::Error>
         let permit = tokio::select! {
             biased;
             _ = &mut shutdown => {
-                tracing::info!("registry notary OpenFn sidecar shutdown signal received");
+                tracing::info!(
+                    "registry notary source adapter sidecar shutdown signal received"
+                );
                 break;
             }
             permit = Arc::clone(&connection_permits).acquire_owned() => {
@@ -1516,7 +1605,9 @@ pub async fn run(config: SidecarConfig) -> Result<(), Box<dyn std::error::Error>
         tokio::select! {
             biased;
             _ = &mut shutdown => {
-                tracing::info!("registry notary OpenFn sidecar shutdown signal received");
+                tracing::info!(
+                    "registry notary source adapter sidecar shutdown signal received"
+                );
                 break;
             }
             accepted = listener.accept() => {
@@ -1806,9 +1897,24 @@ fn validate_source_execution(
                     "source {source_id} http_json config is only valid for http_json sources"
                 )));
             }
+            if source.http_flow.is_some() {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} http_flow config is only valid for http_flow sources"
+                )));
+            }
+            if source.fhir.is_some() {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} fhir config is only valid for fhir sources"
+                )));
+            }
             if source.cache.is_some() {
                 return Err(SidecarError::Config(format!(
                     "source {source_id} cache is only supported for http_json sources"
+                )));
+            }
+            if source.credential_env.trim().is_empty() {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} credential_env is required for OpenFn sources"
                 )));
             }
             let workflow = source.workflow.as_ref().ok_or_else(|| {
@@ -1820,6 +1926,7 @@ fn validate_source_execution(
         }
         SourceEngine::HttpJson => validate_http_json_source(source_id, source),
         SourceEngine::HttpFlow => validate_http_flow_source(source_id, source),
+        SourceEngine::Fhir => validate_fhir_source(source_id, source),
     }
 }
 
@@ -1827,6 +1934,21 @@ fn validate_http_json_source(source_id: &str, source: &SourceConfig) -> Result<(
     if source.workflow.is_some() {
         return Err(SidecarError::Config(format!(
             "source {source_id} workflow is not valid for http_json sources"
+        )));
+    }
+    if source.http_flow.is_some() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} http_flow config is not valid when engine is http_json"
+        )));
+    }
+    if source.fhir.is_some() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} fhir config is not valid when engine is http_json"
+        )));
+    }
+    if source.credential_env.trim().is_empty() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} credential_env is required for http_json sources"
         )));
     }
     let http_json = source.http_json.as_ref().ok_or_else(|| {
@@ -1940,6 +2062,16 @@ fn validate_http_flow_source(source_id: &str, source: &SourceConfig) -> Result<(
     if source.http_json.is_some() {
         return Err(SidecarError::Config(format!(
             "source {source_id} http_json config is not valid when engine is http_flow"
+        )));
+    }
+    if source.fhir.is_some() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} fhir config is not valid when engine is http_flow"
+        )));
+    }
+    if source.credential_env.trim().is_empty() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} credential_env is required for http_flow sources"
         )));
     }
     if matches!(
@@ -2095,6 +2227,246 @@ fn validate_http_flow_source(source_id: &str, source: &SourceConfig) -> Result<(
                     )?;
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_fhir_source(source_id: &str, source: &SourceConfig) -> Result<(), SidecarError> {
+    if source.workflow.is_some() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} workflow is not valid for fhir sources"
+        )));
+    }
+    if source.http_json.is_some() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} http_json config is not valid when engine is fhir"
+        )));
+    }
+    if source.http_flow.is_some() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} http_flow config is not valid when engine is fhir"
+        )));
+    }
+    if source.cache.is_some() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} cache is not supported for fhir sources"
+        )));
+    }
+    if matches!(
+        source.batch.mode,
+        SourceBatchMode::WorkflowBatch | SourceBatchMode::NativeBatch
+    ) {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} batch.mode is not supported for fhir sources"
+        )));
+    }
+    if source.batch.mode != SourceBatchMode::ParallelLookup && source.batch.max_parallel.is_some() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} batch.max_parallel requires batch.mode parallel_lookup"
+        )));
+    }
+    if source.allowed_base_urls.is_empty() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} allowed_base_urls is required for fhir"
+        )));
+    }
+    let fhir = source.fhir.as_ref().ok_or_else(|| {
+        SidecarError::Config(format!(
+            "source {source_id} fhir config is required when engine is fhir"
+        ))
+    })?;
+    if fhir.version != "R4" {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} fhir.version must be R4"
+        )));
+    }
+    if fhir.search_method != "get" {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} fhir.search_method must be get"
+        )));
+    }
+    if fhir.max_search_results == 0 {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} fhir.max_search_results must be greater than zero"
+        )));
+    }
+    if fhir
+        .bearer_token_env
+        .as_deref()
+        .is_some_and(|env| env.trim().is_empty())
+    {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} fhir.bearer_token_env must not be empty"
+        )));
+    }
+    let base_url = reqwest::Url::parse(&fhir.base_url).map_err(|_| {
+        SidecarError::Config(format!(
+            "source {source_id} fhir.base_url must be an absolute URL"
+        ))
+    })?;
+    validate_fhir_base_url_policy(source_id, source, &base_url)?;
+    ensure_allowed_base_url(source_id, source, &base_url)?;
+    validate_fhir_node(source_id, "anchor", &fhir.anchor)?;
+    let mut node_ids = BTreeSet::from([fhir.anchor.id.as_str()]);
+    for relation in &fhir.relations {
+        validate_fhir_node(
+            source_id,
+            &format!("relation {}", relation.id),
+            &FhirNodeConfig {
+                id: relation.id.clone(),
+                resource_type: relation.resource_type.clone(),
+                cardinality: relation.cardinality.clone(),
+                search: relation.search.clone(),
+            },
+        )?;
+        if !node_ids.insert(relation.id.as_str()) {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} fhir node id {} is duplicated",
+                relation.id
+            )));
+        }
+    }
+    for (field, projection) in &fhir.project {
+        if field.trim().is_empty() {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} fhir.project field must not be empty"
+            )));
+        }
+        if !node_ids.contains(projection.node.as_str()) {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} fhir.project.{field}.node is not defined"
+            )));
+        }
+        if !projection.pointer.starts_with('/') {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} fhir.project.{field}.pointer must be a JSON Pointer"
+            )));
+        }
+        if let Some(value) = &projection.default_value {
+            if value.is_object() || value.is_array() {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} fhir.project.{field}.default must be scalar"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_fhir_node(
+    source_id: &str,
+    label: &str,
+    node: &FhirNodeConfig,
+) -> Result<(), SidecarError> {
+    if node.id.trim().is_empty() || node.resource_type.trim().is_empty() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} fhir {label} id and resource_type are required"
+        )));
+    }
+    if !is_fhir_resource_type(&node.resource_type) {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} fhir {label} resource_type is invalid"
+        )));
+    }
+    if !matches!(
+        node.cardinality.as_str(),
+        "one" | "zero_or_one" | "one_or_more" | "any"
+    ) {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} fhir {label} cardinality is unsupported"
+        )));
+    }
+    if node.search.is_empty() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} fhir {label} search must not be empty"
+        )));
+    }
+    for search in &node.search {
+        if search.param.trim().is_empty() {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} fhir {label} search param is required"
+            )));
+        }
+        if !matches!(
+            search.search_type.as_str(),
+            "token" | "reference" | "string" | "date" | "code"
+        ) {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} fhir {label} search type {} is unsupported",
+                search.search_type
+            )));
+        }
+        let value_sources = [
+            search.value.is_some(),
+            search.value_from_lookup.unwrap_or(false),
+            search.value_from_query.is_some(),
+            search.value_from_node.is_some(),
+        ]
+        .into_iter()
+        .filter(|present| *present)
+        .count();
+        if value_sources != 1 {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} fhir {label} search {} must declare exactly one value source",
+                search.param
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn is_fhir_resource_type(value: &str) -> bool {
+    let mut chars = value.chars();
+    chars.next().is_some_and(|first| first.is_ascii_uppercase())
+        && chars.all(|ch| ch.is_ascii_alphanumeric())
+}
+
+fn validate_fhir_base_url_policy(
+    source_id: &str,
+    source: &SourceConfig,
+    base_url: &reqwest::Url,
+) -> Result<(), SidecarError> {
+    let Some(host) = base_url.host_str() else {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} fhir.base_url must include a host"
+        )));
+    };
+    if host.eq_ignore_ascii_case("metadata.google.internal") {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} fhir.base_url must not target metadata services"
+        )));
+    }
+    match base_url.scheme() {
+        "https" => {}
+        "http" => {
+            let ip = host.parse::<IpAddr>().ok().map(canonical_ip);
+            if ip.is_some_and(is_cloud_metadata_ip) {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} fhir.base_url must not target metadata services"
+                )));
+            }
+            let loopback = ip.is_some_and(|ip| ip.is_loopback()) || is_localhost_host(host);
+            if loopback {
+                if !(source.allow_insecure_localhost || source.allow_insecure_private_network) {
+                    return Err(SidecarError::Config(format!(
+                        "source {source_id} fhir.base_url requires allow_insecure_localhost for loopback http"
+                    )));
+                }
+            } else if !source.allow_insecure_private_network {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} fhir.base_url must use https or explicitly allowed private-network http"
+                )));
+            } else {
+                // Runtime request preparation resolves the hostname and applies
+                // the private-network and metadata-service IP policy before any
+                // outbound request is sent.
+            }
+        }
+        _ => {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} fhir.base_url must use https or explicitly allowed private-network http"
+            )));
         }
     }
     Ok(())
@@ -2496,6 +2868,35 @@ fn resolve_auth_tokens(config: &SidecarConfig) -> Result<Vec<ResolvedBearerToken
     Ok(tokens)
 }
 
+fn resolve_fhir_bearer_tokens(
+    config: &SidecarConfig,
+) -> Result<BTreeMap<String, String>, SidecarError> {
+    let mut tokens = BTreeMap::new();
+    for (source_id, source) in &config.sources {
+        if source.engine != SourceEngine::Fhir {
+            continue;
+        }
+        let Some(env) = source
+            .fhir
+            .as_ref()
+            .and_then(|fhir| fhir.bearer_token_env.as_ref())
+        else {
+            continue;
+        };
+        if tokens.contains_key(env) {
+            continue;
+        }
+        let token = std::env::var(env).ok().filter(|token| !token.is_empty());
+        let Some(token) = token else {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} fhir.bearer_token_env {env} is missing or empty"
+            )));
+        };
+        tokens.insert(env.clone(), token);
+    }
+    Ok(tokens)
+}
+
 fn adaptor_pin_version(adaptor: &str) -> Option<&str> {
     let module_specifier = adaptor
         .split_once('=')
@@ -2677,7 +3078,601 @@ async fn execute_source_json(
         }
         SourceEngine::HttpJson => execute_http_json(state, source_id, source, request).await,
         SourceEngine::HttpFlow => execute_http_flow(state, source_id, source, request).await,
+        SourceEngine::Fhir => execute_fhir(state, source_id, source, request).await,
     }
+}
+
+async fn execute_fhir(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: Value,
+) -> Result<SourceExecution, SourceExecutionError> {
+    if request.get("mode").and_then(Value::as_str) == Some("batch_match") {
+        let item_count = request
+            .get("items")
+            .and_then(Value::as_array)
+            .map_or(1, |items| items.len().max(1));
+        let value = tokio::time::timeout(
+            http_json_batch_timeout(&state.config.limits, item_count),
+            execute_fhir_batch_match(state, source_id, source, &request),
+        )
+        .await
+        .map_err(|_| SourceExecutionError::HttpJsonTimeout)??;
+        return Ok(SourceExecution {
+            value,
+            worker_id: "fhir".to_string(),
+        });
+    }
+
+    let lookup = request
+        .get("lookup")
+        .ok_or(SourceExecutionError::HttpJsonBadRequest)?;
+    let lookup_field = lookup
+        .get("field")
+        .and_then(Value::as_str)
+        .ok_or(SourceExecutionError::HttpJsonBadRequest)?;
+    let lookup_value = lookup
+        .get("value")
+        .cloned()
+        .ok_or(SourceExecutionError::HttpJsonBadRequest)?;
+    let fields = request_fields(&request)?;
+    let limit = request
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(2);
+    let purpose = request.get("purpose").and_then(Value::as_str).unwrap_or("");
+    let query_values = request_query_values(&request)?;
+    let data = execute_fhir_lookup(
+        state,
+        source_id,
+        source,
+        lookup_field,
+        lookup_value,
+        &query_values,
+        &fields,
+        limit,
+        purpose,
+    )
+    .await?;
+    Ok(SourceExecution {
+        value: json!({ "data": data }),
+        worker_id: "fhir".to_string(),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_fhir_lookup(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    lookup_field: &str,
+    lookup_value: Value,
+    query_values: &BTreeMap<String, String>,
+    fields: &[String],
+    limit: usize,
+    purpose: &str,
+) -> Result<Vec<Value>, SourceExecutionError> {
+    let fhir = source.fhir.as_ref().ok_or(SourceExecutionError::HttpJson)?;
+    let mut nodes = BTreeMap::<String, Vec<Value>>::new();
+    let anchor = search_fhir_node(
+        state,
+        source_id,
+        source,
+        fhir,
+        &fhir.anchor,
+        lookup_field,
+        &lookup_value,
+        query_values,
+        &nodes,
+        purpose,
+    )
+    .await?;
+    match anchor.len() {
+        0 => return Ok(Vec::new()),
+        1 => {
+            nodes.insert(fhir.anchor.id.clone(), anchor);
+        }
+        _ => {
+            nodes.insert(fhir.anchor.id.clone(), anchor);
+            return Ok(project_fhir_records(fhir, &nodes, fields, limit));
+        }
+    }
+
+    for relation in &fhir.relations {
+        let node = FhirNodeConfig {
+            id: relation.id.clone(),
+            resource_type: relation.resource_type.clone(),
+            cardinality: relation.cardinality.clone(),
+            search: relation.search.clone(),
+        };
+        let resources = search_fhir_node(
+            state,
+            source_id,
+            source,
+            fhir,
+            &node,
+            lookup_field,
+            &lookup_value,
+            query_values,
+            &nodes,
+            purpose,
+        )
+        .await?;
+        if resources.is_empty() {
+            if matches!(relation.cardinality.as_str(), "zero_or_one" | "any") {
+                nodes.insert(relation.id.clone(), resources);
+                continue;
+            }
+            return Ok(Vec::new());
+        }
+        if matches!(relation.cardinality.as_str(), "one" | "zero_or_one") && resources.len() > 1 {
+            nodes.insert(relation.id.clone(), resources);
+            return Ok(project_fhir_records(fhir, &nodes, fields, limit));
+        }
+        nodes.insert(relation.id.clone(), resources);
+    }
+
+    Ok(project_fhir_records(fhir, &nodes, fields, limit))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn search_fhir_node(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    fhir: &FhirSourceConfig,
+    node: &FhirNodeConfig,
+    lookup_field: &str,
+    lookup_value: &Value,
+    query_values: &BTreeMap<String, String>,
+    nodes: &BTreeMap<String, Vec<Value>>,
+    purpose: &str,
+) -> Result<Vec<Value>, SourceExecutionError> {
+    let prepared = prepare_http_json_request(
+        state,
+        source_id,
+        source,
+        &fhir.base_url,
+        &node.resource_type,
+    )
+    .await?;
+    let mut url = prepared.url;
+    {
+        let mut query = url.query_pairs_mut();
+        query.append_pair("_count", &(fhir.max_search_results + 1).to_string());
+        for search in &node.search {
+            let value = fhir_search_value(search, lookup_field, lookup_value, query_values, nodes)?;
+            query.append_pair(&search.param, &value);
+        }
+    }
+    let mut request = prepared
+        .client
+        .get(url)
+        .header("accept", fhir.accept.as_str());
+    if fhir.forward_data_purpose {
+        request = request.header("data-purpose", purpose);
+    }
+    if let Some(env) = &fhir.bearer_token_env {
+        let token = state
+            .fhir_bearer_tokens
+            .get(env)
+            .ok_or(SourceExecutionError::HttpJson)?;
+        request = request.bearer_auth(token);
+    }
+    if !fhir.prefer_handling.is_empty() {
+        request = request.header("prefer", format!("handling={}", fhir.prefer_handling));
+    }
+    if acquire_http_json_rate_or_error(state, source_id)
+        .await
+        .is_some()
+    {
+        return Err(SourceExecutionError::HttpJsonTimeout);
+    }
+    let response = request.send().await.map_err(|error| {
+        if error.is_timeout() {
+            SourceExecutionError::HttpJsonTimeout
+        } else {
+            SourceExecutionError::HttpJson
+        }
+    })?;
+    let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return Err(SourceExecutionError::HttpJson);
+    }
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        let retry_after_seconds = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(state.config.limits.retry_after_seconds);
+        remember_source_backoff_seconds(state, source_id, retry_after_seconds).await;
+        return Err(SourceExecutionError::HttpJsonTimeout);
+    }
+    if !status.is_success() {
+        return Err(SourceExecutionError::HttpJson);
+    }
+    let max_bytes = fhir
+        .max_source_bundle_bytes
+        .min(state.config.limits.max_output_bytes);
+    let body = read_limited_json_response(response, max_bytes).await?;
+    fhir_bundle_match_resources(&body, &node.resource_type, fhir.max_search_results + 1)
+}
+
+fn fhir_search_value(
+    search: &FhirSearchParamConfig,
+    lookup_field: &str,
+    lookup_value: &Value,
+    query_values: &BTreeMap<String, String>,
+    nodes: &BTreeMap<String, Vec<Value>>,
+) -> Result<String, SourceExecutionError> {
+    let raw = if let Some(value) = &search.value {
+        value.clone()
+    } else if search.value_from_lookup.unwrap_or(false) {
+        let _ = lookup_field;
+        value_to_query_string(lookup_value)?
+    } else if let Some(field) = &search.value_from_query {
+        query_values
+            .get(field)
+            .cloned()
+            .ok_or(SourceExecutionError::HttpJsonBadRequest)?
+    } else if let Some(value_from_node) = &search.value_from_node {
+        fhir_value_from_node(value_from_node, nodes)?
+    } else {
+        return Err(SourceExecutionError::HttpJsonBadRequest);
+    };
+    match search.search_type.as_str() {
+        "token" => Ok(search
+            .system
+            .as_ref()
+            .map(|system| format!("{system}|{raw}"))
+            .unwrap_or(raw)),
+        "reference" | "string" | "date" | "code" => Ok(raw),
+        _ => Err(SourceExecutionError::HttpJsonBadRequest),
+    }
+}
+
+fn fhir_value_from_node(
+    value_from_node: &str,
+    nodes: &BTreeMap<String, Vec<Value>>,
+) -> Result<String, SourceExecutionError> {
+    let (node_id, selector) = value_from_node
+        .split_once('.')
+        .ok_or(SourceExecutionError::HttpJsonBadRequest)?;
+    let resource = nodes
+        .get(node_id)
+        .and_then(|resources| resources.first())
+        .ok_or(SourceExecutionError::HttpJson)?;
+    match selector {
+        "id" => resource
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or(SourceExecutionError::HttpJson),
+        "reference" => {
+            let resource_type = resource
+                .get("resourceType")
+                .and_then(Value::as_str)
+                .ok_or(SourceExecutionError::HttpJson)?;
+            let id = resource
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or(SourceExecutionError::HttpJson)?;
+            Ok(format!("{resource_type}/{id}"))
+        }
+        pointer if pointer.starts_with('/') => resource
+            .pointer(pointer)
+            .ok_or(SourceExecutionError::HttpJson)
+            .and_then(value_to_query_string),
+        _ => Err(SourceExecutionError::HttpJsonBadRequest),
+    }
+}
+
+fn value_to_query_string(value: &Value) -> Result<String, SourceExecutionError> {
+    match value {
+        Value::String(value) => Ok(value.clone()),
+        Value::Number(_) | Value::Bool(_) => Ok(value.to_string()),
+        _ => Err(SourceExecutionError::HttpJsonBadRequest),
+    }
+}
+
+fn fhir_bundle_match_resources(
+    body: &Value,
+    resource_type: &str,
+    limit: usize,
+) -> Result<Vec<Value>, SourceExecutionError> {
+    if body.get("resourceType").and_then(Value::as_str) != Some("Bundle")
+        || body.get("type").and_then(Value::as_str) != Some("searchset")
+    {
+        return Err(SourceExecutionError::HttpJson);
+    }
+    let entries = body
+        .get("entry")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let mut resources = Vec::new();
+    for entry in entries {
+        if entry.pointer("/search/mode").and_then(Value::as_str) != Some("match") {
+            continue;
+        }
+        let Some(resource) = entry.get("resource") else {
+            continue;
+        };
+        if resource.get("resourceType").and_then(Value::as_str) != Some(resource_type) {
+            return Err(SourceExecutionError::HttpJson);
+        }
+        resources.push(resource.clone());
+        if resources.len() >= limit {
+            break;
+        }
+    }
+    Ok(resources)
+}
+
+fn project_fhir_records(
+    fhir: &FhirSourceConfig,
+    nodes: &BTreeMap<String, Vec<Value>>,
+    fields: &[String],
+    limit: usize,
+) -> Vec<Value> {
+    let row_count = nodes
+        .values()
+        .map(Vec::len)
+        .max()
+        .unwrap_or_default()
+        .min(limit);
+    (0..row_count)
+        .map(|index| project_fhir_record(fhir, nodes, fields, index))
+        .collect()
+}
+
+fn project_fhir_record(
+    fhir: &FhirSourceConfig,
+    nodes: &BTreeMap<String, Vec<Value>>,
+    fields: &[String],
+    index: usize,
+) -> Value {
+    let mut record = Map::new();
+    for field in fields {
+        let Some(projection) = fhir.project.get(field) else {
+            continue;
+        };
+        let Some(resource) = nodes
+            .get(&projection.node)
+            .and_then(|resources| resources.get(index).or_else(|| resources.first()))
+        else {
+            continue;
+        };
+        if let Some(value) = resource.pointer(&projection.pointer) {
+            record.insert(field.clone(), value.clone());
+        } else if let Some(value) = &projection.default_value {
+            record.insert(field.clone(), value.clone());
+        }
+    }
+    Value::Object(record)
+}
+
+async fn execute_fhir_batch_match(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: &Value,
+) -> Result<Value, SourceExecutionError> {
+    match source.batch.mode {
+        SourceBatchMode::SequentialLookup => {
+            execute_fhir_sequential_batch_match(state, source_id, source, request).await
+        }
+        SourceBatchMode::ParallelLookup => {
+            execute_fhir_parallel_batch_match(state, source_id, source, request).await
+        }
+        SourceBatchMode::WorkflowBatch | SourceBatchMode::NativeBatch => {
+            Err(SourceExecutionError::HttpJsonBadRequest)
+        }
+    }
+}
+
+async fn execute_fhir_sequential_batch_match(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: &Value,
+) -> Result<Value, SourceExecutionError> {
+    let query_signature = request
+        .get("query_signature")
+        .cloned()
+        .ok_or(SourceExecutionError::HttpJsonBadRequest)?;
+    let query_signature: Vec<BatchQueryTerm> =
+        serde_json::from_value(query_signature).map_err(|_| SourceExecutionError::HttpJson)?;
+    let items = request
+        .get("items")
+        .cloned()
+        .ok_or(SourceExecutionError::HttpJsonBadRequest)?;
+    let items: Vec<BatchMatchItem> =
+        serde_json::from_value(items).map_err(|_| SourceExecutionError::HttpJson)?;
+    let fields = request_fields(request)?;
+    let purpose = request.get("purpose").and_then(Value::as_str).unwrap_or("");
+    let mut output = Vec::with_capacity(items.len());
+    for item in &items {
+        let query = fhir_batch_item_query(source, &query_signature, item);
+        let Ok((lookup_field, lookup_value, query_values)) = query else {
+            output.push(json!({
+                "id": item.id,
+                "error": { "code": "source_unavailable" }
+            }));
+            continue;
+        };
+        let result = execute_fhir_lookup(
+            state,
+            source_id,
+            source,
+            &lookup_field,
+            Value::String(lookup_value),
+            &query_values,
+            &fields,
+            2,
+            purpose,
+        )
+        .await;
+        match result {
+            Ok(data) => output.push(json!({ "id": item.id, "data": data })),
+            Err(_) => output.push(json!({
+                "id": item.id,
+                "error": { "code": "source_unavailable" }
+            })),
+        }
+    }
+    Ok(json!({ "items": output }))
+}
+
+async fn execute_fhir_parallel_batch_match(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: &Value,
+) -> Result<Value, SourceExecutionError> {
+    let query_signature = request
+        .get("query_signature")
+        .cloned()
+        .ok_or(SourceExecutionError::HttpJsonBadRequest)?;
+    let query_signature: Vec<BatchQueryTerm> =
+        serde_json::from_value(query_signature).map_err(|_| SourceExecutionError::HttpJson)?;
+    let items = request
+        .get("items")
+        .cloned()
+        .ok_or(SourceExecutionError::HttpJsonBadRequest)?;
+    let items: Vec<BatchMatchItem> =
+        serde_json::from_value(items).map_err(|_| SourceExecutionError::HttpJson)?;
+    let fields = Arc::new(request_fields(request)?);
+    let purpose = Arc::new(
+        request
+            .get("purpose")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+    );
+    let max_parallel = source
+        .batch
+        .max_parallel
+        .unwrap_or(1)
+        .min(items.len().max(1));
+    let semaphore = Arc::new(Semaphore::new(max_parallel));
+    let state = Arc::new(state.clone());
+    let source = Arc::new(source.clone());
+    let source_id = source_id.to_string();
+    let query_signature = Arc::new(query_signature);
+    let mut tasks = JoinSet::new();
+    let requested_ids = items.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
+    for (idx, item) in items.into_iter().enumerate() {
+        let permit = semaphore.clone();
+        let task_state = Arc::clone(&state);
+        let task_source = Arc::clone(&source);
+        let task_source_id = source_id.clone();
+        let task_query_signature = Arc::clone(&query_signature);
+        let task_fields = Arc::clone(&fields);
+        let task_purpose = Arc::clone(&purpose);
+        tasks.spawn(async move {
+            let _permit = permit
+                .acquire_owned()
+                .await
+                .map_err(|_| SourceExecutionError::HttpJson)?;
+            let id = item.id.clone();
+            let response = match fhir_batch_item_query(
+                task_source.as_ref(),
+                task_query_signature.as_ref(),
+                &item,
+            ) {
+                Ok((lookup_field, lookup_value, query_values)) => {
+                    match execute_fhir_lookup(
+                        &task_state,
+                        &task_source_id,
+                        task_source.as_ref(),
+                        &lookup_field,
+                        Value::String(lookup_value),
+                        &query_values,
+                        task_fields.as_ref(),
+                        2,
+                        task_purpose.as_ref(),
+                    )
+                    .await
+                    {
+                        Ok(data) => json!({ "id": id, "data": data }),
+                        Err(_) => json!({
+                            "id": id,
+                            "error": { "code": "source_unavailable" }
+                        }),
+                    }
+                }
+                Err(_) => json!({
+                    "id": id,
+                    "error": { "code": "source_unavailable" }
+                }),
+            };
+            Ok::<_, SourceExecutionError>((idx, response))
+        });
+    }
+
+    let mut output = vec![Value::Null; requested_ids.len()];
+    while let Some(joined) = tasks.join_next().await {
+        let (idx, response) = joined.map_err(|_| SourceExecutionError::HttpJson)??;
+        output[idx] = response;
+    }
+    for (idx, response) in output.iter_mut().enumerate() {
+        if response.is_null() {
+            *response = json!({
+                "id": requested_ids[idx],
+                "error": { "code": "source_unavailable" }
+            });
+        }
+    }
+    Ok(json!({ "items": output }))
+}
+
+fn fhir_batch_item_query(
+    source: &SourceConfig,
+    query_signature: &[BatchQueryTerm],
+    item: &BatchMatchItem,
+) -> Result<(String, String, BTreeMap<String, String>), SourceExecutionError> {
+    let mut query_values = BTreeMap::new();
+    for (term, value) in query_signature.iter().zip(item.values.iter()) {
+        query_values.insert(term.field.clone(), value_to_query_string(value)?);
+    }
+    primary_lookup_value(source, &query_values).ok_or(SourceExecutionError::HttpJsonBadRequest)
+}
+
+fn request_fields(request: &Value) -> Result<Vec<String>, SourceExecutionError> {
+    request
+        .get("fields")
+        .and_then(Value::as_array)
+        .ok_or(SourceExecutionError::HttpJsonBadRequest)?
+        .iter()
+        .map(|field| {
+            field
+                .as_str()
+                .map(str::to_string)
+                .ok_or(SourceExecutionError::HttpJsonBadRequest)
+        })
+        .collect()
+}
+
+fn request_query_values(request: &Value) -> Result<BTreeMap<String, String>, SourceExecutionError> {
+    request
+        .get("query_values")
+        .and_then(Value::as_object)
+        .map(|values| {
+            values
+                .iter()
+                .map(|(key, value)| {
+                    value
+                        .as_str()
+                        .map(|value| (key.clone(), value.to_string()))
+                        .ok_or(SourceExecutionError::HttpJsonBadRequest)
+                })
+                .collect()
+        })
+        .unwrap_or_else(|| Ok(BTreeMap::new()))
 }
 
 async fn execute_http_json(
@@ -4043,8 +5038,11 @@ async fn ensure_http_json_url_policy(
             if !source.allow_insecure_localhost {
                 return Err(());
             }
-        } else {
+        } else if !source.allow_insecure_private_network {
             return Err(());
+        } else {
+            // Resolve below and allow only private/link-local addresses for
+            // plain HTTP service names.
         }
     }
     if let Ok(ip) = host.parse::<IpAddr>() {
@@ -4062,7 +5060,11 @@ async fn ensure_http_json_url_policy(
         .map_err(|_| ())?;
     let mut addrs = Vec::new();
     for address in &mut resolved {
-        ensure_ip_allowed(address.ip(), source)?;
+        let ip = canonical_ip(address.ip());
+        ensure_ip_allowed(ip, source)?;
+        if url.scheme() == "http" && !ip.is_loopback() && !is_private_or_link_local_ip(ip) {
+            return Err(());
+        }
         addrs.push(address);
     }
     if addrs.is_empty() {
@@ -4133,6 +5135,9 @@ fn is_private_or_link_local_ip(ip: IpAddr) -> bool {
 fn load_credentials(config: &SidecarConfig) -> Result<BTreeMap<String, Value>, SidecarError> {
     let mut credentials = BTreeMap::new();
     for (source_id, source) in &config.sources {
+        if source.credential_env.trim().is_empty() {
+            continue;
+        }
         let raw =
             std::env::var(&source.credential_env).map_err(|_| SidecarError::MissingCredential {
                 source_id: source_id.clone(),
@@ -4208,12 +5213,22 @@ async fn run_smoke_lookups(state: &Arc<AppState>) -> Result<(), SidecarError> {
                     "field": smoke.field,
                     "value": smoke.value,
                 },
+                "query_values": {},
                 "fields": smoke.fields,
                 "limit": 1,
                 "purpose": smoke.purpose,
                 "correlation_id": "startup-smoke",
                 "configuration": state.credentials.get(source_id).cloned().unwrap_or(Value::Null),
             });
+            if let Some(query_values) = request
+                .get_mut("query_values")
+                .and_then(Value::as_object_mut)
+            {
+                query_values.insert(smoke.field.clone(), Value::String(smoke.value.clone()));
+                for (key, value) in &smoke.query_values {
+                    query_values.insert(key.clone(), Value::String(value.clone()));
+                }
+            }
             add_source_execution(&mut request, &state.config, source);
             match execute_source_json(state, source_id, source, request).await {
                 Ok(execution) => {
@@ -4490,7 +5505,7 @@ async fn lookup(
         return problem(StatusCode::NOT_FOUND, "source route not found");
     };
 
-    let query = match validate_query(&state, raw_query.as_deref(), query) {
+    let query = match validate_query(&state, source, raw_query.as_deref(), query) {
         Ok(query) => query,
         Err(response) => return *response,
     };
@@ -4507,6 +5522,7 @@ async fn lookup(
             "field": query.lookup_field,
             "value": query.lookup_value,
         },
+        "query_values": query.query_values,
         "fields": query.fields,
         "limit": query.limit,
         "purpose": purpose,
@@ -5086,12 +6102,14 @@ fn unauthorized() -> Response {
 struct LookupQuery {
     lookup_field: String,
     lookup_value: String,
+    query_values: BTreeMap<String, String>,
     fields: Vec<String>,
     limit: usize,
 }
 
 fn validate_query(
     state: &AppState,
+    source: &SourceConfig,
     raw_query: Option<&str>,
     query: HashMap<String, String>,
 ) -> Result<LookupQuery, Box<Response>> {
@@ -5149,13 +6167,21 @@ fn validate_query(
         .into_iter()
         .filter(|(key, _)| key != "fields" && key != "limit")
         .collect::<Vec<_>>();
-    if lookup_pairs.len() != 1 {
+    if lookup_pairs.is_empty() {
+        return Err(Box::new(problem(
+            StatusCode::BAD_REQUEST,
+            "at least one lookup predicate is required",
+        )));
+    }
+    if source.engine != SourceEngine::Fhir && lookup_pairs.len() != 1 {
         return Err(Box::new(problem(
             StatusCode::BAD_REQUEST,
             "exactly one lookup predicate is required",
         )));
     }
-    let (lookup_field, lookup_value) = lookup_pairs.into_iter().next().expect("one lookup pair");
+    let query_values = lookup_pairs.into_iter().collect::<BTreeMap<_, _>>();
+    let (lookup_field, lookup_value, query_values) =
+        primary_lookup_value(source, &query_values).expect("at least one lookup pair");
     if lookup_value.is_empty() {
         return Err(Box::new(problem(
             StatusCode::BAD_REQUEST,
@@ -5166,9 +6192,27 @@ fn validate_query(
     Ok(LookupQuery {
         lookup_field,
         lookup_value,
+        query_values,
         fields,
         limit,
     })
+}
+
+fn primary_lookup_value(
+    source: &SourceConfig,
+    query_values: &BTreeMap<String, String>,
+) -> Option<(String, String, BTreeMap<String, String>)> {
+    if source.engine == SourceEngine::Fhir {
+        if let Some(smoke) = &source.smoke_lookup {
+            if let Some(value) = query_values.get(&smoke.field) {
+                return Some((smoke.field.clone(), value.clone(), query_values.clone()));
+            }
+        }
+    }
+    query_values
+        .iter()
+        .next()
+        .map(|(field, value)| (field.clone(), value.clone(), query_values.clone()))
 }
 
 fn validate_batch_match_request(
@@ -5525,6 +6569,38 @@ fn default_smoke_purpose() -> String {
     "startup-readiness-smoke".to_string()
 }
 
+fn default_fhir_version() -> String {
+    "R4".to_string()
+}
+
+fn default_fhir_search_method() -> String {
+    "get".to_string()
+}
+
+fn default_fhir_prefer_handling() -> String {
+    "strict".to_string()
+}
+
+fn default_fhir_accept() -> String {
+    "application/fhir+json".to_string()
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+const fn default_fhir_max_search_results() -> usize {
+    2
+}
+
+const fn default_fhir_max_source_bundle_bytes() -> usize {
+    5 * 1024 * 1024
+}
+
+fn default_fhir_cardinality_one() -> String {
+    "one".to_string()
+}
+
 async fn shutdown_signal() {
     #[cfg(unix)]
     {
@@ -5632,10 +6708,12 @@ mod tests {
                     allow_insecure_private_network: false,
                     http_json: None,
                     http_flow: None,
+                    fhir: None,
                     cache: None,
                     smoke_lookup: Some(SmokeLookupConfig {
                         field: "national_id".to_string(),
                         value: "person-1".to_string(),
+                        query_values: BTreeMap::new(),
                         fields: vec!["national_id".to_string()],
                         purpose: default_smoke_purpose(),
                     }),
@@ -5914,5 +6992,28 @@ mod tests {
         assert!(ensure_http_json_url_policy(&metadata_mapped_http, &source)
             .await
             .is_err());
+    }
+
+    #[test]
+    fn fhir_base_url_policy_allows_private_network_http_service_names_only_with_escape() {
+        let mut source = minimal_config()
+            .sources
+            .remove("people")
+            .expect("source exists");
+        source.engine = SourceEngine::Fhir;
+        source.allow_insecure_localhost = false;
+        source.allow_insecure_private_network = false;
+
+        let docker_service =
+            reqwest::Url::parse("http://fhir-fixture-server:8080/fhir").expect("url parses");
+        assert!(validate_fhir_base_url_policy("fhir", &source, &docker_service).is_err());
+
+        source.allow_insecure_private_network = true;
+        validate_fhir_base_url_policy("fhir", &source, &docker_service)
+            .expect("private network escape allows docker service names");
+
+        let metadata =
+            reqwest::Url::parse("http://metadata.google.internal/fhir").expect("url parses");
+        assert!(validate_fhir_base_url_policy("fhir", &source, &metadata).is_err());
     }
 }

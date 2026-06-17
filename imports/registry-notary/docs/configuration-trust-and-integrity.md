@@ -182,7 +182,7 @@ path without production key custody.
 - [Operator configuration reference](operator-config-reference.md): the exact
   configuration blocks, including the source connection and expected-sidecar
   pinning.
-- [Source adapter sidecar reference](../crates/registry-notary-openfn-sidecar/README.md):
+- [Source adapter sidecar reference](../crates/registry-notary-source-adapter-sidecar/README.md):
   the governed bundle layout and the commands that render, sign, and verify a
   bundle.
 - [Signing key providers](signing-key-provider.md): credential (SD-JWT VC)

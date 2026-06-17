@@ -33,15 +33,38 @@ Registry Notary owns the evidence decision:
 The workflow should treat Notary as a trust decision service, not as a raw data
 source.
 
-## Demo Package
+## OpenFn Adaptor
 
-The runnable helper and workflow template live in:
+The current OpenFn language adaptor lives in:
+
+```text
+https://github.com/jeremi/openfn-language-registry-stack
+```
+
+When that repository is configured as an OpenFn local adaptor repository,
+Lightning and the worker load the Notary package as:
+
+```text
+@openfn/language-registry-notary@local
+```
+
+Configure an OpenFn credential with:
+
+- `notary_base_url`: Registry Notary service base URL.
+- `token`: bearer token for the Notary caller credential.
+- `openfn_request_fingerprint_key`: local OpenFn HMAC key used by the helper
+  for replay-safe request fingerprints. It is not sent to Registry Notary.
+- `openfn_target_fingerprint_key`: optional separate HMAC key for the
+  `target_fingerprint` audit value.
+
+For local development in this repository, the older runnable helper and
+workflow template still live in:
 
 ```text
 demo/openfn-notary-caller/
 ```
 
-The template uses a local safe HTTP helper rather than `@openfn/language-http`
+The adaptor and local template use a safe helper rather than `@openfn/language-http`
 for the Notary request. In `@openfn/language-http@7.3.1`, non-2xx responses can
 log response bodies before workflow code can redact Problem Details `detail`.
 The helper prepares a minimized `POST /v1/evaluations` request. It:
@@ -54,6 +77,102 @@ The helper prepares a minimized `POST /v1/evaluations` request. It:
 - takes `evaluation_id` from the selected claim result;
 - maps 2xx result bodies separately from non-2xx Problem Details;
 - strips request material and secret-backed configuration from final state.
+
+## Minimal Workflow
+
+The first workflow should read like a claim gate, not like a raw HTTP call:
+
+```js
+const evaluationOptions = {
+  claimId: "farmer-registered",
+  purpose: "https://demo.example.gov/purpose/nagdi/climate-smart-input-support",
+  disclosure: "predicate",
+  target: {
+    type: "Farmer",
+    identifiers: [{ scheme: "farmer_id", valueFrom: "farmer_id" }],
+  },
+};
+
+execute(
+  fn((state) => callNotaryEvaluation(state, evaluationOptions)),
+  fn((state) => {
+    const approved = state.data.notary.branch === "satisfied";
+
+    return {
+      ...state,
+      data: {
+        decision: {
+          status: approved ? "approved" : "manual_review",
+          notary_evaluation_id: state.data.notary.evaluation_id,
+          notary_request_id: state.data.notary.request_id,
+        },
+      },
+    };
+  }),
+);
+```
+
+The public Registry Stack lab publishes current demo service URLs and caller
+tokens at:
+
+```text
+https://lab.registrystack.org/api/lab.json
+```
+
+Use the `agri-evidence` credential for the agriculture Notary examples. The
+lab UI at `https://lab.registrystack.org` shows the same public demo
+credentials.
+
+## Value Claims
+
+When a workflow needs a fact such as farmed land size, model that fact as a
+Registry Notary value claim instead of querying the source Relay from OpenFn.
+The Notary remains the evidence boundary, and OpenFn consumes only the
+minimized claim result:
+
+```js
+const evaluationOptions = {
+  claimId: "farmer-registration-and-land-size",
+  purpose: "https://demo.example.gov/purpose/nagdi/climate-smart-input-support",
+  disclosure: "value",
+  target: {
+    type: "Farmer",
+    identifiers: [{ scheme: "farmer_id", valueFrom: "farmer_id" }],
+  },
+};
+
+execute(
+  fn((state) => callNotaryEvaluation(state, evaluationOptions)),
+  fn((state) => {
+    const evidence = state.data.notary.value;
+    const farmedAreaHa = Number(evidence.farmed_land_size_hectares ?? 0);
+    const approved =
+      evidence.is_registered_farmer === true &&
+      evidence.active_holding === true &&
+      farmedAreaHa >= 1 &&
+      farmedAreaHa <= 3;
+
+    return {
+      ...state,
+      data: {
+        decision: {
+          status: approved ? "approved" : "manual_review",
+          evidence: {
+            holding_id: evidence.holding_id,
+            farmed_area_ha: farmedAreaHa,
+            district: evidence.district,
+            notary_evaluation_id: state.data.notary.evaluation_id,
+          },
+        },
+      },
+    };
+  }),
+);
+```
+
+Composite value claims like this must be configured in the Notary deployment.
+Do not replace them with direct Relay reads when the workflow needs a certified
+trust decision.
 
 ## Auditability And Verification Boundary
 

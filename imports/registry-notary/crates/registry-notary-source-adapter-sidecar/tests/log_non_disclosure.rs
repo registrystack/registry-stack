@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use axum_test::TestServer;
-use registry_notary_openfn_sidecar::{sidecar_router, SidecarConfig};
+use registry_notary_source_adapter_sidecar::{sidecar_router, SidecarConfig};
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};

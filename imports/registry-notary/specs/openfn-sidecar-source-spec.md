@@ -2,7 +2,7 @@
 
 > **Status: Archived (2026-05-31).** The OpenFn sidecar source described here has shipped; the sidecar crate is fully built and tested. This file is kept as a
 > design record and is not the source of truth. For current behavior see the code
-> and crates/registry-notary-openfn-sidecar/README.md.
+> and crates/registry-notary-source-adapter-sidecar/README.md.
 
 ## Goal
 
