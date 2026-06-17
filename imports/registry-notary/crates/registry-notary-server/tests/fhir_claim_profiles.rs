@@ -3,6 +3,7 @@
 //! minimized sidecar facts.
 
 use axum::extract::{Path, Query};
+#[cfg(feature = "registry-notary-cel")]
 use axum::http::StatusCode;
 use axum::{Json, Router};
 use axum_test::TestServer;
@@ -14,12 +15,35 @@ use registry_platform_authcommon::{
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
+#[cfg(feature = "registry-notary-cel")]
+use std::path::PathBuf;
 
 const API_KEY: &str = "fhir-claim-profile-test-api-key";
 const AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
 const SIDECAR_TOKEN: &str = "fhir-claim-profile-sidecar-token";
 const PURPOSE: &str = "https://purpose.example.test/coverage";
 
+#[cfg(feature = "registry-notary-cel")]
+fn cel_worker_bin() -> PathBuf {
+    let env_path = PathBuf::from(env!("CARGO_BIN_EXE_registry-notary-cel-worker"));
+    if env_path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .is_some_and(|file_name| file_name == "deps")
+    {
+        let candidate = env_path
+            .parent()
+            .and_then(|parent| parent.parent())
+            .expect("target debug dir")
+            .join("registry-notary-cel-worker");
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    env_path
+}
+
+#[cfg(feature = "registry-notary-cel")]
 #[tokio::test]
 async fn fhir_demo_claim_profiles_evaluate_against_minimized_source_facts() {
     let sidecar = TestServer::builder()
@@ -180,6 +204,8 @@ fn fhir_demo_config(sidecar_base_url: &str) -> StandaloneRegistryNotaryConfig {
     std::env::set_var("REGISTRY_NOTARY_API_KEY_HASH", fingerprint);
     std::env::set_var("REGISTRY_NOTARY_AUDIT_HASH_SECRET", AUDIT_SECRET);
     std::env::set_var("FHIR_SIDECAR_TOKEN", SIDECAR_TOKEN);
+    #[cfg(feature = "registry-notary-cel")]
+    std::env::set_var("REGISTRY_NOTARY_CEL_WORKER_COMMAND", cel_worker_bin());
 
     let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let config_path = manifest_dir
@@ -203,6 +229,7 @@ fn fhir_demo_config(sidecar_base_url: &str) -> StandaloneRegistryNotaryConfig {
         .get_mut("fhir_sidecar")
         .expect("FHIR sidecar source exists")
         .expected_sidecar = None;
+    config.cel.eval_timeout_ms = 10_000;
     let audit_path = std::env::temp_dir().join(format!(
         "registry-notary-fhir-claim-profiles-{}-{}.jsonl",
         std::process::id(),
@@ -212,6 +239,7 @@ fn fhir_demo_config(sidecar_base_url: &str) -> StandaloneRegistryNotaryConfig {
     config
 }
 
+#[cfg(feature = "registry-notary-cel")]
 fn fhir_demo_config_with_batch(sidecar_base_url: &str) -> StandaloneRegistryNotaryConfig {
     let mut config = fhir_demo_config(sidecar_base_url);
     for claim in &mut config.evidence.claims {
@@ -309,10 +337,12 @@ async fn mock_sidecar_records(
     Json(json!({ "data": [row] }))
 }
 
+#[cfg(feature = "registry-notary-cel")]
 async fn assert_claim_satisfied(notary: &TestServer, claim_id: &str, request: Value) {
     assert_claims_satisfied(notary, &[claim_id], request).await;
 }
 
+#[cfg(feature = "registry-notary-cel")]
 async fn assert_claims_satisfied(notary: &TestServer, claim_ids: &[&str], request: Value) {
     let response = notary
         .post("/v1/evaluations")
@@ -328,6 +358,7 @@ async fn assert_claims_satisfied(notary: &TestServer, claim_ids: &[&str], reques
     assert_all_results_satisfied(response.json(), claim_ids);
 }
 
+#[cfg(feature = "registry-notary-cel")]
 fn assert_all_results_satisfied(body: Value, claim_ids: &[&str]) {
     let results = body["results"].as_array().expect("results array");
     assert_eq!(results.len(), claim_ids.len(), "unexpected result count");
