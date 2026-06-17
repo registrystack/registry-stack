@@ -78,12 +78,22 @@ def env_url(env_name: str, default: str, path: str) -> str:
     return joined_url(os.environ.get(env_name, default), path)
 
 
-def request_source(method: str, url: str, headers: dict[str, str], body: Any | None = None, *, internal: bool = False) -> dict[str, Any]:
+def request_source(
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    body: Any | None = None,
+    *,
+    internal: bool = False,
+    target_input_selection: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     source: dict[str, Any] = {"method": method, "url": url, "headers": headers}
     if body is not None:
         source["body"] = body
     if internal:
         source["internal"] = True
+    if target_input_selection is not None:
+        source["target_input_selection"] = target_input_selection
     return source
 
 
@@ -162,6 +172,26 @@ def claim_catalog_items(body: Any) -> list[Any]:
     if isinstance(service, dict) and isinstance(service.get("claims"), list):
         return service["claims"]
     return []
+
+
+def claims_catalog(body: Any) -> list[dict[str, Any]]:
+    claims: list[dict[str, Any]] = []
+    for item in claim_catalog_items(body):
+        if isinstance(item, dict):
+            claims.append(item)
+        elif isinstance(item, str):
+            claims.append({"id": item})
+    return claims
+
+
+def target_input_facts(body: Any, claim_ids: list[str] | tuple[str, ...] = ()) -> list[dict[str, Any]]:
+    methods = _target_input_methods(claims_catalog(body), list(claim_ids))
+    if not methods:
+        return [{"label": "Target inputs", "value": "Legacy identifier fallback"}]
+    return [
+        {"label": "Target inputs", "value": _target_input_options_label(methods)},
+        {"label": "Input metadata", "value": "Published by Notary claim discovery"},
+    ]
 
 
 def simulated_response(body: Any) -> dict[str, Any]:
@@ -245,6 +275,174 @@ def evaluation_body(subject: str, claim_id: str, id_scheme: str = "national_id",
         "disclosure": disclosure,
         "format": CLAIM_RESULT_FORMAT,
     }
+
+
+def person_profile(
+    identifier: str,
+    *,
+    id_scheme: str = "national_id",
+    attributes: dict[str, Any] | None = None,
+    target_type: str = "Person",
+) -> dict[str, Any]:
+    return {
+        "id": identifier,
+        "target_type": target_type,
+        "identifiers": {id_scheme: identifier} if identifier else {},
+        "attributes": attributes or {},
+    }
+
+
+def evaluation_body_from_claim_metadata(
+    claims_body: Any,
+    profile: dict[str, Any],
+    claim_ids: list[str] | tuple[str, ...],
+    *,
+    disclosure: str = "predicate",
+    fmt: str = CLAIM_RESULT_FORMAT,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    claim_id_list = list(claim_ids)
+    target, selection = target_from_claim_metadata(claims_body, profile, claim_id_list)
+    return {
+        "target": target,
+        "claims": claim_id_list,
+        "disclosure": disclosure,
+        "format": fmt,
+    }, selection
+
+
+def target_from_claim_metadata(
+    claims_body: Any,
+    profile: dict[str, Any],
+    claim_ids: list[str] | tuple[str, ...],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    methods = _target_input_methods(claims_catalog(claims_body), list(claim_ids))
+    for method in methods:
+        for group in method.get("groups", []):
+            target = _target_from_input_group(group, profile, method.get("target_type"))
+            if target is not None:
+                return target, {
+                    "source": "target_inputs",
+                    "method": method.get("method", ""),
+                    "target_type": method.get("target_type") or profile.get("target_type") or "Person",
+                    "claim_ids": list(claim_ids),
+                    "group": _input_group_label(group),
+                    "inputs": group.get("inputs", []),
+                }
+    target = _identifier_fallback_target(profile)
+    return target, {
+        "source": "identifier_fallback",
+        "target_type": target.get("type", "Person"),
+        "claim_ids": list(claim_ids),
+        "group": _identifier_fallback_label(target),
+        "inputs": [],
+    }
+
+
+def _target_input_methods(claims: list[dict[str, Any]], claim_ids: list[str]) -> list[dict[str, Any]]:
+    selected_ids = set(claim_ids)
+    methods: list[dict[str, Any]] = []
+    for claim in claims:
+        if selected_ids and claim.get("id") not in selected_ids:
+            continue
+        target_inputs = claim.get("target_inputs", [])
+        if isinstance(target_inputs, list):
+            methods.extend(item for item in target_inputs if isinstance(item, dict))
+    return methods
+
+
+def _target_from_input_group(group: dict[str, Any], profile: dict[str, Any], target_type: Any) -> dict[str, Any] | None:
+    inputs = group.get("inputs", [])
+    if not isinstance(inputs, list) or not inputs:
+        return None
+    target: dict[str, Any] = {"type": str(target_type or profile.get("target_type") or "Person")}
+    identifiers: list[dict[str, Any]] = []
+    attributes: dict[str, Any] = {}
+    for input_meta in inputs:
+        if not isinstance(input_meta, dict):
+            return None
+        value = _profile_value_for_input(profile, input_meta)
+        if value in (None, ""):
+            return None
+        kind = input_meta.get("kind")
+        name = str(input_meta.get("name") or "")
+        if kind == "id":
+            target["id"] = value
+        elif kind == "identifier" and name:
+            identifiers.append({"scheme": name, "value": value})
+        elif kind == "attribute" and name:
+            attributes[name] = value
+        else:
+            return None
+    if identifiers:
+        target["identifiers"] = identifiers
+    if attributes:
+        target["attributes"] = attributes
+    return target
+
+
+def _profile_value_for_input(profile: dict[str, Any], input_meta: dict[str, Any]) -> Any:
+    kind = input_meta.get("kind")
+    name = str(input_meta.get("name") or "")
+    if kind == "id":
+        return profile.get("id")
+    if kind == "identifier":
+        identifiers = profile.get("identifiers", {})
+        return identifiers.get(name) if isinstance(identifiers, dict) else None
+    if kind == "attribute":
+        attributes = profile.get("attributes", {})
+        return attributes.get(name) if isinstance(attributes, dict) else None
+    return None
+
+
+def _identifier_fallback_target(profile: dict[str, Any]) -> dict[str, Any]:
+    identifiers = profile.get("identifiers", {})
+    if isinstance(identifiers, dict) and identifiers:
+        scheme, value = next(iter(identifiers.items()))
+        return {
+            "type": str(profile.get("target_type") or "Person"),
+            "identifiers": [{"scheme": scheme, "value": value}],
+        }
+    return {"type": str(profile.get("target_type") or "Person"), "id": profile.get("id", "")}
+
+
+def _identifier_fallback_label(target: dict[str, Any]) -> str:
+    identifiers = target.get("identifiers", [])
+    if identifiers and isinstance(identifiers, list) and isinstance(identifiers[0], dict):
+        return _label_from_name(str(identifiers[0].get("scheme") or "identifier"))
+    return "ID"
+
+
+def _target_input_options_label(methods: list[dict[str, Any]]) -> str:
+    labels: list[str] = []
+    for method in methods:
+        groups = method.get("groups", [])
+        if not isinstance(groups, list):
+            continue
+        for group in groups:
+            if isinstance(group, dict):
+                label = _input_group_label(group)
+                if label and label not in labels:
+                    labels.append(label)
+    return " OR ".join(labels) if labels else "Legacy identifier fallback"
+
+
+def _input_group_label(group: dict[str, Any]) -> str:
+    inputs = group.get("inputs", [])
+    if not isinstance(inputs, list):
+        return ""
+    labels = []
+    for input_meta in inputs:
+        if not isinstance(input_meta, dict):
+            continue
+        labels.append(str(input_meta.get("label") or _label_from_name(str(input_meta.get("name") or ""))))
+    return " + ".join(label for label in labels if label)
+
+
+def _label_from_name(name: str) -> str:
+    parts = [part for part in name.split("_") if part]
+    if not parts:
+        return name
+    return " ".join([parts[0].capitalize(), *parts[1:]])
 
 
 def friendly_unavailable(service_name: str, env_name: str, url: str) -> dict[str, Any]:

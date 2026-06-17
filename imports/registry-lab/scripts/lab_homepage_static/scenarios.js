@@ -102,6 +102,53 @@ function sourceSection(title, content) {
   return `<div class="source-section"><h4>${escapeHtml(title)}</h4>${content}</div>`;
 }
 
+function renderTargetInputSelection(selection) {
+  if (!selection) return "";
+  const source = selection.source === "target_inputs" ? "Claim discovery metadata" : "Legacy identifier fallback";
+  const inputs = (selection.inputs || []).map((input) => `${input.label || input.name || input.path || "Input"} (${input.kind || "value"})`);
+  return sourceRows({
+    "Source": source,
+    "Claims": (selection.claim_ids || []).join(", "),
+    "Target type": selection.target_type || "",
+    "Method": selection.method || "",
+    "Selected group": selection.group || "",
+    "Inputs": inputs.join(", ") || "None",
+  });
+}
+
+function renderInputChips(selection) {
+  const inputs = selection.inputs || [];
+  if (!inputs.length) return `<span class="input-chip"><strong>${escapeHtml(selection.group || "Identifier")}</strong><span>fallback</span></span>`;
+  return inputs.map((input) => `
+    <span class="input-chip">
+      <strong>${escapeHtml(input.label || input.name || input.path || "Input")}</strong>
+      <span>${escapeHtml(input.kind || "value")}</span>
+    </span>
+  `).join("");
+}
+
+function renderInputContract(selection) {
+  if (!selection) return "";
+  const fromDiscovery = selection.source === "target_inputs";
+  const sourceLabel = fromDiscovery ? "Claim discovery" : "Fallback";
+  const note = fromDiscovery
+    ? "Built from the Notary claim metadata returned by /v1/claims."
+    : "Using the legacy identifier request shape until this Notary publishes target input metadata.";
+  return `<div class="input-contract">
+    <div>
+      <p class="preview-eyebrow">Input contract</p>
+      <h4>${escapeHtml(selection.group || "Target input")}</h4>
+      <p>${escapeHtml(note)}</p>
+    </div>
+    <div class="input-contract-meta">
+      <span class="contract-pill ${fromDiscovery ? "metadata" : "fallback"}">${escapeHtml(sourceLabel)}</span>
+      ${selection.method ? `<span class="contract-pill">${escapeHtml(selection.method)}</span>` : ""}
+      ${selection.target_type ? `<span class="contract-pill">${escapeHtml(selection.target_type)}</span>` : ""}
+    </div>
+    <div class="input-chip-list">${renderInputChips(selection)}</div>
+  </div>`;
+}
+
 function renderRequestSource(value, isPreview) {
   const canCurl = value.method && value.method !== "SIMULATE" && value.url && !value.internal;
   const previewLabel = isPreview ? `<p class="preview-eyebrow">Request preview, not sent yet</p>` : "";
@@ -110,6 +157,7 @@ function renderRequestSource(value, isPreview) {
     ${canCurl ? `<div class="source-toolbar"><button class="copy-curl" type="button" data-copy-curl="${escapeHtml(curlCommand(value))}">Copy as curl</button></div>` : ""}
     ${value.internal ? `<div class="source-note">Internal lab call. It authenticates with a runtime-only credential that is never published, so there is no runnable curl for it.</div>` : ""}
     <div class="source-line">${escapeHtml(value.method || "")} ${escapeHtml(value.url || "")}</div>
+    ${value.target_input_selection ? sourceSection("Target inputs", renderTargetInputSelection(value.target_input_selection)) : ""}
     ${sourceSection("Headers", sourceRows(value.headers || {}))}
     ${value.body == null ? "" : sourceSection("Body", `<pre class="source-code">${escapeHtml(prettyJson(value.body))}</pre>`)}
   </div>`;
@@ -308,6 +356,7 @@ function renderStep(step, index) {
   const previewHtml = preview.method || (preview.evaluation && preview.render)
     ? sourceBlock(preview, true)
     : sourceBlock({ note: "Run this step to capture the request source." });
+  const inputContract = renderInputContract(preview.target_input_selection);
   return `<article class="step ${runnable ? "" : "locked"}" id="step-${escapeHtml(step.id)}">
     <div class="step-head">
       <span class="step-number">${index + 1}</span>
@@ -317,6 +366,7 @@ function renderStep(step, index) {
     <div class="step-body">
       <div class="request-text"><strong>What this request will do:</strong> ${escapeHtml(step.request_summary)}</div>
       ${renderReuse(step.reuses || [])}
+      <div data-input-contract-for="${escapeHtml(step.id)}">${inputContract}</div>
       ${lockedHint}
       <div class="actions"><button class="primary" type="button" data-run-step="${escapeHtml(step.id)}" data-run-label="${escapeHtml(step.button)}" ${ariaDisabled}>${escapeHtml(step.button)}</button></div>
       <div class="friendly-response" aria-live="polite" data-friendly-for="${escapeHtml(step.id)}"></div>
@@ -405,6 +455,11 @@ function renderFriendly(stepId, friendly) {
 function setSource(stepId, kind, value) {
   const node = document.querySelector(`[data-${kind}-source-for="${CSS.escape(stepId)}"]`);
   if (node) node.innerHTML = sourceBlock(value);
+}
+
+function updateInputContract(stepId, value) {
+  const node = document.querySelector(`[data-input-contract-for="${CSS.escape(stepId)}"]`);
+  if (node && value?.target_input_selection) node.innerHTML = renderInputContract(value.target_input_selection);
 }
 
 function progressKey(scenarioId) {
@@ -524,6 +579,7 @@ async function runStep(stepId, button) {
     renderFriendly(stepId, data.friendly || {});
     setSource(stepId, "request", data.request_source || {});
     setSource(stepId, "response", data.response_source || {});
+    updateInputContract(stepId, data.request_source || {});
     const status = data.friendly?.status || "done";
     updateStatus(stepId, status);
     track("lab_step_result", {
