@@ -88,6 +88,7 @@ def base_routes() -> dict[tuple[str, str], Any]:
                 "default_scenario_id": "alive-proof",
                 "scenarios": [
                     {"id": "alive-proof", "steps": 3},
+                    {"id": "opencrvs-birth-demographics", "steps": 2},
                     {"id": "wallet-credential", "steps": 5},
                     {"id": "dhis2-programme-vc", "steps": 6},
                     {"id": "social-aggregate", "steps": 4},
@@ -110,6 +111,10 @@ def base_routes() -> dict[tuple[str, str], Any]:
         ("GET", "/api/scenarios/alive-proof.json"): (
             200,
             {"story": {"steps": [{"id": "discover"}, {"id": "prepare-evidence"}, {"id": "deny-row"}]}},
+        ),
+        ("GET", "/api/scenarios/opencrvs-birth-demographics.json"): (
+            200,
+            {"story": {"steps": [{"id": "discover"}, {"id": "lookup"}]}},
         ),
         ("GET", "/api/scenarios/wallet-credential.json"): (
             200,
@@ -315,6 +320,7 @@ class HostedSmokeTest(unittest.TestCase):
 
         self.assertEqual(summary["credential_smoke"], "skipped")
         self.assertEqual(summary["scenarios"]["alive-proof"]["deny-row"], "denied_as_expected")
+        self.assertEqual(summary["scenarios"]["opencrvs-birth-demographics"]["lookup"], "done")
         self.assertEqual(summary["scenarios"]["social-aggregate"]["deny-row-with-aggregate"], "denied_as_expected")
         self.assertEqual(summary["scenarios"]["combined-support"]["final-positive"], "done")
         self.assertEqual(summary["scenarios"]["agriculture-voucher"]["positive-voucher"], "done")
@@ -323,6 +329,7 @@ class HostedSmokeTest(unittest.TestCase):
         self.assertEqual(summary["explorers"]["registries"]["social-protection"]["aggregate_records"], 1)
         requested_paths = [path for _, path, _ in server.requests]
         self.assertIn("/api/scenarios/alive-proof/discover", requested_paths)
+        self.assertIn("/api/scenarios/opencrvs-birth-demographics/lookup", requested_paths)
         self.assertIn("/api/scenarios/wallet-credential/credential-preview", requested_paths)
         self.assertIn("/api/scenarios/social-aggregate/read-aggregate", requested_paths)
         self.assertIn("/api/scenarios/combined-support/final-positive", requested_paths)
@@ -331,6 +338,100 @@ class HostedSmokeTest(unittest.TestCase):
         self.assertIn("/api/explorer/registries/civil/records.json?dataset=civil_registry&entity=civil_person&limit=1", requested_paths)
         self.assertIn("/api/explorer/claims/agriculture-notary/evaluate.json", requested_paths)
         self.assertIn("/.well-known/openid-credential-issuer", requested_paths)
+
+    def test_scenario_catalogue_order_does_not_matter(self) -> None:
+        routes = base_routes()
+        status, body = routes[("GET", "/api/scenarios.json")]
+        body = dict(body)
+        body["scenarios"] = list(reversed(body["scenarios"]))
+        routes[("GET", "/api/scenarios.json")] = (status, body)
+
+        with StubServer(routes) as server:
+            summary = hosted_smoke.run_smoke(hosted_smoke.SmokeConfig(base_url=server.url))
+
+        self.assertEqual(summary["stories"]["opencrvs-birth-demographics"], 2)
+
+    def test_none_registry_defaults_fail_without_none_url_requests(self) -> None:
+        routes = base_routes()
+        routes[("GET", "/api/explorer/registries.json")] = (
+            200,
+            {"registries": [{"id": "civil", "default_dataset": None, "default_entity": "civil_person"}]},
+        )
+
+        with StubServer(routes) as server:
+            with self.assertRaises(hosted_smoke.SmokeFailure) as raised:
+                hosted_smoke.run_smoke(hosted_smoke.SmokeConfig(base_url=server.url))
+            requested_paths = [path for _, path, _ in server.requests]
+
+        self.assertIn("registry-explorer-defaults-missing", str(raised.exception))
+        self.assertFalse(any("None" in path for path in requested_paths))
+
+    def test_none_registry_aggregate_is_skipped(self) -> None:
+        routes = base_routes()
+        routes[("GET", "/api/explorer/registries.json")] = (
+            200,
+            {
+                "registries": [
+                    {
+                        "id": "civil",
+                        "default_dataset": "civil_registry",
+                        "default_entity": "civil_person",
+                        "default_aggregate": None,
+                        "default_limit": 1,
+                    }
+                ]
+            },
+        )
+
+        with StubServer(routes) as server:
+            summary = hosted_smoke.run_smoke(hosted_smoke.SmokeConfig(base_url=server.url))
+            requested_paths = [path for _, path, _ in server.requests]
+
+        self.assertEqual(summary["explorers"]["registries"]["civil"]["aggregate_records"], 0)
+        self.assertFalse(any("/aggregates" in path or "/aggregate.json" in path for path in requested_paths))
+
+    def test_none_claim_service_id_fails_without_none_url_requests(self) -> None:
+        routes = base_routes()
+        routes[("GET", "/api/explorer/claims.json")] = (
+            200,
+            {"default_format": "application/vnd.registry-notary.claim-result+json", "claim_services": [{"id": None}]},
+        )
+
+        with StubServer(routes) as server:
+            with self.assertRaises(hosted_smoke.SmokeFailure) as raised:
+                hosted_smoke.run_smoke(hosted_smoke.SmokeConfig(base_url=server.url))
+            requested_paths = [path for _, path, _ in server.requests]
+
+        self.assertIn("claims-explorer-service-id-missing", str(raised.exception))
+        self.assertFalse(any("/claims/None/" in path for path in requested_paths))
+
+    def test_none_default_claim_fails_without_evaluation_request(self) -> None:
+        routes = base_routes()
+        routes[("GET", "/api/explorer/claims/civil-notary/metadata.json")] = (
+            200,
+            {
+                "ok": True,
+                "claim_service": {
+                    "id": "civil-notary",
+                    "default_claim": None,
+                    "claims": [
+                        {
+                            "id": "person-is-alive",
+                            "default_disclosure": "predicate",
+                            "formats": ["application/vnd.registry-notary.claim-result+json"],
+                        }
+                    ],
+                },
+            },
+        )
+
+        with StubServer(routes) as server:
+            with self.assertRaises(hosted_smoke.SmokeFailure) as raised:
+                hosted_smoke.run_smoke(hosted_smoke.SmokeConfig(base_url=server.url))
+            requested_paths = [path for _, path, _ in server.requests]
+
+        self.assertIn("claims-explorer-default-claim-missing", str(raised.exception))
+        self.assertNotIn("/api/explorer/claims/civil-notary/evaluate.json", requested_paths)
 
     def test_missing_story_step_fails_with_clear_contract_error(self) -> None:
         routes = base_routes()

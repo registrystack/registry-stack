@@ -43,6 +43,7 @@ DHIS2_PROGRAMME_CLAIMS = [
 
 EXPECTED_STEPS = {
     "alive-proof": ["discover", "prepare-evidence", "deny-row"],
+    "opencrvs-birth-demographics": ["discover", "lookup"],
     "wallet-credential": ["issuer-metadata", "credential-offer", "holder-key", "nonce", "credential-preview"],
     "dhis2-programme-vc": [
         "discover",
@@ -74,6 +75,10 @@ EXPECTED_STEP_STATUSES = {
         "discover": "done",
         "prepare-evidence": "done",
         "deny-row": "denied_as_expected",
+    },
+    "opencrvs-birth-demographics": {
+        "discover": "done",
+        "lookup": "done",
     },
     "wallet-credential": {
         "issuer-metadata": "done",
@@ -386,9 +391,9 @@ def run_smoke(config: SmokeConfig) -> dict[str, Any]:
     catalogue_ids = scenario_catalogue_ids(catalogue.body)
     expected_catalogue_ids = list(EXPECTED_STEPS)
     require(
-        catalogue_ids == expected_catalogue_ids,
+        sorted(catalogue_ids) == sorted(expected_catalogue_ids),
         "scenario-catalogue-mismatch",
-        {"expected": expected_catalogue_ids, "actual": catalogue_ids},
+        {"expected": sorted(expected_catalogue_ids), "actual": sorted(catalogue_ids)},
     )
 
     lab = client.get(joined_url(base_url, "/api/lab.json"))
@@ -478,9 +483,9 @@ def run_explorer_smoke(client: JsonClient, base_url: str) -> dict[str, Any]:
     for registry in registries:
         if not isinstance(registry, dict):
             continue
-        registry_id = str(registry.get("id", ""))
-        dataset_id = str(registry.get("default_dataset", ""))
-        entity_id = str(registry.get("default_entity", ""))
+        registry_id = str(registry.get("id") or "")
+        dataset_id = str(registry.get("default_dataset") or "")
+        entity_id = str(registry.get("default_entity") or "")
         default_limit = registry.get("default_limit", 1)
         require(registry_id and dataset_id and entity_id, "registry-explorer-defaults-missing", registry)
 
@@ -510,7 +515,7 @@ def run_explorer_smoke(client: JsonClient, base_url: str) -> dict[str, Any]:
         checks += 3
 
         aggregate_count = 0
-        aggregate_id = str(registry.get("default_aggregate", ""))
+        aggregate_id = str(registry.get("default_aggregate") or "")
         if aggregate_id:
             aggregates_path = query_path(
                 f"/api/explorer/registries/{registry_id}/aggregates.json",
@@ -546,7 +551,7 @@ def run_explorer_smoke(client: JsonClient, base_url: str) -> dict[str, Any]:
     for service in services:
         if not isinstance(service, dict):
             continue
-        service_id = str(service.get("id", ""))
+        service_id = str(service.get("id") or "")
         require(service_id, "claims-explorer-service-id-missing", service)
         metadata = client.get(joined_url(base_url, f"/api/explorer/claims/{service_id}/metadata.json"))
         require_ok(metadata, "claims-explorer-metadata-unavailable")
@@ -559,7 +564,7 @@ def run_explorer_smoke(client: JsonClient, base_url: str) -> dict[str, Any]:
 
         mode = "metadata"
         if service_id in DEFAULT_EVALUATED_CLAIM_SERVICES:
-            default_claim = str(claim_service.get("default_claim", ""))
+            default_claim = str(claim_service.get("default_claim") or "")
             selected_claim = next((claim for claim in claims if isinstance(claim, dict) and claim.get("id") == default_claim), {})
             require(bool(selected_claim), "claims-explorer-default-claim-missing", {"service": service_id, "default_claim": default_claim})
             evaluation_body = {
