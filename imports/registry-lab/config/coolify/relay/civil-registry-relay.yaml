@@ -93,6 +93,8 @@ standards:
           district: district
         response_fields:
           person.national_id: national_id
+          person.given_name: given_name
+          person.surname: surname
           person.birth_date: birth_date
           person.life_stage: life_stage
           person.deceased: deceased
