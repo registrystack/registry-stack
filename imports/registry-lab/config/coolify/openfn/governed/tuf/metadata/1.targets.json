@@ -3,31 +3,31 @@
     "_type": "targets",
     "spec_version": "1.0.0",
     "version": 1,
-    "expires": "2026-07-09T16:37:33.299821Z",
+    "expires": "2026-07-17T13:06:26.927197Z",
     "targets": {
       "openfn-dhis2-sidecar-runtime.json": {
-        "length": 1866,
+        "length": 2080,
         "hashes": {
-          "sha256": "0069fbfebf5ad5ffcd7b46b28eccc470302ac4b0e1d62c81bf1e5d22c6adea4f"
+          "sha256": "ba8d1b129ff94423c7f107070c2ebb253d122003fb33ca1cccf65430f00bf3e9"
         },
         "custom": {
-          "bundle_id": "registry-lab-hosted-dhis2-openfn-sidecar-2026-06-09",
-          "product": "registry-notary-openfn-sidecar",
           "previous_config_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-          "sequence": 1,
           "change_classes": [
             "openfn_sidecar_runtime",
             "openfn_sidecar_workflow_bundle",
             "openfn_sidecar_source_binding"
           ],
-          "environment": "hosted-lab",
           "instance_id": "hosted-dhis2-openfn-sidecar",
+          "sequence": 1,
+          "stream_id": "dhis2-openfn-sidecar-runtime",
+          "product": "registry-notary-openfn-sidecar",
+          "apply_policy": "restart_required",
           "signer_kids": [
             "8ec3a843a0f9328c863cac4046ab1cacbbc67888476ac7acf73d9bcd9a223ada"
           ],
-          "stream_id": "dhis2-openfn-sidecar-runtime",
-          "config_hash": "sha256:0069fbfebf5ad5ffcd7b46b28eccc470302ac4b0e1d62c81bf1e5d22c6adea4f",
-          "apply_policy": "restart_required"
+          "bundle_id": "registry-lab-hosted-dhis2-openfn-sidecar-2026-06-09",
+          "environment": "hosted-lab",
+          "config_hash": "sha256:ba8d1b129ff94423c7f107070c2ebb253d122003fb33ca1cccf65430f00bf3e9"
         }
       }
     },
@@ -39,7 +39,7 @@
   "signatures": [
     {
       "keyid": "8ec3a843a0f9328c863cac4046ab1cacbbc67888476ac7acf73d9bcd9a223ada",
-      "sig": "1fb96112ad0a06b76ed1fb4eb72d62c14ef589837dfd5399d4fab21aefd1c18ad5bb27c4d7f0cd68268d6e6ab5085d6152a1385e3dad96dfb31422406d844ba448c5d931fe8c5d9c4a3152a3549a0a8c6556b1991229d6278ec3294c847553852380656280c00066a5b8485a6ef63fed4e9e95d3ffc0345f76ceaa73b70aadbf796e80bcf1864ed52c17220c712a47993010e4223527e493162641b332f7d7c44ca307cccbfe480c855881d0b43f9d97c77c86201826af06d9eeaec5068234235270dd601ff41f556b5e4e1751dfbf59731553767a1ebdb0a57eff9d2e3355249926a6e06048d499d2ae0ad08309cc80daa900bc650d772378699f771ec0ca7840743bbd5601fb5f8124c52a87a2513e0d060b1ad83cf0b80ddbc46e0b1cc7cd13e3ceefa0e32e525f715aed62dcf6449e813c9fc07a05b8a42794ddb618dd9b6fe1fa6096418459062c04191cef69438f56b072e8d9a2f1ec9783b8656076e055d3731a6f056ed1e9bc5df4aba5d775e619a0094985eb60433cdb7d0080ae35"
+      "sig": "4758ea99cdb6fd9a93c05efb01ef3874b5b38a2b901197d43bc76c7187cc4fee53daa44db6bfbd28f384883478e7c443d892b38783fe341b3447e2e2872ec8e23549329fe94be09e9f046a0cd19ed8ad5f7dcb6db1ddb99ec8ad45633ba528f2fa37425bf5fd5219d2c16726df9a3d55229e13c9d51f3f32c323506a1887f9091e01a1f096d2736ab0ad4b52a7a966c35d793c60feec13ed907a6bd4c7ff072f391cd3c284ac24ff8672a046d7de949c19409995649c94b2e68e1e4e0638dd029c9677ea05c14c8d97d7f77f3ecdcaee0e1b8b3110e904d403109612955c4c9d9c64636979a39d59f9082594acfca3defac1370913d2f538c0edb556cda6b8eab7441813dc6ec283143a259c27e4d281f7a58f7c67e1f273247a6e4665af8160825473df7e7ea10b35a456308b9296929eb14d9adaf1d7b56e960fa183fa2eddcef7540291bbb8f323f317ef73afd352270b00787ee8dcd66c5c5313ab7eb694206baf197721b2823470c7b16bd2911e86c2a1516b3dd776913c28955cfc9cae"
     }
   ]
 }

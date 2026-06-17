@@ -1,7 +1,7 @@
 {
-  "config_hash": "sha256:0069fbfebf5ad5ffcd7b46b28eccc470302ac4b0e1d62c81bf1e5d22c6adea4f",
+  "config_hash": "sha256:ba8d1b129ff94423c7f107070c2ebb253d122003fb33ca1cccf65430f00bf3e9",
   "expression_hashes": {
-    "dhis2_health.lookup": "sha256:8b35c21a238c84d02b53cc279843cfd55c69a46796944511bc49424e3bf43760"
+    "dhis2_health.lookup": "sha256:c11a1a4db49e847e067c3f67d2879c8ca2a51e33a8e10bd4c1fe33846182f9f6"
   },
   "jobs_root": "/tmp/registry-lab-openfn-jobs",
   "metadata": {
@@ -12,7 +12,7 @@
       "openfn_sidecar_source_binding",
       "openfn_sidecar_workflow_bundle"
     ],
-    "config_hash": "sha256:0069fbfebf5ad5ffcd7b46b28eccc470302ac4b0e1d62c81bf1e5d22c6adea4f",
+    "config_hash": "sha256:ba8d1b129ff94423c7f107070c2ebb253d122003fb33ca1cccf65430f00bf3e9",
     "environment": "hosted-lab",
     "instance_id": "hosted-dhis2-openfn-sidecar",
     "previous_config_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",

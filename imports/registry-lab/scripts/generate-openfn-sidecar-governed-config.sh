@@ -35,7 +35,7 @@ cp -a "${repo_root}/config/openfn/jobs/." "${jobs_root}/"
 
 cargo run -q \
   --manifest-path "${notary_root}/Cargo.toml" \
-  -p registry-notary-openfn-sidecar \
+  -p registry-notary-source-adapter-sidecar \
   --bin registry-notary-openfn-sidecar \
   -- config render-target \
   --manifest "${manifest}" \
@@ -44,7 +44,7 @@ cargo run -q \
 
 cargo run -q \
   --manifest-path "${notary_root}/Cargo.toml" \
-  -p registry-notary-openfn-sidecar \
+  -p registry-notary-source-adapter-sidecar \
   --bin registry-notary-openfn-sidecar \
   -- config create-local-tuf-repo \
   --target "${target}" \
@@ -67,7 +67,7 @@ cargo run -q \
 
 cargo run -q \
   --manifest-path "${notary_root}/Cargo.toml" \
-  -p registry-notary-openfn-sidecar \
+  -p registry-notary-source-adapter-sidecar \
   --bin registry-notary-openfn-sidecar \
   -- config verify-bundle \
   --product registry-notary-openfn-sidecar \
@@ -92,59 +92,67 @@ config_hash = report["config_hash"]
 root_hash = report["tuf"]["root_sha256"]
 
 def update_yaml(path: Path, updates: dict[str, object]) -> None:
-    import subprocess
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
 
-    script = r'''
-require "json"
-require "yaml"
+    def indent_of(line: str) -> int:
+        return len(line) - len(line.lstrip(" "))
 
-path = ARGV.fetch(0)
-updates = JSON.parse(ARGV.fetch(1))
-data = YAML.load_file(path)
-abort("#{path} did not load as a YAML mapping") unless data.is_a?(Hash)
+    def yaml_key(line: str) -> str | None:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith("- "):
+            return None
+        if ":" not in stripped:
+            return None
+        return stripped.split(":", 1)[0].strip("'\"")
 
-def fetch_child(node, key, dotted_path)
-  if node.is_a?(Array)
-    index = Integer(key)
-    child = node[index]
-  elsif node.is_a?(Hash)
-    child = node[key]
-  else
-    abort("expected YAML collection before #{dotted_path}")
-  end
-  abort("missing YAML path #{dotted_path}") if child.nil?
-  child
-rescue ArgumentError
-  abort("expected list index in YAML path #{dotted_path}")
-end
+    def find_path(dotted_path: str) -> int:
+        parent_indent = -1
+        search_from = 0
+        for part in dotted_path.split("."):
+            if part.isdigit():
+                wanted_index = int(part)
+                found_index = -1
+                for index in range(search_from, len(lines)):
+                    line = lines[index]
+                    stripped = line.strip()
+                    indent = indent_of(line)
+                    if indent <= parent_indent and stripped:
+                        break
+                    if indent > parent_indent and stripped.startswith("- "):
+                        found_index += 1
+                        if found_index == wanted_index:
+                            parent_indent = indent
+                            search_from = index + 1
+                            break
+                else:
+                    raise SystemExit(f"could not find YAML list index {dotted_path} in {path}")
+                if found_index != wanted_index:
+                    raise SystemExit(f"could not find YAML list index {dotted_path} in {path}")
+                continue
 
-updates.each do |dotted_path, value|
-  keys = dotted_path.split(".")
-  leaf = keys.pop
-  parent = data
-  keys.each_with_index do |key, index|
-    parent = fetch_child(parent, key, keys[0..index].join("."))
-  end
-  if parent.is_a?(Array)
-    index = Integer(leaf)
-    next if parent[index] == value
-    parent[index] = value
-  elsif parent.is_a?(Hash)
-    next if parent[leaf] == value
-    parent[leaf] = value
-  else
-    abort("expected YAML collection before #{dotted_path}")
-  end
-  @changed = true
-end
+            for index in range(search_from, len(lines)):
+                line = lines[index]
+                stripped = line.strip()
+                indent = indent_of(line)
+                if indent <= parent_indent and stripped:
+                    break
+                if indent > parent_indent and yaml_key(line) == part:
+                    parent_indent = indent
+                    search_from = index + 1
+                    break
+            else:
+                raise SystemExit(f"could not find YAML path {dotted_path} in {path}")
 
-exit 0 unless @changed
-File.write(path, "# SPDX-License-Identifier: Apache-2.0\n\n" + YAML.dump(data).sub(/\A---\n/, ""))
-'''
-    subprocess.run(
-        ["ruby", "-e", script, str(path), json.dumps(updates)],
-        check=True,
-    )
+        return search_from - 1
+
+    for dotted_path, value in updates.items():
+        line_index = find_path(dotted_path)
+        key = dotted_path.rsplit(".", 1)[-1]
+        indent = " " * indent_of(lines[line_index])
+        newline = "\n" if lines[line_index].endswith("\n") else ""
+        lines[line_index] = f"{indent}{key}: {value}{newline}"
+    path.write_text("".join(lines), encoding="utf-8")
 
 
 update_yaml(
@@ -156,16 +164,7 @@ update_yaml(
 update_yaml(
     notary_config,
     {
-        "evidence.source_connections.dhis2_openfn.expected_sidecar": {
-            "product": "registry-notary-openfn-sidecar",
-            "instance_id": "hosted-dhis2-openfn-sidecar",
-            "environment": "hosted-lab",
-            "stream_id": "dhis2-openfn-sidecar-runtime",
-            "config_hash": config_hash,
-            "require_expression_hashes_verified": True,
-            "require_runtime_verified": True,
-            "require_smoke_verified": True,
-        },
+        "evidence.source_connections.dhis2_openfn.expected_sidecar.config_hash": config_hash,
     },
 )
 
