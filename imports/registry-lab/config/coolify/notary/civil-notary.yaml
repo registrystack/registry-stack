@@ -55,6 +55,9 @@ evidence:
         query_type: predicate
         records_path: /message/search_response/0/data/reg_records
         field_paths:
+          given_name: /person/given_name
+          surname: /person/surname
+          birth_date: /person/birth_date
           deceased: /person/deceased
   claims:
     - id: person-is-alive
