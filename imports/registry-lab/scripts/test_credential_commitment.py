@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import os
+import re
+import shlex
 import subprocess
 import sys
 import unittest
 from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).with_name("credential-commitment.py")
+REPO_ROOT = SCRIPT_PATH.parents[1]
 
 
 class CredentialCommitmentTest(unittest.TestCase):
@@ -219,6 +222,42 @@ class CredentialCommitmentTest(unittest.TestCase):
         )
         self.assertNotEqual(invalid_result.returncode, 0)
         self.assertNotIn(raw_secret, invalid_result.stdout + invalid_result.stderr)
+
+    def test_opencrvs_public_token_commitment_matches_notary_configs(self) -> None:
+        env_path = REPO_ROOT / "config/lab-homepage/public-demo-credentials.env"
+        values: dict[str, str] = {}
+        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            parsed = shlex.split(value, comments=False, posix=True)
+            values[key.strip()] = parsed[0] if parsed else ""
+
+        result = self.run_script(
+            "env-pair",
+            "--product",
+            "registry-notary",
+            "--credential-type",
+            "api_key",
+            "--credential-id",
+            "opencrvs_dci_lab_client",
+            "--raw-env",
+            "OPENCRVS_EVIDENCE_CLIENT_TOKEN",
+            env={"OPENCRVS_EVIDENCE_CLIENT_TOKEN": values["OPENCRVS_EVIDENCE_CLIENT_TOKEN"]},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        commitment_match = re.search(r"OPENCRVS_EVIDENCE_CLIENT_TOKEN_COMMITMENT=(sha256:[0-9a-f]{64})", result.stdout)
+        self.assertIsNotNone(commitment_match)
+        commitment = commitment_match.group(1)
+
+        for config_path in (
+            REPO_ROOT / "config/notary/opencrvs-dci-notary.yaml",
+            REPO_ROOT / "config/coolify/notary/opencrvs-dci-notary.yaml",
+        ):
+            with self.subTest(config_path=config_path):
+                text = config_path.read_text(encoding="utf-8")
+                self.assertIn(f"commitment: {commitment}", text)
 
 
 if __name__ == "__main__":
