@@ -754,15 +754,25 @@ fn filters_from_predicate_query(
                 return Err(FilterError::UnsupportedOp.into());
             }
         }
-        let mut has_expression = false;
-        for key in ["expression1", "expression2"] {
-            if let Some(expression) = predicate.get(key) {
-                has_expression = true;
-                filters.push(filter_from_predicate_expression(expression, config)?);
-            }
-        }
-        if !has_expression {
+        let Some(object) = predicate.as_object() else {
             return Err(FilterError::InvalidValue.into());
+        };
+        let mut expression_keys = object
+            .keys()
+            .filter_map(|key| {
+                key.strip_prefix("expression")
+                    .and_then(|index| index.parse::<usize>().ok())
+                    .filter(|index| *index > 0)
+                    .map(|index| (index, key))
+            })
+            .collect::<Vec<_>>();
+        expression_keys.sort_by_key(|(index, _)| *index);
+        if expression_keys.is_empty() {
+            return Err(FilterError::InvalidValue.into());
+        }
+        for (_, key) in expression_keys {
+            let expression = object.get(key).ok_or(FilterError::InvalidValue)?;
+            filters.push(filter_from_predicate_expression(expression, config)?);
         }
     }
     Ok(filters)
@@ -797,6 +807,49 @@ fn filter_from_predicate_expression(
 }
 
 fn filter_from_operator_object(field: &str, value: &Value) -> Result<EntityFilter, Error> {
+    if let Some(filter_type) = value.get("type").and_then(Value::as_str) {
+        match filter_type {
+            "exact" => {
+                let term = value.get("term").ok_or(FilterError::InvalidValue)?;
+                return Ok(EntityFilter {
+                    field: field.to_string(),
+                    op: EntityFilterOp::Eq,
+                    value: term.clone(),
+                });
+            }
+            "range" => {
+                if value.get("gt").is_some() || value.get("lt").is_some() {
+                    return Err(FilterError::UnsupportedOp.into());
+                }
+                if let (Some(gte), Some(lte)) = (
+                    value.get("gte").or_else(|| value.get("ge")),
+                    value.get("lte").or_else(|| value.get("le")),
+                ) {
+                    return Ok(EntityFilter {
+                        field: field.to_string(),
+                        op: EntityFilterOp::Between,
+                        value: Value::Array(vec![gte.clone(), lte.clone()]),
+                    });
+                }
+                if let Some(gte) = value.get("gte").or_else(|| value.get("ge")) {
+                    return Ok(EntityFilter {
+                        field: field.to_string(),
+                        op: EntityFilterOp::Gte,
+                        value: gte.clone(),
+                    });
+                }
+                if let Some(lte) = value.get("lte").or_else(|| value.get("le")) {
+                    return Ok(EntityFilter {
+                        field: field.to_string(),
+                        op: EntityFilterOp::Lte,
+                        value: lte.clone(),
+                    });
+                }
+                return Err(FilterError::InvalidValue.into());
+            }
+            _ => return Err(FilterError::UnsupportedOp.into()),
+        }
+    }
     if let Some(eq) = value.get("$eq").or_else(|| value.get("eq")) {
         return Ok(EntityFilter {
             field: field.to_string(),

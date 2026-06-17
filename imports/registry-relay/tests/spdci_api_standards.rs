@@ -181,7 +181,7 @@ datasets:
             - field: id
               ops: [eq]
             - field: disability_status
-              ops: [eq, in]
+              ops: [eq, in, gte, lte, between]
             - field: impairment_type
               ops: [eq, in]
 {entity_api_extra}
@@ -927,6 +927,143 @@ async fn sync_search_supports_named_dci_registry_path() {
         .await;
     response.assert_status(StatusCode::OK);
     let body: Value = response.json();
+    assert_eq!(
+        body["message"]["search_response"][0]["data"]["reg_records"][0]["impairment_type"],
+        "mobility"
+    );
+}
+
+#[tokio::test]
+async fn sync_search_supports_notary_expression_filter_shape() {
+    let server = server().await;
+    let response = server
+        .post("/dci/dr/registry/sync/search")
+        .json(&json!({
+            "header": valid_header("msg-search-notary-expression"),
+            "message": {
+                "transaction_id": "txn-search-notary-expression",
+                "search_request": [{
+                    "reference_id": "ref-search-notary-expression",
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "search_criteria": {
+                        "query_type": "expression",
+                        "query": {
+                            "type": "ns:org:QueryType:expression",
+                            "value": {
+                                "expression": {
+                                    "query": {
+                                        "disability_status": {
+                                            "type": "exact",
+                                            "term": "Approved"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }]
+            }
+        }))
+        .await;
+    response.assert_status(StatusCode::OK);
+    let body: Value = response.json();
+    assert_eq!(body["header"]["total_count"], 1);
+    assert_eq!(
+        body["message"]["search_response"][0]["data"]["reg_records"][0]["impairment_type"],
+        "mobility"
+    );
+}
+
+#[tokio::test]
+async fn sync_search_supports_notary_expression_range_with_bounds() {
+    let server = server().await;
+    let response = server
+        .post("/dci/dr/registry/sync/search")
+        .json(&json!({
+            "header": valid_header("msg-search-notary-range"),
+            "message": {
+                "transaction_id": "txn-search-notary-range",
+                "search_request": [{
+                    "reference_id": "ref-search-notary-range",
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "search_criteria": {
+                        "query_type": "expression",
+                        "query": {
+                            "type": "ns:org:QueryType:expression",
+                            "value": {
+                                "expression": {
+                                    "query": {
+                                        "disability_status": {
+                                            "type": "range",
+                                            "gte": "Approved",
+                                            "lte": "Approved"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }]
+            }
+        }))
+        .await;
+    response.assert_status(StatusCode::OK);
+    let body: Value = response.json();
+    assert_eq!(body["header"]["total_count"], 1);
+    assert_eq!(
+        body["message"]["search_response"][0]["data"]["reg_records"][0]["impairment_type"],
+        "mobility"
+    );
+}
+
+#[tokio::test]
+async fn sync_search_supports_numbered_notary_predicates() {
+    let server = server().await;
+    let response = server
+        .post("/dci/dr/registry/sync/search")
+        .json(&json!({
+            "header": valid_header("msg-search-numbered-predicate"),
+            "message": {
+                "transaction_id": "txn-search-numbered-predicate",
+                "search_request": [{
+                    "reference_id": "ref-search-numbered-predicate",
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "search_criteria": {
+                        "query_type": "predicate",
+                        "query": [
+                            {
+                                "seq_num": 1,
+                                "expression1": {
+                                    "attribute_name": "disability_status",
+                                    "operator": "eq",
+                                    "attribute_value": "Approved"
+                                }
+                            },
+                            {
+                                "seq_num": 2,
+                                "expression2": {
+                                    "attribute_name": "disability_details.impairment_type",
+                                    "operator": "eq",
+                                    "attribute_value": "mobility"
+                                }
+                            },
+                            {
+                                "seq_num": 3,
+                                "expression3": {
+                                    "attribute_name": "disability_status",
+                                    "operator": "eq",
+                                    "attribute_value": "Approved"
+                                }
+                            }
+                        ]
+                    }
+                }]
+            }
+        }))
+        .await;
+    response.assert_status(StatusCode::OK);
+    let body: Value = response.json();
+    assert_eq!(body["header"]["total_count"], 1);
     assert_eq!(
         body["message"]["search_response"][0]["data"]["reg_records"][0]["impairment_type"],
         "mobility"
