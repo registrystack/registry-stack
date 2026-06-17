@@ -322,10 +322,10 @@ services:
     environment:
       RUST_LOG: info
       OPENFN_SIDECAR_TOKEN_HASH: ${OPENFN_SIDECAR_TOKEN_HASH:-}
-      OPENFN_DHIS2_HOST_URL: ${OPENFN_DHIS2_HOST_URL:-https://play.im.dhis2.org/stable-2-43-0}
+      OPENFN_DHIS2_HOST_URL: ${OPENFN_DHIS2_HOST_URL:-https://play.im.dhis2.org/stable-2-43-0-1}
       OPENFN_DHIS2_USERNAME: ${OPENFN_DHIS2_USERNAME:-admin}
       OPENFN_DHIS2_PASSWORD: ${OPENFN_DHIS2_PASSWORD:-district}
-      OPENFN_DHIS2_DEMO_CREDENTIAL_JSON: '{"hostUrl":"${OPENFN_DHIS2_HOST_URL:-https://play.im.dhis2.org/stable-2-43-0}","baseUrl":"${OPENFN_DHIS2_HOST_URL:-https://play.im.dhis2.org/stable-2-43-0}","username":"${OPENFN_DHIS2_USERNAME:-admin}","password":"${OPENFN_DHIS2_PASSWORD:-district}"}'
+      OPENFN_DHIS2_DEMO_CREDENTIAL_JSON: '{"hostUrl":"${OPENFN_DHIS2_HOST_URL:-https://play.im.dhis2.org/stable-2-43-0-1}","baseUrl":"${OPENFN_DHIS2_HOST_URL:-https://play.im.dhis2.org/stable-2-43-0-1}","username":"${OPENFN_DHIS2_USERNAME:-admin}","password":"${OPENFN_DHIS2_PASSWORD:-district}"}'
     entrypoint: ["/bin/sh", "-eu", "-c"]
     command:
       - |
