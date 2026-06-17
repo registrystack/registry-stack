@@ -52,7 +52,7 @@ evidence:
       token_env: CIVIL_EVIDENCE_SOURCE_RAW
       dci:
         search_path: /dci/crvs/registry/sync/search
-        query_type: expression
+        query_type: predicate
         records_path: /message/search_response/0/data/reg_records
         field_paths:
           deceased: /person/deceased
