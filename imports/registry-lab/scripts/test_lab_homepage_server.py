@@ -1304,6 +1304,8 @@ class ExplorerApiPayloadTest(unittest.TestCase):
         self.assertEqual(shared["base_url"], "https://shared-notary.lab.registrystack.org")
 
         dhis2 = server.claims_explorer.claim_metadata_payload(self.config, "dhis2-notary")["claim_service"]
+        self.assertEqual(dhis2["default_subject"], "PQfMcpmXeFE")
+        self.assertEqual(dhis2["default_purpose"], "https://demo.example.gov/purpose/dhis2-openfn-health-evidence")
         dhis2_titles = {claim["id"]: claim["title"] for claim in dhis2["claims"]}
         self.assertEqual(dhis2_titles["dhis2-child-program-active"], "Health Programme Participation Attestation")
 
@@ -1527,6 +1529,40 @@ class ExplorerApiPayloadTest(unittest.TestCase):
         self.assertEqual(payload["data_minimization"]["Raw row returned"], "no")
         self.assertEqual(payload["data_minimization"]["Returned to relying service"], 1)
         self.assertEqual(payload["source"]["dataset"], "civil_registry")
+
+    def test_runtime_claim_evaluation_uses_real_token_for_http_call(self) -> None:
+        captured = {}
+
+        class Result:
+            status = 200
+            body = {"results": [{"claim_id": "person-is-alive", "satisfied": True}]}
+            headers = {"content-type": "application/json"}
+            error = ""
+
+        def fake_http_json(method, url, headers, body, timeout=8.0):
+            captured["headers"] = headers
+            return Result()
+
+        os.environ["CIVIL_EVIDENCE_CLIENT_BEARER"] = "civil-real-token"
+        try:
+            with mock.patch.object(server.claims_explorer, "http_json", fake_http_json):
+                payload = server.claims_explorer.run_evaluation(
+                    server.enrich_config({"credentials": []}),
+                    "civil-notary",
+                    {
+                        "claim_id": "person-is-alive",
+                        "subject": "NID-1001",
+                        "identifier_scheme": "national_id",
+                        "disclosure": "predicate",
+                        "format": server.claims_explorer.CLAIM_RESULT_FORMAT,
+                        "purpose": server.claims_explorer.PURPOSE,
+                    },
+                )
+        finally:
+            os.environ.pop("CIVIL_EVIDENCE_CLIENT_BEARER", None)
+        self.assertEqual(captured["headers"]["Authorization"], "Bearer civil-real-token")
+        self.assertNotIn("civil-real-token", str(payload["request_source"]))
+        self.assertIn("[runtime demo token hidden]", str(payload["request_source"]))
 
     def test_civil_preview_unknown_subject_is_not_satisfied(self) -> None:
         payload = server.claims_explorer.run_evaluation(
