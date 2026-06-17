@@ -36,13 +36,15 @@
     "dhis2_health": {
       "dataset": "dhis2_tracker",
       "entity": "person",
+      "engine": "openfn",
       "workflow": {
         "start": "lookup",
+        "batch_mode": "per_item",
         "steps": [
           {
             "id": "lookup",
             "expression": "dhis2-health-lookup.js",
-            "expression_sha256": "sha256:8b35c21a238c84d02b53cc279843cfd55c69a46796944511bc49424e3bf43760",
+            "expression_sha256": "sha256:c11a1a4db49e847e067c3f67d2879c8ca2a51e33a8e10bd4c1fe33846182f9f6",
             "adaptors": [
               "@openfn/language-http@7.3.1"
             ]
@@ -50,12 +52,16 @@
         ]
       },
       "credential_env": "OPENFN_DHIS2_DEMO_CREDENTIAL_JSON",
+      "credential_public_fields": [],
       "allowed_base_urls": [
         "https://play.im.dhis2.org/stable-2-43-0"
       ],
+      "allow_insecure_localhost": false,
+      "allow_insecure_private_network": false,
       "smoke_lookup": {
         "field": "tracked_entity",
         "value": "PQfMcpmXeFE",
+        "query_values": {},
         "fields": [
           "tracked_entity",
           "child_program_active",
