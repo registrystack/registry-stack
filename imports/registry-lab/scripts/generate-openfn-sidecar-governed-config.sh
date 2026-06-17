@@ -15,7 +15,8 @@ datastore_dir="${repo_root}/output/openfn-sidecar-tuf-datastore"
 report="${governed_dir}/openfn-dhis2-sidecar-runtime.report.json"
 bootstrap="${repo_root}/config/coolify/openfn/openfn-dhis2-sidecar.bootstrap.yaml"
 notary_config="${repo_root}/config/coolify/notary/dhis2-health-notary.yaml"
-previous_hash="sha256:0000000000000000000000000000000000000000000000000000000000000000"
+previous_hash="${PREVIOUS_HASH:-sha256:3677335ccc50be1957a2fd076f1c1a7329d3be63f839afd4f5d123b4f6d107e4}"
+sequence="${SEQUENCE:-2}"
 signer_kid="8ec3a843a0f9328c863cac4046ab1cacbbc67888476ac7acf73d9bcd9a223ada"
 
 if [[ ! -d "${notary_root}" ]]; then
@@ -58,7 +59,7 @@ cargo run -q \
   --environment hosted-lab \
   --stream-id dhis2-openfn-sidecar-runtime \
   --bundle-id registry-lab-hosted-dhis2-openfn-sidecar-2026-06-09 \
-  --sequence 1 \
+  --sequence "${sequence}" \
   --previous-config-hash "${previous_hash}" \
   --change-class openfn_sidecar_runtime \
   --change-class openfn_sidecar_workflow_bundle \
