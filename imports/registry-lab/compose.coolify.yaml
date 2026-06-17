@@ -402,7 +402,7 @@ services:
       - /etc/registry-notary-openfn/openfn-dhis2-sidecar.bootstrap.yaml
     environment:
       RUST_LOG: ${RUST_LOG:-info}
-      OPENFN_DHIS2_DEMO_CREDENTIAL_JSON: '{"hostUrl":"https://play.im.dhis2.org/stable-2-43-0","baseUrl":"https://play.im.dhis2.org/stable-2-43-0","username":"${OPENFN_DHIS2_USERNAME:-}","password":"${OPENFN_DHIS2_PASSWORD:-}"}'
+      OPENFN_DHIS2_DEMO_CREDENTIAL_JSON: '{"hostUrl":"https://play.im.dhis2.org/stable-2-43-0-1","baseUrl":"https://play.im.dhis2.org/stable-2-43-0-1","username":"${OPENFN_DHIS2_USERNAME:-admin}","password":"${OPENFN_DHIS2_PASSWORD:-district}"}'
     depends_on:
       config-loader:
         condition: service_completed_successfully
