@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""OpenCRVS demographic birth-record lookup scenario."""
+"""Civil Relay demographic vital-status lookup scenario."""
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from .attestations import attestation
@@ -26,14 +27,14 @@ from .common import (
 )
 
 
-SCENARIO_ID = "opencrvs-birth-demographics"
-SERVICE_NAME = "OpenCRVS DCI Notary"
-CREDENTIAL_ID = "opencrvs-api-key"
-DEFAULT_URL = "https://opencrvs-notary.lab.registrystack.org"
-PURPOSE = "https://demo.example.gov/purpose/opencrvs-dci-lab"
+SCENARIO_ID = "civil-birth-demographics"
+SERVICE_NAME = "Civil Notary"
+CREDENTIAL_ID = "civil-notary-evidence"
+DEFAULT_URL = "http://127.0.0.1:4321"
+PURPOSE = "https://demo.example.gov/purpose/decentralized-evidence-demo"
 
-CLAIM_ID = "opencrvs-birth-record-exists-by-demographics"
-PUBLIC_ATTESTATION = attestation("birth-registration-attestation")
+CLAIM_ID = "civil-person-is-alive-by-demographics"
+PUBLIC_ATTESTATION = attestation("vital-status-attestation")
 SUBJECT_NAME = "Miguel Santos"
 SUBJECT_PROFILE = person_profile(
     "",
@@ -86,14 +87,14 @@ EXPECTED_CLAIMS_BODY = {
 def story() -> dict[str, Any]:
     return {
         "id": SCENARIO_ID,
-        "title": "Can an SP MIS check for an OpenCRVS birth record with name and date of birth instead of an ID?",
-        "short_title": "OpenCRVS Birth Lookup Without an ID",
-        "proves": "The OpenCRVS Notary publishes a demographic input contract and accepts a birth-registration attestation lookup with given name, family name, and birthdate.",
-        "domain": "Civil registration",
+        "title": "Can an SP MIS check Miguel's vital status with name and date of birth instead of an ID?",
+        "short_title": "Civil Lookup Without an ID",
+        "proves": "The Civil Notary publishes a Relay-backed demographic input contract and accepts a vital-status lookup with given name, family name, and birthdate.",
+        "domain": "Civil registry",
         "availability": "hosted",
         "availability_state": {"state": "hosted", "label": "Hosted", "runnable": True},
         "intro": (
-            "You are checking whether a birth record exists when the caller does not have a UIN. The Explorer first "
+            "You are checking Miguel's vital status when the caller does not have a national ID. The Explorer first "
             "asks the Notary what target inputs the claim accepts, then sends only the demographic fields the Notary published."
         ),
         "actor": "Social Protection MIS",
@@ -102,31 +103,31 @@ def story() -> dict[str, Any]:
         "requested_attestations": [PUBLIC_ATTESTATION],
         "lookup_profile": {"id": "by-demographics", "label": "Name and date of birth"},
         "non_disclosure": [
-            "UIN or national ID",
-            "Full OpenCRVS birth record",
-            "Unrequested child, parent, or event attributes",
+            "National ID",
+            "Full civil registry row",
+            "Unrequested household, address, or relationship attributes",
         ],
         "proof_facts": [
             "The Notary publishes target_inputs in claim discovery.",
             "The evaluation request contains demographic attributes only.",
-            "The response is a minimized birth-registration attestation result.",
+            "The response is a minimized vital-status attestation result from a Relay-backed source.",
         ],
         "boundary": {
-            "allowed": "Ask for the Birth Registration Attestation using the published demographic input contract.",
-            "not_allowed": "Invent an identifier lookup, read an OpenCRVS source row, or send extra personal attributes.",
+            "allowed": "Ask for the Vital Status Attestation using the published demographic input contract.",
+            "not_allowed": "Invent an identifier lookup, read a civil registry row, or send extra personal attributes.",
         },
         "steps": [
             {
                 "id": "discover",
                 "label": "Discover the input contract",
-                "prompt": "Ask the OpenCRVS Notary which target inputs it accepts for the demographic birth-record claim.",
-                "button": "Discover OpenCRVS claim inputs",
-                "request_summary": "GET /v1/claims and inspect the target_inputs for the demographic birth-record claim.",
+                "prompt": "Ask the Civil Notary which target inputs it accepts for the demographic vital-status claim.",
+                "button": "Discover Civil claim inputs",
+                "request_summary": "GET /v1/claims and inspect the target_inputs for the demographic vital-status claim.",
             },
             {
                 "id": "lookup",
                 "label": "Lookup without an ID",
-                "prompt": "Use the published contract to ask whether a birth record exists for Miguel using only name and date of birth.",
+                "prompt": "Use the published contract to ask whether Miguel is alive using only name and date of birth.",
                 "button": "Check by name and date of birth",
                 "request_summary": "POST an evaluation with target.attributes.given_name, family_name, and birthdate, not target.identifiers.",
                 "reuses": [
@@ -140,7 +141,7 @@ def story() -> dict[str, Any]:
             {"label": "ID number sent", "value": "No"},
             {"label": "Target inputs", "value": "Given name + family name + birthdate"},
             {"label": "Contract source", "value": "Notary /v1/claims discovery"},
-            {"label": "Raw OpenCRVS row exposed", "value": "No"},
+            {"label": "Raw civil row exposed", "value": "No"},
         ],
     }
 
@@ -172,17 +173,16 @@ def run_step(config: dict[str, Any], step_id: str) -> dict[str, Any]:
 
 
 def _credential(config: dict[str, Any]) -> dict[str, Any]:
-    credential = configured_credential(config, CREDENTIAL_ID)
-    if not credential.get("id"):
-        credential.update(
-            {
-                "id": CREDENTIAL_ID,
-                "env": "OPENCRVS_EVIDENCE_CLIENT_TOKEN",
-                "auth_scheme": "api_key",
-                "service_url": DEFAULT_URL,
-                "display_policy": "public",
-            }
-        )
+    credential = {
+        **configured_credential(config, CREDENTIAL_ID),
+        "id": CREDENTIAL_ID,
+        "env": "CIVIL_EVIDENCE_CLIENT_BEARER",
+        "token": os.environ.get("CIVIL_EVIDENCE_CLIENT_BEARER", ""),
+        "auth_scheme": "bearer",
+        "display_policy": "runtime-hidden",
+    }
+    if not credential.get("service_url"):
+        credential["service_url"] = os.environ.get("CIVIL_EVIDENCE_URL") or DEFAULT_URL
     return credential
 
 
@@ -214,7 +214,7 @@ def _evaluation_body(claims_body: Any) -> tuple[dict[str, Any], dict[str, Any]]:
         claims_body,
         SUBJECT_PROFILE,
         [CLAIM_ID],
-        disclosure="value",
+        disclosure="predicate",
         fmt=CLAIM_RESULT_FORMAT,
     )
 
@@ -225,15 +225,15 @@ def _missing_token_result(config: dict[str, Any], step_id: str) -> dict[str, Any
         "step_id": step_id,
         "friendly": {
             "title": f"{SERVICE_NAME} credential is not configured.",
-            "message": "Set the public OpenCRVS demo API key before running this hosted scenario.",
+            "message": "Set the Civil Notary evidence credential before running this hosted scenario.",
             "status": "needs_attention",
             "facts": [
                 {"label": "Endpoint", "value": _base_url(config)},
-                {"label": "Required token env", "value": credential.get("env", "OPENCRVS_EVIDENCE_CLIENT_TOKEN")},
+                {"label": "Required token env", "value": credential.get("env", "CIVIL_EVIDENCE_CLIENT_BEARER")},
             ],
         },
         "request_source": preview_step(config, step_id),
-        "response_source": {"note": "No OpenCRVS API key configured, so the request was not sent."},
+        "response_source": {"note": "No Civil Notary evidence credential configured, so the request was not sent."},
     }
 
 
@@ -250,7 +250,7 @@ def _discover(config: dict[str, Any], step_id: str) -> dict[str, Any]:
     return {
         "step_id": step_id,
         "friendly": {
-            "title": "The OpenCRVS Notary publishes the demographic input contract." if published else "OpenCRVS claim discovery needs attention.",
+            "title": "The Civil Notary publishes the demographic input contract." if published else "Civil claim discovery needs attention.",
             "message": (
                 "The target_inputs metadata says this claim can be evaluated with given name, family name, and birthdate."
                 if published
@@ -279,7 +279,7 @@ def _lookup(config: dict[str, Any], step_id: str) -> dict[str, Any]:
         return {
             "step_id": step_id,
             "friendly": {
-                "title": "OpenCRVS has not published the demographic input contract.",
+                "title": "The Civil Notary has not published the demographic input contract.",
                 "message": "The Explorer did not send the evaluation because /v1/claims did not describe the required target inputs.",
                 "status": "needs_attention",
                 "facts": [
@@ -324,19 +324,19 @@ def _summarize_lookup(result) -> dict[str, Any]:
         reason = result.body.get("code") or result.body.get("title") or ""
     reason = reason or result.error or "None"
     if matched:
-        title = "The birth record was found without sending an ID."
+        title = "The vital status was checked without sending an ID."
         message = "The Notary evaluated the claim from the published demographic inputs and returned only the requested attestation result."
         status = "done"
     elif result.status == 409:
         title = "The demographic lookup was not uniquely available."
         message = (
-            "The request shape is valid, but the live OpenCRVS search did not produce one usable record. "
+            "The request shape is valid, but the live Civil Relay search did not produce one usable record. "
             "That is still safer than falling back to an invented identifier lookup."
         )
         status = "denied_as_expected"
     else:
-        title = "The OpenCRVS demographic lookup needs attention."
-        message = "The Notary did not return the expected birth-record result. Inspect the response source."
+        title = "The Civil demographic lookup needs attention."
+        message = "The Notary did not return the expected vital-status result. Inspect the response source."
         status = "needs_attention"
     return {
         "title": title,

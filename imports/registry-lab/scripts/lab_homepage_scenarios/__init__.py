@@ -9,9 +9,9 @@ from typing import Any
 from . import (
     agriculture_voucher,
     civil_alive,
+    civil_birth_demographics,
     combined_support,
     dhis2_programme,
-    opencrvs_birth_demographics,
     social_aggregate,
     wallet_vc,
 )
@@ -20,7 +20,7 @@ from .attestations import public_label_violations
 
 SCENARIOS = [
     civil_alive,
-    opencrvs_birth_demographics,
+    civil_birth_demographics,
     wallet_vc,
     dhis2_programme,
     social_aggregate,
