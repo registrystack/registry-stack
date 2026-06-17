@@ -54,7 +54,7 @@
       "credential_env": "OPENFN_DHIS2_DEMO_CREDENTIAL_JSON",
       "credential_public_fields": [],
       "allowed_base_urls": [
-        "https://play.im.dhis2.org/stable-2-43-0"
+        "https://play.im.dhis2.org/stable-2-43-0-1"
       ],
       "allow_insecure_localhost": false,
       "allow_insecure_private_network": false,

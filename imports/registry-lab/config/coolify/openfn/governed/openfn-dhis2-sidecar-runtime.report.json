@@ -1,5 +1,5 @@
 {
-  "config_hash": "sha256:3677335ccc50be1957a2fd076f1c1a7329d3be63f839afd4f5d123b4f6d107e4",
+  "config_hash": "sha256:bee640a8fac3b8dd8c87c75fd21a6c550742e1d7889b9d0015aa79a41900a561",
   "expression_hashes": {
     "dhis2_health.lookup": "sha256:245161afe436d38318fbcf65a3685ac86d16ad96debe818410046be01f5000da"
   },
@@ -12,7 +12,7 @@
       "openfn_sidecar_source_binding",
       "openfn_sidecar_workflow_bundle"
     ],
-    "config_hash": "sha256:3677335ccc50be1957a2fd076f1c1a7329d3be63f839afd4f5d123b4f6d107e4",
+    "config_hash": "sha256:bee640a8fac3b8dd8c87c75fd21a6c550742e1d7889b9d0015aa79a41900a561",
     "environment": "hosted-lab",
     "instance_id": "hosted-dhis2-openfn-sidecar",
     "previous_config_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
