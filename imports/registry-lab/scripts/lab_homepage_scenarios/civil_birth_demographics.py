@@ -40,8 +40,8 @@ SUBJECT_PROFILE = person_profile(
     "",
     attributes={
         "given_name": "Miguel",
-        "family_name": "Santos",
-        "birthdate": "2016-01-15",
+        "surname": "Santos",
+        "birth_date": "2016-01-15",
     },
 )
 
@@ -63,16 +63,16 @@ EXPECTED_CLAIMS_BODY = {
                                     "label": "Given name",
                                 },
                                 {
-                                    "path": "target.attributes.family_name",
+                                    "path": "target.attributes.surname",
                                     "kind": "attribute",
-                                    "name": "family_name",
-                                    "label": "Family name",
+                                    "name": "surname",
+                                    "label": "Surname",
                                 },
                                 {
-                                    "path": "target.attributes.birthdate",
+                                    "path": "target.attributes.birth_date",
                                     "kind": "attribute",
-                                    "name": "birthdate",
-                                    "label": "Birthdate",
+                                    "name": "birth_date",
+                                    "label": "Birth date",
                                 },
                             ]
                         }
@@ -89,7 +89,7 @@ def story() -> dict[str, Any]:
         "id": SCENARIO_ID,
         "title": "Can an SP MIS check Miguel's vital status with name and date of birth instead of an ID?",
         "short_title": "Civil Lookup Without an ID",
-        "proves": "The Civil Notary publishes a Relay-backed demographic input contract and accepts a vital-status lookup with given name, family name, and birthdate.",
+        "proves": "The Civil Notary publishes a Relay-backed demographic input contract and accepts a vital-status lookup with given name, surname, and birth date.",
         "domain": "Civil registry",
         "availability": "hosted",
         "availability_state": {"state": "hosted", "label": "Hosted", "runnable": True},
@@ -129,7 +129,7 @@ def story() -> dict[str, Any]:
                 "label": "Lookup without an ID",
                 "prompt": "Use the published contract to ask whether Miguel is alive using only name and date of birth.",
                 "button": "Check by name and date of birth",
-                "request_summary": "POST an evaluation with target.attributes.given_name, family_name, and birthdate, not target.identifiers.",
+                "request_summary": "POST an evaluation with target.attributes.given_name, surname, and birth_date, not target.identifiers.",
                 "reuses": [
                     {"label": "Attestation", "value": PUBLIC_ATTESTATION["display_name"]},
                     {"label": "Lookup profile", "value": "by-demographics"},
@@ -139,7 +139,7 @@ def story() -> dict[str, Any]:
         ],
         "receipt": [
             {"label": "ID number sent", "value": "No"},
-            {"label": "Target inputs", "value": "Given name + family name + birthdate"},
+            {"label": "Target inputs", "value": "Given name + surname + birth date"},
             {"label": "Contract source", "value": "Notary /v1/claims discovery"},
             {"label": "Raw civil row exposed", "value": "No"},
         ],
@@ -252,7 +252,7 @@ def _discover(config: dict[str, Any], step_id: str) -> dict[str, Any]:
         "friendly": {
             "title": "The Civil Notary publishes the demographic input contract." if published else "Civil claim discovery needs attention.",
             "message": (
-                "The target_inputs metadata says this claim can be evaluated with given name, family name, and birthdate."
+                "The target_inputs metadata says this claim can be evaluated with given name, surname, and birth date."
                 if published
                 else "The demographic claim or its target_inputs metadata was not present in /v1/claims."
             ),
@@ -345,7 +345,7 @@ def _summarize_lookup(result) -> dict[str, Any]:
         "facts": [
             {"label": "HTTP status", "value": result.status if result.status is not None else "No response"},
             {"label": "Subject", "value": SUBJECT_NAME},
-            {"label": "Lookup key", "value": "Given name + family name + birthdate"},
+            {"label": "Lookup key", "value": "Given name + surname + birth date"},
             {"label": "Identifier sent", "value": "No"},
             {"label": "Answer", "value": "Yes" if answer is True else ("No" if answer is False else "Unknown")},
             {"label": "Reason", "value": reason},
