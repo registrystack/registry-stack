@@ -75,6 +75,8 @@ my-first-api/
 `registryctl` keeps Relay and Notary credentials in `secrets/local.env`.
 The Relay and Notary runtime configs contain only fingerprint references, commitments, and
 environment variable names.
+This local demo uses generated API keys only; it does not require OIDC, eSignet, or an
+assisted-access service.
 
 The generated Compose file also starts a local Redis replay store for Notary readiness.
 It is part of the local demo runtime and does not require manual configuration.
@@ -442,6 +444,21 @@ Supply the value afterwards by editing `secrets/local.env` and setting
 `EVIDENCE_SOURCE_API_TOKEN` to the source token.
 If the source API is another Compose service, pass `--source-network <compose-network>` so
 Notary can join that network.
+
+### For a FHIR source-adapter sidecar
+
+If you already have a FHIR source-adapter sidecar running, start from the
+FHIR profile instead of the Registry Data API defaults:
+
+```sh
+registryctl init notary my-fhir-notary --source-kind fhir-sidecar
+```
+
+This generates a starter `patient-record-exists` claim, points Notary at the
+sidecar URL `http://host.docker.internal:4360`, and uses
+`FHIR_SIDECAR_TOKEN` in `secrets/local.env`. Change `--source-url`,
+`--source-token-env`, `--source-dataset`, `--source-entity`, or
+`--source-lookup-field` if your sidecar uses different local names.
 
 From the standalone project directory, the rest of the flow is the same as the co-located
 sections earlier on this page: `registryctl start`, `registryctl notary smoke`, load this

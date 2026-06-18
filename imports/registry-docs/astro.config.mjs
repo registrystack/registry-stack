@@ -198,6 +198,7 @@ export default defineConfig({
             { label: 'Verify a claim', slug: 'tutorials/verify-claim-registry-api' },
             { label: 'Deploy with own data', slug: 'tutorials/deploy-standalone-with-own-data' },
             { label: 'Run the lab', slug: 'tutorials/first-run-with-registry-lab' },
+            { label: 'FHIR evidence', slug: 'tutorials/getting-started-fhir-evidence' },
           ],
         },
         {
