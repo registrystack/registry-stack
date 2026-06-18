@@ -185,12 +185,7 @@ fn is_sha256_digest(value: &str) -> bool {
 }
 
 fn assurance_rank(level: &str) -> Option<u8> {
-    let compact = level
-        .trim()
-        .to_ascii_lowercase()
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .collect::<String>();
+    let compact = normalized_assurance(level);
     match compact.as_str() {
         "low" | "ial1" | "loa1" => Some(1),
         "substantial" | "ial2" | "loa2" => Some(2),
@@ -203,7 +198,9 @@ fn normalized_assurance(level: &str) -> String {
     level
         .trim()
         .to_ascii_lowercase()
-        .replace([' ', '-', '.'], "_")
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect()
 }
 
 #[cfg(test)]
@@ -319,6 +316,21 @@ mod tests {
 
         policy.allowed_assurance = vec!["Substantial".to_string()];
         assert!(matches!(decide(&context(), &policy), Decision::Permit(_)));
+    }
+
+    #[test]
+    fn allowed_assurance_accepts_standard_separator_bearing_labels() {
+        let mut policy = policy();
+        policy.minimum_assurance = None;
+        policy.allowed_assurance = vec!["IAL2".to_string()];
+
+        let mut context = context();
+        context.asserted_assurance = Some("IAL-2".to_string());
+        assert!(matches!(decide(&context, &policy), Decision::Permit(_)));
+
+        policy.allowed_assurance = vec!["LOA 2".to_string()];
+        context.asserted_assurance = Some("loa_2".to_string());
+        assert!(matches!(decide(&context, &policy), Decision::Permit(_)));
     }
 
     #[test]
