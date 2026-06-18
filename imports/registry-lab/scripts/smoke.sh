@@ -335,6 +335,11 @@ aggregate_status="$(curl_status GET http://127.0.0.1:4312/v1/datasets/social_pro
 cp /tmp/decentralized-smoke-response.json "${output_dir}/smoke-aggregate-denial.json"
 check "aggregate denial stable error code" json_path_equals "${output_dir}/smoke-aggregate-denial.json" code auth.scope_denied
 
+purpose_status="$(curl_status GET "http://127.0.0.1:4312/v1/datasets/social_protection_registry/entities/household/records?limit=1" "${SOCIAL_ROW_READER_RAW}" -H "Data-Purpose: https://demo.example.gov/purpose/not-authorized")"
+[[ "${purpose_status}" == "400" ]] || fail "purpose policy denial expected 400, got ${purpose_status}"
+cp /tmp/decentralized-smoke-response.json "${output_dir}/smoke-purpose-policy-denial.json"
+check "purpose policy denial stable error code" json_path_equals "${output_dir}/smoke-purpose-policy-denial.json" code auth.purpose_required
+
 check "civil evidence evaluation" curl_json POST http://127.0.0.1:4321/v1/evaluations "${CIVIL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-civil-evaluation.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data "$(evaluation_payload "NID-1001" "national_id" "person-is-alive")"
 check "civil evidence evaluation results" json_has_key "${output_dir}/smoke-civil-evaluation.json" results
 
@@ -350,6 +355,28 @@ if not result:
 value = result.get("value")
 if value != 5:
     raise SystemExit(f"unexpected household composition: {value!r}")
+PY
+
+check "social household summary redaction" curl_json POST http://127.0.0.1:4322/v1/evaluations "${SOCIAL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-household-summary-redacted.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data "$(evaluation_payload "NID-1001" "national_id" "household-summary-redacted" "value")"
+check "social household summary redacted fields" python - "${output_dir}/smoke-household-summary-redacted.json" <<'PY'
+import json
+import sys
+body = json.load(open(sys.argv[1], encoding="utf-8"))
+results = body.get("results") or body.get("claim_results") or []
+result = next((item for item in results if item.get("claim_id") == "household-summary-redacted"), None)
+if not result:
+    raise SystemExit("household-summary-redacted result missing")
+if result.get("disclosure") != "value":
+    raise SystemExit(f"field redaction should keep value disclosure, got {result.get('disclosure')!r}")
+value = result.get("value")
+if not isinstance(value, dict):
+    raise SystemExit(f"expected object value, got {value!r}")
+for hidden in ("national_id", "poverty_score"):
+    if hidden in value:
+        raise SystemExit(f"redacted field leaked: {hidden}")
+for visible in ("district", "eligibility_band", "household_size", "active_members"):
+    if visible not in value:
+        raise SystemExit(f"expected visible field missing: {visible}")
 PY
 
 check "social caregiver link attestation" curl_json POST http://127.0.0.1:4322/v1/evaluations "${SOCIAL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-caregiver-link.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data "$(caregiver_link_payload "NID-1001" "NID-2001")"
@@ -457,7 +484,11 @@ check "household decision has no Relay write-back" json_path_equals "${decision_
 log_file="/tmp/decentralized-smoke-service-logs.txt"
 docker compose -f "${compose_file}" logs --no-color civil-registry-relay social-protection-registry-relay health-registry-relay civil-notary social-protection-notary shared-eligibility-notary > "${log_file}"
 grep '"error_code":"auth.scope_denied"' "${log_file}" >/dev/null || fail "Relay denied audit event"
+grep '"error_code":"auth.purpose_required"' "${log_file}" >/dev/null || fail "Relay purpose policy denied audit event"
+grep '"pdp_policy_id":"relay.entity.household.purpose-required"' "${log_file}" >/dev/null || fail "Relay PDP policy id audit event"
+grep '"pdp_evaluated_rule_ids":\["entity-purpose-required:household"\]' "${log_file}" >/dev/null || fail "Relay PDP evaluated rule ids audit event"
 grep '"decision":"evaluate"' "${log_file}" >/dev/null || fail "Evidence Server evaluation audit event"
+grep '"matching_policy_id":"demo.household-summary-redaction.v1"' "${log_file}" >/dev/null || fail "Evidence Server matching policy audit event"
 grep '"status_code":200' "${log_file}" >/dev/null || fail "Relay positive audit event"
 
 for secret_var in \

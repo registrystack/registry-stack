@@ -277,6 +277,70 @@ evidence:
         evidence_type_iri: https://demo.example.gov/evidence-types/household-composition
       credential_profiles:
         - enrollment_sd_jwt
+    - id: household-summary-redacted
+      title: Household Summary With Policy Redaction
+      version: 2026-06
+      subject_type: person
+      value:
+        type: object
+      source_bindings:
+        household:
+          connector: registry_data_api
+          connection: social_protection
+          required_scope: social_protection_registry:evidence_verification
+          dataset: social_protection_registry
+          entity: household
+          lookup:
+            input: target.identifiers.national_id
+            field: national_id
+            op: eq
+            cardinality: one
+          matching:
+            policy_id: demo.household-summary-redaction.v1
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
+            redaction_fields:
+              - national_id
+              - poverty_score
+          fields:
+            national_id:
+              field: national_id
+              type: string
+              required: true
+            district:
+              field: district
+              type: string
+              required: true
+            eligibility_band:
+              field: eligibility_band
+              type: string
+              required: true
+            household_size:
+              field: household_size
+              type: integer
+              required: true
+            active_members:
+              field: active_members
+              type: integer
+              required: true
+            poverty_score:
+              field: poverty_score
+              type: number
+              required: true
+      rule:
+        type: cel
+        expression: "{'national_id': source.household.national_id, 'district': source.household.district, 'eligibility_band': source.household.eligibility_band, 'household_size': source.household.household_size, 'active_members': source.household.active_members, 'poverty_score': source.household.poverty_score}"
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+      cccev:
+        requirement_type: InformationRequirement
+        evidence_type: household_summary_redacted_evidence
+        evidence_type_iri: https://demo.example.gov/evidence-types/household-summary-redacted
     - id: caregiver-link
       title: Parent Or Guardian Link Attestation
       version: 2026-06

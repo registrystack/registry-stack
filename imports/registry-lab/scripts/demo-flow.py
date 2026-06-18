@@ -460,6 +460,17 @@ def main() -> int:
     require_problem_code(aggregate_denial, 403, "auth.scope_denied", "row-reader aggregate denial")
     step += 1
 
+    purpose_denial = request(
+        "GET",
+        relays[1].url,
+        "/v1/datasets/social_protection_registry/entities/household/records?limit=1",
+        env("SOCIAL_ROW_READER_RAW"),
+        headers={"Data-Purpose": "https://demo.example.gov/purpose/not-authorized"},
+    )
+    save(out, step, "purpose-policy-denial", {"status": purpose_denial.status, "body": purpose_denial.body})
+    require_problem_code(purpose_denial, 400, "auth.purpose_required", "purpose policy denial")
+    step += 1
+
     edr_area_path = "/ogc/edr/v1/collections/social_protection_households_by_district/area?" + urllib.parse.urlencode(
         {
             "coords": "POLYGON((-0.5 0.5,1.5 0.5,1.5 1.5,-0.5 1.5,-0.5 0.5))",
@@ -489,6 +500,7 @@ def main() -> int:
     eval_specs = [
         (evidence[0], "civil-claim-evaluation", ["person-is-alive"], PRIMARY_SUBJECT, "predicate", CLAIM_RESULT_FORMAT),
         (evidence[1], "social-claim-evaluation", ["program-enrollment-status"], PRIMARY_SUBJECT, "value", CLAIM_RESULT_FORMAT),
+        (evidence[1], "social-redacted-household-summary", ["household-summary-redacted"], PRIMARY_SUBJECT, "value", CLAIM_RESULT_FORMAT),
         (evidence[2], "health-claim-evaluation", ["health-service-available"], PRIMARY_SUBJECT, "predicate", CLAIM_RESULT_FORMAT),
         (evidence[2], "shared-cross-source-evaluation", ["eligible-for-combined-support"], PRIMARY_SUBJECT, "predicate", CLAIM_RESULT_FORMAT),
     ]
@@ -507,6 +519,19 @@ def main() -> int:
             label,
         )
         save(out, step, label, result)
+        if label == "social-redacted-household-summary":
+            redacted = result_for(result, "household-summary-redacted")
+            value = redacted.get("value")
+            if not isinstance(value, dict):
+                raise DemoError(f"redacted household summary expected object value, got {value!r}")
+            for hidden in ("national_id", "poverty_score"):
+                if hidden in value:
+                    raise DemoError(f"redacted household summary leaked {hidden}: {value}")
+            for visible in ("district", "eligibility_band", "household_size", "active_members"):
+                if visible not in value:
+                    raise DemoError(f"redacted household summary missing {visible}: {value}")
+            if redacted.get("disclosure") != "value":
+                raise DemoError(f"redacted household summary should retain value disclosure: {redacted}")
         first_eval = first_eval or result
         step += 1
 
