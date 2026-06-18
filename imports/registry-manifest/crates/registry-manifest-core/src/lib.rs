@@ -1808,14 +1808,18 @@ fn validate_sha256_digest(value: &str, path: impl Into<String>, errors: &mut Vec
     let Some(hex) = value.strip_prefix("sha256:") else {
         errors.push(ValidationError::new(
             path,
-            "digest must use sha256:<64 hex>",
+            "digest must use sha256:<64 lowercase hex>",
         ));
         return;
     };
-    if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if hex.len() != 64
+        || !hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
         errors.push(ValidationError::new(
             path,
-            "digest must use sha256:<64 hex>",
+            "digest must use sha256:<64 lowercase hex>",
         ));
     }
 }

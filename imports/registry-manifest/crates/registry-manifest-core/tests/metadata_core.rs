@@ -1893,7 +1893,13 @@ fn validation_rejects_malformed_evidence_pack_policy_metadata() {
             "policy_hash",
             "sha256:not-a-digest",
             "evaluation_profiles[0].evidence_pack.policy_hash",
-            "sha256:<64 hex>",
+            "sha256:<64 lowercase hex>",
+        ),
+        (
+            "policy_hash",
+            "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "evaluation_profiles[0].evidence_pack.policy_hash",
+            "sha256:<64 lowercase hex>",
         ),
         (
             "odrl_policy_url",
