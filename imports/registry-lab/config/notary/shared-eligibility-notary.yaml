@@ -14,7 +14,7 @@ auth:
       fingerprint:
         provider: env
         name: SHARED_EVIDENCE_CLIENT_TOKEN_HASH
-        commitment: sha256:cc2b488b9347bd08f7645c9c77ad75977a4bc60a69c1e511f9b5e96c245628c1
+        commitment: sha256:8e648b5b98bdd659efff501239b91b00010980eff197aaa7325e06ee46adfc85
       scopes:
         - civil_registry:evidence_verification
         - social_protection_registry:evidence_verification
@@ -24,7 +24,7 @@ auth:
       fingerprint:
         provider: env
         name: SHARED_EVIDENCE_CLIENT_BEARER_HASH
-        commitment: sha256:f505544b0cc717233a2ee9ef3bd95486aa7df9200375af03f624fa113444cba4
+        commitment: sha256:d694ab6afd0b4da6e50009841d8da2a1ab29a393cbaca33605167326438718f4
       scopes:
         - civil_registry:evidence_verification
         - social_protection_registry:evidence_verification

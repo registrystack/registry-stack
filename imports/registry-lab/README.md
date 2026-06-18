@@ -743,7 +743,7 @@ this bundle with `registry-manifest-cli publish` from the pinned
 
 ## Demo flow
 
-`scripts/demo-flow.py` narrates three scenarios:
+`scripts/demo-flow.py` narrates five scenarios:
 
 1. Birth Registration To Child Support: Registry Notary verifies civil facts and
    issues a demo-grade credential without exposing raw civil rows.
@@ -752,7 +752,12 @@ this bundle with `registry-manifest-cli publish` from the pinned
    aggregate over configured district geometries with `Data-Purpose`, then
    writes a demo household-benefit decision artifact without writing back to
    Relay.
-3. Cross-Authority Conditional Support: static metadata leads the client to a
+3. Governed Purpose Policy Denial: the client repeats a protected household row
+   read with an unapproved `Data-Purpose` and captures the stable denial.
+4. Governed Field Redaction: Registry Notary returns a household summary object
+   while policy redacts `national_id` and `poverty_score` without downgrading
+   the whole value disclosure.
+5. Cross-Authority Conditional Support: static metadata leads the client to a
    shared Registry Notary claim that depends on civil, social protection, and
    health authorities.
 
