@@ -1500,7 +1500,7 @@ async fn profile_gate_rejects_missing_inputs_and_disallowed_purpose_before_sourc
         )
         .await
         .expect_err("purpose gate rejects request");
-    assert_eq!(denied.code(), "purpose.not_allowed");
+    assert_eq!(denied.code(), "pdp.purpose_not_permitted");
     assert_eq!(source.reads(), 0);
 }
 
@@ -1739,7 +1739,7 @@ async fn jurisdiction_policy_rejects_before_source_read() {
         .await
         .expect_err("self-asserted jurisdiction rejects request");
 
-    assert_eq!(error.code(), "target.matching_policy_rejected");
+    assert_eq!(error.code(), "pdp.jurisdiction_not_permitted");
     assert_eq!(source.reads(), 0);
 }
 
@@ -1810,7 +1810,7 @@ async fn required_legal_basis_and_consent_reject_before_source_read() {
         .await
         .expect_err("missing legal basis and consent reject request");
 
-    assert_eq!(error.code(), "target.matching_policy_rejected");
+    assert_eq!(error.code(), "pdp.legal_basis_required");
     assert_eq!(source.reads(), 0);
 }
 
@@ -1855,7 +1855,7 @@ async fn unsupported_selected_odrl_terms_reject_before_source_read() {
         .await
         .expect_err("unsupported selected ODRL term rejects before source read");
 
-    assert_eq!(error.code(), "target.matching_policy_rejected");
+    assert_eq!(error.code(), "pdp.unsupported_policy_term");
     assert_eq!(source.reads(), 0);
 }
 
