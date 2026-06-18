@@ -1511,6 +1511,7 @@ mod tests {
                 required_filters: Vec::new(),
                 allowed_filters: Vec::new(),
                 allowed_expansions: Vec::new(),
+                governed_policy: None,
             },
             spatial: None,
         }

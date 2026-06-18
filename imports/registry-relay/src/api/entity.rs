@@ -753,6 +753,9 @@ fn require_purpose_header_decision(
     {
         purpose_constraints.push(configured_purposes);
     }
+    if purpose_constraints.is_empty() {
+        return Err(GovernedAccessError::from_error(AuthError::PurposeDenied));
+    }
     let policy = PdpPolicyInput {
         policy_id: selected_policy
             .as_ref()
@@ -923,7 +926,7 @@ fn selected_ecosystem_policy_from_metadata(
             binding_version = selector.version.as_deref().unwrap_or("<any>"),
             "configured ecosystem binding selector is unavailable at request time"
         );
-        return Err(AuthError::PurposeRequired.into());
+        return Err(InternalError::Unhandled.into());
     };
     let binding = compiled.ecosystem_bindings().iter().find(|binding| {
         binding.id == selector.id
@@ -939,7 +942,7 @@ fn selected_ecosystem_policy_from_metadata(
             binding_version = selector.version.as_deref().unwrap_or("<any>"),
             "configured ecosystem binding selector is absent at request time"
         );
-        return Err(AuthError::PurposeRequired.into());
+        return Err(InternalError::Unhandled.into());
     };
     if binding.binding_type != "governed-evidence" {
         tracing::error!(
@@ -949,7 +952,7 @@ fn selected_ecosystem_policy_from_metadata(
             binding_type = %binding.binding_type,
             "configured ecosystem binding is not governed evidence at request time"
         );
-        return Err(AuthError::PurposeRequired.into());
+        return Err(InternalError::Unhandled.into());
     }
     evidence_pack_policy(binding.evidence_pack.as_ref())
         .ok_or_else(|| {
@@ -959,7 +962,7 @@ fn selected_ecosystem_policy_from_metadata(
                 binding_version = %binding.version,
                 "configured ecosystem binding evidence pack is incomplete at request time"
             );
-            Error::from(AuthError::PurposeRequired)
+            Error::from(InternalError::Unhandled)
         })
         .map(Some)
 }
