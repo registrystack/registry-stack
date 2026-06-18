@@ -5,6 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-lab
+  - registry-registryctl
 last_reviewed: "2026-06-13"
 doc_type: tutorial
 locale: en
@@ -18,9 +19,10 @@ will read a protected registry API from your terminal (**Registry Relay**, which
 authorized callers), then have **Registry Notary** issue a signed credential, delivered to a hosted
 demo wallet, that answers a question without exposing the record. The Relay reads are pure `curl`
 with zero install; the credential step is a guided browser flow using the lab's hosted wallet, so it
-needs no install either; only the optional developer round-trip at the end also uses `jq` and
-`node`. Everything runs in the hosted lab at
-[lab.registrystack.org](https://lab.registrystack.org), so there is no setup on your machine.
+needs no install either; only the optional developer round-trip at the end also uses `registryctl`,
+`jq`, and `node`. Everything runs in the hosted lab at
+[lab.registrystack.org](https://lab.registrystack.org), so the main flow has no setup on your
+machine.
 
 This lab uses synthetic data and public demo-only credentials by design.
 Do not reuse anything you copy here outside the lab.
@@ -181,39 +183,16 @@ be talked into vouching for someone else. For more on this service, see
 For a pure API credential flow, use the hosted DHIS2 Notary: the lab runs a demo
 [DHIS2](https://dhis2.org/) health information system with a Notary in front of it, so the same
 issuance contract can be exercised against a second, independent source system. This path does
-not use the browser wallet sign-in, and unlike the curl-only reads above it also needs `jq` and
-`node` on your machine. It evaluates DHIS2 child-program claims, issues an `application/dc+sd-jwt`
-credential, fetches the issuer JWKS, verifies the Ed25519 signature, and checks that each disclosure
-hash is listed in the issuer-signed JWT.
+not use the browser wallet sign-in, and unlike the curl-only reads above it also needs
+`registryctl`, `jq`, and `node` on your machine. It evaluates DHIS2 child-program claims, issues an
+`application/dc+sd-jwt` credential, fetches the issuer JWKS, verifies the Ed25519 signature, and
+checks that each disclosure hash is listed in the issuer-signed JWT.
 
-Set the hosted Notary URL and load the current demo bearer token from the lab JSON. (`lab.json`
-carries a `credentials` array whose entries have an `id` and a `token`, plus the service list; the
-`dhis2-bearer` entry is the demo evidence-client token for this Notary.)
-
-```sh
-export DHIS2_NOTARY_URL="https://dhis2-notary.lab.registrystack.org"
-export DHIS2_PURPOSE="https://demo.example.gov/purpose/dhis2-openfn-health-evidence"
-export DHIS2_EVIDENCE_CLIENT_BEARER="$(
-  curl -fsS https://lab.registrystack.org/api/lab.json |
-    jq -r '.credentials[] | select(.id == "dhis2-bearer") | .token'
-)"
-```
-
-If you already have `registryctl`, you can load the same values from the
-hosted lab manifest through the helper:
+Load the hosted Notary URL, current demo bearer token, and purpose URI from the lab manifest.
+The `dhis2-bearer` credential is the demo evidence-client token for this Notary.
 
 ```sh
-eval "$(
-  registryctl lab env --credential dhis2-bearer --format json |
-    jq -er '
-      if ([.base_url, .purpose, .token] | all(type == "string" and length > 0)) then
-        @sh "DHIS2_NOTARY_URL=\(.base_url) DHIS2_PURPOSE=\(.purpose) DHIS2_EVIDENCE_CLIENT_BEARER=\(.token)"
-      else
-        error("registryctl lab env output is missing a required field")
-      end
-    '
-)"
-export DHIS2_NOTARY_URL DHIS2_PURPOSE DHIS2_EVIDENCE_CLIENT_BEARER
+eval "$(registryctl lab env --credential dhis2-bearer)"
 ```
 
 Evaluate the credential claims for the live demo tracked entity:
@@ -237,10 +216,10 @@ cat > evaluation-request.json <<'JSON'
 }
 JSON
 
-curl -fsS -X POST "$DHIS2_NOTARY_URL/v1/evaluations" \
-  -H "Authorization: Bearer $DHIS2_EVIDENCE_CLIENT_BEARER" \
+curl -fsS -X POST "$REGISTRY_NOTARY_BASE_URL/v1/evaluations" \
+  -H "Authorization: Bearer $REGISTRY_NOTARY_BEARER_TOKEN" \
   -H "Content-Type: application/json" \
-  -H "Data-Purpose: $DHIS2_PURPOSE" \
+  -H "Data-Purpose: $REGISTRY_NOTARY_PURPOSE" \
   --data @evaluation-request.json \
   -o evaluation.json
 
@@ -264,8 +243,8 @@ jq -n --arg evaluation_id "$EVALUATION_ID" '{
   disclosure: "value"
 }' > credential-request.json
 
-curl -fsS -X POST "$DHIS2_NOTARY_URL/v1/credentials" \
-  -H "Authorization: Bearer $DHIS2_EVIDENCE_CLIENT_BEARER" \
+curl -fsS -X POST "$REGISTRY_NOTARY_BASE_URL/v1/credentials" \
+  -H "Authorization: Bearer $REGISTRY_NOTARY_BEARER_TOKEN" \
   -H "Content-Type: application/json" \
   --data @credential-request.json \
   -o credential.json
@@ -277,7 +256,7 @@ Fetch the issuer keys and verify the credential.
 The JWKS endpoint is public: any verifier can fetch the issuer keys without a credential.
 
 ```sh
-curl -fsS "$DHIS2_NOTARY_URL/.well-known/evidence/jwks.json" -o jwks.json
+curl -fsS "$REGISTRY_NOTARY_BASE_URL/.well-known/evidence/jwks.json" -o jwks.json
 
 node <<'NODE'
 const { createHash, createPublicKey, verify } = require('node:crypto');
