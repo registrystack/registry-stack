@@ -4,6 +4,7 @@ members = [
     "crates/registry-platform-ops",
     "crates/registry-platform-cache",
     "crates/registry-platform-httputil",
+    "crates/registry-platform-pdp",
     "crates/registry-platform-authcommon",
     "crates/registry-platform-audit",
     "crates/registry-platform-oidc",

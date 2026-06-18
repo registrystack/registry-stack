@@ -7,7 +7,7 @@ use registry_platform_crypto::{did_jwk_from_public_jwk, parse_did_jwk, verify, P
 use registry_platform_replay::{
     require_consume_once, ConsumableNonceStore, ReplayKey, ReplayScope,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de, ser::SerializeStruct, Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -94,19 +94,40 @@ impl CredentialConfigurationMetadata {
         display_name: impl Into<String>,
         vct: impl Into<String>,
     ) -> Self {
+        Self::sd_jwt_vc_with_algs(
+            scope,
+            cryptographic_binding_methods_supported,
+            vec![CREDENTIAL_SIGNING_ALG_EDDSA.to_string()],
+            vec![CREDENTIAL_SIGNING_ALG_EDDSA.to_string()],
+            display_name,
+            vct,
+        )
+    }
+
+    pub fn sd_jwt_vc_with_algs(
+        scope: impl Into<String>,
+        cryptographic_binding_methods_supported: Vec<String>,
+        credential_signing_alg_values_supported: Vec<String>,
+        proof_signing_alg_values_supported: Vec<String>,
+        display_name: impl Into<String>,
+        vct: impl Into<String>,
+    ) -> Self {
+        let proof_types_supported = if proof_signing_alg_values_supported.is_empty() {
+            BTreeMap::new()
+        } else {
+            BTreeMap::from([(
+                PROOF_TYPE_JWT.to_string(),
+                ProofTypeMetadata {
+                    proof_signing_alg_values_supported,
+                },
+            )])
+        };
         Self {
             format: SD_JWT_VC_FORMAT.to_string(),
             scope: Some(scope.into()),
             cryptographic_binding_methods_supported,
-            credential_signing_alg_values_supported: vec![CREDENTIAL_SIGNING_ALG_EDDSA.to_string()],
-            proof_types_supported: BTreeMap::from([(
-                PROOF_TYPE_JWT.to_string(),
-                ProofTypeMetadata {
-                    proof_signing_alg_values_supported: vec![
-                        CREDENTIAL_SIGNING_ALG_EDDSA.to_string()
-                    ],
-                },
-            )]),
+            credential_signing_alg_values_supported,
+            proof_types_supported,
             display: vec![DisplayMetadata::new(display_name)],
             vct: Some(vct.into()),
         }
@@ -294,16 +315,101 @@ impl fmt::Debug for NonceResponse {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CredentialRequest {
     pub format: String,
-    #[serde(default)]
     pub credential_identifier: Option<String>,
-    #[serde(default)]
     pub credential_configuration_id: Option<String>,
-    #[serde(default)]
     pub vct: Option<String>,
     pub proof: CredentialRequestProof,
+    pub proofs: CredentialRequestProofs,
+}
+
+fn default_credential_request_format() -> String {
+    SD_JWT_VC_FORMAT.to_string()
+}
+
+impl CredentialRequest {
+    pub fn proof_jwts(&self) -> &[String] {
+        if self.proofs.is_empty() {
+            std::slice::from_ref(&self.proof.jwt)
+        } else {
+            &self.proofs.jwt
+        }
+    }
+}
+
+impl Serialize for CredentialRequest {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("CredentialRequest", 5)?;
+        state.serialize_field("format", &self.format)?;
+        state.serialize_field("credential_identifier", &self.credential_identifier)?;
+        state.serialize_field(
+            "credential_configuration_id",
+            &self.credential_configuration_id,
+        )?;
+        state.serialize_field("vct", &self.vct)?;
+        if self.proofs.is_empty() {
+            state.serialize_field("proof", &self.proof)?;
+        } else {
+            state.serialize_field("proofs", &self.proofs)?;
+        }
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for CredentialRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct WireCredentialRequest {
+            #[serde(default = "default_credential_request_format")]
+            format: String,
+            #[serde(default)]
+            credential_identifier: Option<String>,
+            #[serde(default)]
+            credential_configuration_id: Option<String>,
+            #[serde(default)]
+            vct: Option<String>,
+            #[serde(default)]
+            proof: Option<CredentialRequestProof>,
+            #[serde(default)]
+            proofs: CredentialRequestProofs,
+        }
+
+        let wire = WireCredentialRequest::deserialize(deserializer)?;
+        if wire.proof.is_some() && !wire.proofs.is_empty() {
+            return Err(de::Error::custom(
+                "credential request must not contain both proof and proofs",
+            ));
+        }
+        let proof = match wire.proof {
+            Some(proof) => proof,
+            None => wire
+                .proofs
+                .jwt
+                .first()
+                .map(|jwt| CredentialRequestProof {
+                    proof_type: PROOF_TYPE_JWT.to_string(),
+                    jwt: jwt.clone(),
+                })
+                .ok_or_else(|| de::Error::missing_field("proof"))?,
+        };
+
+        Ok(Self {
+            format: wire.format,
+            credential_identifier: wire.credential_identifier,
+            credential_configuration_id: wire.credential_configuration_id,
+            vct: wire.vct,
+            proof,
+            proofs: wire.proofs,
+        })
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -322,9 +428,34 @@ impl fmt::Debug for CredentialRequestProof {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct CredentialRequestProofs {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub jwt: Vec<String>,
+}
+
+impl CredentialRequestProofs {
+    fn is_empty(&self) -> bool {
+        self.jwt.is_empty()
+    }
+}
+
+impl fmt::Debug for CredentialRequestProofs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CredentialRequestProofs")
+            .field(
+                "jwt",
+                &self.jwt.iter().map(|_| Redacted).collect::<Vec<_>>(),
+            )
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct CredentialResponse {
-    pub credential: String,
+    pub credential: CredentialValue,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub credentials: Vec<CredentialResponseCredential>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -333,13 +464,98 @@ pub struct CredentialResponse {
     pub c_nonce_expires_in: Option<u64>,
 }
 
+impl<'de> Deserialize<'de> for CredentialResponse {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct WireCredentialResponse {
+            #[serde(default)]
+            credential: Option<CredentialValue>,
+            #[serde(default)]
+            credentials: Vec<CredentialResponseCredential>,
+            #[serde(default)]
+            format: Option<String>,
+            #[serde(default)]
+            c_nonce: Option<String>,
+            #[serde(default)]
+            c_nonce_expires_in: Option<u64>,
+        }
+
+        let wire = WireCredentialResponse::deserialize(deserializer)?;
+        let credential = match wire.credential {
+            Some(credential) => credential,
+            None => wire
+                .credentials
+                .first()
+                .map(|entry| entry.credential.clone())
+                .ok_or_else(|| de::Error::missing_field("credential"))?,
+        };
+
+        Ok(Self {
+            credential,
+            credentials: wire.credentials,
+            format: wire.format,
+            c_nonce: wire.c_nonce,
+            c_nonce_expires_in: wire.c_nonce_expires_in,
+        })
+    }
+}
+
 impl fmt::Debug for CredentialResponse {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CredentialResponse")
             .field("credential", &Redacted)
+            .field(
+                "credentials",
+                &self
+                    .credentials
+                    .iter()
+                    .map(|_| Redacted)
+                    .collect::<Vec<_>>(),
+            )
             .field("format", &self.format)
             .field("c_nonce", &self.c_nonce.as_ref().map(|_| Redacted))
             .field("c_nonce_expires_in", &self.c_nonce_expires_in)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum CredentialValue {
+    String(String),
+    Object(Value),
+}
+
+impl From<String> for CredentialValue {
+    fn from(value: String) -> Self {
+        Self::String(value)
+    }
+}
+
+impl From<&str> for CredentialValue {
+    fn from(value: &str) -> Self {
+        Self::String(value.to_string())
+    }
+}
+
+impl fmt::Debug for CredentialValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Redacted.fmt(f)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialResponseCredential {
+    pub credential: CredentialValue,
+}
+
+impl fmt::Debug for CredentialResponseCredential {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CredentialResponseCredential")
+            .field("credential", &Redacted)
             .finish()
     }
 }
@@ -1077,6 +1293,95 @@ mod tests {
     }
 
     #[test]
+    fn credential_request_accepts_proofs_jwt_array() {
+        let request = json!({
+            "credential_configuration_id": "person_is_alive_sd_jwt",
+            "proofs": {
+                "jwt": ["proof-1.jwt.sig", "proof-2.jwt.sig"]
+            }
+        });
+
+        let parsed = serde_json::from_value::<CredentialRequest>(request).expect("request parses");
+
+        assert_eq!(parsed.proof.proof_type, PROOF_TYPE_JWT);
+        assert_eq!(parsed.format, SD_JWT_VC_FORMAT);
+        assert_eq!(parsed.proof.jwt, "proof-1.jwt.sig");
+        assert_eq!(
+            parsed.proof_jwts(),
+            &["proof-1.jwt.sig".to_string(), "proof-2.jwt.sig".to_string()]
+        );
+    }
+
+    #[test]
+    fn credential_request_serializes_proofs_only_shape() {
+        let request = CredentialRequest {
+            format: SD_JWT_VC_FORMAT.to_string(),
+            credential_identifier: None,
+            credential_configuration_id: Some("person_is_alive_sd_jwt".to_string()),
+            vct: None,
+            proof: CredentialRequestProof {
+                proof_type: PROOF_TYPE_JWT.to_string(),
+                jwt: "proof-1.jwt.sig".to_string(),
+            },
+            proofs: CredentialRequestProofs {
+                jwt: vec!["proof-1.jwt.sig".to_string(), "proof-2.jwt.sig".to_string()],
+            },
+        };
+
+        let value = serde_json::to_value(&request).expect("request serializes");
+
+        assert!(value.get("proof").is_none());
+        assert_eq!(
+            value["proofs"],
+            json!({"jwt": ["proof-1.jwt.sig", "proof-2.jwt.sig"]})
+        );
+
+        let round_tripped =
+            serde_json::from_value::<CredentialRequest>(value).expect("request round-trips");
+        assert_eq!(
+            round_tripped.proof_jwts(),
+            &["proof-1.jwt.sig".to_string(), "proof-2.jwt.sig".to_string()]
+        );
+    }
+
+    #[test]
+    fn credential_request_serializes_legacy_proof_only_shape() {
+        let request = CredentialRequest {
+            format: SD_JWT_VC_FORMAT.to_string(),
+            credential_identifier: None,
+            credential_configuration_id: Some("person_is_alive_sd_jwt".to_string()),
+            vct: None,
+            proof: CredentialRequestProof {
+                proof_type: PROOF_TYPE_JWT.to_string(),
+                jwt: "legacy.jwt.sig".to_string(),
+            },
+            proofs: CredentialRequestProofs::default(),
+        };
+
+        let value = serde_json::to_value(&request).expect("request serializes");
+
+        assert_eq!(
+            value["proof"],
+            json!({"proof_type": PROOF_TYPE_JWT, "jwt": "legacy.jwt.sig"})
+        );
+        assert!(value.get("proofs").is_none());
+    }
+
+    #[test]
+    fn credential_request_rejects_conflicting_proof_shapes() {
+        let request = json!({
+            "credential_configuration_id": "person_is_alive_sd_jwt",
+            "proof": {"proof_type": PROOF_TYPE_JWT, "jwt": "legacy.jwt.sig"},
+            "proofs": {"jwt": ["array.jwt.sig"]}
+        });
+
+        assert!(
+            serde_json::from_value::<CredentialRequest>(request).is_err(),
+            "mixed proof and proofs must fail closed"
+        );
+    }
+
+    #[test]
     fn nonce_request_rejects_unknown_fields() {
         assert!(serde_json::from_value::<NonceRequest>(
             json!({"credential_configuration_id":"person_is_alive_sd_jwt"})
@@ -1215,6 +1520,43 @@ mod tests {
         assert!(round_tripped
             .proof_types_supported
             .contains_key(PROOF_TYPE_JWT));
+    }
+
+    #[test]
+    fn credential_configuration_metadata_accepts_explicit_signing_algorithms() {
+        let metadata = CredentialConfigurationMetadata::sd_jwt_vc_with_algs(
+            "identity_vc",
+            vec![CRYPTOGRAPHIC_BINDING_METHOD_DID_JWK.to_string()],
+            vec!["RS256".to_string()],
+            vec![CREDENTIAL_SIGNING_ALG_EDDSA.to_string()],
+            "Identity Credential",
+            "https://vct.example/identity",
+        );
+        let value = serde_json::to_value(&metadata).expect("serializes");
+
+        assert_eq!(
+            value["credential_signing_alg_values_supported"],
+            json!(["RS256"])
+        );
+        assert_eq!(
+            value["proof_types_supported"][PROOF_TYPE_JWT]["proof_signing_alg_values_supported"],
+            json!([CREDENTIAL_SIGNING_ALG_EDDSA])
+        );
+    }
+
+    #[test]
+    fn credential_configuration_metadata_omits_empty_proof_algorithms() {
+        let metadata = CredentialConfigurationMetadata::sd_jwt_vc_with_algs(
+            "identity_vc",
+            vec![CRYPTOGRAPHIC_BINDING_METHOD_DID_JWK.to_string()],
+            vec!["RS256".to_string()],
+            Vec::new(),
+            "Identity Credential",
+            "https://vct.example/identity",
+        );
+        let value = serde_json::to_value(&metadata).expect("serializes");
+
+        assert!(value.get("proof_types_supported").is_none());
     }
 
     #[test]
@@ -1414,6 +1756,60 @@ mod tests {
     }
 
     #[test]
+    fn credential_response_supports_legacy_and_credentials_shapes() {
+        let legacy = CredentialResponse {
+            credential: "credential-1".into(),
+            credentials: Vec::new(),
+            format: Some(SD_JWT_VC_FORMAT.to_string()),
+            c_nonce: None,
+            c_nonce_expires_in: None,
+        };
+        let legacy_value = serde_json::to_value(&legacy).expect("serializes");
+
+        assert_eq!(legacy_value["credential"], "credential-1");
+        assert!(legacy_value.get("credentials").is_none());
+
+        let response = CredentialResponse {
+            credential: "credential-1".into(),
+            credentials: vec![CredentialResponseCredential {
+                credential: "credential-1".into(),
+            }],
+            format: Some(SD_JWT_VC_FORMAT.to_string()),
+            c_nonce: None,
+            c_nonce_expires_in: None,
+        };
+        let value = serde_json::to_value(&response).expect("serializes");
+
+        assert_eq!(value["credential"], "credential-1");
+        assert_eq!(
+            value["credentials"],
+            json!([{"credential": "credential-1"}])
+        );
+
+        let parsed = serde_json::from_value::<CredentialResponse>(json!({
+            "credentials": [{"credential": "credential-2"}],
+            "format": SD_JWT_VC_FORMAT
+        }))
+        .expect("1.0 response parses");
+
+        assert_eq!(parsed.credential, CredentialValue::from("credential-2"));
+        assert_eq!(
+            parsed.credentials[0].credential,
+            CredentialValue::from("credential-2")
+        );
+        assert_eq!(parsed.format.as_deref(), Some(SD_JWT_VC_FORMAT));
+
+        let parsed = serde_json::from_value::<CredentialResponse>(json!({
+            "credentials": [{"credential": {"id": "credential-object"}}]
+        }))
+        .expect("1.0 object credential parses");
+        assert_eq!(
+            parsed.credentials[0].credential,
+            CredentialValue::Object(json!({"id": "credential-object"}))
+        );
+    }
+
+    #[test]
     fn debug_redacts_oid4vci_secrets() {
         let offer = CredentialOffer::pre_authorized_code(
             "https://issuer.example",
@@ -1438,7 +1834,10 @@ mod tests {
             c_nonce_expires_in: 120,
         };
         let credential_response = CredentialResponse {
-            credential: "credential-secret".to_string(),
+            credential: "credential-secret".into(),
+            credentials: vec![CredentialResponseCredential {
+                credential: "credential-secret-2".into(),
+            }],
             format: Some(SD_JWT_VC_FORMAT.to_string()),
             c_nonce: Some("credential-nonce-secret".to_string()),
             c_nonce_expires_in: Some(120),
@@ -1469,6 +1868,7 @@ mod tests {
             "c-nonce-secret",
             "nonce-secret",
             "credential-secret",
+            "credential-secret-2",
             "credential-nonce-secret",
             "validated-nonce-secret",
             "proof-jwt-secret",
