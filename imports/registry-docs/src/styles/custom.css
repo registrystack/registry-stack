@@ -1060,6 +1060,7 @@ starlight-tabs [role='tablist'] {
 starlight-tabs [role='tab'] {
   border: 1px solid transparent;
   border-block-end: 0;
+  margin-block-end: -1px;
 }
 
 starlight-tabs [role='tab'][aria-selected='true'] {
