@@ -115,9 +115,12 @@ pub fn decide(context: &EvidenceRequestContext, policy: &PolicyInput) -> Decisio
         let Some(asserted_assurance) = context.asserted_assurance.as_deref() else {
             return deny(audit, ASSURANCE_INSUFFICIENT);
         };
-        if !policy.allowed_assurance.iter().any(|allowed| {
-            normalized_assurance(allowed) == normalized_assurance(asserted_assurance)
-        }) {
+        let normalized_asserted = normalized_assurance(asserted_assurance);
+        if !policy
+            .allowed_assurance
+            .iter()
+            .any(|allowed| normalized_assurance(allowed) == normalized_asserted)
+        {
             return deny(audit, ASSURANCE_INSUFFICIENT);
         }
     }
