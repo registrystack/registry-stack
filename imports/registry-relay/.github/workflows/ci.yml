@@ -17,10 +17,12 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_NET_GIT_FETCH_WITH_CLI: true
   RUST_BACKTRACE: 1
+  CARGO_LLVM_COV_VERSION: "0.8.7"
+  REGISTRY_RELAY_COVERAGE_THRESHOLD: "85"
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: 001a5350d1956339ad9c6a337baa27e8de90c0f6
+  REGISTRY_PLATFORM_REF: 678d25c127735dde3f0ff0fdae880bfe8ed5e277
   REGISTRY_MANIFEST_REPOSITORY: jeremi/registry-manifest
-  REGISTRY_MANIFEST_REF: 81eb005f1808415199d79e02e24e84a6649be318
+  REGISTRY_MANIFEST_REF: 209fc357d57a3b48e6df033606de0f00248bba5d
   CROSSWALK_REPOSITORY: PublicSchema/crosswalk
   CROSSWALK_REF: 54e0f537830837fcd0c9efa87990987b1846931c
 
@@ -174,6 +176,143 @@ jobs:
           uv run --with 'pyshacl>=0.27,<0.31' --with 'rdflib-jsonld>=0.6' \
             python scripts/validate_dcat_shacl.py \
             --catalog target/dcat-ap/catalog.dcat-ap.jsonld
+
+  # ── Coverage report (x86_64-unknown-linux-gnu) ──────────────────────────
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Checkout registry-platform
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          path: registry-platform
+
+      - name: Link registry-platform path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
+
+      - name: Checkout crosswalk
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.CROSSWALK_REPOSITORY }}
+          ref: ${{ env.CROSSWALK_REF }}
+          path: crosswalk
+
+      - name: Link crosswalk path dependency
+        run: ln -s "$GITHUB_WORKSPACE/crosswalk" "$GITHUB_WORKSPACE/../crosswalk"
+
+      - name: Checkout registry-manifest
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.REGISTRY_MANIFEST_REPOSITORY }}
+          ref: ${{ env.REGISTRY_MANIFEST_REF }}
+          token: ${{ secrets.REGISTRY_MANIFEST_TOKEN || github.token }}
+          path: registry-manifest
+
+      - name: Link registry-manifest path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-manifest" "$GITHUB_WORKSPACE/../registry-manifest"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: coverage
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        with:
+          tool: nextest@0.9.136
+          fallback: none
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        with:
+          tool: cargo-llvm-cov@${{ env.CARGO_LLVM_COV_VERSION }}
+          fallback: none
+
+      - name: Run coverage
+        run: |
+          mkdir -p target/coverage
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov nextest --no-report --build-jobs 2
+          cargo llvm-cov nextest --all-features --no-report --build-jobs 2
+          cargo llvm-cov report | tee target/coverage/summary.txt
+          cat target/coverage/summary.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Export coverage artifacts
+        run: |
+          cargo llvm-cov report --lcov --output-path target/coverage/lcov.info
+          cargo llvm-cov report --json --summary-only --output-path target/coverage/summary.json
+          test -s target/coverage/summary.txt
+          test -s target/coverage/lcov.info
+          test -s target/coverage/summary.json
+
+      - name: Export coverage dashboard data
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          summary = json.loads(Path("target/coverage/summary.json").read_text())
+          line_coverage = summary["data"][0]["totals"]["lines"]["percent"]
+          threshold = float(os.environ["REGISTRY_RELAY_COVERAGE_THRESHOLD"])
+          run_url = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          dashboard = {
+              "repo": "registry-relay",
+              "branch": os.environ.get("GITHUB_REF_NAME", ""),
+              "commit": os.environ.get("GITHUB_SHA", ""),
+              "workflow_run_url": run_url,
+              "generated_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+              "line_coverage_percent": round(line_coverage, 2),
+              "threshold_percent": threshold,
+              "status": "pass" if line_coverage >= threshold else "fail",
+              "artifact_urls": [run_url],
+          }
+          Path("target/coverage/dashboard.json").write_text(json.dumps(dashboard, indent=2) + "\n")
+          PY
+          test -s target/coverage/dashboard.json
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: registry-relay-coverage
+          path: |
+            target/coverage/summary.txt
+            target/coverage/lcov.info
+            target/coverage/summary.json
+            target/coverage/dashboard.json
+
+      - name: Enforce coverage threshold
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          dashboard = json.loads(Path("target/coverage/dashboard.json").read_text())
+          if dashboard["status"] != "pass":
+              raise SystemExit(
+                  f"line coverage {dashboard['line_coverage_percent']:.2f}% is below "
+                  f"threshold {dashboard['threshold_percent']:.2f}%"
+              )
+          PY
 
   # ── cargo-deny (license + advisory + bans) ───────────────────────────────
   deny:

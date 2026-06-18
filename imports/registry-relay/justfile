@@ -120,6 +120,10 @@ container-security:
 ci-preflight:
     scripts/ci-preflight.sh
 
+# Check locked Cargo resolution against the current sibling working trees.
+ci-preflight-worktree:
+    CI_PREFLIGHT_USE_WORKTREE=1 scripts/ci-preflight.sh
+
 # Run the full CI gate locally: pinned-ref preflight, Docker build contract,
 # fmt-check, default/all-feature lint, default/all-feature tests, and cargo-deny.
 ci: ci-preflight docker-build-contract fmt-check lint-default lint test-default test deny openapi-contract

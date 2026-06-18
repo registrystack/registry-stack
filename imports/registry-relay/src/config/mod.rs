@@ -205,6 +205,8 @@ fn default_break_glass_rate_limit() -> BreakGlassRateLimit {
 #[serde(deny_unknown_fields)]
 pub struct MetadataConfig {
     pub source: MetadataSourceConfig,
+    #[serde(default)]
+    pub ecosystem_binding: Option<EcosystemBindingSelectorConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -213,6 +215,14 @@ pub struct MetadataSourceConfig {
     pub path: PathBuf,
     #[serde(default)]
     pub digest: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EcosystemBindingSelectorConfig {
+    pub id: String,
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 /// External standards adapters layered over configured entities.

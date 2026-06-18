@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the perf workflow is wired as a k6 threshold gate."""
+"""Verify the perf workflow keeps its k6 threshold gate active."""
 
 from __future__ import annotations
 
@@ -41,6 +41,10 @@ def main() -> int:
         raise SystemExit("k6 latency thresholds are missing from common.js.")
     if "push:" not in active_workflow or "branches: [main]" not in active_workflow:
         raise SystemExit("perf-smoke.yml must run on pushes to main to gate regressions.")
+    if "workflow_dispatch:" not in workflow:
+        raise SystemExit("perf-smoke.yml must remain manually runnable.")
+    if "branches: [main]" not in workflow:
+        raise SystemExit("perf-smoke.yml must still run after merges to main.")
 
     return 0
 

@@ -4,6 +4,8 @@
 
 Release label: pre-1.0 technical release for evaluation and integration pilots.
 
+[Public test coverage dashboard](https://docs.registrystack.org/reference/test-coverage/) tracks the CI line-coverage signal for this repository.
+
 Registry Relay is a config-driven Rust service that turns sensitive government tabular files and selected database tables into protected, read-only, domain-oriented APIs.
 
 V1 is built around two layers:
@@ -73,7 +75,9 @@ The release binary is written to `target/release/registry-relay`. The full local
 Before opening a PR that changes Rust, Cargo, Docker, workflow, perf, or
 companion-repo references, run `just ci-preflight` to check the workflow-pinned
 `registry-platform`, `registry-manifest`, and `crosswalk` commits with locked
-Cargo resolution.
+Cargo resolution. During coordinated local multi-repo work, run
+`just ci-preflight-worktree` to check the current sibling working trees before
+those dependency refs are committed and repinned.
 
 ## Container Image
 

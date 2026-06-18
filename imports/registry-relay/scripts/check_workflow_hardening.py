@@ -139,6 +139,54 @@ def require_binary_release_powershell_hardening(text: str, path: Path) -> list[s
     return failures
 
 
+def require_coverage_contract(text: str, path: Path) -> list[str]:
+    failures: list[str] = []
+    failures.extend(require(text, 'CARGO_LLVM_COV_VERSION: "0.8.7"', path, "pinned cargo-llvm-cov version"))
+    failures.extend(require(text, 'REGISTRY_RELAY_COVERAGE_THRESHOLD: "85"', path, "baseline coverage threshold"))
+    failures.extend(require(text, "components: llvm-tools-preview", path, "LLVM tools Rust component"))
+    failures.extend(require(text, "tool: cargo-llvm-cov@${{ env.CARGO_LLVM_COV_VERSION }}", path, "pinned cargo-llvm-cov install"))
+    failures.extend(require(text, "cargo llvm-cov clean --workspace", path, "clean coverage profile data"))
+    failures.extend(require(text, "cargo llvm-cov nextest --no-report --build-jobs 2", path, "default-feature nextest coverage pass"))
+    failures.extend(
+        require(
+            text,
+            "cargo llvm-cov nextest --all-features --no-report --build-jobs 2",
+            path,
+            "all-features nextest coverage pass",
+        )
+    )
+    failures.extend(require(text, "cargo llvm-cov report | tee target/coverage/summary.txt", path, "coverage report before threshold gate"))
+    failures.extend(require(text, "Enforce coverage threshold", path, "line coverage threshold gate after artifact upload"))
+    failures.extend(require(text, 'dashboard["status"] != "pass"', path, "dashboard status threshold enforcement"))
+    failures.extend(
+        forbid(
+            text,
+            r"--fail-under-lines",
+            path,
+            "direct fail-under coverage gate before artifact upload",
+        )
+    )
+    failures.extend(require(text, "target/coverage/lcov.info", path, "LCOV coverage artifact"))
+    failures.extend(require(text, "target/coverage/summary.json", path, "JSON coverage summary artifact"))
+    failures.extend(require(text, "target/coverage/summary.txt", path, "text coverage summary artifact"))
+    failures.extend(require(text, "target/coverage/dashboard.json", path, "dashboard coverage artifact"))
+    failures.extend(
+        require(
+            text,
+            "uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2",
+            path,
+            "SHA-pinned coverage artifact upload action",
+        )
+    )
+    upload_index = text.find("Upload coverage artifacts")
+    enforce_index = text.find("Enforce coverage threshold")
+    if upload_index == -1 or enforce_index == -1 or enforce_index < upload_index:
+        failures.append(
+            f"{path.relative_to(ROOT)}: coverage artifacts must upload before threshold enforcement"
+        )
+    return failures
+
+
 def main() -> int:
     ci_workflows = [
         WORKFLOWS / "ci.yml",
@@ -250,6 +298,7 @@ def main() -> int:
     )
     failures.extend(require(ci_text, "tool: nextest@0.9.136", ci, "pinned nextest tool version"))
     failures.extend(require(ci_text, "fallback: none", ci, "nextest install fallback disabled"))
+    failures.extend(require_coverage_contract(ci_text, ci))
 
     if failures:
         print("Workflow hardening check failed:", file=sys.stderr)

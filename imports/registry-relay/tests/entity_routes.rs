@@ -73,6 +73,30 @@ evaluation_profiles:
     claim_id: hidden_name
     subject_id_type: id
     max_source_observed_age_seconds: 86400
+ecosystem_bindings:
+  - id: baseline-dpi/v1
+    version: v1
+    profile: baseline-dpi
+    type: governed-evidence
+    evidence_pack:
+      policy_id: baseline-dpi-policy
+      policy_hash: sha256:3333333333333333333333333333333333333333333333333333333333333333
+      odrl_enforcement:
+        profile: registry-evidence-gateway-pdp/v1
+        constraint_terms:
+          - odrl:purpose
+  - id: assurance-dpi/v1
+    version: v1
+    profile: assurance-dpi
+    type: governed-evidence
+    evidence_pack:
+      policy_id: assurance-dpi-policy
+      policy_hash: sha256:5555555555555555555555555555555555555555555555555555555555555555
+      odrl_enforcement:
+        profile: registry-evidence-gateway-pdp/v1
+        constraint_terms:
+          - odrl:purpose
+          - registry:pdp:assurance
 requirements:
   - id: name_requirement
     iri: https://data.example.test/requirements/name
@@ -102,6 +126,16 @@ datasets:
   - id: social_registry
     title: Social Registry
     description: Synthetic registry
+    policy:
+      uid: https://data.example.test/policies/social-registry
+      assigner: did:web:data.example.test
+      permissions:
+        - action: odrl:use
+          constraints:
+            - left_operand: odrl:purpose
+              operator: odrl:isA
+              right_operand:
+                iri: https://data.example.test/purposes/testing
     evidence_offerings:
       - id: individual_name_evidence
         iri: https://data.example.test/evidence-offerings/individual-name
@@ -259,17 +293,54 @@ async fn server_with_query_and_scopes(scopes: &[&str]) -> TestServer {
     .await
 }
 
+async fn server_with_query_and_ecosystem_binding_selector() -> TestServer {
+    server_with_query_versions_signer_provenance_and_selector(
+        "01J5K8M0000000000000000000",
+        "01J5K8M0000000000000000000",
+        Arc::new(CursorSigner::new_random()),
+        ENTITY_ROUTE_SCOPES,
+        Some("baseline-dpi/v1"),
+    )
+    .await
+}
+
+async fn server_with_query_and_unsupported_ecosystem_binding_selector() -> TestServer {
+    server_with_query_versions_signer_provenance_and_selector(
+        "01J5K8M0000000000000000000",
+        "01J5K8M0000000000000000000",
+        Arc::new(CursorSigner::new_random()),
+        ENTITY_ROUTE_SCOPES,
+        Some("assurance-dpi/v1"),
+    )
+    .await
+}
+
 async fn server_with_query_versions_signer_and_provenance(
     table_ingest_version: &str,
     readiness_ingest_version: &str,
     signer: Arc<CursorSigner>,
     principal_scopes: &[&str],
 ) -> TestServer {
+    server_with_query_versions_signer_provenance_and_selector(
+        table_ingest_version,
+        readiness_ingest_version,
+        signer,
+        principal_scopes,
+        None,
+    )
+    .await
+}
+
+async fn server_with_query_versions_signer_provenance_and_selector(
+    table_ingest_version: &str,
+    readiness_ingest_version: &str,
+    signer: Arc<CursorSigner>,
+    principal_scopes: &[&str],
+    selected_ecosystem_binding: Option<&str>,
+) -> TestServer {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = tmp.path().join("entity_routes.yaml");
-    std::fs::write(
-        &config_path,
-        r#"
+    let config_yaml = r#"
 server:
   bind: 127.0.0.1:0
 
@@ -396,9 +467,29 @@ datasets:
 audit:
   sink: stdout
   format: jsonl
-"#,
-    )
-    .expect("write config");
+"#
+    .to_string();
+    let config_yaml = if let Some(binding_id) = selected_ecosystem_binding {
+        config_yaml.replacen(
+            "\ncatalog:\n",
+            &format!(
+                r#"
+metadata:
+  source:
+    path: metadata.yaml
+  ecosystem_binding:
+    id: {binding_id}
+    version: v1
+
+catalog:
+"#
+            ),
+            1,
+        )
+    } else {
+        config_yaml
+    };
+    std::fs::write(&config_path, config_yaml).expect("write config");
     let cfg = Arc::new(config::load(&config_path).expect("config loads"));
     let registry = Arc::new(EntityRegistry::from_config(&cfg).expect("registry"));
     let metadata = Arc::new(test_evidence_metadata());
@@ -742,7 +833,7 @@ async fn sensitive_fields_remain_in_authorized_projection() {
     let resp = server_with_query()
         .await
         .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
-        .add_header("data-purpose", "casework")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .await;
 
     resp.assert_status(StatusCode::OK);
@@ -753,6 +844,42 @@ async fn sensitive_fields_remain_in_authorized_projection() {
             {"id": "p-1", "household_id": "hh-1", "given_name": "Ada"}
         ])
     );
+}
+
+#[tokio::test]
+async fn entity_collection_rejects_purpose_outside_compiled_policy_without_selector() {
+    let resp = server_with_query()
+        .await
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
+        .add_header("data-purpose", "casework")
+        .await;
+
+    resp.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(resp.json::<Value>()["code"], "auth.purpose_required");
+}
+
+#[tokio::test]
+async fn entity_collection_rejects_purpose_outside_compiled_policy_with_selector() {
+    let resp = server_with_query_and_ecosystem_binding_selector()
+        .await
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
+        .add_header("data-purpose", "casework")
+        .await;
+
+    resp.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(resp.json::<Value>()["code"], "auth.purpose_required");
+}
+
+#[tokio::test]
+async fn entity_collection_rejects_selected_binding_with_unsupported_runtime_term() {
+    let resp = server_with_query_and_unsupported_ecosystem_binding_selector()
+        .await
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .await;
+
+    resp.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(resp.json::<Value>()["code"], "auth.purpose_required");
 }
 
 #[tokio::test]

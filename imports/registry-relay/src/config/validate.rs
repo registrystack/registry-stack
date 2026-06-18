@@ -247,6 +247,7 @@ pub fn validate_runtime_bindings(
     config: &Config,
     metadata: &CompiledMetadata,
 ) -> Result<(), RuntimeBindingError> {
+    validate_ecosystem_binding_selector(config, metadata)?;
     for dataset in &config.datasets {
         let Some(metadata_dataset) = metadata.dataset(dataset.id.as_str()) else {
             tracing::error!(
@@ -406,6 +407,85 @@ pub fn validate_runtime_bindings(
                 return Err(RuntimeBindingError::UnsupportedEvidenceOffering);
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_ecosystem_binding_selector(
+    config: &Config,
+    metadata: &CompiledMetadata,
+) -> Result<(), RuntimeBindingError> {
+    let Some(selector) = config
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.ecosystem_binding.as_ref())
+    else {
+        return Ok(());
+    };
+    if selector.id.trim().is_empty()
+        || selector
+            .version
+            .as_deref()
+            .is_some_and(|version| version.trim().is_empty())
+    {
+        tracing::error!(
+            code = "runtime.binding.ecosystem_binding_invalid",
+            "metadata.ecosystem_binding must declare a non-empty id and version when present"
+        );
+        return Err(RuntimeBindingError::EcosystemBindingInvalid);
+    }
+
+    let matches = metadata
+        .ecosystem_bindings()
+        .iter()
+        .filter(|binding| {
+            binding.id == selector.id
+                && selector
+                    .version
+                    .as_deref()
+                    .is_none_or(|version| binding.version == version)
+        })
+        .collect::<Vec<_>>();
+    let binding = match matches.as_slice() {
+        [binding] => *binding,
+        [] => {
+            tracing::error!(
+                code = "runtime.binding.ecosystem_binding_missing",
+                binding_id = %selector.id,
+                binding_version = selector.version.as_deref().unwrap_or("<any>"),
+                "configured ecosystem binding selector is absent from the metadata manifest"
+            );
+            return Err(RuntimeBindingError::EcosystemBindingMissing);
+        }
+        _ => {
+            tracing::error!(
+                code = "runtime.binding.ecosystem_binding_invalid",
+                binding_id = %selector.id,
+                "configured ecosystem binding selector matched multiple metadata bindings"
+            );
+            return Err(RuntimeBindingError::EcosystemBindingInvalid);
+        }
+    };
+    let evidence_pack = binding.evidence_pack.as_ref();
+    if binding.binding_type != "governed-evidence"
+        || evidence_pack
+            .and_then(|pack| pack.policy_id.as_deref())
+            .is_none_or(|policy_id| policy_id.trim().is_empty())
+        || evidence_pack
+            .and_then(|pack| pack.policy_hash.as_deref())
+            .is_none_or(|policy_hash| policy_hash.trim().is_empty())
+        || evidence_pack
+            .and_then(|pack| pack.odrl_enforcement.as_ref())
+            .is_none()
+    {
+        tracing::error!(
+            code = "runtime.binding.ecosystem_binding_invalid",
+            binding_id = %binding.id,
+            binding_version = %binding.version,
+            binding_type = %binding.binding_type,
+            "configured ecosystem binding must be a governed-evidence binding with evidence_pack policy_id, policy_hash, and odrl_enforcement"
+        );
+        return Err(RuntimeBindingError::EcosystemBindingInvalid);
     }
     Ok(())
 }

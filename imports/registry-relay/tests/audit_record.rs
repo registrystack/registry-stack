@@ -49,6 +49,9 @@ fn sample_record() -> AuditRecord {
         verification_decision: None,
         claim_hash: None,
         evidence_hash: None,
+        pdp_policy_id: None,
+        pdp_policy_hash: None,
+        pdp_evaluated_rule_ids: None,
         scopes_used: vec!["catalog".to_string()],
         query_params: serde_json::json!({}),
         purpose: Some("ci-smoke".to_string()),
@@ -137,6 +140,9 @@ fn record_serialises_to_expected_field_shape() {
         "verification_decision",
         "claim_hash",
         "evidence_hash",
+        "pdp_policy_id",
+        "pdp_policy_hash",
+        "pdp_evaluated_rule_ids",
         "scopes_used",
         "query_params",
         "purpose",
@@ -191,6 +197,9 @@ fn record_field_types_match_contract() {
     assert!(json["verification_decision"].is_null());
     assert!(json["claim_hash"].is_null());
     assert!(json["evidence_hash"].is_null());
+    assert!(json["pdp_policy_id"].is_null());
+    assert!(json["pdp_policy_hash"].is_null());
+    assert!(json["pdp_evaluated_rule_ids"].is_null());
     assert!(json["row_count"].is_null());
     assert!(json["null_geometry_count"].is_null());
     assert!(json["invalid_geometry_count"].is_null());
@@ -669,6 +678,62 @@ async fn middleware_records_geometry_vertex_count_without_raw_geometry() {
     assert_eq!(parsed["geometry_vertex_count"], 5);
     assert_eq!(parsed["row_count"], 1);
     assert!(!records[0].contains("POLYGON"));
+}
+
+#[tokio::test]
+async fn middleware_records_pdp_decision_provenance_from_audit_context() {
+    let (sink, pipeline) = in_memory_pipeline();
+    let app = Router::new()
+        .route(
+            "/v1/datasets/social_registry/entities/individual/records",
+            get(|| async {
+                let mut response = StatusCode::OK.into_response();
+                response.extensions_mut().insert(AuditContextExt {
+                    dataset_id: Some("social_registry".to_string()),
+                    entity_name: Some("individual".to_string()),
+                    pdp_policy_id: Some("social-registry-read".to_string()),
+                    pdp_policy_hash: Some(
+                        "sha256:8a9f0a7a2b8a4e1ce7ddc6a0dff59bb24e894d7101871830e1a10f66db9db646"
+                            .to_string(),
+                    ),
+                    pdp_evaluated_rule_ids: Some(vec![
+                        "allow-statistics-office".to_string(),
+                        "deny-closed-cases".to_string(),
+                    ]),
+                    ..AuditContextExt::default()
+                });
+                response
+            }),
+        )
+        .layer(from_fn(audit_layer))
+        .layer(Extension(pipeline.clone()));
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/datasets/social_registry/entities/individual/records")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let records = sink.snapshot();
+    assert_eq!(records.len(), 1);
+    let parsed = captured_record(&records[0]);
+    assert_eq!(parsed["dataset_id"], "social_registry");
+    assert_eq!(parsed["entity_name"], "individual");
+    assert_eq!(parsed["pdp_policy_id"], "social-registry-read");
+    assert_eq!(
+        parsed["pdp_policy_hash"],
+        "sha256:8a9f0a7a2b8a4e1ce7ddc6a0dff59bb24e894d7101871830e1a10f66db9db646"
+    );
+    assert_eq!(
+        parsed["pdp_evaluated_rule_ids"],
+        serde_json::json!(["allow-statistics-office", "deny-closed-cases"])
+    );
 }
 
 #[tokio::test]

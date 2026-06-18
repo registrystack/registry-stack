@@ -14,6 +14,13 @@ use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
 use axum::{Extension, Router};
+use registry_manifest_core::{
+    CompiledDatasetPolicy, CompiledMetadata, CompiledPolicyOperandValue, EvidencePackMetadata,
+};
+use registry_platform_pdp::{
+    decide as pdp_decide, Decision as PdpDecision, DecisionAudit as PdpDecisionAudit,
+    EvidenceRequestContext as PdpRequestContext, PolicyInput as PdpPolicyInput,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -22,7 +29,7 @@ use tokio::sync::watch;
 use crate::audit::{AuditContextExt, ErrorCodeExt};
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
-use crate::config::{DatasetId, ResourceId};
+use crate::config::{Config, DatasetId, ResourceId};
 use crate::entity::{EntityModel, EntityRegistry};
 use crate::error::{AuthError, EntityError, Error, InternalError, SchemaError};
 use crate::ingest::ReadinessSnapshot;
@@ -169,12 +176,20 @@ async fn entity_collection(
             "entity collection route matched, but entity registry state is not installed",
         );
     };
-    let audit_context = audit_context_for_entity(&registry, &path);
+    let mut audit_context = audit_context_for_entity(&registry, &path);
     let required_filters = match entity_from_registry(&registry, &path.dataset_id, &path.entity) {
         Ok(entity) => {
-            if let Err(error) = require_read_access(principal.clone(), entity, &headers) {
-                return error.into_response();
-            }
+            let read_audit = match require_read_access(
+                &runtime,
+                &path.dataset_id,
+                principal.clone(),
+                entity,
+                &headers,
+            ) {
+                Ok(audit) => audit,
+                Err(error) => return error.into_response(),
+            };
+            attach_pdp_audit(&mut audit_context, read_audit.as_ref());
             if let Some(expand) = params.get("expand") {
                 let expansions = match parse_expansions(expand) {
                     Ok(expansions) => expansions,
@@ -187,6 +202,7 @@ async fn entity_collection(
                     &expansions,
                     principal.clone(),
                     &headers,
+                    &runtime,
                 ) {
                     return error.into_response();
                 }
@@ -329,12 +345,21 @@ async fn entity_record(
             "entity record route matched, but entity registry state is not installed",
         );
     };
-    let audit_context = audit_context_for_entity_record(&registry, &path.dataset_id, &path.entity);
+    let mut audit_context =
+        audit_context_for_entity_record(&registry, &path.dataset_id, &path.entity);
     match entity_from_registry(&registry, &path.dataset_id, &path.entity) {
         Ok(entity) => {
-            if let Err(error) = require_read_access(principal.clone(), entity, &headers) {
-                return error.into_response();
-            }
+            let read_audit = match require_read_access(
+                &runtime,
+                &path.dataset_id,
+                principal.clone(),
+                entity,
+                &headers,
+            ) {
+                Ok(audit) => audit,
+                Err(error) => return error.into_response(),
+            };
+            attach_pdp_audit(&mut audit_context, read_audit.as_ref());
             if let Some(expand) = params.get("expand") {
                 let expansions = match parse_expansions(expand) {
                     Ok(expansions) => expansions,
@@ -347,6 +372,7 @@ async fn entity_record(
                     &expansions,
                     principal.clone(),
                     &headers,
+                    &runtime,
                 ) {
                     return error.into_response();
                 }
@@ -437,7 +463,7 @@ async fn entity_relationship(
             "entity relationship route matched, but entity registry state is not installed",
         );
     };
-    let audit_context = audit_context_for_relationship(
+    let mut audit_context = audit_context_for_relationship(
         &registry,
         &path.dataset_id,
         &path.entity,
@@ -446,9 +472,17 @@ async fn entity_relationship(
     let mut page_context = None;
     match entity_from_registry(&registry, &path.dataset_id, &path.entity) {
         Ok(entity) => {
-            if let Err(error) = require_read_access(principal.clone(), entity, &headers) {
-                return error.into_response();
-            }
+            let read_audit = match require_read_access(
+                &runtime,
+                &path.dataset_id,
+                principal.clone(),
+                entity,
+                &headers,
+            ) {
+                Ok(audit) => audit,
+                Err(error) => return error.into_response(),
+            };
+            attach_pdp_audit(&mut audit_context, read_audit.as_ref());
             if let Err(error) = require_relationship_target_access(
                 &registry,
                 &path.dataset_id,
@@ -456,6 +490,7 @@ async fn entity_relationship(
                 &path.relationship,
                 principal.clone(),
                 &headers,
+                &runtime,
             ) {
                 return error.into_response();
             }
@@ -604,15 +639,14 @@ fn require_principal_scope(
 }
 
 fn require_read_access(
+    runtime: &RuntimeSnapshot,
+    dataset_id: &str,
     principal: Option<Extension<Principal>>,
     entity: &EntityModel,
     headers: &HeaderMap,
-) -> Result<(), Error> {
+) -> Result<Option<PdpDecisionAudit>, Error> {
     require_principal_scope(principal, &entity.access.read_scope)?;
-    if entity.api.require_purpose_header && !has_purpose_header(headers) {
-        return Err(AuthError::PurposeRequired.into());
-    }
-    Ok(())
+    require_purpose_header_decision(runtime, dataset_id, entity, headers)
 }
 
 fn require_expansion_access(
@@ -622,6 +656,7 @@ fn require_expansion_access(
     expansions: &[String],
     principal: Option<Extension<Principal>>,
     headers: &HeaderMap,
+    runtime: &RuntimeSnapshot,
 ) -> Result<(), Error> {
     for expansion in expansions {
         if expansion == "*" || expansion.contains('.') {
@@ -642,6 +677,7 @@ fn require_expansion_access(
             expansion,
             principal.clone(),
             headers,
+            runtime,
         )?;
     }
     Ok(())
@@ -654,6 +690,7 @@ fn require_relationship_target_access(
     relationship_name: &str,
     principal: Option<Extension<Principal>>,
     headers: &HeaderMap,
+    runtime: &RuntimeSnapshot,
 ) -> Result<(), Error> {
     let relationship = entity
         .relationships
@@ -661,14 +698,218 @@ fn require_relationship_target_access(
         .ok_or(crate::error::FilterError::NotAllowed)?;
     let target = entity_from_registry(registry, dataset_id, &relationship.target)?;
     require_principal_scope(principal, &target.access.read_scope)?;
-    if target.api.require_purpose_header && !has_purpose_header(headers) {
-        return Err(AuthError::PurposeRequired.into());
-    }
-    Ok(())
+    require_purpose_header_decision(runtime, dataset_id, target, headers).map(|_| ())
 }
 
-fn has_purpose_header(headers: &HeaderMap) -> bool {
-    purpose_header_value(headers, DATA_PURPOSE_HEADER).is_some()
+fn require_purpose_header_decision(
+    runtime: &RuntimeSnapshot,
+    dataset_id: &str,
+    entity: &EntityModel,
+    headers: &HeaderMap,
+) -> Result<Option<PdpDecisionAudit>, Error> {
+    if !entity.api.require_purpose_header {
+        return Ok(None);
+    }
+    let purpose = purpose_header_value(headers, DATA_PURPOSE_HEADER)
+        .ok_or_else(|| Error::from(AuthError::PurposeRequired))?;
+    let context = PdpRequestContext {
+        purpose: purpose.to_string(),
+        legal_basis_ref: None,
+        consent_ref: None,
+        asserted_assurance: None,
+        jurisdiction: None,
+        source_observed_age_seconds: None,
+    };
+    let selected_policy = selected_ecosystem_policy(runtime)?;
+    let purpose_constraints = governed_purpose_constraints(runtime, dataset_id)
+        .unwrap_or_else(|| vec![vec![purpose.to_string()]]);
+    let policy = PdpPolicyInput {
+        policy_id: selected_policy
+            .as_ref()
+            .map(|policy| policy.policy_id.clone())
+            .unwrap_or_else(|| format!("relay.entity.{}.purpose-required", entity.name)),
+        policy_hash: selected_policy
+            .as_ref()
+            .map(|policy| policy.policy_hash.clone())
+            .unwrap_or_else(|| entity_purpose_policy_hash(entity, &purpose_constraints)),
+        rule_ids: vec![format!("entity-purpose-required:{}", entity.name)],
+        purpose_constraints,
+        permitted_jurisdictions: Vec::new(),
+        allowed_assurance: Vec::new(),
+        minimum_assurance: None,
+        max_source_age_seconds: None,
+        require_legal_basis: false,
+        require_consent: false,
+        redaction_fields: Default::default(),
+        unsupported_odrl_terms: selected_policy
+            .map(|policy| policy.unsupported_odrl_terms)
+            .unwrap_or_default(),
+    };
+    match pdp_decide(&context, &policy) {
+        PdpDecision::Permit(audit) | PdpDecision::PermitWithRedaction { audit, .. } => {
+            Ok(Some(audit))
+        }
+        PdpDecision::Deny { .. } => Err(AuthError::PurposeRequired.into()),
+    }
+}
+
+fn attach_pdp_audit(context: &mut Option<AuditContextExt>, audit: Option<&PdpDecisionAudit>) {
+    let (Some(context), Some(audit)) = (context.as_mut(), audit) else {
+        return;
+    };
+    context.pdp_policy_id = Some(audit.policy_id.clone());
+    context.pdp_policy_hash = Some(audit.policy_hash.clone());
+    context.pdp_evaluated_rule_ids =
+        (!audit.evaluated_rule_ids.is_empty()).then(|| audit.evaluated_rule_ids.clone());
+}
+
+const ODRL_PURPOSE: &str = "http://www.w3.org/ns/odrl/2/purpose";
+const ODRL_IS_A: &str = "http://www.w3.org/ns/odrl/2/isA";
+const ODRL_PURPOSE_COMPACT: &str = "odrl:purpose";
+
+fn governed_purpose_constraints(
+    runtime: &RuntimeSnapshot,
+    dataset_id: &str,
+) -> Option<Vec<Vec<String>>> {
+    let compiled = runtime.compiled_metadata()?;
+    let dataset = compiled.dataset(dataset_id)?;
+    governed_purpose_constraints_for_policy(&dataset.policy)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SelectedEcosystemPolicy {
+    policy_id: String,
+    policy_hash: String,
+    unsupported_odrl_terms: Vec<String>,
+}
+
+fn selected_ecosystem_policy(
+    runtime: &RuntimeSnapshot,
+) -> Result<Option<SelectedEcosystemPolicy>, Error> {
+    let Some(config) = runtime.config() else {
+        return Ok(None);
+    };
+    let Some(compiled) = runtime.compiled_metadata() else {
+        return selected_ecosystem_policy_from_metadata(&config, None);
+    };
+    selected_ecosystem_policy_from_metadata(&config, Some(compiled.as_ref()))
+}
+
+fn selected_ecosystem_policy_from_metadata(
+    config: &Config,
+    compiled: Option<&CompiledMetadata>,
+) -> Result<Option<SelectedEcosystemPolicy>, Error> {
+    let Some(selector) = config
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.ecosystem_binding.as_ref())
+    else {
+        return Ok(None);
+    };
+    let Some(compiled) = compiled else {
+        tracing::error!(
+            code = "runtime.binding.ecosystem_binding_missing",
+            binding_id = %selector.id,
+            binding_version = selector.version.as_deref().unwrap_or("<any>"),
+            "configured ecosystem binding selector is unavailable at request time"
+        );
+        return Err(AuthError::PurposeRequired.into());
+    };
+    let binding = compiled.ecosystem_bindings().iter().find(|binding| {
+        binding.id == selector.id
+            && selector
+                .version
+                .as_deref()
+                .is_none_or(|version| binding.version == version)
+    });
+    let Some(binding) = binding else {
+        tracing::error!(
+            code = "runtime.binding.ecosystem_binding_missing",
+            binding_id = %selector.id,
+            binding_version = selector.version.as_deref().unwrap_or("<any>"),
+            "configured ecosystem binding selector is absent at request time"
+        );
+        return Err(AuthError::PurposeRequired.into());
+    };
+    if binding.binding_type != "governed-evidence" {
+        tracing::error!(
+            code = "runtime.binding.ecosystem_binding_invalid",
+            binding_id = %binding.id,
+            binding_version = %binding.version,
+            binding_type = %binding.binding_type,
+            "configured ecosystem binding is not governed evidence at request time"
+        );
+        return Err(AuthError::PurposeRequired.into());
+    }
+    evidence_pack_policy(binding.evidence_pack.as_ref())
+        .ok_or_else(|| {
+            tracing::error!(
+                code = "runtime.binding.ecosystem_binding_invalid",
+                binding_id = %binding.id,
+                binding_version = %binding.version,
+                "configured ecosystem binding evidence pack is incomplete at request time"
+            );
+            Error::from(AuthError::PurposeRequired)
+        })
+        .map(Some)
+}
+
+fn evidence_pack_policy(
+    evidence_pack: Option<&EvidencePackMetadata>,
+) -> Option<SelectedEcosystemPolicy> {
+    let evidence_pack = evidence_pack?;
+    let enforcement = evidence_pack.odrl_enforcement.as_ref()?;
+    let unsupported_odrl_terms = enforcement
+        .constraint_terms
+        .iter()
+        .filter(|term| term.as_str() != ODRL_PURPOSE_COMPACT)
+        .cloned()
+        .collect();
+    Some(SelectedEcosystemPolicy {
+        policy_id: evidence_pack.policy_id.as_ref()?.trim().to_string(),
+        policy_hash: evidence_pack.policy_hash.as_ref()?.trim().to_string(),
+        unsupported_odrl_terms,
+    })
+}
+
+fn governed_purpose_constraints_for_policy(
+    policy: &CompiledDatasetPolicy,
+) -> Option<Vec<Vec<String>>> {
+    let mut purposes = policy
+        .permissions
+        .iter()
+        .flat_map(|permission| &permission.constraints)
+        .filter(|constraint| {
+            constraint.left_operand == ODRL_PURPOSE && constraint.operator == ODRL_IS_A
+        })
+        .filter_map(|constraint| match &constraint.right_operand {
+            CompiledPolicyOperandValue::Iri(value) if !value.trim().is_empty() => {
+                Some(value.trim().to_string())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    purposes.sort();
+    purposes.dedup();
+    if purposes.is_empty() {
+        None
+    } else {
+        Some(vec![purposes])
+    }
+}
+
+fn entity_purpose_policy_hash(entity: &EntityModel, purpose_constraints: &[Vec<String>]) -> String {
+    let material = format!(
+        "entity={};table_id={};read_scope={};require_purpose_header={};purpose_constraints={:?}",
+        entity.name,
+        entity.table_id,
+        entity.access.read_scope,
+        entity.api.require_purpose_header,
+        purpose_constraints
+    );
+    let mut hasher = Sha256::new();
+    hasher.update(material.as_bytes());
+    format!("sha256:{}", hex_lower(&hasher.finalize()))
 }
 
 fn purpose_header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -1329,4 +1570,97 @@ fn cursor_invalidated() -> Response {
         .extensions_mut()
         .insert(ErrorCodeExt(CURSOR_INVALIDATED_CODE.to_string()));
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_with_selector() -> Config {
+        serde_saphyr::from_str(
+            r#"
+server:
+  bind: 127.0.0.1:0
+metadata:
+  source:
+    path: metadata.yaml
+  ecosystem_binding:
+    id: baseline-dpi/v1
+    version: v1
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+auth:
+  mode: api_key
+  api_keys: []
+datasets: []
+audit:
+  sink: stdout
+  format: jsonl
+"#,
+        )
+        .expect("config parses")
+    }
+
+    fn compiled_metadata_with_binding() -> CompiledMetadata {
+        let manifest: registry_manifest_core::MetadataManifest = serde_saphyr::from_str(
+            r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: test
+  base_url: https://data.example.test
+  title: Test
+  publisher:
+    name: Test
+ecosystem_bindings:
+  - id: baseline-dpi/v1
+    version: v1
+    profile: baseline-dpi
+    type: governed-evidence
+    evidence_pack:
+      policy_id: baseline-dpi-policy
+      policy_hash: sha256:3333333333333333333333333333333333333333333333333333333333333333
+      odrl_enforcement:
+        profile: registry-evidence-gateway-pdp/v1
+        constraint_terms:
+          - odrl:purpose
+datasets: []
+"#,
+        )
+        .expect("metadata manifest parses");
+        registry_manifest_core::compile_manifest(&manifest).expect("metadata compiles")
+    }
+
+    #[test]
+    fn selected_ecosystem_policy_uses_evidence_pack_identity() {
+        let config = config_with_selector();
+        let compiled = compiled_metadata_with_binding();
+
+        let selected = selected_ecosystem_policy_from_metadata(&config, Some(&compiled))
+            .expect("selected binding resolves")
+            .expect("selector is configured");
+
+        assert_eq!(selected.policy_id, "baseline-dpi-policy");
+        assert_eq!(
+            selected.policy_hash,
+            "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+        );
+    }
+
+    #[test]
+    fn selected_ecosystem_policy_is_absent_without_selector() {
+        let mut config = config_with_selector();
+        config
+            .metadata
+            .as_mut()
+            .expect("metadata config")
+            .ecosystem_binding = None;
+        let compiled = compiled_metadata_with_binding();
+
+        let selected = selected_ecosystem_policy_from_metadata(&config, Some(&compiled))
+            .expect("metadata without selector is accepted");
+
+        assert_eq!(selected, None);
+    }
 }

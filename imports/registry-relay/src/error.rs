@@ -337,6 +337,10 @@ pub enum RuntimeBindingError {
     RelationshipMissing,
     #[error("runtime evidence offering kind is unsupported")]
     UnsupportedEvidenceOffering,
+    #[error("runtime ecosystem binding missing from metadata")]
+    EcosystemBindingMissing,
+    #[error("runtime ecosystem binding is invalid")]
+    EcosystemBindingInvalid,
 }
 
 /// `provenance.*` runtime codes.
@@ -1126,6 +1130,12 @@ impl RuntimeBindingError {
             RuntimeBindingError::UnsupportedEvidenceOffering => {
                 "runtime.binding.unsupported_evidence_offering"
             }
+            RuntimeBindingError::EcosystemBindingMissing => {
+                "runtime.binding.ecosystem_binding_missing"
+            }
+            RuntimeBindingError::EcosystemBindingInvalid => {
+                "runtime.binding.ecosystem_binding_invalid"
+            }
         }
     }
 
@@ -1146,6 +1156,10 @@ impl RuntimeBindingError {
                 "Runtime relationship missing from metadata"
             }
             RuntimeBindingError::UnsupportedEvidenceOffering => "Unsupported evidence offering",
+            RuntimeBindingError::EcosystemBindingMissing => {
+                "Runtime ecosystem binding missing from metadata"
+            }
+            RuntimeBindingError::EcosystemBindingInvalid => "Runtime ecosystem binding invalid",
         }
     }
 
@@ -1174,6 +1188,12 @@ impl RuntimeBindingError {
             }
             RuntimeBindingError::UnsupportedEvidenceOffering => {
                 "only external Registry Notary evidence offerings are supported"
+            }
+            RuntimeBindingError::EcosystemBindingMissing => {
+                "configured ecosystem binding selector is absent from the metadata manifest"
+            }
+            RuntimeBindingError::EcosystemBindingInvalid => {
+                "configured ecosystem binding must reference a governed-evidence binding with policy identity and ODRL enforcement"
             }
         }
     }
