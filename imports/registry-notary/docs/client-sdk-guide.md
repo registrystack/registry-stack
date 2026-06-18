@@ -35,10 +35,14 @@ at `https://lab.registrystack.org/api/lab.json`. These are public demo
 credentials, not production secret-handling guidance.
 
 ```bash
-export REGISTRY_NOTARY_BASE_URL="https://agriculture-notary.lab.registrystack.org"
-export REGISTRY_NOTARY_BEARER_TOKEN="_07RtRhidurOsqBe-mW9At1d7zkCWGI1Dumd2E9uj7U"
-export REGISTRY_NOTARY_PURPOSE="https://demo.example.gov/purpose/nagdi/climate-smart-input-support"
+eval "$(registryctl lab env --credential agri-evidence)"
 ```
+
+The helper emits only the requested credential from the hosted lab manifest:
+`REGISTRY_NOTARY_BASE_URL`, `REGISTRY_NOTARY_BEARER_TOKEN`, and
+`REGISTRY_NOTARY_PURPOSE`.
+If you are not using `registryctl`, copy the same values from the lab UI or
+from the `agri-evidence` entry in `lab.json`.
 
 ### Key Terms
 
