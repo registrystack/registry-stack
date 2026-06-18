@@ -175,12 +175,21 @@ fn is_sha256_digest(value: &str) -> bool {
     let Some(hex) = value.strip_prefix("sha256:") else {
         return false;
     };
-    hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+    hex.len() == 64
+        && hex
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 fn assurance_rank(level: &str) -> Option<u8> {
-    match normalized_assurance(level).as_str() {
-        "low" | "ial1" | "loa1" | "substantial_low" => Some(1),
+    let compact = level
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>();
+    match compact.as_str() {
+        "low" | "ial1" | "loa1" => Some(1),
         "substantial" | "ial2" | "loa2" => Some(2),
         "high" | "ial3" | "loa3" => Some(3),
         _ => None,
@@ -265,6 +274,33 @@ mod tests {
         assert_eq!(
             deny_code(decide(&context, &policy())),
             Some(ASSURANCE_INSUFFICIENT.to_string())
+        );
+    }
+
+    #[test]
+    fn minimum_assurance_accepts_standard_separator_bearing_labels() {
+        let mut policy = policy();
+        policy.minimum_assurance = Some("IAL-2".to_string());
+        let mut context = context();
+        context.asserted_assurance = Some("LOA 2".to_string());
+        assert!(matches!(decide(&context, &policy), Decision::Permit(_)));
+
+        policy.minimum_assurance = Some("LOA 2".to_string());
+        context.asserted_assurance = Some("loa-1".to_string());
+        assert_eq!(
+            deny_code(decide(&context, &policy)),
+            Some(ASSURANCE_INSUFFICIENT.to_string())
+        );
+    }
+
+    #[test]
+    fn nonstandard_substantial_low_minimum_fails_closed() {
+        let mut policy = policy();
+        policy.minimum_assurance = Some("substantial-low".to_string());
+
+        assert_eq!(
+            deny_code(decide(&context(), &policy)),
+            Some(UNSUPPORTED_POLICY_TERM.to_string())
         );
     }
 
@@ -362,6 +398,14 @@ mod tests {
         bad_hash.policy_hash = "sha256:not-a-digest".to_string();
         assert_eq!(
             deny_code(decide(&context(), &bad_hash)),
+            Some(POLICY_HASH_INVALID.to_string())
+        );
+
+        let mut uppercase_hash = policy();
+        uppercase_hash.policy_hash =
+            "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string();
+        assert_eq!(
+            deny_code(decide(&context(), &uppercase_hash)),
             Some(POLICY_HASH_INVALID.to_string())
         );
     }
