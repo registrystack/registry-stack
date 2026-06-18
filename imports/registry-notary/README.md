@@ -150,7 +150,9 @@ just ci-preflight
 The preflight stages a temporary workspace, checks out Platform and Crosswalk at
 the workflow-pinned refs, then runs locked Cargo metadata and check commands.
 It catches `Cargo.lock` drift and companion-ref skew before the heavyweight CI
-jobs reach Docker, perf, or security scans.
+jobs reach Docker, perf, or security scans. During coordinated local multi-repo
+work, run `just ci-preflight-worktree` to check the current sibling working
+trees before those dependency refs are committed and repinned.
 
 Registry Notary depends on sibling `../registry-platform` path crates. CI checks
 out `registry-platform` at `REGISTRY_PLATFORM_REF` beside this repository before

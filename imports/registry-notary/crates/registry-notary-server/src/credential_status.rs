@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Storage-backed SD-JWT VC credential status records.
 
+use std::collections::hash_map::DefaultHasher;
 use std::env;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,6 +20,10 @@ use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
+type CredentialStatusTransitionLock = Arc<tokio::sync::Mutex<()>>;
+type CredentialStatusTransitionLocks = Arc<Vec<CredentialStatusTransitionLock>>;
+const CREDENTIAL_STATUS_TRANSITION_LOCK_STRIPES: usize = 1024;
+
 #[derive(Debug, thiserror::Error)]
 pub enum CredentialStatusBuildError {
     #[error("credential status redis URL environment variable is missing or empty: {0}")]
@@ -30,6 +36,8 @@ pub enum CredentialStatusBuildError {
 pub enum CredentialStatusStoreError {
     #[error("credential status record is invalid")]
     InvalidRecord,
+    #[error("credential status transition is invalid")]
+    InvalidTransition,
     #[error("credential status key is invalid")]
     InvalidKey(#[source] CacheKeyError),
     #[error("credential status store failed")]
@@ -84,6 +92,7 @@ pub(crate) struct CredentialStatusStore {
     key_prefix: String,
     store: Option<Arc<dyn CacheStore>>,
     redis_ready: Option<Arc<RedisCacheStore>>,
+    transition_locks: CredentialStatusTransitionLocks,
 }
 
 impl std::fmt::Debug for CredentialStatusStore {
@@ -128,6 +137,7 @@ impl CredentialStatusStore {
                     key_prefix: config.redis.key_prefix.clone(),
                     store: Some(redis.clone()),
                     redis_ready: Some(redis),
+                    transition_locks: transition_locks(),
                 })
             }
             _ => Ok(Self {
@@ -137,6 +147,7 @@ impl CredentialStatusStore {
                 key_prefix: "registry-notary".to_string(),
                 store: Some(Arc::new(InMemoryCacheStore::new())),
                 redis_ready: None,
+                transition_locks: transition_locks(),
             }),
         }
     }
@@ -149,6 +160,7 @@ impl CredentialStatusStore {
             key_prefix: "registry-notary".to_string(),
             store: None,
             redis_ready: None,
+            transition_locks: transition_locks(),
         }
     }
 
@@ -218,9 +230,20 @@ impl CredentialStatusStore {
         credential_id: &str,
         status: &str,
     ) -> Result<Option<CredentialStatusRecord>, CredentialStatusStoreError> {
+        if !self.enabled {
+            return Ok(None);
+        }
+        let transition_lock = self.transition_lock(credential_id);
+        let _transition_guard = transition_lock.lock().await;
+        // This guard makes the read-check-write transition atomic for the
+        // process-local memory store. Redis still relies on this process-local
+        // guard because CacheStore does not expose compare-and-set or Lua.
         let Some(mut record) = self.get(credential_id).await? else {
             return Ok(None);
         };
+        if record.status == CREDENTIAL_STATUS_REVOKED && status != CREDENTIAL_STATUS_REVOKED {
+            return Err(CredentialStatusStoreError::InvalidTransition);
+        }
         record.status = status.to_string();
         record.updated_at = format_time(OffsetDateTime::now_utc());
         self.write_record(&record).await?;
@@ -264,6 +287,13 @@ impl CredentialStatusStore {
         )
         .map_err(CredentialStatusStoreError::InvalidKey)
     }
+
+    fn transition_lock(&self, credential_id: &str) -> CredentialStatusTransitionLock {
+        let mut hasher = DefaultHasher::new();
+        credential_id.hash(&mut hasher);
+        let bucket = hasher.finish() as usize % self.transition_locks.len();
+        Arc::clone(&self.transition_locks[bucket])
+    }
 }
 
 pub(crate) fn is_mutable_status(value: &str) -> bool {
@@ -279,20 +309,129 @@ fn format_time(value: OffsetDateTime) -> String {
         .expect("OffsetDateTime within supported RFC3339 range")
 }
 
+fn transition_locks() -> CredentialStatusTransitionLocks {
+    Arc::new(
+        (0..CREDENTIAL_STATUS_TRANSITION_LOCK_STRIPES)
+            .map(|_| Arc::new(tokio::sync::Mutex::new(())))
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use registry_notary_core::CredentialStatusRedisConfig;
+    use registry_platform_cache::CacheSetOutcome;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::Notify;
 
-    #[tokio::test]
-    async fn memory_store_records_updates_and_derives_expired_status() {
-        let store = CredentialStatusStore::from_config(&CredentialStatusConfig {
+    struct BlockingInMemoryCacheStore {
+        inner: InMemoryCacheStore,
+        block_next_suspended_set: AtomicBool,
+        suspended_set_started: Notify,
+        release_suspended_set: Notify,
+        revoked_set_finished: Notify,
+    }
+
+    impl BlockingInMemoryCacheStore {
+        fn new() -> Self {
+            Self {
+                inner: InMemoryCacheStore::new(),
+                block_next_suspended_set: AtomicBool::new(true),
+                suspended_set_started: Notify::new(),
+                release_suspended_set: Notify::new(),
+                revoked_set_finished: Notify::new(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl CacheStore for BlockingInMemoryCacheStore {
+        async fn get(&self, key: &CacheKey) -> Result<Option<Vec<u8>>, CacheStoreError> {
+            self.inner.get(key).await
+        }
+
+        async fn set(
+            &self,
+            key: &CacheKey,
+            value: &[u8],
+            expires_at: OffsetDateTime,
+        ) -> Result<(), CacheStoreError> {
+            let status = serde_json::from_slice::<CredentialStatusRecord>(value)
+                .ok()
+                .map(|record| record.status);
+            if status.as_deref() == Some(CREDENTIAL_STATUS_SUSPENDED)
+                && self.block_next_suspended_set.swap(false, Ordering::SeqCst)
+            {
+                self.suspended_set_started.notify_one();
+                self.release_suspended_set.notified().await;
+            }
+            let result = self.inner.set(key, value, expires_at).await;
+            if status.as_deref() == Some(CREDENTIAL_STATUS_REVOKED) {
+                self.revoked_set_finished.notify_one();
+            }
+            result
+        }
+
+        async fn set_if_absent(
+            &self,
+            key: &CacheKey,
+            value: &[u8],
+            expires_at: OffsetDateTime,
+        ) -> Result<CacheSetOutcome, CacheStoreError> {
+            self.inner.set_if_absent(key, value, expires_at).await
+        }
+
+        async fn delete(&self, key: &CacheKey) -> Result<bool, CacheStoreError> {
+            self.inner.delete(key).await
+        }
+
+        async fn check_ready(&self) -> Result<(), CacheStoreError> {
+            Ok(())
+        }
+    }
+
+    fn memory_store() -> CredentialStatusStore {
+        CredentialStatusStore::from_config(&CredentialStatusConfig {
             enabled: true,
             base_url: "https://issuer.example/".to_string(),
             retention_seconds: 60,
             ..CredentialStatusConfig::default()
         })
-        .expect("store builds");
+        .expect("store builds")
+    }
+
+    fn memory_store_with_cache(cache: Arc<dyn CacheStore>) -> CredentialStatusStore {
+        CredentialStatusStore {
+            enabled: true,
+            base_url: "https://issuer.example".to_string(),
+            retention_seconds: 60,
+            key_prefix: "registry-notary".to_string(),
+            store: Some(cache),
+            redis_ready: None,
+            transition_locks: transition_locks(),
+        }
+    }
+
+    async fn record_test_credential(store: &CredentialStatusStore, credential_id: &str) {
+        let issued_at = OffsetDateTime::now_utc() - time::Duration::seconds(10);
+        let expires_at = OffsetDateTime::now_utc() + time::Duration::seconds(120);
+        store
+            .record_issued(
+                credential_id.to_string(),
+                "did:web:issuer.example".to_string(),
+                "civil_status_sd_jwt".to_string(),
+                issued_at,
+                expires_at,
+            )
+            .await
+            .expect("record writes");
+    }
+
+    #[tokio::test]
+    async fn memory_store_records_updates_and_derives_expired_status() {
+        let store = memory_store();
         let issued_at = OffsetDateTime::now_utc() - time::Duration::seconds(10);
         let expires_at = OffsetDateTime::now_utc() + time::Duration::seconds(10);
 
@@ -330,6 +469,137 @@ mod tests {
             revoked.effective_status(expires_at + time::Duration::seconds(1)),
             CREDENTIAL_STATUS_REVOKED
         );
+    }
+
+    #[tokio::test]
+    async fn memory_store_allows_valid_and_suspended_until_revoked() {
+        let store = memory_store();
+        let credential_id = "urn:ulid:01HX7Y5F2WAJ7ZP0Q4M5K9E8ND";
+        record_test_credential(&store, credential_id).await;
+
+        let suspended = store
+            .update_status(credential_id, CREDENTIAL_STATUS_SUSPENDED)
+            .await
+            .expect("valid to suspended succeeds")
+            .expect("record exists");
+        assert_eq!(suspended.status, CREDENTIAL_STATUS_SUSPENDED);
+
+        let valid = store
+            .update_status(credential_id, CREDENTIAL_STATUS_VALID)
+            .await
+            .expect("suspended to valid succeeds")
+            .expect("record exists");
+        assert_eq!(valid.status, CREDENTIAL_STATUS_VALID);
+
+        let revoked = store
+            .update_status(credential_id, CREDENTIAL_STATUS_REVOKED)
+            .await
+            .expect("valid to revoked succeeds")
+            .expect("record exists");
+        assert_eq!(revoked.status, CREDENTIAL_STATUS_REVOKED);
+    }
+
+    #[tokio::test]
+    async fn memory_store_rejects_revoked_to_valid_transition() {
+        let store = memory_store();
+        let credential_id = "urn:ulid:01HX7Y5F2WAJ7ZP0Q4M5K9E8NE";
+        record_test_credential(&store, credential_id).await;
+        store
+            .update_status(credential_id, CREDENTIAL_STATUS_REVOKED)
+            .await
+            .expect("revocation succeeds")
+            .expect("record exists");
+
+        let err = store
+            .update_status(credential_id, CREDENTIAL_STATUS_VALID)
+            .await
+            .expect_err("revoked credential must not become valid");
+        assert!(matches!(err, CredentialStatusStoreError::InvalidTransition));
+
+        let record = store
+            .get(credential_id)
+            .await
+            .expect("lookup succeeds")
+            .expect("record exists");
+        assert_eq!(record.status, CREDENTIAL_STATUS_REVOKED);
+    }
+
+    #[tokio::test]
+    async fn memory_store_rejects_revoked_to_suspended_transition() {
+        let store = memory_store();
+        let credential_id = "urn:ulid:01HX7Y5F2WAJ7ZP0Q4M5K9E8NF";
+        record_test_credential(&store, credential_id).await;
+        store
+            .update_status(credential_id, CREDENTIAL_STATUS_REVOKED)
+            .await
+            .expect("revocation succeeds")
+            .expect("record exists");
+
+        let err = store
+            .update_status(credential_id, CREDENTIAL_STATUS_SUSPENDED)
+            .await
+            .expect_err("revoked credential must not become suspended");
+        assert!(matches!(err, CredentialStatusStoreError::InvalidTransition));
+
+        let record = store
+            .get(credential_id)
+            .await
+            .expect("lookup succeeds")
+            .expect("record exists");
+        assert_eq!(record.status, CREDENTIAL_STATUS_REVOKED);
+    }
+
+    #[tokio::test]
+    async fn memory_store_concurrent_revoke_wins_over_stale_non_revoked_update() {
+        let cache = Arc::new(BlockingInMemoryCacheStore::new());
+        let store = memory_store_with_cache(cache.clone());
+        let credential_id = "urn:ulid:01HX7Y5F2WAJ7ZP0Q4M5K9E8NG";
+        record_test_credential(&store, credential_id).await;
+
+        let suspended_store = store.clone();
+        let suspended_update = tokio::spawn(async move {
+            suspended_store
+                .update_status(credential_id, CREDENTIAL_STATUS_SUSPENDED)
+                .await
+        });
+        cache.suspended_set_started.notified().await;
+
+        let revoked_store = store.clone();
+        let revoked_update = tokio::spawn(async move {
+            revoked_store
+                .update_status(credential_id, CREDENTIAL_STATUS_REVOKED)
+                .await
+        });
+        let revoked_before_suspended_released = tokio::time::timeout(
+            Duration::from_millis(50),
+            cache.revoked_set_finished.notified(),
+        )
+        .await;
+        assert!(
+            revoked_before_suspended_released.is_err(),
+            "revocation must wait for the in-flight non-revoked transition"
+        );
+
+        cache.release_suspended_set.notify_waiters();
+        let suspended = suspended_update
+            .await
+            .expect("suspended task joins")
+            .expect("suspended update succeeds")
+            .expect("record exists");
+        assert_eq!(suspended.status, CREDENTIAL_STATUS_SUSPENDED);
+        let revoked = revoked_update
+            .await
+            .expect("revoked task joins")
+            .expect("revoked update succeeds")
+            .expect("record exists");
+        assert_eq!(revoked.status, CREDENTIAL_STATUS_REVOKED);
+
+        let record = store
+            .get(credential_id)
+            .await
+            .expect("lookup succeeds")
+            .expect("record exists");
+        assert_eq!(record.status, CREDENTIAL_STATUS_REVOKED);
     }
 
     #[tokio::test]

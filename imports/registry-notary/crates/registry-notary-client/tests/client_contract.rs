@@ -931,6 +931,7 @@ async fn oid4vci_success_routes_parse_typed_responses() {
                     proof_type: registry_platform_oid4vci::PROOF_TYPE_JWT.to_string(),
                     jwt: "proof-jwt".to_string(),
                 },
+                proofs: registry_platform_oid4vci::CredentialRequestProofs::default(),
             },
             RequestOptions::default(),
         )
@@ -943,7 +944,10 @@ async fn oid4vci_success_routes_parse_typed_responses() {
         vec!["person_is_alive_sd_jwt"]
     );
     assert_eq!(nonce.body.c_nonce, "nonce-1");
-    assert_eq!(credential.body.credential, "sd-jwt-credential");
+    assert_eq!(
+        credential.body.credential,
+        registry_platform_oid4vci::CredentialValue::from("sd-jwt-credential")
+    );
 
     let metadata_debug = format!("{metadata:?}");
     assert!(metadata_debug.contains("https://issuer.example"));
@@ -959,6 +963,33 @@ async fn oid4vci_success_routes_parse_typed_responses() {
     assert!(credential_debug.contains("<redacted>"));
     assert!(!credential_debug.contains("sd-jwt-credential"));
     assert!(!credential_debug.contains("proof-jwt"));
+}
+
+#[cfg(all(feature = "oid4vci", feature = "verifier"))]
+#[tokio::test]
+async fn oid4vci_verifier_rejects_object_credential_shape_before_jwks_fetch() {
+    let client = RegistryNotaryClient::builder("http://127.0.0.1:9")
+        .build()
+        .expect("client builds");
+    let response = registry_platform_oid4vci::CredentialResponse {
+        credential: registry_platform_oid4vci::CredentialValue::Object(json!({
+            "credential": "not-a-compact-sd-jwt"
+        })),
+        credentials: Vec::new(),
+        format: Some(registry_platform_oid4vci::SD_JWT_VC_FORMAT.to_string()),
+        c_nonce: None,
+        c_nonce_expires_in: None,
+    };
+
+    let error = client
+        .verify_oid4vci_credential(
+            &response,
+            registry_notary_client::VerifyOptions::new("https://issuer.example"),
+        )
+        .await
+        .expect_err("object credential shape is not a compact SD-JWT VC");
+
+    assert_eq!(error.code(), "credential.unsupported_shape");
 }
 
 async fn evaluate_handler(headers: HeaderMap, body: Bytes) -> Response {

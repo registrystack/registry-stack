@@ -2906,36 +2906,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "registry-notary-source-adapter-sidecar"
-version = "0.3.0"
-dependencies = [
- "axum",
- "axum-test",
- "chrono",
- "clap",
- "crosswalk-core",
- "hyper",
- "hyper-util",
- "libc",
- "registry-notary-worker-harness",
- "registry-platform-authcommon",
- "registry-platform-config",
- "registry-platform-ops",
- "reqwest",
- "serde",
- "serde_json",
- "serde_norway",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tough",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "registry-notary-server"
 version = "0.3.0"
 dependencies = [
@@ -2966,6 +2936,7 @@ dependencies = [
  "registry-platform-oid4vci",
  "registry-platform-oidc",
  "registry-platform-ops",
+ "registry-platform-pdp",
  "registry-platform-replay",
  "registry-platform-sdjwt",
  "registry-platform-testing",
@@ -2986,6 +2957,36 @@ dependencies = [
  "utoipa",
  "wiremock",
  "zeroize",
+]
+
+[[package]]
+name = "registry-notary-source-adapter-sidecar"
+version = "0.3.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "chrono",
+ "clap",
+ "crosswalk-core",
+ "hyper",
+ "hyper-util",
+ "libc",
+ "registry-notary-worker-harness",
+ "registry-platform-authcommon",
+ "registry-platform-config",
+ "registry-platform-ops",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tough",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -3141,6 +3142,13 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+]
+
+[[package]]
+name = "registry-platform-pdp"
+version = "0.3.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

@@ -2812,7 +2812,10 @@ fn nonce_response_schema() -> Value {
 fn credential_request_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["format", "proof"],
+        "oneOf": [
+            { "required": ["proof"] },
+            { "required": ["proofs"] }
+        ],
         "properties": {
             "format": { "type": "string", "example": "dc+sd-jwt" },
             "credential_identifier": { "type": "string" },
@@ -2824,6 +2827,17 @@ fn credential_request_schema() -> Value {
                 "properties": {
                     "proof_type": { "type": "string", "example": "jwt" },
                     "jwt": { "type": "string" }
+                },
+                "additionalProperties": false
+            },
+            "proofs": {
+                "type": "object",
+                "properties": {
+                    "jwt": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "minItems": 1
+                    }
                 },
                 "additionalProperties": false
             }
@@ -2838,6 +2852,17 @@ fn credential_response_schema() -> Value {
         "required": ["credential"],
         "properties": {
             "credential": { "type": "string" },
+            "credentials": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["credential"],
+                    "properties": {
+                        "credential": { "type": "string" }
+                    },
+                    "additionalProperties": true
+                }
+            },
             "credential_profile": { "type": "string" },
             "format": { "type": "string" },
             "c_nonce": { "type": "string" },

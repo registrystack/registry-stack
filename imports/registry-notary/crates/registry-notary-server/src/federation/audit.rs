@@ -94,6 +94,8 @@ pub(super) fn federation_audit_event(
         requester_type: None,
         requester_ref_hash: None,
         matching_policy_id: None,
+        matching_policy_hash: None,
+        matching_evaluated_rule_ids: None,
         matching_method: None,
         matching_outcome: None,
         matching_error_code: None,

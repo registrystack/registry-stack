@@ -868,15 +868,24 @@
             ],
             "type": "object"
           },
+          "proofs": {
+            "additionalProperties": false,
+            "properties": {
+              "jwt": {
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
           "vct": {
             "format": "uri",
             "type": "string"
           }
         },
-        "required": [
-          "format",
-          "proof"
-        ],
         "type": "object"
       },
       "CredentialResponse": {
@@ -893,6 +902,21 @@
           },
           "credential_profile": {
             "type": "string"
+          },
+          "credentials": {
+            "items": {
+              "additionalProperties": true,
+              "properties": {
+                "credential": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "credential"
+              ],
+              "type": "object"
+            },
+            "type": "array"
           },
           "format": {
             "type": "string"

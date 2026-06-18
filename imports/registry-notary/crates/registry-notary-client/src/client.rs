@@ -431,7 +431,8 @@ impl RegistryNotaryClient {
         response: &registry_platform_oid4vci::CredentialResponse,
         options: VerifyOptions,
     ) -> Result<VerifiedCredential, VerificationError> {
-        self.verify_sd_jwt_vc(&response.credential, options).await
+        self.verify_sd_jwt_vc(oid4vci_compact_credential(&response.credential)?, options)
+            .await
     }
 
     /// List configured claim definitions with `GET /v1/claims`.
@@ -954,6 +955,20 @@ impl RegistryNotaryClient {
         self.base_url
             .join(path.trim_start_matches('/'))
             .map_err(|err| NotaryClientBuildError::Url(err.to_string()))
+    }
+}
+
+#[cfg(all(feature = "oid4vci", feature = "verifier"))]
+fn oid4vci_compact_credential(
+    credential: &registry_platform_oid4vci::CredentialValue,
+) -> Result<&str, VerificationError> {
+    match credential {
+        registry_platform_oid4vci::CredentialValue::String(compact) => Ok(compact.as_str()),
+        registry_platform_oid4vci::CredentialValue::Object(_) => {
+            Err(VerificationError::UnsupportedCredentialShape {
+                code: "credential.unsupported_shape",
+            })
+        }
     }
 }
 

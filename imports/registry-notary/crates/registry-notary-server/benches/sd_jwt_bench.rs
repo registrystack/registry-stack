@@ -70,6 +70,8 @@ fn claim_result(claim_id: &str, value: serde_json::Value) -> ClaimResultView {
             method: "identifier_exact".to_string(),
             confidence: "high".to_string(),
             score: Some(1.0),
+            policy_hash: None,
+            evaluated_rule_ids: Vec::new(),
         }),
         value: Some(value),
         satisfied: Some(true),

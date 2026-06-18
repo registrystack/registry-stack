@@ -23,7 +23,7 @@ For application and wallet developers calling the API or the SDKs.
 - [Client SDK guide](client-sdk-guide.md): evaluate claims and issue credentials from Rust, Python, and Node.js.
 - [Call Notary from OpenFn](openfn-notary-caller-guide.md): use the Registry Stack OpenFn Notary adaptor to branch a workflow on a minimized claim result or certified value claim.
 - [API reference](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/api-reference.md): the route-to-client-method matrix and the stable problem-code registry.
-- [Wallet interop with OID4VCI](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/oid4vci-wallet-interop.md): the OpenID4VCI wallet facade contract and compatibility checklist.
+- [Wallet interop with OID4VCI](oid4vci-wallet-interop.md): the OpenID4VCI wallet facade contract and compatibility checklist.
 - [SD-JWT VC conformance](sd-jwt-vc-conformance-profile.md): the supported credential wire contract and the explicit non-support list.
 - [OpenCRVS DCI tutorial](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/opencrvs-dci-standalone-tutorial.md): issue local demo SD-JWT VCs from OpenCRVS birth-record evidence.
 - [Scenario patterns](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/notary-scenario-patterns.md): reusable evaluation, federation, and issuance flows with sequence diagrams.
@@ -37,11 +37,11 @@ For operators deploying, configuring, and running a Registry Notary.
 - [Model sources and claims](source-claim-modeling-guide.md): design source connectors, source adapter sidecars, claim boundaries, disclosure, and batch reads.
 - [FHIR source adapter](fhir-source-adapter-guide.md): project bounded FHIR R4 graphs into Notary-ready source facts without exposing raw FHIR Bundles.
 - [Signing key providers](signing-key-provider.md): SD-JWT VC signing-key configuration, rotation, and PKCS#11 setup.
-- [Self-attestation](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/self-attestation-operator-guide.md): citizen OIDC subject binding, token policy, allow-lists, and rollout.
+- [Self-attestation](self-attestation-operator-guide.md): citizen OIDC subject binding, token policy, allow-lists, and rollout.
 - [Federated evaluation](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/federated-evaluation-operator-guide.md): static-peer setup, environment variables, and the replay limitation.
 - [Credential lifecycle and status](credential-lifecycle-status.md): short-lived credentials, optional live status, retention, and verifier caveats.
 - [Sidecar trust and secret handling](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/sidecar-trust-and-secrets.md): how the source adapter sidecar verifies its configuration, how Notary pins the sidecar it trusts, how secrets are handled, and what that path does and does not protect against.
-- [Deployment hardening runbook](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/deployment-hardening-runbook.md): production-readiness checklist for network boundaries, secrets, Redis, audit, and rollback.
+- [Deployment hardening runbook](deployment-hardening-runbook.md): production-readiness checklist for network boundaries, secrets, Redis, audit, and rollback.
 
 ## Build and maintain
 

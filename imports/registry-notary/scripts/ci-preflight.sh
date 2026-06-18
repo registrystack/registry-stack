@@ -93,6 +93,18 @@ checkout_ref() {
   local source="${!env_name:-$default_source}"
   local clone_source=""
 
+  if [[ "${CI_PREFLIGHT_USE_WORKTREE:-0}" == "1" && -d "${source}/.git" ]]; then
+    echo "==> registry-notary: using ${label} working tree from ${source}"
+    echo "==> registry-notary: clean CI still checks out ${label} ${ref} from ${repository}"
+    run rsync -a \
+      --exclude '/.git' \
+      --exclude '/target' \
+      "${source}/" \
+      "${destination}/"
+    [[ -f "${destination}/Cargo.toml" ]] || fail "${label} working tree is missing Cargo.toml"
+    return
+  fi
+
   if [[ -d "${source}/.git" ]] && git -C "$source" cat-file -e "${ref}^{commit}" 2>/dev/null; then
     clone_source="$source"
   else

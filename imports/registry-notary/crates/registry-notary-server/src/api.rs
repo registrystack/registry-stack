@@ -47,16 +47,21 @@ use registry_platform_crypto::SigningProvider;
 use registry_platform_oid4vci::{
     consume_validated_proof_nonce_once, validate_proof_jwt, CredentialConfigurationMetadata,
     CredentialIssuerMetadata, CredentialOffer, CredentialRequest as Oid4vciCredentialRequest,
-    CredentialResponse as Oid4vciCredentialResponse, DisplayImageMetadata, DisplayMetadata,
-    NonceRequest as Oid4vciNonceRequest, NonceResponse, ProofValidationPolicy,
-    TokenRequest as Oid4vciTokenRequest, TokenResponse as Oid4vciTokenResponse, TxCode,
-    ValidatedProof, WireError, PRE_AUTHORIZED_CODE_GRANT_TYPE, PROOF_TYPE_JWT, SD_JWT_VC_FORMAT,
+    CredentialResponse as Oid4vciCredentialResponse, CredentialResponseCredential,
+    DisplayImageMetadata, DisplayMetadata, NonceRequest as Oid4vciNonceRequest, NonceResponse,
+    ProofValidationPolicy, TokenRequest as Oid4vciTokenRequest,
+    TokenResponse as Oid4vciTokenResponse, TxCode, ValidatedProof, WireError,
+    PRE_AUTHORIZED_CODE_GRANT_TYPE, PROOF_TYPE_JWT, SD_JWT_VC_FORMAT,
 };
 use registry_platform_ops::{
     internal_config_hash, posture_safe_runtime_config_hash, AntiRollbackKey, AntiRollbackProposal,
     AntiRollbackRecord, AntiRollbackStoreError, ApplyReportResult, BreakGlassApproval,
     BreakGlassRateLimit, ConfigSource, FileAntiRollbackStore, FileLocalApprovalStore,
     LocalApprovalStoreError, LocalOperatorApproval, PostureApplyResult,
+};
+use registry_platform_pdp::{
+    decide as pdp_decide, Decision as PdpDecision, EvidenceRequestContext as PdpRequestContext,
+    PolicyInput as PdpPolicyInput,
 };
 use registry_platform_replay::{ReplayKey, ReplayScope, ReplayStoreError, RequiredReplayError};
 use registry_platform_sdjwt::{validate_holder_proof, HolderProofBindings, HolderProofPolicy};
@@ -76,14 +81,17 @@ use crate::config_governed::{
 };
 use crate::{
     credential_profile_for,
-    credential_status::{is_mutable_status, CredentialStatusStore},
+    credential_status::{is_mutable_status, CredentialStatusStore, CredentialStatusStoreError},
     format_time,
     metrics::AppMetrics,
     openapi_document,
     posture::{posture_document, PostureContext, PostureDocumentError},
     preauth_state::{LoginState, SingleUseReserveError},
     replay::{require_replay_insert, ReplayReadiness, ReplayStores},
-    runtime::claim_ids,
+    runtime::{
+        claim_ids, find_claim, find_claim_version, matching_policy_audit_identity,
+        MatchingPolicyAuditIdentity,
+    },
     standalone::{
         constant_time_eq, generate_numeric_tx_code, generate_opaque_token, pkce_s256_challenge,
         pre_auth_audit_event, AuthAuditState, PreAuthAuditFields, PreAuthRuntime,
@@ -2554,6 +2562,18 @@ fn config_apply_unavailable(detail: &'static str) -> Response {
         .into_response()
 }
 
+fn oid4vci_single_proof_jwt(request: &Oid4vciCredentialRequest) -> Result<&str, Oid4vciWireError> {
+    match request.proof_jwts() {
+        [proof] if !proof.is_empty() => {
+            if request.proofs.jwt.is_empty() && request.proof.proof_type != PROOF_TYPE_JWT {
+                return Err(Oid4vciWireError::InvalidProof);
+            }
+            Ok(proof.as_str())
+        }
+        _ => Err(Oid4vciWireError::InvalidProof),
+    }
+}
+
 pub async fn oid4vci_proof_precheck_middleware(
     State(state): State<Arc<RegistryNotaryApiState>>,
     request: Request<Body>,
@@ -2574,11 +2594,12 @@ pub async fn oid4vci_proof_precheck_middleware(
         Ok(request) => request,
         Err(_) => return oid4vci_error_response(Oid4vciWireError::InvalidRequest),
     };
-    if request.proof.proof_type != PROOF_TYPE_JWT {
-        return oid4vci_error_response(Oid4vciWireError::InvalidProof);
-    }
+    let proof_jwt = match oid4vci_single_proof_jwt(&request) {
+        Ok(proof_jwt) => proof_jwt,
+        Err(error) => return oid4vci_error_response(error),
+    };
     let expected_nonce = if state.oid4vci.nonce.enabled {
-        match oid4vci_proof_nonce(&request.proof.jwt) {
+        match oid4vci_proof_nonce(proof_jwt) {
             Ok(nonce) => Some(nonce),
             Err(error) => return oid4vci_error_response(error),
         }
@@ -2586,7 +2607,7 @@ pub async fn oid4vci_proof_precheck_middleware(
         None
     };
     let validated_proof = match validate_proof_jwt(
-        &request.proof.jwt,
+        proof_jwt,
         &ProofValidationPolicy::credential_endpoint(
             &state.oid4vci.credential_issuer,
             expected_nonce.as_deref(),
@@ -3047,6 +3068,12 @@ async fn update_credential_status(
             "credential_status.not_found",
             "Credential status not found",
             "credential status record was not found",
+        ),
+        Err(CredentialStatusStoreError::InvalidTransition) => credential_status_problem(
+            StatusCode::CONFLICT,
+            "credential_status.invalid_transition",
+            "Invalid credential status transition",
+            "revoked credential status is terminal",
         ),
         Err(_) => credential_status_problem(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -3616,6 +3643,8 @@ pub struct EvidenceAuditContext {
     pub requester_type: Option<String>,
     pub requester_ref_hash: Option<Hashed<EvidenceEntityReference>>,
     pub matching_policy_id: Option<String>,
+    pub matching_policy_hash: Option<Hashed<PolicyIdentifier>>,
+    pub matching_evaluated_rule_ids: Option<Vec<String>>,
     pub matching_method: Option<String>,
     pub matching_outcome: Option<String>,
     pub matching_error_code: Option<String>,
@@ -3682,7 +3711,10 @@ async fn oid4vci_issuer_metadata(
     if !state.oid4vci.enabled {
         return StatusCode::NOT_FOUND.into_response();
     }
-    Json(oid4vci_metadata(&state.oid4vci)).into_response()
+    match oid4vci_metadata(&state.oid4vci, &state.evidence) {
+        Ok(metadata) => Json(metadata).into_response(),
+        Err(error) => oid4vci_error_response(error),
+    }
 }
 
 async fn oid4vci_credential_offer(
@@ -3905,8 +3937,11 @@ async fn oid4vci_credential(
     if let Err(error) = require_oid4vci_token_audience(&state.oid4vci, &principal) {
         return oid4vci_error_response(error);
     }
-    if request.format != SD_JWT_VC_FORMAT || request.proof.proof_type != PROOF_TYPE_JWT {
+    if request.format != SD_JWT_VC_FORMAT {
         return oid4vci_error_response(Oid4vciWireError::UnsupportedCredentialType);
+    }
+    if let Err(error) = oid4vci_single_proof_jwt(&request) {
+        return oid4vci_error_response(error);
     }
     let Some(Extension(validated_proof)) = validated_proof else {
         return oid4vci_error_response(Oid4vciWireError::InvalidProof);
@@ -4184,8 +4219,12 @@ async fn oid4vci_credential(
     } else {
         None
     };
+    let credential = signed.compact;
     let mut response = Json(Oid4vciCredentialResponse {
-        credential: signed.compact,
+        credential: credential.clone().into(),
+        credentials: vec![CredentialResponseCredential {
+            credential: credential.into(),
+        }],
         format: Some(SD_JWT_VC_FORMAT.to_string()),
         c_nonce: next_nonce,
         c_nonce_expires_in: state
@@ -5473,6 +5512,7 @@ async fn evaluate(
                 &audit_request,
                 results.first(),
                 None,
+                None,
             ) {
                 return evidence_error_response(error);
             }
@@ -5480,6 +5520,8 @@ async fn evaluate(
         }
         Err(error) => {
             let audit_code = error.audit_code();
+            let denied_matching_policy =
+                denied_matching_policy_audit_identity(evidence, &audit_request, Some(audit_code));
             let mut response = evidence_error_response(error);
             attach_evidence_audit(
                 &mut response,
@@ -5494,6 +5536,7 @@ async fn evaluate(
                 &audit_request,
                 None,
                 Some(audit_code),
+                denied_matching_policy.as_ref(),
             ) {
                 return evidence_error_response(error);
             }
@@ -5566,6 +5609,7 @@ async fn batch_evaluate(
         request.purpose.as_deref(),
         &request.items,
     );
+    let audit_request = request.clone();
     let evaluation_future = runtime.batch_evaluate(
         Arc::clone(&state.evidence),
         Arc::clone(&state.source),
@@ -5598,6 +5642,8 @@ async fn batch_evaluate(
             if let Err(error) = attach_batch_evaluate_response_audit(
                 &mut response,
                 &state.self_attestation_rate_keys,
+                evidence,
+                &audit_request,
                 &result,
                 batch_audit_purposes.as_deref(),
             ) {
@@ -6147,7 +6193,10 @@ fn oid4vci_error_from_evidence(error: &EvidenceError) -> Oid4vciWireError {
     }
 }
 
-fn oid4vci_metadata(config: &Oid4vciConfig) -> CredentialIssuerMetadata {
+fn oid4vci_metadata(
+    config: &Oid4vciConfig,
+    evidence: &EvidenceConfig,
+) -> Result<CredentialIssuerMetadata, Oid4vciWireError> {
     let metadata = CredentialIssuerMetadata::new(
         config.credential_issuer.clone(),
         config.credential_endpoint.clone(),
@@ -6160,8 +6209,11 @@ fn oid4vci_metadata(config: &Oid4vciConfig) -> CredentialIssuerMetadata {
         config
             .credential_configurations
             .iter()
-            .map(|(id, configuration)| (id.clone(), oid4vci_configuration_metadata(configuration)))
-            .collect(),
+            .map(|(id, configuration)| {
+                oid4vci_configuration_metadata(configuration, evidence)
+                    .map(|metadata| (id.clone(), metadata))
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?,
     )
     .with_display(oid4vci_issuer_display_metadata(&config.display));
     // When the pre-authorized-code flow is enabled the Notary is its own
@@ -6171,13 +6223,15 @@ fn oid4vci_metadata(config: &Oid4vciConfig) -> CredentialIssuerMetadata {
     // per-offer (see the offer/callback handler); the `token_endpoint` is the
     // metadata signal that the issuer accepts that grant directly. When the
     // flow is disabled there is no token endpoint and metadata is unchanged.
-    match (
-        config.pre_authorized_code.enabled,
-        oid4vci_token_endpoint_url(config),
-    ) {
-        (true, Some(token_endpoint)) => metadata.with_token_endpoint(token_endpoint),
-        _ => metadata,
-    }
+    Ok(
+        match (
+            config.pre_authorized_code.enabled,
+            oid4vci_token_endpoint_url(config),
+        ) {
+            (true, Some(token_endpoint)) => metadata.with_token_endpoint(token_endpoint),
+            _ => metadata,
+        },
+    )
 }
 
 /// The Notary's own OID4VCI token endpoint URL: the credential-issuer base with
@@ -6192,17 +6246,36 @@ fn oid4vci_token_endpoint_url(config: &Oid4vciConfig) -> Option<String> {
 
 fn oid4vci_configuration_metadata(
     configuration: &Oid4vciCredentialConfigurationConfig,
-) -> CredentialConfigurationMetadata {
-    let mut metadata = CredentialConfigurationMetadata::sd_jwt_vc(
+    evidence: &EvidenceConfig,
+) -> Result<CredentialConfigurationMetadata, Oid4vciWireError> {
+    let credential_signing_alg = oid4vci_credential_signing_alg(configuration, evidence)?;
+    let mut metadata = CredentialConfigurationMetadata::sd_jwt_vc_with_algs(
         configuration.scope.clone(),
         configuration
             .cryptographic_binding_methods_supported
             .clone(),
+        vec![credential_signing_alg],
+        configuration.proof_signing_alg_values_supported.clone(),
         configuration.display_name.clone(),
         configuration.vct.clone(),
     );
     metadata.display = vec![oid4vci_credential_display_metadata(configuration)];
-    metadata
+    Ok(metadata)
+}
+
+fn oid4vci_credential_signing_alg(
+    configuration: &Oid4vciCredentialConfigurationConfig,
+    evidence: &EvidenceConfig,
+) -> Result<String, Oid4vciWireError> {
+    let profile = evidence
+        .credential_profiles
+        .get(&configuration.credential_profile)
+        .ok_or(Oid4vciWireError::ServerError)?;
+    let signing_key = evidence
+        .signing_keys
+        .get(&profile.signing_key)
+        .ok_or(Oid4vciWireError::ServerError)?;
+    Ok(signing_key.alg.clone())
 }
 
 fn oid4vci_type_metadata_document(configuration: &Oid4vciCredentialConfigurationConfig) -> Value {
@@ -7179,20 +7252,6 @@ fn require_self_attestation_token_policy(
         .verified_claims
         .as_ref()
         .ok_or(EvidenceError::SelfAttestationInvalidToken)?;
-    if !config.token_policy.required_acr_values.is_empty() {
-        let acr = claims
-            .acr
-            .as_ref()
-            .ok_or(EvidenceError::SelfAttestationAssuranceDenied)?;
-        if !config
-            .token_policy
-            .required_acr_values
-            .iter()
-            .any(|allowed| allowed == acr.as_str())
-        {
-            return Err(EvidenceError::SelfAttestationAssuranceDenied);
-        }
-    }
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let leeway = config.token_policy.max_clock_leeway_seconds as i64;
     let auth_time = claims
@@ -7204,6 +7263,13 @@ fn require_self_attestation_token_policy(
     if now.saturating_sub(auth_time) > config.token_policy.max_auth_age_seconds as i64 + leeway {
         return Err(EvidenceError::SelfAttestationAssuranceDenied);
     }
+    require_self_attestation_pdp_decision(
+        config,
+        claims.acr.as_ref().map(|acr| acr.as_str()),
+        now,
+        auth_time,
+        leeway,
+    )?;
     let exp = claims
         .exp
         .ok_or(EvidenceError::SelfAttestationInvalidToken)?;
@@ -7220,6 +7286,59 @@ fn require_self_attestation_token_policy(
         return Err(EvidenceError::SelfAttestationAssuranceDenied);
     }
     Ok(())
+}
+
+fn require_self_attestation_pdp_decision(
+    config: &SelfAttestationConfig,
+    acr: Option<&str>,
+    now: i64,
+    auth_time: i64,
+    leeway: i64,
+) -> Result<(), EvidenceError> {
+    let observed_age = now
+        .saturating_sub(auth_time)
+        .try_into()
+        .ok()
+        .unwrap_or_default();
+    let context = PdpRequestContext {
+        purpose: "self_attestation".to_string(),
+        legal_basis_ref: None,
+        consent_ref: None,
+        asserted_assurance: acr.map(str::to_string),
+        jurisdiction: None,
+        source_observed_age_seconds: Some(observed_age),
+    };
+    let policy = PdpPolicyInput {
+        policy_id: "self-attestation".to_string(),
+        policy_hash: self_attestation_token_policy_hash(config)?,
+        rule_ids: vec!["self-attestation-token-policy".to_string()],
+        purpose_constraints: Vec::new(),
+        permitted_jurisdictions: Vec::new(),
+        allowed_assurance: config.token_policy.required_acr_values.clone(),
+        minimum_assurance: None,
+        max_source_age_seconds: Some(config.token_policy.max_auth_age_seconds + leeway as u64),
+        require_legal_basis: false,
+        require_consent: false,
+        redaction_fields: Default::default(),
+        unsupported_odrl_terms: Vec::new(),
+    };
+    match pdp_decide(&context, &policy) {
+        PdpDecision::Permit(_) | PdpDecision::PermitWithRedaction { .. } => Ok(()),
+        PdpDecision::Deny { .. } => Err(EvidenceError::SelfAttestationAssuranceDenied),
+    }
+}
+
+fn self_attestation_token_policy_hash(
+    config: &SelfAttestationConfig,
+) -> Result<String, EvidenceError> {
+    let canonical = json!({
+        "required_acr_values": config.token_policy.required_acr_values,
+        "assurance_claim_source": config.token_policy.assurance_claim_source,
+        "max_auth_age_seconds": config.token_policy.max_auth_age_seconds,
+        "max_clock_leeway_seconds": config.token_policy.max_clock_leeway_seconds,
+    });
+    let bytes = serde_json::to_vec(&canonical).map_err(|_| EvidenceError::InvalidRequest)?;
+    Ok(format!("sha256:{}", hex_encode(&Sha256::digest(bytes))))
 }
 
 fn require_self_attestation_credential_profile_policy(
@@ -7484,6 +7603,7 @@ fn attach_evaluate_request_audit(
     request: &EvaluateRequest,
     result: Option<&ClaimResultView>,
     matching_error_code: Option<&str>,
+    denied_matching_policy: Option<&MatchingPolicyAuditIdentity>,
 ) -> Result<(), EvidenceError> {
     let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() else {
         return Ok(());
@@ -7529,10 +7649,24 @@ fn attach_evaluate_request_audit(
     }
     if let Some(matching) = result.and_then(|result| result.matching.as_ref()) {
         audit.matching_policy_id = Some(matching.policy_id.clone());
+        audit.matching_policy_hash = matching
+            .policy_hash
+            .as_ref()
+            .map(|hash| Hashed::<PolicyIdentifier>::from_hash(hash.clone()));
+        audit.matching_evaluated_rule_ids =
+            (!matching.evaluated_rule_ids.is_empty()).then(|| matching.evaluated_rule_ids.clone());
         audit.matching_method = Some(matching.method.clone());
         audit.matching_outcome = Some("matched".to_string());
     } else if let Some(error_code) = matching_error_code.filter(|code| is_matching_audit_code(code))
     {
+        if let Some(policy) = denied_matching_policy {
+            audit.matching_policy_id = Some(policy.policy_id.clone());
+            audit.matching_policy_hash = Some(Hashed::<PolicyIdentifier>::from_hash(
+                policy.policy_hash.clone(),
+            ));
+            audit.matching_evaluated_rule_ids =
+                (!policy.evaluated_rule_ids.is_empty()).then(|| policy.evaluated_rule_ids.clone());
+        }
         audit.matching_outcome = Some("error".to_string());
         audit.matching_error_code = Some(error_code.to_string());
     }
@@ -7542,6 +7676,8 @@ fn attach_evaluate_request_audit(
 fn attach_batch_evaluate_response_audit(
     response: &mut Response,
     keys: &SelfAttestationRateLimitKeys,
+    evidence: &EvidenceConfig,
+    request: &BatchEvaluateRequest,
     result: &registry_notary_core::BatchEvaluateResponse,
     audit_purposes: Option<&[String]>,
 ) -> Result<(), EvidenceError> {
@@ -7560,6 +7696,14 @@ fn attach_batch_evaluate_response_audit(
             .filter(|code| is_matching_audit_code(code))
             .map(str::to_string);
         let matching = item.matching.as_ref();
+        let denied_matching_policy = matching_error_code.as_deref().and_then(|code| {
+            denied_batch_item_matching_policy_audit_identity(
+                evidence,
+                request,
+                item.input_index,
+                code,
+            )
+        });
         batch_items.push(EvidenceBatchItemAuditEvent {
             input_index: item.input_index,
             target_type: Some(item.target_ref.entity_type.clone())
@@ -7593,7 +7737,30 @@ fn attach_batch_evaluate_response_audit(
                     )
                 })
                 .transpose()?,
-            matching_policy_id: matching.map(|matching| matching.policy_id.clone()),
+            matching_policy_id: matching
+                .map(|matching| matching.policy_id.clone())
+                .or_else(|| {
+                    denied_matching_policy
+                        .as_ref()
+                        .map(|policy| policy.policy_id.clone())
+                }),
+            matching_policy_hash: matching
+                .and_then(|matching| matching.policy_hash.as_ref())
+                .map(|hash| Hashed::<PolicyIdentifier>::from_hash(hash.clone()))
+                .or_else(|| {
+                    denied_matching_policy.as_ref().map(|policy| {
+                        Hashed::<PolicyIdentifier>::from_hash(policy.policy_hash.clone())
+                    })
+                }),
+            matching_evaluated_rule_ids: matching
+                .map(|matching| matching.evaluated_rule_ids.clone())
+                .filter(|rule_ids| !rule_ids.is_empty())
+                .or_else(|| {
+                    denied_matching_policy
+                        .as_ref()
+                        .map(|policy| policy.evaluated_rule_ids.clone())
+                        .filter(|rule_ids| !rule_ids.is_empty())
+                }),
             matching_method: matching.map(|matching| matching.method.clone()),
             matching_outcome: if item.errors.is_empty() {
                 Some("matched".to_string())
@@ -7607,6 +7774,26 @@ fn attach_batch_evaluate_response_audit(
     }
     audit.batch_items = Some(batch_items);
     Ok(())
+}
+
+fn denied_batch_item_matching_policy_audit_identity(
+    evidence: &EvidenceConfig,
+    request: &BatchEvaluateRequest,
+    input_index: usize,
+    matching_error_code: &str,
+) -> Option<MatchingPolicyAuditIdentity> {
+    let item = request.items.get(input_index)?;
+    let evaluate_request = EvaluateRequest {
+        requester: item.requester.clone(),
+        target: Some(item.target.clone()),
+        relationship: item.relationship.clone(),
+        on_behalf_of: item.on_behalf_of.clone(),
+        claims: request.claims.clone(),
+        disclosure: request.disclosure.clone(),
+        format: request.format.clone(),
+        purpose: item.purpose.clone().or_else(|| request.purpose.clone()),
+    };
+    denied_matching_policy_audit_identity(evidence, &evaluate_request, Some(matching_error_code))
 }
 
 fn hash_audit_handle(
@@ -7702,7 +7889,80 @@ fn is_matching_audit_code(code: &str) -> bool {
     code.starts_with("target.")
         || code.starts_with("requester.")
         || code.starts_with("relationship.")
+        || code.starts_with("pdp.")
         || matches!(code, "purpose.not_allowed" | "evidence.not_available")
+}
+
+fn denied_matching_policy_audit_identity(
+    evidence: &EvidenceConfig,
+    request: &EvaluateRequest,
+    matching_error_code: Option<&str>,
+) -> Option<MatchingPolicyAuditIdentity> {
+    matching_error_code.filter(|code| is_matching_policy_provenance_code(code))?;
+    let context = request.request_context()?;
+    request.claims.iter().find_map(|claim_ref| {
+        let claim = match claim_ref.version.as_deref() {
+            Some(version) => find_claim_version(evidence, claim_ref.id.as_str(), version).ok()?,
+            None => find_claim(evidence, claim_ref.id.as_str()).ok()?,
+        };
+        if let Some(binding) = claim_rule_source_id(claim)
+            .and_then(|source| claim.source_bindings.get(source))
+            .filter(|binding| source_binding_matches_request(binding, &context))
+        {
+            return Some(matching_policy_audit_identity(evidence, binding));
+        }
+        claim
+            .source_bindings
+            .values()
+            .find(|binding| source_binding_matches_request(binding, &context))
+            .or_else(|| {
+                (claim.source_bindings.len() == 1).then(|| {
+                    claim
+                        .source_bindings
+                        .values()
+                        .next()
+                        .expect("single source binding exists")
+                })
+            })
+            .map(|binding| matching_policy_audit_identity(evidence, binding))
+    })
+}
+
+fn claim_rule_source_id(claim: &registry_notary_core::ClaimDefinition) -> Option<&str> {
+    match &claim.rule {
+        registry_notary_core::RuleConfig::Extract { source, .. }
+        | registry_notary_core::RuleConfig::Exists { source } => Some(source.as_str()),
+        registry_notary_core::RuleConfig::Cel { .. }
+        | registry_notary_core::RuleConfig::Plugin { .. } => None,
+    }
+}
+
+fn source_binding_matches_request(
+    binding: &registry_notary_core::SourceBindingConfig,
+    context: &registry_notary_core::EvidenceRequestContext,
+) -> bool {
+    if binding.query_fields.is_empty() {
+        return context
+            .lookup_value(binding.lookup.input.as_str())
+            .is_some();
+    }
+    binding
+        .query_fields
+        .iter()
+        .all(|field| context.lookup_value(field.input.as_str()).is_some())
+}
+
+fn is_matching_policy_provenance_code(code: &str) -> bool {
+    if code.starts_with("pdp.") {
+        return true;
+    }
+    matches!(
+        code,
+        "purpose.not_allowed"
+            | "target.matching_policy_rejected"
+            | "requester.matching_policy_rejected"
+            | "relationship.policy_rejected"
+    )
 }
 
 struct SelfAttestationCredentialAuditDetails<'a> {
@@ -7991,6 +8251,7 @@ pub(crate) fn evidence_status(error: &EvidenceError) -> StatusCode {
         EvidenceError::DisclosureNotAllowed
         | EvidenceError::EvaluationBindingMismatch
         | EvidenceError::PurposeNotAllowed
+        | EvidenceError::PolicyDenied { .. }
         | EvidenceError::RequesterReauthenticationRequired
         | EvidenceError::RequesterMatchingPolicyRejected
         | EvidenceError::TargetMatchingPolicyRejected
@@ -8046,6 +8307,7 @@ pub(crate) fn evidence_title(error: &EvidenceError) -> &'static str {
         EvidenceError::RelationshipPolicyRejected => "Relationship policy rejected",
         EvidenceError::RelationshipPurposeNotAllowed => "Relationship purpose not allowed",
         EvidenceError::PurposeNotAllowed => "Purpose not allowed",
+        EvidenceError::PolicyDenied { .. } => "Policy decision denied",
         EvidenceError::ProfileUnsupported => "Profile unsupported",
         EvidenceError::EvidenceNotAvailable
         | EvidenceError::MatchingEvidenceNotAvailable { .. } => "Evidence not available",
@@ -8125,6 +8387,7 @@ pub(crate) fn evidence_detail(error: &EvidenceError) -> &'static str {
             "the requester-target relationship is not allowed for the declared purpose"
         }
         EvidenceError::PurposeNotAllowed => "the declared purpose is not allowed",
+        EvidenceError::PolicyDenied { .. } => "the configured policy denied the evidence request",
         EvidenceError::ProfileUnsupported => "the requested profile is not supported",
         EvidenceError::EvidenceNotAvailable
         | EvidenceError::MatchingEvidenceNotAvailable { .. } => "the evidence is not available",
@@ -9164,10 +9427,52 @@ mod tests {
         .expect("oid4vci config parses")
     }
 
+    fn oid4vci_evidence_config() -> EvidenceConfig {
+        let mut evidence = evidence_config();
+        let claim = evidence.claims.first_mut().expect("claim exists");
+        claim.formats.push(FORMAT_SD_JWT_VC.to_string());
+        claim
+            .credential_profiles
+            .push("civil_status_sd_jwt".to_string());
+        evidence.signing_keys.insert(
+            "issuer-key".to_string(),
+            serde_json::from_value(json!({
+                "provider": "local_jwk_env",
+                "private_jwk_env": "ISSUER_KEY",
+                "alg": "EdDSA",
+                "kid": "did:web:issuer.example#key-1",
+                "status": "active"
+            }))
+            .expect("signing key parses"),
+        );
+        evidence.credential_profiles.insert(
+            "civil_status_sd_jwt".to_string(),
+            serde_json::from_value(json!({
+                "format": FORMAT_SD_JWT_VC,
+                "issuer": "did:web:issuer.example",
+                "signing_key": "issuer-key",
+                "vct": "https://issuer.example/credentials/civil-status",
+                "validity_seconds": 600,
+                "holder_binding": {
+                    "mode": "did",
+                    "proof_of_possession": "required",
+                    "allowed_did_methods": ["did:jwk"]
+                },
+                "allowed_claims": ["person-is-alive"],
+                "disclosure": { "allowed": ["predicate"] }
+            }))
+            .expect("credential profile parses"),
+        );
+        evidence
+    }
+
     #[test]
     fn oid4vci_metadata_is_public_but_not_operationally_leaky() {
-        let metadata =
-            serde_json::to_value(oid4vci_metadata(&oid4vci_config())).expect("metadata serializes");
+        let evidence = oid4vci_evidence_config();
+        let metadata = serde_json::to_value(
+            oid4vci_metadata(&oid4vci_config(), &evidence).expect("metadata builds"),
+        )
+        .expect("metadata serializes");
 
         assert_eq!(
             metadata["credential_endpoint"],
@@ -9208,18 +9513,52 @@ mod tests {
         );
         assert_eq!(
             metadata["credential_configurations_supported"]["person_is_alive_sd_jwt"]
+                ["credential_signing_alg_values_supported"][0],
+            "EdDSA"
+        );
+        assert_eq!(
+            metadata["credential_configurations_supported"]["person_is_alive_sd_jwt"]
                 ["proof_types_supported"]["jwt"]["proof_signing_alg_values_supported"][0],
             "EdDSA"
         );
         let mut without_nonce = oid4vci_config();
         without_nonce.nonce.enabled = false;
-        let without_nonce =
-            serde_json::to_value(oid4vci_metadata(&without_nonce)).expect("metadata serializes");
+        let without_nonce = serde_json::to_value(
+            oid4vci_metadata(&without_nonce, &evidence).expect("metadata builds"),
+        )
+        .expect("metadata serializes");
         assert!(without_nonce.get("nonce_endpoint").is_none());
         let text = metadata.to_string();
         assert!(!text.contains("token_env"));
         assert!(!text.contains("source_connections"));
         assert!(!text.contains("NAT-123"));
+    }
+
+    #[test]
+    fn oid4vci_metadata_advertises_configured_credential_signing_alg() {
+        let oid4vci = oid4vci_config();
+        let mut evidence = oid4vci_evidence_config();
+        evidence
+            .signing_keys
+            .get_mut("issuer-key")
+            .expect("issuer key exists")
+            .alg = "RS256".to_string();
+
+        let metadata =
+            serde_json::to_value(oid4vci_metadata(&oid4vci, &evidence).expect("metadata builds"))
+                .expect("metadata serializes");
+        let configuration =
+            &metadata["credential_configurations_supported"]["person_is_alive_sd_jwt"];
+
+        assert_eq!(
+            configuration["credential_signing_alg_values_supported"],
+            json!(["RS256"])
+        );
+        assert_eq!(
+            configuration["proof_types_supported"]["jwt"]["proof_signing_alg_values_supported"],
+            json!(["EdDSA"]),
+            "holder proof algorithms stay independent from issuer signing algorithms"
+        );
     }
 
     #[test]
@@ -9243,8 +9582,10 @@ mod tests {
         // wallet sees an authorization_code-only issuer.
         let disabled = oid4vci_config();
         assert!(!disabled.pre_authorized_code.enabled);
+        let evidence = oid4vci_evidence_config();
         let disabled_metadata =
-            serde_json::to_value(oid4vci_metadata(&disabled)).expect("metadata serializes");
+            serde_json::to_value(oid4vci_metadata(&disabled, &evidence).expect("metadata builds"))
+                .expect("metadata serializes");
         assert!(
             disabled_metadata.get("token_endpoint").is_none(),
             "disabled pre-auth must not advertise a token endpoint"
@@ -9255,7 +9596,8 @@ mod tests {
         let mut enabled = oid4vci_config();
         enabled.pre_authorized_code.enabled = true;
         let enabled_metadata =
-            serde_json::to_value(oid4vci_metadata(&enabled)).expect("metadata serializes");
+            serde_json::to_value(oid4vci_metadata(&enabled, &evidence).expect("metadata builds"))
+                .expect("metadata serializes");
         assert_eq!(
             enabled_metadata["token_endpoint"],
             json!("http://127.0.0.1:4325/oid4vci/token"),
@@ -9362,6 +9704,7 @@ mod tests {
                     proof_type: PROOF_TYPE_JWT.to_string(),
                     jwt: sign_oid4vci_proof_without_nonce(&state.oid4vci.credential_issuer),
                 },
+                proofs: registry_platform_oid4vci::CredentialRequestProofs::default(),
             }),
         )
         .await;
@@ -9396,6 +9739,7 @@ mod tests {
                     proof_type: PROOF_TYPE_JWT.to_string(),
                     jwt: proof_without_nonce,
                 },
+                proofs: registry_platform_oid4vci::CredentialRequestProofs::default(),
             }),
         )
         .await;
@@ -9441,6 +9785,7 @@ mod tests {
                 proof_type: PROOF_TYPE_JWT.to_string(),
                 jwt: proof.clone(),
             },
+            proofs: registry_platform_oid4vci::CredentialRequestProofs::default(),
         };
         let validated_proof = validated_oid4vci_proof(&state, &proof, Some(nonce));
 
@@ -9585,6 +9930,7 @@ mod tests {
                     proof_type: PROOF_TYPE_JWT.to_string(),
                     jwt: proof,
                 },
+                proofs: registry_platform_oid4vci::CredentialRequestProofs::default(),
             }),
         )
         .await;
@@ -9603,6 +9949,34 @@ mod tests {
     }
 
     #[test]
+    fn oid4vci_single_proof_jwt_accepts_proofs_array() {
+        let mut request = Oid4vciCredentialRequest {
+            format: SD_JWT_VC_FORMAT.to_string(),
+            credential_identifier: Some("person_is_alive_sd_jwt".to_string()),
+            credential_configuration_id: None,
+            vct: None,
+            proof: registry_platform_oid4vci::CredentialRequestProof {
+                proof_type: String::new(),
+                jwt: String::new(),
+            },
+            proofs: registry_platform_oid4vci::CredentialRequestProofs {
+                jwt: vec!["array-proof.jwt.sig".to_string()],
+            },
+        };
+
+        assert_eq!(
+            oid4vci_single_proof_jwt(&request).expect("single array proof is accepted"),
+            "array-proof.jwt.sig"
+        );
+
+        request.proofs.jwt.push("second-proof.jwt.sig".to_string());
+        assert_eq!(
+            oid4vci_single_proof_jwt(&request),
+            Err(Oid4vciWireError::InvalidProof)
+        );
+    }
+
+    #[test]
     fn oid4vci_credential_request_rejects_ambiguous_configuration_ids() {
         let mut request = Oid4vciCredentialRequest {
             format: SD_JWT_VC_FORMAT.to_string(),
@@ -9613,6 +9987,7 @@ mod tests {
                 proof_type: PROOF_TYPE_JWT.to_string(),
                 jwt: "a.b.c".to_string(),
             },
+            proofs: registry_platform_oid4vci::CredentialRequestProofs::default(),
         };
 
         assert_eq!(
@@ -9702,6 +10077,10 @@ mod tests {
             disclosure: Some("predicate".to_string()),
             format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
             purpose: Some("citizen_self_attestation".to_string()),
+            legal_basis_ref: None,
+            consent_ref: None,
+            jurisdiction: None,
+            assurance_level: None,
             subject: Some(registry_notary_core::EvidenceAuthorizationSubject {
                 binding_claim: SUBJECT_BINDING_CLAIM.to_string(),
                 id_type: "national_id".to_string(),
@@ -10200,6 +10579,31 @@ mod tests {
     }
 
     #[test]
+    fn self_attestation_token_policy_rejects_stale_auth_time() {
+        let config = self_attestation_config();
+        let mut principal = classify_self_attestation_principal(
+            &config,
+            &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        )
+        .expect("citizen principal classifies");
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        principal
+            .verified_claims
+            .as_mut()
+            .expect("test principal has claims")
+            .auth_time = Some(
+            now - config.token_policy.max_auth_age_seconds as i64
+                - config.token_policy.max_clock_leeway_seconds as i64
+                - 1,
+        );
+
+        let err = require_self_attestation_token_policy(&config, &principal)
+            .expect_err("stale auth_time fails closed");
+
+        assert!(matches!(err, EvidenceError::SelfAttestationAssuranceDenied));
+    }
+
+    #[test]
     fn self_attestation_token_policy_rejects_future_iat_and_auth_time() {
         let config = self_attestation_config();
         let principal = classify_self_attestation_principal(
@@ -10357,6 +10761,22 @@ mod tests {
         assert_eq!(
             evidence_status(&EvidenceError::SelfAttestationAssuranceDenied),
             StatusCode::FORBIDDEN
+        );
+    }
+
+    #[test]
+    fn pdp_policy_denials_keep_public_stable_problem_codes() {
+        let error = EvidenceError::PolicyDenied {
+            code: "pdp.assurance_insufficient",
+        };
+
+        assert_eq!(error.code(), "pdp.assurance_insufficient");
+        assert_eq!(error.audit_code(), "pdp.assurance_insufficient");
+        assert_eq!(evidence_status(&error), StatusCode::FORBIDDEN);
+        assert_eq!(evidence_title(&error), "Policy decision denied");
+        assert_eq!(
+            evidence_detail(&error),
+            "the configured policy denied the evidence request"
         );
     }
 
@@ -10666,6 +11086,11 @@ mod tests {
                         method: "configured_lookup".to_string(),
                         confidence: "high".to_string(),
                         score: None,
+                        policy_hash: Some(
+                            "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                                .to_string(),
+                        ),
+                        evaluated_rule_ids: vec!["source-binding-policy:person".to_string()],
                     }),
                     evaluation_id: Some("eval-1".to_string()),
                     status: registry_notary_core::BatchItemStatus::Succeeded,
@@ -10699,6 +11124,33 @@ mod tests {
             },
         };
         let mut response = StatusCode::OK.into_response();
+        let audit_request = BatchEvaluateRequest {
+            items: vec![
+                BatchEvaluateItemRequest {
+                    requester: Some(EvidenceEntity::with_identifier(
+                        "Person",
+                        "national_id",
+                        "NID-REQUESTER",
+                    )),
+                    target: EvidenceEntity::with_identifier("Person", "national_id", "NID-1"),
+                    relationship: None,
+                    on_behalf_of: None,
+                    purpose: None,
+                },
+                BatchEvaluateItemRequest {
+                    requester: None,
+                    target: EvidenceEntity::with_identifier("Person", "national_id", "NID-2"),
+                    relationship: None,
+                    on_behalf_of: None,
+                    purpose: None,
+                },
+            ],
+            claims: vec![ClaimRef::from("person-is-alive")],
+            disclosure: Some("predicate".to_string()),
+            format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+            purpose: Some("program-a".to_string()),
+        };
+        let evidence = EvidenceConfig::default();
         attach_evidence_audit(
             &mut response,
             "batch_evaluate",
@@ -10707,8 +11159,15 @@ mod tests {
             Some(2),
         );
 
-        attach_batch_evaluate_response_audit(&mut response, &keys, &result, None)
-            .expect("batch audit context attaches");
+        attach_batch_evaluate_response_audit(
+            &mut response,
+            &keys,
+            &evidence,
+            &audit_request,
+            &result,
+            None,
+        )
+        .expect("batch audit context attaches");
 
         let audit = response
             .extensions()
@@ -10735,6 +11194,163 @@ mod tests {
         assert!(
             items[1].target_ref_hash.is_none(),
             "failed batch items must not emit durable matched-reference pseudonyms"
+        );
+    }
+
+    #[test]
+    fn batch_audit_preserves_policy_identity_for_matching_policy_rejections() {
+        let keys = SelfAttestationRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
+        let evidence: EvidenceConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "ecosystem_bindings": {
+                "baseline-dpi": {
+                    "profile": "odrl:v1",
+                    "policy_id": "baseline-dpi-policy",
+                    "policy_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+                }
+            },
+            "claims": [{
+                "id": "person-is-alive",
+                "title": "Person is alive",
+                "version": "2026-06",
+                "subject_type": "person",
+                "source_bindings": {
+                    "aa_wrong": {
+                        "connector": "registry_data_api",
+                        "dataset": "civil",
+                        "entity": "person",
+                        "lookup": {
+                            "input": "target.identifiers.national_id",
+                            "field": "national_id",
+                            "op": "eq",
+                            "cardinality": "one"
+                        },
+                        "fields": {
+                            "alive": {
+                                "field": "alive",
+                                "type": "boolean",
+                                "required": true
+                            }
+                        },
+                        "matching": {
+                            "ecosystem_binding": {
+                                "policy_id": "wrong-policy",
+                                "policy_hash": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+                            }
+                        }
+                    },
+                    "zz_civil": {
+                        "connector": "registry_data_api",
+                        "dataset": "civil",
+                        "entity": "person",
+                        "lookup": {
+                            "input": "target.identifiers.national_id",
+                            "field": "national_id",
+                            "op": "eq",
+                            "cardinality": "one"
+                        },
+                        "fields": {
+                            "alive": {
+                                "field": "alive",
+                                "type": "boolean",
+                                "required": true
+                            }
+                        },
+                        "matching": {
+                            "ecosystem_binding": { "id": "baseline-dpi" }
+                        }
+                    }
+                },
+                "rule": { "type": "extract", "source": "zz_civil", "field": "alive" }
+            }]
+        }))
+        .expect("evidence config parses");
+        let request = BatchEvaluateRequest {
+            items: vec![BatchEvaluateItemRequest {
+                requester: None,
+                target: EvidenceEntity::with_identifier("person", "national_id", "NID-TARGET"),
+                relationship: None,
+                on_behalf_of: None,
+                purpose: Some("program-a".to_string()),
+            }],
+            claims: vec![ClaimRef::with_version("person-is-alive", "2026-06")],
+            disclosure: Some("predicate".to_string()),
+            format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+            purpose: None,
+        };
+        let result = registry_notary_core::BatchEvaluateResponse {
+            batch_id: "batch-1".to_string(),
+            status: registry_notary_core::BatchStatus::Completed,
+            claims: vec!["person-is-alive".to_string()],
+            items: vec![registry_notary_core::BatchItemResponse {
+                input_index: 0,
+                target_ref: registry_notary_core::TargetRefView {
+                    entity_type: "person".to_string(),
+                    handle: "rnref:v1:target-handle".to_string(),
+                    identifier_schemes: vec!["national_id".to_string()],
+                    profile: None,
+                },
+                requester_ref: None,
+                matching: None,
+                evaluation_id: None,
+                status: registry_notary_core::BatchItemStatus::Failed,
+                claim_results: Vec::new(),
+                errors: vec![registry_notary_core::BatchItemError {
+                    code: "target.matching_policy_rejected".to_string(),
+                    title: "Target matching policy rejected".to_string(),
+                    retryable: false,
+                    audit_code: None,
+                }],
+            }],
+            summary: registry_notary_core::BatchSummary {
+                succeeded: 0,
+                failed: 1,
+            },
+        };
+        let mut response = StatusCode::OK.into_response();
+        attach_evidence_audit(
+            &mut response,
+            "batch_evaluate",
+            None,
+            &["person-is-alive".to_string()],
+            Some(1),
+        );
+
+        attach_batch_evaluate_response_audit(
+            &mut response,
+            &keys,
+            &evidence,
+            &request,
+            &result,
+            None,
+        )
+        .expect("batch audit context attaches");
+
+        let audit = response
+            .extensions()
+            .get::<EvidenceAuditContext>()
+            .expect("audit context is attached");
+        let item = audit
+            .batch_items
+            .as_ref()
+            .and_then(|items| items.first())
+            .expect("batch item audit is captured");
+        assert_eq!(item.matching_outcome.as_deref(), Some("error"));
+        assert_eq!(
+            item.matching_error_code.as_deref(),
+            Some("target.matching_policy_rejected")
+        );
+        assert_eq!(
+            item.matching_policy_id.as_deref(),
+            Some("baseline-dpi-policy")
+        );
+        assert_eq!(
+            item.matching_policy_hash.as_ref().map(Hashed::as_str),
+            Some("sha256:3333333333333333333333333333333333333333333333333333333333333333")
+        );
+        assert_eq!(
+            item.matching_evaluated_rule_ids.as_deref(),
+            Some(&["source-binding-policy:person".to_string()][..])
         );
     }
 
@@ -10774,6 +11390,11 @@ mod tests {
             method: "configured_lookup".to_string(),
             confidence: "high".to_string(),
             score: None,
+            policy_hash: Some(
+                "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                    .to_string(),
+            ),
+            evaluated_rule_ids: vec!["source-binding-policy:person".to_string()],
         });
         let mut response = StatusCode::OK.into_response();
         attach_evidence_audit(
@@ -10784,7 +11405,7 @@ mod tests {
             Some(1),
         );
 
-        attach_evaluate_request_audit(&mut response, &keys, &request, Some(&result), None)
+        attach_evaluate_request_audit(&mut response, &keys, &request, Some(&result), None, None)
             .expect("audit context attaches");
 
         let audit = response
@@ -10794,6 +11415,14 @@ mod tests {
         assert_eq!(audit.target_type.as_deref(), Some("Person"));
         assert_eq!(audit.requester_type.as_deref(), Some("Person"));
         assert_eq!(audit.matching_policy_id.as_deref(), Some("policy-v1"));
+        assert_eq!(
+            audit.matching_policy_hash.as_ref().map(Hashed::as_str),
+            Some("sha256:1111111111111111111111111111111111111111111111111111111111111111")
+        );
+        assert_eq!(
+            audit.matching_evaluated_rule_ids.as_deref(),
+            Some(&["source-binding-policy:person".to_string()][..])
+        );
         assert_eq!(audit.matching_method.as_deref(), Some("configured_lookup"));
         assert_eq!(audit.matching_outcome.as_deref(), Some("matched"));
         let target_hash = audit
@@ -10860,6 +11489,8 @@ mod tests {
             method: "configured_lookup".to_string(),
             confidence: "high".to_string(),
             score: None,
+            policy_hash: None,
+            evaluated_rule_ids: Vec::new(),
         });
         let mut response = StatusCode::OK.into_response();
 
@@ -10926,7 +11557,14 @@ mod tests {
             &keys,
             &request,
             None,
-            Some("target.attributes_insufficient"),
+            Some("target.matching_policy_rejected"),
+            Some(&MatchingPolicyAuditIdentity {
+                policy_id: "notary.source_binding.default.civil.person".to_string(),
+                policy_hash:
+                    "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                        .to_string(),
+                evaluated_rule_ids: vec!["source-binding-policy:person".to_string()],
+            }),
         )
         .expect("audit context attaches");
 
@@ -10938,7 +11576,19 @@ mod tests {
         assert_eq!(audit.matching_outcome.as_deref(), Some("error"));
         assert_eq!(
             audit.matching_error_code.as_deref(),
-            Some("target.attributes_insufficient")
+            Some("target.matching_policy_rejected")
+        );
+        assert_eq!(
+            audit.matching_policy_id.as_deref(),
+            Some("notary.source_binding.default.civil.person")
+        );
+        assert_eq!(
+            audit.matching_policy_hash.as_ref().map(Hashed::as_str),
+            Some("sha256:2222222222222222222222222222222222222222222222222222222222222222")
+        );
+        assert_eq!(
+            audit.matching_evaluated_rule_ids.as_deref(),
+            Some(&["source-binding-policy:person".to_string()][..])
         );
         assert!(
             audit.target_ref_hash.is_none(),
@@ -10949,6 +11599,129 @@ mod tests {
             .expect("raw matching inputs are absent from audit context");
         assert!(audit.requester_type.is_none());
         assert!(audit.requester_ref_hash.is_none());
+    }
+
+    #[test]
+    fn denied_matching_policy_audit_identity_uses_requested_claim_binding() {
+        let evidence: EvidenceConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "ecosystem_bindings": {
+                "baseline-dpi": {
+                    "profile": "odrl:v1",
+                    "policy_id": "baseline-dpi-policy",
+                    "policy_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+                }
+            },
+            "claims": [{
+                "id": "person-is-alive",
+                "title": "Person is alive",
+                "version": "2026-06",
+                "subject_type": "person",
+                "source_bindings": {
+                    "aa_wrong": {
+                        "connector": "registry_data_api",
+                        "dataset": "civil",
+                        "entity": "person",
+                        "lookup": {
+                            "input": "target.identifiers.national_id",
+                            "field": "national_id",
+                            "op": "eq",
+                            "cardinality": "one"
+                        },
+                        "fields": {
+                            "alive": {
+                                "field": "alive",
+                                "type": "boolean",
+                                "required": true
+                            }
+                        },
+                        "matching": {
+                            "ecosystem_binding": {
+                                "policy_id": "wrong-policy",
+                                "policy_hash": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+                            }
+                        }
+                    },
+                    "zz_civil": {
+                        "connector": "registry_data_api",
+                        "dataset": "civil",
+                        "entity": "person",
+                        "lookup": {
+                            "input": "target.identifiers.national_id",
+                            "field": "national_id",
+                            "op": "eq",
+                            "cardinality": "one"
+                        },
+                        "fields": {
+                            "alive": {
+                                "field": "alive",
+                                "type": "boolean",
+                                "required": true
+                            }
+                        },
+                        "matching": {
+                            "ecosystem_binding": { "id": "baseline-dpi" }
+                        }
+                    }
+                },
+                "rule": { "type": "extract", "source": "zz_civil", "field": "alive" }
+            }]
+        }))
+        .expect("evidence config parses");
+        let request = EvaluateRequest {
+            requester: None,
+            target: Some(EvidenceEntity::with_identifier(
+                "person",
+                "national_id",
+                "NID-TARGET",
+            )),
+            relationship: None,
+            on_behalf_of: None,
+            claims: vec![ClaimRef::with_version("person-is-alive", "2026-06")],
+            disclosure: None,
+            format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+            purpose: Some("program-a".to_string()),
+        };
+
+        let policy = denied_matching_policy_audit_identity(
+            &evidence,
+            &request,
+            Some("pdp.assurance_insufficient"),
+        )
+        .expect("matching policy identity is resolved");
+
+        assert_eq!(policy.policy_id, "baseline-dpi-policy");
+        assert_eq!(
+            policy.policy_hash,
+            "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+        );
+        assert_eq!(
+            policy.evaluated_rule_ids,
+            vec!["source-binding-policy:person".to_string()]
+        );
+        assert!(
+            denied_matching_policy_audit_identity(
+                &evidence,
+                &request,
+                Some("target.matching_policy_rejected")
+            )
+            .is_some(),
+            "legacy matching policy denials still carry policy provenance"
+        );
+        assert!(
+            denied_matching_policy_audit_identity(&evidence, &request, Some("auth.scope_denied"))
+                .is_none(),
+            "non-matching errors must not claim matching policy provenance"
+        );
+        assert!(
+            denied_matching_policy_audit_identity(
+                &evidence,
+                &request,
+                Some("target.attributes_insufficient")
+            )
+            .is_none(),
+            "pre-policy input errors must not claim PDP provenance"
+        );
     }
 
     fn sign_holder_proof(holder_id: &str, payload: Value) -> String {
