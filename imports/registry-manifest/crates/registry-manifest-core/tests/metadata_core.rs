@@ -335,6 +335,16 @@ fn validation_rejects_all_top_level_collection_counts_above_security_limits() {
     assert_has_limit_error(&manifest, "evidence_types", 256);
 
     manifest = manifest_with_body(&format!(
+        "ecosystem_bindings:\n{}",
+        yaml_items(257, |index| {
+            format!(
+                "  - id: binding-{index}\n    version: v1\n    profile: baseline-dpi\n    type: governed-evidence\n"
+            )
+        })
+    ));
+    assert_has_limit_error(&manifest, "ecosystem_bindings", 256);
+
+    manifest = manifest_with_body(&format!(
         "authorities:\n{}",
         yaml_items(257, |index| {
             format!("  - id: authority-{index}\n    name: Authority {index}\n")
@@ -1782,6 +1792,549 @@ fn federated_evaluation_manifest_validates_and_renders_catalog_fields() {
         catalog["evidence_offerings"][0]["access"]["ruleset"],
         json!("age-eligibility-v1")
     );
+}
+
+#[test]
+fn evaluation_profile_evidence_pack_parses_compiles_and_renders_catalog() {
+    let raw = r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: evidence-pack-profile
+  base_url: https://registry.example.test
+  title: Evidence Pack Profile
+  publisher:
+    name: Example Registry
+evaluation_profiles:
+  - id: income_eligibility_profile
+    ruleset: income-eligibility-v1
+    claim_id: income_eligibility
+    subject_id_type: national_id
+    evidence_pack:
+      policy_id: income-policy
+      policy_version: "2026.06"
+      policy_hash: sha256:1111111111111111111111111111111111111111111111111111111111111111
+      odrl_policy_url: https://policies.example.test/odrl/income-policy.json
+datasets: []
+codelists: []
+"#;
+    let manifest: MetadataManifest =
+        serde_yaml_ng::from_str(raw).expect("evidence_pack manifest parses");
+
+    validate_manifest(&manifest).expect("evidence_pack manifest validates");
+    let profile = &manifest.evaluation_profiles[0];
+    let evidence_pack = profile.evidence_pack.as_ref().expect("evidence_pack");
+    assert_eq!(evidence_pack.policy_id.as_deref(), Some("income-policy"));
+    assert_eq!(evidence_pack.policy_version.as_deref(), Some("2026.06"));
+    assert_eq!(
+        evidence_pack.policy_hash.as_deref(),
+        Some("sha256:1111111111111111111111111111111111111111111111111111111111111111")
+    );
+
+    let compiled = compile_manifest(&manifest).expect("evidence_pack manifest compiles");
+    let catalog = render_catalog(&compiled);
+    assert_eq!(
+        catalog["evaluation_profiles"][0]["evidence_pack"]["policy_id"],
+        json!("income-policy")
+    );
+    assert_eq!(
+        catalog["evaluation_profiles"][0]["evidence_pack"]["policy_version"],
+        json!("2026.06")
+    );
+    assert_eq!(
+        catalog["evaluation_profiles"][0]["evidence_pack"]["policy_hash"],
+        json!("sha256:1111111111111111111111111111111111111111111111111111111111111111")
+    );
+}
+
+#[test]
+fn validation_rejects_blank_evidence_pack_policy_fields() {
+    for field in ["policy_id", "policy_hash", "policy_version"] {
+        let raw = format!(
+            r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: blank-evidence-pack
+  base_url: https://registry.example.test
+  title: Blank Evidence Pack
+  publisher:
+    name: Example Registry
+evaluation_profiles:
+  - id: blank_evidence_pack_profile
+    ruleset: blank-evidence-pack-v1
+    claim_id: blank_evidence_pack
+    subject_id_type: national_id
+    evidence_pack:
+      {field}: "   "
+datasets: []
+codelists: []
+"#
+        );
+        let manifest: MetadataManifest =
+            serde_yaml_ng::from_str(&raw).expect("blank evidence_pack manifest parses");
+
+        let error = validate_manifest(&manifest).expect_err("blank evidence_pack field rejected");
+        let MetadataError::Validation { errors } = error else {
+            panic!("unexpected error: {error:?}");
+        };
+        let expected_path = format!("evaluation_profiles[0].evidence_pack.{field}");
+        assert!(
+            errors.iter().any(|error| {
+                error.path == expected_path && error.message.contains("must not be empty")
+            }),
+            "expected blank field error at {expected_path}; got {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn validation_rejects_malformed_evidence_pack_policy_metadata() {
+    let cases = [
+        (
+            "policy_hash",
+            "sha256:not-a-digest",
+            "evaluation_profiles[0].evidence_pack.policy_hash",
+            "sha256:<64 lowercase hex>",
+        ),
+        (
+            "policy_hash",
+            "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "evaluation_profiles[0].evidence_pack.policy_hash",
+            "sha256:<64 lowercase hex>",
+        ),
+        (
+            "odrl_policy_url",
+            "not-a-url",
+            "evaluation_profiles[0].evidence_pack.odrl_policy_url",
+            "URL must start",
+        ),
+        (
+            "odrl_policy_url",
+            "http://policies.example.test/odrl/policy.json",
+            "evaluation_profiles[0].evidence_pack.odrl_policy_url",
+            "https://",
+        ),
+    ];
+
+    for (field, value, expected_path, expected_message) in cases {
+        let raw = format!(
+            r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: malformed-evidence-pack
+  base_url: https://registry.example.test
+  title: Malformed Evidence Pack
+  publisher:
+    name: Example Registry
+evaluation_profiles:
+  - id: malformed_evidence_pack_profile
+    ruleset: malformed-evidence-pack-v1
+    claim_id: malformed_evidence_pack
+    subject_id_type: national_id
+    evidence_pack:
+      {field}: "{value}"
+datasets: []
+codelists: []
+"#
+        );
+        let manifest: MetadataManifest =
+            serde_yaml_ng::from_str(&raw).expect("malformed evidence_pack manifest parses");
+
+        let error = validate_manifest(&manifest).expect_err("malformed evidence_pack rejected");
+        let MetadataError::Validation { errors } = error else {
+            panic!("unexpected error: {error:?}");
+        };
+        assert!(
+            errors.iter().any(|error| {
+                error.path == expected_path && error.message.contains(expected_message)
+            }),
+            "expected malformed field error at {expected_path}; got {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn evidence_pack_odrl_policy_url_serializes_when_present() {
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(
+        r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: odrl-policy-url
+  base_url: https://registry.example.test
+  title: ODRL Policy URL
+  publisher:
+    name: Example Registry
+evaluation_profiles:
+  - id: odrl_policy_profile
+    ruleset: odrl-policy-v1
+    claim_id: odrl_policy
+    subject_id_type: national_id
+    evidence_pack:
+      odrl_policy_url: https://policies.example.test/odrl/policy.json
+datasets: []
+codelists: []
+"#,
+    )
+    .expect("odrl policy url manifest parses");
+
+    validate_manifest(&manifest).expect("odrl policy url manifest validates");
+    let value = serde_json::to_value(&manifest).expect("manifest serializes");
+    assert_eq!(
+        value["evaluation_profiles"][0]["evidence_pack"]["odrl_policy_url"],
+        json!("https://policies.example.test/odrl/policy.json")
+    );
+}
+
+#[test]
+fn ecosystem_bindings_default_empty_for_backwards_compatible_manifests() {
+    let manifest = minimal_manifest();
+
+    validate_manifest(&manifest).expect("minimal manifest validates");
+    assert!(manifest.ecosystem_bindings.is_empty());
+
+    let compiled = compile_manifest(&manifest).expect("minimal manifest compiles");
+    let catalog = render_catalog(&compiled);
+    assert!(catalog.get("ecosystem_bindings").is_none());
+}
+
+#[test]
+fn ecosystem_binding_parses_validates_compiles_and_renders_catalog() {
+    let raw = r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: ecosystem-binding
+  base_url: https://registry.example.test
+  title: Ecosystem Binding
+  publisher:
+    name: Example Registry
+ecosystem_bindings:
+  - id: baseline-dpi/v1
+    version: v1
+    profile: baseline-dpi
+    type: governed-evidence
+    title: Baseline DPI
+    description: Baseline data proofing interface binding
+    evidence_pack:
+      policy_id: baseline-policy
+      policy_version: "2026.06"
+      policy_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222
+      odrl_enforcement:
+        profile: registry-evidence-gateway-pdp/v1
+        constraint_terms:
+          - odrl:purpose
+          - odrl:spatial
+          - registry:pdp:assurance
+    profiles:
+      - id: dcat-ap
+        version: "3.0.0"
+datasets: []
+codelists: []
+"#;
+    let manifest: MetadataManifest =
+        serde_yaml_ng::from_str(raw).expect("ecosystem binding manifest parses");
+
+    validate_manifest(&manifest).expect("ecosystem binding manifest validates");
+    let binding = &manifest.ecosystem_bindings[0];
+    assert_eq!(binding.id, "baseline-dpi/v1");
+    assert_eq!(binding.binding_type, "governed-evidence");
+    assert_eq!(binding.profiles[0].id, "dcat-ap");
+
+    let compiled = compile_manifest(&manifest).expect("ecosystem binding manifest compiles");
+    let catalog = render_catalog(&compiled);
+    assert_eq!(
+        catalog["ecosystem_bindings"][0]["id"],
+        json!("baseline-dpi/v1")
+    );
+    assert_eq!(catalog["ecosystem_bindings"][0]["version"], json!("v1"));
+    assert_eq!(
+        catalog["ecosystem_bindings"][0]["type"],
+        json!("governed-evidence")
+    );
+    assert_eq!(
+        catalog["ecosystem_bindings"][0]["evidence_pack"]["policy_id"],
+        json!("baseline-policy")
+    );
+    assert_eq!(
+        catalog["ecosystem_bindings"][0]["evidence_pack"]["odrl_enforcement"]["profile"],
+        json!("registry-evidence-gateway-pdp/v1")
+    );
+    assert_eq!(
+        catalog["ecosystem_bindings"][0]["evidence_pack"]["odrl_enforcement"]["constraint_terms"],
+        json!(["odrl:purpose", "odrl:spatial", "registry:pdp:assurance"])
+    );
+    assert_eq!(
+        catalog["ecosystem_bindings"][0]["profiles"][0]["version"],
+        json!("3.0.0")
+    );
+}
+
+#[test]
+fn validation_rejects_unsupported_odrl_enforcement_terms() {
+    let raw = r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: unsupported-odrl-enforcement
+  base_url: https://registry.example.test
+  title: Unsupported ODRL Enforcement
+  publisher:
+    name: Example Registry
+ecosystem_bindings:
+  - id: baseline-dpi/v1
+    version: v1
+    profile: baseline-dpi
+    type: governed-evidence
+    evidence_pack:
+      odrl_enforcement:
+        profile: registry-evidence-gateway-pdp/v1
+        constraint_terms:
+          - odrl:purpose
+          - odrl:count
+datasets: []
+codelists: []
+"#;
+    let manifest: MetadataManifest =
+        serde_yaml_ng::from_str(raw).expect("unsupported ODRL manifest parses");
+
+    let error = validate_manifest(&manifest).expect_err("unsupported ODRL term rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(
+        errors.iter().any(|error| {
+            error.path == "ecosystem_bindings[0].evidence_pack.odrl_enforcement.constraint_terms[1]"
+                && error.message.contains("unsupported ODRL enforcement term")
+        }),
+        "expected unsupported ODRL enforcement term error; got {errors:?}"
+    );
+}
+
+#[test]
+fn validation_rejects_governed_evidence_binding_without_odrl_enforcement() {
+    let raw = r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: governed-without-enforcement
+  base_url: https://registry.example.test
+  title: Governed Without Enforcement
+  publisher:
+    name: Example Registry
+ecosystem_bindings:
+  - id: baseline-dpi/v1
+    version: v1
+    profile: baseline-dpi
+    type: governed-evidence
+    evidence_pack:
+      policy_id: baseline-policy
+datasets: []
+codelists: []
+"#;
+    let manifest: MetadataManifest =
+        serde_yaml_ng::from_str(raw).expect("governed manifest parses");
+
+    let error = validate_manifest(&manifest).expect_err("missing enforcement profile rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(
+        errors.iter().any(|error| {
+            error.path == "ecosystem_bindings[0].evidence_pack.odrl_enforcement"
+                && error
+                    .message
+                    .contains("must declare an ODRL enforcement profile")
+        }),
+        "expected missing ODRL enforcement error; got {errors:?}"
+    );
+}
+
+#[test]
+fn validation_rejects_governed_evidence_binding_without_policy_identity() {
+    let raw = r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: governed-without-policy-identity
+  base_url: https://registry.example.test
+  title: Governed Without Policy Identity
+  publisher:
+    name: Example Registry
+ecosystem_bindings:
+  - id: baseline-dpi/v1
+    version: v1
+    profile: baseline-dpi
+    type: governed-evidence
+    evidence_pack:
+      odrl_enforcement:
+        profile: registry-evidence-gateway-pdp/v1
+        constraint_terms:
+          - odrl:purpose
+datasets: []
+codelists: []
+"#;
+    let manifest: MetadataManifest =
+        serde_yaml_ng::from_str(raw).expect("governed manifest parses");
+
+    let error = validate_manifest(&manifest).expect_err("missing policy identity rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(
+        errors.iter().any(|error| {
+            error.path == "ecosystem_bindings[0].evidence_pack.policy_id"
+                && error
+                    .message
+                    .contains("must declare evidence_pack policy_id")
+        }),
+        "expected missing policy_id error; got {errors:?}"
+    );
+    assert!(
+        errors.iter().any(|error| {
+            error.path == "ecosystem_bindings[0].evidence_pack.policy_hash"
+                && error
+                    .message
+                    .contains("must declare evidence_pack policy_hash")
+        }),
+        "expected missing policy_hash error; got {errors:?}"
+    );
+}
+
+#[test]
+fn validation_rejects_unknown_ecosystem_binding_type() {
+    let raw = r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: unknown-ecosystem-binding-type
+  base_url: https://registry.example.test
+  title: Unknown Ecosystem Binding Type
+  publisher:
+    name: Example Registry
+ecosystem_bindings:
+  - id: baseline-dpi/v1
+    version: v1
+    profile: baseline-dpi
+    type: "governed-evidence "
+    evidence_pack:
+      policy_id: baseline-policy
+      policy_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222
+      odrl_enforcement:
+        profile: registry-evidence-gateway-pdp/v1
+        constraint_terms:
+          - odrl:purpose
+datasets: []
+codelists: []
+"#;
+    let manifest: MetadataManifest =
+        serde_yaml_ng::from_str(raw).expect("ecosystem binding manifest parses");
+
+    let error = validate_manifest(&manifest).expect_err("unknown binding type rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(
+        errors.iter().any(|error| {
+            error.path == "ecosystem_bindings[0].type"
+                && error
+                    .message
+                    .contains("ecosystem binding type must be governed-evidence")
+        }),
+        "expected binding type error; got {errors:?}"
+    );
+}
+
+#[test]
+fn ecosystem_binding_blank_fields_are_rejected() {
+    for (binding_body, expected_path) in [
+        (
+            r#"id: "   "
+    version: v1
+    profile: baseline-dpi
+    type: governed-evidence"#,
+            "ecosystem_bindings[0].id",
+        ),
+        (
+            r#"id: baseline-dpi/v1
+    version: "   "
+    profile: baseline-dpi
+    type: governed-evidence"#,
+            "ecosystem_bindings[0].version",
+        ),
+        (
+            r#"id: baseline-dpi/v1
+    version: v1
+    profile: "   "
+    type: governed-evidence"#,
+            "ecosystem_bindings[0].profile",
+        ),
+        (
+            r#"id: baseline-dpi/v1
+    version: v1
+    profile: baseline-dpi
+    type: "   ""#,
+            "ecosystem_bindings[0].type",
+        ),
+        (
+            r#"id: baseline-dpi/v1
+    version: v1
+    profile: baseline-dpi
+    type: governed-evidence
+    title: "   ""#,
+            "ecosystem_bindings[0].title",
+        ),
+        (
+            r#"id: baseline-dpi/v1
+    version: v1
+    profile: baseline-dpi
+    type: governed-evidence
+    description: "   ""#,
+            "ecosystem_bindings[0].description",
+        ),
+        (
+            r#"id: baseline-dpi/v1
+    version: v1
+    profile: baseline-dpi
+    type: governed-evidence
+    evidence_pack:
+      policy_id: "   ""#,
+            "ecosystem_bindings[0].evidence_pack.policy_id",
+        ),
+        (
+            r#"id: baseline-dpi/v1
+    version: v1
+    profile: baseline-dpi
+    type: governed-evidence
+    profiles:
+      - id: profile
+        version: "   ""#,
+            "ecosystem_bindings[0].profiles[0].version",
+        ),
+    ] {
+        let raw = format!(
+            r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: blank-ecosystem-binding
+  base_url: https://registry.example.test
+  title: Blank Ecosystem Binding
+  publisher:
+    name: Example Registry
+ecosystem_bindings:
+  - {binding_body}
+datasets: []
+codelists: []
+"#
+        );
+        let manifest: MetadataManifest =
+            serde_yaml_ng::from_str(&raw).expect("blank ecosystem binding manifest parses");
+
+        let error =
+            validate_manifest(&manifest).expect_err("blank ecosystem binding field rejected");
+        let MetadataError::Validation { errors } = error else {
+            panic!("unexpected error: {error:?}");
+        };
+        assert!(
+            errors.iter().any(|error| {
+                error.path == expected_path && error.message.contains("must not be empty")
+            }),
+            "expected blank field error at {expected_path}; got {errors:?}"
+        );
+    }
 }
 
 #[test]

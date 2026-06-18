@@ -6,6 +6,9 @@ on:
     branches:
       - main
 
+env:
+  REGISTRY_MANIFEST_COVERAGE_THRESHOLD: "80"
+
 jobs:
   rust:
     runs-on: ubuntu-latest
@@ -54,8 +57,70 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: Coverage
-        run: cargo llvm-cov --workspace --fail-under-lines 80
+      - name: Run coverage
+        run: |
+          mkdir -p target/coverage
+          cargo llvm-cov --workspace | tee target/coverage/summary.txt
+          cat target/coverage/summary.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Export coverage artifacts
+        run: |
+          cargo llvm-cov report --lcov --output-path target/coverage/lcov.info
+          cargo llvm-cov report --json --summary-only --output-path target/coverage/summary.json
+          test -s target/coverage/summary.txt
+          test -s target/coverage/lcov.info
+          test -s target/coverage/summary.json
+
+      - name: Export coverage dashboard data
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          summary = json.loads(Path("target/coverage/summary.json").read_text())
+          line_coverage = summary["data"][0]["totals"]["lines"]["percent"]
+          threshold = float(os.environ["REGISTRY_MANIFEST_COVERAGE_THRESHOLD"])
+          run_url = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          dashboard = {
+              "repo": "registry-manifest",
+              "branch": os.environ.get("GITHUB_REF_NAME", ""),
+              "commit": os.environ.get("GITHUB_SHA", ""),
+              "workflow_run_url": run_url,
+              "generated_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+              "line_coverage_percent": round(line_coverage, 2),
+              "threshold_percent": threshold,
+              "status": "pass" if line_coverage >= threshold else "fail",
+              "artifact_urls": [run_url],
+          }
+          Path("target/coverage/dashboard.json").write_text(json.dumps(dashboard, indent=2) + "\n")
+          PY
+          test -s target/coverage/dashboard.json
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: registry-manifest-coverage
+          path: |
+            target/coverage/summary.txt
+            target/coverage/lcov.info
+            target/coverage/summary.json
+            target/coverage/dashboard.json
+
+      - name: Enforce coverage threshold
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          dashboard = json.loads(Path("target/coverage/dashboard.json").read_text())
+          if dashboard["status"] != "pass":
+              raise SystemExit(
+                  f"line coverage {dashboard['line_coverage_percent']:.2f}% is below "
+                  f"threshold {dashboard['threshold_percent']:.2f}%"
+              )
+          PY
 
   dependency-policy:
     runs-on: ubuntu-latest
