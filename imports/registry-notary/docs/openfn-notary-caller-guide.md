@@ -124,7 +124,8 @@ lab UI at `https://lab.registrystack.org` shows the same public demo
 credentials.
 For SDK-style environment variables, run
 `registryctl lab env --credential agri-evidence`; it reads the same manifest
-entry and emits the Notary base URL, bearer token, and purpose URI.
+entry and emits `REGISTRY_NOTARY_BASE_URL`, `REGISTRY_NOTARY_BEARER_TOKEN`,
+and `REGISTRY_NOTARY_PURPOSE`.
 
 ## Value Claims
 
