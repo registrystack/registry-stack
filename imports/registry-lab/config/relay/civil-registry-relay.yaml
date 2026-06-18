@@ -16,7 +16,7 @@ config_trust:
 metadata:
   source:
     path: civil-registry-relay.metadata.yaml
-    digest: sha256:bd601d5dffdf637af50a6197c735b635966b4d7f0948c2174dc3a24a91c82c9a
+    digest: sha256:7da192405ff29422fdee0412a2c98cffe891216ca2267959928969efb8db182c
   ecosystem_binding:
     id: baseline-dpi/v1
     version: v1

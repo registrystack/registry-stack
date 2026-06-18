@@ -15,7 +15,7 @@ config_trust:
 metadata:
   source:
     path: social-protection-registry-relay.metadata.yaml
-    digest: sha256:41dba63198e601e124a4d0964cd53f4bba7735985ad2a56d784fbde28c3a3c10
+    digest: sha256:f4bc330f2d6e276993a438023f6540c4bfa051fce92934c20597f7e2d9bf497b
   ecosystem_binding:
     id: baseline-dpi/v1
     version: v1
