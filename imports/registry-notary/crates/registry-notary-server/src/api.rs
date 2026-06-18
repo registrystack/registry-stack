@@ -88,7 +88,10 @@ use crate::{
     posture::{posture_document, PostureContext, PostureDocumentError},
     preauth_state::{LoginState, SingleUseReserveError},
     replay::{require_replay_insert, ReplayReadiness, ReplayStores},
-    runtime::claim_ids,
+    runtime::{
+        claim_ids, find_claim, find_claim_version, matching_policy_audit_identity,
+        MatchingPolicyAuditIdentity,
+    },
     standalone::{
         constant_time_eq, generate_numeric_tx_code, generate_opaque_token, pkce_s256_challenge,
         pre_auth_audit_event, AuthAuditState, PreAuthAuditFields, PreAuthRuntime,
@@ -5507,6 +5510,7 @@ async fn evaluate(
                 &audit_request,
                 results.first(),
                 None,
+                None,
             ) {
                 return evidence_error_response(error);
             }
@@ -5514,6 +5518,8 @@ async fn evaluate(
         }
         Err(error) => {
             let audit_code = error.audit_code();
+            let denied_matching_policy =
+                denied_matching_policy_audit_identity(evidence, &audit_request, Some(audit_code));
             let mut response = evidence_error_response(error);
             attach_evidence_audit(
                 &mut response,
@@ -5528,6 +5534,7 @@ async fn evaluate(
                 &audit_request,
                 None,
                 Some(audit_code),
+                denied_matching_policy.as_ref(),
             ) {
                 return evidence_error_response(error);
             }
@@ -7591,6 +7598,7 @@ fn attach_evaluate_request_audit(
     request: &EvaluateRequest,
     result: Option<&ClaimResultView>,
     matching_error_code: Option<&str>,
+    denied_matching_policy: Option<&MatchingPolicyAuditIdentity>,
 ) -> Result<(), EvidenceError> {
     let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() else {
         return Ok(());
@@ -7646,6 +7654,14 @@ fn attach_evaluate_request_audit(
         audit.matching_outcome = Some("matched".to_string());
     } else if let Some(error_code) = matching_error_code.filter(|code| is_matching_audit_code(code))
     {
+        if let Some(policy) = denied_matching_policy {
+            audit.matching_policy_id = Some(policy.policy_id.clone());
+            audit.matching_policy_hash = Some(Hashed::<PolicyIdentifier>::from_hash(
+                policy.policy_hash.clone(),
+            ));
+            audit.matching_evaluated_rule_ids =
+                (!policy.evaluated_rule_ids.is_empty()).then(|| policy.evaluated_rule_ids.clone());
+        }
         audit.matching_outcome = Some("error".to_string());
         audit.matching_error_code = Some(error_code.to_string());
     }
@@ -7822,6 +7838,35 @@ fn is_matching_audit_code(code: &str) -> bool {
         || code.starts_with("requester.")
         || code.starts_with("relationship.")
         || matches!(code, "purpose.not_allowed" | "evidence.not_available")
+}
+
+fn denied_matching_policy_audit_identity(
+    evidence: &EvidenceConfig,
+    request: &EvaluateRequest,
+    matching_error_code: Option<&str>,
+) -> Option<MatchingPolicyAuditIdentity> {
+    matching_error_code.filter(|code| is_matching_policy_provenance_code(code))?;
+    request.claims.iter().find_map(|claim_ref| {
+        let claim = match claim_ref.version.as_deref() {
+            Some(version) => find_claim_version(evidence, claim_ref.id.as_str(), version).ok()?,
+            None => find_claim(evidence, claim_ref.id.as_str()).ok()?,
+        };
+        claim
+            .source_bindings
+            .values()
+            .next()
+            .map(|binding| matching_policy_audit_identity(evidence, binding))
+    })
+}
+
+fn is_matching_policy_provenance_code(code: &str) -> bool {
+    matches!(
+        code,
+        "purpose.not_allowed"
+            | "target.matching_policy_rejected"
+            | "requester.matching_policy_rejected"
+            | "relationship.policy_rejected"
+    )
 }
 
 struct SelfAttestationCredentialAuditDetails<'a> {
@@ -11054,7 +11099,7 @@ mod tests {
             Some(1),
         );
 
-        attach_evaluate_request_audit(&mut response, &keys, &request, Some(&result), None)
+        attach_evaluate_request_audit(&mut response, &keys, &request, Some(&result), None, None)
             .expect("audit context attaches");
 
         let audit = response
@@ -11206,7 +11251,14 @@ mod tests {
             &keys,
             &request,
             None,
-            Some("target.attributes_insufficient"),
+            Some("target.matching_policy_rejected"),
+            Some(&MatchingPolicyAuditIdentity {
+                policy_id: "notary.source_binding.default.civil.person".to_string(),
+                policy_hash:
+                    "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                        .to_string(),
+                evaluated_rule_ids: vec!["source-binding-policy:person".to_string()],
+            }),
         )
         .expect("audit context attaches");
 
@@ -11218,7 +11270,19 @@ mod tests {
         assert_eq!(audit.matching_outcome.as_deref(), Some("error"));
         assert_eq!(
             audit.matching_error_code.as_deref(),
-            Some("target.attributes_insufficient")
+            Some("target.matching_policy_rejected")
+        );
+        assert_eq!(
+            audit.matching_policy_id.as_deref(),
+            Some("notary.source_binding.default.civil.person")
+        );
+        assert_eq!(
+            audit.matching_policy_hash.as_ref().map(Hashed::as_str),
+            Some("sha256:2222222222222222222222222222222222222222222222222222222222222222")
+        );
+        assert_eq!(
+            audit.matching_evaluated_rule_ids.as_deref(),
+            Some(&["source-binding-policy:person".to_string()][..])
         );
         assert!(
             audit.target_ref_hash.is_none(),
@@ -11229,6 +11293,96 @@ mod tests {
             .expect("raw matching inputs are absent from audit context");
         assert!(audit.requester_type.is_none());
         assert!(audit.requester_ref_hash.is_none());
+    }
+
+    #[test]
+    fn denied_matching_policy_audit_identity_uses_requested_claim_binding() {
+        let evidence: EvidenceConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "ecosystem_bindings": {
+                "baseline-dpi": {
+                    "profile": "odrl:v1",
+                    "policy_id": "baseline-dpi-policy",
+                    "policy_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+                }
+            },
+            "claims": [{
+                "id": "person-is-alive",
+                "title": "Person is alive",
+                "version": "2026-06",
+                "subject_type": "person",
+                "source_bindings": {
+                    "civil": {
+                        "connector": "registry_data_api",
+                        "dataset": "civil",
+                        "entity": "person",
+                        "lookup": {
+                            "input": "target.id",
+                            "field": "id",
+                            "op": "eq",
+                            "cardinality": "one"
+                        },
+                        "fields": {
+                            "alive": {
+                                "field": "alive",
+                                "type": "boolean",
+                                "required": true
+                            }
+                        },
+                        "matching": {
+                            "ecosystem_binding": { "id": "baseline-dpi" }
+                        }
+                    }
+                },
+                "rule": { "type": "extract", "source": "civil", "field": "alive" }
+            }]
+        }))
+        .expect("evidence config parses");
+        let request = EvaluateRequest {
+            requester: None,
+            target: Some(EvidenceEntity::with_identifier(
+                "person",
+                "national_id",
+                "NID-TARGET",
+            )),
+            relationship: None,
+            on_behalf_of: None,
+            claims: vec![ClaimRef::with_version("person-is-alive", "2026-06")],
+            disclosure: None,
+            format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+            purpose: Some("program-a".to_string()),
+        };
+
+        let policy = denied_matching_policy_audit_identity(
+            &evidence,
+            &request,
+            Some("target.matching_policy_rejected"),
+        )
+        .expect("matching policy identity is resolved");
+
+        assert_eq!(policy.policy_id, "baseline-dpi-policy");
+        assert_eq!(
+            policy.policy_hash,
+            "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+        );
+        assert_eq!(
+            policy.evaluated_rule_ids,
+            vec!["source-binding-policy:person".to_string()]
+        );
+        assert!(
+            denied_matching_policy_audit_identity(&evidence, &request, Some("auth.scope_denied"))
+                .is_none(),
+            "non-matching errors must not claim matching policy provenance"
+        );
+        assert!(
+            denied_matching_policy_audit_identity(
+                &evidence,
+                &request,
+                Some("target.attributes_insufficient")
+            )
+            .is_none(),
+            "pre-policy input errors must not claim PDP provenance"
+        );
     }
 
     fn sign_holder_proof(holder_id: &str, payload: Value) -> String {

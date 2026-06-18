@@ -3186,6 +3186,7 @@ fn matching_pdp_decision(
     {
         return Ok(BindingPolicyEffect::default());
     }
+    let policy_identity = matching_policy_audit_identity(evidence, binding);
     let pdp_context = PdpRequestContext {
         purpose: purpose.to_string(),
         legal_basis_ref: trusted_policy.legal_basis_ref.clone(),
@@ -3195,15 +3196,9 @@ fn matching_pdp_decision(
         source_observed_age_seconds: None,
     };
     let policy = PdpPolicyInput {
-        policy_id: selected_policy
-            .as_ref()
-            .map(|policy| policy.policy_id.clone())
-            .unwrap_or_else(|| matching_purpose_policy_id(binding)),
-        policy_hash: selected_policy
-            .as_ref()
-            .map(|policy| policy.policy_hash.clone())
-            .unwrap_or_else(|| matching_purpose_policy_hash(binding)),
-        rule_ids: vec![format!("source-binding-policy:{}", binding.entity)],
+        policy_id: policy_identity.policy_id.clone(),
+        policy_hash: policy_identity.policy_hash.clone(),
+        rule_ids: policy_identity.evaluated_rule_ids.clone(),
         purpose_constraints: if matching.allowed_purposes.is_empty() {
             Vec::new()
         } else {
@@ -3254,6 +3249,31 @@ fn matching_pdp_decision(
             }
             _ => "pdp.denied",
         }),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MatchingPolicyAuditIdentity {
+    pub policy_id: String,
+    pub policy_hash: String,
+    pub evaluated_rule_ids: Vec<String>,
+}
+
+pub(crate) fn matching_policy_audit_identity(
+    evidence: &EvidenceConfig,
+    binding: &registry_notary_core::SourceBindingConfig,
+) -> MatchingPolicyAuditIdentity {
+    let selected_policy = selected_evidence_pack_policy(evidence, binding);
+    MatchingPolicyAuditIdentity {
+        policy_id: selected_policy
+            .as_ref()
+            .map(|policy| policy.policy_id.clone())
+            .unwrap_or_else(|| matching_purpose_policy_id(binding)),
+        policy_hash: selected_policy
+            .as_ref()
+            .map(|policy| policy.policy_hash.clone())
+            .unwrap_or_else(|| matching_purpose_policy_hash(binding)),
+        evaluated_rule_ids: vec![format!("source-binding-policy:{}", binding.entity)],
     }
 }
 
