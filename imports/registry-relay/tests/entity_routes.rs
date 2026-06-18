@@ -2,6 +2,7 @@
 //! Focused route-shape tests for the entity API slice.
 
 use axum::http::StatusCode;
+use axum::middleware::from_fn;
 use axum::Extension;
 use axum_test::TestServer;
 use datafusion::arrow::array::StringArray;
@@ -11,6 +12,7 @@ use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
 use registry_manifest_core as metadata_core;
 use registry_relay::api::{aggregates_router, entity_router, metadata_router, CursorSigner};
+use registry_relay::audit::{audit_layer, AuditPipeline, InMemorySink};
 use registry_relay::auth::{AuthMode, Principal, ScopeSet};
 use registry_relay::config::{self, DatasetId, ResourceId};
 use registry_relay::entity::EntityRegistry;
@@ -304,6 +306,22 @@ async fn server_with_query_and_ecosystem_binding_selector() -> TestServer {
     .await
 }
 
+async fn server_with_query_audit_and_ecosystem_binding_selector() -> (TestServer, InMemorySink) {
+    let audit_sink = InMemorySink::new();
+    let audit_pipeline: Arc<AuditPipeline> = AuditPipeline::from_sink(audit_sink.clone());
+    let app = app_with_query_versions_signer_provenance_and_selector(
+        "01J5K8M0000000000000000000",
+        "01J5K8M0000000000000000000",
+        Arc::new(CursorSigner::new_random()),
+        ENTITY_ROUTE_SCOPES,
+        Some("baseline-dpi/v1"),
+    )
+    .await
+    .layer(from_fn(audit_layer))
+    .layer(Extension(audit_pipeline));
+    (TestServer::new(app), audit_sink)
+}
+
 async fn server_with_query_and_unsupported_ecosystem_binding_selector() -> TestServer {
     server_with_query_versions_signer_provenance_and_selector(
         "01J5K8M0000000000000000000",
@@ -338,6 +356,25 @@ async fn server_with_query_versions_signer_provenance_and_selector(
     principal_scopes: &[&str],
     selected_ecosystem_binding: Option<&str>,
 ) -> TestServer {
+    TestServer::new(
+        app_with_query_versions_signer_provenance_and_selector(
+            table_ingest_version,
+            readiness_ingest_version,
+            signer,
+            principal_scopes,
+            selected_ecosystem_binding,
+        )
+        .await,
+    )
+}
+
+async fn app_with_query_versions_signer_provenance_and_selector(
+    table_ingest_version: &str,
+    readiness_ingest_version: &str,
+    signer: Arc<CursorSigner>,
+    principal_scopes: &[&str],
+    selected_ecosystem_binding: Option<&str>,
+) -> axum::Router {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = tmp.path().join("entity_routes.yaml");
     let config_yaml = r#"
@@ -560,7 +597,7 @@ catalog:
     );
     let (_tx, readiness) = watch::channel(snapshot);
 
-    let app = entity_router::<()>()
+    entity_router::<()>()
         .merge(metadata_router())
         .layer(Extension(query))
         .layer(Extension(registry))
@@ -568,8 +605,12 @@ catalog:
         .layer(Extension(cfg))
         .layer(Extension(readiness))
         .layer(Extension(signer))
-        .layer(Extension(principal(principal_scopes)));
-    TestServer::new(app)
+        .layer(Extension(principal(principal_scopes)))
+}
+
+fn audit_record_from_envelope(line: &str) -> Value {
+    let envelope: Value = serde_json::from_str(line.trim_end()).expect("valid audit envelope JSON");
+    envelope["record"].clone()
 }
 
 #[tokio::test]
@@ -843,6 +884,81 @@ async fn sensitive_fields_remain_in_authorized_projection() {
         serde_json::json!([
             {"id": "p-1", "household_id": "hh-1", "given_name": "Ada"}
         ])
+    );
+}
+
+#[tokio::test]
+async fn governed_entity_collection_audit_records_selector_pdp_provenance() {
+    let (server, audit_sink) = server_with_query_audit_and_ecosystem_binding_selector().await;
+    let resp = server
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .await;
+
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert_eq!(
+        body["data"],
+        serde_json::json!([
+            {"id": "p-1", "household_id": "hh-1", "given_name": "Ada"}
+        ])
+    );
+
+    let records = audit_sink.snapshot();
+    assert_eq!(
+        records.len(),
+        1,
+        "governed entity request emits one audit record"
+    );
+    let record = audit_record_from_envelope(&records[0]);
+    assert_eq!(record["dataset_id"], "social_registry");
+    assert_eq!(record["entity_name"], "individual");
+    assert_eq!(
+        record["purpose"],
+        "https://data.example.test/purposes/testing"
+    );
+    assert_eq!(record["pdp_policy_id"], "baseline-dpi-policy");
+    assert_eq!(
+        record["pdp_policy_hash"],
+        "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+    );
+    assert_eq!(
+        record["pdp_evaluated_rule_ids"],
+        serde_json::json!(["entity-purpose-required:individual"])
+    );
+}
+
+#[tokio::test]
+async fn governed_entity_collection_denial_audit_records_selector_pdp_provenance() {
+    let (server, audit_sink) = server_with_query_audit_and_ecosystem_binding_selector().await;
+    let resp = server
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
+        .add_header("data-purpose", "casework")
+        .await;
+
+    resp.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(resp.json::<Value>()["code"], "auth.purpose_required");
+
+    let records = audit_sink.snapshot();
+    assert_eq!(
+        records.len(),
+        1,
+        "denied governed entity request emits one audit record"
+    );
+    let record = audit_record_from_envelope(&records[0]);
+    assert_eq!(record["dataset_id"], "social_registry");
+    assert_eq!(record["entity_name"], "individual");
+    assert_eq!(record["purpose"], "casework");
+    assert_eq!(record["status_code"], 400);
+    assert_eq!(record["error_code"], "auth.purpose_required");
+    assert_eq!(record["pdp_policy_id"], "baseline-dpi-policy");
+    assert_eq!(
+        record["pdp_policy_hash"],
+        "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+    );
+    assert_eq!(
+        record["pdp_evaluated_rule_ids"],
+        serde_json::json!(["entity-purpose-required:individual"])
     );
 }
 

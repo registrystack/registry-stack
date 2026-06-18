@@ -187,7 +187,7 @@ async fn entity_collection(
                 &headers,
             ) {
                 Ok(audit) => audit,
-                Err(error) => return error.into_response(),
+                Err(error) => return access_error_response(error, audit_context),
             };
             attach_pdp_audit(&mut audit_context, read_audit.as_ref());
             if let Some(expand) = params.get("expand") {
@@ -204,7 +204,7 @@ async fn entity_collection(
                     &headers,
                     &runtime,
                 ) {
-                    return error.into_response();
+                    return access_error_response(error, audit_context);
                 }
             }
             entity.api.required_filters.clone()
@@ -357,7 +357,7 @@ async fn entity_record(
                 &headers,
             ) {
                 Ok(audit) => audit,
-                Err(error) => return error.into_response(),
+                Err(error) => return access_error_response(error, audit_context),
             };
             attach_pdp_audit(&mut audit_context, read_audit.as_ref());
             if let Some(expand) = params.get("expand") {
@@ -374,7 +374,7 @@ async fn entity_record(
                     &headers,
                     &runtime,
                 ) {
-                    return error.into_response();
+                    return access_error_response(error, audit_context);
                 }
             }
         }
@@ -480,7 +480,7 @@ async fn entity_relationship(
                 &headers,
             ) {
                 Ok(audit) => audit,
-                Err(error) => return error.into_response(),
+                Err(error) => return access_error_response(error, audit_context),
             };
             attach_pdp_audit(&mut audit_context, read_audit.as_ref());
             if let Err(error) = require_relationship_target_access(
@@ -492,7 +492,7 @@ async fn entity_relationship(
                 &headers,
                 &runtime,
             ) {
-                return error.into_response();
+                return access_error_response(error, audit_context);
             }
             if let Some(relationship) = entity.relationships.get(&path.relationship) {
                 let target =
@@ -644,8 +644,9 @@ fn require_read_access(
     principal: Option<Extension<Principal>>,
     entity: &EntityModel,
     headers: &HeaderMap,
-) -> Result<Option<PdpDecisionAudit>, Error> {
-    require_principal_scope(principal, &entity.access.read_scope)?;
+) -> Result<Option<PdpDecisionAudit>, GovernedAccessError> {
+    require_principal_scope(principal, &entity.access.read_scope)
+        .map_err(GovernedAccessError::from)?;
     require_purpose_header_decision(runtime, dataset_id, entity, headers)
 }
 
@@ -657,10 +658,12 @@ fn require_expansion_access(
     principal: Option<Extension<Principal>>,
     headers: &HeaderMap,
     runtime: &RuntimeSnapshot,
-) -> Result<(), Error> {
+) -> Result<(), GovernedAccessError> {
     for expansion in expansions {
         if expansion == "*" || expansion.contains('.') {
-            return Err(crate::error::FilterError::UnsupportedOp.into());
+            return Err(GovernedAccessError::from_error(
+                crate::error::FilterError::UnsupportedOp,
+            ));
         }
         if !entity
             .api
@@ -668,7 +671,9 @@ fn require_expansion_access(
             .iter()
             .any(|allowed| allowed == expansion)
         {
-            return Err(crate::error::FilterError::NotAllowed.into());
+            return Err(GovernedAccessError::from_error(
+                crate::error::FilterError::NotAllowed,
+            ));
         }
         require_relationship_target_access(
             registry,
@@ -691,13 +696,15 @@ fn require_relationship_target_access(
     principal: Option<Extension<Principal>>,
     headers: &HeaderMap,
     runtime: &RuntimeSnapshot,
-) -> Result<(), Error> {
+) -> Result<(), GovernedAccessError> {
     let relationship = entity
         .relationships
         .get(relationship_name)
-        .ok_or(crate::error::FilterError::NotAllowed)?;
-    let target = entity_from_registry(registry, dataset_id, &relationship.target)?;
-    require_principal_scope(principal, &target.access.read_scope)?;
+        .ok_or_else(|| GovernedAccessError::from_error(crate::error::FilterError::NotAllowed))?;
+    let target = entity_from_registry(registry, dataset_id, &relationship.target)
+        .map_err(GovernedAccessError::from)?;
+    require_principal_scope(principal, &target.access.read_scope)
+        .map_err(GovernedAccessError::from)?;
     require_purpose_header_decision(runtime, dataset_id, target, headers).map(|_| ())
 }
 
@@ -706,12 +713,12 @@ fn require_purpose_header_decision(
     dataset_id: &str,
     entity: &EntityModel,
     headers: &HeaderMap,
-) -> Result<Option<PdpDecisionAudit>, Error> {
+) -> Result<Option<PdpDecisionAudit>, GovernedAccessError> {
     if !entity.api.require_purpose_header {
         return Ok(None);
     }
     let purpose = purpose_header_value(headers, DATA_PURPOSE_HEADER)
-        .ok_or_else(|| Error::from(AuthError::PurposeRequired))?;
+        .ok_or_else(|| GovernedAccessError::from_error(AuthError::PurposeRequired))?;
     let context = PdpRequestContext {
         purpose: purpose.to_string(),
         legal_basis_ref: None,
@@ -720,7 +727,7 @@ fn require_purpose_header_decision(
         jurisdiction: None,
         source_observed_age_seconds: None,
     };
-    let selected_policy = selected_ecosystem_policy(runtime)?;
+    let selected_policy = selected_ecosystem_policy(runtime).map_err(GovernedAccessError::from)?;
     let purpose_constraints = governed_purpose_constraints(runtime, dataset_id)
         .unwrap_or_else(|| vec![vec![purpose.to_string()]]);
     let policy = PdpPolicyInput {
@@ -749,7 +756,38 @@ fn require_purpose_header_decision(
         PdpDecision::Permit(audit) | PdpDecision::PermitWithRedaction { audit, .. } => {
             Ok(Some(audit))
         }
-        PdpDecision::Deny { .. } => Err(AuthError::PurposeRequired.into()),
+        PdpDecision::Deny { audit, .. } => Err(GovernedAccessError::with_pdp_audit(
+            AuthError::PurposeRequired.into(),
+            audit,
+        )),
+    }
+}
+
+#[derive(Debug)]
+struct GovernedAccessError {
+    error: Error,
+    pdp_audit: Option<PdpDecisionAudit>,
+}
+
+impl GovernedAccessError {
+    fn from_error(error: impl Into<Error>) -> Self {
+        Self {
+            error: error.into(),
+            pdp_audit: None,
+        }
+    }
+
+    fn with_pdp_audit(error: Error, audit: PdpDecisionAudit) -> Self {
+        Self {
+            error,
+            pdp_audit: Some(audit),
+        }
+    }
+}
+
+impl From<Error> for GovernedAccessError {
+    fn from(error: Error) -> Self {
+        Self::from_error(error)
     }
 }
 
@@ -966,6 +1004,14 @@ fn with_optional_audit_context(response: Response, context: Option<AuditContextE
         Some(context) => with_audit_context(response, context),
         None => response,
     }
+}
+
+fn access_error_response(
+    error: GovernedAccessError,
+    mut context: Option<AuditContextExt>,
+) -> Response {
+    attach_pdp_audit(&mut context, error.pdp_audit.as_ref());
+    with_optional_audit_context(error.error.into_response(), context)
 }
 
 fn with_audit_context(mut response: Response, context: AuditContextExt) -> Response {
