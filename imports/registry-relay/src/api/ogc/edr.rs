@@ -15,10 +15,13 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use tokio::sync::watch;
 
+use crate::api::governed::{
+    attach_pdp_audit, require_governed_read_access, GovernedAccessError, GovernedReadDecision,
+};
 use crate::audit::AuditContextExt;
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
-use crate::config::{AggregateConfig, AggregateSpatialConfig, Config, DatasetConfig};
+use crate::config::{AggregateConfig, AggregateSpatialConfig, Config, DatasetConfig, EntityConfig};
 use crate::entity::EntityRegistry;
 use crate::error::{AggregateError, AuthError, Error, FilterError, OgcError, SpatialError};
 use crate::ingest::ReadinessSnapshot;
@@ -39,7 +42,6 @@ const CONFORMANCE_AREA: &str = "http://www.opengis.net/spec/ogcapi-edr-1/1.1/con
 const CONFORMANCE_GEOJSON: &str = "http://www.opengis.net/spec/ogcapi-edr-1/1.1/conf/geojson";
 const CONFORMANCE_GROUP_BY: &str = "https://spec.spdci.org/spdci-aggregates-1/1.0/conf/group-by";
 const PROFILE_GROUP_BY: &str = "https://spec.spdci.org/spdci-aggregates-1/1.0/profile/group-by";
-const DATA_PURPOSE_HEADER: &str = "data-purpose";
 const NO_MATCH_ADMIN_ID: &str = "__registry_relay_no_matching_admin_geometry__";
 
 pub fn router<S>() -> Router<S>
@@ -244,9 +246,13 @@ async fn area_common(
     if let Err(error) = require_collection_source_read_scope(&principal, &collection) {
         return error.into_response();
     }
-    if let Err(error) = require_purpose_header(&config, &collection, &headers) {
-        return error.into_response();
-    }
+    let governed_decision =
+        match require_collection_source_governed_access(&runtime, &config, &collection, &headers) {
+            Ok(decision) => decision,
+            Err(error) => {
+                return edr_access_error_response(error, &collection, geometry_vertex_count)
+            }
+        };
     let AggregateSpatialConfig::AdminArea {
         dimension,
         geometry_entity,
@@ -311,13 +317,17 @@ async fn area_common(
         filters,
         max_rows: None,
     };
-    let result = match aggregate_query
+    let mut result = match aggregate_query
         .execute_aggregate(&collection.dataset_id, &collection.aggregate_id, request)
         .await
     {
         Ok(result) => result,
         Err(error) => return error.into_response(),
     };
+    crate::api::aggregates::redact_aggregate_result(
+        &mut result,
+        &governed_decision.redaction_fields,
+    );
     let as_of = resolve_as_of(
         runtime.readiness_rx().as_ref(),
         &result,
@@ -372,7 +382,7 @@ async fn area_common(
     }))
     .into_response();
     response.headers_mut().insert(header::CONTENT_TYPE, GEOJSON);
-    response.extensions_mut().insert(AuditContextExt {
+    let mut audit_context = Some(AuditContextExt {
         dataset_id: Some(result.dataset_id.clone()),
         aggregate_id: Some(result.aggregate_id.clone()),
         collection_id: Some(path.collection_id),
@@ -381,6 +391,10 @@ async fn area_common(
         geometry_vertex_count: Some(geometry_vertex_count),
         ..AuditContextExt::default()
     });
+    attach_pdp_audit(&mut audit_context, governed_decision.audit.as_ref());
+    if let Some(context) = audit_context {
+        response.extensions_mut().insert(context);
+    }
     response
 }
 
@@ -833,17 +847,26 @@ where
     serde_json::from_str(&format!(r#""{value}""#)).ok()
 }
 
-fn require_purpose_header(
+fn require_collection_source_governed_access(
+    runtime: &RuntimeSnapshot,
     config: &Config,
     collection: &EdrCollection<'_>,
     headers: &HeaderMap,
-) -> Result<(), Error> {
+) -> Result<GovernedReadDecision, GovernedAccessError> {
+    let entity = collection_source_entity(config, collection).map_err(GovernedAccessError::from)?;
+    require_governed_read_access(runtime, &collection.dataset_id, entity, headers)
+}
+
+fn collection_source_entity<'a>(
+    config: &'a Config,
+    collection: &EdrCollection<'_>,
+) -> Result<&'a EntityConfig, Error> {
     let source_entity = collection
         .aggregate
         .source_entity
         .as_deref()
         .ok_or(OgcError::CollectionNotFound)?;
-    let require = config
+    config
         .datasets
         .iter()
         .find(|dataset| dataset.id.as_str() == collection.dataset_id)
@@ -853,11 +876,27 @@ fn require_purpose_header(
                 .iter()
                 .find(|entity| entity.name == source_entity)
         })
-        .is_some_and(|entity| entity.api.require_purpose_header);
-    if !require || purpose_header_value(headers).is_some() {
-        return Ok(());
+        .ok_or_else(|| OgcError::CollectionNotFound.into())
+}
+
+fn edr_access_error_response(
+    error: GovernedAccessError,
+    collection: &EdrCollection<'_>,
+    geometry_vertex_count: u64,
+) -> Response {
+    let mut audit_context = Some(AuditContextExt {
+        dataset_id: Some(collection.dataset_id.clone()),
+        aggregate_id: Some(collection.aggregate_id.clone()),
+        collection_id: Some(collection.collection_id.clone()),
+        geometry_vertex_count: Some(geometry_vertex_count),
+        ..AuditContextExt::default()
+    });
+    attach_pdp_audit(&mut audit_context, error.pdp_audit.as_ref());
+    let mut response = error.error.into_response();
+    if let Some(context) = audit_context {
+        response.extensions_mut().insert(context);
     }
-    Err(AuthError::PurposeRequired.into())
+    response
 }
 
 fn require_collection_source_metadata_scope(
@@ -886,14 +925,6 @@ fn require_collection_source_read_scope(
         require_scope(principal, scope)?;
     }
     Ok(())
-}
-
-fn purpose_header_value(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(DATA_PURPOSE_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
 }
 
 fn require_any_metadata_scope(

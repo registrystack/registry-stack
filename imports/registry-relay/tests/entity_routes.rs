@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Focused route-shape tests for the entity API slice.
 
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode};
 use axum::middleware::from_fn;
 use axum::Extension;
 use axum_test::TestServer;
@@ -1045,6 +1045,91 @@ async fn governed_entity_policy_redacts_configured_fields_from_relationships() {
 }
 
 #[tokio::test]
+async fn governed_entity_policy_redacts_configured_fields_from_expansions() {
+    let policy = r#"          governed_policy:
+            permitted_purposes:
+              - https://data.example.test/purposes/testing
+            redaction_fields: [given_name]
+            trusted_context: {}
+"#;
+    let server = server_with_query_and_governed_entity_policy(policy).await;
+
+    let collection = server
+        .get("/v1/datasets/social_registry/entities/household/records?region=north&expand=members")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .await;
+
+    collection.assert_status(StatusCode::OK);
+    let body: Value = collection.json();
+    assert_eq!(
+        body["data"][0]["members"],
+        serde_json::json!([
+            {"id": "p-1", "household_id": "hh-1"},
+            {"id": "p-2", "household_id": "hh-1"}
+        ])
+    );
+
+    let record = server
+        .get("/v1/datasets/social_registry/entities/household/records/hh-1?expand=members")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .await;
+
+    record.assert_status(StatusCode::OK);
+    let body: Value = record.json();
+    assert_eq!(
+        body["members"],
+        serde_json::json!([
+            {"id": "p-1", "household_id": "hh-1"},
+            {"id": "p-2", "household_id": "hh-1"}
+        ])
+    );
+}
+
+#[tokio::test]
+async fn governed_entity_etag_varies_by_redaction_policy() {
+    let full = server_with_query()
+        .await
+        .get("/v1/datasets/social_registry/entities/individual/records/p-1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .await;
+
+    full.assert_status(StatusCode::OK);
+    let full_etag = full
+        .headers()
+        .get(header::ETAG)
+        .expect("full response has etag")
+        .to_str()
+        .expect("etag is text")
+        .to_string();
+
+    let policy = r#"          governed_policy:
+            permitted_purposes:
+              - https://data.example.test/purposes/testing
+            redaction_fields: [given_name]
+            trusted_context: {}
+"#;
+    let redacted = server_with_query_and_governed_entity_policy(policy)
+        .await
+        .get("/v1/datasets/social_registry/entities/individual/records/p-1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .add_header(header::IF_NONE_MATCH.as_str(), full_etag.as_str())
+        .await;
+
+    redacted.assert_status(StatusCode::OK);
+    let redacted_etag = redacted
+        .headers()
+        .get(header::ETAG)
+        .expect("redacted response has etag")
+        .to_str()
+        .expect("etag is text");
+    assert_ne!(redacted_etag, full_etag);
+    assert_eq!(
+        redacted.json::<Value>(),
+        serde_json::json!({"id": "p-1", "household_id": "hh-1"})
+    );
+}
+
+#[tokio::test]
 async fn governed_entity_policy_denies_when_required_trusted_context_is_missing() {
     let policy = r#"          governed_policy:
             permitted_purposes:
@@ -1059,7 +1144,7 @@ async fn governed_entity_policy_denies_when_required_trusted_context_is_missing(
         .await;
 
     resp.assert_status(StatusCode::FORBIDDEN);
-    assert_eq!(resp.json::<Value>()["code"], "auth.purpose_denied");
+    assert_eq!(resp.json::<Value>()["code"], "pdp.legal_basis_required");
 }
 
 #[tokio::test]
@@ -1112,7 +1197,7 @@ async fn governed_entity_collection_denial_audit_records_selector_pdp_provenance
         .await;
 
     resp.assert_status(StatusCode::FORBIDDEN);
-    assert_eq!(resp.json::<Value>()["code"], "auth.purpose_denied");
+    assert_eq!(resp.json::<Value>()["code"], "pdp.purpose_not_permitted");
 
     let records = audit_sink.snapshot();
     assert_eq!(
@@ -1125,7 +1210,7 @@ async fn governed_entity_collection_denial_audit_records_selector_pdp_provenance
     assert_eq!(record["entity_name"], "individual");
     assert_eq!(record["purpose"], "casework");
     assert_eq!(record["status_code"], 403);
-    assert_eq!(record["error_code"], "auth.purpose_denied");
+    assert_eq!(record["error_code"], "pdp.purpose_not_permitted");
     assert_eq!(record["pdp_policy_id"], "baseline-dpi-policy");
     assert_eq!(
         record["pdp_policy_hash"],
@@ -1146,19 +1231,19 @@ async fn entity_collection_rejects_purpose_outside_compiled_policy_without_selec
         .await;
 
     resp.assert_status(StatusCode::FORBIDDEN);
-    assert_eq!(resp.json::<Value>()["code"], "auth.purpose_denied");
+    assert_eq!(resp.json::<Value>()["code"], "pdp.purpose_not_permitted");
 }
 
 #[tokio::test]
-async fn entity_collection_rejects_purpose_when_compiled_policy_has_no_purpose_constraints() {
+async fn entity_collection_keeps_header_only_purpose_semantics_without_governed_policy() {
     let resp = server_with_query_without_dataset_policy()
         .await
         .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
         .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .await;
 
-    resp.assert_status(StatusCode::FORBIDDEN);
-    assert_eq!(resp.json::<Value>()["code"], "auth.purpose_denied");
+    resp.assert_status_ok();
+    assert_eq!(resp.json::<Value>()["data"][0]["id"], "p-1");
 }
 
 #[tokio::test]
@@ -1170,7 +1255,7 @@ async fn entity_collection_rejects_purpose_outside_compiled_policy_with_selector
         .await;
 
     resp.assert_status(StatusCode::FORBIDDEN);
-    assert_eq!(resp.json::<Value>()["code"], "auth.purpose_denied");
+    assert_eq!(resp.json::<Value>()["code"], "pdp.purpose_not_permitted");
 }
 
 #[tokio::test]
@@ -1182,7 +1267,7 @@ async fn entity_collection_rejects_selected_binding_with_unsupported_runtime_ter
         .await;
 
     resp.assert_status(StatusCode::FORBIDDEN);
-    assert_eq!(resp.json::<Value>()["code"], "auth.purpose_denied");
+    assert_eq!(resp.json::<Value>()["code"], "pdp.unsupported_policy_term");
 }
 
 #[tokio::test]

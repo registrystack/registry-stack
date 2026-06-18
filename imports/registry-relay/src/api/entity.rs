@@ -14,22 +14,19 @@ use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
 use axum::{Extension, Router};
-use registry_manifest_core::{
-    CompiledDatasetPolicy, CompiledMetadata, CompiledPolicyOperandValue, EvidencePackMetadata,
-};
-use registry_platform_pdp::{
-    decide as pdp_decide, Decision as PdpDecision, DecisionAudit as PdpDecisionAudit,
-    EvidenceRequestContext as PdpRequestContext, PolicyInput as PdpPolicyInput,
-};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 
+use crate::api::governed::{
+    attach_pdp_audit, entity_etag as governed_entity_etag, governed_cache_variant,
+    require_governed_read_access, strong_etag as governed_strong_etag, GovernedAccessError,
+    GovernedReadDecision,
+};
 use crate::audit::{AuditContextExt, ErrorCodeExt};
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
-use crate::config::{Config, DatasetId, ResourceId};
+use crate::config::{DatasetId, ResourceId};
 use crate::entity::{EntityModel, EntityRegistry};
 use crate::error::{AuthError, EntityError, Error, InternalError, SchemaError};
 use crate::ingest::ReadinessSnapshot;
@@ -43,7 +40,6 @@ use crate::runtime_config::{CursorSigner, RuntimeSnapshot, CURSOR_MAC_LEN};
 const PROBLEM_JSON: HeaderValue = HeaderValue::from_static("application/problem+json");
 const QUERY_UNAVAILABLE_CODE: &str = "entity.query_unavailable";
 const CURSOR_INVALIDATED_CODE: &str = "pagination.cursor_invalidated";
-const DATA_PURPOSE_HEADER: &str = "data-purpose";
 
 /// Defensive cap on the number of filter parameters accepted on a
 /// single entity-collection request. Pairs with the URI length cap in
@@ -177,7 +173,7 @@ async fn entity_collection(
         );
     };
     let mut audit_context = audit_context_for_entity(&registry, &path);
-    let required_filters = match entity_from_registry(&registry, &path.dataset_id, &path.entity) {
+    let collection_access = match entity_from_registry(&registry, &path.dataset_id, &path.entity) {
         Ok(entity) => {
             let read_decision = match require_read_access(
                 &runtime,
@@ -190,12 +186,12 @@ async fn entity_collection(
                 Err(error) => return access_error_response(error, audit_context),
             };
             attach_pdp_audit(&mut audit_context, read_decision.audit.as_ref());
-            if let Some(expand) = params.get("expand") {
+            let expansion_decisions = if let Some(expand) = params.get("expand") {
                 let expansions = match parse_expansions(expand) {
                     Ok(expansions) => expansions,
                     Err(error) => return error.into_response(),
                 };
-                if let Err(error) = require_expansion_access(
+                match require_expansion_access(
                     &registry,
                     &path.dataset_id,
                     entity,
@@ -204,13 +200,17 @@ async fn entity_collection(
                     &headers,
                     &runtime,
                 ) {
-                    return access_error_response(error, audit_context);
+                    Ok(decisions) => decisions,
+                    Err(error) => return access_error_response(error, audit_context),
                 }
+            } else {
+                BTreeMap::new()
+            };
+            EntityCollectionAccess {
+                required_filters: entity.api.required_filters.clone(),
+                read_decision,
+                expansion_decisions,
             }
-            (
-                entity.api.required_filters.clone(),
-                read_decision.redaction_fields,
-            )
         }
         Err(error) => return error.into_response(),
     };
@@ -241,15 +241,14 @@ async fn entity_collection(
         Err(PageParamError::CursorInvalidated) => return cursor_invalidated(),
         Err(PageParamError::Error(error)) => return error.into_response(),
     };
-    if !required_filters.0.is_empty() {
-        let satisfied = query_params
-            .query
-            .filters
-            .iter()
-            .any(|filter| satisfies_required_filter(&required_filters.0, filter));
+    if !collection_access.required_filters.is_empty() {
+        let satisfied =
+            query_params.query.filters.iter().any(|filter| {
+                satisfies_required_filter(&collection_access.required_filters, filter)
+            });
         if !satisfied {
             return Error::from(EntityError::FilterRequired {
-                required: required_filters.0,
+                required: collection_access.required_filters,
             })
             .into_response();
         }
@@ -273,7 +272,11 @@ async fn entity_collection(
         .await
     {
         Ok(mut rows) => {
-            redact_rows(&mut rows.rows, &required_filters.1);
+            redact_rows(
+                &mut rows.rows,
+                &collection_access.read_decision.redaction_fields,
+            );
+            redact_expanded_rows(&mut rows.rows, &collection_access.expansion_decisions);
             let cursor_context = CursorContext {
                 dataset_id: path.dataset_id.clone(),
                 entity: path.entity.clone(),
@@ -306,6 +309,11 @@ async fn entity_collection(
                 None
             };
             let body = paginated_body(Value::Array(rows.rows), next_cursor.as_deref());
+            let validator = governed_cache_variant_for_expansions(
+                &validator,
+                &collection_access.read_decision,
+                &collection_access.expansion_decisions,
+            );
             let etag = entity_etag(
                 "collection",
                 &path.dataset_id,
@@ -351,7 +359,7 @@ async fn entity_record(
     };
     let mut audit_context =
         audit_context_for_entity_record(&registry, &path.dataset_id, &path.entity);
-    let read_decision = match entity_from_registry(&registry, &path.dataset_id, &path.entity) {
+    let record_access = match entity_from_registry(&registry, &path.dataset_id, &path.entity) {
         Ok(entity) => {
             let read_decision = match require_read_access(
                 &runtime,
@@ -364,12 +372,12 @@ async fn entity_record(
                 Err(error) => return access_error_response(error, audit_context),
             };
             attach_pdp_audit(&mut audit_context, read_decision.audit.as_ref());
-            if let Some(expand) = params.get("expand") {
+            let expansion_decisions = if let Some(expand) = params.get("expand") {
                 let expansions = match parse_expansions(expand) {
                     Ok(expansions) => expansions,
                     Err(error) => return error.into_response(),
                 };
-                if let Err(error) = require_expansion_access(
+                match require_expansion_access(
                     &registry,
                     &path.dataset_id,
                     entity,
@@ -378,10 +386,16 @@ async fn entity_record(
                     &headers,
                     &runtime,
                 ) {
-                    return access_error_response(error, audit_context);
+                    Ok(decisions) => decisions,
+                    Err(error) => return access_error_response(error, audit_context),
                 }
+            } else {
+                BTreeMap::new()
+            };
+            EntityRecordAccess {
+                read_decision,
+                expansion_decisions,
             }
-            read_decision
         }
         Err(error) => return error.into_response(),
     };
@@ -392,7 +406,11 @@ async fn entity_record(
         );
     };
 
-    let validator = format!("{}?{}", path.id, params_validator(&params));
+    let validator = governed_cache_variant_for_expansions(
+        &format!("{}?{}", path.id, params_validator(&params)),
+        &record_access.read_decision,
+        &record_access.expansion_decisions,
+    );
     let query_params = match record_query_from_params(params) {
         Ok(query_params) => query_params,
         Err(error) => return error.into_response(),
@@ -420,7 +438,8 @@ async fn entity_record(
                 &validator,
             );
             let mut record = record;
-            redact_record(&mut record, &read_decision.redaction_fields);
+            redact_record(&mut record, &record_access.read_decision.redaction_fields);
+            redact_expanded_record(&mut record, &record_access.expansion_decisions);
             let plain_response = if let Some(etag) = etag.as_deref() {
                 if if_none_match_matches(&headers, etag) {
                     not_modified_response(etag)
@@ -477,8 +496,8 @@ async fn entity_relationship(
         &path.relationship,
     );
     let mut page_context = None;
-    let relationship_redaction_fields;
-    match entity_from_registry(&registry, &path.dataset_id, &path.entity) {
+    let relationship_access = match entity_from_registry(&registry, &path.dataset_id, &path.entity)
+    {
         Ok(entity) => {
             let read_decision = match require_read_access(
                 &runtime,
@@ -503,7 +522,6 @@ async fn entity_relationship(
                 Ok(decision) => decision,
                 Err(error) => return access_error_response(error, audit_context),
             };
-            relationship_redaction_fields = target_read_decision.redaction_fields;
             if let Some(relationship) = entity.relationships.get(&path.relationship) {
                 let target =
                     match entity_from_registry(&registry, &path.dataset_id, &relationship.target) {
@@ -529,9 +547,13 @@ async fn entity_relationship(
                     });
                 }
             }
+            EntityRelationshipAccess {
+                read_decision,
+                target_read_decision,
+            }
         }
         Err(error) => return error.into_response(),
-    }
+    };
 
     let Some(query) = runtime.query() else {
         return query_unavailable(
@@ -546,11 +568,17 @@ async fn entity_relationship(
     };
 
     let link_params = params.clone();
-    let validator = format!(
-        "{}:{}?{}",
-        path.id,
-        path.relationship,
-        params_validator(&link_params)
+    let validator = governed_cache_variant(
+        &format!(
+            "{}:{}?{}",
+            path.id,
+            path.relationship,
+            params_validator(&link_params)
+        ),
+        [
+            &relationship_access.read_decision,
+            &relationship_access.target_read_decision,
+        ],
     );
     let relationship_query =
         match relationship_query_from_params(&signer, params, page_context.as_ref()) {
@@ -570,7 +598,10 @@ async fn entity_relationship(
         .await
     {
         Ok(mut page) => {
-            redact_relationship_value(&mut page.value, &relationship_redaction_fields);
+            redact_relationship_value(
+                &mut page.value,
+                &relationship_access.target_read_decision.redaction_fields,
+            );
             let etag = entity_etag(
                 "relationship",
                 &path.dataset_id,
@@ -658,7 +689,7 @@ fn require_read_access(
 ) -> Result<GovernedReadDecision, GovernedAccessError> {
     require_principal_scope(principal, &entity.access.read_scope)
         .map_err(GovernedAccessError::from)?;
-    require_purpose_header_decision(runtime, dataset_id, entity, headers)
+    require_governed_read_access(runtime, dataset_id, entity, headers)
 }
 
 fn require_expansion_access(
@@ -669,7 +700,8 @@ fn require_expansion_access(
     principal: Option<Extension<Principal>>,
     headers: &HeaderMap,
     runtime: &RuntimeSnapshot,
-) -> Result<(), GovernedAccessError> {
+) -> Result<BTreeMap<String, GovernedReadDecision>, GovernedAccessError> {
+    let mut decisions = BTreeMap::new();
     for expansion in expansions {
         if expansion == "*" || expansion.contains('.') {
             return Err(GovernedAccessError::from_error(
@@ -695,9 +727,11 @@ fn require_expansion_access(
             headers,
             runtime,
         )
-        .map(|_| ())?;
+        .map(|decision| {
+            decisions.insert(expansion.clone(), decision);
+        })?;
     }
-    Ok(())
+    Ok(decisions)
 }
 
 fn require_relationship_target_access(
@@ -717,95 +751,34 @@ fn require_relationship_target_access(
         .map_err(GovernedAccessError::from)?;
     require_principal_scope(principal, &target.access.read_scope)
         .map_err(GovernedAccessError::from)?;
-    require_purpose_header_decision(runtime, dataset_id, target, headers)
+    require_governed_read_access(runtime, dataset_id, target, headers)
 }
 
-fn require_purpose_header_decision(
-    runtime: &RuntimeSnapshot,
-    dataset_id: &str,
-    entity: &EntityModel,
-    headers: &HeaderMap,
-) -> Result<GovernedReadDecision, GovernedAccessError> {
-    let governed_policy = entity.api.governed_policy.as_ref();
-    if !entity.api.require_purpose_header && governed_policy.is_none() {
-        return Ok(GovernedReadDecision::default());
-    }
-    let purpose = purpose_header_value(headers, DATA_PURPOSE_HEADER)
-        .ok_or_else(|| GovernedAccessError::from_error(AuthError::PurposeRequired))?;
-    let context = PdpRequestContext {
-        purpose: purpose.to_string(),
-        legal_basis_ref: governed_policy
-            .and_then(|policy| policy.trusted_context.legal_basis_ref.clone()),
-        consent_ref: governed_policy.and_then(|policy| policy.trusted_context.consent_ref.clone()),
-        asserted_assurance: governed_policy
-            .and_then(|policy| policy.trusted_context.asserted_assurance.clone()),
-        jurisdiction: governed_policy
-            .and_then(|policy| policy.trusted_context.jurisdiction.clone()),
-        source_observed_age_seconds: governed_policy
-            .and_then(|policy| policy.trusted_context.source_observed_age_seconds),
-    };
-    let selected_policy = selected_ecosystem_policy(runtime).map_err(GovernedAccessError::from)?;
-    let mut purpose_constraints =
-        governed_purpose_constraints(runtime, dataset_id).unwrap_or_default();
-    if let Some(configured_purposes) = governed_policy
-        .map(|policy| policy.permitted_purposes.clone())
-        .filter(|purposes| !purposes.is_empty())
-    {
-        purpose_constraints.push(configured_purposes);
-    }
-    if purpose_constraints.is_empty() {
-        return Err(GovernedAccessError::from_error(AuthError::PurposeDenied));
-    }
-    let policy = PdpPolicyInput {
-        policy_id: selected_policy
-            .as_ref()
-            .map(|policy| policy.policy_id.clone())
-            .unwrap_or_else(|| format!("relay.entity.{}.purpose-required", entity.name)),
-        policy_hash: selected_policy
-            .as_ref()
-            .map(|policy| policy.policy_hash.clone())
-            .unwrap_or_else(|| entity_purpose_policy_hash(entity, &purpose_constraints)),
-        rule_ids: vec![format!("entity-purpose-required:{}", entity.name)],
-        purpose_constraints,
-        permitted_jurisdictions: governed_policy
-            .map(|policy| policy.permitted_jurisdictions.clone())
-            .unwrap_or_default(),
-        allowed_assurance: governed_policy
-            .map(|policy| policy.allowed_assurance.clone())
-            .unwrap_or_default(),
-        minimum_assurance: governed_policy.and_then(|policy| policy.minimum_assurance.clone()),
-        max_source_age_seconds: governed_policy.and_then(|policy| policy.max_source_age_seconds),
-        require_legal_basis: governed_policy.is_some_and(|policy| policy.require_legal_basis),
-        require_consent: governed_policy.is_some_and(|policy| policy.require_consent),
-        redaction_fields: governed_policy
-            .map(|policy| policy.redaction_fields.iter().cloned().collect())
-            .unwrap_or_default(),
-        unsupported_odrl_terms: selected_policy
-            .map(|policy| policy.unsupported_odrl_terms)
-            .unwrap_or_default(),
-    };
-    match pdp_decide(&context, &policy) {
-        PdpDecision::Permit(audit) => Ok(GovernedReadDecision {
-            audit: Some(audit),
-            redaction_fields: BTreeSet::new(),
-        }),
-        PdpDecision::PermitWithRedaction {
-            audit, field_set, ..
-        } => Ok(GovernedReadDecision {
-            audit: Some(audit),
-            redaction_fields: field_set,
-        }),
-        PdpDecision::Deny { audit, .. } => Err(GovernedAccessError::with_pdp_audit(
-            AuthError::PurposeDenied.into(),
-            audit,
-        )),
-    }
+struct EntityCollectionAccess {
+    required_filters: Vec<String>,
+    read_decision: GovernedReadDecision,
+    expansion_decisions: BTreeMap<String, GovernedReadDecision>,
 }
 
-#[derive(Debug, Default)]
-struct GovernedReadDecision {
-    audit: Option<PdpDecisionAudit>,
-    redaction_fields: BTreeSet<String>,
+struct EntityRecordAccess {
+    read_decision: GovernedReadDecision,
+    expansion_decisions: BTreeMap<String, GovernedReadDecision>,
+}
+
+struct EntityRelationshipAccess {
+    read_decision: GovernedReadDecision,
+    target_read_decision: GovernedReadDecision,
+}
+
+fn governed_cache_variant_for_expansions(
+    base: &str,
+    read_decision: &GovernedReadDecision,
+    expansion_decisions: &BTreeMap<String, GovernedReadDecision>,
+) -> String {
+    governed_cache_variant(
+        base,
+        std::iter::once(read_decision).chain(expansion_decisions.values()),
+    )
 }
 
 fn redact_rows(rows: &mut [Value], field_names: &BTreeSet<String>) {
@@ -816,6 +789,39 @@ fn redact_rows(rows: &mut [Value], field_names: &BTreeSet<String>) {
 
 fn redact_record(record: &mut EntityRecord, field_names: &BTreeSet<String>) {
     redact_value_fields(&mut record.value, field_names);
+}
+
+fn redact_expanded_rows(
+    rows: &mut [Value],
+    expansion_decisions: &BTreeMap<String, GovernedReadDecision>,
+) {
+    for row in rows {
+        redact_expanded_value(row, expansion_decisions);
+    }
+}
+
+fn redact_expanded_record(
+    record: &mut EntityRecord,
+    expansion_decisions: &BTreeMap<String, GovernedReadDecision>,
+) {
+    redact_expanded_value(&mut record.value, expansion_decisions);
+}
+
+fn redact_expanded_value(
+    value: &mut Value,
+    expansion_decisions: &BTreeMap<String, GovernedReadDecision>,
+) {
+    if expansion_decisions.is_empty() {
+        return;
+    }
+    let Value::Object(object) = value else {
+        return;
+    };
+    for (expansion, decision) in expansion_decisions {
+        if let Some(expanded) = object.get_mut(expansion) {
+            redact_relationship_value(expanded, &decision.redaction_fields);
+        }
+    }
 }
 
 fn redact_relationship_value(value: &mut Value, field_names: &BTreeSet<String>) {
@@ -836,201 +842,6 @@ fn redact_value_fields(value: &mut Value, field_names: &BTreeSet<String>) {
     for field_name in field_names {
         object.remove(field_name);
     }
-}
-
-#[derive(Debug)]
-struct GovernedAccessError {
-    error: Error,
-    pdp_audit: Option<PdpDecisionAudit>,
-}
-
-impl GovernedAccessError {
-    fn from_error(error: impl Into<Error>) -> Self {
-        Self {
-            error: error.into(),
-            pdp_audit: None,
-        }
-    }
-
-    fn with_pdp_audit(error: Error, audit: PdpDecisionAudit) -> Self {
-        Self {
-            error,
-            pdp_audit: Some(audit),
-        }
-    }
-}
-
-impl From<Error> for GovernedAccessError {
-    fn from(error: Error) -> Self {
-        Self::from_error(error)
-    }
-}
-
-fn attach_pdp_audit(context: &mut Option<AuditContextExt>, audit: Option<&PdpDecisionAudit>) {
-    let (Some(context), Some(audit)) = (context.as_mut(), audit) else {
-        return;
-    };
-    context.pdp_policy_id = Some(audit.policy_id.clone());
-    context.pdp_policy_hash = Some(audit.policy_hash.clone());
-    context.pdp_evaluated_rule_ids =
-        (!audit.evaluated_rule_ids.is_empty()).then(|| audit.evaluated_rule_ids.clone());
-}
-
-const ODRL_PURPOSE: &str = "http://www.w3.org/ns/odrl/2/purpose";
-const ODRL_IS_A: &str = "http://www.w3.org/ns/odrl/2/isA";
-const ODRL_PURPOSE_COMPACT: &str = "odrl:purpose";
-
-fn governed_purpose_constraints(
-    runtime: &RuntimeSnapshot,
-    dataset_id: &str,
-) -> Option<Vec<Vec<String>>> {
-    let compiled = runtime.compiled_metadata()?;
-    let dataset = compiled.dataset(dataset_id)?;
-    governed_purpose_constraints_for_policy(&dataset.policy)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SelectedEcosystemPolicy {
-    policy_id: String,
-    policy_hash: String,
-    unsupported_odrl_terms: Vec<String>,
-}
-
-fn selected_ecosystem_policy(
-    runtime: &RuntimeSnapshot,
-) -> Result<Option<SelectedEcosystemPolicy>, Error> {
-    let Some(config) = runtime.config() else {
-        return Ok(None);
-    };
-    let Some(compiled) = runtime.compiled_metadata() else {
-        return selected_ecosystem_policy_from_metadata(&config, None);
-    };
-    selected_ecosystem_policy_from_metadata(&config, Some(compiled.as_ref()))
-}
-
-fn selected_ecosystem_policy_from_metadata(
-    config: &Config,
-    compiled: Option<&CompiledMetadata>,
-) -> Result<Option<SelectedEcosystemPolicy>, Error> {
-    let Some(selector) = config
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.ecosystem_binding.as_ref())
-    else {
-        return Ok(None);
-    };
-    let Some(compiled) = compiled else {
-        tracing::error!(
-            code = "runtime.binding.ecosystem_binding_missing",
-            binding_id = %selector.id,
-            binding_version = selector.version.as_deref().unwrap_or("<any>"),
-            "configured ecosystem binding selector is unavailable at request time"
-        );
-        return Err(InternalError::Unhandled.into());
-    };
-    let binding = compiled.ecosystem_bindings().iter().find(|binding| {
-        binding.id == selector.id
-            && selector
-                .version
-                .as_deref()
-                .is_none_or(|version| binding.version == version)
-    });
-    let Some(binding) = binding else {
-        tracing::error!(
-            code = "runtime.binding.ecosystem_binding_missing",
-            binding_id = %selector.id,
-            binding_version = selector.version.as_deref().unwrap_or("<any>"),
-            "configured ecosystem binding selector is absent at request time"
-        );
-        return Err(InternalError::Unhandled.into());
-    };
-    if binding.binding_type != "governed-evidence" {
-        tracing::error!(
-            code = "runtime.binding.ecosystem_binding_invalid",
-            binding_id = %binding.id,
-            binding_version = %binding.version,
-            binding_type = %binding.binding_type,
-            "configured ecosystem binding is not governed evidence at request time"
-        );
-        return Err(InternalError::Unhandled.into());
-    }
-    evidence_pack_policy(binding.evidence_pack.as_ref())
-        .ok_or_else(|| {
-            tracing::error!(
-                code = "runtime.binding.ecosystem_binding_invalid",
-                binding_id = %binding.id,
-                binding_version = %binding.version,
-                "configured ecosystem binding evidence pack is incomplete at request time"
-            );
-            Error::from(InternalError::Unhandled)
-        })
-        .map(Some)
-}
-
-fn evidence_pack_policy(
-    evidence_pack: Option<&EvidencePackMetadata>,
-) -> Option<SelectedEcosystemPolicy> {
-    let evidence_pack = evidence_pack?;
-    let enforcement = evidence_pack.odrl_enforcement.as_ref()?;
-    let unsupported_odrl_terms = enforcement
-        .constraint_terms
-        .iter()
-        .filter(|term| term.as_str() != ODRL_PURPOSE_COMPACT)
-        .cloned()
-        .collect();
-    Some(SelectedEcosystemPolicy {
-        policy_id: evidence_pack.policy_id.as_ref()?.trim().to_string(),
-        policy_hash: evidence_pack.policy_hash.as_ref()?.trim().to_string(),
-        unsupported_odrl_terms,
-    })
-}
-
-fn governed_purpose_constraints_for_policy(
-    policy: &CompiledDatasetPolicy,
-) -> Option<Vec<Vec<String>>> {
-    let mut purposes = policy
-        .permissions
-        .iter()
-        .flat_map(|permission| &permission.constraints)
-        .filter(|constraint| {
-            constraint.left_operand == ODRL_PURPOSE && constraint.operator == ODRL_IS_A
-        })
-        .filter_map(|constraint| match &constraint.right_operand {
-            CompiledPolicyOperandValue::Iri(value) if !value.trim().is_empty() => {
-                Some(value.trim().to_string())
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    purposes.sort();
-    purposes.dedup();
-    if purposes.is_empty() {
-        None
-    } else {
-        Some(vec![purposes])
-    }
-}
-
-fn entity_purpose_policy_hash(entity: &EntityModel, purpose_constraints: &[Vec<String>]) -> String {
-    let material = format!(
-        "entity={};table_id={};read_scope={};require_purpose_header={};purpose_constraints={:?}",
-        entity.name,
-        entity.table_id,
-        entity.access.read_scope,
-        entity.api.require_purpose_header,
-        purpose_constraints
-    );
-    let mut hasher = Sha256::new();
-    hasher.update(material.as_bytes());
-    format!("sha256:{}", hex_lower(&hasher.finalize()))
-}
-
-fn purpose_header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
-    headers
-        .get(name)
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
 }
 
 fn field_name_by_table_column(entity: &EntityModel, table_column: &str) -> Result<String, Error> {
@@ -1102,15 +913,12 @@ pub fn entity_etag(
     ingest_version: Option<&str>,
     variant: &str,
 ) -> Option<String> {
-    let ingest_version = ingest_version?;
-    Some(strong_etag(&[
-        "entity",
-        kind,
-        dataset_id,
-        entity_name,
-        ingest_version,
-        variant,
-    ]))
+    governed_entity_etag(kind, dataset_id, entity_name, ingest_version, variant)
+}
+
+#[doc(hidden)]
+pub fn strong_etag(parts: &[&str]) -> String {
+    governed_strong_etag(parts)
 }
 
 fn params_validator(params: &HashMap<String, String>) -> String {
@@ -1119,18 +927,6 @@ fn params_validator(params: &HashMap<String, String>) -> String {
         .map(|(name, value)| (name.as_str(), value.as_str()))
         .collect::<BTreeMap<_, _>>();
     serde_json::to_string(&params).expect("string map serializes")
-}
-
-#[doc(hidden)]
-pub fn strong_etag(parts: &[&str]) -> String {
-    let mut hasher = Sha256::new();
-    for part in parts {
-        hasher.update(part.len().to_string().as_bytes());
-        hasher.update(b":");
-        hasher.update(part.as_bytes());
-        hasher.update(b";");
-    }
-    format!(r#""sha256:{}""#, hex_lower(&hasher.finalize()))
 }
 
 fn with_optional_etag(response: Response, etag: Option<&str>) -> Response {
@@ -1691,97 +1487,4 @@ fn cursor_invalidated() -> Response {
         .extensions_mut()
         .insert(ErrorCodeExt(CURSOR_INVALIDATED_CODE.to_string()));
     response
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn config_with_selector() -> Config {
-        serde_saphyr::from_str(
-            r#"
-server:
-  bind: 127.0.0.1:0
-metadata:
-  source:
-    path: metadata.yaml
-  ecosystem_binding:
-    id: baseline-dpi/v1
-    version: v1
-catalog:
-  title: Test
-  base_url: https://data.example.test
-  publisher: Test
-auth:
-  mode: api_key
-  api_keys: []
-datasets: []
-audit:
-  sink: stdout
-  format: jsonl
-"#,
-        )
-        .expect("config parses")
-    }
-
-    fn compiled_metadata_with_binding() -> CompiledMetadata {
-        let manifest: registry_manifest_core::MetadataManifest = serde_saphyr::from_str(
-            r#"
-schema_version: registry-manifest/v1
-catalog:
-  id: test
-  base_url: https://data.example.test
-  title: Test
-  publisher:
-    name: Test
-ecosystem_bindings:
-  - id: baseline-dpi/v1
-    version: v1
-    profile: baseline-dpi
-    type: governed-evidence
-    evidence_pack:
-      policy_id: baseline-dpi-policy
-      policy_hash: sha256:3333333333333333333333333333333333333333333333333333333333333333
-      odrl_enforcement:
-        profile: registry-evidence-gateway-pdp/v1
-        constraint_terms:
-          - odrl:purpose
-datasets: []
-"#,
-        )
-        .expect("metadata manifest parses");
-        registry_manifest_core::compile_manifest(&manifest).expect("metadata compiles")
-    }
-
-    #[test]
-    fn selected_ecosystem_policy_uses_evidence_pack_identity() {
-        let config = config_with_selector();
-        let compiled = compiled_metadata_with_binding();
-
-        let selected = selected_ecosystem_policy_from_metadata(&config, Some(&compiled))
-            .expect("selected binding resolves")
-            .expect("selector is configured");
-
-        assert_eq!(selected.policy_id, "baseline-dpi-policy");
-        assert_eq!(
-            selected.policy_hash,
-            "sha256:3333333333333333333333333333333333333333333333333333333333333333"
-        );
-    }
-
-    #[test]
-    fn selected_ecosystem_policy_is_absent_without_selector() {
-        let mut config = config_with_selector();
-        config
-            .metadata
-            .as_mut()
-            .expect("metadata config")
-            .ecosystem_binding = None;
-        let compiled = compiled_metadata_with_binding();
-
-        let selected = selected_ecosystem_policy_from_metadata(&config, Some(&compiled))
-            .expect("metadata without selector is accepted");
-
-        assert_eq!(selected, None);
-    }
 }

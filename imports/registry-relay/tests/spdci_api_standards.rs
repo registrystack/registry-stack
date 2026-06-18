@@ -683,6 +683,85 @@ async fn spdci_routes_enforce_entity_purpose_header_gate() {
 }
 
 #[tokio::test]
+async fn spdci_routes_enforce_governed_purpose_and_redact_reg_records() {
+    let server = try_server_with_entity_api_extra(
+        r#"          governed_policy:
+            permitted_purposes:
+              - benefits
+            redaction_fields: [impairment_type]
+            trusted_context: {}
+"#,
+    )
+    .await
+    .expect("test server builds");
+
+    let denied = server
+        .post("/dci/dr/registry/sync/search")
+        .add_header("data-purpose", "casework")
+        .json(&sync_search_body(
+            "msg-governed-purpose-denied",
+            "txn-governed-purpose-denied",
+        ))
+        .await;
+    denied.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(denied.json::<Value>()["code"], "pdp.purpose_not_permitted");
+
+    let search = server
+        .post("/dci/dr/registry/sync/search")
+        .add_header("data-purpose", "benefits")
+        .json(&sync_search_body(
+            "msg-governed-purpose-search",
+            "txn-governed-purpose-search",
+        ))
+        .await;
+    search.assert_status(StatusCode::OK);
+    let body: Value = search.json();
+    let record = &body["message"]["search_response"][0]["data"]["reg_records"][0];
+    assert_eq!(record["id"], "ABC451123");
+    assert!(record.get("impairment_type").is_none());
+
+    let details = server
+        .post("/dci/dr/registry/sync/get-disability-details")
+        .add_header("data-purpose", "benefits")
+        .json(&disabled_criteria_body(
+            "msg-governed-purpose-details",
+            "txn-governed-purpose-details",
+        ))
+        .await;
+    details.assert_status(StatusCode::OK);
+    let body: Value = details.json();
+    let record = &body["message"]["search_response"][0]["data"]["reg_records"][0];
+    assert_eq!(record["id"], "ABC451123");
+    assert!(record.get("impairment_type").is_none());
+}
+
+#[tokio::test]
+async fn disabled_status_denies_when_status_source_field_is_redacted() {
+    let server = try_server_with_entity_api_extra(
+        r#"          governed_policy:
+            permitted_purposes:
+              - benefits
+            redaction_fields: [disability_status]
+            trusted_context: {}
+"#,
+    )
+    .await
+    .expect("test server builds");
+
+    let response = server
+        .post("/dci/dr/registry/sync/disabled")
+        .add_header("data-purpose", "benefits")
+        .json(&disabled_criteria_body(
+            "msg-governed-status-redacted",
+            "txn-governed-status-redacted",
+        ))
+        .await;
+
+    response.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(response.json::<Value>()["code"], "auth.purpose_denied");
+}
+
+#[tokio::test]
 async fn spdci_routes_enforce_entity_required_filter_gate() {
     let server =
         try_server_with_entity_api_extra("          required_filters: [impairment_type]\n")
@@ -1302,6 +1381,63 @@ async fn sync_search_projects_response_fields_into_nested_reg_record_when_availa
         record.get("impairment_type").is_none(),
         "response_fields should project the configured SP DCI shape, not the raw entity row"
     );
+}
+
+#[tokio::test]
+async fn sync_search_redacts_mapped_response_field_without_failing_projection() {
+    let server = match try_server_with_options_and_entity_api_extra(
+        r#"        response_fields:
+          personal_details.member_identifier: id
+          disability_details.impairment_type: impairment_type
+"#,
+        r#"          governed_policy:
+            permitted_purposes:
+              - benefits
+            redaction_fields: [impairment_type]
+            trusted_context: {}
+"#,
+        true,
+    )
+    .await
+    {
+        Ok(server) => server,
+        Err(error) if response_mapping_runtime_unavailable(&error) => return,
+        Err(error) => panic!("test server should build: {error:?}"),
+    };
+
+    let response = server
+        .post("/dci/dr/registry/sync/search")
+        .add_header("data-purpose", "benefits")
+        .json(&json!({
+            "header": valid_header("msg-search-response-fields-redacted"),
+            "message": {
+                "transaction_id": "txn-search-response-fields-redacted",
+                "search_request": [{
+                    "reference_id": "ref-search-response-fields-redacted",
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "search_criteria": {
+                        "query_type": "idtype-value",
+                        "query": {
+                            "type": "DISABILITY_ID",
+                            "value": "ABC451123"
+                        }
+                    }
+                }]
+            }
+        }))
+        .await;
+
+    response.assert_status(StatusCode::OK);
+    let body: Value = response.json();
+    let record = &body["message"]["search_response"][0]["data"]["reg_records"][0];
+    assert_eq!(record["personal_details"]["member_identifier"], "ABC451123");
+    assert!(
+        record["disability_details"]
+            .get("impairment_type")
+            .is_none(),
+        "mapped target path for a redacted source field must be omitted"
+    );
+    assert!(record.get("impairment_type").is_none());
 }
 
 #[cfg(feature = "standards-cel-mapping")]

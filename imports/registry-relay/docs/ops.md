@@ -391,7 +391,7 @@ For container deployments, `stdout` is still the simplest default because the pl
 
 Audit records must not contain raw secrets or raw API keys. Mark identifier fields as `sensitive: true` in table or entity field config when query values should be deterministically hashed in audit rather than omitted entirely. The flag is audit-only in beta; it does not remove fields from authorized API responses.
 
-**Data-Purpose audit semantics** (frozen, 2026-06-11 evidence-contracts decision record, D5): when the `Data-Purpose` header is present on a request, its value is always recorded verbatim in the audit trail (`purpose` field). Header presence can be required per entity via `require_purpose_header: true`; a missing header returns `400 auth.purpose_required`. Purpose values are not enforced or compared at the consultation layer; Registry Notary is the purpose-certification layer. Value-level allowlists, if ever added, will arrive as additive opt-in configuration.
+**Data-Purpose audit semantics** (frozen, 2026-06-11 evidence-contracts decision record, D5): when the `Data-Purpose` header is present on a request, its value is always recorded verbatim in the audit trail (`purpose` field). Header presence can be required per entity via `require_purpose_header: true`; a missing header returns `400 auth.purpose_required`. Without an entity `governed_policy`, purpose values are not enforced or compared at the consultation layer; Registry Notary is the purpose-certification layer. With an entity `governed_policy`, governed evidence-gateway routes evaluate the configured PDP purpose allowlist and return stable `pdp.*` denials. Value-level allowlists remain additive opt-in configuration.
 
 ## Dataset Refresh And Reload
 

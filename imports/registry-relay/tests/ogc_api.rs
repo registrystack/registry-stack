@@ -31,7 +31,11 @@ fn id<T: serde::de::DeserializeOwned>(value: &str) -> T {
     serde_json::from_str(&format!(r#""{value}""#)).expect("id deserializes")
 }
 
-fn write_config(tmp: &TempDir, require_purpose_header: bool) -> std::path::PathBuf {
+fn write_config_with_entity_api_extra(
+    tmp: &TempDir,
+    require_purpose_header: bool,
+    entity_api_extra: &str,
+) -> std::path::PathBuf {
     let path = tmp.path().join("ogc_api.yaml");
     std::fs::write(
         &path,
@@ -104,6 +108,7 @@ datasets:
           default_limit: 100
           max_limit: 1000
           require_purpose_header: {require_purpose_header}
+{entity_api_extra}
           required_filters: [facility_type]
           allowed_filters:
             - field: facility_type
@@ -130,9 +135,23 @@ audit:
 }
 
 async fn server_with_purpose(scopes: &[&str], require_purpose_header: bool) -> TestServer {
+    server_with_purpose_and_entity_api_extra(scopes, require_purpose_header, "").await
+}
+
+async fn server_with_purpose_and_entity_api_extra(
+    scopes: &[&str],
+    require_purpose_header: bool,
+    entity_api_extra: &str,
+) -> TestServer {
     let tmp = TempDir::new().expect("tempdir");
-    let cfg =
-        Arc::new(config::load(&write_config(&tmp, require_purpose_header)).expect("config loads"));
+    let cfg = Arc::new(
+        config::load(&write_config_with_entity_api_extra(
+            &tmp,
+            require_purpose_header,
+            entity_api_extra,
+        ))
+        .expect("config loads"),
+    );
     let registry = Arc::new(EntityRegistry::from_config(&cfg).expect("registry compiles"));
     let ctx = Arc::new(SessionContext::new());
 
@@ -331,8 +350,17 @@ async fn item_by_id_preserves_required_filter_context_and_null_geometry() {
 
 #[tokio::test]
 async fn ogc_items_and_features_enforce_required_purpose_header() {
-    let server =
-        server_with_purpose(&["civic_registry:metadata", "civic_registry:rows"], true).await;
+    let policy = r#"          governed_policy:
+            permitted_purposes:
+              - capacity planning
+            trusted_context: {}
+"#;
+    let server = server_with_purpose_and_entity_api_extra(
+        &["civic_registry:metadata", "civic_registry:rows"],
+        true,
+        policy,
+    )
+    .await;
 
     let response = server
         .get("/ogc/v1/datasets/civic_registry/collections/facilities/items?facility_type=clinic")
@@ -364,6 +392,47 @@ async fn ogc_items_and_features_enforce_required_purpose_header() {
         .add_header("data-purpose", "capacity planning")
         .await;
     response.assert_status_ok();
+}
+
+#[tokio::test]
+async fn ogc_items_enforce_governed_purpose_and_redaction() {
+    let policy = r#"          governed_policy:
+            permitted_purposes:
+              - capacity planning
+            redaction_fields: [name]
+            trusted_context: {}
+"#;
+    let server = server_with_purpose_and_entity_api_extra(
+        &["civic_registry:metadata", "civic_registry:rows"],
+        true,
+        policy,
+    )
+    .await;
+
+    let denied = server
+        .get("/ogc/v1/datasets/civic_registry/collections/facilities/items?facility_type=clinic")
+        .add_header("data-purpose", "casework")
+        .await;
+    denied.assert_status_forbidden();
+    assert_eq!(denied.json::<Value>()["code"], "pdp.purpose_not_permitted");
+
+    let collection = server
+        .get("/ogc/v1/datasets/civic_registry/collections/facilities/items?facility_type=clinic")
+        .add_header("data-purpose", "capacity planning")
+        .await;
+    collection.assert_status_ok();
+    let body: Value = collection.json();
+    assert!(body["features"][0]["properties"].get("name").is_none());
+    assert_eq!(body["features"][0]["properties"]["facility_type"], "clinic");
+
+    let item = server
+        .get("/ogc/v1/datasets/civic_registry/collections/facilities/items/FAC-001?facility_type=clinic")
+        .add_header("data-purpose", "capacity planning")
+        .await;
+    item.assert_status_ok();
+    let body: Value = item.json();
+    assert!(body["properties"].get("name").is_none());
+    assert_eq!(body["properties"]["facility_type"], "clinic");
 }
 
 #[tokio::test]

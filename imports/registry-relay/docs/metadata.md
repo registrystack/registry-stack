@@ -380,9 +380,10 @@ just validate-catalog-semic-local catalog=target/metadata.bregdcat-ap.jsonld pro
 
 This section is the canonical reference for how Registry Relay publishes ODRL
 policy metadata. Registry Relay publishes descriptive ODRL Offers for dataset
-discovery and governance review. It does not evaluate policies, enforce
-purposes or duties at request time, create ODRL Agreements, negotiate
-Dataspace Protocol contracts, or grant access.
+discovery and governance review. Governed evidence-gateway routes may evaluate
+the supported PDP subset declared by `registry-evidence-gateway-pdp/v1` before
+serving data. Registry Relay does not create ODRL Agreements, negotiate
+Dataspace Protocol contracts, or grant access from metadata alone.
 
 ### Dataset-scoped Offers
 
@@ -589,10 +590,10 @@ with the failing field path in the error payload.
 
 Registry Relay publishes descriptive ODRL policy metadata. It does not:
 
-- evaluate purpose, recipient, legal basis, or duties at request time
+- evaluate ODRL terms outside the supported governed evidence-gateway PDP subset
 - create ODRL Agreements
 - negotiate DSP contracts or Transfer Processes
-- enforce ODRL at the API layer
+- enforce ODRL Offers as accepted agreements at the API layer
 - emit `dspace:dataServiceType` on normal Relay REST, OGC API, or SP DCI
   endpoints (those endpoints use `dcat:endpointURL`,
   `dcat:endpointDescription`, `dcterms:conformsTo`, and `dcterms:format`)
