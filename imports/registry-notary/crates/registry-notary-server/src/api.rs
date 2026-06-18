@@ -2563,11 +2563,13 @@ fn config_apply_unavailable(detail: &'static str) -> Response {
 }
 
 fn oid4vci_single_proof_jwt(request: &Oid4vciCredentialRequest) -> Result<&str, Oid4vciWireError> {
-    if request.proof.proof_type != PROOF_TYPE_JWT {
-        return Err(Oid4vciWireError::InvalidProof);
-    }
     match request.proof_jwts() {
-        [proof] if !proof.is_empty() => Ok(proof.as_str()),
+        [proof] if !proof.is_empty() => {
+            if request.proofs.jwt.is_empty() && request.proof.proof_type != PROOF_TYPE_JWT {
+                return Err(Oid4vciWireError::InvalidProof);
+            }
+            Ok(proof.as_str())
+        }
         _ => Err(Oid4vciWireError::InvalidProof),
     }
 }
@@ -9907,8 +9909,8 @@ mod tests {
             credential_configuration_id: None,
             vct: None,
             proof: registry_platform_oid4vci::CredentialRequestProof {
-                proof_type: PROOF_TYPE_JWT.to_string(),
-                jwt: "legacy-proof.jwt.sig".to_string(),
+                proof_type: String::new(),
+                jwt: String::new(),
             },
             proofs: registry_platform_oid4vci::CredentialRequestProofs {
                 jwt: vec!["array-proof.jwt.sig".to_string()],

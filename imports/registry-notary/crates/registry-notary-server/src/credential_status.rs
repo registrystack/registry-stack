@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Storage-backed SD-JWT VC credential status records.
 
-use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::env;
-use std::sync::{Arc, Mutex};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 use std::time::Duration;
 
 use registry_notary_core::{
@@ -20,7 +21,8 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 type CredentialStatusTransitionLock = Arc<tokio::sync::Mutex<()>>;
-type CredentialStatusTransitionLocks = Arc<Mutex<HashMap<String, CredentialStatusTransitionLock>>>;
+type CredentialStatusTransitionLocks = Arc<Vec<CredentialStatusTransitionLock>>;
+const CREDENTIAL_STATUS_TRANSITION_LOCK_STRIPES: usize = 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CredentialStatusBuildError {
@@ -287,14 +289,10 @@ impl CredentialStatusStore {
     }
 
     fn transition_lock(&self, credential_id: &str) -> CredentialStatusTransitionLock {
-        let mut locks = self
-            .transition_locks
-            .lock()
-            .expect("credential status transition lock map is healthy");
-        locks
-            .entry(credential_id.to_string())
-            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-            .clone()
+        let mut hasher = DefaultHasher::new();
+        credential_id.hash(&mut hasher);
+        let bucket = hasher.finish() as usize % self.transition_locks.len();
+        Arc::clone(&self.transition_locks[bucket])
     }
 }
 
@@ -312,7 +310,11 @@ fn format_time(value: OffsetDateTime) -> String {
 }
 
 fn transition_locks() -> CredentialStatusTransitionLocks {
-    Arc::new(Mutex::new(HashMap::new()))
+    Arc::new(
+        (0..CREDENTIAL_STATUS_TRANSITION_LOCK_STRIPES)
+            .map(|_| Arc::new(tokio::sync::Mutex::new(())))
+            .collect(),
+    )
 }
 
 #[cfg(test)]
