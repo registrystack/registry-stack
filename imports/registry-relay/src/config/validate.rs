@@ -26,8 +26,8 @@ use super::capabilities::source_capabilities;
 use super::{
     AggregateConfig, AggregateSpatialConfig, AllowedFilter, AuthMode, Config, DatasetConfig,
     EntityConfig, EntityRelationshipConfig, EntitySpatialConfig, FieldConfig, FieldType, FilterOp,
-    OidcConfig, RefreshConfig, RelationshipKind, ResourceConfig, Sensitivity, SourceConfig,
-    SpatialBboxFieldsConfig, SpatialGeometryConfig, CRS84,
+    GovernedPolicyConfig, OidcConfig, RefreshConfig, RelationshipKind, ResourceConfig, Sensitivity,
+    SourceConfig, SpatialBboxFieldsConfig, SpatialGeometryConfig, CRS84,
 };
 
 /// Product-scoped admin capability required by private admin mutations.
@@ -3317,8 +3317,109 @@ fn validate_entity_filters(
             return Err(ConfigError::ValidationError);
         }
     }
+    if let Some(policy) = entity.api.governed_policy.as_ref() {
+        validate_entity_governed_policy(dataset, entity, policy)?;
+    }
 
     Ok(())
+}
+
+fn validate_entity_governed_policy(
+    dataset: &DatasetConfig,
+    entity: &EntityConfig,
+    policy: &GovernedPolicyConfig,
+) -> Result<(), ConfigError> {
+    for purpose in &policy.permitted_purposes {
+        if purpose.trim().is_empty() {
+            return entity_governed_policy_error(dataset, entity, "empty permitted_purposes entry");
+        }
+    }
+    for jurisdiction in &policy.permitted_jurisdictions {
+        if jurisdiction.trim().is_empty() {
+            return entity_governed_policy_error(
+                dataset,
+                entity,
+                "empty permitted_jurisdictions entry",
+            );
+        }
+    }
+    for assurance in &policy.allowed_assurance {
+        if assurance.trim().is_empty() {
+            return entity_governed_policy_error(dataset, entity, "empty allowed_assurance entry");
+        }
+    }
+    if policy
+        .minimum_assurance
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return entity_governed_policy_error(dataset, entity, "empty minimum_assurance");
+    }
+    if policy.max_source_age_seconds == Some(0) {
+        return entity_governed_policy_error(
+            dataset,
+            entity,
+            "max_source_age_seconds must be greater than zero",
+        );
+    }
+    for field in &policy.redaction_fields {
+        if field.trim().is_empty() {
+            return entity_governed_policy_error(dataset, entity, "empty redaction_fields entry");
+        }
+    }
+    let trusted = &policy.trusted_context;
+    if trusted
+        .jurisdiction
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return entity_governed_policy_error(dataset, entity, "empty trusted_context.jurisdiction");
+    }
+    if trusted
+        .asserted_assurance
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return entity_governed_policy_error(
+            dataset,
+            entity,
+            "empty trusted_context.asserted_assurance",
+        );
+    }
+    if trusted
+        .legal_basis_ref
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return entity_governed_policy_error(
+            dataset,
+            entity,
+            "empty trusted_context.legal_basis_ref",
+        );
+    }
+    if trusted
+        .consent_ref
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return entity_governed_policy_error(dataset, entity, "empty trusted_context.consent_ref");
+    }
+    Ok(())
+}
+
+fn entity_governed_policy_error(
+    dataset: &DatasetConfig,
+    entity: &EntityConfig,
+    reason: &str,
+) -> Result<(), ConfigError> {
+    tracing::error!(
+        code = "config.validation_error",
+        dataset_id = %dataset.id,
+        entity = %entity.name,
+        reason = %reason,
+        "entity governed_policy is invalid"
+    );
+    Err(ConfigError::ValidationError)
 }
 
 fn validate_entity_aggregates(

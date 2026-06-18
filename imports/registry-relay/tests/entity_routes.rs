@@ -42,8 +42,8 @@ fn principal(scopes: &[&str]) -> Principal {
     }
 }
 
-fn test_evidence_metadata() -> metadata_core::CompiledMetadata {
-    let manifest: metadata_core::MetadataManifest = serde_saphyr::from_str(
+fn test_evidence_metadata_manifest() -> metadata_core::MetadataManifest {
+    serde_saphyr::from_str(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -241,7 +241,17 @@ datasets:
             type: string
 "#,
     )
-    .expect("metadata manifest parses");
+    .expect("metadata manifest parses")
+}
+
+fn test_evidence_metadata() -> metadata_core::CompiledMetadata {
+    let manifest = test_evidence_metadata_manifest();
+    metadata_core::compile_manifest(&manifest).expect("metadata manifest compiles")
+}
+
+fn test_evidence_metadata_without_dataset_policy() -> metadata_core::CompiledMetadata {
+    let mut manifest = test_evidence_metadata_manifest();
+    manifest.datasets[0].policy = None;
     metadata_core::compile_manifest(&manifest).expect("metadata manifest compiles")
 }
 
@@ -253,6 +263,20 @@ const ENTITY_ROUTE_SCOPES: &[&str] = &[
 
 async fn server_with_query() -> TestServer {
     server_with_query_version("01J5K8M0000000000000000000").await
+}
+
+async fn server_with_query_without_dataset_policy() -> TestServer {
+    TestServer::new(
+        app_with_query_versions_signer_provenance_selector_and_metadata(
+            "01J5K8M0000000000000000000",
+            "01J5K8M0000000000000000000",
+            Arc::new(CursorSigner::new_random()),
+            ENTITY_ROUTE_SCOPES,
+            None,
+            test_evidence_metadata_without_dataset_policy(),
+        )
+        .await,
+    )
 }
 
 async fn server_with_query_version(ingest_version: &str) -> TestServer {
@@ -304,6 +328,21 @@ async fn server_with_query_and_ecosystem_binding_selector() -> TestServer {
         Some("baseline-dpi/v1"),
     )
     .await
+}
+
+async fn server_with_query_and_governed_entity_policy(governed_policy_yaml: &str) -> TestServer {
+    TestServer::new(
+        app_with_query_versions_signer_provenance_selector_metadata_and_config_patch(
+            "01J5K8M0000000000000000000",
+            "01J5K8M0000000000000000000",
+            Arc::new(CursorSigner::new_random()),
+            ENTITY_ROUTE_SCOPES,
+            Some("baseline-dpi/v1"),
+            test_evidence_metadata(),
+            Some(governed_policy_yaml),
+        )
+        .await,
+    )
 }
 
 async fn server_with_query_audit_and_ecosystem_binding_selector() -> (TestServer, InMemorySink) {
@@ -374,6 +413,46 @@ async fn app_with_query_versions_signer_provenance_and_selector(
     signer: Arc<CursorSigner>,
     principal_scopes: &[&str],
     selected_ecosystem_binding: Option<&str>,
+) -> axum::Router {
+    app_with_query_versions_signer_provenance_selector_and_metadata(
+        table_ingest_version,
+        readiness_ingest_version,
+        signer,
+        principal_scopes,
+        selected_ecosystem_binding,
+        test_evidence_metadata(),
+    )
+    .await
+}
+
+async fn app_with_query_versions_signer_provenance_selector_and_metadata(
+    table_ingest_version: &str,
+    readiness_ingest_version: &str,
+    signer: Arc<CursorSigner>,
+    principal_scopes: &[&str],
+    selected_ecosystem_binding: Option<&str>,
+    metadata: metadata_core::CompiledMetadata,
+) -> axum::Router {
+    app_with_query_versions_signer_provenance_selector_metadata_and_config_patch(
+        table_ingest_version,
+        readiness_ingest_version,
+        signer,
+        principal_scopes,
+        selected_ecosystem_binding,
+        metadata,
+        None,
+    )
+    .await
+}
+
+async fn app_with_query_versions_signer_provenance_selector_metadata_and_config_patch(
+    table_ingest_version: &str,
+    readiness_ingest_version: &str,
+    signer: Arc<CursorSigner>,
+    principal_scopes: &[&str],
+    selected_ecosystem_binding: Option<&str>,
+    metadata: metadata_core::CompiledMetadata,
+    governed_policy_yaml: Option<&str>,
 ) -> axum::Router {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = tmp.path().join("entity_routes.yaml");
@@ -526,10 +605,19 @@ catalog:
     } else {
         config_yaml
     };
+    let config_yaml = if let Some(governed_policy_yaml) = governed_policy_yaml {
+        config_yaml.replacen(
+            "          require_purpose_header: true\n",
+            &format!("          require_purpose_header: true\n{governed_policy_yaml}"),
+            1,
+        )
+    } else {
+        config_yaml
+    };
     std::fs::write(&config_path, config_yaml).expect("write config");
     let cfg = Arc::new(config::load(&config_path).expect("config loads"));
     let registry = Arc::new(EntityRegistry::from_config(&cfg).expect("registry"));
-    let metadata = Arc::new(test_evidence_metadata());
+    let metadata = Arc::new(metadata);
     let ctx = Arc::new(SessionContext::new());
     let schema = Arc::new(Schema::new(vec![
         Field::new("household_id", DataType::Utf8, false),
@@ -888,6 +976,93 @@ async fn sensitive_fields_remain_in_authorized_projection() {
 }
 
 #[tokio::test]
+async fn governed_entity_policy_redacts_configured_fields_from_collection_and_record() {
+    let policy = r#"          governed_policy:
+            permitted_purposes:
+              - https://data.example.test/purposes/testing
+            permitted_jurisdictions: [ZZ]
+            allowed_assurance: [substantial]
+            require_legal_basis: true
+            require_consent: true
+            redaction_fields: [given_name]
+            trusted_context:
+              jurisdiction: ZZ
+              asserted_assurance: substantial
+              legal_basis_ref: law:test-benefits
+              consent_ref: consent:test
+"#;
+    let server = server_with_query_and_governed_entity_policy(policy).await;
+
+    let collection = server
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .await;
+
+    collection.assert_status(StatusCode::OK);
+    let body: Value = collection.json();
+    assert_eq!(
+        body["data"],
+        serde_json::json!([
+            {"id": "p-1", "household_id": "hh-1"}
+        ])
+    );
+
+    let record = server
+        .get("/v1/datasets/social_registry/entities/individual/records/p-1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .await;
+
+    record.assert_status(StatusCode::OK);
+    assert_eq!(
+        record.json::<Value>(),
+        serde_json::json!({"id": "p-1", "household_id": "hh-1"})
+    );
+}
+
+#[tokio::test]
+async fn governed_entity_policy_redacts_configured_fields_from_relationships() {
+    let policy = r#"          governed_policy:
+            permitted_purposes:
+              - https://data.example.test/purposes/testing
+            redaction_fields: [given_name]
+            trusted_context: {}
+"#;
+    let server = server_with_query_and_governed_entity_policy(policy).await;
+
+    let relationship = server
+        .get("/v1/datasets/social_registry/entities/household/records/hh-1/relationships/members?limit=1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .await;
+
+    relationship.assert_status(StatusCode::OK);
+    let body: Value = relationship.json();
+    assert_eq!(
+        body["data"],
+        serde_json::json!([
+            {"id": "p-1", "household_id": "hh-1"}
+        ])
+    );
+}
+
+#[tokio::test]
+async fn governed_entity_policy_denies_when_required_trusted_context_is_missing() {
+    let policy = r#"          governed_policy:
+            permitted_purposes:
+              - https://data.example.test/purposes/testing
+            require_legal_basis: true
+            trusted_context: {}
+"#;
+    let resp = server_with_query_and_governed_entity_policy(policy)
+        .await
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .await;
+
+    resp.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(resp.json::<Value>()["code"], "auth.purpose_denied");
+}
+
+#[tokio::test]
 async fn governed_entity_collection_audit_records_selector_pdp_provenance() {
     let (server, audit_sink) = server_with_query_audit_and_ecosystem_binding_selector().await;
     let resp = server
@@ -936,8 +1111,8 @@ async fn governed_entity_collection_denial_audit_records_selector_pdp_provenance
         .add_header("data-purpose", "casework")
         .await;
 
-    resp.assert_status(StatusCode::BAD_REQUEST);
-    assert_eq!(resp.json::<Value>()["code"], "auth.purpose_required");
+    resp.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(resp.json::<Value>()["code"], "auth.purpose_denied");
 
     let records = audit_sink.snapshot();
     assert_eq!(
@@ -949,8 +1124,8 @@ async fn governed_entity_collection_denial_audit_records_selector_pdp_provenance
     assert_eq!(record["dataset_id"], "social_registry");
     assert_eq!(record["entity_name"], "individual");
     assert_eq!(record["purpose"], "casework");
-    assert_eq!(record["status_code"], 400);
-    assert_eq!(record["error_code"], "auth.purpose_required");
+    assert_eq!(record["status_code"], 403);
+    assert_eq!(record["error_code"], "auth.purpose_denied");
     assert_eq!(record["pdp_policy_id"], "baseline-dpi-policy");
     assert_eq!(
         record["pdp_policy_hash"],
@@ -970,8 +1145,20 @@ async fn entity_collection_rejects_purpose_outside_compiled_policy_without_selec
         .add_header("data-purpose", "casework")
         .await;
 
-    resp.assert_status(StatusCode::BAD_REQUEST);
-    assert_eq!(resp.json::<Value>()["code"], "auth.purpose_required");
+    resp.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(resp.json::<Value>()["code"], "auth.purpose_denied");
+}
+
+#[tokio::test]
+async fn entity_collection_rejects_purpose_when_compiled_policy_has_no_purpose_constraints() {
+    let resp = server_with_query_without_dataset_policy()
+        .await
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .await;
+
+    resp.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(resp.json::<Value>()["code"], "auth.purpose_denied");
 }
 
 #[tokio::test]
@@ -982,8 +1169,8 @@ async fn entity_collection_rejects_purpose_outside_compiled_policy_with_selector
         .add_header("data-purpose", "casework")
         .await;
 
-    resp.assert_status(StatusCode::BAD_REQUEST);
-    assert_eq!(resp.json::<Value>()["code"], "auth.purpose_required");
+    resp.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(resp.json::<Value>()["code"], "auth.purpose_denied");
 }
 
 #[tokio::test]
@@ -994,8 +1181,8 @@ async fn entity_collection_rejects_selected_binding_with_unsupported_runtime_ter
         .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .await;
 
-    resp.assert_status(StatusCode::BAD_REQUEST);
-    assert_eq!(resp.json::<Value>()["code"], "auth.purpose_required");
+    resp.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(resp.json::<Value>()["code"], "auth.purpose_denied");
 }
 
 #[tokio::test]

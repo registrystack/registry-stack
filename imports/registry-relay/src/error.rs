@@ -113,6 +113,8 @@ pub enum AuthError {
     ScopeDenied { required: String },
     #[error("purpose header required")]
     PurposeRequired,
+    #[error("purpose denied")]
+    PurposeDenied,
     #[error("admin scope required")]
     AdminRequired,
     /// OIDC: the bearer JWT's `exp` is in the past (beyond the
@@ -614,6 +616,7 @@ impl AuthError {
             AuthError::MalformedCredential => "auth.malformed_credential",
             AuthError::ScopeDenied { .. } => "auth.scope_denied",
             AuthError::PurposeRequired => "auth.purpose_required",
+            AuthError::PurposeDenied => "auth.purpose_denied",
             AuthError::AdminRequired => "auth.admin_required",
             AuthError::TokenExpired => "auth.token_expired",
             AuthError::TokenNotYetValid => "auth.token_not_yet_valid",
@@ -640,6 +643,7 @@ impl AuthError {
             | AuthError::KidUnknown
             | AuthError::AlgorithmNotAllowed => StatusCode::UNAUTHORIZED,
             AuthError::ScopeDenied { .. }
+            | AuthError::PurposeDenied
             | AuthError::AdminRequired
             | AuthError::ClientNotAllowed => StatusCode::FORBIDDEN,
             AuthError::PurposeRequired => StatusCode::BAD_REQUEST,
@@ -654,6 +658,7 @@ impl AuthError {
             AuthError::MalformedCredential => "Malformed credential",
             AuthError::ScopeDenied { .. } => "Scope denied",
             AuthError::PurposeRequired => "Purpose header required",
+            AuthError::PurposeDenied => "Purpose denied",
             AuthError::AdminRequired => "Admin scope required",
             AuthError::TokenExpired => "Token expired",
             AuthError::TokenNotYetValid => "Token not yet valid",
@@ -682,6 +687,9 @@ impl AuthError {
             }
             AuthError::PurposeRequired => {
                 "Data-Purpose header is required for this resource".to_string()
+            }
+            AuthError::PurposeDenied => {
+                "Data-Purpose header is not permitted by policy for this resource".to_string()
             }
             AuthError::AdminRequired => "admin scope is required for this endpoint".to_string(),
             AuthError::TokenExpired => "bearer token has expired".to_string(),

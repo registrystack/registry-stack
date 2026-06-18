@@ -324,6 +324,27 @@ fn required_filters_empty_is_accepted() {
 }
 
 #[test]
+fn governed_entity_policy_rejects_blank_policy_terms() {
+    let tmp = TempDir::new().expect("tempdir");
+    let dataset = dataset_with_required_filters("[]").replace(
+        "          allowed_filters:\n",
+        r#"          governed_policy:
+            permitted_purposes: [" "]
+            permitted_jurisdictions: [ZZ]
+            allowed_assurance: [substantial]
+            trusted_context:
+              jurisdiction: ZZ
+          allowed_filters:
+"#,
+    );
+    let config_path = write_config(&tmp, &base_config(&dataset));
+    let err = registry_relay::config::load(&config_path)
+        .expect_err("config rejects blank governed policy terms");
+
+    assert_eq!(err.code(), "config.validation_error");
+}
+
+#[test]
 fn allowed_expansions_without_matching_relationship_are_rejected() {
     let tmp = TempDir::new().expect("tempdir");
     let dataset = dataset_with_required_filters("[]").replace(

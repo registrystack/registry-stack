@@ -7,7 +7,7 @@
 //! once auth and query state are wired. Without query state, data reads
 //! return an explicit RFC 9457-style `501` response.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use axum::extract::{Path, Query};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -35,7 +35,7 @@ use crate::error::{AuthError, EntityError, Error, InternalError, SchemaError};
 use crate::ingest::ReadinessSnapshot;
 use crate::metadata;
 use crate::query::{
-    satisfies_required_filter, EntityCollectionQuery, EntityFilter, EntityFilterOp,
+    satisfies_required_filter, EntityCollectionQuery, EntityFilter, EntityFilterOp, EntityRecord,
     RelationshipPageQuery,
 };
 use crate::runtime_config::{CursorSigner, RuntimeSnapshot, CURSOR_MAC_LEN};
@@ -179,7 +179,7 @@ async fn entity_collection(
     let mut audit_context = audit_context_for_entity(&registry, &path);
     let required_filters = match entity_from_registry(&registry, &path.dataset_id, &path.entity) {
         Ok(entity) => {
-            let read_audit = match require_read_access(
+            let read_decision = match require_read_access(
                 &runtime,
                 &path.dataset_id,
                 principal.clone(),
@@ -189,7 +189,7 @@ async fn entity_collection(
                 Ok(audit) => audit,
                 Err(error) => return access_error_response(error, audit_context),
             };
-            attach_pdp_audit(&mut audit_context, read_audit.as_ref());
+            attach_pdp_audit(&mut audit_context, read_decision.audit.as_ref());
             if let Some(expand) = params.get("expand") {
                 let expansions = match parse_expansions(expand) {
                     Ok(expansions) => expansions,
@@ -207,7 +207,10 @@ async fn entity_collection(
                     return access_error_response(error, audit_context);
                 }
             }
-            entity.api.required_filters.clone()
+            (
+                entity.api.required_filters.clone(),
+                read_decision.redaction_fields,
+            )
         }
         Err(error) => return error.into_response(),
     };
@@ -238,15 +241,15 @@ async fn entity_collection(
         Err(PageParamError::CursorInvalidated) => return cursor_invalidated(),
         Err(PageParamError::Error(error)) => return error.into_response(),
     };
-    if !required_filters.is_empty() {
+    if !required_filters.0.is_empty() {
         let satisfied = query_params
             .query
             .filters
             .iter()
-            .any(|filter| satisfies_required_filter(&required_filters, filter));
+            .any(|filter| satisfies_required_filter(&required_filters.0, filter));
         if !satisfied {
             return Error::from(EntityError::FilterRequired {
-                required: required_filters,
+                required: required_filters.0,
             })
             .into_response();
         }
@@ -269,7 +272,8 @@ async fn entity_collection(
         .read_collection(&path.dataset_id, &path.entity, query_params.query)
         .await
     {
-        Ok(rows) => {
+        Ok(mut rows) => {
+            redact_rows(&mut rows.rows, &required_filters.1);
             let cursor_context = CursorContext {
                 dataset_id: path.dataset_id.clone(),
                 entity: path.entity.clone(),
@@ -347,9 +351,9 @@ async fn entity_record(
     };
     let mut audit_context =
         audit_context_for_entity_record(&registry, &path.dataset_id, &path.entity);
-    match entity_from_registry(&registry, &path.dataset_id, &path.entity) {
+    let read_decision = match entity_from_registry(&registry, &path.dataset_id, &path.entity) {
         Ok(entity) => {
-            let read_audit = match require_read_access(
+            let read_decision = match require_read_access(
                 &runtime,
                 &path.dataset_id,
                 principal.clone(),
@@ -359,7 +363,7 @@ async fn entity_record(
                 Ok(audit) => audit,
                 Err(error) => return access_error_response(error, audit_context),
             };
-            attach_pdp_audit(&mut audit_context, read_audit.as_ref());
+            attach_pdp_audit(&mut audit_context, read_decision.audit.as_ref());
             if let Some(expand) = params.get("expand") {
                 let expansions = match parse_expansions(expand) {
                     Ok(expansions) => expansions,
@@ -377,9 +381,10 @@ async fn entity_record(
                     return access_error_response(error, audit_context);
                 }
             }
+            read_decision
         }
         Err(error) => return error.into_response(),
-    }
+    };
 
     let Some(query) = runtime.query() else {
         return query_unavailable(
@@ -414,6 +419,8 @@ async fn entity_record(
                 record.validator_ingest_version.as_deref(),
                 &validator,
             );
+            let mut record = record;
+            redact_record(&mut record, &read_decision.redaction_fields);
             let plain_response = if let Some(etag) = etag.as_deref() {
                 if if_none_match_matches(&headers, etag) {
                     not_modified_response(etag)
@@ -470,9 +477,10 @@ async fn entity_relationship(
         &path.relationship,
     );
     let mut page_context = None;
+    let relationship_redaction_fields;
     match entity_from_registry(&registry, &path.dataset_id, &path.entity) {
         Ok(entity) => {
-            let read_audit = match require_read_access(
+            let read_decision = match require_read_access(
                 &runtime,
                 &path.dataset_id,
                 principal.clone(),
@@ -482,8 +490,8 @@ async fn entity_relationship(
                 Ok(audit) => audit,
                 Err(error) => return access_error_response(error, audit_context),
             };
-            attach_pdp_audit(&mut audit_context, read_audit.as_ref());
-            if let Err(error) = require_relationship_target_access(
+            attach_pdp_audit(&mut audit_context, read_decision.audit.as_ref());
+            let target_read_decision = match require_relationship_target_access(
                 &registry,
                 &path.dataset_id,
                 entity,
@@ -492,8 +500,10 @@ async fn entity_relationship(
                 &headers,
                 &runtime,
             ) {
-                return access_error_response(error, audit_context);
-            }
+                Ok(decision) => decision,
+                Err(error) => return access_error_response(error, audit_context),
+            };
+            relationship_redaction_fields = target_read_decision.redaction_fields;
             if let Some(relationship) = entity.relationships.get(&path.relationship) {
                 let target =
                     match entity_from_registry(&registry, &path.dataset_id, &relationship.target) {
@@ -559,7 +569,8 @@ async fn entity_relationship(
         )
         .await
     {
-        Ok(page) => {
+        Ok(mut page) => {
+            redact_relationship_value(&mut page.value, &relationship_redaction_fields);
             let etag = entity_etag(
                 "relationship",
                 &path.dataset_id,
@@ -644,7 +655,7 @@ fn require_read_access(
     principal: Option<Extension<Principal>>,
     entity: &EntityModel,
     headers: &HeaderMap,
-) -> Result<Option<PdpDecisionAudit>, GovernedAccessError> {
+) -> Result<GovernedReadDecision, GovernedAccessError> {
     require_principal_scope(principal, &entity.access.read_scope)
         .map_err(GovernedAccessError::from)?;
     require_purpose_header_decision(runtime, dataset_id, entity, headers)
@@ -683,7 +694,8 @@ fn require_expansion_access(
             principal.clone(),
             headers,
             runtime,
-        )?;
+        )
+        .map(|_| ())?;
     }
     Ok(())
 }
@@ -696,7 +708,7 @@ fn require_relationship_target_access(
     principal: Option<Extension<Principal>>,
     headers: &HeaderMap,
     runtime: &RuntimeSnapshot,
-) -> Result<(), GovernedAccessError> {
+) -> Result<GovernedReadDecision, GovernedAccessError> {
     let relationship = entity
         .relationships
         .get(relationship_name)
@@ -705,7 +717,7 @@ fn require_relationship_target_access(
         .map_err(GovernedAccessError::from)?;
     require_principal_scope(principal, &target.access.read_scope)
         .map_err(GovernedAccessError::from)?;
-    require_purpose_header_decision(runtime, dataset_id, target, headers).map(|_| ())
+    require_purpose_header_decision(runtime, dataset_id, target, headers)
 }
 
 fn require_purpose_header_decision(
@@ -713,23 +725,34 @@ fn require_purpose_header_decision(
     dataset_id: &str,
     entity: &EntityModel,
     headers: &HeaderMap,
-) -> Result<Option<PdpDecisionAudit>, GovernedAccessError> {
-    if !entity.api.require_purpose_header {
-        return Ok(None);
+) -> Result<GovernedReadDecision, GovernedAccessError> {
+    let governed_policy = entity.api.governed_policy.as_ref();
+    if !entity.api.require_purpose_header && governed_policy.is_none() {
+        return Ok(GovernedReadDecision::default());
     }
     let purpose = purpose_header_value(headers, DATA_PURPOSE_HEADER)
         .ok_or_else(|| GovernedAccessError::from_error(AuthError::PurposeRequired))?;
     let context = PdpRequestContext {
         purpose: purpose.to_string(),
-        legal_basis_ref: None,
-        consent_ref: None,
-        asserted_assurance: None,
-        jurisdiction: None,
-        source_observed_age_seconds: None,
+        legal_basis_ref: governed_policy
+            .and_then(|policy| policy.trusted_context.legal_basis_ref.clone()),
+        consent_ref: governed_policy.and_then(|policy| policy.trusted_context.consent_ref.clone()),
+        asserted_assurance: governed_policy
+            .and_then(|policy| policy.trusted_context.asserted_assurance.clone()),
+        jurisdiction: governed_policy
+            .and_then(|policy| policy.trusted_context.jurisdiction.clone()),
+        source_observed_age_seconds: governed_policy
+            .and_then(|policy| policy.trusted_context.source_observed_age_seconds),
     };
     let selected_policy = selected_ecosystem_policy(runtime).map_err(GovernedAccessError::from)?;
-    let purpose_constraints = governed_purpose_constraints(runtime, dataset_id)
-        .unwrap_or_else(|| vec![vec![purpose.to_string()]]);
+    let mut purpose_constraints =
+        governed_purpose_constraints(runtime, dataset_id).unwrap_or_default();
+    if let Some(configured_purposes) = governed_policy
+        .map(|policy| policy.permitted_purposes.clone())
+        .filter(|purposes| !purposes.is_empty())
+    {
+        purpose_constraints.push(configured_purposes);
+    }
     let policy = PdpPolicyInput {
         policy_id: selected_policy
             .as_ref()
@@ -741,25 +764,74 @@ fn require_purpose_header_decision(
             .unwrap_or_else(|| entity_purpose_policy_hash(entity, &purpose_constraints)),
         rule_ids: vec![format!("entity-purpose-required:{}", entity.name)],
         purpose_constraints,
-        permitted_jurisdictions: Vec::new(),
-        allowed_assurance: Vec::new(),
-        minimum_assurance: None,
-        max_source_age_seconds: None,
-        require_legal_basis: false,
-        require_consent: false,
-        redaction_fields: Default::default(),
+        permitted_jurisdictions: governed_policy
+            .map(|policy| policy.permitted_jurisdictions.clone())
+            .unwrap_or_default(),
+        allowed_assurance: governed_policy
+            .map(|policy| policy.allowed_assurance.clone())
+            .unwrap_or_default(),
+        minimum_assurance: governed_policy.and_then(|policy| policy.minimum_assurance.clone()),
+        max_source_age_seconds: governed_policy.and_then(|policy| policy.max_source_age_seconds),
+        require_legal_basis: governed_policy.is_some_and(|policy| policy.require_legal_basis),
+        require_consent: governed_policy.is_some_and(|policy| policy.require_consent),
+        redaction_fields: governed_policy
+            .map(|policy| policy.redaction_fields.iter().cloned().collect())
+            .unwrap_or_default(),
         unsupported_odrl_terms: selected_policy
             .map(|policy| policy.unsupported_odrl_terms)
             .unwrap_or_default(),
     };
     match pdp_decide(&context, &policy) {
-        PdpDecision::Permit(audit) | PdpDecision::PermitWithRedaction { audit, .. } => {
-            Ok(Some(audit))
-        }
+        PdpDecision::Permit(audit) => Ok(GovernedReadDecision {
+            audit: Some(audit),
+            redaction_fields: BTreeSet::new(),
+        }),
+        PdpDecision::PermitWithRedaction {
+            audit, field_set, ..
+        } => Ok(GovernedReadDecision {
+            audit: Some(audit),
+            redaction_fields: field_set,
+        }),
         PdpDecision::Deny { audit, .. } => Err(GovernedAccessError::with_pdp_audit(
-            AuthError::PurposeRequired.into(),
+            AuthError::PurposeDenied.into(),
             audit,
         )),
+    }
+}
+
+#[derive(Debug, Default)]
+struct GovernedReadDecision {
+    audit: Option<PdpDecisionAudit>,
+    redaction_fields: BTreeSet<String>,
+}
+
+fn redact_rows(rows: &mut [Value], field_names: &BTreeSet<String>) {
+    for row in rows {
+        redact_value_fields(row, field_names);
+    }
+}
+
+fn redact_record(record: &mut EntityRecord, field_names: &BTreeSet<String>) {
+    redact_value_fields(&mut record.value, field_names);
+}
+
+fn redact_relationship_value(value: &mut Value, field_names: &BTreeSet<String>) {
+    if let Value::Array(rows) = value {
+        redact_rows(rows, field_names);
+    } else {
+        redact_value_fields(value, field_names);
+    }
+}
+
+fn redact_value_fields(value: &mut Value, field_names: &BTreeSet<String>) {
+    if field_names.is_empty() {
+        return;
+    }
+    let Value::Object(object) = value else {
+        return;
+    };
+    for field_name in field_names {
+        object.remove(field_name);
     }
 }
 

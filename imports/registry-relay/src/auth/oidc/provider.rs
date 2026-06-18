@@ -387,6 +387,7 @@ fn auth_error_code(err: &AuthError) -> &'static str {
         AuthError::MalformedCredential => "auth.malformed_credential",
         AuthError::ScopeDenied { .. } => "auth.scope_denied",
         AuthError::PurposeRequired => "auth.purpose_required",
+        AuthError::PurposeDenied => "auth.purpose_denied",
         AuthError::AdminRequired => "auth.admin_required",
         AuthError::TokenExpired => "auth.token_expired",
         AuthError::TokenNotYetValid => "auth.token_not_yet_valid",
