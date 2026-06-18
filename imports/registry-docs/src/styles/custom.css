@@ -1051,6 +1051,28 @@ mobile-starlight-toc summary {
   background: var(--registry-active);
 }
 
+/* Starlight language tabs */
+
+starlight-tabs [role='tablist'] {
+  gap: 2px;
+}
+
+starlight-tabs [role='tab'] {
+  border: 1px solid transparent;
+  border-block-end: 0;
+}
+
+starlight-tabs [role='tab'][aria-selected='true'] {
+  border-color: var(--registry-blue);
+  background: var(--registry-active);
+  color: var(--registry-blue);
+}
+
+starlight-tabs [role='tab']:not([aria-selected='true']):hover {
+  background: var(--registry-code-bg);
+  color: var(--registry-ink);
+}
+
 /* ProjectMap: two-column owns / does-not-own grid */
 
 .project-ownership {
