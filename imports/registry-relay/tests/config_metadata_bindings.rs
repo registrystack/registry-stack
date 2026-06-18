@@ -135,6 +135,23 @@ config_trust:
     .expect("runtime config rewrites");
 }
 
+fn insert_ecosystem_binding_selector(path: &std::path::Path, id: &str, version: Option<&str>) {
+    let yaml = std::fs::read_to_string(path).expect("runtime config reads");
+    let version = version
+        .map(|version| format!("    version: {version}\n"))
+        .unwrap_or_default();
+    std::fs::write(
+        path,
+        yaml.replace(
+            "  source:\n    path: metadata.yaml\n",
+            &format!(
+                "  source:\n    path: metadata.yaml\n  ecosystem_binding:\n    id: {id}\n{version}"
+            ),
+        ),
+    )
+    .expect("runtime config rewrites");
+}
+
 fn write_metadata_manifest(tmp: &TempDir, include_region: bool) {
     let region_field = if include_region {
         r#"
@@ -199,6 +216,61 @@ datasets:
     .expect("write metadata manifest");
 }
 
+fn append_ecosystem_bindings(tmp: &TempDir, extra_constraint_term: Option<&str>) {
+    let path = tmp.path().join("metadata.yaml");
+    let mut yaml = std::fs::read_to_string(&path).expect("metadata manifest reads");
+    let extra_term = extra_constraint_term
+        .map(|term| format!("          - {term}\n"))
+        .unwrap_or_default();
+    yaml.push_str(&format!(
+        r#"
+ecosystem_bindings:
+  - id: baseline-dpi/v1
+    version: v1
+    profile: baseline-dpi
+    type: governed-evidence
+    title: Baseline DPI
+    evidence_pack:
+      policy_id: baseline-dpi-policy
+      policy_hash: sha256:3333333333333333333333333333333333333333333333333333333333333333
+      odrl_enforcement:
+        profile: registry-evidence-gateway-pdp/v1
+        constraint_terms:
+          - odrl:purpose
+          - registry:pdp:assurance
+{extra_term}  - id: sp-dci/v1
+    version: v1
+    profile: sp-dci
+    type: governed-evidence
+    title: Social Protection DCI
+    evidence_pack:
+      policy_id: sp-dci-policy
+      policy_hash: sha256:4444444444444444444444444444444444444444444444444444444444444444
+      odrl_enforcement:
+        profile: registry-evidence-gateway-pdp/v1
+        constraint_terms:
+          - odrl:purpose
+          - odrl:spatial
+          - registry:pdp:source_age
+"#
+    ));
+    std::fs::write(path, yaml).expect("metadata manifest rewrites");
+}
+
+fn remove_first_binding_policy_hash(tmp: &TempDir) {
+    let path = tmp.path().join("metadata.yaml");
+    let yaml = std::fs::read_to_string(&path).expect("metadata manifest reads");
+    std::fs::write(
+        path,
+        yaml.replacen(
+            "      policy_hash: sha256:3333333333333333333333333333333333333333333333333333333333333333\n",
+            "",
+            1,
+        ),
+    )
+    .expect("metadata manifest rewrites");
+}
+
 #[test]
 fn load_with_metadata_loads_manifest_relative_to_runtime_config() {
     let tmp = TempDir::new().expect("tempdir");
@@ -218,6 +290,95 @@ fn load_with_metadata_loads_manifest_relative_to_runtime_config() {
             .is_some_and(|digest| digest.starts_with("sha256:")),
         "loader records the active metadata source digest"
     );
+}
+
+#[test]
+fn load_with_metadata_accepts_governed_evidence_ecosystem_bindings() {
+    let tmp = TempDir::new().expect("tempdir");
+    write_metadata_manifest(&tmp, true);
+    append_ecosystem_bindings(&tmp, None);
+    let runtime_path = write_runtime_config(&tmp, "metadata.yaml");
+
+    let loaded = config::load_with_metadata(&runtime_path).expect("split config loads");
+    let metadata = loaded.metadata.expect("metadata is compiled");
+    let bindings = metadata.ecosystem_bindings();
+
+    assert_eq!(bindings.len(), 2);
+    assert_eq!(bindings[0].id, "baseline-dpi/v1");
+    assert_eq!(bindings[0].profile, "baseline-dpi");
+    assert_eq!(
+        bindings[0]
+            .evidence_pack
+            .as_ref()
+            .and_then(|pack| pack.odrl_enforcement.as_ref())
+            .map(|profile| profile.constraint_terms.as_slice())
+            .expect("baseline ODRL enforcement"),
+        ["odrl:purpose", "registry:pdp:assurance"]
+    );
+    assert_eq!(bindings[1].id, "sp-dci/v1");
+    assert_eq!(bindings[1].profile, "sp-dci");
+}
+
+#[test]
+fn load_with_metadata_accepts_selected_governed_evidence_ecosystem_binding() {
+    let tmp = TempDir::new().expect("tempdir");
+    write_metadata_manifest(&tmp, true);
+    append_ecosystem_bindings(&tmp, None);
+    let runtime_path = write_runtime_config(&tmp, "metadata.yaml");
+    insert_ecosystem_binding_selector(&runtime_path, "baseline-dpi/v1", Some("v1"));
+
+    let loaded = config::load_with_metadata(&runtime_path).expect("split config loads");
+
+    assert_eq!(
+        loaded
+            .runtime
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.ecosystem_binding.as_ref())
+            .map(|selector| (selector.id.as_str(), selector.version.as_deref())),
+        Some(("baseline-dpi/v1", Some("v1")))
+    );
+}
+
+#[test]
+fn load_with_metadata_rejects_missing_selected_ecosystem_binding() {
+    let tmp = TempDir::new().expect("tempdir");
+    write_metadata_manifest(&tmp, true);
+    append_ecosystem_bindings(&tmp, None);
+    let runtime_path = write_runtime_config(&tmp, "metadata.yaml");
+    insert_ecosystem_binding_selector(&runtime_path, "missing-binding/v1", Some("v1"));
+
+    let err = config::load_with_metadata(&runtime_path)
+        .expect_err("missing selected ecosystem binding should fail startup");
+
+    assert_eq!(err.code(), "runtime.binding.ecosystem_binding_missing");
+}
+
+#[test]
+fn load_with_metadata_rejects_selected_binding_without_policy_hash() {
+    let tmp = TempDir::new().expect("tempdir");
+    write_metadata_manifest(&tmp, true);
+    append_ecosystem_bindings(&tmp, None);
+    remove_first_binding_policy_hash(&tmp);
+    let runtime_path = write_runtime_config(&tmp, "metadata.yaml");
+    insert_ecosystem_binding_selector(&runtime_path, "baseline-dpi/v1", Some("v1"));
+
+    let err = config::load_with_metadata(&runtime_path)
+        .expect_err("selected ecosystem binding without policy hash should fail startup");
+
+    assert_eq!(err.code(), "metadata.manifest.validation_failed");
+}
+
+#[test]
+fn load_with_metadata_rejects_unsupported_odrl_enforcement_term() {
+    let tmp = TempDir::new().expect("tempdir");
+    write_metadata_manifest(&tmp, true);
+    append_ecosystem_bindings(&tmp, Some("odrl:count"));
+    let runtime_path = write_runtime_config(&tmp, "metadata.yaml");
+
+    let err = config::load_with_metadata(&runtime_path)
+        .expect_err("unsupported ODRL enforcement term should fail startup");
+    assert_eq!(err.code(), "metadata.manifest.validation_failed");
 }
 
 #[test]

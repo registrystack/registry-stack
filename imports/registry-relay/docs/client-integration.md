@@ -81,6 +81,22 @@ Before a client is allowed to consume Relay data, confirm:
 - Logs redact bearer tokens, API keys, query values for sensitive fields, raw
   row bodies, VC-JWT bodies, and Problem Details `detail`.
 
+## OpenFn Workflows
+
+OpenFn workflows can use the Registry Stack OpenFn Relay adaptor instead of a
+generic HTTP step. The adaptor provides helpers for protected record reads,
+relationship reads, aggregate queries, dataset discovery, entity schemas, and
+evidence offering discovery:
+
+```text
+@openfn/language-registry-relay@local
+```
+
+Use the adaptor when the workflow is authorized to read Relay data directly.
+Use Registry Notary when the workflow needs a governed trust decision or a
+certified value claim. The [OpenFn Relay guide](openfn-relay-adaptor-guide.md)
+shows the lab-backed workflow shape and guardrails.
+
 ## Authentication
 
 Relay deployments use one auth mode at startup:

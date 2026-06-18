@@ -1,7 +1,0 @@
-interface:
-  display_name: "Registry Relay Config Review"
-  short_description: "Review registry-relay V1 configs for safety"
-  default_prompt: "Use $registry-relay-config-review to review this registry-relay V1 config before deployment."
-
-policy:
-  allow_implicit_invocation: true

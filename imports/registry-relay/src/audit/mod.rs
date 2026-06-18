@@ -117,6 +117,9 @@ pub struct AuditContextExt {
     pub verification_decision: Option<String>,
     pub claim_hash: Option<String>,
     pub evidence_hash: Option<String>,
+    pub pdp_policy_id: Option<String>,
+    pub pdp_policy_hash: Option<String>,
+    pub pdp_evaluated_rule_ids: Option<Vec<String>>,
     pub null_geometry_count: Option<u64>,
     pub invalid_geometry_count: Option<u64>,
     pub geometry_vertex_count: Option<u64>,
@@ -288,6 +291,12 @@ pub struct AuditRecord {
     pub claim_hash: Option<String>,
     /// HMAC binding for submitted evidence metadata, never raw evidence.
     pub evidence_hash: Option<String>,
+    /// PDP policy identifier used for governed access decisions.
+    pub pdp_policy_id: Option<String>,
+    /// PDP policy hash used for governed access decisions.
+    pub pdp_policy_hash: Option<String>,
+    /// PDP rule ids evaluated for governed access decisions.
+    pub pdp_evaluated_rule_ids: Option<Vec<String>>,
     /// Scopes actually checked on this request, in declaration order.
     pub scopes_used: Vec<String>,
     /// Redacted parameter inventory (names + ops, never values).
@@ -443,6 +452,9 @@ impl OperationalAuditEvent {
             verification_decision: None,
             claim_hash: None,
             evidence_hash: None,
+            pdp_policy_id: None,
+            pdp_policy_hash: None,
+            pdp_evaluated_rule_ids: None,
             scopes_used: Vec::new(),
             query_params: json!({}),
             purpose: None,
@@ -809,6 +821,9 @@ pub async fn audit_layer(
         verification_decision: context.verification_decision,
         claim_hash: context.claim_hash,
         evidence_hash: context.evidence_hash,
+        pdp_policy_id: context.pdp_policy_id,
+        pdp_policy_hash: context.pdp_policy_hash,
+        pdp_evaluated_rule_ids: context.pdp_evaluated_rule_ids,
         scopes_used,
         query_params,
         purpose,

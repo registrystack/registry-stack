@@ -67,6 +67,34 @@ fn server_with_aggregate_only_execution(scopes: &[&str]) -> TestServer {
     )
 }
 
+fn server_with_source_entity_api_extra(
+    scopes: &[&str],
+    require_purpose_header: bool,
+    entity_api_extra: &str,
+) -> TestServer {
+    let yaml = edr_config_yaml(require_purpose_header, true, 100, false).replacen(
+        &format!(
+            "          require_purpose_header: {}\n",
+            if require_purpose_header {
+                "true"
+            } else {
+                "false"
+            }
+        ),
+        &format!(
+            "          require_purpose_header: {}\n{}",
+            if require_purpose_header {
+                "true"
+            } else {
+                "false"
+            },
+            entity_api_extra
+        ),
+        1,
+    );
+    server_from_config(scopes, yaml)
+}
+
 fn server_from_config(scopes: &[&str], yaml: String) -> TestServer {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = tmp.path().join("ogc_edr.yaml");
@@ -433,15 +461,19 @@ async fn area_post_geojson_returns_single_submitted_geometry_feature() {
 
 #[tokio::test]
 async fn area_enforces_source_entity_purpose_header() {
-    let server = server_with_options(
+    let policy = r#"          governed_policy:
+            permitted_purposes:
+              - capacity planning
+            trusted_context: {}
+"#;
+    let server = server_with_source_entity_api_extra(
         &[
             "social_registry:metadata",
             "social_registry:aggregate",
             "social_registry:rows",
         ],
         true,
-        true,
-        100,
+        policy,
     );
 
     let missing = server
@@ -459,12 +491,57 @@ async fn area_enforces_source_entity_purpose_header() {
     blank.assert_status_bad_request();
     assert_eq!(blank.json::<Value>()["code"], "auth.purpose_required");
 
+    let denied = server
+        .get("/ogc/edr/v1/collections/social_registry_beneficiaries_by_municipality/area")
+        .add_query_param("coords", "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))")
+        .add_header("data-purpose", "casework")
+        .await;
+    denied.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(denied.json::<Value>()["code"], "pdp.purpose_not_permitted");
+
     let ok = server
         .get("/ogc/edr/v1/collections/social_registry_beneficiaries_by_municipality/area")
         .add_query_param("coords", "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))")
         .add_header("data-purpose", "capacity planning")
         .await;
     ok.assert_status_ok();
+}
+
+#[tokio::test]
+async fn area_applies_source_entity_governed_redaction_to_feature_properties() {
+    let policy = r#"          governed_policy:
+            permitted_purposes:
+              - capacity planning
+            redaction_fields: [individual_count]
+            trusted_context: {}
+"#;
+    let server = server_with_source_entity_api_extra(
+        &[
+            "social_registry:metadata",
+            "social_registry:aggregate",
+            "social_registry:rows",
+        ],
+        false,
+        policy,
+    );
+
+    let response = server
+        .get("/ogc/edr/v1/collections/social_registry_beneficiaries_by_municipality/area")
+        .add_query_param("coords", "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))")
+        .add_query_param("parameter-name", "individual_count")
+        .add_query_param("group_by", "municipality")
+        .add_header("data-purpose", "capacity planning")
+        .await;
+
+    response.assert_status_ok();
+    let body: Value = response.json();
+    let features = body["features"].as_array().expect("features");
+    assert_eq!(features.len(), 1);
+    assert_eq!(features[0]["properties"]["municipality"], "mun-1");
+    assert!(
+        features[0]["properties"].get("individual_count").is_none(),
+        "redacted aggregate measure must not be present in EDR feature properties"
+    );
 }
 
 #[tokio::test]

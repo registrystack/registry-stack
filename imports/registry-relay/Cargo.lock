@@ -5039,6 +5039,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-platform-pdp"
+version = "0.3.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "registry-platform-replay"
 version = "0.3.0"
 dependencies = [
@@ -5133,6 +5140,7 @@ dependencies = [
  "registry-platform-httputil",
  "registry-platform-oidc",
  "registry-platform-ops",
+ "registry-platform-pdp",
  "registry-platform-sdjwt",
  "registry-platform-testing",
  "reqwest",

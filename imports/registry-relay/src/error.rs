@@ -50,6 +50,8 @@ pub enum Error {
     #[error("{0}")]
     Auth(#[from] AuthError),
     #[error("{0}")]
+    Pdp(#[from] PdpError),
+    #[error("{0}")]
     Entity(#[from] EntityError),
     #[error("{0}")]
     Filter(#[from] FilterError),
@@ -113,6 +115,8 @@ pub enum AuthError {
     ScopeDenied { required: String },
     #[error("purpose header required")]
     PurposeRequired,
+    #[error("purpose denied")]
+    PurposeDenied,
     #[error("admin scope required")]
     AdminRequired,
     /// OIDC: the bearer JWT's `exp` is in the past (beyond the
@@ -152,6 +156,29 @@ pub enum AuthError {
     /// outages from bad tokens.
     #[error("jwks unavailable")]
     JwksUnavailable,
+}
+
+/// `pdp.*` policy decision codes from the shared Registry PDP.
+#[derive(Debug, Error)]
+pub enum PdpError {
+    #[error("purpose not permitted")]
+    PurposeNotPermitted,
+    #[error("assurance insufficient")]
+    AssuranceInsufficient,
+    #[error("evidence stale")]
+    EvidenceStale,
+    #[error("legal basis required")]
+    LegalBasisRequired,
+    #[error("consent required")]
+    ConsentRequired,
+    #[error("jurisdiction not permitted")]
+    JurisdictionNotPermitted,
+    #[error("unsupported policy term")]
+    UnsupportedPolicyTerm,
+    #[error("policy id required")]
+    PolicyIdRequired,
+    #[error("policy hash invalid")]
+    PolicyHashInvalid,
 }
 
 /// `filter.*` codes.
@@ -337,6 +364,10 @@ pub enum RuntimeBindingError {
     RelationshipMissing,
     #[error("runtime evidence offering kind is unsupported")]
     UnsupportedEvidenceOffering,
+    #[error("runtime ecosystem binding missing from metadata")]
+    EcosystemBindingMissing,
+    #[error("runtime ecosystem binding is invalid")]
+    EcosystemBindingInvalid,
 }
 
 /// `provenance.*` runtime codes.
@@ -455,6 +486,7 @@ impl Error {
     pub fn code(&self) -> &'static str {
         match self {
             Error::Auth(e) => e.code(),
+            Error::Pdp(e) => e.code(),
             Error::Entity(e) => e.code(),
             Error::Filter(e) => e.code(),
             Error::Schema(e) => e.code(),
@@ -483,6 +515,7 @@ impl Error {
     pub fn http_status(&self) -> StatusCode {
         match self {
             Error::Auth(e) => e.http_status(),
+            Error::Pdp(e) => e.http_status(),
             Error::Entity(e) => e.http_status(),
             Error::Filter(e) => e.http_status(),
             Error::Schema(e) => e.http_status(),
@@ -507,6 +540,7 @@ impl Error {
     pub fn title(&self) -> &'static str {
         match self {
             Error::Auth(e) => e.title(),
+            Error::Pdp(e) => e.title(),
             Error::Entity(e) => e.title(),
             Error::Filter(e) => e.title(),
             Error::Schema(e) => e.title(),
@@ -533,6 +567,7 @@ impl Error {
     pub fn detail(&self) -> String {
         match self {
             Error::Auth(e) => e.detail(),
+            Error::Pdp(e) => e.detail().to_string(),
             Error::Entity(e) => e.detail(),
             Error::Filter(e) => e.detail().to_string(),
             Error::Schema(e) => e.detail().to_string(),
@@ -610,6 +645,7 @@ impl AuthError {
             AuthError::MalformedCredential => "auth.malformed_credential",
             AuthError::ScopeDenied { .. } => "auth.scope_denied",
             AuthError::PurposeRequired => "auth.purpose_required",
+            AuthError::PurposeDenied => "auth.purpose_denied",
             AuthError::AdminRequired => "auth.admin_required",
             AuthError::TokenExpired => "auth.token_expired",
             AuthError::TokenNotYetValid => "auth.token_not_yet_valid",
@@ -636,6 +672,7 @@ impl AuthError {
             | AuthError::KidUnknown
             | AuthError::AlgorithmNotAllowed => StatusCode::UNAUTHORIZED,
             AuthError::ScopeDenied { .. }
+            | AuthError::PurposeDenied
             | AuthError::AdminRequired
             | AuthError::ClientNotAllowed => StatusCode::FORBIDDEN,
             AuthError::PurposeRequired => StatusCode::BAD_REQUEST,
@@ -650,6 +687,7 @@ impl AuthError {
             AuthError::MalformedCredential => "Malformed credential",
             AuthError::ScopeDenied { .. } => "Scope denied",
             AuthError::PurposeRequired => "Purpose header required",
+            AuthError::PurposeDenied => "Purpose denied",
             AuthError::AdminRequired => "Admin scope required",
             AuthError::TokenExpired => "Token expired",
             AuthError::TokenNotYetValid => "Token not yet valid",
@@ -679,6 +717,9 @@ impl AuthError {
             AuthError::PurposeRequired => {
                 "Data-Purpose header is required for this resource".to_string()
             }
+            AuthError::PurposeDenied => {
+                "Data-Purpose header is not permitted by policy for this resource".to_string()
+            }
             AuthError::AdminRequired => "admin scope is required for this endpoint".to_string(),
             AuthError::TokenExpired => "bearer token has expired".to_string(),
             AuthError::TokenNotYetValid => "bearer token is not yet valid".to_string(),
@@ -699,6 +740,70 @@ impl AuthError {
             AuthError::JwksUnavailable => {
                 "the JWKS endpoint is unreachable and no cached keys are available".to_string()
             }
+        }
+    }
+}
+
+impl PdpError {
+    #[must_use]
+    pub fn from_stable_code(code: &str) -> Self {
+        match code {
+            registry_platform_pdp::PURPOSE_NOT_PERMITTED => Self::PurposeNotPermitted,
+            registry_platform_pdp::ASSURANCE_INSUFFICIENT => Self::AssuranceInsufficient,
+            registry_platform_pdp::EVIDENCE_STALE => Self::EvidenceStale,
+            registry_platform_pdp::LEGAL_BASIS_REQUIRED => Self::LegalBasisRequired,
+            registry_platform_pdp::CONSENT_REQUIRED => Self::ConsentRequired,
+            registry_platform_pdp::JURISDICTION_NOT_PERMITTED => Self::JurisdictionNotPermitted,
+            registry_platform_pdp::UNSUPPORTED_POLICY_TERM => Self::UnsupportedPolicyTerm,
+            registry_platform_pdp::POLICY_ID_REQUIRED => Self::PolicyIdRequired,
+            registry_platform_pdp::POLICY_HASH_INVALID => Self::PolicyHashInvalid,
+            _ => Self::UnsupportedPolicyTerm,
+        }
+    }
+
+    fn code(&self) -> &'static str {
+        match self {
+            Self::PurposeNotPermitted => registry_platform_pdp::PURPOSE_NOT_PERMITTED,
+            Self::AssuranceInsufficient => registry_platform_pdp::ASSURANCE_INSUFFICIENT,
+            Self::EvidenceStale => registry_platform_pdp::EVIDENCE_STALE,
+            Self::LegalBasisRequired => registry_platform_pdp::LEGAL_BASIS_REQUIRED,
+            Self::ConsentRequired => registry_platform_pdp::CONSENT_REQUIRED,
+            Self::JurisdictionNotPermitted => registry_platform_pdp::JURISDICTION_NOT_PERMITTED,
+            Self::UnsupportedPolicyTerm => registry_platform_pdp::UNSUPPORTED_POLICY_TERM,
+            Self::PolicyIdRequired => registry_platform_pdp::POLICY_ID_REQUIRED,
+            Self::PolicyHashInvalid => registry_platform_pdp::POLICY_HASH_INVALID,
+        }
+    }
+
+    fn http_status(&self) -> StatusCode {
+        StatusCode::FORBIDDEN
+    }
+
+    fn title(&self) -> &'static str {
+        match self {
+            Self::PurposeNotPermitted => "Purpose not permitted",
+            Self::AssuranceInsufficient => "Assurance insufficient",
+            Self::EvidenceStale => "Evidence stale",
+            Self::LegalBasisRequired => "Legal basis required",
+            Self::ConsentRequired => "Consent required",
+            Self::JurisdictionNotPermitted => "Jurisdiction not permitted",
+            Self::UnsupportedPolicyTerm => "Unsupported policy term",
+            Self::PolicyIdRequired => "Policy id required",
+            Self::PolicyHashInvalid => "Policy hash invalid",
+        }
+    }
+
+    fn detail(&self) -> &'static str {
+        match self {
+            Self::PurposeNotPermitted => "request purpose is not permitted by policy",
+            Self::AssuranceInsufficient => "request assurance is insufficient for policy",
+            Self::EvidenceStale => "source evidence is stale for policy",
+            Self::LegalBasisRequired => "legal basis is required by policy",
+            Self::ConsentRequired => "consent reference is required by policy",
+            Self::JurisdictionNotPermitted => "request jurisdiction is not permitted by policy",
+            Self::UnsupportedPolicyTerm => "policy contains a term this service cannot enforce",
+            Self::PolicyIdRequired => "policy identity is required",
+            Self::PolicyHashInvalid => "policy hash is invalid",
         }
     }
 }
@@ -1126,6 +1231,12 @@ impl RuntimeBindingError {
             RuntimeBindingError::UnsupportedEvidenceOffering => {
                 "runtime.binding.unsupported_evidence_offering"
             }
+            RuntimeBindingError::EcosystemBindingMissing => {
+                "runtime.binding.ecosystem_binding_missing"
+            }
+            RuntimeBindingError::EcosystemBindingInvalid => {
+                "runtime.binding.ecosystem_binding_invalid"
+            }
         }
     }
 
@@ -1146,6 +1257,10 @@ impl RuntimeBindingError {
                 "Runtime relationship missing from metadata"
             }
             RuntimeBindingError::UnsupportedEvidenceOffering => "Unsupported evidence offering",
+            RuntimeBindingError::EcosystemBindingMissing => {
+                "Runtime ecosystem binding missing from metadata"
+            }
+            RuntimeBindingError::EcosystemBindingInvalid => "Runtime ecosystem binding invalid",
         }
     }
 
@@ -1174,6 +1289,12 @@ impl RuntimeBindingError {
             }
             RuntimeBindingError::UnsupportedEvidenceOffering => {
                 "only external Registry Notary evidence offerings are supported"
+            }
+            RuntimeBindingError::EcosystemBindingMissing => {
+                "configured ecosystem binding selector is absent from the metadata manifest"
+            }
+            RuntimeBindingError::EcosystemBindingInvalid => {
+                "configured ecosystem binding must reference a governed-evidence binding with policy identity and ODRL enforcement"
             }
         }
     }

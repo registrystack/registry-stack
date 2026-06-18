@@ -89,6 +89,7 @@ registry-platform-httpsec = { version = "0.3.0", path = "../registry-platform/cr
 registry-platform-httputil = { version = "0.3.0", path = "../registry-platform/crates/registry-platform-httputil" }
 registry-platform-oidc = { version = "0.3.0", path = "../registry-platform/crates/registry-platform-oidc" }
 registry-platform-config = { version = "0.3.0", path = "../registry-platform/crates/registry-platform-config" }
+registry-platform-pdp = { version = "0.3.0", path = "../registry-platform/crates/registry-platform-pdp" }
 registry-platform-sdjwt = { version = "0.3.0", path = "../registry-platform/crates/registry-platform-sdjwt" }
 getrandom = { version = "0.4" }
 hmac = { version = "0.13" }

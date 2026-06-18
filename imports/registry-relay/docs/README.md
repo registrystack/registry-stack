@@ -14,6 +14,7 @@ The references describe supported behavior. Each fact has one home; pages link t
 
 - [API guide](api.md): auth, scopes, filters, pagination, metadata caching, Problem Details, standards surfaces, and the admin route reference. The curated public OpenAPI surface lives in [openapi/registry-relay.openapi.json](../openapi/registry-relay.openapi.json) and the served `/docs` and `/openapi.json`.
 - [Client integration guide](client-integration.md): caller behavior for auth, purpose headers, discovery, pagination, ETags, errors, retries, aggregates, signed response credentials, and the Registry Notary handoff.
+- [Call Relay from OpenFn](openfn-relay-adaptor-guide.md): use the Registry Stack OpenFn Relay adaptor for protected row reads, discovery, and aggregate queries.
 - [Signed response credentials](provenance.md): VC-JWT response opt-in, issuer modes, schemas, contexts, DID Web, audit, and verification. The config key is `provenance` for compatibility.
 
 ## Operate

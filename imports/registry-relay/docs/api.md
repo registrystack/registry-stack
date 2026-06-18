@@ -235,9 +235,10 @@ Data-Purpose: https://data.example.gov/purposes/service-intake-check
 
 - Header **presence** can be required per entity via `require_purpose_header: true`. A missing header when required returns `400 auth.purpose_required`.
 - When the header is present, the value is **always recorded verbatim** in the audit trail.
-- Purpose **values are not enforced** at the consultation layer. Relay does not validate, compare, or allowlist values.
+- Without an entity `governed_policy`, purpose **values are not enforced** at the consultation layer. Relay records the value but does not validate, compare, or allowlist it.
+- With an entity `governed_policy`, governed evidence-gateway routes evaluate the configured PDP purpose allowlist and return a stable `pdp.*` denial when the purpose is not permitted.
 - **Registry Notary** is the purpose-certification layer.
-- Value-level allowlists, if ever added, will arrive as additive opt-in configuration and will not change this default behavior.
+- Value-level allowlists remain additive opt-in configuration and do not change the default `require_purpose_header` behavior.
 
 Use stable, reviewable purpose IRIs. Do not put secrets, bearer tokens, or personal data in this header; it is recorded in audit logs.
 

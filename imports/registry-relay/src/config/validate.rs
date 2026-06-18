@@ -26,8 +26,8 @@ use super::capabilities::source_capabilities;
 use super::{
     AggregateConfig, AggregateSpatialConfig, AllowedFilter, AuthMode, Config, DatasetConfig,
     EntityConfig, EntityRelationshipConfig, EntitySpatialConfig, FieldConfig, FieldType, FilterOp,
-    OidcConfig, RefreshConfig, RelationshipKind, ResourceConfig, Sensitivity, SourceConfig,
-    SpatialBboxFieldsConfig, SpatialGeometryConfig, CRS84,
+    GovernedPolicyConfig, OidcConfig, RefreshConfig, RelationshipKind, ResourceConfig, Sensitivity,
+    SourceConfig, SpatialBboxFieldsConfig, SpatialGeometryConfig, CRS84,
 };
 
 /// Product-scoped admin capability required by private admin mutations.
@@ -247,6 +247,7 @@ pub fn validate_runtime_bindings(
     config: &Config,
     metadata: &CompiledMetadata,
 ) -> Result<(), RuntimeBindingError> {
+    validate_ecosystem_binding_selector(config, metadata)?;
     for dataset in &config.datasets {
         let Some(metadata_dataset) = metadata.dataset(dataset.id.as_str()) else {
             tracing::error!(
@@ -406,6 +407,85 @@ pub fn validate_runtime_bindings(
                 return Err(RuntimeBindingError::UnsupportedEvidenceOffering);
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_ecosystem_binding_selector(
+    config: &Config,
+    metadata: &CompiledMetadata,
+) -> Result<(), RuntimeBindingError> {
+    let Some(selector) = config
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.ecosystem_binding.as_ref())
+    else {
+        return Ok(());
+    };
+    if selector.id.trim().is_empty()
+        || selector
+            .version
+            .as_deref()
+            .is_some_and(|version| version.trim().is_empty())
+    {
+        tracing::error!(
+            code = "runtime.binding.ecosystem_binding_invalid",
+            "metadata.ecosystem_binding must declare a non-empty id and version when present"
+        );
+        return Err(RuntimeBindingError::EcosystemBindingInvalid);
+    }
+
+    let matches = metadata
+        .ecosystem_bindings()
+        .iter()
+        .filter(|binding| {
+            binding.id == selector.id
+                && selector
+                    .version
+                    .as_deref()
+                    .is_none_or(|version| binding.version == version)
+        })
+        .collect::<Vec<_>>();
+    let binding = match matches.as_slice() {
+        [binding] => *binding,
+        [] => {
+            tracing::error!(
+                code = "runtime.binding.ecosystem_binding_missing",
+                binding_id = %selector.id,
+                binding_version = selector.version.as_deref().unwrap_or("<any>"),
+                "configured ecosystem binding selector is absent from the metadata manifest"
+            );
+            return Err(RuntimeBindingError::EcosystemBindingMissing);
+        }
+        _ => {
+            tracing::error!(
+                code = "runtime.binding.ecosystem_binding_invalid",
+                binding_id = %selector.id,
+                "configured ecosystem binding selector matched multiple metadata bindings"
+            );
+            return Err(RuntimeBindingError::EcosystemBindingInvalid);
+        }
+    };
+    let evidence_pack = binding.evidence_pack.as_ref();
+    if binding.binding_type != "governed-evidence"
+        || evidence_pack
+            .and_then(|pack| pack.policy_id.as_deref())
+            .is_none_or(|policy_id| policy_id.trim().is_empty())
+        || evidence_pack
+            .and_then(|pack| pack.policy_hash.as_deref())
+            .is_none_or(|policy_hash| policy_hash.trim().is_empty())
+        || evidence_pack
+            .and_then(|pack| pack.odrl_enforcement.as_ref())
+            .is_none()
+    {
+        tracing::error!(
+            code = "runtime.binding.ecosystem_binding_invalid",
+            binding_id = %binding.id,
+            binding_version = %binding.version,
+            binding_type = %binding.binding_type,
+            "configured ecosystem binding must be a governed-evidence binding with evidence_pack policy_id, policy_hash, and odrl_enforcement"
+        );
+        return Err(RuntimeBindingError::EcosystemBindingInvalid);
     }
     Ok(())
 }
@@ -3237,8 +3317,109 @@ fn validate_entity_filters(
             return Err(ConfigError::ValidationError);
         }
     }
+    if let Some(policy) = entity.api.governed_policy.as_ref() {
+        validate_entity_governed_policy(dataset, entity, policy)?;
+    }
 
     Ok(())
+}
+
+fn validate_entity_governed_policy(
+    dataset: &DatasetConfig,
+    entity: &EntityConfig,
+    policy: &GovernedPolicyConfig,
+) -> Result<(), ConfigError> {
+    for purpose in &policy.permitted_purposes {
+        if purpose.trim().is_empty() {
+            return entity_governed_policy_error(dataset, entity, "empty permitted_purposes entry");
+        }
+    }
+    for jurisdiction in &policy.permitted_jurisdictions {
+        if jurisdiction.trim().is_empty() {
+            return entity_governed_policy_error(
+                dataset,
+                entity,
+                "empty permitted_jurisdictions entry",
+            );
+        }
+    }
+    for assurance in &policy.allowed_assurance {
+        if assurance.trim().is_empty() {
+            return entity_governed_policy_error(dataset, entity, "empty allowed_assurance entry");
+        }
+    }
+    if policy
+        .minimum_assurance
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return entity_governed_policy_error(dataset, entity, "empty minimum_assurance");
+    }
+    if policy.max_source_age_seconds == Some(0) {
+        return entity_governed_policy_error(
+            dataset,
+            entity,
+            "max_source_age_seconds must be greater than zero",
+        );
+    }
+    for field in &policy.redaction_fields {
+        if field.trim().is_empty() {
+            return entity_governed_policy_error(dataset, entity, "empty redaction_fields entry");
+        }
+    }
+    let trusted = &policy.trusted_context;
+    if trusted
+        .jurisdiction
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return entity_governed_policy_error(dataset, entity, "empty trusted_context.jurisdiction");
+    }
+    if trusted
+        .asserted_assurance
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return entity_governed_policy_error(
+            dataset,
+            entity,
+            "empty trusted_context.asserted_assurance",
+        );
+    }
+    if trusted
+        .legal_basis_ref
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return entity_governed_policy_error(
+            dataset,
+            entity,
+            "empty trusted_context.legal_basis_ref",
+        );
+    }
+    if trusted
+        .consent_ref
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return entity_governed_policy_error(dataset, entity, "empty trusted_context.consent_ref");
+    }
+    Ok(())
+}
+
+fn entity_governed_policy_error(
+    dataset: &DatasetConfig,
+    entity: &EntityConfig,
+    reason: &str,
+) -> Result<(), ConfigError> {
+    tracing::error!(
+        code = "config.validation_error",
+        dataset_id = %dataset.id,
+        entity = %entity.name,
+        reason = %reason,
+        "entity governed_policy is invalid"
+    );
+    Err(ConfigError::ValidationError)
 }
 
 fn validate_entity_aggregates(

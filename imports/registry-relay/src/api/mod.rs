@@ -18,6 +18,7 @@ pub mod datasets;
 pub mod did;
 pub mod docs;
 pub mod entity;
+pub(crate) mod governed;
 pub mod health;
 pub mod metadata;
 #[cfg(any(

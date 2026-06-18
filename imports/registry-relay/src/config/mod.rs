@@ -205,6 +205,8 @@ fn default_break_glass_rate_limit() -> BreakGlassRateLimit {
 #[serde(deny_unknown_fields)]
 pub struct MetadataConfig {
     pub source: MetadataSourceConfig,
+    #[serde(default)]
+    pub ecosystem_binding: Option<EcosystemBindingSelectorConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -213,6 +215,14 @@ pub struct MetadataSourceConfig {
     pub path: PathBuf,
     #[serde(default)]
     pub digest: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EcosystemBindingSelectorConfig {
+    pub id: String,
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 /// External standards adapters layered over configured entities.
@@ -1147,11 +1157,51 @@ pub struct EntityApiConfig {
     #[serde(default)]
     pub require_purpose_header: bool,
     #[serde(default)]
+    pub governed_policy: Option<GovernedPolicyConfig>,
+    #[serde(default)]
     pub required_filters: Vec<String>,
     #[serde(default)]
     pub allowed_filters: Vec<AllowedFilter>,
     #[serde(default)]
     pub allowed_expansions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct GovernedPolicyConfig {
+    #[serde(default)]
+    pub permitted_purposes: Vec<String>,
+    #[serde(default)]
+    pub permitted_jurisdictions: Vec<String>,
+    #[serde(default)]
+    pub allowed_assurance: Vec<String>,
+    #[serde(default)]
+    pub minimum_assurance: Option<String>,
+    #[serde(default)]
+    pub max_source_age_seconds: Option<u64>,
+    #[serde(default)]
+    pub require_legal_basis: bool,
+    #[serde(default)]
+    pub require_consent: bool,
+    #[serde(default)]
+    pub redaction_fields: Vec<String>,
+    #[serde(default)]
+    pub trusted_context: GovernedTrustedContextConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct GovernedTrustedContextConfig {
+    #[serde(default)]
+    pub jurisdiction: Option<String>,
+    #[serde(default)]
+    pub asserted_assurance: Option<String>,
+    #[serde(default)]
+    pub legal_basis_ref: Option<String>,
+    #[serde(default)]
+    pub consent_ref: Option<String>,
+    #[serde(default)]
+    pub source_observed_age_seconds: Option<u64>,
 }
 
 /// Declared resource schema. `strict` is the spec's `strict_schema`

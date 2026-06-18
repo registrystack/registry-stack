@@ -6,7 +6,7 @@ mod format;
 mod response;
 mod sdmx;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use axum::extract::{Path, Query};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -17,6 +17,9 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::watch;
 
+use crate::api::governed::{
+    attach_pdp_audit, require_governed_read_access, GovernedAccessError, GovernedReadDecision,
+};
 use crate::audit::{AuditContextExt, ErrorCodeExt};
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
@@ -28,7 +31,6 @@ use crate::runtime_config::RuntimeSnapshot;
 
 const PROBLEM_JSON: HeaderValue = HeaderValue::from_static("application/problem+json");
 const QUERY_UNAVAILABLE_CODE: &str = "aggregate.query_unavailable";
-const DATA_PURPOSE_HEADER: &str = "data-purpose";
 
 /// Official SDMX-JSON 2.1 data message schema vendored for offline validation.
 pub const SDMX_JSON_DATA_SCHEMA_2_1: &[u8] =
@@ -333,9 +335,16 @@ async fn run_aggregate(
         Ok(pair) => pair,
         Err(error) => return error.into_response(),
     };
-    if let Err(error) = require_purpose_header(dataset, aggregate, &headers) {
-        return error.into_response();
-    }
+    let governed_decision = match require_source_entity_governed_access(
+        &runtime,
+        &path.dataset_id,
+        dataset,
+        aggregate,
+        &headers,
+    ) {
+        Ok(decision) => decision,
+        Err(error) => return aggregate_access_error_response(error, &path),
+    };
     if let Err(error) =
         require_aggregate_scope(principal.clone(), &path.dataset_id, Some(aggregate))
     {
@@ -365,7 +374,8 @@ async fn run_aggregate(
         .execute_aggregate(&path.dataset_id, &path.aggregate_id, request)
         .await
     {
-        Ok(result) => {
+        Ok(mut result) => {
+            redact_aggregate_result(&mut result, &governed_decision.redaction_fields);
             let readiness = runtime.readiness_rx();
             let as_of = resolve_as_of_rfc3339(readiness.as_ref(), &result);
             let envelope = response::aggregate_result_json(&result, as_of.as_deref());
@@ -393,17 +403,74 @@ async fn run_aggregate(
                     as_of_rfc3339: as_of,
                 },
             );
-            response.extensions_mut().insert(AuditContextExt {
+            let mut audit_context = Some(AuditContextExt {
                 dataset_id: Some(path.dataset_id),
                 aggregate_id: Some(path.aggregate_id),
                 row_count: Some(result.data.len() as u64),
                 suppressed_groups: result.disclosure_control.suppressed_rows,
                 ..AuditContextExt::default()
             });
+            attach_pdp_audit(&mut audit_context, governed_decision.audit.as_ref());
+            if let Some(context) = audit_context {
+                response.extensions_mut().insert(context);
+            }
             vary_accept(&mut response);
             response
         }
         Err(error) => error.into_response(),
+    }
+}
+
+pub(crate) fn redact_aggregate_result(
+    result: &mut AggregateResult,
+    field_names: &BTreeSet<String>,
+) {
+    if field_names.is_empty() {
+        return;
+    }
+    let row_fields = aggregate_row_fields_to_redact(result, field_names);
+    for row in &mut result.data {
+        redact_aggregate_row(row, &row_fields);
+    }
+    result.group_by.retain(|field| !row_fields.contains(field));
+    result
+        .indicators
+        .retain(|field| !row_fields.contains(field));
+    result.schema.dimensions.retain(|dimension| {
+        !field_names.contains(&dimension.id) && !field_names.contains(&dimension.field)
+    });
+    result.schema.indicators.retain(|indicator| {
+        !field_names.contains(&indicator.id) && !field_names.contains(&indicator.column)
+    });
+}
+
+fn aggregate_row_fields_to_redact(
+    result: &AggregateResult,
+    field_names: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let mut row_fields = field_names.clone();
+    for dimension in &result.schema.dimensions {
+        if field_names.contains(&dimension.id) || field_names.contains(&dimension.field) {
+            row_fields.insert(dimension.id.clone());
+        }
+    }
+    for indicator in &result.schema.indicators {
+        if field_names.contains(&indicator.id) || field_names.contains(&indicator.column) {
+            row_fields.insert(indicator.id.clone());
+        }
+    }
+    row_fields
+}
+
+fn redact_aggregate_row(row: &mut Value, field_names: &BTreeSet<String>) {
+    let Value::Object(object) = row else {
+        return;
+    };
+    for field_name in field_names {
+        object.remove(field_name);
+        if let Some(attributes) = object.get_mut("attributes").and_then(Value::as_object_mut) {
+            attributes.remove(&format!("{field_name}$status"));
+        }
     }
 }
 
@@ -583,26 +650,32 @@ fn require_principal_scope(
     require_scope(&principal, required)
 }
 
-fn require_purpose_header(
+fn require_source_entity_governed_access(
+    runtime: &RuntimeSnapshot,
+    dataset_id: &str,
     dataset: &DatasetConfig,
     aggregate: &crate::config::AggregateConfig,
     headers: &HeaderMap,
-) -> Result<(), Error> {
-    let require = source_entity(dataset, aggregate)?
-        .api
-        .require_purpose_header;
-    if !require {
-        return Ok(());
+) -> Result<GovernedReadDecision, GovernedAccessError> {
+    let entity = source_entity(dataset, aggregate).map_err(GovernedAccessError::from)?;
+    require_governed_read_access(runtime, dataset_id, entity, headers)
+}
+
+fn aggregate_access_error_response(
+    error: GovernedAccessError,
+    path: &AggregateRunPath,
+) -> Response {
+    let mut audit_context = Some(AuditContextExt {
+        dataset_id: Some(path.dataset_id.clone()),
+        aggregate_id: Some(path.aggregate_id.clone()),
+        ..AuditContextExt::default()
+    });
+    attach_pdp_audit(&mut audit_context, error.pdp_audit.as_ref());
+    let mut response = error.error.into_response();
+    if let Some(context) = audit_context {
+        response.extensions_mut().insert(context);
     }
-    let present = headers
-        .get(DATA_PURPOSE_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| !value.trim().is_empty());
-    if present {
-        Ok(())
-    } else {
-        Err(AuthError::PurposeRequired.into())
-    }
+    response
 }
 
 fn require_source_entity_metadata_scope(

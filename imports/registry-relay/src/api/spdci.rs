@@ -6,7 +6,7 @@
 //! routes translate the SP DCI Disability Registry synchronous request
 //! envelope onto one configured entity.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::sync::Arc;
 
@@ -16,11 +16,15 @@ use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Json as JsonResponse, Response};
 use axum::routing::post;
 use axum::{Extension, Router};
+use registry_platform_pdp::DecisionAudit as PdpDecisionAudit;
 use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use ulid::Ulid;
 
+use crate::api::governed::{
+    attach_pdp_audit, require_governed_read_access, GovernedAccessError, GovernedReadDecision,
+};
 use crate::audit::AuditContextExt;
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
@@ -45,7 +49,6 @@ const REQUIRED_HEADER_FIELDS: &[&str] = &[
     "sender_id",
     "total_count",
 ];
-const DATA_PURPOSE_HEADER: &str = "data-purpose";
 const DEFAULT_DISABILITY_REGISTRY_NAME: &str = "dr";
 const DEFAULT_DISABILITY_REGISTRY_TYPE: &str = "ns:org:RegistryType:DR";
 const DEFAULT_DISABILITY_RECORD_TYPE: &str = "spdci-extensions-dci:DisabledPerson";
@@ -114,22 +117,37 @@ async fn disabled_status(
         Ok(route) => route,
         Err(error) => return error.into_response(),
     };
-    let result = run_disabled_status(&route, headers, principal, body).await;
-    let (response, row_count) = match result {
+    let result = run_disabled_status(&runtime, &route, headers, principal, body).await;
+    let (response, row_count, pdp_audit) = match result {
         Ok(value) => value,
-        Err(error) => (error.into_response(), 0),
+        Err(error) => (error.error.into_response(), 0, error.pdp_audit),
     };
-    with_audit_context(response, &route, row_count)
+    with_audit_context(response, &route, row_count, pdp_audit.as_ref())
 }
 
 async fn run_disabled_status(
+    runtime: &RuntimeSnapshot,
     route: &RouteState,
     headers: HeaderMap,
     principal: Option<Extension<Principal>>,
     body: Value,
-) -> Result<(Response, u64), Error> {
+) -> Result<(Response, u64, Option<PdpDecisionAudit>), SpdciRunError> {
     require_scope_for(principal, &route.entity.access.evidence_verification_scope)?;
-    require_entity_route_gates(&route.entity, &headers)?;
+    let governed_decision = require_entity_route_gates(
+        runtime,
+        route.config.dataset.as_str(),
+        &route.entity,
+        &headers,
+    )?;
+    if governed_decision
+        .redaction_fields
+        .contains(&route.config.disabled_status_field)
+    {
+        return Err(SpdciRunError {
+            error: AuthError::PurposeDenied.into(),
+            pdp_audit: governed_decision.audit,
+        });
+    }
     let request = SpdciRequest::from_body(body, &route.config)?;
     require_entity_filters_for_query(
         &route.entity,
@@ -163,6 +181,7 @@ async fn run_disabled_status(
     Ok((
         spdci_envelope_with_count("on-search", message, &headers, DISABLED_STATUS_TOTAL_COUNT),
         row_count,
+        governed_decision.audit,
     ))
 }
 
@@ -178,25 +197,37 @@ async fn sync_search_response(
         Err(error) => return error.into_response(),
     };
     let response_mapper = runtime.spdci_response_mapper();
-    let result =
-        run_sync_search_response(&route, headers, response_mapper.as_deref(), principal, body)
-            .await;
-    let (response, total_count) = match result {
-        Ok((response, total_count)) => (response, total_count),
-        Err(error) => (error.into_response(), 0),
+    let result = run_sync_search_response(
+        &runtime,
+        &route,
+        headers,
+        response_mapper.as_deref(),
+        principal,
+        body,
+    )
+    .await;
+    let (response, total_count, pdp_audit) = match result {
+        Ok(value) => value,
+        Err(error) => (error.error.into_response(), 0, error.pdp_audit),
     };
-    with_search_audit_context(response, &route, total_count)
+    with_search_audit_context(response, &route, total_count, pdp_audit.as_ref())
 }
 
 async fn run_sync_search_response(
+    runtime: &RuntimeSnapshot,
     route: &SearchRouteState,
     headers: HeaderMap,
     response_mapper: Option<&SpdciResponseMapper>,
     principal: Option<Extension<Principal>>,
     body: Value,
-) -> Result<(Response, u64), Error> {
+) -> Result<(Response, u64, Option<PdpDecisionAudit>), SpdciRunError> {
     require_scope_for(principal, &route.entity.access.read_scope)?;
-    require_entity_route_gates(&route.entity, &headers)?;
+    let governed_decision = require_entity_route_gates(
+        runtime,
+        route.config.dataset.as_str(),
+        &route.entity,
+        &headers,
+    )?;
     let request = SearchRequest::from_body(body, &route.config)?;
     for item in &request.items {
         require_entity_filters_for_query(&route.entity, &item.filters)?;
@@ -206,8 +237,13 @@ async fn run_sync_search_response(
     for item in request.items {
         let rows = read_search_rows(route, &item).await?;
         total_count += rows.len() as u64;
-        let reg_records =
-            project_search_records(&route.registry_name, &route.config, response_mapper, rows)?;
+        let reg_records = project_search_records(
+            &route.registry_name,
+            &route.config,
+            response_mapper,
+            rows,
+            &governed_decision.redaction_fields,
+        )?;
         search_response.push(json!({
             "reference_id": item.reference_id,
             "timestamp": now_rfc3339(),
@@ -228,6 +264,7 @@ async fn run_sync_search_response(
     Ok((
         spdci_envelope_with_count("on-search", message, &headers, total_count),
         total_count,
+        governed_decision.audit,
     ))
 }
 
@@ -277,30 +314,38 @@ async fn search_response(
         &route,
         &registry_name,
         &search_registry_config,
+        &runtime,
         headers,
         response_mapper.as_deref(),
         principal,
         body,
     )
     .await;
-    let (response, row_count) = match result {
-        Ok((response, count)) => (response, count),
-        Err(error) => (error.into_response(), 0),
+    let (response, row_count, pdp_audit) = match result {
+        Ok(value) => value,
+        Err(error) => (error.error.into_response(), 0, error.pdp_audit),
     };
-    with_audit_context(response, &route, row_count)
+    with_audit_context(response, &route, row_count, pdp_audit.as_ref())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_search_response(
     route: &RouteState,
     registry_name: &str,
     search_registry_config: &SpdciRegistryConfig,
+    runtime: &RuntimeSnapshot,
     headers: HeaderMap,
     response_mapper: Option<&SpdciResponseMapper>,
     principal: Option<Extension<Principal>>,
     body: Value,
-) -> Result<(Response, u64), Error> {
+) -> Result<(Response, u64, Option<PdpDecisionAudit>), SpdciRunError> {
     require_scope_for(principal, &route.entity.access.read_scope)?;
-    require_entity_route_gates(&route.entity, &headers)?;
+    let governed_decision = require_entity_route_gates(
+        runtime,
+        route.config.dataset.as_str(),
+        &route.entity,
+        &headers,
+    )?;
     let request = SpdciRequest::from_body(body, &route.config)?;
     require_entity_filters_for_query(
         &route.entity,
@@ -312,8 +357,13 @@ async fn run_search_response(
     )?;
     let rows = read_rows(route, &request, None).await?;
     let row_count = rows.len() as u64;
-    let reg_records =
-        project_search_records(registry_name, search_registry_config, response_mapper, rows)?;
+    let reg_records = project_search_records(
+        registry_name,
+        search_registry_config,
+        response_mapper,
+        rows,
+        &governed_decision.redaction_fields,
+    )?;
     let message = json!({
         "transaction_id": request.transaction_id,
         "correlation_id": request.correlation_id,
@@ -330,6 +380,7 @@ async fn run_search_response(
     Ok((
         spdci_envelope_with_count("on-search", message, &headers, row_count),
         row_count,
+        governed_decision.audit,
     ))
 }
 
@@ -344,6 +395,30 @@ struct SearchRouteState {
     config: SpdciRegistryConfig,
     entity: EntityModel,
     query: Arc<EntityQueryEngine>,
+}
+
+#[derive(Debug)]
+struct SpdciRunError {
+    error: Error,
+    pdp_audit: Option<PdpDecisionAudit>,
+}
+
+impl From<Error> for SpdciRunError {
+    fn from(error: Error) -> Self {
+        Self {
+            error,
+            pdp_audit: None,
+        }
+    }
+}
+
+impl From<GovernedAccessError> for SpdciRunError {
+    fn from(error: GovernedAccessError) -> Self {
+        Self {
+            error: error.error,
+            pdp_audit: error.pdp_audit,
+        }
+    }
 }
 
 impl RouteState {
@@ -926,6 +1001,7 @@ fn project_search_records(
     registry_config: &SpdciRegistryConfig,
     response_mapper: Option<&SpdciResponseMapper>,
     rows: Vec<Value>,
+    redaction_fields: &BTreeSet<String>,
 ) -> Result<Value, Error> {
     let default_mapper;
     let mapper = match response_mapper {
@@ -947,7 +1023,11 @@ fn project_search_records(
     };
     let mapped = rows
         .into_iter()
-        .map(|row| mapper.project_record(registry_name, registry_config, row))
+        .map(|row| {
+            let mut record = mapper.project_record(registry_name, registry_config, row)?;
+            redact_spdci_record(&mut record, registry_config, redaction_fields);
+            Ok::<Value, crate::spdci::SpdciResponseMappingError>(record)
+        })
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| {
             tracing::error!(
@@ -962,6 +1042,46 @@ fn project_search_records(
     // Per the SP DCI spec, `reg_records` is always a JSON array
     // (`@container: "@set"`). Empty results emit `[]`.
     Ok(Value::Array(mapped))
+}
+
+fn redact_spdci_record(
+    record: &mut Value,
+    registry_config: &SpdciRegistryConfig,
+    field_names: &BTreeSet<String>,
+) {
+    if field_names.is_empty() {
+        return;
+    }
+    for field_name in field_names {
+        remove_dotted(record, field_name);
+    }
+    for (target, source) in &registry_config.response_fields {
+        if field_names.contains(source) || field_names.contains(target) {
+            remove_dotted(record, target);
+        }
+    }
+}
+
+fn remove_dotted(value: &mut Value, path: &str) {
+    let mut parts = path.split('.').filter(|part| !part.is_empty()).peekable();
+    let Some(first) = parts.next() else {
+        return;
+    };
+    let mut current = value;
+    let mut part = first;
+    while parts.peek().is_some() {
+        let Value::Object(object) = current else {
+            return;
+        };
+        let Some(next) = object.get_mut(part) else {
+            return;
+        };
+        current = next;
+        part = parts.next().expect("peeked next part");
+    }
+    if let Value::Object(object) = current {
+        object.remove(part);
+    }
 }
 
 fn registry_has_mapping(config: &SpdciRegistryConfig) -> bool {
@@ -989,11 +1109,13 @@ fn require_scope_for(principal: Option<Extension<Principal>>, required: &str) ->
     require_scope(&principal, required)
 }
 
-fn require_entity_route_gates(entity: &EntityModel, headers: &HeaderMap) -> Result<(), Error> {
-    if entity.api.require_purpose_header && !has_purpose_header(headers) {
-        return Err(AuthError::PurposeRequired.into());
-    }
-    Ok(())
+fn require_entity_route_gates(
+    runtime: &RuntimeSnapshot,
+    dataset_id: &str,
+    entity: &EntityModel,
+    headers: &HeaderMap,
+) -> Result<GovernedReadDecision, GovernedAccessError> {
+    require_governed_read_access(runtime, dataset_id, entity, headers)
 }
 
 fn require_entity_filters_for_query(
@@ -1013,14 +1135,6 @@ fn require_entity_filters_for_query(
         required: entity.api.required_filters.clone(),
     }
     .into())
-}
-
-fn has_purpose_header(headers: &HeaderMap) -> bool {
-    headers
-        .get(DATA_PURPOSE_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .is_some_and(|s| !s.is_empty())
 }
 
 fn spdci_envelope_with_count(
@@ -1058,14 +1172,23 @@ fn now_rfc3339() -> String {
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
-fn with_audit_context(mut response: Response, route: &RouteState, row_count: u64) -> Response {
-    response.extensions_mut().insert(AuditContextExt {
+fn with_audit_context(
+    mut response: Response,
+    route: &RouteState,
+    row_count: u64,
+    pdp_audit: Option<&PdpDecisionAudit>,
+) -> Response {
+    let mut context = Some(AuditContextExt {
         dataset_id: Some(route.config.dataset.to_string()),
         entity_name: Some(route.config.entity.clone()),
         table_id: Some(route.entity.table_id.clone()),
         row_count: Some(row_count),
         ..AuditContextExt::default()
     });
+    attach_pdp_audit(&mut context, pdp_audit);
+    if let Some(context) = context {
+        response.extensions_mut().insert(context);
+    }
     response
 }
 
@@ -1073,14 +1196,19 @@ fn with_search_audit_context(
     mut response: Response,
     route: &SearchRouteState,
     row_count: u64,
+    pdp_audit: Option<&PdpDecisionAudit>,
 ) -> Response {
-    response.extensions_mut().insert(AuditContextExt {
+    let mut context = Some(AuditContextExt {
         dataset_id: Some(route.config.dataset.to_string()),
         entity_name: Some(route.config.entity.clone()),
         table_id: Some(route.entity.table_id.clone()),
         row_count: Some(row_count),
         ..AuditContextExt::default()
     });
+    attach_pdp_audit(&mut context, pdp_audit);
+    if let Some(context) = context {
+        response.extensions_mut().insert(context);
+    }
     response
 }
 

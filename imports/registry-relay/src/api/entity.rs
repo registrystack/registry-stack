@@ -7,7 +7,7 @@
 //! once auth and query state are wired. Without query state, data reads
 //! return an explicit RFC 9457-style `501` response.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use axum::extract::{Path, Query};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -16,9 +16,13 @@ use axum::routing::get;
 use axum::{Extension, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 
+use crate::api::governed::{
+    attach_pdp_audit, entity_etag as governed_entity_etag, governed_cache_variant,
+    require_governed_read_access, strong_etag as governed_strong_etag, GovernedAccessError,
+    GovernedReadDecision,
+};
 use crate::audit::{AuditContextExt, ErrorCodeExt};
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
@@ -28,7 +32,7 @@ use crate::error::{AuthError, EntityError, Error, InternalError, SchemaError};
 use crate::ingest::ReadinessSnapshot;
 use crate::metadata;
 use crate::query::{
-    satisfies_required_filter, EntityCollectionQuery, EntityFilter, EntityFilterOp,
+    satisfies_required_filter, EntityCollectionQuery, EntityFilter, EntityFilterOp, EntityRecord,
     RelationshipPageQuery,
 };
 use crate::runtime_config::{CursorSigner, RuntimeSnapshot, CURSOR_MAC_LEN};
@@ -36,7 +40,6 @@ use crate::runtime_config::{CursorSigner, RuntimeSnapshot, CURSOR_MAC_LEN};
 const PROBLEM_JSON: HeaderValue = HeaderValue::from_static("application/problem+json");
 const QUERY_UNAVAILABLE_CODE: &str = "entity.query_unavailable";
 const CURSOR_INVALIDATED_CODE: &str = "pagination.cursor_invalidated";
-const DATA_PURPOSE_HEADER: &str = "data-purpose";
 
 /// Defensive cap on the number of filter parameters accepted on a
 /// single entity-collection request. Pairs with the URI length cap in
@@ -169,29 +172,45 @@ async fn entity_collection(
             "entity collection route matched, but entity registry state is not installed",
         );
     };
-    let audit_context = audit_context_for_entity(&registry, &path);
-    let required_filters = match entity_from_registry(&registry, &path.dataset_id, &path.entity) {
+    let mut audit_context = audit_context_for_entity(&registry, &path);
+    let collection_access = match entity_from_registry(&registry, &path.dataset_id, &path.entity) {
         Ok(entity) => {
-            if let Err(error) = require_read_access(principal.clone(), entity, &headers) {
-                return error.into_response();
-            }
-            if let Some(expand) = params.get("expand") {
+            let read_decision = match require_read_access(
+                &runtime,
+                &path.dataset_id,
+                principal.clone(),
+                entity,
+                &headers,
+            ) {
+                Ok(audit) => audit,
+                Err(error) => return access_error_response(error, audit_context),
+            };
+            attach_pdp_audit(&mut audit_context, read_decision.audit.as_ref());
+            let expansion_decisions = if let Some(expand) = params.get("expand") {
                 let expansions = match parse_expansions(expand) {
                     Ok(expansions) => expansions,
                     Err(error) => return error.into_response(),
                 };
-                if let Err(error) = require_expansion_access(
+                match require_expansion_access(
                     &registry,
                     &path.dataset_id,
                     entity,
                     &expansions,
                     principal.clone(),
                     &headers,
+                    &runtime,
                 ) {
-                    return error.into_response();
+                    Ok(decisions) => decisions,
+                    Err(error) => return access_error_response(error, audit_context),
                 }
+            } else {
+                BTreeMap::new()
+            };
+            EntityCollectionAccess {
+                required_filters: entity.api.required_filters.clone(),
+                read_decision,
+                expansion_decisions,
             }
-            entity.api.required_filters.clone()
         }
         Err(error) => return error.into_response(),
     };
@@ -222,15 +241,14 @@ async fn entity_collection(
         Err(PageParamError::CursorInvalidated) => return cursor_invalidated(),
         Err(PageParamError::Error(error)) => return error.into_response(),
     };
-    if !required_filters.is_empty() {
-        let satisfied = query_params
-            .query
-            .filters
-            .iter()
-            .any(|filter| satisfies_required_filter(&required_filters, filter));
+    if !collection_access.required_filters.is_empty() {
+        let satisfied =
+            query_params.query.filters.iter().any(|filter| {
+                satisfies_required_filter(&collection_access.required_filters, filter)
+            });
         if !satisfied {
             return Error::from(EntityError::FilterRequired {
-                required: required_filters,
+                required: collection_access.required_filters,
             })
             .into_response();
         }
@@ -253,7 +271,12 @@ async fn entity_collection(
         .read_collection(&path.dataset_id, &path.entity, query_params.query)
         .await
     {
-        Ok(rows) => {
+        Ok(mut rows) => {
+            redact_rows(
+                &mut rows.rows,
+                &collection_access.read_decision.redaction_fields,
+            );
+            redact_expanded_rows(&mut rows.rows, &collection_access.expansion_decisions);
             let cursor_context = CursorContext {
                 dataset_id: path.dataset_id.clone(),
                 entity: path.entity.clone(),
@@ -286,6 +309,11 @@ async fn entity_collection(
                 None
             };
             let body = paginated_body(Value::Array(rows.rows), next_cursor.as_deref());
+            let validator = governed_cache_variant_for_expansions(
+                &validator,
+                &collection_access.read_decision,
+                &collection_access.expansion_decisions,
+            );
             let etag = entity_etag(
                 "collection",
                 &path.dataset_id,
@@ -329,31 +357,48 @@ async fn entity_record(
             "entity record route matched, but entity registry state is not installed",
         );
     };
-    let audit_context = audit_context_for_entity_record(&registry, &path.dataset_id, &path.entity);
-    match entity_from_registry(&registry, &path.dataset_id, &path.entity) {
+    let mut audit_context =
+        audit_context_for_entity_record(&registry, &path.dataset_id, &path.entity);
+    let record_access = match entity_from_registry(&registry, &path.dataset_id, &path.entity) {
         Ok(entity) => {
-            if let Err(error) = require_read_access(principal.clone(), entity, &headers) {
-                return error.into_response();
-            }
-            if let Some(expand) = params.get("expand") {
+            let read_decision = match require_read_access(
+                &runtime,
+                &path.dataset_id,
+                principal.clone(),
+                entity,
+                &headers,
+            ) {
+                Ok(audit) => audit,
+                Err(error) => return access_error_response(error, audit_context),
+            };
+            attach_pdp_audit(&mut audit_context, read_decision.audit.as_ref());
+            let expansion_decisions = if let Some(expand) = params.get("expand") {
                 let expansions = match parse_expansions(expand) {
                     Ok(expansions) => expansions,
                     Err(error) => return error.into_response(),
                 };
-                if let Err(error) = require_expansion_access(
+                match require_expansion_access(
                     &registry,
                     &path.dataset_id,
                     entity,
                     &expansions,
                     principal.clone(),
                     &headers,
+                    &runtime,
                 ) {
-                    return error.into_response();
+                    Ok(decisions) => decisions,
+                    Err(error) => return access_error_response(error, audit_context),
                 }
+            } else {
+                BTreeMap::new()
+            };
+            EntityRecordAccess {
+                read_decision,
+                expansion_decisions,
             }
         }
         Err(error) => return error.into_response(),
-    }
+    };
 
     let Some(query) = runtime.query() else {
         return query_unavailable(
@@ -361,7 +406,11 @@ async fn entity_record(
         );
     };
 
-    let validator = format!("{}?{}", path.id, params_validator(&params));
+    let validator = governed_cache_variant_for_expansions(
+        &format!("{}?{}", path.id, params_validator(&params)),
+        &record_access.read_decision,
+        &record_access.expansion_decisions,
+    );
     let query_params = match record_query_from_params(params) {
         Ok(query_params) => query_params,
         Err(error) => return error.into_response(),
@@ -388,6 +437,9 @@ async fn entity_record(
                 record.validator_ingest_version.as_deref(),
                 &validator,
             );
+            let mut record = record;
+            redact_record(&mut record, &record_access.read_decision.redaction_fields);
+            redact_expanded_record(&mut record, &record_access.expansion_decisions);
             let plain_response = if let Some(etag) = etag.as_deref() {
                 if if_none_match_matches(&headers, etag) {
                     not_modified_response(etag)
@@ -437,28 +489,39 @@ async fn entity_relationship(
             "entity relationship route matched, but entity registry state is not installed",
         );
     };
-    let audit_context = audit_context_for_relationship(
+    let mut audit_context = audit_context_for_relationship(
         &registry,
         &path.dataset_id,
         &path.entity,
         &path.relationship,
     );
     let mut page_context = None;
-    match entity_from_registry(&registry, &path.dataset_id, &path.entity) {
+    let relationship_access = match entity_from_registry(&registry, &path.dataset_id, &path.entity)
+    {
         Ok(entity) => {
-            if let Err(error) = require_read_access(principal.clone(), entity, &headers) {
-                return error.into_response();
-            }
-            if let Err(error) = require_relationship_target_access(
+            let read_decision = match require_read_access(
+                &runtime,
+                &path.dataset_id,
+                principal.clone(),
+                entity,
+                &headers,
+            ) {
+                Ok(audit) => audit,
+                Err(error) => return access_error_response(error, audit_context),
+            };
+            attach_pdp_audit(&mut audit_context, read_decision.audit.as_ref());
+            let target_read_decision = match require_relationship_target_access(
                 &registry,
                 &path.dataset_id,
                 entity,
                 &path.relationship,
                 principal.clone(),
                 &headers,
+                &runtime,
             ) {
-                return error.into_response();
-            }
+                Ok(decision) => decision,
+                Err(error) => return access_error_response(error, audit_context),
+            };
             if let Some(relationship) = entity.relationships.get(&path.relationship) {
                 let target =
                     match entity_from_registry(&registry, &path.dataset_id, &relationship.target) {
@@ -484,9 +547,13 @@ async fn entity_relationship(
                     });
                 }
             }
+            EntityRelationshipAccess {
+                read_decision,
+                target_read_decision,
+            }
         }
         Err(error) => return error.into_response(),
-    }
+    };
 
     let Some(query) = runtime.query() else {
         return query_unavailable(
@@ -501,11 +568,17 @@ async fn entity_relationship(
     };
 
     let link_params = params.clone();
-    let validator = format!(
-        "{}:{}?{}",
-        path.id,
-        path.relationship,
-        params_validator(&link_params)
+    let validator = governed_cache_variant(
+        &format!(
+            "{}:{}?{}",
+            path.id,
+            path.relationship,
+            params_validator(&link_params)
+        ),
+        [
+            &relationship_access.read_decision,
+            &relationship_access.target_read_decision,
+        ],
     );
     let relationship_query =
         match relationship_query_from_params(&signer, params, page_context.as_ref()) {
@@ -524,7 +597,11 @@ async fn entity_relationship(
         )
         .await
     {
-        Ok(page) => {
+        Ok(mut page) => {
+            redact_relationship_value(
+                &mut page.value,
+                &relationship_access.target_read_decision.redaction_fields,
+            );
             let etag = entity_etag(
                 "relationship",
                 &path.dataset_id,
@@ -604,15 +681,15 @@ fn require_principal_scope(
 }
 
 fn require_read_access(
+    runtime: &RuntimeSnapshot,
+    dataset_id: &str,
     principal: Option<Extension<Principal>>,
     entity: &EntityModel,
     headers: &HeaderMap,
-) -> Result<(), Error> {
-    require_principal_scope(principal, &entity.access.read_scope)?;
-    if entity.api.require_purpose_header && !has_purpose_header(headers) {
-        return Err(AuthError::PurposeRequired.into());
-    }
-    Ok(())
+) -> Result<GovernedReadDecision, GovernedAccessError> {
+    require_principal_scope(principal, &entity.access.read_scope)
+        .map_err(GovernedAccessError::from)?;
+    require_governed_read_access(runtime, dataset_id, entity, headers)
 }
 
 fn require_expansion_access(
@@ -622,10 +699,14 @@ fn require_expansion_access(
     expansions: &[String],
     principal: Option<Extension<Principal>>,
     headers: &HeaderMap,
-) -> Result<(), Error> {
+    runtime: &RuntimeSnapshot,
+) -> Result<BTreeMap<String, GovernedReadDecision>, GovernedAccessError> {
+    let mut decisions = BTreeMap::new();
     for expansion in expansions {
         if expansion == "*" || expansion.contains('.') {
-            return Err(crate::error::FilterError::UnsupportedOp.into());
+            return Err(GovernedAccessError::from_error(
+                crate::error::FilterError::UnsupportedOp,
+            ));
         }
         if !entity
             .api
@@ -633,7 +714,9 @@ fn require_expansion_access(
             .iter()
             .any(|allowed| allowed == expansion)
         {
-            return Err(crate::error::FilterError::NotAllowed.into());
+            return Err(GovernedAccessError::from_error(
+                crate::error::FilterError::NotAllowed,
+            ));
         }
         require_relationship_target_access(
             registry,
@@ -642,9 +725,13 @@ fn require_expansion_access(
             expansion,
             principal.clone(),
             headers,
-        )?;
+            runtime,
+        )
+        .map(|decision| {
+            decisions.insert(expansion.clone(), decision);
+        })?;
     }
-    Ok(())
+    Ok(decisions)
 }
 
 fn require_relationship_target_access(
@@ -654,29 +741,107 @@ fn require_relationship_target_access(
     relationship_name: &str,
     principal: Option<Extension<Principal>>,
     headers: &HeaderMap,
-) -> Result<(), Error> {
+    runtime: &RuntimeSnapshot,
+) -> Result<GovernedReadDecision, GovernedAccessError> {
     let relationship = entity
         .relationships
         .get(relationship_name)
-        .ok_or(crate::error::FilterError::NotAllowed)?;
-    let target = entity_from_registry(registry, dataset_id, &relationship.target)?;
-    require_principal_scope(principal, &target.access.read_scope)?;
-    if target.api.require_purpose_header && !has_purpose_header(headers) {
-        return Err(AuthError::PurposeRequired.into());
+        .ok_or_else(|| GovernedAccessError::from_error(crate::error::FilterError::NotAllowed))?;
+    let target = entity_from_registry(registry, dataset_id, &relationship.target)
+        .map_err(GovernedAccessError::from)?;
+    require_principal_scope(principal, &target.access.read_scope)
+        .map_err(GovernedAccessError::from)?;
+    require_governed_read_access(runtime, dataset_id, target, headers)
+}
+
+struct EntityCollectionAccess {
+    required_filters: Vec<String>,
+    read_decision: GovernedReadDecision,
+    expansion_decisions: BTreeMap<String, GovernedReadDecision>,
+}
+
+struct EntityRecordAccess {
+    read_decision: GovernedReadDecision,
+    expansion_decisions: BTreeMap<String, GovernedReadDecision>,
+}
+
+struct EntityRelationshipAccess {
+    read_decision: GovernedReadDecision,
+    target_read_decision: GovernedReadDecision,
+}
+
+fn governed_cache_variant_for_expansions(
+    base: &str,
+    read_decision: &GovernedReadDecision,
+    expansion_decisions: &BTreeMap<String, GovernedReadDecision>,
+) -> String {
+    governed_cache_variant(
+        base,
+        std::iter::once(read_decision).chain(expansion_decisions.values()),
+    )
+}
+
+fn redact_rows(rows: &mut [Value], field_names: &BTreeSet<String>) {
+    for row in rows {
+        redact_value_fields(row, field_names);
     }
-    Ok(())
 }
 
-fn has_purpose_header(headers: &HeaderMap) -> bool {
-    purpose_header_value(headers, DATA_PURPOSE_HEADER).is_some()
+fn redact_record(record: &mut EntityRecord, field_names: &BTreeSet<String>) {
+    redact_value_fields(&mut record.value, field_names);
 }
 
-fn purpose_header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
-    headers
-        .get(name)
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
+fn redact_expanded_rows(
+    rows: &mut [Value],
+    expansion_decisions: &BTreeMap<String, GovernedReadDecision>,
+) {
+    for row in rows {
+        redact_expanded_value(row, expansion_decisions);
+    }
+}
+
+fn redact_expanded_record(
+    record: &mut EntityRecord,
+    expansion_decisions: &BTreeMap<String, GovernedReadDecision>,
+) {
+    redact_expanded_value(&mut record.value, expansion_decisions);
+}
+
+fn redact_expanded_value(
+    value: &mut Value,
+    expansion_decisions: &BTreeMap<String, GovernedReadDecision>,
+) {
+    if expansion_decisions.is_empty() {
+        return;
+    }
+    let Value::Object(object) = value else {
+        return;
+    };
+    for (expansion, decision) in expansion_decisions {
+        if let Some(expanded) = object.get_mut(expansion) {
+            redact_relationship_value(expanded, &decision.redaction_fields);
+        }
+    }
+}
+
+fn redact_relationship_value(value: &mut Value, field_names: &BTreeSet<String>) {
+    if let Value::Array(rows) = value {
+        redact_rows(rows, field_names);
+    } else {
+        redact_value_fields(value, field_names);
+    }
+}
+
+fn redact_value_fields(value: &mut Value, field_names: &BTreeSet<String>) {
+    if field_names.is_empty() {
+        return;
+    }
+    let Value::Object(object) = value else {
+        return;
+    };
+    for field_name in field_names {
+        object.remove(field_name);
+    }
 }
 
 fn field_name_by_table_column(entity: &EntityModel, table_column: &str) -> Result<String, Error> {
@@ -727,6 +892,14 @@ fn with_optional_audit_context(response: Response, context: Option<AuditContextE
     }
 }
 
+fn access_error_response(
+    error: GovernedAccessError,
+    mut context: Option<AuditContextExt>,
+) -> Response {
+    attach_pdp_audit(&mut context, error.pdp_audit.as_ref());
+    with_optional_audit_context(error.error.into_response(), context)
+}
+
 fn with_audit_context(mut response: Response, context: AuditContextExt) -> Response {
     response.extensions_mut().insert(context);
     response
@@ -740,15 +913,12 @@ pub fn entity_etag(
     ingest_version: Option<&str>,
     variant: &str,
 ) -> Option<String> {
-    let ingest_version = ingest_version?;
-    Some(strong_etag(&[
-        "entity",
-        kind,
-        dataset_id,
-        entity_name,
-        ingest_version,
-        variant,
-    ]))
+    governed_entity_etag(kind, dataset_id, entity_name, ingest_version, variant)
+}
+
+#[doc(hidden)]
+pub fn strong_etag(parts: &[&str]) -> String {
+    governed_strong_etag(parts)
 }
 
 fn params_validator(params: &HashMap<String, String>) -> String {
@@ -757,18 +927,6 @@ fn params_validator(params: &HashMap<String, String>) -> String {
         .map(|(name, value)| (name.as_str(), value.as_str()))
         .collect::<BTreeMap<_, _>>();
     serde_json::to_string(&params).expect("string map serializes")
-}
-
-#[doc(hidden)]
-pub fn strong_etag(parts: &[&str]) -> String {
-    let mut hasher = Sha256::new();
-    for part in parts {
-        hasher.update(part.len().to_string().as_bytes());
-        hasher.update(b":");
-        hasher.update(part.as_bytes());
-        hasher.update(b";");
-    }
-    format!(r#""sha256:{}""#, hex_lower(&hasher.finalize()))
 }
 
 fn with_optional_etag(response: Response, etag: Option<&str>) -> Response {

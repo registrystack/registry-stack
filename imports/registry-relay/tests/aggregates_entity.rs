@@ -250,9 +250,13 @@ async fn server_with_aggregates() -> TestServer {
 }
 
 async fn server_with_aggregate_scopes(scopes: &[&str]) -> TestServer {
+    server_with_aggregate_config(AGGREGATE_CONFIG.to_string(), scopes).await
+}
+
+async fn server_with_aggregate_config(config_yaml: String, scopes: &[&str]) -> TestServer {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = tmp.path().join("aggregates_entity.yaml");
-    std::fs::write(&config_path, AGGREGATE_CONFIG).expect("write config");
+    std::fs::write(&config_path, config_yaml).expect("write config");
     let cfg = Arc::new(config::load(&config_path).expect("config loads"));
     let registry = Arc::new(EntityRegistry::from_config(&cfg).expect("registry"));
     let ctx = Arc::new(SessionContext::new());
@@ -596,6 +600,84 @@ async fn aggregate_execution_requires_source_entity_read_scope() {
 
     resp.assert_status_forbidden();
     assert_eq!(resp.json::<Value>()["code"], "auth.scope_denied");
+}
+
+#[tokio::test]
+async fn aggregate_execution_enforces_source_entity_governed_purpose() {
+    let config = AGGREGATE_CONFIG.replace(
+        "          max_limit: 1000\naudit:",
+        r#"          max_limit: 1000
+          governed_policy:
+            permitted_purposes:
+              - capacity planning
+            trusted_context: {}
+audit:"#,
+    );
+    let server = server_with_aggregate_config(
+        config,
+        &[
+            "social_registry:metadata",
+            "social_registry:aggregate",
+            "social_registry:rows",
+        ],
+    )
+    .await;
+
+    let get = server
+        .get("/v1/datasets/social_registry/aggregates/by_municipality")
+        .add_header("data-purpose", "casework")
+        .await;
+    get.assert_status_forbidden();
+    assert_eq!(get.json::<Value>()["code"], "pdp.purpose_not_permitted");
+
+    let post = server
+        .post("/v1/datasets/social_registry/aggregates/by_municipality/query")
+        .add_header("data-purpose", "casework")
+        .json(&json!({ "group_by": ["municipality_code"] }))
+        .await;
+    post.assert_status_forbidden();
+    assert_eq!(post.json::<Value>()["code"], "pdp.purpose_not_permitted");
+}
+
+#[tokio::test]
+async fn aggregate_execution_applies_governed_redaction_to_observations_and_structure() {
+    let config = AGGREGATE_CONFIG.replace(
+        "          max_limit: 1000\naudit:",
+        r#"          max_limit: 1000
+          governed_policy:
+            permitted_purposes:
+              - capacity planning
+            redaction_fields: [municipality_code]
+            trusted_context: {}
+audit:"#,
+    );
+    let server = server_with_aggregate_config(
+        config,
+        &[
+            "social_registry:metadata",
+            "social_registry:aggregate",
+            "social_registry:rows",
+        ],
+    )
+    .await;
+
+    let response = server
+        .get("/v1/datasets/social_registry/aggregates/by_municipality")
+        .add_header("data-purpose", "capacity planning")
+        .await;
+
+    response.assert_status_ok();
+    let body: Value = response.json();
+    let observations = body["observations"].as_array().expect("observations");
+    assert!(!observations.is_empty());
+    assert!(
+        observations
+            .iter()
+            .all(|row| row.get("municipality_code").is_none()),
+        "redacted aggregate dimension must not be present in observations: {observations:?}"
+    );
+    assert_eq!(body["structure"]["dimensions"], json!([]));
+    assert_eq!(observations[0]["individual_count"], 2);
 }
 
 #[tokio::test]

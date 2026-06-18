@@ -29,6 +29,10 @@ class WorkflowHardeningCheckTest(unittest.TestCase):
         path = self.module.WORKFLOWS / "binary-release.yml"
         return self.module.require_binary_release_powershell_hardening(text, path)
 
+    def coverage_failures(self, text: str) -> list[str]:
+        path = self.module.WORKFLOWS / "ci.yml"
+        return self.module.require_coverage_contract(text, path)
+
     def test_flags_get_nexte_st_installer(self):
         self.assertTrue(self.flagged("run: curl -LsSf https://get.nexte.st/latest/linux | tar xzf -"))
 
@@ -118,6 +122,97 @@ class WorkflowHardeningCheckTest(unittest.TestCase):
         )
 
         self.assertEqual(self.binary_release_failures(text), [])
+
+    def test_coverage_contract_requires_threshold(self):
+        text = (
+            'CARGO_LLVM_COV_VERSION: "0.8.7"\n'
+            "components: llvm-tools-preview\n"
+            "tool: cargo-llvm-cov@${{ env.CARGO_LLVM_COV_VERSION }}\n"
+            "cargo llvm-cov clean --workspace\n"
+            "cargo llvm-cov nextest --no-report --build-jobs 2\n"
+            "cargo llvm-cov nextest --all-features --no-report --build-jobs 2\n"
+            "cargo llvm-cov report | tee target/coverage/summary.txt\n"
+            "target/coverage/summary.txt\n"
+            "target/coverage/lcov.info\n"
+            "target/coverage/summary.json\n"
+            "target/coverage/dashboard.json\n"
+            "Upload coverage artifacts\n"
+            "Enforce coverage threshold\n"
+            'dashboard["status"] != "pass"\n'
+            "uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2\n"
+        )
+
+        failures = self.coverage_failures(text)
+
+        self.assertTrue(any("baseline coverage threshold" in failure for failure in failures))
+
+    def test_coverage_contract_requires_pinned_llvm_cov_install(self):
+        text = (
+            'CARGO_LLVM_COV_VERSION: "0.8.7"\n'
+            'REGISTRY_RELAY_COVERAGE_THRESHOLD: "85"\n'
+            "components: llvm-tools-preview\n"
+            "cargo llvm-cov clean --workspace\n"
+            "cargo llvm-cov nextest --no-report --build-jobs 2\n"
+            "cargo llvm-cov nextest --all-features --no-report --build-jobs 2\n"
+            "cargo llvm-cov report | tee target/coverage/summary.txt\n"
+            "target/coverage/summary.txt\n"
+            "target/coverage/lcov.info\n"
+            "target/coverage/summary.json\n"
+            "target/coverage/dashboard.json\n"
+            "Upload coverage artifacts\n"
+            "Enforce coverage threshold\n"
+            'dashboard["status"] != "pass"\n'
+            "uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2\n"
+        )
+
+        failures = self.coverage_failures(text)
+
+        self.assertTrue(any("pinned cargo-llvm-cov install" in failure for failure in failures))
+
+    def test_coverage_contract_requires_llvm_tools_component(self):
+        text = (
+            'CARGO_LLVM_COV_VERSION: "0.8.7"\n'
+            'REGISTRY_RELAY_COVERAGE_THRESHOLD: "85"\n'
+            "tool: cargo-llvm-cov@${{ env.CARGO_LLVM_COV_VERSION }}\n"
+            "cargo llvm-cov clean --workspace\n"
+            "cargo llvm-cov nextest --no-report --build-jobs 2\n"
+            "cargo llvm-cov nextest --all-features --no-report --build-jobs 2\n"
+            "cargo llvm-cov report | tee target/coverage/summary.txt\n"
+            "target/coverage/summary.txt\n"
+            "target/coverage/lcov.info\n"
+            "target/coverage/summary.json\n"
+            "target/coverage/dashboard.json\n"
+            "Upload coverage artifacts\n"
+            "Enforce coverage threshold\n"
+            'dashboard["status"] != "pass"\n'
+            "uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2\n"
+        )
+
+        failures = self.coverage_failures(text)
+
+        self.assertTrue(any("LLVM tools Rust component" in failure for failure in failures))
+
+    def test_coverage_contract_rejects_direct_fail_under_before_upload(self):
+        text = Path(self.module.ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        text += "\ncargo llvm-cov report --fail-under-lines 85\n"
+
+        failures = self.coverage_failures(text)
+
+        self.assertTrue(any("direct fail-under coverage gate" in failure for failure in failures))
+
+    def test_coverage_contract_requires_upload_before_threshold_enforcement(self):
+        text = Path(self.module.ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        text = text.replace("Upload coverage artifacts", "Upload coverage artifacts removed")
+        text = text.replace("Enforce coverage threshold", "Upload coverage artifacts")
+        text = text.replace("Upload coverage artifacts removed", "Enforce coverage threshold")
+
+        failures = self.coverage_failures(text)
+
+        self.assertTrue(any("upload before threshold enforcement" in failure for failure in failures))
 
     def test_real_workflows_pass(self):
         self.assertEqual(self.module.main(), 0)

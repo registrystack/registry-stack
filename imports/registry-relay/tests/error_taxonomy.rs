@@ -11,7 +11,7 @@ use axum::response::IntoResponse;
 use registry_relay::audit::ErrorCodeExt;
 use registry_relay::error::{
     AdminError, AggregateError, AuthError, ConfigError, Error, FilterError, IngestError,
-    InternalError, MetadataError, OgcError, QueryError, RuntimeBindingError, SchemaError,
+    InternalError, MetadataError, OgcError, PdpError, QueryError, RuntimeBindingError, SchemaError,
     SpatialError,
 };
 use serde_json::Value;
@@ -31,6 +31,7 @@ fn all_variants() -> Vec<Error> {
             required: "social_registry:rows".to_string(),
         }),
         Error::Auth(AuthError::PurposeRequired),
+        Error::Auth(AuthError::PurposeDenied),
         Error::Auth(AuthError::AdminRequired),
         Error::Auth(AuthError::TokenExpired),
         Error::Auth(AuthError::TokenNotYetValid),
@@ -41,6 +42,16 @@ fn all_variants() -> Vec<Error> {
         Error::Auth(AuthError::AlgorithmNotAllowed),
         Error::Auth(AuthError::ClientNotAllowed),
         Error::Auth(AuthError::JwksUnavailable),
+        // pdp.*
+        Error::Pdp(PdpError::PurposeNotPermitted),
+        Error::Pdp(PdpError::AssuranceInsufficient),
+        Error::Pdp(PdpError::EvidenceStale),
+        Error::Pdp(PdpError::LegalBasisRequired),
+        Error::Pdp(PdpError::ConsentRequired),
+        Error::Pdp(PdpError::JurisdictionNotPermitted),
+        Error::Pdp(PdpError::UnsupportedPolicyTerm),
+        Error::Pdp(PdpError::PolicyIdRequired),
+        Error::Pdp(PdpError::PolicyHashInvalid),
         // filter.*
         Error::Filter(FilterError::UnknownField),
         Error::Filter(FilterError::NotAllowed),
@@ -125,6 +136,7 @@ fn expected_table() -> Vec<(&'static str, StatusCode)> {
         ("auth.malformed_credential", StatusCode::UNAUTHORIZED),
         ("auth.scope_denied", StatusCode::FORBIDDEN),
         ("auth.purpose_required", StatusCode::BAD_REQUEST),
+        ("auth.purpose_denied", StatusCode::FORBIDDEN),
         ("auth.admin_required", StatusCode::FORBIDDEN),
         ("auth.token_expired", StatusCode::UNAUTHORIZED),
         ("auth.token_not_yet_valid", StatusCode::UNAUTHORIZED),
@@ -135,6 +147,15 @@ fn expected_table() -> Vec<(&'static str, StatusCode)> {
         ("auth.algorithm_not_allowed", StatusCode::UNAUTHORIZED),
         ("auth.client_not_allowed", StatusCode::FORBIDDEN),
         ("auth.jwks_unavailable", StatusCode::SERVICE_UNAVAILABLE),
+        ("pdp.purpose_not_permitted", StatusCode::FORBIDDEN),
+        ("pdp.assurance_insufficient", StatusCode::FORBIDDEN),
+        ("pdp.evidence_stale", StatusCode::FORBIDDEN),
+        ("pdp.legal_basis_required", StatusCode::FORBIDDEN),
+        ("pdp.consent_required", StatusCode::FORBIDDEN),
+        ("pdp.jurisdiction_not_permitted", StatusCode::FORBIDDEN),
+        ("pdp.unsupported_policy_term", StatusCode::FORBIDDEN),
+        ("pdp.policy_id_required", StatusCode::FORBIDDEN),
+        ("pdp.policy_hash_invalid", StatusCode::FORBIDDEN),
         ("filter.unknown_field", StatusCode::BAD_REQUEST),
         ("filter.not_allowed", StatusCode::BAD_REQUEST),
         ("filter.unsupported_op", StatusCode::BAD_REQUEST),

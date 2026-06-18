@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Read-only OGC API Features routes for spatial registry entities.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -17,6 +17,7 @@ use serde_json::{json, Map, Value};
 use time::format_description::well_known::Rfc3339;
 use time::{Date, OffsetDateTime};
 
+use crate::api::governed::{attach_pdp_audit, require_governed_read_access, GovernedAccessError};
 use crate::audit::{AuditContextExt, ErrorCodeExt};
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
@@ -34,7 +35,6 @@ const GEOJSON: HeaderValue = HeaderValue::from_static("application/geo+json");
 const JSON: &str = "application/json";
 const GEOJSON_MIME: &str = "application/geo+json";
 const OGC_BASE: &str = "/ogc/v1";
-const DATA_PURPOSE_HEADER: &str = "data-purpose";
 const MAX_FILTERS_PER_REQUEST: usize = 20;
 const OPENAPI_ENABLED: bool = true;
 
@@ -218,9 +218,25 @@ async fn collection_items(
     ) else {
         return Error::from(OgcError::CollectionNotFound).into_response();
     };
-    if let Err(error) = require_read_purpose_header(entity, &headers) {
-        return error.into_response();
-    }
+    let governed_decision =
+        match require_governed_read_access(&runtime, &path.dataset_id, entity, &headers) {
+            Ok(decision) => decision,
+            Err(error) => {
+                return ogc_access_error_response(
+                    error,
+                    entity,
+                    spatial,
+                    &path.dataset_id,
+                    OgcAuditContext {
+                        underlying_kind: "entity_collection",
+                        primary_key: None,
+                        row_count: None,
+                        null_geometry_count: None,
+                        invalid_geometry_count: None,
+                    },
+                )
+            }
+        };
 
     let parsed = match parse_items_query(entity, spatial, params, None) {
         Ok(parsed) => parsed,
@@ -251,12 +267,13 @@ async fn collection_items(
         .read_collection(&path.dataset_id, &entity.name, entity_query)
         .await
     {
-        Ok(rows) => {
+        Ok(mut rows) => {
             if let Some(cursor) = decoded_cursor.as_ref() {
                 if cursor.ingest_version != rows.cursor_ingest_version {
                     return Error::from(QueryError::CursorInvalid).into_response();
                 }
             }
+            redact_rows(&mut rows.rows, &governed_decision.redaction_fields);
             let feature_rows = match rows_to_features(
                 &path.dataset_id,
                 entity,
@@ -267,21 +284,20 @@ async fn collection_items(
                 Ok(features) => features,
                 Err(error) => {
                     let response = error.error.into_response();
-                    return with_audit_context(
-                        response,
-                        audit_context(
-                            entity,
-                            spatial,
-                            &path.dataset_id,
-                            OgcAuditContext {
-                                underlying_kind: "entity_collection",
-                                primary_key: None,
-                                row_count: None,
-                                null_geometry_count: Some(error.null_geometry_count),
-                                invalid_geometry_count: Some(error.invalid_geometry_count),
-                            },
-                        ),
-                    );
+                    let mut context = Some(audit_context(
+                        entity,
+                        spatial,
+                        &path.dataset_id,
+                        OgcAuditContext {
+                            underlying_kind: "entity_collection",
+                            primary_key: None,
+                            row_count: None,
+                            null_geometry_count: Some(error.null_geometry_count),
+                            invalid_geometry_count: Some(error.invalid_geometry_count),
+                        },
+                    ));
+                    attach_pdp_audit(&mut context, governed_decision.audit.as_ref());
+                    return with_audit_context(response, context.expect("context present"));
                 }
             };
             let row_count = feature_rows.features.len() as u64;
@@ -307,21 +323,20 @@ async fn collection_items(
             );
             let mut response = Json(body).into_response();
             response.headers_mut().insert(header::CONTENT_TYPE, GEOJSON);
-            with_audit_context(
-                response,
-                audit_context(
-                    entity,
-                    spatial,
-                    &path.dataset_id,
-                    OgcAuditContext {
-                        underlying_kind: "entity_collection",
-                        primary_key: None,
-                        row_count: Some(row_count),
-                        null_geometry_count: Some(feature_rows.null_geometry_count),
-                        invalid_geometry_count: Some(feature_rows.invalid_geometry_count),
-                    },
-                ),
-            )
+            let mut context = Some(audit_context(
+                entity,
+                spatial,
+                &path.dataset_id,
+                OgcAuditContext {
+                    underlying_kind: "entity_collection",
+                    primary_key: None,
+                    row_count: Some(row_count),
+                    null_geometry_count: Some(feature_rows.null_geometry_count),
+                    invalid_geometry_count: Some(feature_rows.invalid_geometry_count),
+                },
+            ));
+            attach_pdp_audit(&mut context, governed_decision.audit.as_ref());
+            with_audit_context(response, context.expect("context present"))
         }
         Err(error) => error.into_response(),
     }
@@ -349,9 +364,25 @@ async fn feature_item(
     ) else {
         return Error::from(OgcError::FeatureNotFound).into_response();
     };
-    if let Err(error) = require_read_purpose_header(entity, &headers) {
-        return error.into_response();
-    }
+    let governed_decision =
+        match require_governed_read_access(&runtime, &path.dataset_id, entity, &headers) {
+            Ok(decision) => decision,
+            Err(error) => {
+                return ogc_access_error_response(
+                    error,
+                    entity,
+                    spatial,
+                    &path.dataset_id,
+                    OgcAuditContext {
+                        underlying_kind: "entity_record",
+                        primary_key: Some(path.feature_id.clone()),
+                        row_count: None,
+                        null_geometry_count: None,
+                        invalid_geometry_count: None,
+                    },
+                )
+            }
+        };
 
     let parsed = match parse_items_query(entity, spatial, params, Some(&path.feature_id)) {
         Ok(parsed) => parsed,
@@ -371,7 +402,8 @@ async fn feature_item(
         .read_collection(&path.dataset_id, &entity.name, parsed.entity_query)
         .await
     {
-        Ok(rows) => {
+        Ok(mut rows) => {
+            redact_rows(&mut rows.rows, &governed_decision.redaction_fields);
             let feature_rows = match rows_to_features(
                 &path.dataset_id,
                 entity,
@@ -382,21 +414,20 @@ async fn feature_item(
                 Ok(features) => features,
                 Err(error) => {
                     let response = error.error.into_response();
-                    return with_audit_context(
-                        response,
-                        audit_context(
-                            entity,
-                            spatial,
-                            &path.dataset_id,
-                            OgcAuditContext {
-                                underlying_kind: "entity_record",
-                                primary_key: Some(path.feature_id),
-                                row_count: None,
-                                null_geometry_count: Some(error.null_geometry_count),
-                                invalid_geometry_count: Some(error.invalid_geometry_count),
-                            },
-                        ),
-                    );
+                    let mut context = Some(audit_context(
+                        entity,
+                        spatial,
+                        &path.dataset_id,
+                        OgcAuditContext {
+                            underlying_kind: "entity_record",
+                            primary_key: Some(path.feature_id),
+                            row_count: None,
+                            null_geometry_count: Some(error.null_geometry_count),
+                            invalid_geometry_count: Some(error.invalid_geometry_count),
+                        },
+                    ));
+                    attach_pdp_audit(&mut context, governed_decision.audit.as_ref());
+                    return with_audit_context(response, context.expect("context present"));
                 }
             };
             let Some(feature) = feature_rows.features.into_iter().next() else {
@@ -404,21 +435,20 @@ async fn feature_item(
             };
             let mut response = Json(feature).into_response();
             response.headers_mut().insert(header::CONTENT_TYPE, GEOJSON);
-            with_audit_context(
-                response,
-                audit_context(
-                    entity,
-                    spatial,
-                    &path.dataset_id,
-                    OgcAuditContext {
-                        underlying_kind: "entity_record",
-                        primary_key: Some(path.feature_id),
-                        row_count: Some(1),
-                        null_geometry_count: Some(feature_rows.null_geometry_count),
-                        invalid_geometry_count: Some(feature_rows.invalid_geometry_count),
-                    },
-                ),
-            )
+            let mut context = Some(audit_context(
+                entity,
+                spatial,
+                &path.dataset_id,
+                OgcAuditContext {
+                    underlying_kind: "entity_record",
+                    primary_key: Some(path.feature_id),
+                    row_count: Some(1),
+                    null_geometry_count: Some(feature_rows.null_geometry_count),
+                    invalid_geometry_count: Some(feature_rows.invalid_geometry_count),
+                },
+            ));
+            attach_pdp_audit(&mut context, governed_decision.audit.as_ref());
+            with_audit_context(response, context.expect("context present"))
         }
         Err(error) => error.into_response(),
     }
@@ -485,19 +515,33 @@ fn require_spatial_entity<'a>(
     Ok((entity, spatial))
 }
 
-fn require_read_purpose_header(entity: &EntityModel, headers: &HeaderMap) -> Result<(), Error> {
-    if !entity.api.require_purpose_header || purpose_header_value(headers).is_some() {
-        return Ok(());
-    }
-    Err(AuthError::PurposeRequired.into())
+fn ogc_access_error_response(
+    error: GovernedAccessError,
+    entity: &EntityModel,
+    spatial: &EntitySpatialModel,
+    dataset_id: &str,
+    audit: OgcAuditContext,
+) -> Response {
+    let mut context = Some(audit_context(entity, spatial, dataset_id, audit));
+    attach_pdp_audit(&mut context, error.pdp_audit.as_ref());
+    with_audit_context(
+        error.error.into_response(),
+        context.expect("audit context is present"),
+    )
 }
 
-fn purpose_header_value(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(DATA_PURPOSE_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+fn redact_rows(rows: &mut [Value], field_names: &BTreeSet<String>) {
+    if field_names.is_empty() {
+        return;
+    }
+    for row in rows {
+        let Value::Object(object) = row else {
+            continue;
+        };
+        for field_name in field_names {
+            object.remove(field_name);
+        }
+    }
 }
 
 fn spatial_collections(
@@ -1511,6 +1555,7 @@ mod tests {
                 required_filters: Vec::new(),
                 allowed_filters: Vec::new(),
                 allowed_expansions: Vec::new(),
+                governed_policy: None,
             },
             spatial: None,
         }

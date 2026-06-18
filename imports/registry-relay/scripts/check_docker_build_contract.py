@@ -124,7 +124,7 @@ def main() -> int:
     failures.extend(
         require(
             build_script,
-            'manifest_ref="${REGISTRY_MANIFEST_REF:-81eb005f1808415199d79e02e24e84a6649be318}"',
+            'manifest_ref="${REGISTRY_MANIFEST_REF:-209fc357d57a3b48e6df033606de0f00248bba5d}"',
             "registry-manifest immutable default ref",
         )
     )

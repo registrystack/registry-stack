@@ -94,10 +94,13 @@ policy offer, access service, and schema evidence.
 ## ODRL Policy Assumptions
 
 Registry Relay may publish ODRL policy metadata as discovery and governance
-evidence. It does not evaluate or enforce ODRL policies, and it does not produce
-accepted ODRL agreements. Dataset-level policy output should therefore use
-`odrl:Offer`, not `odrl:Agreement`, unless a future feature explicitly models an
-accepted agreement from an external governance process.
+evidence. Governed evidence-gateway routes may evaluate the supported PDP subset
+declared by `registry-evidence-gateway-pdp/v1` before serving data. Registry
+Relay still does not create or negotiate accepted ODRL agreements, and ODRL
+Offers outside the supported PDP subset remain catalog evidence. Dataset-level
+policy output should therefore use `odrl:Offer`, not `odrl:Agreement`, unless a
+future feature explicitly models an accepted agreement from an external
+governance process.
 
 Configured policy values should be IRI-first. Purposes, recipients, actions,
 operands, assigners, assignees, and units should be explicit IRIs or compact

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import importlib.util
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -18,25 +19,61 @@ class PerfThresholdGateCheckTest(unittest.TestCase):
     def setUp(self):
         self.module = load_module()
 
-    def test_active_yaml_lines_ignores_whole_line_comments(self):
-        active = self.module.active_yaml_lines(
-            "# REGISTRY_RELAY_NO_THRESHOLD=1\n"
-            "  # REGISTRY_RELAY_NO_THRESHOLD=1\n"
-            "run: echo ok\n"
-        )
+    def test_real_workflow_does_not_run_on_pull_requests(self):
+        workflow = self.module.WORKFLOW.read_text(encoding="utf-8")
 
-        self.assertNotIn("REGISTRY_RELAY_NO_THRESHOLD", active)
-        self.assertIn("run: echo ok", active)
-
-    def test_active_yaml_lines_preserves_shell_after_inline_hash(self):
-        active = self.module.active_yaml_lines(
-            "run: echo '# keep shell literal'; REGISTRY_RELAY_NO_THRESHOLD=1\n"
-        )
-
-        self.assertIn("REGISTRY_RELAY_NO_THRESHOLD=1", active)
-
-    def test_real_workflow_passes(self):
+        self.assertNotIn("pull_request:", workflow)
         self.assertEqual(self.module.main(), 0)
+
+    def test_accepts_manual_and_main_only_workflow(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workflow = tmp_path / "perf-smoke.yml"
+            common_js = tmp_path / "common.js"
+            workflow.write_text(
+                "name: perf-smoke\n"
+                "on:\n"
+                "  push:\n"
+                "    branches: [main]\n"
+                "  workflow_dispatch:\n"
+                "jobs: {}\n",
+                encoding="utf-8",
+            )
+            common_js.write_text(
+                "if (__ENV.REGISTRY_RELAY_NO_THRESHOLD === '1') {}\n"
+                "export const thresholds = {'http_req_duration{expected_status:false}': []};\n",
+                encoding="utf-8",
+            )
+            self.module.WORKFLOW = workflow
+            self.module.COMMON_JS = common_js
+
+            self.assertEqual(self.module.main(), 0)
+
+    def test_rejects_threshold_bypass_in_workflow(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workflow = tmp_path / "perf-smoke.yml"
+            common_js = tmp_path / "common.js"
+            workflow.write_text(
+                "name: perf-smoke\n"
+                "on:\n"
+                "  push:\n"
+                "    branches: [main]\n"
+                "  workflow_dispatch:\n"
+                "env:\n"
+                "  REGISTRY_RELAY_NO_THRESHOLD: 1\n",
+                encoding="utf-8",
+            )
+            common_js.write_text(
+                "if (__ENV.REGISTRY_RELAY_NO_THRESHOLD === '1') {}\n"
+                "export const thresholds = {'http_req_duration{expected_status:false}': []};\n",
+                encoding="utf-8",
+            )
+            self.module.WORKFLOW = workflow
+            self.module.COMMON_JS = common_js
+
+            with self.assertRaises(SystemExit):
+                self.module.main()
 
 
 if __name__ == "__main__":
