@@ -1695,21 +1695,13 @@ fn validate_governed_evidence_pack(
         ));
         return;
     };
-    if evidence_pack
-        .policy_id
-        .as_deref()
-        .is_none_or(|policy_id| policy_id.trim().is_empty())
-    {
+    if evidence_pack.policy_id.is_none() {
         errors.push(ValidationError::new(
             format!("{path}.evidence_pack.policy_id"),
             "governed-evidence bindings must declare evidence_pack policy_id",
         ));
     }
-    if evidence_pack
-        .policy_hash
-        .as_deref()
-        .is_none_or(|policy_hash| policy_hash.trim().is_empty())
-    {
+    if evidence_pack.policy_hash.is_none() {
         errors.push(ValidationError::new(
             format!("{path}.evidence_pack.policy_hash"),
             "governed-evidence bindings must declare evidence_pack policy_hash",
@@ -1805,18 +1797,14 @@ fn validate_odrl_enforcement_profile(
 }
 
 fn validate_sha256_digest(value: &str, path: impl Into<String>, errors: &mut Vec<ValidationError>) {
-    let Some(hex) = value.strip_prefix("sha256:") else {
-        errors.push(ValidationError::new(
-            path,
-            "digest must use sha256:<64 lowercase hex>",
-        ));
-        return;
-    };
-    if hex.len() != 64
-        || !hex
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-    {
+    let path = path.into();
+    let is_valid = value.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    });
+    if !is_valid {
         errors.push(ValidationError::new(
             path,
             "digest must use sha256:<64 lowercase hex>",
