@@ -3277,6 +3277,8 @@ pub(crate) fn pre_auth_audit_event(
         requester_type: None,
         requester_ref_hash: None,
         matching_policy_id: None,
+        matching_policy_hash: None,
+        matching_evaluated_rule_ids: None,
         matching_method: None,
         matching_outcome: None,
         matching_error_code: None,
@@ -4522,6 +4524,9 @@ fn build_audit_event(
     let requester_type = audit.and_then(|context| context.requester_type.clone());
     let requester_ref_hash = audit.and_then(|context| context.requester_ref_hash.clone());
     let matching_policy_id = audit.and_then(|context| context.matching_policy_id.clone());
+    let matching_policy_hash = audit.and_then(|context| context.matching_policy_hash.clone());
+    let matching_evaluated_rule_ids =
+        audit.and_then(|context| context.matching_evaluated_rule_ids.clone());
     let matching_method = audit.and_then(|context| context.matching_method.clone());
     let matching_outcome = audit.and_then(|context| context.matching_outcome.clone());
     let matching_error_code = audit.and_then(|context| context.matching_error_code.clone());
@@ -4581,6 +4586,8 @@ fn build_audit_event(
         requester_type,
         requester_ref_hash,
         matching_policy_id,
+        matching_policy_hash,
+        matching_evaluated_rule_ids,
         matching_method,
         matching_outcome,
         matching_error_code,
@@ -7630,6 +7637,8 @@ credential_profiles:
             requester_type: None,
             requester_ref_hash: None,
             matching_policy_id: None,
+            matching_policy_hash: None,
+            matching_evaluated_rule_ids: None,
             matching_method: None,
             matching_outcome: None,
             matching_error_code: None,
@@ -8218,6 +8227,8 @@ credential_profiles:
             requester_type: Some("person".to_string()),
             requester_ref_hash: Some(Hashed::from_hash("sha256:requester")),
             matching_policy_id: Some("civil-registry-v1".to_string()),
+            matching_policy_hash: Some(Hashed::from_hash("sha256:matching-policy")),
+            matching_evaluated_rule_ids: Some(vec!["source-binding-policy:person".to_string()]),
             matching_method: Some("configured_lookup".to_string()),
             matching_outcome: Some("matched".to_string()),
             matching_error_code: None,

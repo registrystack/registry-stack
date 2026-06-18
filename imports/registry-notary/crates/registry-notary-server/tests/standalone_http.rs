@@ -8982,6 +8982,30 @@ async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
     let status_after_revoke_body: Value = status_after_revoke.json();
     assert_eq!(status_after_revoke_body["status"], json!("revoked"));
 
+    for attempted_status in ["valid", "suspended"] {
+        let rejected = server
+            .post(&format!("/admin/v1/credentials/{credential_id}/status"))
+            .add_header("authorization", format!("Bearer {admin_token}"))
+            .json(&json!({ "status": attempted_status }))
+            .await;
+        rejected.assert_status(StatusCode::CONFLICT);
+        let rejected_body: Value = rejected.json();
+        assert_eq!(
+            rejected_body["code"],
+            json!("credential_status.invalid_transition")
+        );
+    }
+
+    let status_after_rejected_mutations = server
+        .get(&format!("/v1/credentials/{credential_id}/status"))
+        .await;
+    status_after_rejected_mutations.assert_status_ok();
+    let status_after_rejected_mutations_body: Value = status_after_rejected_mutations.json();
+    assert_eq!(
+        status_after_rejected_mutations_body["status"],
+        json!("revoked")
+    );
+
     let records = audit_envelopes(&audit_path)
         .into_iter()
         .map(|envelope| envelope.record)

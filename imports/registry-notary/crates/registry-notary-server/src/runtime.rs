@@ -7,6 +7,11 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use registry_platform_pdp::{
+    decide as pdp_decide, Decision as PdpDecision, DecisionAudit as PdpDecisionAudit,
+    EvidenceRequestContext as PdpRequestContext, PolicyInput as PdpPolicyInput,
+};
+
 // ---------------------------------------------------------------------------
 // Per-batch fetch memoization (Stage 2)
 // ---------------------------------------------------------------------------
@@ -105,7 +110,8 @@ type FetchMemo = Arc<MemoState>;
 /// Result of loading a single source binding: the row value plus, when the
 /// value came from the batch memo, the original observation timestamp so the
 /// caller can pin `iat` to the upstream read time.
-type BindingFetchResult = Result<(Value, Option<OffsetDateTime>), EvidenceError>;
+type BindingFetchResult =
+    Result<(Value, Option<OffsetDateTime>, BindingPolicyEffect), EvidenceError>;
 
 type ClaimVersionSelections = BTreeMap<String, Option<String>>;
 
@@ -238,6 +244,8 @@ use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use tokio::sync::Semaphore;
+
+const SD_JWT_VC_RSA_ISSUER_KEY_TYPE: &str = "RSA";
 use tokio::task::JoinSet;
 use ulid::Ulid;
 
@@ -455,6 +463,8 @@ async fn prefetch_bulk_bindings(
     requested_claims: &[ClaimRef],
     claim_versions: &ClaimVersionSelections,
     purpose: &str,
+    disclosure: DisclosureProfile,
+    trusted_policy: &TrustedPolicyContext,
     fetch_memo: FetchMemo,
 ) {
     if contexts.is_empty() || requested_claims.is_empty() {
@@ -515,7 +525,24 @@ async fn prefetch_bulk_bindings(
                 fields,
             );
             for context in contexts {
-                if validate_matching_policy(binding, context, purpose).is_err() {
+                let policy_effect = match validate_matching_policy(
+                    &evidence,
+                    binding,
+                    context,
+                    purpose,
+                    trusted_policy,
+                ) {
+                    Ok(effect) => effect,
+                    Err(_) => continue,
+                };
+                if ensure_redaction_disclosure_allowed(
+                    &claim.disclosure.allowed,
+                    claim.value.value_type.as_str(),
+                    disclosure,
+                    &policy_effect.redaction_fields,
+                )
+                .is_err()
+                {
                     continue;
                 }
                 let source_context = minimized_context_for_binding(binding, context);
@@ -715,9 +742,33 @@ struct ClaimResultInternal {
     requester: Option<EvidenceEntity>,
     matching: Option<MatchingMetadata>,
     value: Value,
+    redaction_fields: BTreeSet<String>,
     issued_at: OffsetDateTime,
     expires_at: Option<OffsetDateTime>,
     provenance: ClaimProvenance,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct MatchingPolicyAudit {
+    policy_id: Option<String>,
+    policy_hash: Option<String>,
+    evaluated_rule_ids: BTreeSet<String>,
+}
+
+impl MatchingPolicyAudit {
+    fn record(&mut self, audit: PdpDecisionAudit) {
+        self.policy_id.get_or_insert(audit.policy_id);
+        self.policy_hash.get_or_insert(audit.policy_hash);
+        self.evaluated_rule_ids.extend(audit.evaluated_rule_ids);
+    }
+
+    fn rule_ids(&self) -> Vec<String> {
+        self.evaluated_rule_ids.iter().cloned().collect()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.policy_id.is_none() && self.policy_hash.is_none() && self.evaluated_rule_ids.is_empty()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -760,7 +811,9 @@ struct ClaimEvaluationContext {
     source: Arc<dyn SourceReader>,
     source_capability: SourceCapability,
     context: EvidenceRequestContext,
+    trusted_policy: TrustedPolicyContext,
     purpose: String,
+    disclosure: DisclosureProfile,
     correlation_id: Option<BoundedCorrelationId>,
     evaluation_id: String,
     policy: EvaluationPolicy,
@@ -782,6 +835,35 @@ struct ClaimEvaluationContext {
     cel_concurrency: Option<Arc<Semaphore>>,
     #[cfg(feature = "registry-notary-cel")]
     cel_config: Arc<RegistryNotaryCelConfig>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct TrustedPolicyContext {
+    legal_basis_ref: Option<String>,
+    consent_ref: Option<String>,
+    jurisdiction: Option<String>,
+    assurance_level: Option<String>,
+}
+
+impl TrustedPolicyContext {
+    fn from_principal(principal: &EvidencePrincipal) -> Self {
+        let Some(details) = principal.authorization_details.as_ref() else {
+            return Self::default();
+        };
+        Self {
+            legal_basis_ref: trusted_non_empty(details.legal_basis_ref.as_deref()),
+            consent_ref: trusted_non_empty(details.consent_ref.as_deref()),
+            jurisdiction: trusted_non_empty(details.jurisdiction.as_deref()),
+            assurance_level: trusted_non_empty(details.assurance_level.as_deref()),
+        }
+    }
+}
+
+fn trusted_non_empty(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 #[cfg_attr(not(feature = "registry-notary-cel"), allow(dead_code))]
@@ -979,13 +1061,15 @@ impl RegistryNotaryRuntime {
     }
 
     fn credential_capabilities(evidence: &EvidenceConfig) -> Value {
+        let signing_algs = Self::credential_signing_algs(evidence);
+        let issuer_key_types = Self::credential_issuer_key_types(&signing_algs);
         json!({
             "formats": [FORMAT_SD_JWT_VC],
             "sd_jwt_vc": {
                 "media_type": FORMAT_SD_JWT_VC,
                 "jwt_typ": SD_JWT_VC_JWT_TYP,
-                "signing_algs": [SD_JWT_VC_SIGNING_ALG],
-                "issuer_key_types": [SD_JWT_VC_ISSUER_KEY_TYPE],
+                "signing_algs": signing_algs,
+                "issuer_key_types": issuer_key_types,
                 "holder_binding_methods": [SD_JWT_VC_HOLDER_BINDING_METHOD],
                 "status_methods": [],
                 "credential_profiles": Self::credential_profile_capabilities(evidence),
@@ -1002,6 +1086,37 @@ impl RegistryNotaryRuntime {
                 "openid4vci_full_issuer"
             ]
         })
+    }
+
+    fn credential_signing_algs(evidence: &EvidenceConfig) -> Vec<String> {
+        let mut algs = BTreeSet::new();
+        for profile in evidence.credential_profiles.values() {
+            if profile.format != FORMAT_SD_JWT_VC {
+                continue;
+            }
+            if let Some(key) = evidence.signing_keys.get(&profile.signing_key) {
+                algs.insert(key.alg.clone());
+            }
+        }
+        if algs.is_empty() {
+            algs.insert(SD_JWT_VC_SIGNING_ALG.to_string());
+        }
+        algs.into_iter().collect()
+    }
+
+    fn credential_issuer_key_types(signing_algs: &[String]) -> Vec<String> {
+        let mut key_types = BTreeSet::new();
+        for alg in signing_algs {
+            match alg.as_str() {
+                "RS256" => {
+                    key_types.insert(SD_JWT_VC_RSA_ISSUER_KEY_TYPE.to_string());
+                }
+                _ => {
+                    key_types.insert(SD_JWT_VC_ISSUER_KEY_TYPE.to_string());
+                }
+            }
+        }
+        key_types.into_iter().collect()
     }
 
     fn credential_profile_capabilities(evidence: &EvidenceConfig) -> Vec<Value> {
@@ -1187,6 +1302,7 @@ impl RegistryNotaryRuntime {
             .as_ref()
             .map(|_| Arc::new(Semaphore::new(self.cel_config.worker_count.max(1))));
         let policy = evaluation_policy_from_self_attestation(self_attestation.as_ref());
+        let trusted_policy = TrustedPolicyContext::from_principal(principal);
         let internal = self
             .evaluate_claims_dag(
                 Arc::clone(&evidence),
@@ -1194,7 +1310,9 @@ impl RegistryNotaryRuntime {
                 request
                     .request_context()
                     .ok_or(EvidenceError::InvalidRequest)?,
+                trusted_policy,
                 purpose.clone(),
+                disclosure,
                 evaluation_id.clone(),
                 now,
                 request.claims.clone(),
@@ -1317,6 +1435,13 @@ impl RegistryNotaryRuntime {
             .memo_observer
             .map(Arc::clone)
             .unwrap_or_else(|| Arc::new(MemoState::new()));
+        let trusted_policy = TrustedPolicyContext::from_principal(principal);
+        let disclosure = requested_disclosure(
+            &evidence,
+            &request.claims,
+            &claim_versions,
+            &request.disclosure,
+        )?;
         // Stage 3: when a connection declares `bulk_mode != None`, prefetch
         // all bindings across all target contexts via `SourceReader::read_many`
         // and seed the memo with the results. The per-target evaluation pipeline
@@ -1341,6 +1466,8 @@ impl RegistryNotaryRuntime {
                 &request.claims,
                 &claim_versions,
                 purpose.as_str(),
+                disclosure,
+                &trusted_policy,
                 Arc::clone(&fetch_memo),
             )
             .await;
@@ -1358,6 +1485,7 @@ impl RegistryNotaryRuntime {
             let purpose_for_task = subject_purposes[input_index].clone();
             let principal_id = principal.principal_id.clone();
             let principal_scopes = principal.scopes.clone();
+            let principal_authorization_details = principal.authorization_details.clone();
             let memo_for_task = Arc::clone(&fetch_memo);
             let source_capability = source_capability.clone();
             #[cfg(feature = "registry-notary-cel")]
@@ -1382,7 +1510,7 @@ impl RegistryNotaryRuntime {
                     scopes: principal_scopes,
                     access_mode: registry_notary_core::AccessMode::MachineClient,
                     verified_claims: None,
-                    authorization_details: None,
+                    authorization_details: principal_authorization_details,
                 };
                 let result = runtime
                     .evaluate_subject_for_batch(
@@ -1572,7 +1700,9 @@ impl RegistryNotaryRuntime {
                 request
                     .request_context()
                     .ok_or(EvidenceError::InvalidRequest)?,
+                TrustedPolicyContext::from_principal(principal),
                 purpose_override.to_string(),
+                disclosure,
                 evaluation_id.clone(),
                 now,
                 request.claims.clone(),
@@ -1616,7 +1746,9 @@ impl RegistryNotaryRuntime {
         evidence: Arc<EvidenceConfig>,
         source: Arc<dyn SourceReader>,
         context: EvidenceRequestContext,
+        trusted_policy: TrustedPolicyContext,
         purpose: String,
+        disclosure: DisclosureProfile,
         evaluation_id: String,
         now: OffsetDateTime,
         requested: Vec<ClaimRef>,
@@ -1649,7 +1781,9 @@ impl RegistryNotaryRuntime {
                     source: Arc::clone(&source),
                     source_capability: source_capability.clone(),
                     context: context.clone(),
+                    trusted_policy: trusted_policy.clone(),
                     purpose: purpose.clone(),
+                    disclosure,
                     correlation_id: correlation_id.clone(),
                     evaluation_id: evaluation_id.clone(),
                     policy: policy.clone(),
@@ -1800,12 +1934,15 @@ async fn evaluate_claim_task(
     if !claim.operations.evaluate.enabled {
         return Err(EvidenceError::OperationUnsupported);
     }
-    let (sources, observed_at) = load_sources(
+    let (sources, observed_at, redaction_fields, matching_policy_audit) = load_sources(
+        Arc::clone(&ctx.evidence),
         Arc::clone(&ctx.source),
         Arc::clone(&claim_arc(&claim)),
         ctx.source_capability.clone(),
         ctx.context.clone(),
+        ctx.trusted_policy.clone(),
         ctx.purpose.clone(),
+        ctx.disclosure,
         Arc::clone(&ctx.binding_concurrency),
         ctx.fetch_memo.clone(),
     )
@@ -1919,8 +2056,9 @@ async fn evaluate_claim_task(
         subject_type: claim.subject_type.clone(),
         target: ctx.context.target.clone(),
         requester: ctx.context.requester.clone(),
-        matching: claim_matching_metadata(&claim),
+        matching: claim_matching_metadata(&ctx.evidence, &claim, matching_policy_audit.as_ref()),
         value,
+        redaction_fields,
         issued_at,
         expires_at: None,
         provenance,
@@ -2466,17 +2604,29 @@ fn max_batch_subjects(
 /// other waits for the result via the `Pending` semaphore in the memo slot.
 /// Errors are never left in the table; a failed fetch allows the next caller to
 /// retry against upstream without poisoning other subjects.
+#[allow(clippy::too_many_arguments)]
 async fn load_sources(
+    evidence: Arc<EvidenceConfig>,
     source: Arc<dyn SourceReader>,
     claim: Arc<ClaimDefinition>,
     source_capability: SourceCapability,
     context: EvidenceRequestContext,
+    trusted_policy: TrustedPolicyContext,
     purpose: String,
+    disclosure: DisclosureProfile,
     binding_concurrency: Arc<Semaphore>,
     fetch_memo: Option<FetchMemo>,
-) -> Result<(BTreeMap<String, Value>, Option<OffsetDateTime>), EvidenceError> {
+) -> Result<
+    (
+        BTreeMap<String, Value>,
+        Option<OffsetDateTime>,
+        BTreeSet<String>,
+        Option<MatchingPolicyAudit>,
+    ),
+    EvidenceError,
+> {
     if claim.source_bindings.is_empty() {
-        return Ok((BTreeMap::new(), None));
+        return Ok((BTreeMap::new(), None, BTreeSet::new(), None));
     }
 
     // Bindings within a claim are independent: each owns its own memo key and
@@ -2491,19 +2641,28 @@ async fn load_sources(
         let binding = binding.clone();
         let claim_id = claim.id.clone();
         let source = Arc::clone(&source);
+        let evidence = Arc::clone(&evidence);
         let source_capability = source_capability.clone();
         let context = context.clone();
+        let trusted_policy = trusted_policy.clone();
         let purpose = purpose.clone();
         let binding_concurrency = Arc::clone(&binding_concurrency);
         let fetch_memo = fetch_memo.clone();
+        let allowed_disclosures = claim.disclosure.allowed.clone();
+        let claim_value_type = claim.value.value_type.clone();
         tasks.spawn(async move {
             let result = load_one_binding(
+                &evidence,
                 source,
                 &source_capability,
                 claim_id.as_str(),
+                &allowed_disclosures,
+                claim_value_type.as_str(),
                 &binding,
                 &context,
+                &trusted_policy,
                 &purpose,
+                disclosure,
                 binding_concurrency,
                 fetch_memo.as_ref(),
             )
@@ -2514,6 +2673,8 @@ async fn load_sources(
 
     let mut out: BTreeMap<String, Value> = BTreeMap::new();
     let mut oldest_memo_ts: Option<OffsetDateTime> = None;
+    let mut redaction_fields = BTreeSet::new();
+    let mut matching_policy_audit = MatchingPolicyAudit::default();
     while let Some(joined) = tasks.join_next().await {
         let (id, result) = match joined {
             Ok(pair) => pair,
@@ -2527,7 +2688,11 @@ async fn load_sources(
             }
             Err(_) => return Err(EvidenceError::RuleEvaluationFailed),
         };
-        let (value, memo_ts) = result?;
+        let (value, memo_ts, binding_policy_effect) = result?;
+        redaction_fields.extend(binding_policy_effect.redaction_fields);
+        if let Some(audit) = binding_policy_effect.audit {
+            matching_policy_audit.record(audit);
+        }
         if let Some(ts) = memo_ts {
             oldest_memo_ts = Some(match oldest_memo_ts {
                 None => ts,
@@ -2536,7 +2701,12 @@ async fn load_sources(
         }
         out.insert(id, value);
     }
-    Ok((out, oldest_memo_ts))
+    Ok((
+        out,
+        oldest_memo_ts,
+        redaction_fields,
+        (!matching_policy_audit.is_empty()).then_some(matching_policy_audit),
+    ))
 }
 
 /// Load a single source binding, consulting and updating the batch memo.
@@ -2557,18 +2727,31 @@ async fn load_sources(
 ///    attempt a fresh fetch themselves.
 #[allow(clippy::too_many_arguments)]
 async fn load_one_binding(
+    evidence: &EvidenceConfig,
     source: Arc<dyn SourceReader>,
     source_capability: &SourceCapability,
     claim_id: &str,
+    allowed_disclosures: &[String],
+    claim_value_type: &str,
     binding: &registry_notary_core::SourceBindingConfig,
     context: &EvidenceRequestContext,
+    trusted_policy: &TrustedPolicyContext,
     purpose: &str,
+    disclosure: DisclosureProfile,
     binding_concurrency: Arc<Semaphore>,
     fetch_memo: Option<&FetchMemo>,
-) -> Result<(Value, Option<OffsetDateTime>), EvidenceError> {
-    if let Err(error) = validate_matching_policy(binding, context, purpose) {
-        return Err(collapse_matching_error(binding, error));
-    }
+) -> Result<(Value, Option<OffsetDateTime>, BindingPolicyEffect), EvidenceError> {
+    let binding_policy_effect =
+        match validate_matching_policy(evidence, binding, context, purpose, trusted_policy) {
+            Ok(effect) => effect,
+            Err(error) => return Err(collapse_matching_error(binding, error)),
+        };
+    ensure_redaction_disclosure_allowed(
+        allowed_disclosures,
+        claim_value_type,
+        disclosure,
+        &binding_policy_effect.redaction_fields,
+    )?;
     // Compute the lookup value to build the cache key. If this fails (e.g.
     // unsupported lookup op) we skip the memo entirely and fall through to a
     // direct fetch; the connector will surface the same error there.
@@ -2603,7 +2786,7 @@ async fn load_one_binding(
                     target: "registry_notary_server::memo",
                     "memo_hit",
                 );
-                return Ok((value, Some(ts)));
+                return Ok((value, Some(ts), binding_policy_effect.clone()));
             }
             Action::Owner(sem) => {
                 let result = fetch_and_signal(
@@ -2619,7 +2802,9 @@ async fn load_one_binding(
                     sem,
                 )
                 .await;
-                return result.map_err(|error| collapse_matching_error(binding, error));
+                return result
+                    .map(|(value, memo_ts)| (value, memo_ts, binding_policy_effect.clone()))
+                    .map_err(|error| collapse_matching_error(binding, error));
             }
             Action::Wait(sem) => {
                 // --- Phase 2: wait for the in-flight owner to finish ---
@@ -2639,7 +2824,7 @@ async fn load_one_binding(
                         target: "registry_notary_server::memo",
                         "memo_hit",
                     );
-                    return Ok((value, Some(ts)));
+                    return Ok((value, Some(ts), binding_policy_effect.clone()));
                 }
                 // Owner failed; fall through to an unconditional fresh fetch.
             }
@@ -2658,7 +2843,30 @@ async fn load_one_binding(
         binding_concurrency,
     )
     .await
+    .map(|(value, memo_ts)| (value, memo_ts, binding_policy_effect.clone()))
     .map_err(|error| collapse_matching_error(binding, error))
+}
+
+fn ensure_redaction_disclosure_allowed(
+    allowed_disclosures: &[String],
+    claim_value_type: &str,
+    disclosure: DisclosureProfile,
+    redaction_fields: &BTreeSet<String>,
+) -> Result<(), EvidenceError> {
+    if redaction_fields.is_empty() || disclosure != DisclosureProfile::Value {
+        return Ok(());
+    }
+    if supports_object_field_redaction(claim_value_type, redaction_fields) {
+        return Ok(());
+    }
+    if allowed_disclosures
+        .iter()
+        .any(|candidate| candidate == DisclosureProfile::Redacted.as_str())
+    {
+        Ok(())
+    } else {
+        Err(EvidenceError::DisclosureNotAllowed)
+    }
 }
 
 /// Signal-all permit count used when waking memo waiters. Matches tokio's
@@ -2852,11 +3060,19 @@ fn binding_cache_value_for_context(
     Ok(Value::Array(values))
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct BindingPolicyEffect {
+    redaction_fields: BTreeSet<String>,
+    audit: Option<PdpDecisionAudit>,
+}
+
 fn validate_matching_policy(
+    evidence: &EvidenceConfig,
     binding: &registry_notary_core::SourceBindingConfig,
     context: &EvidenceRequestContext,
     purpose: &str,
-) -> Result<(), EvidenceError> {
+    trusted_policy: &TrustedPolicyContext,
+) -> Result<BindingPolicyEffect, EvidenceError> {
     let matching = &binding.matching;
     if context.on_behalf_of.is_some()
         || context.target.profile.is_some()
@@ -2867,14 +3083,13 @@ fn validate_matching_policy(
     {
         return Err(EvidenceError::ProfileUnsupported);
     }
-    if !matching.allowed_purposes.is_empty()
-        && !matching
-            .allowed_purposes
-            .iter()
-            .any(|allowed| allowed == purpose)
-    {
-        return Err(EvidenceError::PurposeNotAllowed);
-    }
+    let binding_policy_effect =
+        matching_pdp_decision(evidence, binding, context, purpose, trusted_policy).map_err(
+            |code| match code {
+                registry_platform_pdp::PURPOSE_NOT_PERMITTED => EvidenceError::PurposeNotAllowed,
+                _ => EvidenceError::TargetMatchingPolicyRejected,
+            },
+        )?;
     if let Some(target_type) = matching.target_type.as_deref() {
         if context.target.entity_type != target_type {
             return Err(EvidenceError::TargetMatchingPolicyRejected);
@@ -2949,7 +3164,187 @@ fn validate_matching_policy(
             }
         }
     }
-    Ok(())
+    Ok(binding_policy_effect)
+}
+
+fn matching_pdp_decision(
+    evidence: &EvidenceConfig,
+    binding: &registry_notary_core::SourceBindingConfig,
+    context: &EvidenceRequestContext,
+    purpose: &str,
+    trusted_policy: &TrustedPolicyContext,
+) -> Result<BindingPolicyEffect, &'static str> {
+    let matching = &binding.matching;
+    let selected_policy = selected_evidence_pack_policy(evidence, binding);
+    if matching.allowed_purposes.is_empty()
+        && matching.allowed_assurance.is_empty()
+        && matching.permitted_jurisdictions.is_empty()
+        && !matching.require_legal_basis
+        && !matching.require_consent
+        && matching.redaction_fields.is_empty()
+        && selected_policy.is_none()
+    {
+        return Ok(BindingPolicyEffect::default());
+    }
+    let pdp_context = PdpRequestContext {
+        purpose: purpose.to_string(),
+        legal_basis_ref: trusted_policy.legal_basis_ref.clone(),
+        consent_ref: trusted_policy.consent_ref.clone(),
+        asserted_assurance: matching_context_assurance(context, trusted_policy),
+        jurisdiction: matching_context_jurisdiction(context, trusted_policy),
+        source_observed_age_seconds: None,
+    };
+    let policy = PdpPolicyInput {
+        policy_id: selected_policy
+            .as_ref()
+            .map(|policy| policy.policy_id.clone())
+            .unwrap_or_else(|| matching_purpose_policy_id(binding)),
+        policy_hash: selected_policy
+            .as_ref()
+            .map(|policy| policy.policy_hash.clone())
+            .unwrap_or_else(|| matching_purpose_policy_hash(binding)),
+        rule_ids: vec![format!("source-binding-policy:{}", binding.entity)],
+        purpose_constraints: if matching.allowed_purposes.is_empty() {
+            Vec::new()
+        } else {
+            vec![matching.allowed_purposes.clone()]
+        },
+        permitted_jurisdictions: matching.permitted_jurisdictions.clone(),
+        allowed_assurance: matching.allowed_assurance.clone(),
+        minimum_assurance: None,
+        max_source_age_seconds: None,
+        require_legal_basis: matching.require_legal_basis,
+        require_consent: matching.require_consent,
+        redaction_fields: matching.redaction_fields.iter().cloned().collect(),
+        unsupported_odrl_terms: selected_policy
+            .as_ref()
+            .map(|policy| policy.unsupported_odrl_terms.clone())
+            .unwrap_or_default(),
+    };
+    match pdp_decide(&pdp_context, &policy) {
+        PdpDecision::Permit(audit) => Ok(BindingPolicyEffect {
+            audit: Some(audit),
+            ..BindingPolicyEffect::default()
+        }),
+        PdpDecision::PermitWithRedaction {
+            audit, field_set, ..
+        } => Ok(BindingPolicyEffect {
+            redaction_fields: field_set,
+            audit: Some(audit),
+        }),
+        PdpDecision::Deny {
+            stable_problem_code,
+            ..
+        } => Err(match stable_problem_code.as_str() {
+            registry_platform_pdp::PURPOSE_NOT_PERMITTED => {
+                registry_platform_pdp::PURPOSE_NOT_PERMITTED
+            }
+            registry_platform_pdp::ASSURANCE_INSUFFICIENT => {
+                registry_platform_pdp::ASSURANCE_INSUFFICIENT
+            }
+            registry_platform_pdp::JURISDICTION_NOT_PERMITTED => {
+                registry_platform_pdp::JURISDICTION_NOT_PERMITTED
+            }
+            registry_platform_pdp::LEGAL_BASIS_REQUIRED => {
+                registry_platform_pdp::LEGAL_BASIS_REQUIRED
+            }
+            registry_platform_pdp::CONSENT_REQUIRED => registry_platform_pdp::CONSENT_REQUIRED,
+            registry_platform_pdp::UNSUPPORTED_POLICY_TERM => {
+                registry_platform_pdp::UNSUPPORTED_POLICY_TERM
+            }
+            _ => "pdp.denied",
+        }),
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SelectedEvidencePackPolicy {
+    policy_id: String,
+    policy_hash: String,
+    unsupported_odrl_terms: Vec<String>,
+}
+
+fn selected_evidence_pack_policy(
+    evidence: &EvidenceConfig,
+    binding: &registry_notary_core::SourceBindingConfig,
+) -> Option<SelectedEvidencePackPolicy> {
+    let selector = binding.matching.ecosystem_binding.as_ref()?;
+    if let (Some(policy_id), Some(policy_hash)) =
+        (selector.policy_id.as_ref(), selector.policy_hash.as_ref())
+    {
+        return Some(SelectedEvidencePackPolicy {
+            policy_id: policy_id.clone(),
+            policy_hash: policy_hash.clone(),
+            unsupported_odrl_terms: selector.unsupported_odrl_terms.clone(),
+        });
+    }
+    if let Some(id) = selector.id.as_deref() {
+        let metadata = evidence.ecosystem_bindings.get(id)?;
+        return Some(SelectedEvidencePackPolicy {
+            policy_id: metadata.policy_id.clone(),
+            policy_hash: metadata.policy_hash.clone(),
+            unsupported_odrl_terms: metadata.unsupported_odrl_terms.clone(),
+        });
+    }
+    let profile = selector.profile.as_deref()?;
+    let metadata = evidence
+        .ecosystem_bindings
+        .values()
+        .find(|candidate| candidate.profile.as_deref() == Some(profile))?;
+    Some(SelectedEvidencePackPolicy {
+        policy_id: metadata.policy_id.clone(),
+        policy_hash: metadata.policy_hash.clone(),
+        unsupported_odrl_terms: metadata.unsupported_odrl_terms.clone(),
+    })
+}
+
+fn matching_context_assurance(
+    _context: &EvidenceRequestContext,
+    trusted_policy: &TrustedPolicyContext,
+) -> Option<String> {
+    trusted_policy.assurance_level.clone()
+}
+
+fn matching_context_jurisdiction(
+    _context: &EvidenceRequestContext,
+    trusted_policy: &TrustedPolicyContext,
+) -> Option<String> {
+    trusted_policy.jurisdiction.clone()
+}
+
+fn matching_purpose_policy_id(binding: &registry_notary_core::SourceBindingConfig) -> String {
+    binding.matching.policy_id.clone().unwrap_or_else(|| {
+        format!(
+            "notary.source_binding.{}.{}.{}",
+            binding
+                .connection
+                .as_deref()
+                .filter(|connection| !connection.trim().is_empty())
+                .unwrap_or("default"),
+            binding.dataset,
+            binding.entity
+        )
+    })
+}
+
+fn matching_purpose_policy_hash(binding: &registry_notary_core::SourceBindingConfig) -> String {
+    let material = serde_json::json!({
+        "connection": binding.connection,
+        "dataset": binding.dataset,
+        "entity": binding.entity,
+        "policy_id": binding.matching.policy_id,
+        "allowed_purposes": binding.matching.allowed_purposes,
+        "allowed_assurance": binding.matching.allowed_assurance,
+        "permitted_jurisdictions": binding.matching.permitted_jurisdictions,
+        "require_legal_basis": binding.matching.require_legal_basis,
+        "require_consent": binding.matching.require_consent,
+        "redaction_fields": binding.matching.redaction_fields,
+    });
+    hash_json(&material)
+        .map(|hash| format!("sha256:{hash}"))
+        .unwrap_or_else(|_| {
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string()
+        })
 }
 
 fn minimized_context_for_binding(
@@ -3107,12 +3502,22 @@ fn path_allowed(path: &str, allowed: &[String]) -> bool {
     })
 }
 
-fn claim_matching_metadata(claim: &ClaimDefinition) -> Option<MatchingMetadata> {
+fn claim_matching_metadata(
+    evidence: &EvidenceConfig,
+    claim: &ClaimDefinition,
+    audit: Option<&MatchingPolicyAudit>,
+) -> Option<MatchingMetadata> {
     claim.source_bindings.values().find_map(|binding| {
         let matching = &binding.matching;
-        let policy_id = matching.policy_id.as_ref()?;
+        let selected_policy = selected_evidence_pack_policy(evidence, binding);
+        let policy_id = selected_policy
+            .as_ref()
+            .map(|policy| policy.policy_id.as_str())
+            .or(matching.policy_id.as_deref())
+            .map(str::to_string)
+            .or_else(|| audit.and_then(|audit| audit.policy_id.clone()))?;
         Some(MatchingMetadata {
-            policy_id: policy_id.clone(),
+            policy_id,
             method: matching
                 .method
                 .clone()
@@ -3122,6 +3527,8 @@ fn claim_matching_metadata(claim: &ClaimDefinition) -> Option<MatchingMetadata> 
                 .clone()
                 .unwrap_or_else(|| "high".to_string()),
             score: None,
+            policy_hash: audit.and_then(|audit| audit.policy_hash.clone()),
+            evaluated_rule_ids: audit.map(MatchingPolicyAudit::rule_ids).unwrap_or_default(),
         })
     })
 }
@@ -3630,6 +4037,33 @@ fn cel_meta(evidence: &EvidenceConfig, claim: &ClaimDefinition) -> Value {
     })
 }
 
+fn supports_object_field_redaction(
+    claim_value_type: &str,
+    redaction_fields: &BTreeSet<String>,
+) -> bool {
+    claim_value_type == "object"
+        && !redaction_fields.is_empty()
+        && redaction_fields
+            .iter()
+            .all(|field| is_top_level_redaction_field(field))
+}
+
+fn is_top_level_redaction_field(field: &str) -> bool {
+    !field.is_empty()
+        && field != "value"
+        && !field.contains('.')
+        && !field.contains('[')
+        && !field.contains(']')
+}
+
+fn redact_object_fields(value: &Value, redaction_fields: &BTreeSet<String>) -> Option<Value> {
+    let mut object = value.as_object()?.clone();
+    for field in redaction_fields {
+        object.remove(field);
+    }
+    Some(Value::Object(object))
+}
+
 fn view_claim(
     self_attestation_rate_keys: &SelfAttestationRateLimitKeys,
     result: &ClaimResultInternal,
@@ -3638,12 +4072,23 @@ fn view_claim(
     format: &str,
 ) -> Result<ClaimResultView, EvidenceError> {
     let mut effective_disclosure = disclosure;
+    let field_redaction =
+        supports_object_field_redaction(claim.value.value_type.as_str(), &result.redaction_fields);
+    let forced_redaction = !result.redaction_fields.is_empty()
+        && effective_disclosure == DisclosureProfile::Value
+        && !field_redaction;
+    if forced_redaction {
+        effective_disclosure = DisclosureProfile::Redacted;
+    }
     let allowed = claim
         .disclosure
         .allowed
         .iter()
         .any(|candidate| candidate == effective_disclosure.as_str());
     if !allowed {
+        if forced_redaction {
+            return Err(EvidenceError::DisclosureNotAllowed);
+        }
         effective_disclosure = match DisclosureDowngrade::parse(&claim.disclosure.downgrade)
             .ok_or(EvidenceError::InvalidRequest)?
         {
@@ -3662,6 +4107,9 @@ fn view_claim(
         }
     }
     let value = match effective_disclosure {
+        DisclosureProfile::Value if field_redaction => {
+            redact_object_fields(&result.value, &result.redaction_fields)
+        }
         DisclosureProfile::Value => Some(result.value.clone()),
         DisclosureProfile::Predicate => result.value.as_bool().map(Value::Bool),
         DisclosureProfile::Redacted => None,
@@ -4550,6 +4998,17 @@ mod tests {
             enabled: true,
             service_id: "evidence.test".to_string(),
             credential_profiles,
+            signing_keys: BTreeMap::from([(
+                "issuer-key".to_string(),
+                serde_json::from_value(json!({
+                    "provider": "local_jwk_env",
+                    "private_jwk_env": "ISSUER_KEY",
+                    "alg": "RS256",
+                    "kid": "did:web:issuer.test#key-1",
+                    "status": "active"
+                }))
+                .expect("signing key parses"),
+            )]),
             ..EvidenceConfig::default()
         };
 
@@ -4558,10 +5017,10 @@ mod tests {
 
         assert_eq!(capabilities["media_type"], json!(FORMAT_SD_JWT_VC));
         assert_eq!(capabilities["jwt_typ"], json!(SD_JWT_VC_JWT_TYP));
-        assert_eq!(capabilities["signing_algs"], json!([SD_JWT_VC_SIGNING_ALG]));
+        assert_eq!(capabilities["signing_algs"], json!(["RS256"]));
         assert_eq!(
             capabilities["issuer_key_types"],
-            json!([SD_JWT_VC_ISSUER_KEY_TYPE])
+            json!([SD_JWT_VC_RSA_ISSUER_KEY_TYPE])
         );
         assert_eq!(
             capabilities["holder_binding_methods"],
@@ -5184,6 +5643,177 @@ mod tests {
             .expect("batch inputs are valid");
 
         assert_eq!(unique, BTreeSet::from(["appeals", "benefits"]));
+    }
+
+    #[test]
+    fn matching_pdp_decision_uses_shared_contract() {
+        let mut binding = test_source_binding();
+        binding.matching.allowed_purposes = vec!["benefits".to_string(), "appeals".to_string()];
+        binding.matching.allowed_assurance = vec!["substantial".to_string()];
+        let mut context = EvidenceRequestContext {
+            requester: None,
+            target: EvidenceEntity {
+                entity_type: "Person".to_string(),
+                id: Some("person-1".to_string()),
+                identifiers: Vec::new(),
+                attributes: BTreeMap::new(),
+                assurance: Some(registry_notary_core::EvidenceAssurance {
+                    method: None,
+                    level_scheme: None,
+                    level: Some("substantial".to_string()),
+                    verified_at: None,
+                    issuer: None,
+                    evidence: Vec::new(),
+                }),
+                profile: None,
+            },
+            relationship: None,
+            on_behalf_of: None,
+        };
+
+        let default_trusted_policy = TrustedPolicyContext::default();
+        let evidence = EvidenceConfig::default();
+        assert_eq!(
+            matching_pdp_decision(
+                &evidence,
+                &binding,
+                &context,
+                "benefits",
+                &default_trusted_policy
+            ),
+            Err(registry_platform_pdp::ASSURANCE_INSUFFICIENT)
+        );
+        assert_eq!(
+            matching_pdp_decision(
+                &evidence,
+                &binding,
+                &context,
+                "marketing",
+                &default_trusted_policy
+            ),
+            Err(registry_platform_pdp::PURPOSE_NOT_PERMITTED)
+        );
+        context.target.assurance.as_mut().expect("assurance").level =
+            Some("substantial".to_string());
+        assert_eq!(
+            matching_pdp_decision(
+                &evidence,
+                &binding,
+                &context,
+                "benefits",
+                &default_trusted_policy
+            ),
+            Err(registry_platform_pdp::ASSURANCE_INSUFFICIENT)
+        );
+        let trusted_policy = TrustedPolicyContext {
+            assurance_level: Some("substantial".to_string()),
+            ..TrustedPolicyContext::default()
+        };
+        assert_eq!(
+            matching_pdp_decision(&evidence, &binding, &context, "benefits", &trusted_policy),
+            Ok(BindingPolicyEffect {
+                redaction_fields: BTreeSet::new(),
+                audit: Some(PdpDecisionAudit {
+                    policy_id: matching_purpose_policy_id(&binding),
+                    policy_hash: matching_purpose_policy_hash(&binding),
+                    evaluated_rule_ids: vec!["source-binding-policy:person".to_string()],
+                })
+            })
+        );
+
+        binding.matching.permitted_jurisdictions = vec!["RW".to_string()];
+        binding.matching.require_legal_basis = true;
+        binding.matching.require_consent = true;
+        binding.matching.redaction_fields = vec!["value".to_string()];
+        let trusted_policy = TrustedPolicyContext {
+            legal_basis_ref: Some("legal-basis:benefits".to_string()),
+            consent_ref: Some("consent:person-1".to_string()),
+            jurisdiction: Some("RW".to_string()),
+            assurance_level: Some("substantial".to_string()),
+        };
+        assert_eq!(
+            matching_pdp_decision(&evidence, &binding, &context, "benefits", &trusted_policy),
+            Ok(BindingPolicyEffect {
+                redaction_fields: BTreeSet::from(["value".to_string()]),
+                audit: Some(PdpDecisionAudit {
+                    policy_id: matching_purpose_policy_id(&binding),
+                    policy_hash: matching_purpose_policy_hash(&binding),
+                    evaluated_rule_ids: vec!["source-binding-policy:person".to_string()],
+                })
+            })
+        );
+        assert!(matching_purpose_policy_hash(&binding).starts_with("sha256:"));
+    }
+
+    #[test]
+    fn matching_pdp_decision_uses_selected_evidence_pack_identity() {
+        let mut evidence = EvidenceConfig::default();
+        evidence.ecosystem_bindings.insert(
+            "civil-pack".to_string(),
+            registry_notary_core::EvidenceEcosystemBindingConfig {
+                profile: Some("registry-notary/source-policy/v1".to_string()),
+                policy_id: "evidence-pack-policy".to_string(),
+                policy_hash:
+                    "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                        .to_string(),
+                unsupported_odrl_terms: Vec::new(),
+            },
+        );
+        let mut binding = test_source_binding();
+        binding.matching.ecosystem_binding =
+            Some(registry_notary_core::EcosystemBindingSelectorConfig {
+                id: Some("civil-pack".to_string()),
+                ..registry_notary_core::EcosystemBindingSelectorConfig::default()
+            });
+        let context = EvidenceRequestContext {
+            requester: None,
+            target: EvidenceEntity::new("Person"),
+            relationship: None,
+            on_behalf_of: None,
+        };
+
+        let selected =
+            selected_evidence_pack_policy(&evidence, &binding).expect("selected policy resolves");
+        assert_eq!(selected.policy_id, "evidence-pack-policy");
+        assert_eq!(
+            selected.policy_hash,
+            "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        );
+        assert_eq!(
+            matching_pdp_decision(
+                &evidence,
+                &binding,
+                &context,
+                "benefits",
+                &TrustedPolicyContext::default()
+            ),
+            Ok(BindingPolicyEffect {
+                redaction_fields: BTreeSet::new(),
+                audit: Some(PdpDecisionAudit {
+                    policy_id: "evidence-pack-policy".to_string(),
+                    policy_hash:
+                        "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                            .to_string(),
+                    evaluated_rule_ids: vec!["source-binding-policy:person".to_string()],
+                })
+            })
+        );
+
+        evidence
+            .ecosystem_bindings
+            .get_mut("civil-pack")
+            .expect("binding exists")
+            .unsupported_odrl_terms = vec!["odrl:targetPolicy".to_string()];
+        assert_eq!(
+            matching_pdp_decision(
+                &evidence,
+                &binding,
+                &context,
+                "benefits",
+                &TrustedPolicyContext::default()
+            ),
+            Err(registry_platform_pdp::UNSUPPORTED_POLICY_TERM)
+        );
     }
 
     #[tokio::test]

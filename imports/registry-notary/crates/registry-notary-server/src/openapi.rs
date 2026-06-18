@@ -2812,7 +2812,10 @@ fn nonce_response_schema() -> Value {
 fn credential_request_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["format", "proof"],
+        "oneOf": [
+            { "required": ["proof"] },
+            { "required": ["proofs"] }
+        ],
         "properties": {
             "format": { "type": "string", "example": "dc+sd-jwt" },
             "credential_identifier": { "type": "string" },
@@ -2826,6 +2829,17 @@ fn credential_request_schema() -> Value {
                     "jwt": { "type": "string" }
                 },
                 "additionalProperties": false
+            },
+            "proofs": {
+                "type": "object",
+                "properties": {
+                    "jwt": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "minItems": 1
+                    }
+                },
+                "additionalProperties": false
             }
         },
         "additionalProperties": false
@@ -2837,7 +2851,28 @@ fn credential_response_schema() -> Value {
         "type": "object",
         "required": ["credential"],
         "properties": {
-            "credential": { "type": "string" },
+            "credential": {
+                "oneOf": [
+                    { "type": "string" },
+                    { "type": "object", "additionalProperties": true }
+                ]
+            },
+            "credentials": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["credential"],
+                    "properties": {
+                        "credential": {
+                            "oneOf": [
+                                { "type": "string" },
+                                { "type": "object", "additionalProperties": true }
+                            ]
+                        }
+                    },
+                    "additionalProperties": true
+                }
+            },
             "credential_profile": { "type": "string" },
             "format": { "type": "string" },
             "c_nonce": { "type": "string" },

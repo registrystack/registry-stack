@@ -1158,6 +1158,10 @@ pub struct MatchingMetadata {
     pub confidence: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub score: Option<f64>,
+    #[serde(default, skip)]
+    pub policy_hash: Option<String>,
+    #[serde(default, skip)]
+    pub evaluated_rule_ids: Vec<String>,
 }
 
 /// `schema_version` value carried by every [`ClaimProvenance`]. Frozen at beta
@@ -1374,6 +1378,14 @@ pub struct EvidenceAuthorizationDetails {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purpose: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legal_basis_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jurisdiction: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assurance_level: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject: Option<EvidenceAuthorizationSubject>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access_mode: Option<AccessMode>,
@@ -1502,6 +1514,10 @@ pub struct EvidenceAuditEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matching_policy_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matching_policy_hash: Option<Hashed<PolicyIdentifier>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matching_evaluated_rule_ids: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matching_method: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matching_outcome: Option<String>,
@@ -1578,6 +1594,10 @@ pub struct EvidenceBatchItemAuditEvent {
     pub requester_ref_hash: Option<Hashed<EvidenceEntityReference>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matching_policy_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matching_policy_hash: Option<Hashed<PolicyIdentifier>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matching_evaluated_rule_ids: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matching_method: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2116,6 +2136,8 @@ mod tests {
             requester_type: Some("person".to_string()),
             requester_ref_hash: Some(Hashed::from_hash("hmac-sha256:requester")),
             matching_policy_id: Some("civil-registry-v1".to_string()),
+            matching_policy_hash: Some(Hashed::from_hash("sha256:matching-policy")),
+            matching_evaluated_rule_ids: Some(vec!["source-binding-policy:person".to_string()]),
             matching_method: Some("configured_lookup".to_string()),
             matching_outcome: Some("matched".to_string()),
             matching_error_code: None,
@@ -2126,6 +2148,8 @@ mod tests {
                 requester_type: Some("person".to_string()),
                 requester_ref_hash: Some(Hashed::from_hash("hmac-sha256:batch-requester")),
                 matching_policy_id: Some("civil-registry-v1".to_string()),
+                matching_policy_hash: Some(Hashed::from_hash("sha256:matching-policy")),
+                matching_evaluated_rule_ids: Some(vec!["source-binding-policy:person".to_string()]),
                 matching_method: Some("configured_lookup".to_string()),
                 matching_outcome: Some("matched".to_string()),
                 matching_error_code: None,

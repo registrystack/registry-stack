@@ -280,7 +280,7 @@ process can receive requests.
 
 ## Credential Request
 
-The wallet credential request uses:
+The wallet credential request can use the legacy single-proof shape:
 
 ```json
 {
@@ -292,6 +292,20 @@ The wallet credential request uses:
   }
 }
 ```
+
+OID4VCI 1.0 wallets can instead send the final-spec proof array shape:
+
+```json
+{
+  "credential_configuration_id": "birth_record_sd_jwt",
+  "proofs": {
+    "jwt": ["<holder-proof-jwt>"]
+  }
+}
+```
+
+Send either `proof` or `proofs`, not both. Notary accepts one JWT proof for a
+credential request and rejects requests with multiple proof JWTs.
 
 The proof JWT should demonstrate holder control of a `did:jwk` key and be fresh
 within `oid4vci.proof.max_age_seconds`, allowing only
@@ -309,6 +323,11 @@ Successful responses contain the issued SD-JWT VC:
 {
   "format": "dc+sd-jwt",
   "credential": "<sd-jwt-vc>",
+  "credentials": [
+    {
+      "credential": "<sd-jwt-vc>"
+    }
+  ],
   "c_nonce": "<optional-next-nonce>",
   "c_nonce_expires_in": 300
 }

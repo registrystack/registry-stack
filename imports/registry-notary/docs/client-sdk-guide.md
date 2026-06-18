@@ -1005,13 +1005,20 @@ The stable application problem `code` values for policy mapping live in the
 Enable optional routes only when needed:
 
 ```toml
-registry-notary-client = { git = "https://github.com/jeremi/registry-notary", tag = "vX.Y.Z", features = ["oid4vci", "federation", "json-facade"] }
+registry-notary-client = {
+  git = "https://github.com/jeremi/registry-notary",
+  tag = "vX.Y.Z",
+  features = ["oid4vci", "federation", "json-facade"]
+}
 ```
 
 In a workspace checkout, the same feature selection can use path dependencies:
 
 ```toml
-registry-notary-client = { path = "crates/registry-notary-client", features = ["oid4vci", "federation", "json-facade"] }
+registry-notary-client = {
+  path = "crates/registry-notary-client",
+  features = ["oid4vci", "federation", "json-facade"]
+}
 ```
 
 ### Rust JSON Facade
@@ -1051,7 +1058,11 @@ transport methods continue to return decoded response bodies without hidden
 network refreshes or trust-policy decisions.
 
 ```toml
-registry-notary-client = { git = "https://github.com/jeremi/registry-notary", tag = "vX.Y.Z", features = ["verifier"] }
+registry-notary-client = {
+  git = "https://github.com/jeremi/registry-notary",
+  tag = "vX.Y.Z",
+  features = ["verifier"]
+}
 ```
 
 ```rust
@@ -1114,6 +1125,73 @@ const result = await client.evaluate({
   claims: ["person-is-alive"],
   signal: controller.signal,
 });
+
+const client = new RegistryNotaryClient({
+  baseUrl: "https://notary.example.gov",
+  retryPolicy: {
+    maxAttempts: 3,
+    baseDelayMs: 100,
+    maxDelayMs: 2000,
+    retryTransportErrors: true,
+    retryRateLimited: true,
+    retryUnavailable: true,
+  },
+});
+
+const result = await client.batchEvaluate(
+  {
+    items: [{
+      target: {
+        type: "Person",
+        identifiers: [{ scheme: "national_id", value: "person-1", issuer: "civil_registry" }],
+      },
+      relationship: { type: "self" },
+    }],
+    claims: ["person-is-alive"],
+    purpose: "benefits_eligibility",
+  },
+  {
+    idempotencyKey: "batch-2026-05-29-001",
+    signal: controller.signal,
+  },
+);
+```
+
+### Discovery, Status, OID4VCI, Federation
+
+```js
+const claims = await client.listClaims();
+const claim = await client.getClaim("person-is-alive");
+const jwks = await client.issuerJwks();
+await client.refreshJwks();
+const key = await client.getJwk("key-1");
+const status = await client.credentialStatus("credential-1");
+
+const metadata = await client.oid4vciIssuerMetadata();
+const offer = await client.oid4vciCredentialOffer("person_is_alive_sd_jwt");
+const nonce = await client.oid4vciNonce();
+
+const responseJws = await client.federationEvaluateJws("eyJ...");
+```
+
+### Node Errors
+
+```js
+import { NotaryProblemError, NotaryTransportError } from "@registry-notary/client";
+
+try {
+  await client.evaluate({
+    target: { type: "Person", identifiers: [{ scheme: "national_id", value: "person-1" }] },
+    relationship: { type: "self" },
+    claims: ["person-is-alive"],
+  });
+} catch (error) {
+  if (error instanceof NotaryProblemError) {
+    console.log(error.status, error.code, error.requestId);
+  } else if (error instanceof NotaryTransportError) {
+    console.log("transport failure");
+  }
+}
 ```
 
 ## API Method Matrix

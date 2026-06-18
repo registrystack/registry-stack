@@ -171,6 +171,8 @@ pub enum VerificationError {
     DisclosureDigestMismatch { code: &'static str },
     #[error("SD-JWT VC holder binding does not match policy")]
     HolderBinding { code: &'static str },
+    #[error("OID4VCI credential response does not contain a compact SD-JWT VC")]
+    UnsupportedCredentialShape { code: &'static str },
     #[error("issuer JWKS could not be loaded")]
     JwksUnavailable { code: &'static str },
 }
@@ -192,6 +194,7 @@ impl VerificationError {
             | Self::TimeClaim { code }
             | Self::DisclosureDigestMismatch { code }
             | Self::HolderBinding { code }
+            | Self::UnsupportedCredentialShape { code }
             | Self::JwksUnavailable { code } => code,
         }
     }

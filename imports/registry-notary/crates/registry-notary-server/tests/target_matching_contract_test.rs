@@ -10,11 +10,12 @@ use std::time::{Duration, Instant};
 use registry_notary_core::{
     AccessMode, BatchEvaluateItemRequest, BatchEvaluateRequest, BatchOperationConfig, BulkMode,
     ClaimDefinition, ClaimOperationsConfig, ClaimRef, ClaimValueConfig, DciSourceConnectionConfig,
-    DisclosureConfig, EvaluateRequest, EvidenceConfig, EvidenceEntity, EvidenceError,
-    EvidencePrincipal, EvidenceRelationship, EvidenceRequestContext, OperationConfig, RuleConfig,
-    SourceBindingConfig, SourceConnectionConfig, SourceConnectorKind, SourceFieldConfig,
-    SourceLookupConfig, SourceMatchingConfig, SourceQueryFieldConfig, SubjectRequest,
-    FORMAT_CLAIM_RESULT_JSON,
+    DisclosureConfig, EcosystemBindingSelectorConfig, EvaluateRequest, EvidenceAssurance,
+    EvidenceAuthorizationDetails, EvidenceConfig, EvidenceEcosystemBindingConfig, EvidenceEntity,
+    EvidenceError, EvidenceIdentifier, EvidencePrincipal, EvidenceRelationship,
+    EvidenceRequestContext, OperationConfig, RuleConfig, SourceBindingConfig,
+    SourceConnectionConfig, SourceConnectorKind, SourceFieldConfig, SourceLookupConfig,
+    SourceMatchingConfig, SourceQueryFieldConfig, SubjectRequest, FORMAT_CLAIM_RESULT_JSON,
 };
 use registry_notary_server::{
     BatchEvaluateOptions, EvidenceStore, RegistryNotaryRuntime, SourceReader,
@@ -61,6 +62,60 @@ impl SourceReader for MatchingSource {
                 "land_parcel" => match_land_parcel(context),
                 _ => Err(EvidenceError::SourceUnavailable),
             }
+        })
+    }
+
+    fn required_scopes(
+        &self,
+        _evidence: &EvidenceConfig,
+        _claim_id: &str,
+    ) -> Result<Vec<String>, EvidenceError> {
+        Ok(Vec::new())
+    }
+}
+
+#[derive(Debug)]
+struct ObjectProfileSource {
+    reads: AtomicUsize,
+}
+
+impl ObjectProfileSource {
+    fn new() -> Self {
+        Self {
+            reads: AtomicUsize::new(0),
+        }
+    }
+
+    fn reads(&self) -> usize {
+        self.reads.load(Ordering::SeqCst)
+    }
+}
+
+impl SourceReader for ObjectProfileSource {
+    fn read_one<'a>(
+        &'a self,
+        _binding: &'a SourceBindingConfig,
+        _subject: &'a SubjectRequest,
+        _purpose: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+        Box::pin(async { Err(EvidenceError::TargetAttributesInsufficient) })
+    }
+
+    fn read_one_for_context<'a>(
+        &'a self,
+        _binding: &'a SourceBindingConfig,
+        _context: &'a EvidenceRequestContext,
+        _purpose: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+        Box::pin(async {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            Ok(json!({
+                "profile": {
+                    "given_name": "Amina",
+                    "family_name": "Diallo",
+                    "birthdate": "1984-02-10"
+                }
+            }))
         })
     }
 
@@ -439,6 +494,42 @@ fn parcel_claim() -> ClaimDefinition {
     )
 }
 
+fn person_profile_claim() -> ClaimDefinition {
+    let mut claim = claim(
+        "person-profile",
+        "person_profile",
+        "profile",
+        "Person",
+        SourceMatchingConfig {
+            policy_id: Some("demo-person-profile-v1".to_string()),
+            method: Some("exact_name_birthdate".to_string()),
+            target_type: Some("Person".to_string()),
+            allowed_purposes: vec!["benefits".to_string()],
+            allowed_relationships: vec!["self".to_string()],
+            sufficient_target_inputs: vec![vec![
+                "target.attributes.given_name".to_string(),
+                "target.attributes.family_name".to_string(),
+                "target.attributes.birthdate".to_string(),
+            ]],
+            allowed_target_inputs: vec!["target.attributes.*".to_string()],
+            collapse_matching_errors: false,
+            confidence: Some("high".to_string()),
+            ..SourceMatchingConfig::default()
+        },
+    );
+    claim.value.value_type = "object".to_string();
+    claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .fields
+        .get_mut("profile")
+        .expect("profile source field exists")
+        .field_type = Some("object".to_string());
+    claim.disclosure.allowed = vec!["value".to_string()];
+    claim
+}
+
 fn claim(
     id: &str,
     entity: &str,
@@ -517,6 +608,33 @@ fn principal() -> EvidencePrincipal {
         verified_claims: None,
         authorization_details: None,
     }
+}
+
+fn principal_with_policy_context(
+    assurance_level: Option<&str>,
+    jurisdiction: Option<&str>,
+    legal_basis_ref: Option<&str>,
+    consent_ref: Option<&str>,
+) -> EvidencePrincipal {
+    let mut principal = principal();
+    principal.authorization_details = Some(EvidenceAuthorizationDetails {
+        detail_type: "registry_notary".to_string(),
+        schema_version: "1".to_string(),
+        actions: Vec::new(),
+        locations: Vec::new(),
+        claims: Vec::new(),
+        disclosure: None,
+        format: None,
+        purpose: None,
+        legal_basis_ref: legal_basis_ref.map(ToOwned::to_owned),
+        consent_ref: consent_ref.map(ToOwned::to_owned),
+        jurisdiction: jurisdiction.map(ToOwned::to_owned),
+        assurance_level: assurance_level.map(ToOwned::to_owned),
+        subject: None,
+        access_mode: None,
+        assisted_access_context: None,
+    });
+    principal
 }
 
 fn evaluate_request(target: EvidenceEntity, claim: &str) -> EvaluateRequest {
@@ -1020,6 +1138,361 @@ async fn profile_gate_rejects_missing_inputs_and_disallowed_purpose_before_sourc
         .await
         .expect_err("purpose gate rejects request");
     assert_eq!(denied.code(), "purpose.not_allowed");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
+async fn assurance_policy_rejects_before_source_read() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching
+        .allowed_assurance = vec!["substantial".to_string()];
+    let mut target = person_target("Amina", "Diallo", Some("1984-02-10"));
+    target.assurance = Some(EvidenceAssurance {
+        method: None,
+        level_scheme: None,
+        level: Some("substantial".to_string()),
+        verified_at: None,
+        issuer: None,
+        evidence: Vec::new(),
+    });
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            evaluate_request(target, "person-is-alive"),
+            None,
+        )
+        .await
+        .expect_err("self-asserted assurance rejects request");
+
+    assert_eq!(error.code(), "target.matching_policy_rejected");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
+async fn assurance_policy_accepts_trusted_authorization_details() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching
+        .allowed_assurance = vec!["substantial".to_string()];
+    let principal = principal_with_policy_context(Some("substantial"), None, None, None);
+
+    let results = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal,
+            evaluate_request(
+                person_target("Amina", "Diallo", Some("1984-02-10")),
+                "person-is-alive",
+            ),
+            None,
+        )
+        .await
+        .expect("trusted assurance permits source read");
+
+    assert_eq!(results[0].value, Some(json!(true)));
+    assert_eq!(source.reads(), 1);
+}
+
+#[tokio::test]
+async fn redaction_policy_forces_redacted_value_disclosure() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    claim.disclosure.allowed.push("redacted".to_string());
+    claim.disclosure.downgrade = "redacted".to_string();
+    claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching
+        .redaction_fields = vec!["value".to_string()];
+
+    let results = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            evaluate_request(
+                person_target("Amina", "Diallo", Some("1984-02-10")),
+                "person-is-alive",
+            ),
+            None,
+        )
+        .await
+        .expect("redaction permit still evaluates claim");
+
+    assert_eq!(results[0].disclosure, "redacted");
+    assert_eq!(results[0].value, None);
+    assert_eq!(results[0].satisfied, None);
+    assert_eq!(source.reads(), 1);
+}
+
+#[tokio::test]
+async fn redaction_policy_fails_closed_when_redacted_disclosure_is_not_allowed() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching
+        .redaction_fields = vec!["value".to_string()];
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            evaluate_request(
+                person_target("Amina", "Diallo", Some("1984-02-10")),
+                "person-is-alive",
+            ),
+            None,
+        )
+        .await
+        .expect_err("redaction must not leak through value-only disclosure");
+
+    assert_eq!(error.code(), "claim.disclosure_not_allowed");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
+async fn object_field_redaction_remains_value_disclosure() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(ObjectProfileSource::new());
+    let mut claim = person_profile_claim();
+    claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching
+        .redaction_fields = vec!["birthdate".to_string()];
+
+    let results = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            evaluate_request(
+                person_target("Amina", "Diallo", Some("1984-02-10")),
+                "person-profile",
+            ),
+            None,
+        )
+        .await
+        .expect("top-level object field redaction evaluates as value disclosure");
+
+    assert_eq!(results[0].disclosure, "value");
+    assert_eq!(source.reads(), 1);
+    assert_eq!(
+        results[0].value,
+        Some(json!({
+            "given_name": "Amina",
+            "family_name": "Diallo"
+        }))
+    );
+}
+
+#[tokio::test]
+async fn unmappable_object_redaction_fails_closed_before_source_read() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(ObjectProfileSource::new());
+    let mut claim = person_profile_claim();
+    claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching
+        .redaction_fields = vec!["profile.birthdate".to_string()];
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            evaluate_request(
+                person_target("Amina", "Diallo", Some("1984-02-10")),
+                "person-profile",
+            ),
+            None,
+        )
+        .await
+        .expect_err("path-like object redaction cannot be carried by value disclosure");
+
+    assert_eq!(error.code(), "claim.disclosure_not_allowed");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
+async fn jurisdiction_policy_rejects_before_source_read() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching
+        .permitted_jurisdictions = vec!["RW".to_string()];
+    let mut target = person_target("Amina", "Diallo", Some("1984-02-10"));
+    target.identifiers.push(EvidenceIdentifier {
+        scheme: "national_id".to_string(),
+        value: "NAT-123".to_string(),
+        issuer: None,
+        country: Some("RW".to_string()),
+    });
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            evaluate_request(target, "person-is-alive"),
+            None,
+        )
+        .await
+        .expect_err("self-asserted jurisdiction rejects request");
+
+    assert_eq!(error.code(), "target.matching_policy_rejected");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
+async fn jurisdiction_legal_basis_and_consent_accept_trusted_authorization_details() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    let matching = &mut claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching;
+    matching.permitted_jurisdictions = vec!["RW".to_string()];
+    matching.require_legal_basis = true;
+    matching.require_consent = true;
+    let principal = principal_with_policy_context(
+        None,
+        Some("RW"),
+        Some("legal-basis:benefits"),
+        Some("consent:person-1"),
+    );
+
+    let results = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal,
+            evaluate_request(
+                person_target("Amina", "Diallo", Some("1984-02-10")),
+                "person-is-alive",
+            ),
+            None,
+        )
+        .await
+        .expect("trusted jurisdiction, legal basis, and consent permit source read");
+
+    assert_eq!(results[0].value, Some(json!(true)));
+    assert_eq!(source.reads(), 1);
+}
+
+#[tokio::test]
+async fn required_legal_basis_and_consent_reject_before_source_read() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    let matching = &mut claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching;
+    matching.require_legal_basis = true;
+    matching.require_consent = true;
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            evaluate_request(
+                person_target("Amina", "Diallo", Some("1984-02-10")),
+                "person-is-alive",
+            ),
+            None,
+        )
+        .await
+        .expect_err("missing legal basis and consent reject request");
+
+    assert_eq!(error.code(), "target.matching_policy_rejected");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
+async fn unsupported_selected_odrl_terms_reject_before_source_read() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching
+        .ecosystem_binding = Some(EcosystemBindingSelectorConfig {
+        id: Some("civil-pack".to_string()),
+        ..EcosystemBindingSelectorConfig::default()
+    });
+    let mut evidence = (*evidence_config(vec![claim])).clone();
+    evidence.ecosystem_bindings.insert(
+        "civil-pack".to_string(),
+        EvidenceEcosystemBindingConfig {
+            profile: Some("registry-notary/source-policy/v1".to_string()),
+            policy_id: "evidence-pack-policy".to_string(),
+            policy_hash: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                .to_string(),
+            unsupported_odrl_terms: vec!["odrl:targetPolicy".to_string()],
+        },
+    );
+
+    let error = runtime
+        .evaluate(
+            Arc::new(evidence),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            evaluate_request(
+                person_target("Amina", "Diallo", Some("1984-02-10")),
+                "person-is-alive",
+            ),
+            None,
+        )
+        .await
+        .expect_err("unsupported selected ODRL term rejects before source read");
+
+    assert_eq!(error.code(), "target.matching_policy_rejected");
     assert_eq!(source.reads(), 0);
 }
 
@@ -1755,6 +2228,75 @@ async fn batch_prefetch_minimizes_context_and_excludes_policy_rejected_items() {
     assert_eq!(
         response.items[1].errors[0].code,
         "target.matching_policy_rejected"
+    );
+}
+
+#[tokio::test]
+async fn batch_redaction_prefetch_skips_unmappable_value_disclosure() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(BatchContextRecordingSource::new());
+    let mut claim = person_profile_claim();
+    let binding = claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists");
+    binding.connector = SourceConnectorKind::OpenFnSidecar;
+    binding.connection = Some("openfn_crvs".to_string());
+    binding.query_fields = vec![
+        SourceQueryFieldConfig {
+            input: "target.attributes.given_name".to_string(),
+            field: "given_name".to_string(),
+            op: "eq".to_string(),
+        },
+        SourceQueryFieldConfig {
+            input: "target.attributes.family_name".to_string(),
+            field: "family_name".to_string(),
+            op: "eq".to_string(),
+        },
+        SourceQueryFieldConfig {
+            input: "target.attributes.birthdate".to_string(),
+            field: "birthdate".to_string(),
+            op: "eq".to_string(),
+        },
+    ];
+    binding.matching.redaction_fields = vec!["profile.birthdate".to_string()];
+
+    let response = runtime
+        .batch_evaluate(
+            evidence_config_with_openfn_batch_connection(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            BatchEvaluateRequest {
+                items: vec![BatchEvaluateItemRequest {
+                    requester: None,
+                    target: person_target("Amina", "Diallo", Some("1984-02-10")),
+                    relationship: Some(EvidenceRelationship {
+                        relationship_type: "self".to_string(),
+                        attributes: BTreeMap::new(),
+                    }),
+                    on_behalf_of: None,
+                    purpose: Some("benefits".to_string()),
+                }],
+                claims: vec![ClaimRef::new("person-profile")],
+                disclosure: Some("value".to_string()),
+                format: None,
+                purpose: None,
+            },
+            BatchEvaluateOptions::default(),
+        )
+        .await
+        .expect("batch completes with per-item disclosure outcome");
+
+    assert_eq!(source.read_many_calls(), 0);
+    assert_eq!(source.read_one_calls(), 0);
+    assert!(matches!(
+        response.items[0].status,
+        registry_notary_core::BatchItemStatus::Failed
+    ));
+    assert_eq!(
+        response.items[0].errors[0].code,
+        "claim.disclosure_not_allowed"
     );
 }
 

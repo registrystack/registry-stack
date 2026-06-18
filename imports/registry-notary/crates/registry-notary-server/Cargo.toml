@@ -26,6 +26,7 @@ registry-platform-httputil.workspace = true
 registry-platform-oid4vci.workspace = true
 registry-platform-oidc.workspace = true
 registry-platform-ops.workspace = true
+registry-platform-pdp.workspace = true
 registry-platform-replay.workspace = true
 registry-platform-sdjwt.workspace = true
 axum.workspace = true

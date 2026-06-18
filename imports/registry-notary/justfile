@@ -72,6 +72,10 @@ security:
 ci-preflight:
     ./scripts/ci-preflight.sh
 
+# Run the first-push CI preflight against current sibling working trees.
+ci-preflight-worktree:
+    CI_PREFLIGHT_USE_WORKTREE=1 ./scripts/ci-preflight.sh
+
 # Run the full local CI gate.
 ci: ci-preflight fmt-check lint-default lint test-default test deny openapi-check openapi-contract exposure-check security
 

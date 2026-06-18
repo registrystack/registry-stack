@@ -27,11 +27,10 @@ use crate::model::{
 
 const PKCE_METHOD_S256: &str = "S256";
 
-/// The only non-EdDSA signing algorithm the Notary accepts, and only for the
-/// eSignet pre-authorized-code RP client assertion. eSignet registers the RP
-/// client with an RSA/RS256 key and rejects EdDSA client assertions, so the RP
-/// key signs with RS256. Credential, access-token, and federation signing stay
-/// EdDSA; `validate_signing_key_alg_usage` enforces that separation.
+/// The only non-EdDSA signing algorithm the Notary accepts. Credential profiles
+/// and the eSignet pre-authorized-code RP client assertion may use RS256.
+/// Access-token and federation signing stay EdDSA; `validate_signing_key_alg_usage`
+/// enforces that separation.
 pub const CLIENT_ASSERTION_SIGNING_ALG_RS256: &str = "RS256";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -452,7 +451,12 @@ impl StandaloneRegistryNotaryConfig {
                         }
                     }
                 }
-                validate_source_matching_config(&claim.id, binding_id, &binding.matching)?;
+                validate_source_matching_config(
+                    &claim.id,
+                    binding_id,
+                    &binding.matching,
+                    &self.evidence.ecosystem_bindings,
+                )?;
             }
         }
         // Registry Notary currently resolves holder material only from
@@ -602,12 +606,10 @@ impl StandaloneRegistryNotaryConfig {
     }
 
     /// Signing-key ids whose resolved public material must not be shared, per
-    /// issue #173. These are the separated EdDSA signing roles: every credential
+    /// issue #173. These are the separated signing roles: every credential
     /// profile signing key, the access-token signing key (when enabled), and the
-    /// federation signing key (when enabled). The same separation boundary is
-    /// documented in `validate_signing_key_alg_usage`, which treats those three
-    /// sites as distinct EdDSA roles. The eSignet pre-authorized-code RP client
-    /// key is intentionally excluded: it is a separate, relaxed role that is
+    /// federation signing key (when enabled). The eSignet pre-authorized-code RP
+    /// client key is intentionally excluded: it is a separate role that is
     /// allowed to reuse the credential issuer's key material.
     pub fn reuse_scoped_signing_key_ids(&self) -> HashSet<&str> {
         let mut scoped: HashSet<&str> = self
@@ -631,47 +633,30 @@ impl StandaloneRegistryNotaryConfig {
         scoped
     }
 
-    /// Confine non-EdDSA (RS256) signing keys to the eSignet pre-authorized-code
-    /// RP client assertion. Every EdDSA-required site (credential profiles, the
-    /// access-token signing key, the federation signing key) must reference an
-    /// EdDSA key, so relaxing the per-key alg gate cannot weaken those sites. A
-    /// non-EdDSA key referenced only by
-    /// `oid4vci.pre_authorized_code.esignet.client_signing_key_id`, or not
-    /// referenced at all, is allowed.
+    /// Confine non-EdDSA (RS256) signing keys to credential profiles and the
+    /// eSignet pre-authorized-code RP client assertion. Access-token signing and
+    /// federation signing must reference EdDSA keys.
     fn validate_signing_key_alg_usage(&self) -> Result<(), EvidenceConfigError> {
         for (key_id, key) in &self.evidence.signing_keys {
             if key.alg == CREDENTIAL_SIGNING_ALG_EDDSA {
                 continue;
-            }
-            for (profile_id, profile) in &self.evidence.credential_profiles {
-                if profile.signing_key == *key_id {
-                    return invalid_signing_key(
-                        key_id,
-                        format!(
-                            "non-EdDSA signing key is used by credential profile '{profile_id}'; \
-                             non-EdDSA signing keys may only be used as the eSignet \
-                             pre-authorized-code RP client assertion key \
-                             (oid4vci.pre_authorized_code.esignet.client_signing_key_id)"
-                        ),
-                    );
-                }
             }
             if self.auth.access_token_signing.signing_key_id == *key_id {
                 return invalid_signing_key(
                     key_id,
                     "non-EdDSA signing key is used as the access-token signing key \
                      (auth.access_token_signing.signing_key_id); non-EdDSA signing keys may only \
-                     be used as the eSignet pre-authorized-code RP client assertion key \
-                     (oid4vci.pre_authorized_code.esignet.client_signing_key_id)",
+                     be used by credential profiles or as the eSignet pre-authorized-code RP \
+                     client assertion key (oid4vci.pre_authorized_code.esignet.client_signing_key_id)",
                 );
             }
             if self.federation.signing.signing_key == *key_id {
                 return invalid_signing_key(
                     key_id,
                     "non-EdDSA signing key is used as the federation signing key \
-                     (federation.signing.signing_key); non-EdDSA signing keys may only be used as \
-                     the eSignet pre-authorized-code RP client assertion key \
-                     (oid4vci.pre_authorized_code.esignet.client_signing_key_id)",
+                     (federation.signing.signing_key); non-EdDSA signing keys may only be used by \
+                     credential profiles or as the eSignet pre-authorized-code RP client assertion \
+                     key (oid4vci.pre_authorized_code.esignet.client_signing_key_id)",
                 );
             }
         }
@@ -4091,6 +4076,8 @@ pub struct EvidenceConfig {
     #[serde(default)]
     pub credential_profiles: BTreeMap<String, CredentialProfileConfig>,
     #[serde(default)]
+    pub ecosystem_bindings: BTreeMap<String, EvidenceEcosystemBindingConfig>,
+    #[serde(default)]
     pub source_connections: BTreeMap<String, SourceConnectionConfig>,
     /// Per-request fan-out caps. Setting both `subjects=1` and `bindings=1`
     /// reproduces today's strictly-sequential behavior (Stage 1 kill switch).
@@ -4178,10 +4165,13 @@ impl EvidenceConfig {
     }
 }
 
+const SUPPORTED_ECOSYSTEM_BINDING_PROFILE: &str = "registry-notary/source-policy/v1";
+
 fn validate_source_matching_config(
     claim: &str,
     binding: &str,
     matching: &SourceMatchingConfig,
+    ecosystem_bindings: &BTreeMap<String, EvidenceEcosystemBindingConfig>,
 ) -> Result<(), EvidenceConfigError> {
     if matching
         .target_type
@@ -4217,6 +4207,38 @@ fn validate_source_matching_config(
         .any(|value| value.trim().is_empty())
     {
         return invalid_matching_config(claim, binding, "allowed_purposes must not contain blanks");
+    }
+    if matching
+        .allowed_assurance
+        .iter()
+        .any(|value| value.trim().is_empty())
+    {
+        return invalid_matching_config(
+            claim,
+            binding,
+            "allowed_assurance must not contain blanks",
+        );
+    }
+    if matching
+        .permitted_jurisdictions
+        .iter()
+        .any(|value| value.trim().is_empty())
+    {
+        return invalid_matching_config(
+            claim,
+            binding,
+            "permitted_jurisdictions must not contain blanks",
+        );
+    }
+    if matching
+        .redaction_fields
+        .iter()
+        .any(|value| value.trim().is_empty())
+    {
+        return invalid_matching_config(claim, binding, "redaction_fields must not contain blanks");
+    }
+    if let Some(selector) = &matching.ecosystem_binding {
+        validate_ecosystem_binding_selector(claim, binding, selector, ecosystem_bindings)?;
     }
     if matching
         .allowed_relationships
@@ -4276,6 +4298,202 @@ fn validate_source_matching_config(
             claim,
             binding,
             "allowed input path lists must not contain blanks",
+        );
+    }
+    Ok(())
+}
+
+fn validate_ecosystem_binding_selector(
+    claim: &str,
+    binding: &str,
+    selector: &EcosystemBindingSelectorConfig,
+    ecosystem_bindings: &BTreeMap<String, EvidenceEcosystemBindingConfig>,
+) -> Result<(), EvidenceConfigError> {
+    if selector
+        .id
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return invalid_matching_config(claim, binding, "ecosystem_binding.id must not be empty");
+    }
+    if selector
+        .profile
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return invalid_matching_config(
+            claim,
+            binding,
+            "ecosystem_binding.profile must not be empty",
+        );
+    }
+    if selector
+        .policy_id
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return invalid_matching_config(
+            claim,
+            binding,
+            "ecosystem_binding.policy_id must not be empty",
+        );
+    }
+    if selector
+        .policy_hash
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return invalid_matching_config(
+            claim,
+            binding,
+            "ecosystem_binding.policy_hash must not be empty",
+        );
+    }
+    if selector
+        .unsupported_odrl_terms
+        .iter()
+        .any(|value| value.trim().is_empty())
+    {
+        return invalid_matching_config(
+            claim,
+            binding,
+            "ecosystem_binding.unsupported_odrl_terms must not contain blanks",
+        );
+    }
+
+    let has_local_policy = selector.policy_id.is_some() || selector.policy_hash.is_some();
+    if has_local_policy {
+        let (Some(policy_id), Some(policy_hash)) = (&selector.policy_id, &selector.policy_hash)
+        else {
+            return invalid_matching_config(
+                claim,
+                binding,
+                "ecosystem_binding policy_id and policy_hash must be configured together",
+            );
+        };
+        validate_supported_ecosystem_profile(claim, binding, selector.profile.as_deref())?;
+        validate_policy_hash(claim, binding, policy_hash)?;
+        if policy_id.trim().is_empty() {
+            return invalid_matching_config(
+                claim,
+                binding,
+                "ecosystem_binding.policy_id must not be empty",
+            );
+        }
+        return Ok(());
+    }
+
+    let selected = select_ecosystem_binding(selector, ecosystem_bindings).map_err(|reason| {
+        EvidenceConfigError::InvalidMatchingConfig {
+            claim: claim.to_string(),
+            binding: binding.to_string(),
+            reason,
+        }
+    })?;
+    validate_ecosystem_binding_metadata(claim, binding, selected)
+}
+
+fn select_ecosystem_binding<'a>(
+    selector: &EcosystemBindingSelectorConfig,
+    ecosystem_bindings: &'a BTreeMap<String, EvidenceEcosystemBindingConfig>,
+) -> Result<&'a EvidenceEcosystemBindingConfig, String> {
+    if let Some(id) = selector.id.as_deref() {
+        let Some(candidate) = ecosystem_bindings.get(id) else {
+            return Err(format!("ecosystem_binding id '{id}' was not found"));
+        };
+        if let Some(profile) = selector.profile.as_deref() {
+            if candidate.profile.as_deref() != Some(profile) {
+                return Err(format!(
+                    "ecosystem_binding id '{id}' does not use selected profile '{profile}'"
+                ));
+            }
+        }
+        return Ok(candidate);
+    }
+
+    let Some(profile) = selector.profile.as_deref() else {
+        return Err("ecosystem_binding must select by id, profile, or local policy".to_string());
+    };
+    let mut matches = ecosystem_bindings
+        .values()
+        .filter(|candidate| candidate.profile.as_deref() == Some(profile));
+    let Some(selected) = matches.next() else {
+        return Err(format!(
+            "ecosystem_binding profile '{profile}' was not found"
+        ));
+    };
+    if matches.next().is_some() {
+        return Err(format!(
+            "ecosystem_binding profile '{profile}' matched multiple bindings; select by id"
+        ));
+    }
+    Ok(selected)
+}
+
+fn validate_ecosystem_binding_metadata(
+    claim: &str,
+    binding: &str,
+    metadata: &EvidenceEcosystemBindingConfig,
+) -> Result<(), EvidenceConfigError> {
+    validate_supported_ecosystem_profile(claim, binding, metadata.profile.as_deref())?;
+    if metadata.policy_id.trim().is_empty() {
+        return invalid_matching_config(
+            claim,
+            binding,
+            "selected ecosystem binding policy_id must not be empty",
+        );
+    }
+    validate_policy_hash(claim, binding, &metadata.policy_hash)?;
+    if metadata
+        .unsupported_odrl_terms
+        .iter()
+        .any(|value| value.trim().is_empty())
+    {
+        return invalid_matching_config(
+            claim,
+            binding,
+            "selected ecosystem binding unsupported_odrl_terms must not contain blanks",
+        );
+    }
+    Ok(())
+}
+
+fn validate_supported_ecosystem_profile(
+    claim: &str,
+    binding: &str,
+    profile: Option<&str>,
+) -> Result<(), EvidenceConfigError> {
+    match profile {
+        None | Some(SUPPORTED_ECOSYSTEM_BINDING_PROFILE) => Ok(()),
+        Some(profile) => invalid_matching_config(
+            claim,
+            binding,
+            &format!("unsupported ecosystem_binding profile '{profile}'"),
+        ),
+    }
+}
+
+fn validate_policy_hash(
+    claim: &str,
+    binding: &str,
+    policy_hash: &str,
+) -> Result<(), EvidenceConfigError> {
+    let Some(hex) = policy_hash.strip_prefix("sha256:") else {
+        return invalid_matching_config(
+            claim,
+            binding,
+            "ecosystem_binding.policy_hash must use sha256:<64 lowercase hex>",
+        );
+    };
+    if hex.len() != 64
+        || !hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return invalid_matching_config(
+            claim,
+            binding,
+            "ecosystem_binding.policy_hash must use sha256:<64 lowercase hex>",
         );
     }
     Ok(())
@@ -4395,6 +4613,17 @@ pub struct SourceBindingConfig {
     pub matching: SourceMatchingConfig,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceEcosystemBindingConfig {
+    #[serde(default)]
+    pub profile: Option<String>,
+    pub policy_id: String,
+    pub policy_hash: String,
+    #[serde(default)]
+    pub unsupported_odrl_terms: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceQueryFieldConfig {
@@ -4417,6 +4646,18 @@ pub struct SourceMatchingConfig {
     pub requester_type: Option<String>,
     #[serde(default)]
     pub allowed_purposes: Vec<String>,
+    #[serde(default)]
+    pub allowed_assurance: Vec<String>,
+    #[serde(default)]
+    pub permitted_jurisdictions: Vec<String>,
+    #[serde(default)]
+    pub require_legal_basis: bool,
+    #[serde(default)]
+    pub require_consent: bool,
+    #[serde(default)]
+    pub redaction_fields: Vec<String>,
+    #[serde(default)]
+    pub ecosystem_binding: Option<EcosystemBindingSelectorConfig>,
     #[serde(default)]
     pub allowed_relationships: Vec<String>,
     /// Relationship-specific purpose allow-lists. Empty means relationships
@@ -4443,6 +4684,21 @@ pub struct SourceMatchingConfig {
     pub confidence: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EcosystemBindingSelectorConfig {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub profile: Option<String>,
+    #[serde(default)]
+    pub policy_id: Option<String>,
+    #[serde(default)]
+    pub policy_hash: Option<String>,
+    #[serde(default)]
+    pub unsupported_odrl_terms: Vec<String>,
+}
+
 impl Default for SourceMatchingConfig {
     fn default() -> Self {
         Self {
@@ -4451,6 +4707,12 @@ impl Default for SourceMatchingConfig {
             target_type: None,
             requester_type: None,
             allowed_purposes: Vec::new(),
+            allowed_assurance: Vec::new(),
+            permitted_jurisdictions: Vec::new(),
+            require_legal_basis: false,
+            require_consent: false,
+            redaction_fields: Vec::new(),
+            ecosystem_binding: None,
             allowed_relationships: Vec::new(),
             relationship_purpose_scopes: BTreeMap::new(),
             sufficient_target_inputs: Vec::new(),
@@ -5976,6 +6238,128 @@ auth:
             err,
             EvidenceConfigError::InvalidMatchingConfig { .. }
         ));
+    }
+
+    #[test]
+    fn matching_config_rejects_blank_pdp_policy_entries() {
+        let mut assurance = SourceMatchingConfig {
+            allowed_assurance: vec!["substantial".to_string(), " ".to_string()],
+            ..SourceMatchingConfig::default()
+        };
+        let ecosystem_bindings = BTreeMap::new();
+        let err = validate_source_matching_config("claim", "src", &assurance, &ecosystem_bindings)
+            .expect_err("blank assurance entry is rejected");
+        assert!(
+            matches!(err, EvidenceConfigError::InvalidMatchingConfig { ref reason, .. } if reason.contains("allowed_assurance")),
+            "expected allowed_assurance rejection, got {err:?}"
+        );
+
+        assurance.allowed_assurance.clear();
+        assurance.permitted_jurisdictions = vec!["RW".to_string(), " ".to_string()];
+        let err = validate_source_matching_config("claim", "src", &assurance, &ecosystem_bindings)
+            .expect_err("blank jurisdiction entry is rejected");
+        assert!(
+            matches!(err, EvidenceConfigError::InvalidMatchingConfig { ref reason, .. } if reason.contains("permitted_jurisdictions")),
+            "expected permitted_jurisdictions rejection, got {err:?}"
+        );
+
+        assurance.permitted_jurisdictions.clear();
+        assurance.redaction_fields = vec!["value".to_string(), " ".to_string()];
+        let err = validate_source_matching_config("claim", "src", &assurance, &ecosystem_bindings)
+            .expect_err("blank redaction entry is rejected");
+        assert!(
+            matches!(err, EvidenceConfigError::InvalidMatchingConfig { ref reason, .. } if reason.contains("redaction_fields")),
+            "expected redaction_fields rejection, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn matching_config_selects_governed_ecosystem_binding_metadata() {
+        let ecosystem_bindings = BTreeMap::from([(
+            "civil-pack".to_string(),
+            EvidenceEcosystemBindingConfig {
+                profile: Some(SUPPORTED_ECOSYSTEM_BINDING_PROFILE.to_string()),
+                policy_id: "evidence-pack-policy".to_string(),
+                policy_hash:
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        .to_string(),
+                unsupported_odrl_terms: Vec::new(),
+            },
+        )]);
+        let matching = SourceMatchingConfig {
+            ecosystem_binding: Some(EcosystemBindingSelectorConfig {
+                id: Some("civil-pack".to_string()),
+                profile: Some(SUPPORTED_ECOSYSTEM_BINDING_PROFILE.to_string()),
+                ..EcosystemBindingSelectorConfig::default()
+            }),
+            ..SourceMatchingConfig::default()
+        };
+
+        validate_source_matching_config("claim", "src", &matching, &ecosystem_bindings)
+            .expect("selected governed ecosystem binding validates");
+    }
+
+    #[test]
+    fn matching_config_rejects_malformed_or_unsupported_selected_ecosystem_binding() {
+        let mut ecosystem_bindings = BTreeMap::from([(
+            "civil-pack".to_string(),
+            EvidenceEcosystemBindingConfig {
+                profile: Some("unsupported-profile".to_string()),
+                policy_id: "evidence-pack-policy".to_string(),
+                policy_hash:
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        .to_string(),
+                unsupported_odrl_terms: Vec::new(),
+            },
+        )]);
+        let matching = SourceMatchingConfig {
+            ecosystem_binding: Some(EcosystemBindingSelectorConfig {
+                id: Some("civil-pack".to_string()),
+                ..EcosystemBindingSelectorConfig::default()
+            }),
+            ..SourceMatchingConfig::default()
+        };
+        let err = validate_source_matching_config("claim", "src", &matching, &ecosystem_bindings)
+            .expect_err("unsupported selected profile is rejected");
+        assert!(
+            matches!(err, EvidenceConfigError::InvalidMatchingConfig { ref reason, .. } if reason.contains("unsupported ecosystem_binding profile")),
+            "expected unsupported profile rejection, got {err:?}"
+        );
+
+        ecosystem_bindings
+            .get_mut("civil-pack")
+            .expect("binding exists")
+            .profile = Some(SUPPORTED_ECOSYSTEM_BINDING_PROFILE.to_string());
+        ecosystem_bindings
+            .get_mut("civil-pack")
+            .expect("binding exists")
+            .policy_hash = "sha256:not-hex".to_string();
+        let err = validate_source_matching_config("claim", "src", &matching, &ecosystem_bindings)
+            .expect_err("malformed selected policy hash is rejected");
+        assert!(
+            matches!(err, EvidenceConfigError::InvalidMatchingConfig { ref reason, .. } if reason.contains("policy_hash")),
+            "expected malformed policy_hash rejection, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn matching_config_accepts_config_local_ecosystem_binding_selector() {
+        let matching = SourceMatchingConfig {
+            ecosystem_binding: Some(EcosystemBindingSelectorConfig {
+                profile: Some(SUPPORTED_ECOSYSTEM_BINDING_PROFILE.to_string()),
+                policy_id: Some("local-policy".to_string()),
+                policy_hash: Some(
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                        .to_string(),
+                ),
+                unsupported_odrl_terms: vec!["odrl:targetPolicy".to_string()],
+                ..EcosystemBindingSelectorConfig::default()
+            }),
+            ..SourceMatchingConfig::default()
+        };
+
+        validate_source_matching_config("claim", "src", &matching, &BTreeMap::new())
+            .expect("local ecosystem binding selector validates");
     }
 
     fn valid_self_attestation_config() -> StandaloneRegistryNotaryConfig {
@@ -9904,10 +10288,8 @@ access_token_ttl_seconds: 300
     }
 
     #[test]
-    fn rs256_signing_key_rejected_as_credential_profile_key() {
+    fn rs256_signing_key_may_be_credential_profile_key() {
         let mut config = valid_pre_auth_config();
-        // The kid DID matches the credential profile issuer so the alg-usage
-        // guard (not the unrelated issuer-binding check) is what rejects this.
         config.evidence.signing_keys.insert(
             "esignet-rp-key".to_string(),
             rs256_signing_key("ESIGNET_RP_KEY", "did:web:issuer.example#esignet-rp-key"),
@@ -9919,8 +10301,9 @@ access_token_ttl_seconds: 300
             .get_mut("civil_status_sd_jwt")
             .expect("civil status credential profile exists")
             .signing_key = "esignet-rp-key".to_string();
-        let reason = expect_signing_key_error(&config);
-        assert!(reason.contains("client_signing_key_id"));
+        config
+            .validate()
+            .expect("an RS256 credential profile signing key validates");
     }
 
     #[test]
