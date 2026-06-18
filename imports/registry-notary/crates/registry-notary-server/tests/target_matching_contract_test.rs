@@ -1537,7 +1537,7 @@ async fn assurance_policy_rejects_before_source_read() {
         .await
         .expect_err("self-asserted assurance rejects request");
 
-    assert_eq!(error.code(), "target.matching_policy_rejected");
+    assert_eq!(error.code(), "pdp.assurance_insufficient");
     assert_eq!(source.reads(), 0);
 }
 
