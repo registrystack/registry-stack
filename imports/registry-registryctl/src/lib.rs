@@ -48,6 +48,12 @@ const REGISTRYCTL_RELEASES_API: &str =
 const REGISTRYCTL_INSTALL_SCRIPT: &str =
     "https://raw.githubusercontent.com/jeremi/registry-registryctl/main/install.sh";
 const UPDATE_CHECK_CACHE_SECONDS: u64 = 60 * 60 * 24;
+const LAB_MANIFEST_URL: &str = "https://lab.registrystack.org/api/lab.json";
+const AGRI_EVIDENCE_PURPOSE: &str =
+    "https://demo.example.gov/purpose/nagdi/climate-smart-input-support";
+const DHIS2_EVIDENCE_PURPOSE: &str =
+    "https://demo.example.gov/purpose/dhis2-openfn-health-evidence";
+const OPENCRVS_EVIDENCE_PURPOSE: &str = "https://demo.example.gov/purpose/opencrvs-dci-lab";
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum NotarySource {
@@ -230,6 +236,12 @@ impl OpenFnBatchMode {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum DoctorFormat {
+    Json,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum LabEnvFormat {
+    Shell,
     Json,
 }
 
@@ -423,6 +435,63 @@ pub fn refresh_update_check_cache() -> Result<()> {
     Ok(())
 }
 
+pub fn lab_env(credential_id: &str, format: LabEnvFormat) -> Result<()> {
+    let body = fetch_lab_manifest()?;
+    let output = lab_env_output_from_manifest(&body, credential_id, format)?;
+    println!("{output}");
+    Ok(())
+}
+
+fn fetch_lab_manifest() -> Result<String> {
+    let response = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .get(LAB_MANIFEST_URL)
+        .set("Accept", "application/json")
+        .set("User-Agent", "registryctl")
+        .call()
+        .map_err(lab_manifest_http_error)?;
+    response
+        .into_string()
+        .context("failed to read hosted lab manifest response")
+}
+
+fn lab_manifest_http_error(error: ureq::Error) -> anyhow::Error {
+    match error {
+        ureq::Error::Status(status, response) => {
+            let body = response.into_string().unwrap_or_default();
+            anyhow!(
+                "hosted lab manifest returned HTTP {status} from {LAB_MANIFEST_URL}: {}",
+                body.trim()
+            )
+        }
+        ureq::Error::Transport(error) => {
+            anyhow!("failed to fetch hosted lab manifest from {LAB_MANIFEST_URL}: {error}")
+        }
+    }
+}
+
+fn lab_env_output_from_manifest(
+    manifest: &str,
+    credential_id: &str,
+    format: LabEnvFormat,
+) -> Result<String> {
+    let manifest = parse_lab_manifest(manifest)?;
+    let env = manifest.resolve_env(credential_id).map_err(|err| {
+        anyhow!("failed to resolve hosted lab credential {credential_id:?}: {err}")
+    })?;
+    Ok(match format {
+        LabEnvFormat::Shell => env.to_shell_exports(),
+        LabEnvFormat::Json => {
+            serde_json::to_string_pretty(&env).context("failed to render hosted lab env JSON")?
+        }
+    })
+}
+
+fn parse_lab_manifest(manifest: &str) -> Result<LabManifest> {
+    serde_json::from_str(manifest).context("failed to parse hosted lab manifest JSON")
+}
+
 fn spawn_update_check_refresh() {
     let Ok(current_exe) = std::env::current_exe() else {
         return;
@@ -568,6 +637,214 @@ struct UpdateCheckCache {
 struct CachedLatestRelease {
     is_fresh: bool,
     latest_tag: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LabManifest {
+    #[serde(default)]
+    credentials: Vec<LabCredential>,
+    #[serde(default)]
+    services: Vec<LabService>,
+}
+
+impl LabManifest {
+    fn resolve_env(&self, credential_id: &str) -> Result<LabEnv> {
+        let credential = self
+            .credentials
+            .iter()
+            .find(|credential| credential.id == credential_id)
+            .ok_or_else(|| {
+                let available = self
+                    .credentials
+                    .iter()
+                    .map(|credential| credential.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if available.is_empty() {
+                    anyhow!(
+                        "hosted lab manifest did not contain credentials; check {LAB_MANIFEST_URL}"
+                    )
+                } else {
+                    anyhow!(
+                        "hosted lab credential {credential_id:?} was not found; available credential ids: {available}"
+                    )
+                }
+            })?;
+        credential.resolve_env(self)
+    }
+
+    fn service_for_url(&self, service_url: &str) -> Option<&LabService> {
+        self.services
+            .iter()
+            .find(|service| service.url.as_deref() == Some(service_url))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct LabCredential {
+    id: String,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    auth_scheme: Option<String>,
+    #[serde(default)]
+    service_url: Option<String>,
+    #[serde(default)]
+    token: Option<String>,
+    #[serde(default)]
+    purpose: Option<String>,
+    #[serde(default)]
+    purpose_uri: Option<String>,
+    #[serde(default)]
+    default_purpose: Option<String>,
+}
+
+impl LabCredential {
+    fn resolve_env(&self, manifest: &LabManifest) -> Result<LabEnv> {
+        let base_url = required_trimmed(self.service_url.as_deref(), "service_url", &self.id)?;
+        let token = required_trimmed(self.token.as_deref(), "token", &self.id)?;
+        let auth_scheme = LabAuthScheme::parse(self.auth_scheme.as_deref());
+        let purpose = self
+            .purpose_uri
+            .as_deref()
+            .or(self.default_purpose.as_deref())
+            .or_else(|| purpose_uri(self.purpose.as_deref()))
+            .or_else(|| {
+                manifest
+                    .service_for_url(base_url)
+                    .and_then(|service| service.purpose_uri())
+            })
+            .or_else(|| known_lab_purpose(&self.id))
+            .ok_or_else(|| {
+                anyhow!(
+                    "hosted lab credential {:?} does not declare a purpose URI; add purpose_uri/default_purpose to the manifest",
+                    self.id
+                )
+            })?;
+
+        Ok(LabEnv {
+            notice: format!(
+                "Public Registry Stack hosted-lab demo credentials for {}. Use only with synthetic hosted-lab quickstarts; this is not production secret-handling guidance.",
+                self.id
+            ),
+            credential_id: self.id.clone(),
+            label: self.label.clone(),
+            auth_scheme,
+            base_url: base_url.to_string(),
+            token: token.to_string(),
+            purpose: purpose.to_string(),
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct LabService {
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    purpose: Option<String>,
+    #[serde(default)]
+    purpose_uri: Option<String>,
+    #[serde(default)]
+    default_purpose: Option<String>,
+}
+
+impl LabService {
+    fn purpose_uri(&self) -> Option<&str> {
+        self.purpose_uri
+            .as_deref()
+            .or(self.default_purpose.as_deref())
+            .or_else(|| purpose_uri(self.purpose.as_deref()))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum LabAuthScheme {
+    Bearer,
+    ApiKey,
+}
+
+impl LabAuthScheme {
+    fn parse(value: Option<&str>) -> Self {
+        match value {
+            Some(value) if value.eq_ignore_ascii_case("api_key") => Self::ApiKey,
+            Some(value) if value.eq_ignore_ascii_case("api-key") => Self::ApiKey,
+            _ => Self::Bearer,
+        }
+    }
+
+    fn token_env_name(self) -> &'static str {
+        match self {
+            Self::Bearer => "REGISTRY_NOTARY_BEARER_TOKEN",
+            Self::ApiKey => "REGISTRY_NOTARY_API_KEY",
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct LabEnv {
+    notice: String,
+    credential_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    auth_scheme: LabAuthScheme,
+    base_url: String,
+    token: String,
+    purpose: String,
+}
+
+impl LabEnv {
+    fn to_shell_exports(&self) -> String {
+        let mut lines = vec![
+            format!("# {}", self.notice),
+            format!(
+                "export REGISTRY_NOTARY_BASE_URL={}",
+                shell_quote(&self.base_url)
+            ),
+            format!(
+                "export {}={}",
+                self.auth_scheme.token_env_name(),
+                shell_quote(&self.token)
+            ),
+            format!(
+                "export REGISTRY_NOTARY_PURPOSE={}",
+                shell_quote(&self.purpose)
+            ),
+        ];
+        lines.push(String::new());
+        lines.join("\n")
+    }
+}
+
+fn required_trimmed<'a>(
+    value: Option<&'a str>,
+    field: &str,
+    credential_id: &str,
+) -> Result<&'a str> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        bail!("hosted lab credential {credential_id:?} is missing required {field}");
+    };
+    Ok(value)
+}
+
+fn known_lab_purpose(credential_id: &str) -> Option<&'static str> {
+    match credential_id {
+        "agri-evidence" => Some(AGRI_EVIDENCE_PURPOSE),
+        "dhis2-api-key" | "dhis2-bearer" => Some(DHIS2_EVIDENCE_PURPOSE),
+        "opencrvs-api-key" => Some(OPENCRVS_EVIDENCE_PURPOSE),
+        _ => None,
+    }
+}
+
+fn purpose_uri(value: Option<&str>) -> Option<&str> {
+    value
+        .map(str::trim)
+        .filter(|value| value.starts_with("http://") || value.starts_with("https://"))
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -3972,6 +4249,97 @@ mod tests {
                 "registryctl must not depend on {forbidden_dependency}"
             );
         }
+    }
+
+    #[test]
+    fn lab_env_shell_exports_only_requested_bearer_credential() {
+        let output = lab_env_output_from_manifest(
+            r#"{
+              "services": [
+                {
+                  "id": "agriculture-notary",
+                  "url": "https://agriculture-notary.lab.registrystack.org",
+                  "purpose": "Answers agriculture evidence questions."
+                }
+              ],
+              "credentials": [
+                {
+                  "id": "dhis2-bearer",
+                  "label": "DHIS2 Notary bearer token",
+                  "service_url": "https://dhis2-notary.lab.registrystack.org",
+                  "token": "do-not-print"
+                },
+                {
+                  "id": "agri-evidence",
+                  "label": "Agriculture Notary bearer token",
+                  "service_url": "https://agriculture-notary.lab.registrystack.org",
+                  "token": "agri-token"
+                }
+              ]
+            }"#,
+            "agri-evidence",
+            LabEnvFormat::Shell,
+        )
+        .unwrap();
+
+        assert!(output.contains("Public Registry Stack hosted-lab demo credentials"));
+        assert!(output.contains(
+            "export REGISTRY_NOTARY_BASE_URL='https://agriculture-notary.lab.registrystack.org'"
+        ));
+        assert!(output.contains("export REGISTRY_NOTARY_BEARER_TOKEN='agri-token'"));
+        assert!(output.contains(&format!(
+            "export REGISTRY_NOTARY_PURPOSE='{}'",
+            AGRI_EVIDENCE_PURPOSE
+        )));
+        assert!(!output.contains("do-not-print"));
+        assert!(!output.contains("dhis2-bearer"));
+    }
+
+    #[test]
+    fn lab_env_json_supports_api_key_credentials() {
+        let output = lab_env_output_from_manifest(
+            r#"{
+              "credentials": [
+                {
+                  "id": "opencrvs-api-key",
+                  "auth_scheme": "api_key",
+                  "service_url": "https://opencrvs-notary.lab.registrystack.org",
+                  "token": "api-key-token"
+                }
+              ]
+            }"#,
+            "opencrvs-api-key",
+            LabEnvFormat::Json,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+
+        assert_eq!(value["credential_id"], "opencrvs-api-key");
+        assert_eq!(value["auth_scheme"], "api_key");
+        assert_eq!(value["token"], "api-key-token");
+        assert_eq!(value["purpose"], OPENCRVS_EVIDENCE_PURPOSE);
+    }
+
+    #[test]
+    fn lab_env_missing_credential_lists_available_ids() {
+        let error = lab_env_output_from_manifest(
+            r#"{
+              "credentials": [
+                {
+                  "id": "agri-evidence",
+                  "service_url": "https://agriculture-notary.lab.registrystack.org",
+                  "token": "agri-token"
+                }
+              ]
+            }"#,
+            "missing",
+            LabEnvFormat::Shell,
+        )
+        .unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains("failed to resolve hosted lab credential"));
+        assert!(message.contains("agri-evidence"));
     }
 
     fn openfn_options(temp: &TempDir) -> OpenFnConvertOptions {

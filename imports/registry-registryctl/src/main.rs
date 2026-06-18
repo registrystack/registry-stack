@@ -4,8 +4,8 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 use registryctl::{
-    DeploymentProfile, DoctorFormat, NotaryInitOptions, NotaryInitSourceKind, NotarySource,
-    OpenFnBatchMode, OpenFnConvertOptions, OpenFnImportOptions, Sample,
+    DeploymentProfile, DoctorFormat, LabEnvFormat, NotaryInitOptions, NotaryInitSourceKind,
+    NotarySource, OpenFnBatchMode, OpenFnConvertOptions, OpenFnImportOptions, Sample,
 };
 
 fn main() -> Result<()> {
@@ -228,6 +228,9 @@ fn main() -> Result<()> {
                 allow_empty_job_bodies,
             })?,
         },
+        Commands::Lab { command } => match command {
+            LabCommand::Env { credential, format } => registryctl::lab_env(&credential, format)?,
+        },
         Commands::Bruno { command } => match command {
             BrunoCommand::Generate { force } => {
                 registryctl::bruno_generate_project(&std::env::current_dir()?, force)?;
@@ -296,6 +299,11 @@ enum Commands {
         #[command(subcommand)]
         command: Box<OpenFnCommand>,
     },
+    /// Work with public hosted-lab quickstart helpers.
+    Lab {
+        #[command(subcommand)]
+        command: LabCommand,
+    },
     /// Work with the optional generated Bruno API collection.
     Bruno {
         #[command(subcommand)]
@@ -307,7 +315,7 @@ impl Commands {
     fn should_check_for_updates(&self) -> bool {
         !matches!(
             self,
-            Self::Doctor { .. } | Self::UpdateCheck | Self::UpdateCheckRefresh
+            Self::Doctor { .. } | Self::Lab { .. } | Self::UpdateCheck | Self::UpdateCheckRefresh
         )
     }
 }
@@ -387,6 +395,36 @@ mod tests {
         let cli = Cli::try_parse_from(["registryctl", "__update-check-refresh"]).unwrap();
 
         assert!(matches!(cli.command, Commands::UpdateCheckRefresh));
+        assert!(!cli.command.should_check_for_updates());
+    }
+
+    #[test]
+    fn lab_env_cli_parses_credential_and_format() {
+        let cli = Cli::try_parse_from([
+            "registryctl",
+            "lab",
+            "env",
+            "--credential",
+            "agri-evidence",
+            "--format",
+            "json",
+        ])
+        .unwrap();
+
+        let Commands::Lab { command } = cli.command else {
+            panic!("expected lab command");
+        };
+        let LabCommand::Env { credential, format } = command;
+        assert_eq!(credential, "agri-evidence");
+        assert_eq!(format, LabEnvFormat::Json);
+    }
+
+    #[test]
+    fn lab_env_skips_automatic_update_check() {
+        let cli =
+            Cli::try_parse_from(["registryctl", "lab", "env", "--credential", "agri-evidence"])
+                .unwrap();
+
         assert!(!cli.command.should_check_for_updates());
     }
 }
@@ -682,6 +720,19 @@ enum OpenFnCommand {
         /// Permit empty OpenFn job bodies.
         #[arg(long)]
         allow_empty_job_bodies: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum LabCommand {
+    /// Emit SDK-ready environment values from the public hosted lab manifest.
+    Env {
+        /// Hosted lab credential id to export.
+        #[arg(long)]
+        credential: String,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = LabEnvFormat::Shell)]
+        format: LabEnvFormat,
     },
 }
 
