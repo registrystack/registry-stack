@@ -1882,7 +1882,7 @@ async fn purpose_rejection_precedes_matching_policy_rejection() {
         .await
         .expect_err("purpose gate wins over matching policy");
 
-    assert_eq!(error.code(), "purpose.not_allowed");
+    assert_eq!(error.code(), "pdp.purpose_not_permitted");
     assert_eq!(source.reads(), 0);
 }
 
