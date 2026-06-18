@@ -7,6 +7,51 @@ these clients instead of hand-written HTTP calls when application code needs the
 Notary wire contract, purpose handling, bounded response reads, route-aware
 retry behavior, JWKS refresh behavior, and redacted error mapping.
 
+This guide starts with the first integration path: discover a claim, evaluate it
+for one target, read the result, and handle errors safely. Later sections cover
+batch evaluation, rendering, credential issuance, OID4VCI, federation, and
+Rust-only verifier helpers.
+
+## Start Here
+
+Before the first SDK call, collect these values from the deployment operator or
+from your own application workflow.
+
+| Need | Example | Where It Comes From |
+| --- | --- | --- |
+| Service base URL | `https://agriculture-notary.lab.registrystack.org` | Hosted lab manifest or Registry Notary operator |
+| Auth credential | `AGRI_EVIDENCE_CLIENT_BEARER` | Hosted lab manifest or Registry Notary operator |
+| Claim id | `eligible-for-climate-smart-input-voucher` | `list_claims` or operator docs |
+| Target identifier | `farmer_id` and `FARMER-1001` | Your application or case record |
+| Purpose | `https://demo.example.gov/purpose/nagdi/climate-smart-input-support` | Your product, policy, or workflow |
+
+Use `list_claims` first when you are unsure which claim ids your credential can
+see. A later `403` on evaluation usually means the credential lacks the
+`required_scope` for one of the requested claims.
+
+The quickstart uses the public hosted lab backend so the examples are runnable
+as written. The lab publishes current demo service URLs and caller credentials
+at `https://lab.registrystack.org/api/lab.json`. These are public demo
+credentials, not production secret-handling guidance.
+
+```bash
+export REGISTRY_NOTARY_BASE_URL="https://agriculture-notary.lab.registrystack.org"
+export REGISTRY_NOTARY_BEARER_TOKEN="_07RtRhidurOsqBe-mW9At1d7zkCWGI1Dumd2E9uj7U"
+export REGISTRY_NOTARY_PURPOSE="https://demo.example.gov/purpose/nagdi/climate-smart-input-support"
+```
+
+### Key Terms
+
+- **Claim:** A named question Notary can evaluate, such as
+  `eligible-for-climate-smart-input-voucher`.
+- **Target:** The person, organization, or record being evaluated.
+- **Requester:** The actor asking for the evaluation.
+- **Relationship:** Why the requester may ask about the target, such as `self`.
+- **Purpose:** The reason for processing, sent in request metadata and usually
+  recorded in audit evidence.
+- **Disclosure:** The detail level requested in the response. `predicate`
+  asks for a minimized true, false, or unknown style result.
+
 ## Packages
 
 | Runtime | Package | Surface |
@@ -20,46 +65,287 @@ application, discovery, OID4VCI, and federation helpers, but keep JSON as
 dictionaries or plain objects. Rust additionally exposes operational, admin,
 format, and explicit SD-JWT VC verifier helpers.
 
-## Common Concepts
+The packages are not currently published to public package registries. Pin
+integrations to a release tag or commit.
 
-### Base URL
+```toml
+[dependencies]
+registry-notary-client = { git = "https://github.com/jeremi/registry-notary", tag = "vX.Y.Z" }
+registry-notary-core = { git = "https://github.com/jeremi/registry-notary", tag = "vX.Y.Z" }
+```
 
-Use the service root URL. A path prefix is allowed and is preserved when routes
-are joined.
+```bash
+python -m pip install "git+https://github.com/jeremi/registry-notary.git@vX.Y.Z#subdirectory=bindings/python"
+```
 
-Clients require HTTPS for non-loopback hosts. Rust allows HTTP loopback only in
-debug or `test-support` builds. Python and Node local workflows may use
-`http://127.0.0.1`, `http://localhost`, or `http://[::1]`.
+```bash
+pnpm add "github:jeremi/registry-notary#vX.Y.Z&path:bindings/node"
+```
 
-Python also exposes an explicit lab/internal escape hatch for Docker Compose
-and private service-network deployments:
-`allow_insecure_internal_http=True`. Use it only when transport is already
-protected by the deployment boundary or a local development network. Production
-service URLs should remain HTTPS.
+npm does not support installing from a subdirectory of a git repository. With
+npm, install the Node package from a checkout pinned to a release tag or
+commit:
 
-### Authentication
+```bash
+npm install ./bindings/node
+```
 
-Configure exactly one auth mode:
+From an app that depends on a local Registry Notary checkout, use path installs
+instead:
 
-- Bearer token, sent as `Authorization: Bearer <token>`.
-- API key, sent as `X-Api-Key`.
-- Rust only: dynamic `AuthProvider`.
+```toml
+[dependencies]
+registry-notary-client = { path = "/path/to/registry-notary/crates/registry-notary-client" }
+registry-notary-core = { path = "/path/to/registry-notary/crates/registry-notary-core" }
+```
 
-Supplying more than one auth mode is a build-time error. Debug output redacts
-configured auth material.
+```bash
+python -m pip install -e /path/to/registry-notary/bindings/python
+pnpm add /path/to/registry-notary/bindings/node
+```
 
-### Scopes
+## First Evaluation
+
+This quickstart checks whether the lab farmer `FARMER-1001` satisfies the
+`eligible-for-climate-smart-input-voucher` claim. Use it when your application
+already knows the target identifier and wants a minimized claim result from
+Notary.
+
+The examples set `default_purpose` or `defaultPurpose` on the client. You can
+also set purpose per call when different workflows share the same client.
+
+### Python
+
+```python
+import os
+
+from registry_notary import RegistryNotaryClient
+from registry_notary.errors import NotaryProblemError, NotaryTransportError
+
+client = RegistryNotaryClient(
+    base_url=os.environ["REGISTRY_NOTARY_BASE_URL"],
+    bearer_token=os.environ["REGISTRY_NOTARY_BEARER_TOKEN"],
+    default_purpose=os.environ["REGISTRY_NOTARY_PURPOSE"],
+    user_agent="benefits-api/1.0",
+)
+
+claims = client.list_claims()
+print([claim["id"] for claim in claims.get("data", [])])
+
+try:
+    result = client.evaluate_request({
+        "target": {
+            "type": "Farmer",
+            "identifiers": [{
+                "scheme": "farmer_id",
+                "value": "FARMER-1001",
+            }],
+        },
+        "relationship": {"type": "self"},
+        "claims": ["eligible-for-climate-smart-input-voucher"],
+        "disclosure": "predicate",
+        "purpose": os.environ["REGISTRY_NOTARY_PURPOSE"],
+    })
+except NotaryProblemError as exc:
+    print(exc.status, exc.code, exc.request_id)
+except NotaryTransportError:
+    print("transport failure")
+else:
+    first = result["results"][0]
+    print(first["claim_id"], first.get("satisfied"))
+```
+
+What this does:
+
+- `list_claims` confirms which claim ids this credential can see.
+- `target` identifies the entity being evaluated.
+- `relationship` tells Notary why this requester may ask about the target.
+- `claims` names the claim ids to evaluate.
+- `disclosure` asks for a minimized claim answer.
+- `purpose` must match the configured default purpose when both are present.
+
+Python also has a shorter helper for the common one-target case:
+
+```python
+result = client.evaluate(
+    target_id="FARMER-1001",
+    identifier_scheme="farmer_id",
+    target_type="Farmer",
+    claims=["eligible-for-climate-smart-input-voucher"],
+)
+```
+
+Use `evaluate_request` when you need the full canonical wire shape, including
+relationship context, version-pinned claim references, `disclosure`, `format`,
+or explicit `purpose`.
+
+### Node.js
+
+```js
+import {
+  NotaryProblemError,
+  NotaryTransportError,
+  RegistryNotaryClient,
+} from "@registry-notary/client";
+
+const client = new RegistryNotaryClient({
+  baseUrl: process.env.REGISTRY_NOTARY_BASE_URL,
+  bearerToken: process.env.REGISTRY_NOTARY_BEARER_TOKEN,
+  defaultPurpose: process.env.REGISTRY_NOTARY_PURPOSE,
+  userAgent: "benefits-api/1.0",
+});
+
+const claims = await client.listClaims();
+console.log(claims.data?.map((claim) => claim.id) ?? []);
+
+try {
+  const result = await client.evaluate({
+    target: {
+      type: "Farmer",
+      identifiers: [{ scheme: "farmer_id", value: "FARMER-1001" }],
+    },
+    relationship: { type: "self" },
+    claims: ["eligible-for-climate-smart-input-voucher"],
+    disclosure: "predicate",
+    purpose: process.env.REGISTRY_NOTARY_PURPOSE,
+  });
+
+  const first = result.results[0];
+  console.log(first.claimId, first.satisfied);
+} catch (error) {
+  if (error instanceof NotaryProblemError) {
+    console.log(error.status, error.code, error.requestId);
+  } else if (error instanceof NotaryTransportError) {
+    console.log("transport failure");
+  } else {
+    throw error;
+  }
+}
+```
+
+The high-level Node helpers accept camelCase object keys and return camelCase
+response keys. Use `evaluateRequest` when you want to send canonical snake_case
+wire JSON and receive snake_case response JSON.
+
+```js
+const result = await client.evaluateRequest({
+  target: {
+    type: "Farmer",
+    identifiers: [{ scheme: "farmer_id", value: "FARMER-1001" }],
+  },
+  relationship: { type: "self" },
+  claims: ["eligible-for-climate-smart-input-voucher"],
+  disclosure: "predicate",
+  purpose: process.env.REGISTRY_NOTARY_PURPOSE,
+});
+```
+
+### Rust
+
+```rust
+use registry_notary_client::RegistryNotaryClient;
+
+let base_url = std::env::var("REGISTRY_NOTARY_BASE_URL")?;
+let bearer_token = std::env::var("REGISTRY_NOTARY_BEARER_TOKEN")?;
+let purpose = std::env::var("REGISTRY_NOTARY_PURPOSE")?;
+
+let client = RegistryNotaryClient::builder(base_url)
+    .bearer_token(bearer_token)
+    .default_purpose(purpose.clone())
+    .user_agent("benefits-api/1.0")
+    .build()?;
+
+let claims = client.list_claims(Default::default()).await?;
+
+let response = client
+    .evaluate_target("Farmer")
+    .target_identifier("farmer_id", "FARMER-1001")
+    .relationship("self")
+    .claims(["eligible-for-climate-smart-input-voucher"])
+    .disclosure("predicate")
+    .purpose(purpose.clone())
+    .send()
+    .await?;
+
+if let Some(result) = response.body.result_for("eligible-for-climate-smart-input-voucher") {
+    println!("satisfied: {:?}", result.satisfied);
+}
+```
+
+Rust returns `NotaryResponse<T>`, so response metadata is available next to the
+decoded body:
+
+```rust
+println!("status: {}", response.status);
+println!("request id: {:?}", response.request_id);
+```
+
+## Understanding The Request
+
+The SDKs protect the same wire model. Most integration confusion comes from the
+request fields, not from the language syntax.
+
+### Target, Requester, Relationship
+
+The target is the entity being evaluated. Most application calls include a
+target with one or more identifiers:
+
+```json
+{
+  "target": {
+    "type": "Person",
+    "identifiers": [
+      {
+        "scheme": "national_id",
+        "value": "person-1",
+        "issuer": "civil_registry"
+      }
+    ]
+  }
+}
+```
+
+Requester context is optional. Include it when the caller is asking about a
+different target or acting on behalf of someone else. Use `relationship` to
+explain the permission context, such as `self`, `guardian`, `case_worker`, or a
+deployment-specific value.
+
+For citizen self-attestation flows, omit identity fields and let the server
+derive the requester, target, and `self` relationship from the verified token
+binding:
+
+```python
+result = client.evaluate_request({
+    "claims": [{"id": "person-is-alive", "version": "2026-05"}],
+    "disclosure": "predicate",
+})
+```
+
+### Claims And Scopes
+
+Claim references may be plain strings or pinned objects with `id` and
+`version`. The same versioned claim reference shape is supported for single
+evaluation and batch evaluation.
+
+```json
+{
+  "claims": [
+    "person-is-alive",
+    { "id": "age-over-18", "version": "2026-05" }
+  ]
+}
+```
 
 The credential behind your auth mode carries a `scopes` list, and every claim
-declares a `required_scope` on its source bindings that is enforced before
-evaluation. Scope strings are operator-defined `<namespace>:<operation>` values
-(for example `civil_registry:evidence_verification` or
-`registry_notary:credential_issue`); there is no fixed global registry of scope
-names. When you connect to a deployment you do not operate, ask the operator
-which scopes the claims you need require and request a credential carrying
-exactly those scopes. `GET /v1/claims` (`list_claims` in every SDK) confirms
-which claims your credential can see before the first evaluation; a `403` on
-evaluation means the credential lacks that claim's `required_scope`.
+declares a `required_scope` on its source bindings. Scope strings are
+operator-defined `<namespace>:<operation>` values, for example
+`civil_registry:evidence_verification` or `registry_notary:credential_issue`.
+There is no fixed global registry of scope names.
+
+When you connect to a deployment you do not operate, ask the operator which
+scopes the claims you need require. `GET /v1/claims`, exposed as `list_claims`
+or `listClaims`, confirms which claims your credential can see before the first
+evaluation.
 
 ### Purpose
 
@@ -70,107 +356,92 @@ The client rejects mismatches before sending the request.
 Set a client default purpose when most calls share one purpose. Override per
 call through request options when needed.
 
-### Request Metadata
+### Disclosure And Format
 
-Request options support:
+Use `disclosure` to request the amount of detail your workflow is allowed to
+receive. `predicate` is the common minimized answer for policy gates. Other
+disclosure modes and formats are deployment-specific and should be selected
+from operator guidance or claim metadata.
 
-- `purpose`, mapped to `Data-Purpose`.
-- `request_id`, mapped to `X-Request-Id`.
-- `traceparent`, mapped to W3C trace context.
-- `idempotency_key`, mapped to `Idempotency-Key` only for batch evaluation.
-- `accept`, for Rust, JSON facade, and selected Python request helpers that
-  need an explicit `Accept`. Node does not expose a public accept override.
+## Understanding The Response
 
-### Retry Contract
+Successful Python and Node helpers return the decoded response body directly.
+Rust returns `NotaryResponse<T>` with the decoded body plus metadata.
 
-Retries are disabled by default. When enabled, they are still route-aware:
+A single evaluation response is an object with `results`. Each result represents
+one claim answer. This example is abbreviated because real responses include
+provenance and matching metadata.
 
-- GET routes may retry transport errors, 429, or 503 according to the policy.
-- `POST /v1/batch-evaluations` may retry only when an `Idempotency-Key` is
-  supplied.
-- Evaluation, render, credential issuance, OID4VCI credential, and federation
-  submission are never retried because those POST routes are not deduplicated by
-  the server.
-
-`Retry-After` seconds are honored. Rust, Python, and Node also handle HTTP-date
-`Retry-After` by using the response `Date` header as the reference clock when it
-is present.
-
-### Response Metadata
-
-All typed Rust methods return `NotaryResponse<T>` with:
-
-- `body`: decoded response body.
-- `status`: HTTP status returned by the server.
-- `request_id`: server `X-Request-Id`, when present.
-- `retry_after`: server `Retry-After`, when present.
-
-Python and Node expose equivalent fields on errors. Successful Python and Node
-helpers return the response body directly.
-
-### Error Handling And Redaction
-
-Rust returns `NotaryClientError`. Python and Node expose:
-
-- `NotaryError`
-- `NotaryTransportError`
-- `NotaryProblemError`
-
-Safe fields for logs are `status`, `code`, `title`, `retryable`, and `request_id`. Do not
-log raw request bodies, requester or target identifiers, holder proofs,
-credential bodies, SD-JWT disclosures, nonces, Authorization, `X-Api-Key`, or
-Problem Details `detail`.
-
-The Rust `portable()` error envelope is intended for language bindings and FFI.
-It intentionally excludes sensitive detail strings.
-
-The stable application problem `code` values for policy mapping live in the
-[problem code registry in the API reference](api-reference.md#problem-code-registry).
-
-## Rust
-
-### Install
-
-> Note: the `path = "crates/..."` dependencies below assume you are building
-> inside the Registry Notary workspace checkout. The workspace crates are not
-> published to crates.io. An external integrator without the checkout should
-> use a `git` dependency pinned to a release tag (for example `v0.3.1`) or a
-> commit:
->
-> ```toml
-> [dependencies]
-> registry-notary-client = { git = "https://github.com/jeremi/registry-notary", tag = "vX.Y.Z" }
-> registry-notary-core = { git = "https://github.com/jeremi/registry-notary", tag = "vX.Y.Z" }
-> ```
-
-```toml
-[dependencies]
-registry-notary-client = { path = "crates/registry-notary-client" }
-registry-notary-core = { path = "crates/registry-notary-core" }
-```
-
-Enable optional routes when needed:
-
-```toml
-registry-notary-client = {
-  path = "crates/registry-notary-client",
-  features = ["oid4vci", "federation", "json-facade"]
+```json
+{
+  "results": [
+    {
+      "evaluation_id": "eval-1",
+      "claim_id": "person-is-alive",
+      "claim_version": "2026-05",
+      "target_ref": {
+        "type": "Person",
+        "handle": "target-1",
+        "identifier_schemes": ["national_id"]
+      },
+      "value": null,
+      "satisfied": true,
+      "disclosure": "predicate",
+      "format": "application/vnd.registry-notary.claim-result+json",
+      "issued_at": "2026-05-29T00:00:00Z",
+      "expires_at": null,
+      "provenance": {}
+    }
+  ]
 }
 ```
 
+Inspect these fields first:
+
+- `evaluation_id`: save this if you plan to render or issue a credential later.
+- `claim_id`: identifies which requested claim this result belongs to.
+- `satisfied`: `true`, `false`, or absent when the claim does not map to a
+  boolean predicate.
+- `value`: a minimized value when the requested disclosure and claim format
+  allow it.
+- `provenance`: evidence metadata. Do not log it blindly.
+
+## Which Method Should I Use?
+
+| Task | Rust | Python | Node.js |
+| --- | --- | --- | --- |
+| See claims available to my credential | `list_claims` | `list_claims` | `listClaims` |
+| Evaluate one target with helper fields | `evaluate_target(...).send()` | `evaluate` | `evaluate` |
+| Send canonical wire JSON | `evaluate_request` | `evaluate_request` | `evaluateRequest` |
+| Evaluate many targets safely | `batch_evaluate_request` | `batch_evaluate_request` | `batchEvaluate` or `batchEvaluateRequest` |
+| Render an evaluation | `render_request` | `render_request` | `renderRequest` |
+| Issue a credential | `issue_credential_request` | `issue_credential_request` | `issueCredentialRequest` |
+| Check credential status | `credential_status` | `credential_status` | `credentialStatus` |
+| Read issuer JWKS | `issuer_jwks` | `issuer_jwks` | `issuerJwks` |
+| Verify SD-JWT VC material | verifier feature | not exposed | not exposed |
+
+Use the high-level helpers when your app is doing the common thing. Use the raw
+or request-shaped helpers when you need exact wire JSON, versioned claim
+references, route-shaped request bodies, or language binding code.
+
+## Common Recipes
+
 ### Create A Client
 
-```rust
-use registry_notary_client::RegistryNotaryClient;
+Configure exactly one auth mode:
 
+- Bearer token, sent as `Authorization: Bearer <token>`.
+- API key, sent as `X-Api-Key`.
+- Rust only: dynamic `AuthProvider`.
+
+Supplying more than one auth mode is a client construction error. Debug output
+redacts configured auth material.
+
+```rust
 let client = RegistryNotaryClient::builder("https://notary.example.gov")
     .bearer_token("access-token")
-    .default_purpose("benefits_eligibility")
-    .user_agent("benefits-api/1.0")
     .build()?;
 ```
-
-API key auth:
 
 ```rust
 let client = RegistryNotaryClient::builder("https://notary.example.gov")
@@ -178,35 +449,69 @@ let client = RegistryNotaryClient::builder("https://notary.example.gov")
     .build()?;
 ```
 
-### High-Level Evaluation
-
-Evaluation requests use the canonical requester/target evidence model. The
-target is the entity being evaluated; optional requester context identifies the
-actor or represented party, and relationship explains why the requester may ask
-about that target.
-
-```rust
-let response = client
-    .evaluate_target("Person")
-    .target_identifier("national_id", "person-1")
-    .target_identifier_issuer("civil_registry")
-    .relationship("self")
-    .claims(["person-is-alive", "age-over-18"])
-    .disclosure("predicate")
-    .send()
-    .await?;
-
-if let Some(result) = response.body.result_for("person-is-alive") {
-    println!("satisfied: {:?}", result.satisfied);
-}
+```python
+client = RegistryNotaryClient(
+    base_url="https://notary.example.gov",
+    bearer_token="access-token",
+)
 ```
 
-### Raw Request Evaluation
+```js
+const client = new RegistryNotaryClient({
+  baseUrl: "https://notary.example.gov",
+  bearerToken: "access-token",
+});
+```
 
-> Note: the raw-DTO examples construct `registry-notary-core` types directly and
-> assume building inside the workspace checkout. Integrators who only consume the
-> client over HTTP can use the high-level builder or JSON facade shown elsewhere
-> in this guide.
+### Send A Full Canonical Evaluation
+
+Use the canonical request shape when the high-level helper hides fields your
+workflow cares about. The Python and Node raw helpers preserve canonical
+snake_case JSON.
+
+```python
+result = client.evaluate_request(
+    {
+        "target": {
+            "type": "Person",
+            "identifiers": [{
+                "scheme": "national_id",
+                "value": "person-1",
+                "issuer": "civil_registry",
+            }],
+        },
+        "relationship": {"type": "self"},
+        "claims": [{"id": "person-is-alive", "version": "2026-05"}],
+        "disclosure": "predicate",
+        "purpose": "benefits_eligibility",
+    },
+    request_id="req-123",
+    traceparent="00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+)
+```
+
+```js
+const result = await client.evaluateRequest(
+  {
+    target: {
+      type: "Person",
+      identifiers: [{ scheme: "national_id", value: "person-1", issuer: "civil_registry" }],
+    },
+    relationship: { type: "self" },
+    claims: [{ id: "person-is-alive", version: "2026-05" }],
+    disclosure: "predicate",
+    purpose: "benefits_eligibility",
+  },
+  {
+    requestId: "req-123",
+    traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+  },
+);
+```
+
+Rust callers can also construct core DTOs directly. This is most useful inside
+the Registry Notary workspace or when the application already depends on
+`registry-notary-core`.
 
 ```rust
 use registry_notary_client::RequestOptions;
@@ -241,6 +546,7 @@ let request = EvaluateRequest {
 };
 
 let options = RequestOptions::builder()
+    .purpose("benefits_eligibility")
     .request_id("req-123")
     .traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
     .build();
@@ -248,10 +554,83 @@ let options = RequestOptions::builder()
 let response = client.evaluate_request(request, options).await?;
 ```
 
-### Batch Evaluation
+### Batch With Retry
 
-Batch evaluation is the only POST route that accepts `Idempotency-Key` through
-the client.
+Use batch evaluation when several targets share the same claim set. Batch
+evaluation is the only POST route that accepts `Idempotency-Key` through the
+client. Retries are allowed for this route only when an idempotency key is
+supplied.
+
+```python
+from registry_notary import RetryPolicy
+
+client = RegistryNotaryClient(
+    base_url="https://notary.example.gov",
+    bearer_token="access-token",
+    retry_policy=RetryPolicy(
+        max_attempts=3,
+        base_delay=0.1,
+        max_delay=2.0,
+        retry_transport_errors=True,
+        retry_rate_limited=True,
+        retry_unavailable=True,
+    ),
+)
+
+result = client.batch_evaluate_request(
+    {
+        "items": [{
+            "target": {
+                "type": "Person",
+                "identifiers": [{
+                    "scheme": "national_id",
+                    "value": "person-1",
+                    "issuer": "civil_registry",
+                }],
+            },
+            "relationship": {"type": "self"},
+        }],
+        "claims": ["person-is-alive"],
+        "purpose": "benefits_eligibility",
+    },
+    idempotency_key="batch-2026-05-29-001",
+)
+```
+
+```js
+const controller = new AbortController();
+
+const client = new RegistryNotaryClient({
+  baseUrl: "https://notary.example.gov",
+  bearerToken: "access-token",
+  retryPolicy: {
+    maxAttempts: 3,
+    baseDelayMs: 100,
+    maxDelayMs: 2000,
+    retryTransportErrors: true,
+    retryRateLimited: true,
+    retryUnavailable: true,
+  },
+});
+
+const result = await client.batchEvaluate(
+  {
+    items: [{
+      target: {
+        type: "Person",
+        identifiers: [{ scheme: "national_id", value: "person-1", issuer: "civil_registry" }],
+      },
+      relationship: { type: "self" },
+    }],
+    claims: ["person-is-alive"],
+    purpose: "benefits_eligibility",
+  },
+  {
+    idempotencyKey: "batch-2026-05-29-001",
+    signal: controller.signal,
+  },
+);
+```
 
 ```rust
 use registry_notary_client::{RequestOptions, RetryPolicy};
@@ -310,29 +689,34 @@ let response = client.batch_evaluate_request(request, options).await?;
 println!("succeeded: {}", response.body.summary.succeeded);
 ```
 
-### Discovery And JWKS
+### Render An Evaluation
 
-```rust
-let service = client.service_document(RequestOptions::default()).await?;
-let jwks = client.issuer_jwks(RequestOptions::default()).await?;
+Render when you already have an `evaluation_id` and need a configured evidence
+format for display, export, or downstream exchange.
 
-// Force refresh after an unknown kid during verification.
-let refreshed = client.refresh_jwks(RequestOptions::default()).await?;
-```
-
-`issuer_jwks` uses a short in-process cache when called without request
-options. `raw_issuer_jwks` bypasses that cache.
-
-### Render And Credential Issuance
-
-The render route carries `evaluation_id` in the path. Rust accepts the core
-`RenderRequest` DTO and moves `evaluation_id` into
+Rust accepts the core `RenderRequest` DTO and moves `evaluation_id` into
 `/v1/evaluations/{evaluation_id}/render` before sending the body. Python and
-Node raw helpers accept canonical snake_case JSON, require a mapping/object,
+Node raw helpers accept canonical snake_case JSON, require a mapping or object,
 extract `evaluation_id`, and send the remaining fields as the route body.
 
+```python
+rendered = client.render_request({
+    "evaluation_id": "eval-1",
+    "format": "application/vnd.registry-notary.claim-result+json",
+    "disclosure": "predicate",
+})
+```
+
+```js
+const rendered = await client.renderRequest({
+  evaluation_id: "eval-1",
+  format: "application/vnd.registry-notary.claim-result+json",
+  disclosure: "predicate",
+});
+```
+
 ```rust
-use registry_notary_core::{CredentialIssueRequest, RenderRequest};
+use registry_notary_core::RenderRequest;
 
 let rendered = client
     .render_request(
@@ -346,6 +730,30 @@ let rendered = client
         RequestOptions::default(),
     )
     .await?;
+```
+
+### Issue A Credential
+
+Issue a credential when a successful evaluation should become a credential
+artifact, such as an SD-JWT VC. Credential bodies are sensitive. Do not log
+them, and note that Rust redacts credential bodies from `Debug`.
+
+```python
+credential = client.issue_credential_request({
+    "evaluation_id": "eval-1",
+    "credential_profile": "person_is_alive_sd_jwt",
+})
+```
+
+```js
+const credential = await client.issueCredentialRequest({
+  evaluation_id: "eval-1",
+  credential_profile: "person_is_alive_sd_jwt",
+});
+```
+
+```rust
+use registry_notary_core::CredentialIssueRequest;
 
 let credential = client
     .issue_credential_request(
@@ -364,55 +772,47 @@ let credential = client
     .await?;
 ```
 
-Credential bodies are present in `credential.body`, but redacted from `Debug`.
+### Discovery And JWKS
 
-### Explicit Credential Verification
+Use discovery for claim catalogs, service metadata, and issuer keys. The JWKS
+helpers use a short in-process cache when called without request options.
+`raw_issuer_jwks` or `rawIssuerJwks` bypasses that cache.
 
-Enable the Rust `verifier` feature when relying-party or wallet code needs to
-verify SD-JWT VC credential material. Verification is explicit and opt-in:
-transport methods continue to return decoded response bodies without hidden
-network refreshes or trust-policy decisions.
+```python
+claims = client.list_claims()
+claim = client.get_claim("person-is-alive")
+service = client.service_document()
+jwks = client.issuer_jwks()
+client.refresh_jwks()
+key = client.get_jwk("key-1")
+```
 
-```toml
-registry-notary-client = {
-  path = "crates/registry-notary-client",
-  features = ["verifier"]
-}
+```js
+const claims = await client.listClaims();
+const claim = await client.getClaim("person-is-alive");
+const service = await client.serviceDocument();
+const jwks = await client.issuerJwks();
+await client.refreshJwks();
+const key = await client.getJwk("key-1");
 ```
 
 ```rust
-use registry_notary_client::{HolderBindingPolicy, VerifyOptions};
+let service = client.service_document(RequestOptions::default()).await?;
+let jwks = client.issuer_jwks(RequestOptions::default()).await?;
 
-let options = VerifyOptions::new("did:web:notary.example")
-    .expected_vct("https://credentials.example/vct/person-is-alive")
-    .holder_binding(HolderBindingPolicy::Required);
-
-let verified = client
-    .verify_credential_response(&credential.body, options)
-    .await?;
+// Force refresh after an unknown kid during verification.
+let refreshed = client.refresh_jwks(RequestOptions::default()).await?;
 ```
 
-The verifier resolves the JWS `kid` only from trusted issuer JWKS, reuses the
-client's short JWKS TTL cache, and forces one refresh on `key.unknown`. It does
-not loop indefinitely. `VerifyOptions` lets callers set expected issuer,
-accepted algorithms, expected `vct`, clock skew, and holder-binding policy.
-Selective-disclosure presentations may include a subset of disclosures; each
-presented disclosure must hash to a digest in the credential. When a
-presentation includes a key-binding JWT, the verifier separates it from
-disclosures and verifies its holder proof signature against the credential
-`cnf.jwk`.
-
-Verifier errors are redacted and safe for policy mapping by code. Stable codes
-include `signature.invalid`, `key.unknown`, `algorithm.disallowed`,
-`claim.issuer_mismatch`, `claim.vct_mismatch`, `claim.time_invalid`,
-`disclosure.digest_mismatch`, `holder_binding.required`, and
-`holder_binding.kid_mismatch`, and `holder_binding.proof_invalid`.
-
-Python and Node do not expose verifier wrappers in this first phase. Callers in
-those runtimes should use the Rust verifier through their application boundary
-or perform verification in wallet-specific code.
-
 ### Credential Status
+
+```python
+status = client.credential_status("credential-1")
+```
+
+```js
+const status = await client.credentialStatus("credential-1");
+```
 
 ```rust
 let status = client
@@ -426,7 +826,38 @@ let updated = client
 
 ### OID4VCI
 
-Enable the `oid4vci` feature.
+The client wraps endpoints only. It does not generate holder proofs or manage
+holder keys.
+
+```python
+metadata = client.oid4vci_issuer_metadata()
+offer = client.oid4vci_credential_offer("person_is_alive_sd_jwt")
+nonce = client.oid4vci_nonce()
+credential = client.oid4vci_credential({
+    "credential_configuration_id": "person_is_alive_sd_jwt",
+    "proof": {"proof_type": "jwt", "jwt": "eyJ..."},
+})
+```
+
+```js
+const metadata = await client.oid4vciIssuerMetadata();
+const offer = await client.oid4vciCredentialOffer("person_is_alive_sd_jwt");
+const nonce = await client.oid4vciNonce();
+const credential = await client.oid4vciCredential({
+  credential_configuration_id: "person_is_alive_sd_jwt",
+  proof: { proof_type: "jwt", jwt: "eyJ..." },
+});
+```
+
+In Rust, enable the `oid4vci` feature:
+
+```toml
+registry-notary-client = {
+  git = "https://github.com/jeremi/registry-notary",
+  tag = "vX.Y.Z",
+  features = ["oid4vci"]
+}
+```
 
 ```rust
 let metadata = client
@@ -438,12 +869,28 @@ let offer = client
     .await?;
 ```
 
-The client wraps endpoints only. It does not generate holder proofs or manage
-holder keys.
-
 ### Federation
 
-Enable the `federation` feature.
+The client submits an already-signed JWT. It does not mint or sign federation
+requests.
+
+```python
+response_jws = client.federation_evaluate_jws("eyJ...")
+```
+
+```js
+const responseJws = await client.federationEvaluateJws("eyJ...");
+```
+
+In Rust, enable the `federation` feature:
+
+```toml
+registry-notary-client = {
+  git = "https://github.com/jeremi/registry-notary",
+  tag = "vX.Y.Z",
+  features = ["federation"]
+}
+```
 
 ```rust
 let compact_response_jws = client
@@ -451,10 +898,119 @@ let compact_response_jws = client
     .await?;
 ```
 
-The client submits an already-signed JWT. It does not mint or sign federation
-requests.
+## Production Checklist
 
-### JSON Facade
+### Base URL
+
+Use the service root URL. A path prefix is allowed and is preserved when routes
+are joined.
+
+Clients require HTTPS for non-loopback hosts. Rust allows HTTP loopback only in
+debug or `test-support` builds. Python and Node local workflows may use
+`http://127.0.0.1`, `http://localhost`, or `http://[::1]`.
+
+Python also exposes an explicit lab/internal escape hatch for Docker Compose
+and private service-network deployments:
+
+```python
+client = RegistryNotaryClient(
+    base_url="http://registry-notary:8080",
+    default_purpose="benefits_eligibility",
+    allow_insecure_internal_http=True,
+)
+```
+
+Use `allow_insecure_internal_http=True` only when transport is already
+protected by the deployment boundary or a local development network. Production
+service URLs should remain HTTPS.
+
+### Request Metadata
+
+Request options support:
+
+- `purpose`, mapped to `Data-Purpose`.
+- `request_id` or `requestId`, mapped to `X-Request-Id`.
+- `traceparent`, mapped to W3C trace context.
+- `idempotency_key` or `idempotencyKey`, mapped to `Idempotency-Key` only for
+  batch evaluation.
+- `accept`, for Rust, JSON facade, and selected Python request helpers that
+  need an explicit `Accept`. Node does not expose a public accept override.
+
+### Retry Contract
+
+Retries are disabled by default. When enabled, they are route-aware:
+
+- GET routes may retry transport errors, 429, or 503 according to the policy.
+- `POST /v1/batch-evaluations` may retry only when an `Idempotency-Key` is
+  supplied.
+- Evaluation, render, credential issuance, OID4VCI credential, and federation
+  submission are never retried because those POST routes are not deduplicated by
+  the server.
+
+`Retry-After` seconds are honored. Rust, Python, and Node also handle HTTP-date
+`Retry-After` by using the response `Date` header as the reference clock when it
+is present.
+
+### Response Metadata
+
+All typed Rust methods return `NotaryResponse<T>` with:
+
+- `body`: decoded response body.
+- `status`: HTTP status returned by the server.
+- `request_id`: server `X-Request-Id`, when present.
+- `retry_after`: server `Retry-After`, when present.
+
+Python and Node expose equivalent fields on errors. Successful Python and Node
+helpers return the response body directly.
+
+### Error Handling And Redaction
+
+Rust returns `NotaryClientError`. Python and Node expose:
+
+- `NotaryError`
+- `NotaryTransportError`
+- `NotaryProblemError`
+
+Safe fields for logs are `status`, `code`, `title`, `retryable`, and
+`request_id`. Do not log raw request bodies, requester or target identifiers,
+holder proofs, credential bodies, SD-JWT disclosures, nonces, Authorization,
+`X-Api-Key`, or Problem Details `detail`.
+
+Problem detail strings are not exposed by the Python wrapper. The Rust
+`portable()` error envelope is intended for language bindings and FFI. It
+intentionally excludes sensitive detail strings.
+
+The stable application problem `code` values for policy mapping live in the
+[problem code registry in the API reference](api-reference.md#problem-code-registry).
+
+### Troubleshooting
+
+| Symptom | Likely Cause | Check |
+| --- | --- | --- |
+| `401` | Missing, expired, or wrong auth credential | Token/API key source and configured auth mode |
+| `403` | Credential lacks a claim's `required_scope` | `list_claims`, operator scope mapping |
+| Client rejects before send | Body `purpose` and header/default purpose differ | Request body and client options |
+| Batch did not retry | Missing idempotency key or retry policy disabled | `idempotency_key`/`idempotencyKey`, retry settings |
+| Render request fails | `evaluation_id` missing or empty | Use an id from a previous evaluation result |
+| Unknown signing key | JWKS cache does not have the `kid` | `refresh_jwks`/`refreshJwks` or Rust verifier refresh path |
+
+## Runtime Reference
+
+### Rust Features
+
+Enable optional routes only when needed:
+
+```toml
+registry-notary-client = { git = "https://github.com/jeremi/registry-notary", tag = "vX.Y.Z", features = ["oid4vci", "federation", "json-facade"] }
+```
+
+In a workspace checkout, the same feature selection can use path dependencies:
+
+```toml
+registry-notary-client = { path = "crates/registry-notary-client", features = ["oid4vci", "federation", "json-facade"] }
+```
+
+### Rust JSON Facade
 
 Enable `json-facade` when building language wrappers. The facade accepts and
 returns canonical wire JSON with snake_case fields.
@@ -483,335 +1039,77 @@ let response = handle
     .await?;
 ```
 
-## Python
+### Rust Credential Verification
 
-`bindings/python/registry_notary` is the supported Python client package for
-downstream applications. Its public names for application integrations are:
-`RegistryNotaryClient`, `RetryPolicy`, `evaluate`,
-`evaluate_request`, `batch_evaluate_request`, `list_claims`, `get_claim`,
-`issuer_jwks`, `raw_issuer_jwks`, `render_request`,
-`issue_credential_request`, and `credential_status`.
+Enable the Rust `verifier` feature when relying-party or wallet code needs to
+verify SD-JWT VC credential material. Verification is explicit and opt-in:
+transport methods continue to return decoded response bodies without hidden
+network refreshes or trust-policy decisions.
 
-### Install
-
-The package is not currently published to PyPI. Install it directly from the
-git repository pinned to a release tag or commit (for example `v0.3.1`):
-
-```bash
-python -m pip install "git+https://github.com/jeremi/registry-notary.git@vX.Y.Z#subdirectory=bindings/python"
+```toml
+registry-notary-client = { git = "https://github.com/jeremi/registry-notary", tag = "vX.Y.Z", features = ["verifier"] }
 ```
 
-From a local checkout, `python -m pip install -e bindings/python` works as
-well.
+```rust
+use registry_notary_client::{HolderBindingPolicy, VerifyOptions};
 
-### Create A Client
+let options = VerifyOptions::new("did:web:notary.example")
+    .expected_vct("https://credentials.example/vct/person-is-alive")
+    .holder_binding(HolderBindingPolicy::Required);
 
-```python
-from registry_notary import RegistryNotaryClient
-
-client = RegistryNotaryClient(
-    base_url="https://notary.example.gov",
-    bearer_token="access-token",
-    default_purpose="benefits_eligibility",
-    user_agent="benefits-api/1.0",
-)
+let verified = client
+    .verify_credential_response(&credential.body, options)
+    .await?;
 ```
 
-For internal lab or Compose service names that intentionally use cleartext
-HTTP, make the exception explicit:
+The verifier resolves the JWS `kid` only from trusted issuer JWKS, reuses the
+client's short JWKS TTL cache, and forces one refresh on `key.unknown`. It does
+not loop indefinitely. `VerifyOptions` lets callers set expected issuer,
+accepted algorithms, expected `vct`, clock skew, and holder-binding policy.
 
-```python
-client = RegistryNotaryClient(
-    base_url="http://registry-notary:8080",
-    default_purpose="benefits_eligibility",
-    allow_insecure_internal_http=True,
-)
-```
+Selective-disclosure presentations may include a subset of disclosures. Each
+presented disclosure must hash to a digest in the credential. When a
+presentation includes a key-binding JWT, the verifier separates it from
+disclosures and verifies its holder proof signature against the credential
+`cnf.jwk`.
 
-### Evaluate
+Verifier errors are redacted and safe for policy mapping by code. Stable codes
+include `signature.invalid`, `key.unknown`, `algorithm.disallowed`,
+`claim.issuer_mismatch`, `claim.vct_mismatch`, `claim.time_invalid`,
+`disclosure.digest_mismatch`, `holder_binding.required`,
+`holder_binding.kid_mismatch`, and `holder_binding.proof_invalid`.
 
-```python
-result = client.evaluate(
-    target_id="person-1",
-    identifier_scheme="national_id",
-    claims=["person-is-alive"],
-)
-```
+Python and Node do not expose verifier wrappers in this first phase. Callers in
+those runtimes should use the Rust verifier through their application boundary
+or perform verification in wallet-specific code.
 
-Use `evaluate_request` for the full canonical wire shape, including
-relationship context and optional fields such as `disclosure` or `format`:
-
-```python
-result = client.evaluate_request({
-    "target": {
-        "type": "Person",
-        "identifiers": [{
-            "scheme": "national_id",
-            "value": "person-1",
-            "issuer": "civil_registry",
-        }],
-    },
-    "relationship": {"type": "self"},
-    "claims": [{"id": "person-is-alive", "version": "2026-05"}],
-    "disclosure": "predicate",
-    "purpose": "benefits_eligibility",
-})
-```
-
-For citizen self-attestation, omit identity fields and let the server derive the
-requester, target, and `self` relationship from the verified token binding:
-
-```python
-result = client.evaluate_request({
-    "claims": [{"id": "person-is-alive", "version": "2026-05"}],
-    "disclosure": "predicate",
-})
-```
-
-Claim references may be plain strings or pinned objects with `id` and
-`version`. The same versioned claim reference shape is supported for single
-evaluation and batch evaluation.
+### Python Async Helpers
 
 Async evaluation helpers are prefixed with `a`, for example `aevaluate` and
-`aevaluate_request`.
-
-### Batch With Retry
-
-```python
-from registry_notary import RetryPolicy
-
-client = RegistryNotaryClient(
-    base_url="https://notary.example.gov",
-    retry_policy=RetryPolicy(
-        max_attempts=3,
-        base_delay=0.1,
-        max_delay=2.0,
-        retry_transport_errors=True,
-        retry_rate_limited=True,
-        retry_unavailable=True,
-    ),
-)
-
-result = client.batch_evaluate_request(
-    {
-        "items": [{
-            "target": {
-                "type": "Person",
-                "identifiers": [{
-                    "scheme": "national_id",
-                    "value": "person-1",
-                    "issuer": "civil_registry",
-                }],
-            },
-            "relationship": {"type": "self"},
-        }],
-        "claims": ["person-is-alive"],
-        "purpose": "benefits_eligibility",
-    },
-    idempotency_key="batch-2026-05-29-001",
-)
-```
-
-### Render And Credential Issuance
-
-Raw render requests use canonical snake_case JSON and must include
-`evaluation_id`. The Python wrapper rejects non-mapping inputs before it reads
-or sends any fields.
+`aevaluate_request`. The package also exposes async forms for batch evaluation,
+rendering, and credential issuance:
 
 ```python
-rendered = client.render_request({
-    "evaluation_id": "eval-1",
-    "format": "application/vnd.registry-notary.claim-result+json",
+result = await client.aevaluate_request({
+    "claims": ["person-is-alive"],
     "disclosure": "predicate",
 })
-
-credential = client.issue_credential_request({
-    "evaluation_id": "eval-1",
-    "credential_profile": "person_is_alive_sd_jwt",
-})
 ```
 
-### Discovery, Status, OID4VCI, Federation
+### Node Abort Signals
 
-```python
-claims = client.list_claims()
-claim = client.get_claim("person-is-alive")
-jwks = client.issuer_jwks()
-client.refresh_jwks()
-key = client.get_jwk("key-1")
-status = client.credential_status("credential-1")
-
-metadata = client.oid4vci_issuer_metadata()
-offer = client.oid4vci_credential_offer("person_is_alive_sd_jwt")
-nonce = client.oid4vci_nonce()
-
-response_jws = client.federation_evaluate_jws("eyJ...")
-```
-
-### Python Errors
-
-```python
-from registry_notary.errors import NotaryProblemError, NotaryTransportError
-
-try:
-    client.evaluate(
-        target_id="person-1",
-        identifier_scheme="national_id",
-        claims=["person-is-alive"],
-    )
-except NotaryProblemError as exc:
-    print(exc.status, exc.code, exc.request_id)
-except NotaryTransportError:
-    print("transport failure")
-```
-
-Problem detail strings are not exposed.
-
-## Node.js
-
-### Install
-
-The package is not currently published to the npm registry. With pnpm you can
-install it directly from the git repository pinned to a release tag or commit
-(for example `v0.3.1`):
-
-```bash
-pnpm add "github:jeremi/registry-notary#vX.Y.Z&path:bindings/node"
-```
-
-npm does not support installing from a subdirectory of a git repository, so
-with npm install it from a checkout pinned to a release tag or commit:
-
-```bash
-npm install ./bindings/node
-```
-
-### Create A Client
-
-```js
-import { RegistryNotaryClient } from "@registry-notary/client";
-
-const client = new RegistryNotaryClient({
-  baseUrl: "https://notary.example.gov",
-  bearerToken: "access-token",
-  defaultPurpose: "benefits_eligibility",
-  userAgent: "benefits-api/1.0",
-});
-```
-
-### Evaluate
-
-High-level Node helpers use camelCase at the wrapper boundary:
-
-```js
-const result = await client.evaluate({
-  target: {
-    type: "Person",
-    identifiers: [{ scheme: "national_id", value: "person-1", issuer: "civil_registry" }],
-  },
-  relationship: { type: "self" },
-  claims: ["person-is-alive"],
-  disclosure: "predicate",
-});
-```
-
-Raw helpers preserve canonical wire shape:
-
-```js
-const result = await client.evaluateRequest({
-  target: {
-    type: "Person",
-    identifiers: [{ scheme: "national_id", value: "person-1", issuer: "civil_registry" }],
-  },
-  relationship: { type: "self" },
-  claims: ["person-is-alive"],
-  purpose: "benefits_eligibility",
-});
-```
-
-Render uses the route-shaped API. `renderRequest` requires a plain request
-object with snake_case `evaluation_id`, removes `evaluation_id` from the JSON
-body, and posts the rest to `/v1/evaluations/{evaluation_id}/render`.
-
-```js
-const rendered = await client.renderRequest({
-  evaluation_id: "eval-1",
-  format: "application/vnd.registry-notary.claim-result+json",
-  disclosure: "predicate",
-});
-```
-
-### Abort And Retry
+Node request helpers accept `signal` in request options. The high-level
+`evaluate` and `batchEvaluate` helpers also accept `signal` on the request
+object for convenience.
 
 ```js
 const controller = new AbortController();
 
-const client = new RegistryNotaryClient({
-  baseUrl: "https://notary.example.gov",
-  retryPolicy: {
-    maxAttempts: 3,
-    baseDelayMs: 100,
-    maxDelayMs: 2000,
-    retryTransportErrors: true,
-    retryRateLimited: true,
-    retryUnavailable: true,
-  },
+const result = await client.evaluate({
+  target: { type: "Person", identifiers: [{ scheme: "national_id", value: "person-1" }] },
+  claims: ["person-is-alive"],
+  signal: controller.signal,
 });
-
-const result = await client.batchEvaluate(
-  {
-    items: [{
-      target: {
-        type: "Person",
-        identifiers: [{ scheme: "national_id", value: "person-1", issuer: "civil_registry" }],
-      },
-      relationship: { type: "self" },
-    }],
-    claims: ["person-is-alive"],
-    purpose: "benefits_eligibility",
-  },
-  {
-    idempotencyKey: "batch-2026-05-29-001",
-    signal: controller.signal,
-  },
-);
-```
-
-### Discovery, Status, OID4VCI, Federation
-
-```js
-const claims = await client.listClaims();
-const claim = await client.getClaim("person-is-alive");
-const jwks = await client.issuerJwks();
-await client.refreshJwks();
-const key = await client.getJwk("key-1");
-const status = await client.credentialStatus("credential-1");
-
-const metadata = await client.oid4vciIssuerMetadata();
-const offer = await client.oid4vciCredentialOffer("person_is_alive_sd_jwt");
-const nonce = await client.oid4vciNonce();
-
-const responseJws = await client.federationEvaluateJws("eyJ...");
-```
-
-### Node Errors
-
-```js
-import { NotaryProblemError, NotaryTransportError } from "@registry-notary/client";
-
-try {
-  await client.evaluate({
-    target: { type: "Person", identifiers: [{ scheme: "national_id", value: "person-1" }] },
-    relationship: { type: "self" },
-    claims: ["person-is-alive"],
-  });
-} catch (error) {
-  if (error instanceof NotaryProblemError) {
-    console.log(error.status, error.code, error.requestId);
-  } else if (error instanceof NotaryTransportError) {
-    console.log("transport failure");
-  }
-}
 ```
 
 ## API Method Matrix
