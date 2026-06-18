@@ -199,6 +199,23 @@ export DHIS2_EVIDENCE_CLIENT_BEARER="$(
 )"
 ```
 
+If you already have `registryctl`, you can load the same values from the
+hosted lab manifest through the helper:
+
+```sh
+eval "$(
+  registryctl lab env --credential dhis2-bearer --format json |
+    jq -er '
+      if ([.base_url, .purpose, .token] | all(type == "string" and length > 0)) then
+        @sh "DHIS2_NOTARY_URL=\(.base_url) DHIS2_PURPOSE=\(.purpose) DHIS2_EVIDENCE_CLIENT_BEARER=\(.token)"
+      else
+        error("registryctl lab env output is missing a required field")
+      end
+    '
+)"
+export DHIS2_NOTARY_URL DHIS2_PURPOSE DHIS2_EVIDENCE_CLIENT_BEARER
+```
+
 Evaluate the credential claims for the live demo tracked entity:
 
 ```sh
