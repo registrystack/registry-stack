@@ -674,9 +674,10 @@ impl LabManifest {
     }
 
     fn service_for_url(&self, service_url: &str) -> Option<&LabService> {
-        self.services
-            .iter()
-            .find(|service| service.url.as_deref() == Some(service_url))
+        let service_url = normalized_lab_url(service_url);
+        self.services.iter().find(|service| {
+            service.url.as_deref().map(normalized_lab_url).as_deref() == Some(service_url.as_str())
+        })
     }
 }
 
@@ -841,6 +842,10 @@ fn purpose_uri(value: Option<&str>) -> Option<&str> {
     value
         .map(str::trim)
         .filter(|value| value.starts_with("http://") || value.starts_with("https://"))
+}
+
+fn normalized_lab_url(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_string()
 }
 
 fn shell_quote(value: &str) -> String {
@@ -4318,6 +4323,33 @@ mod tests {
         assert_eq!(value["auth_scheme"], "api_key");
         assert_eq!(value["token"], "api-key-token");
         assert_eq!(value["purpose"], OPENCRVS_EVIDENCE_PURPOSE);
+    }
+
+    #[test]
+    fn lab_env_matches_service_purpose_when_url_slashes_differ() {
+        let output = lab_env_output_from_manifest(
+            r#"{
+              "services": [
+                {
+                  "url": "https://custom-notary.lab.registrystack.org/",
+                  "purpose_uri": "https://demo.example.gov/purpose/custom"
+                }
+              ],
+              "credentials": [
+                {
+                  "id": "custom-bearer",
+                  "service_url": "https://custom-notary.lab.registrystack.org",
+                  "token": "custom-token"
+                }
+              ]
+            }"#,
+            "custom-bearer",
+            LabEnvFormat::Json,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+
+        assert_eq!(value["purpose"], "https://demo.example.gov/purpose/custom");
     }
 
     #[test]
