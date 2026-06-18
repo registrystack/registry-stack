@@ -898,15 +898,7 @@
             "type": "integer"
           },
           "credential": {
-            "oneOf": [
-              {
-                "type": "string"
-              },
-              {
-                "additionalProperties": true,
-                "type": "object"
-              }
-            ]
+            "type": "string"
           },
           "credential_profile": {
             "type": "string"
@@ -916,15 +908,7 @@
               "additionalProperties": true,
               "properties": {
                 "credential": {
-                  "oneOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "additionalProperties": true,
-                      "type": "object"
-                    }
-                  ]
+                  "type": "string"
                 }
               },
               "required": [

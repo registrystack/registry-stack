@@ -2851,24 +2851,14 @@ fn credential_response_schema() -> Value {
         "type": "object",
         "required": ["credential"],
         "properties": {
-            "credential": {
-                "oneOf": [
-                    { "type": "string" },
-                    { "type": "object", "additionalProperties": true }
-                ]
-            },
+            "credential": { "type": "string" },
             "credentials": {
                 "type": "array",
                 "items": {
                     "type": "object",
                     "required": ["credential"],
                     "properties": {
-                        "credential": {
-                            "oneOf": [
-                                { "type": "string" },
-                                { "type": "object", "additionalProperties": true }
-                            ]
-                        }
+                        "credential": { "type": "string" }
                     },
                     "additionalProperties": true
                 }
