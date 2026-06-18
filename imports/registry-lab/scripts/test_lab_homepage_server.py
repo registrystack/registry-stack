@@ -445,6 +445,27 @@ class GroupCredentialsTest(unittest.TestCase):
         grouped_ids = {c["id"] for service in enriched["services"] for c in service["credentials"]}
         self.assertIn("orphan", grouped_ids)
 
+    def test_committed_notary_credentials_expose_default_purpose(self) -> None:
+        config = server.enrich_config(server.load_config(server.DEFAULT_CONFIG))
+        credentials = {credential["id"]: credential for credential in config["credentials"]}
+
+        self.assertEqual(
+            credentials["agri-evidence"]["default_purpose"],
+            "https://demo.example.gov/purpose/nagdi/climate-smart-input-support",
+        )
+        self.assertEqual(
+            credentials["dhis2-api-key"]["default_purpose"],
+            "https://demo.example.gov/purpose/dhis2-openfn-health-evidence",
+        )
+        self.assertEqual(
+            credentials["dhis2-bearer"]["default_purpose"],
+            "https://demo.example.gov/purpose/dhis2-openfn-health-evidence",
+        )
+        self.assertEqual(
+            credentials["opencrvs-api-key"]["default_purpose"],
+            "https://demo.example.gov/purpose/opencrvs-dci-lab",
+        )
+
 
 class ScenarioPayloadTest(unittest.TestCase):
     """The scenario runner exposes a multi-story catalogue and dedicated story payloads."""
