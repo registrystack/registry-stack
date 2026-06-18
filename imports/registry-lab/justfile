@@ -47,11 +47,11 @@ generate:
 
 # Build the default demo topology.
 build:
-    REGISTRY_RELAY_SOURCE_DIR="{{relay_src}}" REGISTRY_NOTARY_SOURCE_DIR="{{notary_src}}" REGISTRY_OPENFN_NOTARY_SOURCE_DIR="{{openfn_notary_src}}" REGISTRY_PLATFORM_SOURCE_DIR="{{platform_src}}" REGISTRY_RELAY_PLATFORM_SOURCE_DIR="{{platform_src}}" REGISTRY_NOTARY_PLATFORM_SOURCE_DIR="{{platform_src}}" REGISTRY_MANIFEST_REPO="{{manifest_src}}" CROSSWALK_SOURCE_DIR="{{crosswalk_src}}" REGISTRY_RELAY_FEATURES="{{relay_features}}" docker compose -f compose.yaml build --no-cache
+    docker compose -f compose.yaml build --no-cache
 
 # Start the default demo topology.
 up:
-    REGISTRY_RELAY_SOURCE_DIR="{{relay_src}}" REGISTRY_NOTARY_SOURCE_DIR="{{notary_src}}" REGISTRY_OPENFN_NOTARY_SOURCE_DIR="{{openfn_notary_src}}" REGISTRY_PLATFORM_SOURCE_DIR="{{platform_src}}" REGISTRY_RELAY_PLATFORM_SOURCE_DIR="{{platform_src}}" REGISTRY_NOTARY_PLATFORM_SOURCE_DIR="{{platform_src}}" REGISTRY_MANIFEST_REPO="{{manifest_src}}" CROSSWALK_SOURCE_DIR="{{crosswalk_src}}" REGISTRY_RELAY_FEATURES="{{relay_features}}" docker compose -f compose.yaml up -d
+    docker compose -f compose.yaml up -d
 
 # Stop containers and remove demo volumes.
 down:
@@ -89,9 +89,9 @@ lab2-generate:
 # Start the opt-in Lab 2 governed configuration topology.
 lab2-up:
     @test -d output/lab2/runtime-config && test -n "$$(find output/lab2/runtime-config -maxdepth 1 -type f -print -quit)" || (echo "Run just lab2-generate first." >&2; exit 1)
-    REGISTRY_RELAY_SOURCE_DIR="{{relay_src}}" REGISTRY_NOTARY_SOURCE_DIR="{{notary_src}}" REGISTRY_OPENFN_NOTARY_SOURCE_DIR="{{openfn_notary_src}}" REGISTRY_PLATFORM_SOURCE_DIR="{{platform_src}}" REGISTRY_RELAY_PLATFORM_SOURCE_DIR="{{platform_src}}" REGISTRY_NOTARY_PLATFORM_SOURCE_DIR="{{platform_src}}" REGISTRY_MANIFEST_REPO="{{manifest_src}}" CROSSWALK_SOURCE_DIR="{{crosswalk_src}}" REGISTRY_RELAY_FEATURES="{{relay_features}}" docker compose -f compose.yaml -f compose.lab2.yaml build --no-cache lab2-civil-registry-relay
-    REGISTRY_RELAY_SOURCE_DIR="{{relay_src}}" REGISTRY_NOTARY_SOURCE_DIR="{{notary_src}}" REGISTRY_OPENFN_NOTARY_SOURCE_DIR="{{openfn_notary_src}}" REGISTRY_PLATFORM_SOURCE_DIR="{{platform_src}}" REGISTRY_RELAY_PLATFORM_SOURCE_DIR="{{platform_src}}" REGISTRY_NOTARY_PLATFORM_SOURCE_DIR="{{platform_src}}" REGISTRY_MANIFEST_REPO="{{manifest_src}}" CROSSWALK_SOURCE_DIR="{{crosswalk_src}}" REGISTRY_RELAY_FEATURES="{{relay_features}}" docker compose -f compose.yaml -f compose.lab2.yaml build --no-cache lab2-civil-notary
-    REGISTRY_RELAY_SOURCE_DIR="{{relay_src}}" REGISTRY_NOTARY_SOURCE_DIR="{{notary_src}}" REGISTRY_OPENFN_NOTARY_SOURCE_DIR="{{openfn_notary_src}}" REGISTRY_PLATFORM_SOURCE_DIR="{{platform_src}}" REGISTRY_RELAY_PLATFORM_SOURCE_DIR="{{platform_src}}" REGISTRY_NOTARY_PLATFORM_SOURCE_DIR="{{platform_src}}" REGISTRY_MANIFEST_REPO="{{manifest_src}}" CROSSWALK_SOURCE_DIR="{{crosswalk_src}}" REGISTRY_RELAY_FEATURES="{{relay_features}}" docker compose -f compose.yaml -f compose.lab2.yaml up -d --no-build lab2-civil-registry-relay lab2-civil-notary
+    docker compose -f compose.yaml -f compose.lab2.yaml build lab2-civil-registry-relay
+    docker compose -f compose.yaml -f compose.lab2.yaml build lab2-civil-notary
+    docker compose -f compose.yaml -f compose.lab2.yaml up -d --no-build lab2-civil-registry-relay lab2-civil-notary
 
 # Capture Relay and Notary deployment-profile doctor reports for the running Lab 2 topology.
 lab2-doctor:

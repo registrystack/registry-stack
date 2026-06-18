@@ -363,7 +363,7 @@ import json
 import sys
 body = json.load(open(sys.argv[1], encoding="utf-8"))
 results = body.get("results") or body.get("claim_results") or []
-result = next((item for item in results if item.get("claim_id") == "household-summary-redacted"), None)
+result = next((item for item in results if isinstance(item, dict) and item.get("claim_id") == "household-summary-redacted"), None)
 if not result:
     raise SystemExit("household-summary-redacted result missing")
 if result.get("disclosure") != "value":
