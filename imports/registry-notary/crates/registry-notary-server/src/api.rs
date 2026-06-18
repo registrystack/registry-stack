@@ -5607,6 +5607,7 @@ async fn batch_evaluate(
         request.purpose.as_deref(),
         &request.items,
     );
+    let audit_request = request.clone();
     let evaluation_future = runtime.batch_evaluate(
         Arc::clone(&state.evidence),
         Arc::clone(&state.source),
@@ -5639,6 +5640,8 @@ async fn batch_evaluate(
             if let Err(error) = attach_batch_evaluate_response_audit(
                 &mut response,
                 &state.self_attestation_rate_keys,
+                evidence,
+                &audit_request,
                 &result,
                 batch_audit_purposes.as_deref(),
             ) {
@@ -7671,6 +7674,8 @@ fn attach_evaluate_request_audit(
 fn attach_batch_evaluate_response_audit(
     response: &mut Response,
     keys: &SelfAttestationRateLimitKeys,
+    evidence: &EvidenceConfig,
+    request: &BatchEvaluateRequest,
     result: &registry_notary_core::BatchEvaluateResponse,
     audit_purposes: Option<&[String]>,
 ) -> Result<(), EvidenceError> {
@@ -7689,6 +7694,14 @@ fn attach_batch_evaluate_response_audit(
             .filter(|code| is_matching_audit_code(code))
             .map(str::to_string);
         let matching = item.matching.as_ref();
+        let denied_matching_policy = matching_error_code.as_deref().and_then(|code| {
+            denied_batch_item_matching_policy_audit_identity(
+                evidence,
+                request,
+                item.input_index,
+                code,
+            )
+        });
         batch_items.push(EvidenceBatchItemAuditEvent {
             input_index: item.input_index,
             target_type: Some(item.target_ref.entity_type.clone())
@@ -7722,13 +7735,30 @@ fn attach_batch_evaluate_response_audit(
                     )
                 })
                 .transpose()?,
-            matching_policy_id: matching.map(|matching| matching.policy_id.clone()),
+            matching_policy_id: matching
+                .map(|matching| matching.policy_id.clone())
+                .or_else(|| {
+                    denied_matching_policy
+                        .as_ref()
+                        .map(|policy| policy.policy_id.clone())
+                }),
             matching_policy_hash: matching
                 .and_then(|matching| matching.policy_hash.as_ref())
-                .map(|hash| Hashed::<PolicyIdentifier>::from_hash(hash.clone())),
+                .map(|hash| Hashed::<PolicyIdentifier>::from_hash(hash.clone()))
+                .or_else(|| {
+                    denied_matching_policy.as_ref().map(|policy| {
+                        Hashed::<PolicyIdentifier>::from_hash(policy.policy_hash.clone())
+                    })
+                }),
             matching_evaluated_rule_ids: matching
                 .map(|matching| matching.evaluated_rule_ids.clone())
-                .filter(|rule_ids| !rule_ids.is_empty()),
+                .filter(|rule_ids| !rule_ids.is_empty())
+                .or_else(|| {
+                    denied_matching_policy
+                        .as_ref()
+                        .map(|policy| policy.evaluated_rule_ids.clone())
+                        .filter(|rule_ids| !rule_ids.is_empty())
+                }),
             matching_method: matching.map(|matching| matching.method.clone()),
             matching_outcome: if item.errors.is_empty() {
                 Some("matched".to_string())
@@ -7742,6 +7772,26 @@ fn attach_batch_evaluate_response_audit(
     }
     audit.batch_items = Some(batch_items);
     Ok(())
+}
+
+fn denied_batch_item_matching_policy_audit_identity(
+    evidence: &EvidenceConfig,
+    request: &BatchEvaluateRequest,
+    input_index: usize,
+    matching_error_code: &str,
+) -> Option<MatchingPolicyAuditIdentity> {
+    let item = request.items.get(input_index)?;
+    let evaluate_request = EvaluateRequest {
+        requester: item.requester.clone(),
+        target: Some(item.target.clone()),
+        relationship: item.relationship.clone(),
+        on_behalf_of: item.on_behalf_of.clone(),
+        claims: request.claims.clone(),
+        disclosure: request.disclosure.clone(),
+        format: request.format.clone(),
+        purpose: item.purpose.clone().or_else(|| request.purpose.clone()),
+    };
+    denied_matching_policy_audit_identity(evidence, &evaluate_request, Some(matching_error_code))
 }
 
 fn hash_audit_handle(
@@ -11009,6 +11059,33 @@ mod tests {
             },
         };
         let mut response = StatusCode::OK.into_response();
+        let audit_request = BatchEvaluateRequest {
+            items: vec![
+                BatchEvaluateItemRequest {
+                    requester: Some(EvidenceEntity::with_identifier(
+                        "Person",
+                        "national_id",
+                        "NID-REQUESTER",
+                    )),
+                    target: EvidenceEntity::with_identifier("Person", "national_id", "NID-1"),
+                    relationship: None,
+                    on_behalf_of: None,
+                    purpose: None,
+                },
+                BatchEvaluateItemRequest {
+                    requester: None,
+                    target: EvidenceEntity::with_identifier("Person", "national_id", "NID-2"),
+                    relationship: None,
+                    on_behalf_of: None,
+                    purpose: None,
+                },
+            ],
+            claims: vec![ClaimRef::from("person-is-alive")],
+            disclosure: Some("predicate".to_string()),
+            format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+            purpose: Some("program-a".to_string()),
+        };
+        let evidence = EvidenceConfig::default();
         attach_evidence_audit(
             &mut response,
             "batch_evaluate",
@@ -11017,8 +11094,15 @@ mod tests {
             Some(2),
         );
 
-        attach_batch_evaluate_response_audit(&mut response, &keys, &result, None)
-            .expect("batch audit context attaches");
+        attach_batch_evaluate_response_audit(
+            &mut response,
+            &keys,
+            &evidence,
+            &audit_request,
+            &result,
+            None,
+        )
+        .expect("batch audit context attaches");
 
         let audit = response
             .extensions()
@@ -11045,6 +11129,139 @@ mod tests {
         assert!(
             items[1].target_ref_hash.is_none(),
             "failed batch items must not emit durable matched-reference pseudonyms"
+        );
+    }
+
+    #[test]
+    fn batch_audit_preserves_policy_identity_for_matching_policy_rejections() {
+        let keys = SelfAttestationRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
+        let evidence: EvidenceConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "ecosystem_bindings": {
+                "baseline-dpi": {
+                    "profile": "odrl:v1",
+                    "policy_id": "baseline-dpi-policy",
+                    "policy_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+                }
+            },
+            "claims": [{
+                "id": "person-is-alive",
+                "title": "Person is alive",
+                "version": "2026-06",
+                "subject_type": "person",
+                "source_bindings": {
+                    "civil": {
+                        "connector": "registry_data_api",
+                        "dataset": "civil",
+                        "entity": "person",
+                        "lookup": {
+                            "input": "target.id",
+                            "field": "id",
+                            "op": "eq",
+                            "cardinality": "one"
+                        },
+                        "fields": {
+                            "alive": {
+                                "field": "alive",
+                                "type": "boolean",
+                                "required": true
+                            }
+                        },
+                        "matching": {
+                            "ecosystem_binding": { "id": "baseline-dpi" }
+                        }
+                    }
+                },
+                "rule": { "type": "extract", "source": "civil", "field": "alive" }
+            }]
+        }))
+        .expect("evidence config parses");
+        let request = BatchEvaluateRequest {
+            items: vec![BatchEvaluateItemRequest {
+                requester: None,
+                target: EvidenceEntity::with_identifier("person", "national_id", "NID-TARGET"),
+                relationship: None,
+                on_behalf_of: None,
+                purpose: Some("program-a".to_string()),
+            }],
+            claims: vec![ClaimRef::with_version("person-is-alive", "2026-06")],
+            disclosure: Some("predicate".to_string()),
+            format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+            purpose: None,
+        };
+        let result = registry_notary_core::BatchEvaluateResponse {
+            batch_id: "batch-1".to_string(),
+            status: registry_notary_core::BatchStatus::Completed,
+            claims: vec!["person-is-alive".to_string()],
+            items: vec![registry_notary_core::BatchItemResponse {
+                input_index: 0,
+                target_ref: registry_notary_core::TargetRefView {
+                    entity_type: "person".to_string(),
+                    handle: "rnref:v1:target-handle".to_string(),
+                    identifier_schemes: vec!["national_id".to_string()],
+                    profile: None,
+                },
+                requester_ref: None,
+                matching: None,
+                evaluation_id: None,
+                status: registry_notary_core::BatchItemStatus::Failed,
+                claim_results: Vec::new(),
+                errors: vec![registry_notary_core::BatchItemError {
+                    code: "target.matching_policy_rejected".to_string(),
+                    title: "Target matching policy rejected".to_string(),
+                    retryable: false,
+                    audit_code: None,
+                }],
+            }],
+            summary: registry_notary_core::BatchSummary {
+                succeeded: 0,
+                failed: 1,
+            },
+        };
+        let mut response = StatusCode::OK.into_response();
+        attach_evidence_audit(
+            &mut response,
+            "batch_evaluate",
+            None,
+            &["person-is-alive".to_string()],
+            Some(1),
+        );
+
+        attach_batch_evaluate_response_audit(
+            &mut response,
+            &keys,
+            &evidence,
+            &request,
+            &result,
+            None,
+        )
+        .expect("batch audit context attaches");
+
+        let audit = response
+            .extensions()
+            .get::<EvidenceAuditContext>()
+            .expect("audit context is attached");
+        let item = audit
+            .batch_items
+            .as_ref()
+            .and_then(|items| items.first())
+            .expect("batch item audit is captured");
+        assert_eq!(item.matching_outcome.as_deref(), Some("error"));
+        assert_eq!(
+            item.matching_error_code.as_deref(),
+            Some("target.matching_policy_rejected")
+        );
+        assert_eq!(
+            item.matching_policy_id.as_deref(),
+            Some("baseline-dpi-policy")
+        );
+        assert_eq!(
+            item.matching_policy_hash.as_ref().map(Hashed::as_str),
+            Some("sha256:3333333333333333333333333333333333333333333333333333333333333333")
+        );
+        assert_eq!(
+            item.matching_evaluated_rule_ids.as_deref(),
+            Some(&["source-binding-policy:person".to_string()][..])
         );
     }
 

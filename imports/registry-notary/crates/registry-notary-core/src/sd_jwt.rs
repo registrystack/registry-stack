@@ -453,6 +453,38 @@ mod tests {
     }
 
     #[test]
+    fn issued_credential_disclosures_do_not_reintroduce_redacted_object_fields() {
+        let issuer = EvidenceIssuer::from_jwk_str(RAW_JWK, "did:web:issuer.test#key-1".to_string())
+            .expect("test issuer builds");
+        let mut result = claim_result("household-summary");
+        result.value = Some(json!({
+            "name": "Ada",
+            "household_id": "hh-1"
+        }));
+
+        let signed = issue(
+            &test_profile(),
+            &issuer,
+            &[result],
+            "subject-ref",
+            None,
+            OffsetDateTime::now_utc(),
+            IssueOptions::default(),
+        )
+        .expect("credential issues");
+        let disclosures = decoded_disclosures(&signed);
+        let disclosure_json = serde_json::to_string(&disclosures).expect("disclosures serialize");
+
+        assert!(disclosure_json.contains("household-summary"));
+        assert!(disclosure_json.contains("Ada"));
+        assert!(!disclosure_json.contains("ssn"), "{disclosure_json}");
+        assert!(
+            !disclosure_json.contains("123-45-6789"),
+            "{disclosure_json}"
+        );
+    }
+
+    #[test]
     fn issued_credential_uses_platform_holder_confirmation() {
         let issuer = EvidenceIssuer::from_jwk_str(RAW_JWK, "did:web:issuer.test#key-1".to_string())
             .expect("test issuer builds");
@@ -811,6 +843,21 @@ mod tests {
             .skip(1)
             .filter(|disclosure| !disclosure.is_empty())
             .map(|disclosure| URL_SAFE_NO_PAD.encode(Sha256::digest(disclosure.as_bytes())))
+            .collect()
+    }
+
+    fn decoded_disclosures(signed: &SignedSdJwtVc) -> Vec<Value> {
+        signed
+            .disclosures
+            .iter()
+            .map(|disclosure| {
+                serde_json::from_slice(
+                    &URL_SAFE_NO_PAD
+                        .decode(disclosure)
+                        .expect("disclosure decodes as base64url"),
+                )
+                .expect("disclosure decodes as JSON")
+            })
             .collect()
     }
 }

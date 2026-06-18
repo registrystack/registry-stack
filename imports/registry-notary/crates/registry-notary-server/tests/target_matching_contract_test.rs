@@ -21,6 +21,8 @@ use registry_notary_server::{
     BatchEvaluateOptions, EvidenceStore, RegistryNotaryRuntime, SourceReader,
 };
 use serde_json::{json, Value};
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 #[derive(Debug)]
 struct MatchingSource {
@@ -62,6 +64,51 @@ impl SourceReader for MatchingSource {
                 "land_parcel" => match_land_parcel(context),
                 _ => Err(EvidenceError::SourceUnavailable),
             }
+        })
+    }
+
+    fn required_scopes(
+        &self,
+        _evidence: &EvidenceConfig,
+        _claim_id: &str,
+    ) -> Result<Vec<String>, EvidenceError> {
+        Ok(Vec::new())
+    }
+}
+
+#[derive(Debug)]
+struct ObservedAtSource {
+    observed_at: Option<String>,
+}
+
+impl ObservedAtSource {
+    fn new(observed_at: Option<String>) -> Self {
+        Self { observed_at }
+    }
+}
+
+impl SourceReader for ObservedAtSource {
+    fn read_one<'a>(
+        &'a self,
+        _binding: &'a SourceBindingConfig,
+        _subject: &'a SubjectRequest,
+        _purpose: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+        Box::pin(async { Err(EvidenceError::TargetAttributesInsufficient) })
+    }
+
+    fn read_one_for_context<'a>(
+        &'a self,
+        _binding: &'a SourceBindingConfig,
+        _context: &'a EvidenceRequestContext,
+        _purpose: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut row = json!({"alive": true});
+            if let Some(observed_at) = self.observed_at.as_deref() {
+                row["observed_at"] = json!(observed_at);
+            }
+            Ok(row)
         })
     }
 
@@ -184,6 +231,9 @@ impl BatchContextRecordingSource {
 #[derive(Debug)]
 struct DelayedContextSource;
 
+#[derive(Debug)]
+struct DelayedMultiPolicySource;
+
 impl SourceReader for DelayedContextSource {
     fn read_one<'a>(
         &'a self,
@@ -208,6 +258,39 @@ impl SourceReader for DelayedContextSource {
                 .as_deref()
                 .ok_or(EvidenceError::TargetAttributesInsufficient)?;
             Ok(json!({ "id": id }))
+        })
+    }
+
+    fn required_scopes(
+        &self,
+        _evidence: &EvidenceConfig,
+        _claim_id: &str,
+    ) -> Result<Vec<String>, EvidenceError> {
+        Ok(Vec::new())
+    }
+}
+
+impl SourceReader for DelayedMultiPolicySource {
+    fn read_one<'a>(
+        &'a self,
+        _binding: &'a SourceBindingConfig,
+        _subject: &'a SubjectRequest,
+        _purpose: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+        Box::pin(async { Err(EvidenceError::TargetAttributesInsufficient) })
+    }
+
+    fn read_one_for_context<'a>(
+        &'a self,
+        binding: &'a SourceBindingConfig,
+        _context: &'a EvidenceRequestContext,
+        _purpose: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+        Box::pin(async move {
+            if binding.entity == "person_alpha" {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            Ok(json!({ "alive": true }))
         })
     }
 
@@ -308,6 +391,104 @@ impl SourceReader for BatchContextRecordingSource {
     ) -> Result<Vec<String>, EvidenceError> {
         Ok(Vec::new())
     }
+}
+
+#[derive(Debug)]
+struct RequesterSensitiveBatchSource {
+    read_many_calls: AtomicUsize,
+    read_one_calls: AtomicUsize,
+    seen_batches: Mutex<Vec<Vec<EvidenceRequestContext>>>,
+}
+
+impl RequesterSensitiveBatchSource {
+    fn new() -> Self {
+        Self {
+            read_many_calls: AtomicUsize::new(0),
+            read_one_calls: AtomicUsize::new(0),
+            seen_batches: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn read_many_calls(&self) -> usize {
+        self.read_many_calls.load(Ordering::SeqCst)
+    }
+
+    fn read_one_calls(&self) -> usize {
+        self.read_one_calls.load(Ordering::SeqCst)
+    }
+
+    fn seen_batches(&self) -> Vec<Vec<EvidenceRequestContext>> {
+        self.seen_batches
+            .lock()
+            .expect("seen batches mutex is not poisoned")
+            .clone()
+    }
+}
+
+impl SourceReader for RequesterSensitiveBatchSource {
+    fn read_one<'a>(
+        &'a self,
+        _binding: &'a SourceBindingConfig,
+        _subject: &'a SubjectRequest,
+        _purpose: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+        Box::pin(async {
+            self.read_one_calls.fetch_add(1, Ordering::SeqCst);
+            Err(EvidenceError::SourceUnavailable)
+        })
+    }
+
+    fn read_one_for_context<'a>(
+        &'a self,
+        _binding: &'a SourceBindingConfig,
+        context: &'a EvidenceRequestContext,
+        _purpose: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.read_one_calls.fetch_add(1, Ordering::SeqCst);
+            requester_office_alive(context)
+        })
+    }
+
+    fn read_many_context<'a>(
+        &'a self,
+        bindings: Vec<(SourceBindingConfig, EvidenceRequestContext)>,
+        _purpose: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Vec<Result<Value, EvidenceError>>> + Send + 'a>> {
+        Box::pin(async move {
+            self.read_many_calls.fetch_add(1, Ordering::SeqCst);
+            let contexts: Vec<EvidenceRequestContext> = bindings
+                .iter()
+                .map(|(_, context)| context.clone())
+                .collect();
+            self.seen_batches
+                .lock()
+                .expect("seen batches mutex is not poisoned")
+                .push(contexts);
+            bindings
+                .iter()
+                .map(|(_, context)| requester_office_alive(context))
+                .collect()
+        })
+    }
+
+    fn required_scopes(
+        &self,
+        _evidence: &EvidenceConfig,
+        _claim_id: &str,
+    ) -> Result<Vec<String>, EvidenceError> {
+        Ok(Vec::new())
+    }
+}
+
+fn requester_office_alive(context: &EvidenceRequestContext) -> Result<Value, EvidenceError> {
+    let office = context
+        .requester
+        .as_ref()
+        .and_then(|requester| requester.attributes.get("office"))
+        .and_then(Value::as_str)
+        .ok_or(EvidenceError::RequesterMatchingPolicyRejected)?;
+    Ok(json!({ "alive": office == "north" }))
 }
 
 fn match_person(context: &EvidenceRequestContext) -> Result<Value, EvidenceError> {
@@ -467,6 +648,24 @@ fn person_claim() -> ClaimDefinition {
             allowed_target_inputs: vec!["target.attributes.*".to_string()],
             collapse_matching_errors: false,
             confidence: Some("high".to_string()),
+            ..SourceMatchingConfig::default()
+        },
+    )
+}
+
+fn freshness_gated_person_claim() -> ClaimDefinition {
+    claim(
+        "fresh-person-is-alive",
+        "person",
+        "alive",
+        "Person",
+        SourceMatchingConfig {
+            policy_id: Some("demo-person-freshness-v1".to_string()),
+            target_type: Some("Person".to_string()),
+            allowed_purposes: vec!["benefits".to_string()],
+            max_source_age_seconds: Some(60),
+            source_observed_at_field: Some("observed_at".to_string()),
+            collapse_matching_errors: false,
             ..SourceMatchingConfig::default()
         },
     )
@@ -653,6 +852,20 @@ fn evaluate_request(target: EvidenceEntity, claim: &str) -> EvaluateRequest {
     }
 }
 
+fn observed_person_target() -> EvidenceEntity {
+    let mut target = EvidenceEntity::new("Person");
+    target.id = Some("p-1".to_string());
+    target
+}
+
+fn requester_with_office(office: &str) -> EvidenceEntity {
+    let mut requester = EvidenceEntity::new("Person");
+    requester
+        .attributes
+        .insert("office".to_string(), json!(office));
+    requester
+}
+
 #[tokio::test]
 async fn person_name_birthdate_unique_match_succeeds_with_metadata() {
     let runtime = RegistryNotaryRuntime::new();
@@ -690,6 +903,156 @@ async fn person_name_birthdate_unique_match_succeeds_with_metadata() {
     assert_eq!(matching.confidence, "high");
     assert_eq!(matching.score, None);
     assert_eq!(source.reads(), 1);
+}
+
+#[tokio::test]
+async fn source_observed_at_contract_enforces_matching_freshness() {
+    let runtime = RegistryNotaryRuntime::new();
+    let store = EvidenceStore::default();
+    let fresh_observed_at = (OffsetDateTime::now_utc() - time::Duration::seconds(10))
+        .format(&Rfc3339)
+        .expect("fresh observed timestamp formats");
+    let fresh = runtime
+        .evaluate(
+            evidence_config(vec![freshness_gated_person_claim()]),
+            Arc::new(ObservedAtSource::new(Some(fresh_observed_at))),
+            &store,
+            &principal(),
+            evaluate_request(observed_person_target(), "fresh-person-is-alive"),
+            None,
+        )
+        .await
+        .expect("fresh source observation satisfies max age");
+
+    assert_eq!(fresh[0].value, Some(json!(true)));
+
+    let stale_observed_at = (OffsetDateTime::now_utc() - time::Duration::seconds(61))
+        .format(&Rfc3339)
+        .expect("stale observed timestamp formats");
+    let stale = runtime
+        .evaluate(
+            evidence_config(vec![freshness_gated_person_claim()]),
+            Arc::new(ObservedAtSource::new(Some(stale_observed_at))),
+            &store,
+            &principal(),
+            evaluate_request(observed_person_target(), "fresh-person-is-alive"),
+            None,
+        )
+        .await
+        .expect_err("stale source observation is rejected");
+
+    assert_eq!(stale.code(), "target.matching_policy_rejected");
+
+    let missing = runtime
+        .evaluate(
+            evidence_config(vec![freshness_gated_person_claim()]),
+            Arc::new(ObservedAtSource::new(None)),
+            &store,
+            &principal(),
+            evaluate_request(observed_person_target(), "fresh-person-is-alive"),
+            None,
+        )
+        .await
+        .expect_err("missing source observation is rejected");
+
+    assert_eq!(missing.code(), "target.matching_policy_rejected");
+}
+
+#[tokio::test]
+async fn multi_source_matching_metadata_uses_one_deterministic_policy_identity() {
+    let runtime = RegistryNotaryRuntime::new();
+    let store = EvidenceStore::default();
+    let source = Arc::new(DelayedMultiPolicySource);
+    let mut claim = claim(
+        "multi-policy-person-is-alive",
+        "person_alpha",
+        "alive",
+        "Person",
+        SourceMatchingConfig {
+            method: Some("configured_lookup".to_string()),
+            confidence: Some("high".to_string()),
+            ecosystem_binding: Some(EcosystemBindingSelectorConfig {
+                id: Some("alpha-pack".to_string()),
+                ..EcosystemBindingSelectorConfig::default()
+            }),
+            ..SourceMatchingConfig::default()
+        },
+    );
+    let alpha = claim
+        .source_bindings
+        .remove("src")
+        .expect("source binding exists");
+    let mut zeta = alpha.clone();
+    zeta.entity = "person_zeta".to_string();
+    zeta.matching.ecosystem_binding = Some(EcosystemBindingSelectorConfig {
+        id: Some("zeta-pack".to_string()),
+        ..EcosystemBindingSelectorConfig::default()
+    });
+    claim.source_bindings =
+        BTreeMap::from([("alpha".to_string(), alpha), ("zeta".to_string(), zeta)]);
+    claim.rule = RuleConfig::Extract {
+        source: "alpha".to_string(),
+        field: "alive".to_string(),
+    };
+    let evidence = Arc::new(EvidenceConfig {
+        enabled: true,
+        inline_batch_limit: 20,
+        ecosystem_bindings: BTreeMap::from([
+            (
+                "alpha-pack".to_string(),
+                EvidenceEcosystemBindingConfig {
+                    profile: Some("odrl:v1".to_string()),
+                    policy_id: "alpha-policy".to_string(),
+                    policy_hash:
+                        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                            .to_string(),
+                    unsupported_odrl_terms: Vec::new(),
+                },
+            ),
+            (
+                "zeta-pack".to_string(),
+                EvidenceEcosystemBindingConfig {
+                    profile: Some("odrl:v1".to_string()),
+                    policy_id: "zeta-policy".to_string(),
+                    policy_hash:
+                        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                            .to_string(),
+                    unsupported_odrl_terms: Vec::new(),
+                },
+            ),
+        ]),
+        claims: vec![claim],
+        ..EvidenceConfig::default()
+    });
+
+    let results = runtime
+        .evaluate(
+            evidence,
+            source,
+            &store,
+            &principal(),
+            evaluate_request(
+                person_target("Amina", "Diallo", Some("1984-02-10")),
+                "multi-policy-person-is-alive",
+            ),
+            None,
+        )
+        .await
+        .expect("multi-source claim succeeds");
+
+    let matching = results[0]
+        .matching
+        .as_ref()
+        .expect("matching metadata is emitted");
+    assert_eq!(matching.policy_id, "alpha-policy");
+    assert_eq!(
+        matching.policy_hash.as_deref(),
+        Some("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    );
+    assert_eq!(
+        matching.evaluated_rule_ids,
+        vec!["source-binding-policy:person_alpha".to_string()]
+    );
 }
 
 #[tokio::test]
@@ -2228,6 +2591,86 @@ async fn batch_prefetch_minimizes_context_and_excludes_policy_rejected_items() {
     assert_eq!(
         response.items[1].errors[0].code,
         "target.matching_policy_rejected"
+    );
+}
+
+#[tokio::test]
+async fn batch_memo_key_includes_minimized_requester_context() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(RequesterSensitiveBatchSource::new());
+    let mut claim = claim(
+        "requester-sensitive-alive",
+        "person",
+        "alive",
+        "Person",
+        SourceMatchingConfig {
+            allowed_purposes: vec!["benefits".to_string()],
+            allowed_requester_inputs: vec!["requester.attributes.office".to_string()],
+            ..SourceMatchingConfig::default()
+        },
+    );
+    let binding = claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists");
+    binding.connector = SourceConnectorKind::OpenFnSidecar;
+    binding.connection = Some("openfn_crvs".to_string());
+
+    let response = runtime
+        .batch_evaluate(
+            evidence_config_with_openfn_batch_connection(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            BatchEvaluateRequest {
+                items: vec![
+                    BatchEvaluateItemRequest {
+                        requester: Some(requester_with_office("north")),
+                        target: observed_person_target(),
+                        relationship: None,
+                        on_behalf_of: None,
+                        purpose: Some("benefits".to_string()),
+                    },
+                    BatchEvaluateItemRequest {
+                        requester: Some(requester_with_office("south")),
+                        target: observed_person_target(),
+                        relationship: None,
+                        on_behalf_of: None,
+                        purpose: Some("benefits".to_string()),
+                    },
+                ],
+                claims: vec![ClaimRef::new("requester-sensitive-alive")],
+                disclosure: Some("value".to_string()),
+                format: None,
+                purpose: None,
+            },
+            BatchEvaluateOptions::default(),
+        )
+        .await
+        .expect("batch completes with requester-sensitive outcomes");
+
+    assert_eq!(source.read_many_calls(), 1);
+    assert_eq!(source.read_one_calls(), 0);
+    assert_eq!(response.summary.succeeded, 2);
+    assert_eq!(response.items[0].claim_results[0].value, Some(json!(true)));
+    assert_eq!(response.items[1].claim_results[0].value, Some(json!(false)));
+
+    let batches = source.seen_batches();
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].len(), 2);
+    assert_eq!(
+        batches[0][0]
+            .requester
+            .as_ref()
+            .and_then(|requester| requester.attributes.get("office")),
+        Some(&json!("north"))
+    );
+    assert_eq!(
+        batches[0][1]
+            .requester
+            .as_ref()
+            .and_then(|requester| requester.attributes.get("office")),
+        Some(&json!("south"))
     );
 }
 

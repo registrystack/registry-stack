@@ -4230,6 +4230,36 @@ fn validate_source_matching_config(
             "permitted_jurisdictions must not contain blanks",
         );
     }
+    if matching.max_source_age_seconds == Some(0) {
+        return invalid_matching_config(
+            claim,
+            binding,
+            "max_source_age_seconds must be greater than zero",
+        );
+    }
+    if matching.max_source_age_seconds.is_some()
+        && matching
+            .source_observed_at_field
+            .as_ref()
+            .is_none_or(|value| value.trim().is_empty())
+    {
+        return invalid_matching_config(
+            claim,
+            binding,
+            "source_observed_at_field is required when max_source_age_seconds is set",
+        );
+    }
+    if matching
+        .source_observed_at_field
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return invalid_matching_config(
+            claim,
+            binding,
+            "source_observed_at_field must not be empty",
+        );
+    }
     if matching
         .redaction_fields
         .iter()
@@ -4651,6 +4681,10 @@ pub struct SourceMatchingConfig {
     #[serde(default)]
     pub permitted_jurisdictions: Vec<String>,
     #[serde(default)]
+    pub max_source_age_seconds: Option<u64>,
+    #[serde(default)]
+    pub source_observed_at_field: Option<String>,
+    #[serde(default)]
     pub require_legal_basis: bool,
     #[serde(default)]
     pub require_consent: bool,
@@ -4709,6 +4743,8 @@ impl Default for SourceMatchingConfig {
             allowed_purposes: Vec::new(),
             allowed_assurance: Vec::new(),
             permitted_jurisdictions: Vec::new(),
+            max_source_age_seconds: None,
+            source_observed_at_field: None,
             require_legal_basis: false,
             require_consent: false,
             redaction_fields: Vec::new(),
@@ -6270,6 +6306,39 @@ auth:
         assert!(
             matches!(err, EvidenceConfigError::InvalidMatchingConfig { ref reason, .. } if reason.contains("redaction_fields")),
             "expected redaction_fields rejection, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn matching_config_rejects_invalid_source_freshness_contract() {
+        let ecosystem_bindings = BTreeMap::new();
+        let mut matching = SourceMatchingConfig {
+            max_source_age_seconds: Some(0),
+            source_observed_at_field: Some("observed_at".to_string()),
+            ..SourceMatchingConfig::default()
+        };
+        let err = validate_source_matching_config("claim", "src", &matching, &ecosystem_bindings)
+            .expect_err("zero max source age is rejected");
+        assert!(
+            matches!(err, EvidenceConfigError::InvalidMatchingConfig { ref reason, .. } if reason.contains("max_source_age_seconds")),
+            "expected max_source_age_seconds rejection, got {err:?}"
+        );
+
+        matching.max_source_age_seconds = Some(60);
+        matching.source_observed_at_field = None;
+        let err = validate_source_matching_config("claim", "src", &matching, &ecosystem_bindings)
+            .expect_err("missing source observed path is rejected");
+        assert!(
+            matches!(err, EvidenceConfigError::InvalidMatchingConfig { ref reason, .. } if reason.contains("source_observed_at_field")),
+            "expected source_observed_at_field rejection, got {err:?}"
+        );
+
+        matching.source_observed_at_field = Some(" ".to_string());
+        let err = validate_source_matching_config("claim", "src", &matching, &ecosystem_bindings)
+            .expect_err("blank source observed path is rejected");
+        assert!(
+            matches!(err, EvidenceConfigError::InvalidMatchingConfig { ref reason, .. } if reason.contains("source_observed_at_field")),
+            "expected source_observed_at_field rejection, got {err:?}"
         );
     }
 
