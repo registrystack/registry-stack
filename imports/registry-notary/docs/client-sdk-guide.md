@@ -170,6 +170,7 @@ Python also has a shorter helper for the common one-target case:
 result = client.evaluate(
     target_id="FARMER-1001",
     identifier_scheme="farmer_id",
+    target_type="Farmer",
     claims=["eligible-for-climate-smart-input-voucher"],
 )
 ```
@@ -1000,20 +1001,13 @@ The stable application problem `code` values for policy mapping live in the
 Enable optional routes only when needed:
 
 ```toml
-registry-notary-client = {
-  git = "https://github.com/jeremi/registry-notary",
-  tag = "vX.Y.Z",
-  features = ["oid4vci", "federation", "json-facade"]
-}
+registry-notary-client = { git = "https://github.com/jeremi/registry-notary", tag = "vX.Y.Z", features = ["oid4vci", "federation", "json-facade"] }
 ```
 
 In a workspace checkout, the same feature selection can use path dependencies:
 
 ```toml
-registry-notary-client = {
-  path = "crates/registry-notary-client",
-  features = ["oid4vci", "federation", "json-facade"]
-}
+registry-notary-client = { path = "crates/registry-notary-client", features = ["oid4vci", "federation", "json-facade"] }
 ```
 
 ### Rust JSON Facade
@@ -1053,11 +1047,7 @@ transport methods continue to return decoded response bodies without hidden
 network refreshes or trust-policy decisions.
 
 ```toml
-registry-notary-client = {
-  git = "https://github.com/jeremi/registry-notary",
-  tag = "vX.Y.Z",
-  features = ["verifier"]
-}
+registry-notary-client = { git = "https://github.com/jeremi/registry-notary", tag = "vX.Y.Z", features = ["verifier"] }
 ```
 
 ```rust
@@ -1115,13 +1105,11 @@ object for convenience.
 ```js
 const controller = new AbortController();
 
-const result = await client.evaluate(
-  {
-    target: { type: "Person", identifiers: [{ scheme: "national_id", value: "person-1" }] },
-    claims: ["person-is-alive"],
-  },
-  { signal: controller.signal },
-);
+const result = await client.evaluate({
+  target: { type: "Person", identifiers: [{ scheme: "national_id", value: "person-1" }] },
+  claims: ["person-is-alive"],
+  signal: controller.signal,
+});
 ```
 
 ## API Method Matrix
