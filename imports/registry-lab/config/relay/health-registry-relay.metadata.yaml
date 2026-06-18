@@ -27,6 +27,18 @@ evaluation_profiles:
     claim_id: health_service_availability
     subject_id_type: id
     max_source_observed_age_seconds: 86400
+ecosystem_bindings:
+  - id: baseline-dpi/v1
+    version: v1
+    profile: baseline-dpi
+    type: governed-evidence
+    evidence_pack:
+      policy_id: demo.health-row-purpose.v1
+      policy_hash: sha256:ada396b356a349a203a31188b04fd06b66ac03810af1d0606f1452d804230a61
+      odrl_enforcement:
+        profile: registry-evidence-gateway-pdp/v1
+        constraint_terms:
+          - odrl:purpose
 requirements:
   - id: health_linked_support_requirement
     iri: https://demo.example.gov/requirements/health-linked-support
@@ -47,6 +59,16 @@ datasets:
     sensitivity: personal
     access_rights: restricted
     update_frequency: weekly
+    policy:
+      uid: https://demo.example.gov/policies/health-row-purpose
+      assigner: did:web:health-registry.demo.example.gov
+      permissions:
+        - action: odrl:use
+          constraints:
+            - left_operand: odrl:purpose
+              operator: odrl:isA
+              right_operand:
+                iri: https://demo.example.gov/purpose/decentralized-evidence-demo
     evidence_offerings:
       - id: health_service_availability_evidence_service
         iri: https://demo.example.gov/evidence-offerings/health-service-availability

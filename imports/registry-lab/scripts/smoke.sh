@@ -336,9 +336,9 @@ cp /tmp/decentralized-smoke-response.json "${output_dir}/smoke-aggregate-denial.
 check "aggregate denial stable error code" json_path_equals "${output_dir}/smoke-aggregate-denial.json" code auth.scope_denied
 
 purpose_status="$(curl_status GET "http://127.0.0.1:4312/v1/datasets/social_protection_registry/entities/household/records?limit=1" "${SOCIAL_ROW_READER_RAW}" -H "Data-Purpose: https://demo.example.gov/purpose/not-authorized")"
-[[ "${purpose_status}" == "400" ]] || fail "purpose policy denial expected 400, got ${purpose_status}"
+[[ "${purpose_status}" == "403" ]] || fail "purpose policy denial expected 403, got ${purpose_status}"
 cp /tmp/decentralized-smoke-response.json "${output_dir}/smoke-purpose-policy-denial.json"
-check "purpose policy denial stable error code" json_path_equals "${output_dir}/smoke-purpose-policy-denial.json" code auth.purpose_required
+check "purpose policy denial stable error code" json_path_equals "${output_dir}/smoke-purpose-policy-denial.json" code auth.purpose_denied
 
 check "civil evidence evaluation" curl_json POST http://127.0.0.1:4321/v1/evaluations "${CIVIL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-civil-evaluation.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data "$(evaluation_payload "NID-1001" "national_id" "person-is-alive")"
 check "civil evidence evaluation results" json_has_key "${output_dir}/smoke-civil-evaluation.json" results
@@ -484,8 +484,10 @@ check "household decision has no Relay write-back" json_path_equals "${decision_
 log_file="/tmp/decentralized-smoke-service-logs.txt"
 docker compose -f "${compose_file}" logs --no-color civil-registry-relay social-protection-registry-relay health-registry-relay civil-notary social-protection-notary shared-eligibility-notary > "${log_file}"
 grep '"error_code":"auth.scope_denied"' "${log_file}" >/dev/null || fail "Relay denied audit event"
-grep '"error_code":"auth.purpose_required"' "${log_file}" >/dev/null || fail "Relay purpose policy denied audit event"
-grep '"pdp_policy_id":"relay.entity.household.purpose-required"' "${log_file}" >/dev/null || fail "Relay PDP policy id audit event"
+grep '"error_code":"auth.purpose_denied"' "${log_file}" >/dev/null || fail "Relay purpose policy denied audit event"
+grep '"pdp_policy_id":"demo.civil-row-purpose.v1"' "${log_file}" >/dev/null || fail "Civil Relay PDP policy id audit event"
+grep '"pdp_policy_id":"demo.health-row-purpose.v1"' "${log_file}" >/dev/null || fail "Health Relay PDP policy id audit event"
+grep '"pdp_policy_id":"demo.social-protection-row-purpose.v1"' "${log_file}" >/dev/null || fail "Social Relay PDP policy id audit event"
 grep '"pdp_evaluated_rule_ids":\["entity-purpose-required:household"\]' "${log_file}" >/dev/null || fail "Relay PDP evaluated rule ids audit event"
 grep '"decision":"evaluate"' "${log_file}" >/dev/null || fail "Evidence Server evaluation audit event"
 grep '"matching_policy_id":"demo.household-summary-redaction.v1"' "${log_file}" >/dev/null || fail "Evidence Server matching policy audit event"

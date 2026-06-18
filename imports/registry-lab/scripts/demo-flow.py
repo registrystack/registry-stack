@@ -468,7 +468,7 @@ def main() -> int:
         headers={"Data-Purpose": "https://demo.example.gov/purpose/not-authorized"},
     )
     save(out, step, "purpose-policy-denial", {"status": purpose_denial.status, "body": purpose_denial.body})
-    require_problem_code(purpose_denial, 400, "auth.purpose_required", "purpose policy denial")
+    require_problem_code(purpose_denial, 403, "auth.purpose_denied", "purpose policy denial")
     step += 1
 
     edr_area_path = "/ogc/edr/v1/collections/social_protection_households_by_district/area?" + urllib.parse.urlencode(

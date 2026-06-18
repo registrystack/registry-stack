@@ -14,7 +14,7 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_EVIDENCE_CLIENT_TOKEN_HASH
-        commitment: sha256:af5f0338524f0e7330e9dc808b53dfcaa48f0fd56b09f67c63e534eed8ddd8a0
+        commitment: sha256:b6c6ad92de0c44220a77a4f6cf96aaa71161f0ce4deeeb7989f41ee72e41a775
       scopes:
         - civil_registry:evidence_verification
   bearer_tokens:
@@ -22,7 +22,7 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_EVIDENCE_CLIENT_BEARER_HASH
-        commitment: sha256:34a286449da17af8d9e99ee9428161db423aea16a58bdb2dbc50050b5e7bb868
+        commitment: sha256:ef6f8b6646627e2519f5e0ab7fd21dafe1a411e4a980c30c72035715c9156ea2
       scopes:
         - civil_registry:evidence_verification
 

@@ -27,6 +27,18 @@ evaluation_profiles:
     claim_id: program_enrollment_status
     subject_id_type: id
     max_source_observed_age_seconds: 86400
+ecosystem_bindings:
+  - id: baseline-dpi/v1
+    version: v1
+    profile: baseline-dpi
+    type: governed-evidence
+    evidence_pack:
+      policy_id: demo.social-protection-row-purpose.v1
+      policy_hash: sha256:388352668467809d19e2039fdb13048a45ce59690b7ed1eeae82c2a083aeb2c3
+      odrl_enforcement:
+        profile: registry-evidence-gateway-pdp/v1
+        constraint_terms:
+          - odrl:purpose
 requirements:
   - id: household_support_requirement
     iri: https://demo.example.gov/requirements/household-support-eligibility
@@ -47,6 +59,16 @@ datasets:
     sensitivity: personal
     access_rights: restricted
     update_frequency: weekly
+    policy:
+      uid: https://demo.example.gov/policies/social-protection-row-purpose
+      assigner: did:web:social-protection.demo.example.gov
+      permissions:
+        - action: odrl:use
+          constraints:
+            - left_operand: odrl:purpose
+              operator: odrl:isA
+              right_operand:
+                iri: https://demo.example.gov/purpose/decentralized-evidence-demo
     evidence_offerings:
       - id: household_support_evidence_service
         iri: https://demo.example.gov/evidence-offerings/household-support

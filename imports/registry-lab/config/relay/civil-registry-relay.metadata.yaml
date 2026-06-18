@@ -27,6 +27,18 @@ evaluation_profiles:
     claim_id: civil_child_status
     subject_id_type: id
     max_source_observed_age_seconds: 86400
+ecosystem_bindings:
+  - id: baseline-dpi/v1
+    version: v1
+    profile: baseline-dpi
+    type: governed-evidence
+    evidence_pack:
+      policy_id: demo.civil-row-purpose.v1
+      policy_hash: sha256:f7f3b78717b70a4e8463a4601bc36272a5c3a50912347139d187de2e4a520cd0
+      odrl_enforcement:
+        profile: registry-evidence-gateway-pdp/v1
+        constraint_terms:
+          - odrl:purpose
 requirements:
   - id: child_identity_requirement
     iri: https://demo.example.gov/requirements/child-identity-and-alive
@@ -49,6 +61,16 @@ datasets:
     update_frequency: daily
     conforms_to:
       - spdci:extensions/crvs/v1/Person
+    policy:
+      uid: https://demo.example.gov/policies/civil-row-purpose
+      assigner: did:web:civil-registry.demo.example.gov
+      permissions:
+        - action: odrl:use
+          constraints:
+            - left_operand: odrl:purpose
+              operator: odrl:isA
+              right_operand:
+                iri: https://demo.example.gov/purpose/decentralized-evidence-demo
     evidence_offerings:
       - id: civil_child_status_evidence_service
         iri: https://demo.example.gov/evidence-offerings/civil-child-status
