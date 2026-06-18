@@ -58,6 +58,8 @@ pub enum EvidenceError {
     RelationshipPurposeNotAllowed,
     #[error("purpose is not allowed")]
     PurposeNotAllowed,
+    #[error("policy decision denied the request: {code}")]
+    PolicyDenied { code: &'static str },
     #[error("evidence request profile is unsupported")]
     ProfileUnsupported,
     #[error("evidence is not available")]
@@ -133,6 +135,7 @@ impl EvidenceError {
             Self::RelationshipPolicyRejected => "relationship.policy_rejected",
             Self::RelationshipPurposeNotAllowed => "relationship.purpose_not_allowed",
             Self::PurposeNotAllowed => "purpose.not_allowed",
+            Self::PolicyDenied { code } => code,
             Self::ProfileUnsupported => "profile.unsupported",
             Self::EvidenceNotAvailable | Self::MatchingEvidenceNotAvailable { .. } => {
                 "evidence.not_available"
@@ -168,6 +171,7 @@ impl EvidenceError {
             Self::SelfAttestationAssuranceDenied => {
                 SelfAttestationDenialCode::AssuranceDenied.as_str()
             }
+            Self::PolicyDenied { code } => code,
             Self::MatchingEvidenceNotAvailable { audit_code } => audit_code,
             _ => self.code(),
         }
@@ -267,5 +271,15 @@ mod tests {
         };
         assert_eq!(collapsed.code(), "evidence.not_available");
         assert_eq!(collapsed.audit_code(), "target.match_ambiguous");
+    }
+
+    #[test]
+    fn policy_denials_keep_stable_pdp_code() {
+        let error = EvidenceError::PolicyDenied {
+            code: "pdp.assurance_insufficient",
+        };
+
+        assert_eq!(error.code(), "pdp.assurance_insufficient");
+        assert_eq!(error.audit_code(), "pdp.assurance_insufficient");
     }
 }

@@ -941,7 +941,7 @@ async fn source_observed_at_contract_enforces_matching_freshness() {
         .await
         .expect_err("stale source observation is rejected");
 
-    assert_eq!(stale.code(), "target.matching_policy_rejected");
+    assert_eq!(stale.code(), "pdp.evidence_stale");
 
     let missing = runtime
         .evaluate(
@@ -955,7 +955,7 @@ async fn source_observed_at_contract_enforces_matching_freshness() {
         .await
         .expect_err("missing source observation is rejected");
 
-    assert_eq!(missing.code(), "target.matching_policy_rejected");
+    assert_eq!(missing.code(), "pdp.evidence_stale");
 }
 
 #[tokio::test]

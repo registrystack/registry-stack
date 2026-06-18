@@ -7889,6 +7889,7 @@ fn is_matching_audit_code(code: &str) -> bool {
     code.starts_with("target.")
         || code.starts_with("requester.")
         || code.starts_with("relationship.")
+        || code.starts_with("pdp.")
         || matches!(code, "purpose.not_allowed" | "evidence.not_available")
 }
 
@@ -7898,20 +7899,63 @@ fn denied_matching_policy_audit_identity(
     matching_error_code: Option<&str>,
 ) -> Option<MatchingPolicyAuditIdentity> {
     matching_error_code.filter(|code| is_matching_policy_provenance_code(code))?;
+    let context = request.request_context()?;
     request.claims.iter().find_map(|claim_ref| {
         let claim = match claim_ref.version.as_deref() {
             Some(version) => find_claim_version(evidence, claim_ref.id.as_str(), version).ok()?,
             None => find_claim(evidence, claim_ref.id.as_str()).ok()?,
         };
+        if let Some(binding) = claim_rule_source_id(claim)
+            .and_then(|source| claim.source_bindings.get(source))
+            .filter(|binding| source_binding_matches_request(binding, &context))
+        {
+            return Some(matching_policy_audit_identity(evidence, binding));
+        }
         claim
             .source_bindings
             .values()
-            .next()
+            .find(|binding| source_binding_matches_request(binding, &context))
+            .or_else(|| {
+                (claim.source_bindings.len() == 1).then(|| {
+                    claim
+                        .source_bindings
+                        .values()
+                        .next()
+                        .expect("single source binding exists")
+                })
+            })
             .map(|binding| matching_policy_audit_identity(evidence, binding))
     })
 }
 
+fn claim_rule_source_id(claim: &registry_notary_core::ClaimDefinition) -> Option<&str> {
+    match &claim.rule {
+        registry_notary_core::RuleConfig::Extract { source, .. }
+        | registry_notary_core::RuleConfig::Exists { source } => Some(source.as_str()),
+        registry_notary_core::RuleConfig::Cel { .. }
+        | registry_notary_core::RuleConfig::Plugin { .. } => None,
+    }
+}
+
+fn source_binding_matches_request(
+    binding: &registry_notary_core::SourceBindingConfig,
+    context: &registry_notary_core::EvidenceRequestContext,
+) -> bool {
+    if binding.query_fields.is_empty() {
+        return context
+            .lookup_value(binding.lookup.input.as_str())
+            .is_some();
+    }
+    binding
+        .query_fields
+        .iter()
+        .all(|field| context.lookup_value(field.input.as_str()).is_some())
+}
+
 fn is_matching_policy_provenance_code(code: &str) -> bool {
+    if code.starts_with("pdp.") {
+        return true;
+    }
     matches!(
         code,
         "purpose.not_allowed"
@@ -8207,6 +8251,7 @@ pub(crate) fn evidence_status(error: &EvidenceError) -> StatusCode {
         EvidenceError::DisclosureNotAllowed
         | EvidenceError::EvaluationBindingMismatch
         | EvidenceError::PurposeNotAllowed
+        | EvidenceError::PolicyDenied { .. }
         | EvidenceError::RequesterReauthenticationRequired
         | EvidenceError::RequesterMatchingPolicyRejected
         | EvidenceError::TargetMatchingPolicyRejected
@@ -8262,6 +8307,7 @@ pub(crate) fn evidence_title(error: &EvidenceError) -> &'static str {
         EvidenceError::RelationshipPolicyRejected => "Relationship policy rejected",
         EvidenceError::RelationshipPurposeNotAllowed => "Relationship purpose not allowed",
         EvidenceError::PurposeNotAllowed => "Purpose not allowed",
+        EvidenceError::PolicyDenied { .. } => "Policy decision denied",
         EvidenceError::ProfileUnsupported => "Profile unsupported",
         EvidenceError::EvidenceNotAvailable
         | EvidenceError::MatchingEvidenceNotAvailable { .. } => "Evidence not available",
@@ -8341,6 +8387,7 @@ pub(crate) fn evidence_detail(error: &EvidenceError) -> &'static str {
             "the requester-target relationship is not allowed for the declared purpose"
         }
         EvidenceError::PurposeNotAllowed => "the declared purpose is not allowed",
+        EvidenceError::PolicyDenied { .. } => "the configured policy denied the evidence request",
         EvidenceError::ProfileUnsupported => "the requested profile is not supported",
         EvidenceError::EvidenceNotAvailable
         | EvidenceError::MatchingEvidenceNotAvailable { .. } => "the evidence is not available",
@@ -10718,6 +10765,22 @@ mod tests {
     }
 
     #[test]
+    fn pdp_policy_denials_keep_public_stable_problem_codes() {
+        let error = EvidenceError::PolicyDenied {
+            code: "pdp.assurance_insufficient",
+        };
+
+        assert_eq!(error.code(), "pdp.assurance_insufficient");
+        assert_eq!(error.audit_code(), "pdp.assurance_insufficient");
+        assert_eq!(evidence_status(&error), StatusCode::FORBIDDEN);
+        assert_eq!(evidence_title(&error), "Policy decision denied");
+        assert_eq!(
+            evidence_detail(&error),
+            "the configured policy denied the evidence request"
+        );
+    }
+
+    #[test]
     fn self_attestation_policy_hash_includes_credential_profile_policy() {
         let config = self_attestation_config();
         let mut evidence = evidence_config();
@@ -11152,13 +11215,37 @@ mod tests {
                 "version": "2026-06",
                 "subject_type": "person",
                 "source_bindings": {
-                    "civil": {
+                    "aa_wrong": {
                         "connector": "registry_data_api",
                         "dataset": "civil",
                         "entity": "person",
                         "lookup": {
-                            "input": "target.id",
-                            "field": "id",
+                            "input": "target.identifiers.national_id",
+                            "field": "national_id",
+                            "op": "eq",
+                            "cardinality": "one"
+                        },
+                        "fields": {
+                            "alive": {
+                                "field": "alive",
+                                "type": "boolean",
+                                "required": true
+                            }
+                        },
+                        "matching": {
+                            "ecosystem_binding": {
+                                "policy_id": "wrong-policy",
+                                "policy_hash": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+                            }
+                        }
+                    },
+                    "zz_civil": {
+                        "connector": "registry_data_api",
+                        "dataset": "civil",
+                        "entity": "person",
+                        "lookup": {
+                            "input": "target.identifiers.national_id",
+                            "field": "national_id",
                             "op": "eq",
                             "cardinality": "one"
                         },
@@ -11174,7 +11261,7 @@ mod tests {
                         }
                     }
                 },
-                "rule": { "type": "extract", "source": "civil", "field": "alive" }
+                "rule": { "type": "extract", "source": "zz_civil", "field": "alive" }
             }]
         }))
         .expect("evidence config parses");
@@ -11531,13 +11618,37 @@ mod tests {
                 "version": "2026-06",
                 "subject_type": "person",
                 "source_bindings": {
-                    "civil": {
+                    "aa_wrong": {
                         "connector": "registry_data_api",
                         "dataset": "civil",
                         "entity": "person",
                         "lookup": {
-                            "input": "target.id",
-                            "field": "id",
+                            "input": "target.identifiers.national_id",
+                            "field": "national_id",
+                            "op": "eq",
+                            "cardinality": "one"
+                        },
+                        "fields": {
+                            "alive": {
+                                "field": "alive",
+                                "type": "boolean",
+                                "required": true
+                            }
+                        },
+                        "matching": {
+                            "ecosystem_binding": {
+                                "policy_id": "wrong-policy",
+                                "policy_hash": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+                            }
+                        }
+                    },
+                    "zz_civil": {
+                        "connector": "registry_data_api",
+                        "dataset": "civil",
+                        "entity": "person",
+                        "lookup": {
+                            "input": "target.identifiers.national_id",
+                            "field": "national_id",
                             "op": "eq",
                             "cardinality": "one"
                         },
@@ -11553,7 +11664,7 @@ mod tests {
                         }
                     }
                 },
-                "rule": { "type": "extract", "source": "civil", "field": "alive" }
+                "rule": { "type": "extract", "source": "zz_civil", "field": "alive" }
             }]
         }))
         .expect("evidence config parses");
@@ -11575,7 +11686,7 @@ mod tests {
         let policy = denied_matching_policy_audit_identity(
             &evidence,
             &request,
-            Some("target.matching_policy_rejected"),
+            Some("pdp.assurance_insufficient"),
         )
         .expect("matching policy identity is resolved");
 
@@ -11587,6 +11698,15 @@ mod tests {
         assert_eq!(
             policy.evaluated_rule_ids,
             vec!["source-binding-policy:person".to_string()]
+        );
+        assert!(
+            denied_matching_policy_audit_identity(
+                &evidence,
+                &request,
+                Some("target.matching_policy_rejected")
+            )
+            .is_some(),
+            "legacy matching policy denials still carry policy provenance"
         );
         assert!(
             denied_matching_policy_audit_identity(&evidence, &request, Some("auth.scope_denied"))

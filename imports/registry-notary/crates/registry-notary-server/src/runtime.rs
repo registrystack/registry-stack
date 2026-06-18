@@ -3144,10 +3144,7 @@ fn validate_matching_freshness_policy(
         true,
     )
     .map(|_| ())
-    .map_err(|code| match code {
-        registry_platform_pdp::PURPOSE_NOT_PERMITTED => EvidenceError::PurposeNotAllowed,
-        _ => EvidenceError::TargetMatchingPolicyRejected,
-    })
+    .map_err(pdp_denial_error)
 }
 
 fn source_observed_age_seconds(source_observed_at: OffsetDateTime) -> u64 {
@@ -3238,10 +3235,7 @@ fn validate_matching_policy(
         None,
         false,
     )
-    .map_err(|code| match code {
-        registry_platform_pdp::PURPOSE_NOT_PERMITTED => EvidenceError::PurposeNotAllowed,
-        _ => EvidenceError::TargetMatchingPolicyRejected,
-    })?;
+    .map_err(pdp_denial_error)?;
     if let Some(target_type) = matching.target_type.as_deref() {
         if context.target.entity_type != target_type {
             return Err(EvidenceError::TargetMatchingPolicyRejected);
@@ -3399,6 +3393,10 @@ fn matching_pdp_decision(
             _ => "pdp.denied",
         }),
     }
+}
+
+fn pdp_denial_error(code: &'static str) -> EvidenceError {
+    EvidenceError::PolicyDenied { code }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3638,11 +3636,10 @@ fn collapse_matching_error(
         | EvidenceError::RelationshipMatchAmbiguous
         | EvidenceError::RelationshipAttributesInsufficient
         | EvidenceError::RelationshipPolicyRejected
-        | EvidenceError::RelationshipPurposeNotAllowed) => {
-            EvidenceError::MatchingEvidenceNotAvailable {
-                audit_code: matching_error.audit_code(),
-            }
-        }
+        | EvidenceError::RelationshipPurposeNotAllowed
+        | EvidenceError::PolicyDenied { .. }) => EvidenceError::MatchingEvidenceNotAvailable {
+            audit_code: matching_error.audit_code(),
+        },
         other => other,
     }
 }
@@ -4027,11 +4024,13 @@ fn cel_root_bindings(
             .claims
             .get(&binding.claim)
             .ok_or(EvidenceError::RuleEvaluationFailed)?;
+        let value = cel_project_claim_value(ctx, &binding.claim, result)?;
+        let satisfied = value.as_ref().and_then(Value::as_bool);
         claim_values.insert(
             alias.clone(),
             json!({
-                "value": result.value,
-                "satisfied": result.value.as_bool(),
+                "value": value,
+                "satisfied": satisfied,
                 "claim_id": result.claim_id,
                 "version": result.claim_version,
             }),
@@ -4069,6 +4068,22 @@ fn cel_root_bindings(
         ctx.config,
     )?;
     Ok(root_bindings)
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn cel_project_claim_value(
+    ctx: &CelEvaluationContext<'_>,
+    claim_id: &str,
+    result: &ClaimResultInternal,
+) -> Result<Option<Value>, EvidenceError> {
+    if result.redaction_fields.is_empty() {
+        return Ok(Some(result.value.clone()));
+    }
+    let claim = find_claim_version(ctx.evidence, claim_id, &result.claim_version)?;
+    if supports_object_field_redaction(claim.value.value_type.as_str(), &result.redaction_fields) {
+        return redact_object_fields(&result.value, &result.redaction_fields);
+    }
+    Ok(None)
 }
 
 #[cfg(feature = "registry-notary-cel")]
@@ -4581,6 +4596,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
     use registry_notary_core::Hashed;
 
     #[derive(Debug, Default)]
@@ -5904,6 +5921,92 @@ mod tests {
         assert_eq!(view.value, Some(json!({"name": "Ada"})));
     }
 
+    #[tokio::test]
+    async fn issued_sd_jwt_disclosure_uses_view_claim_redacted_object_value() {
+        const RAW_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
+
+        let keys = SelfAttestationRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
+        let mut claim = test_claim("household-summary", Vec::new(), false);
+        claim.value.value_type = "object".to_string();
+        let result = test_claim_result(
+            "household-summary",
+            json!({
+                "name": "Ada",
+                "household_id": "hh-1",
+                "ssn": "123-45-6789"
+            }),
+            BTreeSet::from(["ssn".to_string()]),
+        );
+        let view = view_claim(
+            &keys,
+            &result,
+            &claim,
+            DisclosureProfile::Value,
+            FORMAT_CLAIM_RESULT_JSON,
+        )
+        .expect("configured object field is redacted before issuance");
+        assert_eq!(
+            view.value,
+            Some(json!({
+                "name": "Ada",
+                "household_id": "hh-1"
+            }))
+        );
+
+        let issuer = registry_notary_core::sd_jwt::EvidenceIssuer::from_jwk_str(
+            RAW_JWK,
+            "did:web:issuer.test#key-1".to_string(),
+        )
+        .expect("test issuer builds");
+        let profile = CredentialProfileConfig {
+            format: FORMAT_SD_JWT_VC.to_string(),
+            issuer: "did:web:issuer.test".to_string(),
+            signing_key: "issuer-key".to_string(),
+            vct: "https://vct.example/test".to_string(),
+            validity_seconds: 60,
+            holder_binding: Default::default(),
+            allowed_claims: Vec::new(),
+            disclosure: Default::default(),
+        };
+        let signed = registry_notary_core::sd_jwt::issue(
+            &profile,
+            &issuer,
+            &[view],
+            "subject-ref",
+            None,
+            OffsetDateTime::UNIX_EPOCH,
+            registry_notary_core::sd_jwt::IssueOptions::default(),
+        )
+        .await
+        .expect("credential issues");
+        let disclosures = signed
+            .disclosures
+            .iter()
+            .map(|disclosure| {
+                serde_json::from_slice::<Value>(
+                    &URL_SAFE_NO_PAD
+                        .decode(disclosure)
+                        .expect("disclosure decodes as base64url"),
+                )
+                .expect("disclosure decodes as JSON")
+            })
+            .collect::<Vec<_>>();
+        let disclosure = disclosures
+            .iter()
+            .find(|disclosure| disclosure.get(1) == Some(&json!("household-summary")))
+            .expect("household-summary disclosure exists");
+        let disclosure_json = serde_json::to_string(&disclosures).expect("disclosures serialize");
+
+        assert_eq!(disclosure[2]["value"]["name"], json!("Ada"));
+        assert_eq!(disclosure[2]["value"]["household_id"], json!("hh-1"));
+        assert!(disclosure[2]["value"].get("ssn").is_none());
+        assert!(!disclosure_json.contains("ssn"), "{disclosure_json}");
+        assert!(
+            !disclosure_json.contains("123-45-6789"),
+            "{disclosure_json}"
+        );
+    }
+
     #[test]
     fn matching_pdp_decision_uses_shared_contract() {
         let mut binding = test_source_binding();
@@ -6121,6 +6224,83 @@ mod tests {
             true
         )
         .is_ok());
+    }
+
+    #[test]
+    fn matching_policy_validation_preserves_stable_pdp_denials() {
+        let mut binding = test_source_binding();
+        binding.matching.allowed_purposes = vec!["benefits".to_string()];
+        let context = EvidenceRequestContext {
+            requester: None,
+            target: EvidenceEntity::new("Person"),
+            relationship: None,
+            on_behalf_of: None,
+        };
+        let default_trusted_policy = TrustedPolicyContext::default();
+
+        let error = validate_matching_policy(
+            &EvidenceConfig::default(),
+            &binding,
+            &context,
+            "marketing",
+            &default_trusted_policy,
+        )
+        .expect_err("wrong purpose must be a stable PDP denial");
+        assert!(matches!(
+            error,
+            EvidenceError::PolicyDenied {
+                code: registry_platform_pdp::PURPOSE_NOT_PERMITTED
+            }
+        ));
+
+        binding.matching.allowed_assurance = vec!["substantial".to_string()];
+        let error = validate_matching_policy(
+            &EvidenceConfig::default(),
+            &binding,
+            &context,
+            "benefits",
+            &default_trusted_policy,
+        )
+        .expect_err("insufficient assurance must be a stable PDP denial");
+        assert!(matches!(
+            error,
+            EvidenceError::PolicyDenied {
+                code: registry_platform_pdp::ASSURANCE_INSUFFICIENT
+            }
+        ));
+
+        binding.matching.max_source_age_seconds = Some(60);
+        let error = validate_matching_freshness_policy(
+            &EvidenceConfig::default(),
+            &binding,
+            &context,
+            "benefits",
+            &TrustedPolicyContext {
+                assurance_level: Some("substantial".to_string()),
+                ..TrustedPolicyContext::default()
+            },
+            None,
+        )
+        .expect_err("missing source observation age must be a stable PDP denial");
+        assert!(matches!(
+            error,
+            EvidenceError::PolicyDenied {
+                code: registry_platform_pdp::EVIDENCE_STALE
+            }
+        ));
+
+        binding.matching.collapse_matching_errors = true;
+        assert!(matches!(
+            collapse_matching_error(
+                &binding,
+                EvidenceError::PolicyDenied {
+                    code: registry_platform_pdp::EVIDENCE_STALE,
+                },
+            ),
+            EvidenceError::MatchingEvidenceNotAvailable {
+                audit_code: registry_platform_pdp::EVIDENCE_STALE
+            }
+        ));
     }
 
     #[test]
@@ -6384,6 +6564,65 @@ mod tests {
         );
         assert!(runtimes[0].assurance.pinned);
         assert!(runtimes[0].assurance.runtime_verified);
+    }
+
+    #[cfg(feature = "registry-notary-cel")]
+    #[test]
+    fn cel_root_bindings_redact_dependent_object_claim_values() {
+        let mut dependency = test_claim("dependency", Vec::new(), false);
+        dependency.value.value_type = "object".to_string();
+        let selected = test_claim("selected", vec!["dependency"], false);
+        let evidence = EvidenceConfig {
+            enabled: true,
+            service_id: "runtime.test".to_string(),
+            claims: vec![selected.clone(), dependency],
+            ..EvidenceConfig::default()
+        };
+        let bindings = CelBindingsConfig {
+            claims: BTreeMap::from([(
+                "prior".to_string(),
+                registry_notary_core::ClaimBindingConfig {
+                    claim: "dependency".to_string(),
+                    binding_type: None,
+                },
+            )]),
+            vars: BTreeMap::new(),
+        };
+        let claims = BTreeMap::from([(
+            "dependency".to_string(),
+            test_claim_result(
+                "dependency",
+                json!({
+                    "name": "Ada",
+                    "ssn": "123-45-6789"
+                }),
+                BTreeSet::from(["ssn".to_string()]),
+            ),
+        )]);
+        let sources = BTreeMap::new();
+        let target = EvidenceEntity::new("Person");
+        let config = RegistryNotaryCelConfig::default();
+
+        let root = cel_root_bindings(&CelEvaluationContext {
+            evidence: &evidence,
+            claim: &selected,
+            expression: "claims.prior.value.ssn",
+            bindings: &bindings,
+            claims: &claims,
+            sources: &sources,
+            subject: None,
+            target: &target,
+            purpose: "benefits",
+            today: "2026-06-18".to_string(),
+            worker: None,
+            config: &config,
+        })
+        .expect("CEL root bindings build");
+        let prior = &root["claims"]["prior"];
+
+        assert_eq!(prior["value"], json!({"name": "Ada"}));
+        assert!(prior["value"].get("ssn").is_none());
+        assert_eq!(prior["satisfied"], Value::Null);
     }
 
     #[tokio::test]

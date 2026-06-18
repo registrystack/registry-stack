@@ -456,11 +456,25 @@ mod tests {
     fn issued_credential_disclosures_do_not_reintroduce_redacted_object_fields() {
         let issuer = EvidenceIssuer::from_jwk_str(RAW_JWK, "did:web:issuer.test#key-1".to_string())
             .expect("test issuer builds");
-        let mut result = claim_result("household-summary");
-        result.value = Some(json!({
+        let source_value = json!({
             "name": "Ada",
-            "household_id": "hh-1"
-        }));
+            "household_id": "hh-1",
+            "ssn": "123-45-6789"
+        });
+        assert!(
+            source_value.to_string().contains("123-45-6789"),
+            "the source fixture must contain the PII this regression protects"
+        );
+        let mut redacted_value = source_value
+            .as_object()
+            .expect("source fixture is an object")
+            .clone();
+        assert!(
+            redacted_value.remove("ssn").is_some(),
+            "the test redaction fixture must remove an existing field"
+        );
+        let mut result = claim_result("household-summary");
+        result.value = Some(Value::Object(redacted_value));
 
         let signed = issue(
             &test_profile(),
@@ -473,10 +487,20 @@ mod tests {
         )
         .expect("credential issues");
         let disclosures = decoded_disclosures(&signed);
+        let household_disclosure = disclosures
+            .iter()
+            .find(|disclosure| disclosure.get(1) == Some(&json!("household-summary")))
+            .expect("household-summary disclosure exists");
         let disclosure_json = serde_json::to_string(&disclosures).expect("disclosures serialize");
 
         assert!(disclosure_json.contains("household-summary"));
         assert!(disclosure_json.contains("Ada"));
+        assert_eq!(household_disclosure[2]["value"]["name"], json!("Ada"));
+        assert_eq!(
+            household_disclosure[2]["value"]["household_id"],
+            json!("hh-1")
+        );
+        assert!(household_disclosure[2]["value"].get("ssn").is_none());
         assert!(!disclosure_json.contains("ssn"), "{disclosure_json}");
         assert!(
             !disclosure_json.contains("123-45-6789"),
