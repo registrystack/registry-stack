@@ -36,6 +36,17 @@ const MAX_ENTITY_FIELDS: usize = 512;
 const MAX_ENTITY_RELATIONSHIPS: usize = 512;
 const MAX_CODELIST_CONCEPTS: usize = 1024;
 const MAX_URI_LIST_ITEMS: usize = 128;
+const ECOSYSTEM_BINDING_TYPE_GOVERNED_EVIDENCE: &str = "governed-evidence";
+const ODRL_ENFORCEMENT_PROFILE: &str = "registry-evidence-gateway-pdp/v1";
+const SUPPORTED_ODRL_ENFORCEMENT_TERMS: &[&str] = &[
+    "odrl:purpose",
+    "odrl:spatial",
+    "registry:pdp:assurance",
+    "registry:pdp:source_age",
+    "registry:pdp:legal_basis",
+    "registry:pdp:consent",
+    "registry:pdp:redaction",
+];
 const BUILTIN_VOCABULARIES: &[(&str, &str)] = &[
     ("adms", "http://www.w3.org/ns/adms#"),
     ("cccev", "http://data.europa.eu/m8g/"),
@@ -187,6 +198,8 @@ pub struct MetadataManifest {
     #[serde(default)]
     pub evaluation_profiles: Vec<EvaluationProfileManifest>,
     #[serde(default)]
+    pub ecosystem_bindings: Vec<EcosystemBindingManifest>,
+    #[serde(default)]
     pub requirements: Vec<RequirementManifest>,
     #[serde(default)]
     pub evidence_types: Vec<EvidenceTypeManifest>,
@@ -238,6 +251,8 @@ struct MetadataManifestFields {
     #[serde(default)]
     evaluation_profiles: Vec<EvaluationProfileManifest>,
     #[serde(default)]
+    ecosystem_bindings: Vec<EcosystemBindingManifest>,
+    #[serde(default)]
     requirements: Vec<RequirementManifest>,
     #[serde(default)]
     evidence_types: Vec<EvidenceTypeManifest>,
@@ -264,6 +279,7 @@ impl From<MetadataManifestFields> for MetadataManifest {
             profiles: fields.profiles,
             federation: fields.federation,
             evaluation_profiles: fields.evaluation_profiles,
+            ecosystem_bindings: fields.ecosystem_bindings,
             requirements: fields.requirements,
             evidence_types: fields.evidence_types,
             authorities: fields.authorities,
@@ -353,6 +369,46 @@ pub struct EvaluationProfileManifest {
     pub subject_id_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_source_observed_age_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_pack: Option<EvidencePackMetadata>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct EvidencePackMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub odrl_policy_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub odrl_enforcement: Option<OdrlEnforcementProfile>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct OdrlEnforcementProfile {
+    pub profile: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub constraint_terms: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct EcosystemBindingManifest {
+    pub id: String,
+    pub version: String,
+    pub profile: String,
+    #[serde(rename = "type")]
+    pub binding_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<LocalizedText>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<LocalizedText>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_pack: Option<EvidencePackMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<ProfileClaim>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -932,6 +988,7 @@ pub struct CompiledMetadataInner {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub federation: Option<FederationManifest>,
     pub evaluation_profiles: Vec<EvaluationProfileManifest>,
+    pub ecosystem_bindings: Vec<EcosystemBindingManifest>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -1367,6 +1424,10 @@ impl CompiledMetadata {
         &self.inner.evaluation_profiles
     }
 
+    pub fn ecosystem_bindings(&self) -> &[EcosystemBindingManifest] {
+        &self.inner.ecosystem_bindings
+    }
+
     pub fn filter(
         &self,
         predicate: impl Fn(&CompiledDataset, &CompiledEntity) -> bool,
@@ -1450,6 +1511,7 @@ impl CompiledMetadata {
                 profiles: self.inner.profiles.clone(),
                 federation: self.inner.federation.clone(),
                 evaluation_profiles: self.inner.evaluation_profiles.clone(),
+                ecosystem_bindings: self.inner.ecosystem_bindings.clone(),
             }),
         }
     }
@@ -1557,8 +1619,205 @@ fn validate_evaluation_profiles<'a>(
             format!("{path}.subject_id_type"),
             errors,
         );
+        validate_optional_evidence_pack_metadata(
+            profile.evidence_pack.as_ref(),
+            format!("{path}.evidence_pack"),
+            errors,
+        );
     }
     rulesets
+}
+
+fn validate_ecosystem_bindings(manifest: &MetadataManifest, errors: &mut Vec<ValidationError>) {
+    let mut ids = BTreeSet::new();
+    for (index, binding) in manifest.ecosystem_bindings.iter().enumerate() {
+        let path = format!("ecosystem_bindings[{index}]");
+        validate_non_empty(&binding.id, format!("{path}.id"), errors);
+        validate_non_empty(&binding.version, format!("{path}.version"), errors);
+        if !binding.id.trim().is_empty()
+            && !binding.version.trim().is_empty()
+            && !ids.insert((binding.id.as_str(), binding.version.as_str()))
+        {
+            errors.push(ValidationError::new(
+                format!("{path}.id"),
+                "ecosystem binding id and version must be unique",
+            ));
+        }
+        validate_non_empty(&binding.profile, format!("{path}.profile"), errors);
+        validate_non_empty(&binding.binding_type, format!("{path}.type"), errors);
+        let is_governed_evidence = binding.binding_type == ECOSYSTEM_BINDING_TYPE_GOVERNED_EVIDENCE;
+        if !binding.binding_type.trim().is_empty() && !is_governed_evidence {
+            errors.push(ValidationError::new(
+                format!("{path}.type"),
+                format!(
+                    "ecosystem binding type must be {ECOSYSTEM_BINDING_TYPE_GOVERNED_EVIDENCE}"
+                ),
+            ));
+        }
+        if let Some(title) = binding.title.as_ref() {
+            validate_non_empty(&title.text(), format!("{path}.title"), errors);
+        }
+        if let Some(description) = binding.description.as_ref() {
+            validate_non_empty(&description.text(), format!("{path}.description"), errors);
+        }
+        validate_optional_evidence_pack_metadata(
+            binding.evidence_pack.as_ref(),
+            format!("{path}.evidence_pack"),
+            errors,
+        );
+        if is_governed_evidence {
+            validate_governed_evidence_pack(binding.evidence_pack.as_ref(), &path, errors);
+        }
+        let mut profile_ids = BTreeSet::new();
+        for (profile_index, profile) in binding.profiles.iter().enumerate() {
+            let profile_path = format!("{path}.profiles[{profile_index}]");
+            validate_id(&profile.id, format!("{profile_path}.id"), errors);
+            validate_non_empty(&profile.version, format!("{profile_path}.version"), errors);
+            if !profile_ids.insert(profile.id.as_str()) {
+                errors.push(ValidationError::new(
+                    format!("{profile_path}.id"),
+                    "profile id must be unique within an ecosystem binding",
+                ));
+            }
+        }
+    }
+}
+
+fn validate_governed_evidence_pack(
+    evidence_pack: Option<&EvidencePackMetadata>,
+    path: &str,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(evidence_pack) = evidence_pack else {
+        errors.push(ValidationError::new(
+            format!("{path}.evidence_pack"),
+            "governed-evidence bindings must declare evidence_pack metadata",
+        ));
+        return;
+    };
+    if evidence_pack
+        .policy_id
+        .as_deref()
+        .is_none_or(|policy_id| policy_id.trim().is_empty())
+    {
+        errors.push(ValidationError::new(
+            format!("{path}.evidence_pack.policy_id"),
+            "governed-evidence bindings must declare evidence_pack policy_id",
+        ));
+    }
+    if evidence_pack
+        .policy_hash
+        .as_deref()
+        .is_none_or(|policy_hash| policy_hash.trim().is_empty())
+    {
+        errors.push(ValidationError::new(
+            format!("{path}.evidence_pack.policy_hash"),
+            "governed-evidence bindings must declare evidence_pack policy_hash",
+        ));
+    }
+    if evidence_pack.odrl_enforcement.is_none() {
+        errors.push(ValidationError::new(
+            format!("{path}.evidence_pack.odrl_enforcement"),
+            "governed-evidence bindings must declare an ODRL enforcement profile",
+        ));
+    }
+}
+
+fn validate_optional_evidence_pack_metadata(
+    evidence_pack: Option<&EvidencePackMetadata>,
+    path: String,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(evidence_pack) = evidence_pack else {
+        return;
+    };
+    validate_optional_non_empty(
+        evidence_pack.policy_id.as_deref(),
+        format!("{path}.policy_id"),
+        errors,
+    );
+    validate_optional_non_empty(
+        evidence_pack.policy_version.as_deref(),
+        format!("{path}.policy_version"),
+        errors,
+    );
+    validate_optional_non_empty(
+        evidence_pack.policy_hash.as_deref(),
+        format!("{path}.policy_hash"),
+        errors,
+    );
+    if let Some(policy_hash) = evidence_pack.policy_hash.as_deref() {
+        validate_sha256_digest(policy_hash, format!("{path}.policy_hash"), errors);
+    }
+    validate_optional_non_empty(
+        evidence_pack.odrl_policy_url.as_deref(),
+        format!("{path}.odrl_policy_url"),
+        errors,
+    );
+    if let Some(odrl_policy_url) = evidence_pack.odrl_policy_url.as_deref() {
+        validate_https_url(odrl_policy_url, format!("{path}.odrl_policy_url"), errors);
+    }
+    validate_odrl_enforcement_profile(
+        evidence_pack.odrl_enforcement.as_ref(),
+        format!("{path}.odrl_enforcement"),
+        errors,
+    );
+}
+
+fn validate_odrl_enforcement_profile(
+    enforcement: Option<&OdrlEnforcementProfile>,
+    path: String,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(enforcement) = enforcement else {
+        return;
+    };
+    validate_non_empty(&enforcement.profile, format!("{path}.profile"), errors);
+    if !enforcement.profile.trim().is_empty() && enforcement.profile != ODRL_ENFORCEMENT_PROFILE {
+        errors.push(ValidationError::new(
+            format!("{path}.profile"),
+            format!("ODRL enforcement profile must be {ODRL_ENFORCEMENT_PROFILE}"),
+        ));
+    }
+    if enforcement.constraint_terms.is_empty() {
+        errors.push(ValidationError::new(
+            format!("{path}.constraint_terms"),
+            "ODRL enforcement profile must list at least one constraint term",
+        ));
+    }
+    let mut terms = BTreeSet::new();
+    for (index, term) in enforcement.constraint_terms.iter().enumerate() {
+        let term_path = format!("{path}.constraint_terms[{index}]");
+        validate_non_empty(term, term_path.clone(), errors);
+        if !term.trim().is_empty() && !SUPPORTED_ODRL_ENFORCEMENT_TERMS.contains(&term.as_str()) {
+            errors.push(ValidationError::new(
+                term_path.clone(),
+                "unsupported ODRL enforcement term",
+            ));
+        }
+        if !terms.insert(term.as_str()) {
+            errors.push(ValidationError::new(
+                term_path,
+                "ODRL enforcement terms must be unique",
+            ));
+        }
+    }
+}
+
+fn validate_sha256_digest(value: &str, path: impl Into<String>, errors: &mut Vec<ValidationError>) {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        errors.push(ValidationError::new(
+            path,
+            "digest must use sha256:<64 hex>",
+        ));
+        return;
+    };
+    if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        errors.push(ValidationError::new(
+            path,
+            "digest must use sha256:<64 hex>",
+        ));
+    }
 }
 
 fn validate_collection_limits(manifest: &MetadataManifest, errors: &mut Vec<ValidationError>) {
@@ -1578,6 +1837,12 @@ fn validate_collection_limits(manifest: &MetadataManifest, errors: &mut Vec<Vali
     validate_count_limit(
         manifest.evaluation_profiles.len(),
         "evaluation_profiles",
+        MAX_TOP_LEVEL_COLLECTION_ITEMS,
+        errors,
+    );
+    validate_count_limit(
+        manifest.ecosystem_bindings.len(),
+        "ecosystem_bindings",
         MAX_TOP_LEVEL_COLLECTION_ITEMS,
         errors,
     );
@@ -1809,6 +2074,7 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
 
     validate_federation(manifest.federation.as_ref(), &mut errors);
     let evaluation_profile_rulesets = validate_evaluation_profiles(manifest, &mut errors);
+    validate_ecosystem_bindings(manifest, &mut errors);
     let requirement_ids = validate_requirements(manifest, &mut errors);
     let evidence_type_ids = validate_evidence_types(manifest, &requirement_ids, &mut errors);
     validate_requirement_evidence_type_lists(manifest, &evidence_type_ids, &mut errors);
@@ -2083,6 +2349,7 @@ pub fn compile_manifest(manifest: &MetadataManifest) -> Result<CompiledMetadata,
             profiles: manifest.profiles.clone(),
             federation: manifest.federation.clone(),
             evaluation_profiles: manifest.evaluation_profiles.clone(),
+            ecosystem_bindings: manifest.ecosystem_bindings.clone(),
         }),
     })
 }
@@ -2134,6 +2401,9 @@ pub fn render_catalog(compiled: &CompiledMetadata) -> Value {
     }
     if !compiled.evaluation_profiles().is_empty() {
         catalog["evaluation_profiles"] = json!(compiled.evaluation_profiles());
+    }
+    if !compiled.ecosystem_bindings().is_empty() {
+        catalog["ecosystem_bindings"] = json!(compiled.ecosystem_bindings());
     }
     catalog
 }
@@ -5868,6 +6138,16 @@ fn records_collection_json() -> Value {
 
 fn validate_non_empty(value: &str, path: impl Into<String>, errors: &mut Vec<ValidationError>) {
     if value.trim().is_empty() {
+        errors.push(ValidationError::new(path, "value must not be empty"));
+    }
+}
+
+fn validate_optional_non_empty(
+    value: Option<&str>,
+    path: impl Into<String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if value.is_some_and(|value| value.trim().is_empty()) {
         errors.push(ValidationError::new(path, "value must not be empty"));
     }
 }

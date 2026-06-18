@@ -4,6 +4,8 @@
 
 Release label: pre-1.0 technical release for evaluation and integration pilots.
 
+[Public test coverage dashboard](https://docs.registrystack.org/reference/test-coverage/) tracks the CI line-coverage signal for this repository.
+
 Registry Manifest is the commons contract and schema kernel for registry
 metadata. It is a portable Rust workspace for modeling, validating, and
 rendering standards-facing registry metadata without running Registry Relay.
@@ -135,7 +137,10 @@ Registry Notary delegated-evaluation MVP:
 - top-level `federation` metadata with `node_id`, `issuer`, `jwks_uri`,
   `federation_api`, and `supported_protocol_versions`;
 - top-level `evaluation_profiles` that bind public profile IDs and `ruleset`
-  IDs to Notary claim IDs and subject ID types;
+  IDs to Notary claim IDs and subject ID types, optionally with `evidence_pack`
+  policy identity metadata;
+- top-level `ecosystem_bindings` that publish governed evidence binding IDs,
+  versions, profiles, and ODRL enforcement metadata for runtime PDP selection;
 - `registry-notary` evidence offerings whose `access.ruleset` references one
   of those evaluation profile rulesets.
 

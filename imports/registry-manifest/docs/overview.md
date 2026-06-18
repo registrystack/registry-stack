@@ -109,10 +109,9 @@ A full working example is at
 
 ## The metadata model
 
-The top-level struct is `MetadataManifest`, which groups ten manifest types:
-`CatalogManifest`, `DatasetManifest`, `EntityManifest`, `ServiceManifest`, `FormManifest`,
-`EvidenceOfferingManifest`, `DatasetPolicyManifest`, `RequirementManifest`,
-`EvidenceTypeManifest`, and `CodelistManifest`.
+The top-level struct is `MetadataManifest`, which groups catalog, dataset,
+entity, service, form, evidence offering, dataset policy, requirement, evidence
+type, codelist, federation, evaluation profile, and ecosystem binding metadata.
 Full field-by-field documentation is in [Registry Manifest reference](./reference.md).
 
 Grouped evidence is explicit.
