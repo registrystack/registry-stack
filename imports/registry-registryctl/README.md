@@ -107,6 +107,20 @@ runs the lookup workflow for each batch item. `--batch-mode native` runs the
 workflow once with `state.data.items` and requires the Registry Notary adaptor
 so authors can return validated per-item results from OpenFn.
 
+## Hosted lab SDK environment
+
+For public hosted-lab quickstarts, fetch current SDK-ready Notary environment
+values from the lab manifest:
+
+```sh
+registryctl lab env --credential agri-evidence
+```
+
+By default this emits shell exports for the hosted agriculture Notary base URL,
+demo bearer token, and purpose URI. These are public synthetic lab credentials,
+not production secret-handling guidance. Use `--format json` for structured
+output, including API-key credentials such as `opencrvs-api-key`.
+
 ## Development
 
 ```sh
