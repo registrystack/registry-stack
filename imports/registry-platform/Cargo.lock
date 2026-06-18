@@ -2188,6 +2188,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-platform-pdp"
+version = "0.3.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "registry-platform-replay"
 version = "0.3.0"
 dependencies = [
