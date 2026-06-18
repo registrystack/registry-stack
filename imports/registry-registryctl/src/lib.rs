@@ -49,11 +49,6 @@ const REGISTRYCTL_INSTALL_SCRIPT: &str =
     "https://raw.githubusercontent.com/jeremi/registry-registryctl/main/install.sh";
 const UPDATE_CHECK_CACHE_SECONDS: u64 = 60 * 60 * 24;
 const LAB_MANIFEST_URL: &str = "https://lab.registrystack.org/api/lab.json";
-const AGRI_EVIDENCE_PURPOSE: &str =
-    "https://demo.example.gov/purpose/nagdi/climate-smart-input-support";
-const DHIS2_EVIDENCE_PURPOSE: &str =
-    "https://demo.example.gov/purpose/dhis2-openfn-health-evidence";
-const OPENCRVS_EVIDENCE_PURPOSE: &str = "https://demo.example.gov/purpose/opencrvs-dci-lab";
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum NotarySource {
@@ -715,7 +710,6 @@ impl LabCredential {
                     .service_for_url(base_url)
                     .and_then(|service| service.purpose_uri())
             })
-            .or_else(|| known_lab_purpose(&self.id))
             .ok_or_else(|| {
                 anyhow!(
                     "hosted lab credential {:?} does not declare a purpose URI; add purpose_uri/default_purpose to the manifest",
@@ -827,15 +821,6 @@ fn required_trimmed<'a>(
         bail!("hosted lab credential {credential_id:?} is missing required {field}");
     };
     Ok(value)
-}
-
-fn known_lab_purpose(credential_id: &str) -> Option<&'static str> {
-    match credential_id {
-        "agri-evidence" => Some(AGRI_EVIDENCE_PURPOSE),
-        "dhis2-api-key" | "dhis2-bearer" => Some(DHIS2_EVIDENCE_PURPOSE),
-        "opencrvs-api-key" => Some(OPENCRVS_EVIDENCE_PURPOSE),
-        _ => None,
-    }
 }
 
 fn purpose_uri(value: Option<&str>) -> Option<&str> {
@@ -4278,7 +4263,8 @@ mod tests {
                   "id": "agri-evidence",
                   "label": "Agriculture Notary bearer token",
                   "service_url": "https://agriculture-notary.lab.registrystack.org",
-                  "token": "agri-token"
+                  "token": "agri-token",
+                  "default_purpose": "https://demo.example.gov/purpose/nagdi/climate-smart-input-support"
                 }
               ]
             }"#,
@@ -4292,10 +4278,9 @@ mod tests {
             "export REGISTRY_NOTARY_BASE_URL='https://agriculture-notary.lab.registrystack.org'"
         ));
         assert!(output.contains("export REGISTRY_NOTARY_BEARER_TOKEN='agri-token'"));
-        assert!(output.contains(&format!(
-            "export REGISTRY_NOTARY_PURPOSE='{}'",
-            AGRI_EVIDENCE_PURPOSE
-        )));
+        assert!(output.contains(
+            "export REGISTRY_NOTARY_PURPOSE='https://demo.example.gov/purpose/nagdi/climate-smart-input-support'"
+        ));
         assert!(!output.contains("do-not-print"));
         assert!(!output.contains("dhis2-bearer"));
     }
@@ -4309,7 +4294,8 @@ mod tests {
                   "id": "opencrvs-api-key",
                   "auth_scheme": "api_key",
                   "service_url": "https://opencrvs-notary.lab.registrystack.org",
-                  "token": "api-key-token"
+                  "token": "api-key-token",
+                  "default_purpose": "https://demo.example.gov/purpose/opencrvs-dci-lab"
                 }
               ]
             }"#,
@@ -4322,7 +4308,10 @@ mod tests {
         assert_eq!(value["credential_id"], "opencrvs-api-key");
         assert_eq!(value["auth_scheme"], "api_key");
         assert_eq!(value["token"], "api-key-token");
-        assert_eq!(value["purpose"], OPENCRVS_EVIDENCE_PURPOSE);
+        assert_eq!(
+            value["purpose"],
+            "https://demo.example.gov/purpose/opencrvs-dci-lab"
+        );
     }
 
     #[test]
@@ -4350,6 +4339,28 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&output).unwrap();
 
         assert_eq!(value["purpose"], "https://demo.example.gov/purpose/custom");
+    }
+
+    #[test]
+    fn lab_env_rejects_credentials_without_manifest_purpose() {
+        let error = lab_env_output_from_manifest(
+            r#"{
+              "credentials": [
+                {
+                  "id": "custom-bearer",
+                  "service_url": "https://custom-notary.lab.registrystack.org",
+                  "token": "custom-token"
+                }
+              ]
+            }"#,
+            "custom-bearer",
+            LabEnvFormat::Shell,
+        )
+        .unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains("does not declare a purpose URI"));
+        assert!(message.contains("default_purpose"));
     }
 
     #[test]
