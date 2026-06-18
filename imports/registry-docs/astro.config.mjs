@@ -5,6 +5,7 @@ import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
 import mermaid from 'astro-mermaid';
+import remarkGfm from 'remark-gfm';
 // Single source of truth for the machine-discovery pointer. Reused as the
 // llms.txt `details` block so it can never drift from the header the per-page
 // .md endpoint prepends (src/pages/[...slug].md.ts).
@@ -53,6 +54,9 @@ export default defineConfig({
   site: 'https://docs.registrystack.org',
   base,
   trailingSlash: 'always',
+  markdown: {
+    remarkPlugins: [remarkGfm],
+  },
   // Redirects for content that moved in the docs/marketing split (Wave 4).
   // External redirects (to marketing) absorb the migrated persuasion pages;
   // internal redirects map the retired /projects/* and /capabilities/* routes
