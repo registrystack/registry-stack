@@ -47,8 +47,10 @@ jobs:
       - name: Patch Coolify image env vars
         env:
           COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
-          COOLIFY_API_BASE_URL: https://cool.pitgenius.com/api/v1
-          REGISTRY_LAB_APP_UUID: klhnsuoye8lwuamp0bko387t
+          COOLIFY_API_BASE_URL: ${{ vars.COOLIFY_API_BASE_URL }}
+          COOLIFY_REGISTRY_LAB_APP_UUID: ${{ vars.COOLIFY_REGISTRY_LAB_APP_UUID }}
+          COOLIFY_HOSTED_SOCIAL_APP_UUID: ${{ vars.COOLIFY_HOSTED_SOCIAL_APP_UUID }}
+          COOLIFY_HOSTED_AGRI_APP_UUID: ${{ vars.COOLIFY_HOSTED_AGRI_APP_UUID }}
           REGISTRY_RELAY_IMAGE: ${{ inputs.registry_relay_image }}
           REGISTRY_NOTARY_IMAGE: ${{ inputs.registry_notary_image }}
           REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE: ${{ inputs.registry_notary_openfn_sidecar_image }}
@@ -59,72 +61,115 @@ jobs:
             echo "::error::COOLIFY_API_TOKEN is not configured."
             exit 1
           fi
+          missing=0
+          for name in COOLIFY_API_BASE_URL COOLIFY_REGISTRY_LAB_APP_UUID COOLIFY_HOSTED_SOCIAL_APP_UUID COOLIFY_HOSTED_AGRI_APP_UUID; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::${name} is not configured."
+              missing=1
+            fi
+          done
+          if [ "$missing" -eq 1 ]; then
+            exit 1
+          fi
+          api_base="${COOLIFY_API_BASE_URL%/}"
 
           patch_env() {
-            key="$1"
-            value="$2"
+            app="$1"
+            label="$2"
+            key="$3"
+            value="$4"
             curl -fsS \
               -X PATCH \
               -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
               -H "Content-Type: application/json" \
-              "${COOLIFY_API_BASE_URL}/applications/${REGISTRY_LAB_APP_UUID}/envs" \
+              "${api_base}/applications/${app}/envs" \
               -d "$(jq -nc --arg key "$key" --arg value "$value" '{key: $key, value: $value, is_preview: false}')"
             echo
+            echo "patched app=${label} key=${key}"
           }
 
-          patch_env REGISTRY_RELAY_IMAGE "${REGISTRY_RELAY_IMAGE}"
-          patch_env REGISTRY_NOTARY_IMAGE "${REGISTRY_NOTARY_IMAGE}"
-          patch_env REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE "${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE}"
+          patch_product_images() {
+            app="$1"
+            label="$2"
+            patch_env "$app" "$label" REGISTRY_RELAY_IMAGE "${REGISTRY_RELAY_IMAGE}"
+            patch_env "$app" "$label" REGISTRY_NOTARY_IMAGE "${REGISTRY_NOTARY_IMAGE}"
+          }
 
-      - name: Trigger Registry Lab deploy
+          patch_product_images "${COOLIFY_REGISTRY_LAB_APP_UUID}" monolith
+          patch_env "${COOLIFY_REGISTRY_LAB_APP_UUID}" monolith REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE "${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE}"
+          patch_product_images "${COOLIFY_HOSTED_SOCIAL_APP_UUID}" social
+          patch_product_images "${COOLIFY_HOSTED_AGRI_APP_UUID}" agri
+
+      - name: Trigger hosted deploys
         id: deploy
         env:
           COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
-          COOLIFY_API_BASE_URL: https://cool.pitgenius.com/api/v1
-          REGISTRY_LAB_APP_UUID: klhnsuoye8lwuamp0bko387t
+          COOLIFY_API_BASE_URL: ${{ vars.COOLIFY_API_BASE_URL }}
+          COOLIFY_REGISTRY_LAB_APP_UUID: ${{ vars.COOLIFY_REGISTRY_LAB_APP_UUID }}
+          COOLIFY_HOSTED_SOCIAL_APP_UUID: ${{ vars.COOLIFY_HOSTED_SOCIAL_APP_UUID }}
+          COOLIFY_HOSTED_AGRI_APP_UUID: ${{ vars.COOLIFY_HOSTED_AGRI_APP_UUID }}
         run: |
           set -euo pipefail
-          deployment_uuid="$(
-            curl -fsS \
-            -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
-            "${COOLIFY_API_BASE_URL}/deploy?uuid=${REGISTRY_LAB_APP_UUID}&force=false" \
-            | python3 -c 'import json, sys; print(json.load(sys.stdin)["deployments"][0]["deployment_uuid"])'
-          )"
-          echo "deployment_uuid=${deployment_uuid}" >> "$GITHUB_OUTPUT"
-          echo "triggered deployment_uuid=${deployment_uuid}"
-
-      - name: Wait for Registry Lab deploy
-        env:
-          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
-          COOLIFY_API_BASE_URL: https://cool.pitgenius.com/api/v1
-          DEPLOYMENT_UUID: ${{ steps.deploy.outputs.deployment_uuid }}
-        run: |
-          set -euo pipefail
-
-          deadline=$((SECONDS + 1200))
-          while true; do
-            status="$(
+          api_base="${COOLIFY_API_BASE_URL%/}"
+          deployments_file="$(mktemp)"
+          apps=(
+            "${COOLIFY_REGISTRY_LAB_APP_UUID}|monolith"
+            "${COOLIFY_HOSTED_SOCIAL_APP_UUID}|social"
+            "${COOLIFY_HOSTED_AGRI_APP_UUID}|agri"
+          )
+          for entry in "${apps[@]}"; do
+            IFS='|' read -r app label <<<"$entry"
+            deployment_uuid="$(
               curl -fsS \
                 -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
-                "${COOLIFY_API_BASE_URL}/deployments/${DEPLOYMENT_UUID}" \
-                | python3 -c 'import json, sys; data=json.load(sys.stdin); print((data.get("status") or data.get("deployment", {}).get("status") or "").lower())'
+                "${api_base}/deploy?uuid=${app}&force=false" \
+                | python3 -c 'import json, sys; print(json.load(sys.stdin)["deployments"][0]["deployment_uuid"])'
             )"
-            echo "status deployment_uuid=${DEPLOYMENT_UUID} status=${status}"
-            case "$status" in
-              finished)
-                break
-                ;;
-              failed|cancelled|canceled|error)
-                echo "::error::Coolify deployment failed: ${status}"
-                exit 1
-                ;;
-            esac
-            if [ "$SECONDS" -ge "$deadline" ]; then
-              echo "::error::Timed out waiting for Coolify deployment ${DEPLOYMENT_UUID}"
-              exit 1
-            fi
-            sleep 15
+            printf '%s\t%s\n' "$label" "$deployment_uuid" >> "$deployments_file"
+            echo "triggered app=${label} deployment_uuid=${deployment_uuid}"
           done
+          {
+            echo "deployments<<EOF"
+            cat "$deployments_file"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Wait for hosted deploys
+        env:
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          COOLIFY_API_BASE_URL: ${{ vars.COOLIFY_API_BASE_URL }}
+          DEPLOYMENTS: ${{ steps.deploy.outputs.deployments }}
+        run: |
+          set -euo pipefail
+          api_base="${COOLIFY_API_BASE_URL%/}"
+
+          while IFS="$(printf '\t')" read -r label deployment_uuid; do
+            [ -n "$label" ] || continue
+            deadline=$((SECONDS + 1200))
+            while true; do
+              status="$(
+                curl -fsS \
+                  -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+                  "${api_base}/deployments/${deployment_uuid}" \
+                  | python3 -c 'import json, sys; data=json.load(sys.stdin); print((data.get("status") or data.get("deployment", {}).get("status") or "").lower())'
+              )"
+              echo "status app=${label} deployment_uuid=${deployment_uuid} status=${status}"
+              case "$status" in
+                finished)
+                  break
+                  ;;
+                failed|cancelled|canceled|error)
+                  echo "::error::Coolify deployment failed for ${label}: ${status}"
+                  exit 1
+                  ;;
+              esac
+              if [ "$SECONDS" -ge "$deadline" ]; then
+                echo "::error::Timed out waiting for Coolify deployment ${deployment_uuid}"
+                exit 1
+              fi
+              sleep 15
+            done
+          done <<<"${DEPLOYMENTS}"
 
       - name: Run hosted smoke
         env:
