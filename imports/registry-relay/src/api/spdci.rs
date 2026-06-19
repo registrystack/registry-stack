@@ -24,6 +24,7 @@ use ulid::Ulid;
 
 use crate::api::governed::{
     attach_pdp_audit, require_governed_read_access, GovernedAccessError, GovernedReadDecision,
+    GovernedRedactionProjection, GovernedRequestInfo,
 };
 use crate::audit::AuditContextExt;
 use crate::auth::scopes::require_scope;
@@ -132,12 +133,19 @@ async fn run_disabled_status(
     principal: Option<Extension<Principal>>,
     body: Value,
 ) -> Result<(Response, u64, Option<PdpDecisionAudit>), SpdciRunError> {
-    require_scope_for(principal, &route.entity.access.evidence_verification_scope)?;
+    let principal_ref = principal.as_ref().map(|Extension(principal)| principal);
+    require_scope_for(
+        principal_ref,
+        &route.entity.access.evidence_verification_scope,
+    )?;
     let governed_decision = require_entity_route_gates(
         runtime,
         route.config.dataset.as_str(),
         &route.entity,
         &headers,
+        principal_ref,
+        &route.entity.access.evidence_verification_scope,
+        "spdci_disabled_status",
     )?;
     if governed_decision
         .redaction_fields
@@ -221,12 +229,16 @@ async fn run_sync_search_response(
     principal: Option<Extension<Principal>>,
     body: Value,
 ) -> Result<(Response, u64, Option<PdpDecisionAudit>), SpdciRunError> {
-    require_scope_for(principal, &route.entity.access.read_scope)?;
+    let principal_ref = principal.as_ref().map(|Extension(principal)| principal);
+    require_scope_for(principal_ref, &route.entity.access.read_scope)?;
     let governed_decision = require_entity_route_gates(
         runtime,
         route.config.dataset.as_str(),
         &route.entity,
         &headers,
+        principal_ref,
+        &route.entity.access.read_scope,
+        "spdci_search",
     )?;
     let request = SearchRequest::from_body(body, &route.config)?;
     for item in &request.items {
@@ -339,12 +351,16 @@ async fn run_search_response(
     principal: Option<Extension<Principal>>,
     body: Value,
 ) -> Result<(Response, u64, Option<PdpDecisionAudit>), SpdciRunError> {
-    require_scope_for(principal, &route.entity.access.read_scope)?;
+    let principal_ref = principal.as_ref().map(|Extension(principal)| principal);
+    require_scope_for(principal_ref, &route.entity.access.read_scope)?;
     let governed_decision = require_entity_route_gates(
         runtime,
         route.config.dataset.as_str(),
         &route.entity,
         &headers,
+        principal_ref,
+        &route.entity.access.read_scope,
+        "spdci_disability_details",
     )?;
     let request = SpdciRequest::from_body(body, &route.config)?;
     require_entity_filters_for_query(
@@ -1102,11 +1118,11 @@ fn positive_status(value: &Value, positive_values: &[String]) -> bool {
         .any(|candidate| candidate.trim().eq_ignore_ascii_case(&normalized))
 }
 
-fn require_scope_for(principal: Option<Extension<Principal>>, required: &str) -> Result<(), Error> {
-    let Some(Extension(principal)) = principal else {
+fn require_scope_for(principal: Option<&Principal>, required: &str) -> Result<(), Error> {
+    let Some(principal) = principal else {
         return Err(AuthError::MissingCredential.into());
     };
-    require_scope(&principal, required)
+    require_scope(principal, required)
 }
 
 fn require_entity_route_gates(
@@ -1114,8 +1130,23 @@ fn require_entity_route_gates(
     dataset_id: &str,
     entity: &EntityModel,
     headers: &HeaderMap,
+    principal: Option<&Principal>,
+    checked_scope: &str,
+    requested_disclosure: &str,
 ) -> Result<GovernedReadDecision, GovernedAccessError> {
-    require_governed_read_access(runtime, dataset_id, entity, headers)
+    require_governed_read_access(
+        runtime,
+        dataset_id,
+        entity,
+        headers,
+        principal,
+        GovernedRequestInfo {
+            route_identity: "registry-relay.spdci",
+            requested_disclosure,
+            checked_scope,
+            redaction_projection: GovernedRedactionProjection::EntityFields,
+        },
+    )
 }
 
 fn require_entity_filters_for_query(

@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
+use axum::middleware::from_fn;
 use axum::Extension;
 use axum_test::TestServer;
 use datafusion::arrow::array::StringArray;
@@ -12,6 +13,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
 use registry_relay::api::edr_router;
+use registry_relay::audit::{audit_layer, AuditPipeline, InMemorySink};
 use registry_relay::auth::{AuthMode, Principal, ScopeSet};
 use registry_relay::config::{self, DatasetId, ResourceId};
 use registry_relay::entity::EntityRegistry;
@@ -95,6 +97,54 @@ fn server_with_source_entity_api_extra(
     server_from_config(scopes, yaml)
 }
 
+fn server_with_aggregate_only_source_entity_api_extra(
+    scopes: &[&str],
+    entity_api_extra: &str,
+) -> TestServer {
+    let yaml = edr_config_yaml_with_geometry_read_scope(
+        false,
+        true,
+        100,
+        true,
+        "social_registry:geometry",
+    )
+    .replace("min_group_size: 1", "min_group_size: 2")
+    .replacen(
+        "          require_purpose_header: false\n",
+        &format!("          require_purpose_header: false\n{entity_api_extra}"),
+        1,
+    );
+    server_from_config(scopes, yaml)
+}
+
+fn server_with_source_entity_api_extra_and_audit(
+    scopes: &[&str],
+    require_purpose_header: bool,
+    entity_api_extra: &str,
+) -> (TestServer, InMemorySink) {
+    let yaml = edr_config_yaml(require_purpose_header, true, 100, false).replacen(
+        &format!(
+            "          require_purpose_header: {}\n",
+            if require_purpose_header {
+                "true"
+            } else {
+                "false"
+            }
+        ),
+        &format!(
+            "          require_purpose_header: {}\n{}",
+            if require_purpose_header {
+                "true"
+            } else {
+                "false"
+            },
+            entity_api_extra
+        ),
+        1,
+    );
+    server_from_config_with_audit(scopes, yaml)
+}
+
 fn server_from_config(scopes: &[&str], yaml: String) -> TestServer {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = tmp.path().join("ogc_edr.yaml");
@@ -128,6 +178,50 @@ fn server_from_config(scopes: &[&str], yaml: String) -> TestServer {
             .layer(Extension(cfg))
             .layer(Extension(principal(scopes))),
     )
+}
+
+fn server_from_config_with_audit(scopes: &[&str], yaml: String) -> (TestServer, InMemorySink) {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = tmp.path().join("ogc_edr.yaml");
+    std::fs::write(&config_path, yaml).expect("write config");
+    let cfg = Arc::new(
+        config::load(&config_path)
+            .unwrap_or_else(|err| panic!("config loads for {}: {err:?}", config_path.display())),
+    );
+    std::mem::forget(tmp);
+
+    let registry = Arc::new(EntityRegistry::from_config(&cfg).expect("registry"));
+    let ctx = Arc::new(SessionContext::new());
+    register_individuals(&ctx);
+    register_municipalities(&ctx);
+
+    let entity_query = Arc::new(EntityQueryEngine::new(
+        Arc::clone(&ctx),
+        Arc::clone(&registry),
+    ));
+    let aggregate_query = Arc::new(AggregateQueryEngine::new(
+        Arc::clone(&ctx),
+        Arc::clone(&registry),
+        Arc::clone(&cfg),
+    ));
+    let audit_sink = InMemorySink::new();
+    let audit_pipeline: Arc<AuditPipeline> = AuditPipeline::from_sink(audit_sink.clone());
+
+    let app = edr_router::<()>()
+        .layer(Extension(entity_query))
+        .layer(Extension(aggregate_query))
+        .layer(Extension(registry))
+        .layer(Extension(cfg))
+        .layer(Extension(principal(scopes)))
+        .layer(from_fn(audit_layer))
+        .layer(Extension(audit_pipeline));
+
+    (TestServer::new(app), audit_sink)
+}
+
+fn audit_record_from_envelope(line: &str) -> Value {
+    let envelope: Value = serde_json::from_str(line.trim_end()).expect("valid audit envelope JSON");
+    envelope["record"].clone()
 }
 
 fn edr_config_yaml(
@@ -508,6 +602,74 @@ async fn area_enforces_source_entity_purpose_header() {
 }
 
 #[tokio::test]
+async fn area_governed_denial_audit_records_pdp_provenance() {
+    let policy = r#"          governed_policy:
+            permitted_purposes:
+              - capacity planning
+            trusted_context: {}
+"#;
+    let (server, audit_sink) = server_with_source_entity_api_extra_and_audit(
+        &[
+            "social_registry:metadata",
+            "social_registry:aggregate",
+            "social_registry:rows",
+        ],
+        false,
+        policy,
+    );
+
+    let response = server
+        .get("/ogc/edr/v1/collections/social_registry_beneficiaries_by_municipality/area")
+        .add_query_param("coords", "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))")
+        .add_header("data-purpose", "casework")
+        .await;
+
+    response.assert_status_forbidden();
+    assert_eq!(
+        response.json::<Value>()["code"],
+        "pdp.purpose_not_permitted"
+    );
+
+    let records = audit_sink.snapshot();
+    assert_eq!(
+        records.len(),
+        1,
+        "denied governed EDR area request emits one audit record"
+    );
+    let record = audit_record_from_envelope(&records[0]);
+    assert_eq!(
+        record["path"],
+        "/ogc/edr/v1/collections/social_registry_beneficiaries_by_municipality/area"
+    );
+    assert_eq!(record["dataset_id"], "social_registry");
+    assert_eq!(record["aggregate_id"], "beneficiaries_by_municipality");
+    assert_eq!(
+        record["collection_id"],
+        "social_registry_beneficiaries_by_municipality"
+    );
+    assert_eq!(record["purpose"], "casework");
+    assert_eq!(record["status_code"], 403);
+    assert_eq!(record["error_code"], "pdp.purpose_not_permitted");
+    assert_eq!(
+        record["pdp_policy_id"],
+        "relay.entity.individual.purpose-required"
+    );
+    assert!(
+        record["pdp_policy_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.starts_with("sha256:") && hash.len() == 71),
+        "audit record should include a stable sha256 PDP policy hash: {record}"
+    );
+    assert_eq!(
+        record["pdp_evaluated_rule_ids"],
+        json!([
+            "entity-purpose-required:individual.policy_identity",
+            "entity-purpose-required:individual.purpose"
+        ])
+    );
+}
+
+#[tokio::test]
 async fn area_applies_source_entity_governed_redaction_to_feature_properties() {
     let policy = r#"          governed_policy:
             permitted_purposes:
@@ -684,7 +846,6 @@ async fn area_allows_aggregate_only_execution_when_explicitly_configured() {
     let server = server_with_aggregate_only_execution(&[
         "social_registry:metadata",
         "social_registry:aggregate",
-        "social_registry:geometry",
     ]);
 
     let resp = server
@@ -692,6 +853,34 @@ async fn area_allows_aggregate_only_execution_when_explicitly_configured() {
         .add_query_param("coords", "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))")
         .add_query_param("parameter-name", "individual_count")
         .add_query_param("group_by", "municipality")
+        .await;
+
+    resp.assert_status_ok();
+    let body: Value = resp.json();
+    let features = body["features"].as_array().expect("features");
+    assert_eq!(features.len(), 1);
+    assert_eq!(features[0]["properties"]["municipality"], "mun-1");
+    assert_eq!(features[0]["properties"]["individual_count"], 2);
+}
+
+#[tokio::test]
+async fn area_aggregate_only_governed_policy_uses_aggregate_checked_scope() {
+    let policy = r#"          governed_policy:
+            permitted_purposes:
+              - capacity planning
+            trusted_context: {}
+"#;
+    let server = server_with_aggregate_only_source_entity_api_extra(
+        &["social_registry:metadata", "social_registry:aggregate"],
+        policy,
+    );
+
+    let resp = server
+        .get("/ogc/edr/v1/collections/social_registry_beneficiaries_by_municipality/area")
+        .add_query_param("coords", "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))")
+        .add_query_param("parameter-name", "individual_count")
+        .add_query_param("group_by", "municipality")
+        .add_header("data-purpose", "capacity planning")
         .await;
 
     resp.assert_status_ok();

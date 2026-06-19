@@ -98,7 +98,6 @@ ecosystem_bindings:
         profile: registry-evidence-gateway-pdp/v1
         constraint_terms:
           - odrl:purpose
-          - registry:pdp:assurance
 requirements:
   - id: name_requirement
     iri: https://data.example.test/requirements/name
@@ -259,6 +258,17 @@ const ENTITY_ROUTE_SCOPES: &[&str] = &[
     "social_registry:metadata",
     "social_registry:rows",
     "social_registry:evidence_verification",
+    "registry:trust:jurisdiction:ZZ",
+    "registry:trust:assurance:substantial",
+    "registry:trust:legal_basis:law:test-benefits",
+    "registry:trust:consent:consent:test",
+    "registry:trust:source_observed_age_seconds:5",
+];
+
+const ENTITY_ROUTE_SCOPES_WITHOUT_TRUST_ASSERTIONS: &[&str] = &[
+    "social_registry:metadata",
+    "social_registry:rows",
+    "social_registry:evidence_verification",
 ];
 
 async fn server_with_query() -> TestServer {
@@ -345,6 +355,23 @@ async fn server_with_query_and_governed_entity_policy(governed_policy_yaml: &str
     )
 }
 
+async fn server_with_query_and_governed_entity_policy_without_trust_assertion_scopes(
+    governed_policy_yaml: &str,
+) -> TestServer {
+    TestServer::new(
+        app_with_query_versions_signer_provenance_selector_metadata_and_config_patch(
+            "01J5K8M0000000000000000000",
+            "01J5K8M0000000000000000000",
+            Arc::new(CursorSigner::new_random()),
+            ENTITY_ROUTE_SCOPES_WITHOUT_TRUST_ASSERTIONS,
+            Some("baseline-dpi/v1"),
+            test_evidence_metadata(),
+            Some(governed_policy_yaml),
+        )
+        .await,
+    )
+}
+
 async fn server_with_query_audit_and_ecosystem_binding_selector() -> (TestServer, InMemorySink) {
     let audit_sink = InMemorySink::new();
     let audit_pipeline: Arc<AuditPipeline> = AuditPipeline::from_sink(audit_sink.clone());
@@ -359,17 +386,6 @@ async fn server_with_query_audit_and_ecosystem_binding_selector() -> (TestServer
     .layer(from_fn(audit_layer))
     .layer(Extension(audit_pipeline));
     (TestServer::new(app), audit_sink)
-}
-
-async fn server_with_query_and_unsupported_ecosystem_binding_selector() -> TestServer {
-    server_with_query_versions_signer_provenance_and_selector(
-        "01J5K8M0000000000000000000",
-        "01J5K8M0000000000000000000",
-        Arc::new(CursorSigner::new_random()),
-        ENTITY_ROUTE_SCOPES,
-        Some("assurance-dpi/v1"),
-    )
-    .await
 }
 
 async fn server_with_query_versions_signer_and_provenance(
@@ -985,17 +1001,17 @@ async fn governed_entity_policy_redacts_configured_fields_from_collection_and_re
             require_legal_basis: true
             require_consent: true
             redaction_fields: [given_name]
-            trusted_context:
-              jurisdiction: ZZ
-              asserted_assurance: substantial
-              legal_basis_ref: law:test-benefits
-              consent_ref: consent:test
+            trusted_context: {}
 "#;
     let server = server_with_query_and_governed_entity_policy(policy).await;
 
     let collection = server
         .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
         .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .add_header("x-registry-trust-jurisdiction", "ZZ")
+        .add_header("x-registry-trust-assurance", "substantial")
+        .add_header("x-registry-trust-legal-basis", "law:test-benefits")
+        .add_header("x-registry-trust-consent", "consent:test")
         .await;
 
     collection.assert_status(StatusCode::OK);
@@ -1010,6 +1026,10 @@ async fn governed_entity_policy_redacts_configured_fields_from_collection_and_re
     let record = server
         .get("/v1/datasets/social_registry/entities/individual/records/p-1")
         .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .add_header("x-registry-trust-jurisdiction", "ZZ")
+        .add_header("x-registry-trust-assurance", "substantial")
+        .add_header("x-registry-trust-legal-basis", "law:test-benefits")
+        .add_header("x-registry-trust-consent", "consent:test")
         .await;
 
     record.assert_status(StatusCode::OK);
@@ -1148,6 +1168,206 @@ async fn governed_entity_policy_denies_when_required_trusted_context_is_missing(
 }
 
 #[tokio::test]
+async fn governed_entity_policy_uses_request_trust_context_on_same_route() {
+    let policy = r#"          governed_policy:
+            permitted_purposes:
+              - https://data.example.test/purposes/testing
+            permitted_jurisdictions: [ZZ]
+            allowed_assurance: [substantial]
+            max_source_age_seconds: 30
+            require_legal_basis: true
+            require_consent: true
+            trusted_context: {}
+"#;
+    let server = server_with_query_and_governed_entity_policy(policy).await;
+
+    let missing_context = server
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .await;
+
+    missing_context.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(
+        missing_context.json::<Value>()["code"],
+        "pdp.jurisdiction_not_permitted"
+    );
+
+    let missing_freshness = server
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .add_header("x-registry-trust-jurisdiction", "ZZ")
+        .add_header("x-registry-trust-assurance", "substantial")
+        .add_header("x-registry-trust-legal-basis", "law:test-benefits")
+        .add_header("x-registry-trust-consent", "consent:test")
+        .await;
+
+    missing_freshness.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(
+        missing_freshness.json::<Value>()["code"],
+        "pdp.evidence_stale"
+    );
+
+    let stale_context = server
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .add_header("x-registry-trust-jurisdiction", "ZZ")
+        .add_header("x-registry-trust-assurance", "substantial")
+        .add_header("x-registry-trust-legal-basis", "law:test-benefits")
+        .add_header("x-registry-trust-consent", "consent:test")
+        .add_header("x-registry-source-observed-age-seconds", "31")
+        .await;
+
+    stale_context.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(stale_context.json::<Value>()["code"], "pdp.evidence_stale");
+
+    let allowed = server
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .add_header("x-registry-trust-jurisdiction", "ZZ")
+        .add_header("x-registry-trust-assurance", "substantial")
+        .add_header("x-registry-trust-legal-basis", "law:test-benefits")
+        .add_header("x-registry-trust-consent", "consent:test")
+        .add_header("x-registry-source-observed-age-seconds", "5")
+        .await;
+
+    allowed.assert_status(StatusCode::OK);
+    assert_eq!(allowed.json::<Value>()["data"][0]["id"], "p-1");
+}
+
+#[tokio::test]
+async fn governed_entity_policy_ignores_unverified_trust_headers() {
+    let policy = r#"          governed_policy:
+            permitted_purposes:
+              - https://data.example.test/purposes/testing
+            permitted_jurisdictions: [ZZ]
+            allowed_assurance: [substantial]
+            require_legal_basis: true
+            require_consent: true
+            trusted_context: {}
+"#;
+    let server =
+        server_with_query_and_governed_entity_policy_without_trust_assertion_scopes(policy).await;
+
+    let denied = server
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .add_header("x-registry-trust-jurisdiction", "ZZ")
+        .add_header("x-registry-trust-assurance", "substantial")
+        .add_header("x-registry-trust-legal-basis", "law:test-benefits")
+        .add_header("x-registry-trust-consent", "consent:test")
+        .await;
+
+    denied.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(
+        denied.json::<Value>()["code"],
+        "pdp.jurisdiction_not_permitted"
+    );
+}
+
+#[tokio::test]
+async fn governed_entity_denial_happens_before_query_engine_is_required() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = tmp.path().join("governed_no_query.yaml");
+    std::fs::write(
+        &config_path,
+        r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+auth:
+  mode: api_key
+  api_keys: []
+datasets:
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    defaults:
+      refresh:
+        mode: manual
+    tables:
+      - id: individuals_table
+        source:
+          type: file
+          path: fixtures/social_registry.csv
+        primary_key: individual_id
+        schema:
+          strict: true
+          fields:
+            - name: individual_id
+              type: string
+              nullable: false
+    entities:
+      - name: individual
+        table: individuals_table
+        fields:
+          - name: id
+            from: individual_id
+        access:
+          metadata_scope: social_registry:metadata
+          aggregate_scope: social_registry:aggregate
+          read_scope: social_registry:rows
+        api:
+          default_limit: 100
+          max_limit: 1000
+          require_purpose_header: true
+          governed_policy:
+            permitted_purposes:
+              - benefits
+            trusted_context: {}
+audit:
+  sink: stdout
+  format: jsonl
+"#,
+    )
+    .expect("write config");
+    let cfg = Arc::new(config::load(&config_path).expect("config loads"));
+    let registry = Arc::new(EntityRegistry::from_config(&cfg).expect("registry"));
+    let server = TestServer::new(
+        entity_router::<()>()
+            .layer(Extension(registry))
+            .layer(Extension(cfg))
+            .layer(Extension(principal(ENTITY_ROUTE_SCOPES))),
+    );
+
+    let denied = server
+        .get("/v1/datasets/social_registry/entities/individual/records")
+        .add_header("data-purpose", "casework")
+        .await;
+
+    denied.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(denied.json::<Value>()["code"], "pdp.purpose_not_permitted");
+}
+
+#[tokio::test]
+async fn governed_entity_missing_redaction_field_denies_before_read() {
+    let policy = r#"          governed_policy:
+            permitted_purposes:
+              - https://data.example.test/purposes/testing
+            redaction_fields: [missing_field]
+            trusted_context: {}
+"#;
+    let server = server_with_query_and_governed_entity_policy(policy).await;
+
+    let response = server
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .await;
+
+    response.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(
+        response.json::<Value>()["code"],
+        "pdp.unsupported_policy_term"
+    );
+}
+
+#[tokio::test]
 async fn governed_entity_collection_audit_records_selector_pdp_provenance() {
     let (server, audit_sink) = server_with_query_audit_and_ecosystem_binding_selector().await;
     let resp = server
@@ -1182,9 +1402,29 @@ async fn governed_entity_collection_audit_records_selector_pdp_provenance() {
         record["pdp_policy_hash"],
         "sha256:3333333333333333333333333333333333333333333333333333333333333333"
     );
+    assert_eq!(record["pdp_ecosystem_binding_id"], "baseline-dpi/v1");
+    assert_eq!(record["pdp_ecosystem_binding_version"], "v1");
+    assert_eq!(record["pdp_route_identity"], "registry-relay.entity");
+    assert_eq!(
+        record["pdp_source_binding"],
+        "relay:social_registry:individuals_table"
+    );
+    assert_eq!(
+        record["pdp_checked_scopes"],
+        serde_json::json!(["social_registry:rows"])
+    );
     assert_eq!(
         record["pdp_evaluated_rule_ids"],
-        serde_json::json!(["entity-purpose-required:individual"])
+        serde_json::json!([
+            "entity-purpose-required:individual.policy_identity",
+            "entity-purpose-required:individual.odrl_terms",
+            "entity-purpose-required:individual.purpose",
+            "entity-purpose-required:individual.requested_fact",
+            "entity-purpose-required:individual.requested_disclosure",
+            "entity-purpose-required:individual.source_binding",
+            "entity-purpose-required:individual.route_identity",
+            "entity-purpose-required:individual.checked_scope"
+        ])
     );
 }
 
@@ -1217,8 +1457,27 @@ async fn governed_entity_collection_denial_audit_records_selector_pdp_provenance
         "sha256:3333333333333333333333333333333333333333333333333333333333333333"
     );
     assert_eq!(
+        record["pdp_stable_problem_code"],
+        "pdp.purpose_not_permitted"
+    );
+    assert_eq!(record["pdp_ecosystem_binding_id"], "baseline-dpi/v1");
+    assert_eq!(record["pdp_ecosystem_binding_version"], "v1");
+    assert_eq!(record["pdp_route_identity"], "registry-relay.entity");
+    assert_eq!(
+        record["pdp_source_binding"],
+        "relay:social_registry:individuals_table"
+    );
+    assert_eq!(
+        record["pdp_checked_scopes"],
+        serde_json::json!(["social_registry:rows"])
+    );
+    assert_eq!(
         record["pdp_evaluated_rule_ids"],
-        serde_json::json!(["entity-purpose-required:individual"])
+        serde_json::json!([
+            "entity-purpose-required:individual.policy_identity",
+            "entity-purpose-required:individual.odrl_terms",
+            "entity-purpose-required:individual.purpose"
+        ])
     );
 }
 
@@ -1256,18 +1515,6 @@ async fn entity_collection_rejects_purpose_outside_compiled_policy_with_selector
 
     resp.assert_status(StatusCode::FORBIDDEN);
     assert_eq!(resp.json::<Value>()["code"], "pdp.purpose_not_permitted");
-}
-
-#[tokio::test]
-async fn entity_collection_rejects_selected_binding_with_unsupported_runtime_term() {
-    let resp = server_with_query_and_unsupported_ecosystem_binding_selector()
-        .await
-        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
-        .add_header("data-purpose", "https://data.example.test/purposes/testing")
-        .await;
-
-    resp.assert_status(StatusCode::FORBIDDEN);
-    assert_eq!(resp.json::<Value>()["code"], "pdp.unsupported_policy_term");
 }
 
 #[tokio::test]

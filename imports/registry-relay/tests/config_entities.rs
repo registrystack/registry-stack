@@ -147,6 +147,45 @@ fn valid_household_individual_entities_load_and_compile() {
 }
 
 #[test]
+fn governed_redaction_field_must_be_top_level_projectable_path() {
+    let tmp = TempDir::new().expect("tempdir");
+    let invalid = valid_dataset().replace(
+        "          allowed_filters:\n            - field: household_id",
+        "          governed_policy:\n            permitted_purposes: [testing]\n            redaction_fields: [profile.birthdate]\n            trusted_context: {}\n          allowed_filters:\n            - field: household_id",
+    );
+    let config_path = write_config(&tmp, &base_config(&invalid));
+    let err = registry_relay::config::load(&config_path)
+        .expect_err("config rejects unprojectable governed redaction field");
+    assert_eq!(err.code(), "config.validation_error");
+}
+
+#[test]
+fn governed_policy_rejects_static_trusted_source_freshness() {
+    let tmp = TempDir::new().expect("tempdir");
+    let invalid = valid_dataset().replace(
+        "          allowed_filters:\n            - field: household_id",
+        "          governed_policy:\n            permitted_purposes: [testing]\n            max_source_age_seconds: 30\n            trusted_context:\n              source_observed_age_seconds: 5\n          allowed_filters:\n            - field: household_id",
+    );
+    let config_path = write_config(&tmp, &base_config(&invalid));
+    let err = registry_relay::config::load(&config_path)
+        .expect_err("config rejects static governed freshness context");
+    assert_eq!(err.code(), "config.validation_error");
+}
+
+#[test]
+fn governed_policy_rejects_inert_policy_block() {
+    let tmp = TempDir::new().expect("tempdir");
+    let invalid = valid_dataset().replace(
+        "          allowed_filters:\n            - field: household_id",
+        "          governed_policy:\n            trusted_context: {}\n          allowed_filters:\n            - field: household_id",
+    );
+    let config_path = write_config(&tmp, &base_config(&invalid));
+    let err = registry_relay::config::load(&config_path)
+        .expect_err("config rejects governed policy with no enforced gates");
+    assert_eq!(err.code(), "config.validation_error");
+}
+
+#[test]
 fn entity_referencing_missing_table_is_rejected() {
     let tmp = TempDir::new().expect("tempdir");
     let invalid = valid_dataset().replace("table: households_table", "table: missing_table");

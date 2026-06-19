@@ -21,7 +21,7 @@ use tokio::sync::watch;
 use crate::api::governed::{
     attach_pdp_audit, entity_etag as governed_entity_etag, governed_cache_variant,
     require_governed_read_access, strong_etag as governed_strong_etag, GovernedAccessError,
-    GovernedReadDecision,
+    GovernedReadDecision, GovernedRedactionProjection, GovernedRequestInfo,
 };
 use crate::audit::{AuditContextExt, ErrorCodeExt};
 use crate::auth::scopes::require_scope;
@@ -113,7 +113,10 @@ async fn entity_schema(
     let Some(entity) = dataset.entity(&path.entity) else {
         return Error::from(SchemaError::UnknownResource).into_response();
     };
-    if let Err(error) = require_principal_scope(principal, &entity.access.metadata_scope) {
+    if let Err(error) = require_principal_scope(
+        principal.as_ref().map(|Extension(principal)| principal),
+        &entity.access.metadata_scope,
+    ) {
         return error.into_response();
     }
     let readiness = runtime.readiness_rx();
@@ -670,14 +673,11 @@ fn entity_from_registry<'a>(
         .ok_or_else(|| SchemaError::UnknownResource.into())
 }
 
-fn require_principal_scope(
-    principal: Option<Extension<Principal>>,
-    required: &str,
-) -> Result<(), Error> {
-    let Some(Extension(principal)) = principal else {
+fn require_principal_scope(principal: Option<&Principal>, required: &str) -> Result<(), Error> {
+    let Some(principal) = principal else {
         return Err(AuthError::MissingCredential.into());
     };
-    require_scope(&principal, required)
+    require_scope(principal, required)
 }
 
 fn require_read_access(
@@ -687,9 +687,22 @@ fn require_read_access(
     entity: &EntityModel,
     headers: &HeaderMap,
 ) -> Result<GovernedReadDecision, GovernedAccessError> {
-    require_principal_scope(principal, &entity.access.read_scope)
+    let principal_ref = principal.as_ref().map(|Extension(principal)| principal);
+    require_principal_scope(principal_ref, &entity.access.read_scope)
         .map_err(GovernedAccessError::from)?;
-    require_governed_read_access(runtime, dataset_id, entity, headers)
+    require_governed_read_access(
+        runtime,
+        dataset_id,
+        entity,
+        headers,
+        principal_ref,
+        GovernedRequestInfo {
+            route_identity: "registry-relay.entity",
+            requested_disclosure: "entity",
+            checked_scope: &entity.access.read_scope,
+            redaction_projection: GovernedRedactionProjection::EntityFields,
+        },
+    )
 }
 
 fn require_expansion_access(
@@ -749,9 +762,22 @@ fn require_relationship_target_access(
         .ok_or_else(|| GovernedAccessError::from_error(crate::error::FilterError::NotAllowed))?;
     let target = entity_from_registry(registry, dataset_id, &relationship.target)
         .map_err(GovernedAccessError::from)?;
-    require_principal_scope(principal, &target.access.read_scope)
+    let principal_ref = principal.as_ref().map(|Extension(principal)| principal);
+    require_principal_scope(principal_ref, &target.access.read_scope)
         .map_err(GovernedAccessError::from)?;
-    require_governed_read_access(runtime, dataset_id, target, headers)
+    require_governed_read_access(
+        runtime,
+        dataset_id,
+        target,
+        headers,
+        principal_ref,
+        GovernedRequestInfo {
+            route_identity: "registry-relay.entity.relationship",
+            requested_disclosure: "entity_relationship",
+            checked_scope: &target.access.read_scope,
+            redaction_projection: GovernedRedactionProjection::EntityFields,
+        },
+    )
 }
 
 struct EntityCollectionAccess {

@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use axum::middleware::from_fn;
 use axum::{Extension, Router};
 use axum_test::TestServer;
 use datafusion::arrow::array::{Float64Array, StringArray};
@@ -11,6 +12,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
 use registry_relay::api::{aggregates_router, entity_router};
+use registry_relay::audit::{audit_layer, AuditPipeline, InMemorySink};
 use registry_relay::auth::{AuthMode, Principal, ScopeSet};
 use registry_relay::config::{self, DatasetId, ResourceId};
 use registry_relay::entity::EntityRegistry;
@@ -276,6 +278,43 @@ async fn server_with_aggregate_config(config_yaml: String, scopes: &[&str]) -> T
             .layer(Extension(registry))
             .layer(Extension(principal(scopes))),
     )
+}
+
+async fn server_with_aggregate_config_and_audit(
+    config_yaml: String,
+    scopes: &[&str],
+) -> (TestServer, InMemorySink) {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = tmp.path().join("aggregates_entity.yaml");
+    std::fs::write(&config_path, config_yaml).expect("write config");
+    let cfg = Arc::new(config::load(&config_path).expect("config loads"));
+    let registry = Arc::new(EntityRegistry::from_config(&cfg).expect("registry"));
+    let ctx = Arc::new(SessionContext::new());
+
+    register_households(&ctx);
+    register_individuals(&ctx);
+
+    let query = Arc::new(AggregateQueryEngine::new(
+        Arc::clone(&ctx),
+        Arc::clone(&registry),
+        Arc::clone(&cfg),
+    ));
+    let audit_sink = InMemorySink::new();
+    let audit_pipeline: Arc<AuditPipeline> = AuditPipeline::from_sink(audit_sink.clone());
+
+    let app = aggregates_router::<()>()
+        .layer(Extension(query))
+        .layer(Extension(registry))
+        .layer(Extension(principal(scopes)))
+        .layer(from_fn(audit_layer))
+        .layer(Extension(audit_pipeline));
+
+    (TestServer::new(app), audit_sink)
+}
+
+fn audit_record_from_envelope(line: &str) -> Value {
+    let envelope: Value = serde_json::from_str(line.trim_end()).expect("valid audit envelope JSON");
+    envelope["record"].clone()
 }
 
 async fn server_with_formula_cells() -> TestServer {
@@ -637,6 +676,197 @@ audit:"#,
         .await;
     post.assert_status_forbidden();
     assert_eq!(post.json::<Value>()["code"], "pdp.purpose_not_permitted");
+}
+
+#[tokio::test]
+async fn aggregate_governed_denial_audit_records_pdp_provenance() {
+    let config = AGGREGATE_CONFIG.replace(
+        "          max_limit: 1000\naudit:",
+        r#"          max_limit: 1000
+          governed_policy:
+            permitted_purposes:
+              - capacity planning
+            trusted_context: {}
+audit:"#,
+    );
+    let (server, audit_sink) = server_with_aggregate_config_and_audit(
+        config,
+        &[
+            "social_registry:metadata",
+            "social_registry:aggregate",
+            "social_registry:rows",
+        ],
+    )
+    .await;
+
+    let response = server
+        .get("/v1/datasets/social_registry/aggregates/by_municipality")
+        .add_header("data-purpose", "casework")
+        .await;
+
+    response.assert_status_forbidden();
+    assert_eq!(
+        response.json::<Value>()["code"],
+        "pdp.purpose_not_permitted"
+    );
+
+    let records = audit_sink.snapshot();
+    assert_eq!(
+        records.len(),
+        1,
+        "denied governed aggregate request emits one audit record"
+    );
+    let record = audit_record_from_envelope(&records[0]);
+    assert_eq!(
+        record["path"],
+        "/v1/datasets/social_registry/aggregates/by_municipality"
+    );
+    assert_eq!(record["dataset_id"], "social_registry");
+    assert_eq!(record["aggregate_id"], "by_municipality");
+    assert_eq!(record["purpose"], "casework");
+    assert_eq!(record["status_code"], 403);
+    assert_eq!(record["error_code"], "pdp.purpose_not_permitted");
+    assert_eq!(
+        record["pdp_policy_id"],
+        "relay.entity.individual.purpose-required"
+    );
+    assert!(
+        record["pdp_policy_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.starts_with("sha256:") && hash.len() == 71),
+        "audit record should include a stable sha256 PDP policy hash: {record}"
+    );
+    assert_eq!(
+        record["pdp_evaluated_rule_ids"],
+        json!([
+            "entity-purpose-required:individual.policy_identity",
+            "entity-purpose-required:individual.purpose"
+        ])
+    );
+}
+
+#[tokio::test]
+async fn aggregate_scope_denial_happens_before_governed_pdp() {
+    let config = AGGREGATE_CONFIG.replace(
+        "          max_limit: 1000\naudit:",
+        r#"          max_limit: 1000
+          governed_policy:
+            permitted_purposes:
+              - capacity planning
+            trusted_context: {}
+audit:"#,
+    );
+    let (server, audit_sink) = server_with_aggregate_config_and_audit(
+        config,
+        &["social_registry:metadata", "social_registry:rows"],
+    )
+    .await;
+
+    let response = server
+        .get("/v1/datasets/social_registry/aggregates/by_municipality")
+        .add_header("data-purpose", "casework")
+        .await;
+
+    response.assert_status_forbidden();
+    assert_eq!(response.json::<Value>()["code"], "auth.scope_denied");
+
+    let records = audit_sink.snapshot();
+    assert_eq!(
+        records.len(),
+        1,
+        "aggregate scope denial emits one audit record"
+    );
+    let record = audit_record_from_envelope(&records[0]);
+    assert_eq!(record["status_code"], 403);
+    assert_eq!(record["error_code"], "auth.scope_denied");
+    assert!(
+        record.get("pdp_policy_id").is_none_or(Value::is_null),
+        "aggregate auth denial must not expose PDP policy provenance: {record}"
+    );
+    assert!(
+        record
+            .get("pdp_evaluated_rule_ids")
+            .is_none_or(Value::is_null),
+        "aggregate auth denial must not evaluate governed PDP rules: {record}"
+    );
+}
+
+#[tokio::test]
+async fn aggregate_source_read_scope_denial_happens_before_governed_pdp() {
+    let config = AGGREGATE_CONFIG.replace(
+        "          max_limit: 1000\naudit:",
+        r#"          max_limit: 1000
+          governed_policy:
+            permitted_purposes:
+              - capacity planning
+            trusted_context: {}
+audit:"#,
+    );
+    let (server, audit_sink) = server_with_aggregate_config_and_audit(
+        config,
+        &["social_registry:metadata", "social_registry:aggregate"],
+    )
+    .await;
+
+    let response = server
+        .get("/v1/datasets/social_registry/aggregates/by_municipality")
+        .add_header("data-purpose", "capacity planning")
+        .await;
+
+    response.assert_status_forbidden();
+    assert_eq!(response.json::<Value>()["code"], "auth.scope_denied");
+
+    let records = audit_sink.snapshot();
+    assert_eq!(
+        records.len(),
+        1,
+        "source read scope denial emits one audit record"
+    );
+    let record = audit_record_from_envelope(&records[0]);
+    assert_eq!(record["status_code"], 403);
+    assert_eq!(record["error_code"], "auth.scope_denied");
+    assert!(
+        record.get("pdp_policy_id").is_none_or(Value::is_null),
+        "source read auth denial must not expose PDP policy provenance: {record}"
+    );
+    assert!(
+        record
+            .get("pdp_evaluated_rule_ids")
+            .is_none_or(Value::is_null),
+        "source read auth denial must not evaluate governed PDP rules: {record}"
+    );
+}
+
+#[tokio::test]
+async fn aggregate_only_governed_execution_uses_aggregate_scope_for_pdp() {
+    let config = AGGREGATE_CONFIG
+        .replace(
+            "      - id: by_municipality_masked\n",
+            "      - id: by_municipality_masked\n        access:\n          aggregate_only_execution: true\n",
+        )
+        .replace(
+            "          max_limit: 1000\naudit:",
+            r#"          max_limit: 1000
+          governed_policy:
+            permitted_purposes:
+              - capacity planning
+            trusted_context: {}
+audit:"#,
+        );
+    let server = server_with_aggregate_config(
+        config,
+        &["social_registry:metadata", "social_registry:aggregate"],
+    )
+    .await;
+
+    let response = server
+        .get("/v1/datasets/social_registry/aggregates/by_municipality_masked")
+        .add_header("data-purpose", "capacity planning")
+        .await;
+
+    response.assert_status_ok();
+    let body: Value = response.json();
+    assert_eq!(body["aggregate_id"], "by_municipality_masked");
 }
 
 #[tokio::test]

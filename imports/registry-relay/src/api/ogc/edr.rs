@@ -17,6 +17,7 @@ use tokio::sync::watch;
 
 use crate::api::governed::{
     attach_pdp_audit, require_governed_read_access, GovernedAccessError, GovernedReadDecision,
+    GovernedRedactionProjection, GovernedRequestInfo,
 };
 use crate::audit::AuditContextExt;
 use crate::auth::scopes::require_scope;
@@ -246,13 +247,16 @@ async fn area_common(
     if let Err(error) = require_collection_source_read_scope(&principal, &collection) {
         return error.into_response();
     }
-    let governed_decision =
-        match require_collection_source_governed_access(&runtime, &config, &collection, &headers) {
-            Ok(decision) => decision,
-            Err(error) => {
-                return edr_access_error_response(error, &collection, geometry_vertex_count)
-            }
-        };
+    let governed_decision = match require_collection_source_governed_access(
+        &runtime,
+        &config,
+        &collection,
+        &headers,
+        Some(&principal),
+    ) {
+        Ok(decision) => decision,
+        Err(error) => return edr_access_error_response(error, &collection, geometry_vertex_count),
+    };
     let AggregateSpatialConfig::AdminArea {
         dimension,
         geometry_entity,
@@ -276,6 +280,7 @@ async fn area_common(
         geometry_entity,
         geometry_id_field,
         geometry_field,
+        aggregate_only_execution(collection.aggregate),
         *max_geometry_vertices,
         &input_geometry,
     )
@@ -505,10 +510,13 @@ async fn matching_admin_geometries(
     geometry_entity: &str,
     geometry_id_field: &str,
     geometry_field: &str,
+    aggregate_only_execution: bool,
     max_geometry_vertices: u32,
     input_geometry: &Geometry,
 ) -> Result<Vec<AdminGeometry>, Error> {
-    require_geometry_entity_read_scope(config, principal, dataset_id, geometry_entity)?;
+    if !aggregate_only_execution {
+        require_geometry_entity_read_scope(config, principal, dataset_id, geometry_entity)?;
+    }
     let input_geo = geo_geometry(input_geometry)?;
     let mut matched = Vec::new();
     let mut after_primary_key = None;
@@ -852,9 +860,33 @@ fn require_collection_source_governed_access(
     config: &Config,
     collection: &EdrCollection<'_>,
     headers: &HeaderMap,
+    principal: Option<&Principal>,
 ) -> Result<GovernedReadDecision, GovernedAccessError> {
     let entity = collection_source_entity(config, collection).map_err(GovernedAccessError::from)?;
-    require_governed_read_access(runtime, &collection.dataset_id, entity, headers)
+    require_governed_read_access(
+        runtime,
+        &collection.dataset_id,
+        entity,
+        headers,
+        principal,
+        GovernedRequestInfo {
+            route_identity: "registry-relay.ogc.edr",
+            requested_disclosure: "ogc_edr_area",
+            checked_scope: collection_checked_scope(collection, entity),
+            redaction_projection: GovernedRedactionProjection::DeferredOutput,
+        },
+    )
+}
+
+fn collection_checked_scope<'a>(
+    collection: &'a EdrCollection<'_>,
+    entity: &'a EntityConfig,
+) -> &'a str {
+    if aggregate_only_execution(collection.aggregate) {
+        &collection.aggregate_scope
+    } else {
+        &entity.access.read_scope
+    }
 }
 
 fn collection_source_entity<'a>(
@@ -913,18 +945,20 @@ fn require_collection_source_read_scope(
     principal: &Principal,
     collection: &EdrCollection<'_>,
 ) -> Result<(), Error> {
-    if collection
-        .aggregate
-        .access
-        .as_ref()
-        .is_some_and(|access| access.aggregate_only_execution)
-    {
+    if aggregate_only_execution(collection.aggregate) {
         return Ok(());
     }
     if let Some(scope) = collection.source_entity_read_scope.as_deref() {
         require_scope(principal, scope)?;
     }
     Ok(())
+}
+
+fn aggregate_only_execution(aggregate: &AggregateConfig) -> bool {
+    aggregate
+        .access
+        .as_ref()
+        .is_some_and(|access| access.aggregate_only_execution)
 }
 
 fn require_any_metadata_scope(

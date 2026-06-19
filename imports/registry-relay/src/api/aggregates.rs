@@ -19,6 +19,7 @@ use tokio::sync::watch;
 
 use crate::api::governed::{
     attach_pdp_audit, require_governed_read_access, GovernedAccessError, GovernedReadDecision,
+    GovernedRedactionProjection, GovernedRequestInfo,
 };
 use crate::audit::{AuditContextExt, ErrorCodeExt};
 use crate::auth::scopes::require_scope;
@@ -335,24 +336,28 @@ async fn run_aggregate(
         Ok(pair) => pair,
         Err(error) => return error.into_response(),
     };
+    if let Err(error) =
+        require_aggregate_scope(principal.clone(), &path.dataset_id, Some(aggregate))
+    {
+        return error.into_response();
+    }
+    if !aggregate_only_execution(aggregate) {
+        if let Err(error) = require_source_entity_read_scope(principal.clone(), dataset, aggregate)
+        {
+            return error.into_response();
+        }
+    }
     let governed_decision = match require_source_entity_governed_access(
         &runtime,
         &path.dataset_id,
         dataset,
         aggregate,
         &headers,
+        principal.as_ref().map(|Extension(principal)| principal),
     ) {
         Ok(decision) => decision,
         Err(error) => return aggregate_access_error_response(error, &path),
     };
-    if let Err(error) =
-        require_aggregate_scope(principal.clone(), &path.dataset_id, Some(aggregate))
-    {
-        return error.into_response();
-    }
-    if let Err(error) = require_source_entity_read_scope(principal, dataset, aggregate) {
-        return error.into_response();
-    }
     let signed_vc_requested = crate::api::provenance_issuance::signed_vc_requested(
         runtime.provenance_state().as_ref(),
         &headers,
@@ -656,9 +661,39 @@ fn require_source_entity_governed_access(
     dataset: &DatasetConfig,
     aggregate: &crate::config::AggregateConfig,
     headers: &HeaderMap,
+    principal: Option<&Principal>,
 ) -> Result<GovernedReadDecision, GovernedAccessError> {
     let entity = source_entity(dataset, aggregate).map_err(GovernedAccessError::from)?;
-    require_governed_read_access(runtime, dataset_id, entity, headers)
+    let checked_scope = governed_aggregate_checked_scope(dataset_id, entity, aggregate);
+    require_governed_read_access(
+        runtime,
+        dataset_id,
+        entity,
+        headers,
+        principal,
+        GovernedRequestInfo {
+            route_identity: "registry-relay.aggregate",
+            requested_disclosure: "aggregate",
+            checked_scope: &checked_scope,
+            redaction_projection: GovernedRedactionProjection::DeferredOutput,
+        },
+    )
+}
+
+fn governed_aggregate_checked_scope(
+    dataset_id: &str,
+    entity: &crate::config::EntityConfig,
+    aggregate: &crate::config::AggregateConfig,
+) -> String {
+    if aggregate_only_execution(aggregate) {
+        return aggregate
+            .access
+            .as_ref()
+            .and_then(|access| access.aggregate_scope.as_deref())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("{dataset_id}:aggregate"));
+    }
+    entity.access.read_scope.clone()
 }
 
 fn aggregate_access_error_response(
@@ -694,17 +729,20 @@ fn require_source_entity_read_scope(
     dataset: &DatasetConfig,
     aggregate: &crate::config::AggregateConfig,
 ) -> Result<(), Error> {
-    if aggregate
-        .access
-        .as_ref()
-        .is_some_and(|access| access.aggregate_only_execution)
-    {
+    if aggregate_only_execution(aggregate) {
         return Ok(());
     }
     require_principal_scope(
         principal,
         &source_entity(dataset, aggregate)?.access.read_scope,
     )
+}
+
+fn aggregate_only_execution(aggregate: &crate::config::AggregateConfig) -> bool {
+    aggregate
+        .access
+        .as_ref()
+        .is_some_and(|access| access.aggregate_only_execution)
 }
 
 fn source_entity<'a>(
