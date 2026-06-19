@@ -1,0 +1,116 @@
+{
+  "schema_version": "registry-lab/evidence-gateway-synthetic-data/v1",
+  "binding_id": "oots-birth-evidence/v1",
+  "records": [
+    {
+      "id": "oots-birth-success",
+      "observed_at": "2026-06-19T00:00:00Z",
+      "evidence": {
+        "identifier": "BIRTH-CERT-1001",
+        "issue_date": "2026-06-01",
+        "issuing_authority": "Example Civil Registry",
+        "issuing_place": {
+          "id": "LOC-CR-01",
+          "name": "Example Civil Registration Office"
+        }
+      },
+      "birth": {
+        "identifier": "BIRTH-1001",
+        "child": {
+          "identifiers": [
+            {
+              "scheme": "national_id",
+              "value": "NID-1001"
+            }
+          ],
+          "given_name": "Amina",
+          "family_name": "Demo",
+          "date_of_birth": "2015-04-12",
+          "place_of_birth": "Example District Hospital",
+          "sex_at_birth": "female"
+        },
+        "parents": [
+          {
+            "identifiers": [
+              {
+                "scheme": "national_id",
+                "value": "NID-9001"
+              }
+            ],
+            "relationship": "parent"
+          }
+        ]
+      }
+    },
+    {
+      "id": "oots-birth-denial-target",
+      "observed_at": "2026-06-19T00:00:00Z",
+      "evidence": {
+        "identifier": "BIRTH-CERT-1002",
+        "issue_date": "2026-06-01",
+        "issuing_authority": "Example Civil Registry",
+        "issuing_place": {
+          "id": "LOC-CR-01",
+          "name": "Example Civil Registration Office"
+        }
+      },
+      "birth": {
+        "identifier": "BIRTH-1002",
+        "child": {
+          "identifiers": [
+            {
+              "scheme": "national_id",
+              "value": "NID-1002"
+            }
+          ],
+          "given_name": "Noor",
+          "family_name": "Demo",
+          "date_of_birth": "2018-01-22",
+          "place_of_birth": "Example District Hospital",
+          "sex_at_birth": "female"
+        },
+        "parents": []
+      }
+    },
+    {
+      "id": "oots-birth-stale",
+      "observed_at": "2026-06-15T00:00:00Z",
+      "evidence": {
+        "identifier": "BIRTH-CERT-1001",
+        "issue_date": "2026-06-01",
+        "issuing_authority": "Example Civil Registry",
+        "issuing_place": {
+          "id": "LOC-CR-01",
+          "name": "Example Civil Registration Office"
+        }
+      },
+      "birth": {
+        "identifier": "BIRTH-1001",
+        "child": {
+          "identifiers": [
+            {
+              "scheme": "national_id",
+              "value": "NID-1001"
+            }
+          ],
+          "given_name": "Amina",
+          "family_name": "Demo",
+          "date_of_birth": "2015-04-12",
+          "place_of_birth": "Example District Hospital",
+          "sex_at_birth": "female"
+        },
+        "parents": [
+          {
+            "identifiers": [
+              {
+                "scheme": "national_id",
+                "value": "NID-9001"
+              }
+            ],
+            "relationship": "parent"
+          }
+        ]
+      }
+    }
+  ]
+}

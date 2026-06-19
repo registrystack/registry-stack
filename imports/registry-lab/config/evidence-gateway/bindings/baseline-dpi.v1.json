@@ -1,0 +1,82 @@
+{
+  "schema_version": "registry-lab/evidence-gateway-binding/v1",
+  "binding": {
+    "id": "baseline-dpi/v1",
+    "version": "v1",
+    "profile": "baseline-dpi",
+    "type": "governed-evidence",
+    "description": "Default governed evidence binding for PublicSchema-style REST evidence requests.",
+    "source_configs": [
+      "config/relay/civil-registry-relay.metadata.yaml",
+      "config/relay/social-protection-registry-relay.metadata.yaml",
+      "config/relay/health-registry-relay.metadata.yaml"
+    ],
+    "synthetic_data": "config/evidence-gateway/synthetic/baseline-dpi.v1.json",
+    "golden_fixtures": "config/evidence-gateway/golden/baseline-dpi.v1.json"
+  },
+  "evidence_pack": {
+    "policy_id": "lab.baseline-dpi.governed-evidence.v1",
+    "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
+    "odrl_enforcement": {
+      "profile": "registry-evidence-gateway-pdp/v1",
+      "constraint_terms": [
+        "odrl:purpose",
+        "odrl:spatial"
+      ],
+      "unsupported_terms_fail_closed": true,
+      "compile_target": "native-pdp"
+    },
+    "pdp_gates": [
+      {
+        "term": "registry:pdp:assurance",
+        "operator": "odrl:gteq",
+        "rightOperand": "substantial"
+      },
+      {
+        "term": "registry:pdp:source_age",
+        "operator": "odrl:lteq",
+        "rightOperand": 86400
+      },
+      {
+        "term": "registry:pdp:legal_basis",
+        "operator": "odrl:isA",
+        "rightOperand": "demo:child-support-eligibility"
+      },
+      {
+        "term": "registry:pdp:consent",
+        "operator": "odrl:isA",
+        "rightOperand": "demo:child-support-consent"
+      }
+    ]
+  },
+  "odrl_policy": {
+    "@context": [
+      "https://www.w3.org/ns/odrl.jsonld",
+      {
+        "registry": "https://registrystack.org/ns/evidence-gateway#"
+      }
+    ],
+    "@type": "Set",
+    "uid": "urn:registry-lab:policy:baseline-dpi:governed-evidence:v1",
+    "profile": "registry-evidence-gateway-pdp/v1",
+    "permission": [
+      {
+        "uid": "urn:registry-lab:rule:baseline-dpi:purpose:decentralized-evidence-demo",
+        "action": "odrl:use",
+        "target": "urn:registry-lab:evidence:baseline-dpi:v1",
+        "constraint": [
+          {
+            "leftOperand": "odrl:purpose",
+            "operator": "odrl:isA",
+            "rightOperand": "https://demo.example.gov/purpose/decentralized-evidence-demo"
+          },
+          {
+            "leftOperand": "odrl:spatial",
+            "operator": "odrl:isA",
+            "rightOperand": "ZZ"
+          }
+        ]
+      }
+    ]
+  }
+}

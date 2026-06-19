@@ -19,6 +19,13 @@ auth:
         - civil_registry:evidence_verification
         - social_protection_registry:evidence_verification
         - health_registry:evidence_verification
+      authorization_details:
+        type: registry-notary/evidence-authorization/v1
+        schema_version: v1
+        legal_basis_ref: demo:child-support-eligibility
+        consent_ref: demo:child-support-consent
+        jurisdiction: ZZ
+        assurance_level: substantial
   bearer_tokens:
     - id: shared_evidence_client
       fingerprint:
@@ -29,6 +36,13 @@ auth:
         - civil_registry:evidence_verification
         - social_protection_registry:evidence_verification
         - health_registry:evidence_verification
+      authorization_details:
+        type: registry-notary/evidence-authorization/v1
+        schema_version: v1
+        legal_basis_ref: demo:child-support-eligibility
+        consent_ref: demo:child-support-consent
+        jurisdiction: ZZ
+        assurance_level: substantial
 
 audit:
   sink: stdout
@@ -60,6 +74,11 @@ evidence:
     health:
       base_url: https://health-relay.lab.registrystack.org
       token_env: SHARED_HEALTH_EVIDENCE_SOURCE_RAW
+  ecosystem_bindings:
+    baseline-dpi/v1:
+      profile: registry-notary/source-policy/v1
+      policy_id: lab.baseline-dpi.governed-evidence.v1
+      policy_hash: sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb
   signing_keys:
     shared-eligibility-evidence-demo:
       provider: local_jwk_env
@@ -101,6 +120,19 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            max_source_age_seconds: 86400
+            source_observed_at_field: observed_at
+            ecosystem_binding:
+              id: baseline-dpi/v1
           lookup:
             input: target.identifiers.national_id
             field: national_id
@@ -140,6 +172,19 @@ evidence:
           required_scope: social_protection_registry:evidence_verification
           dataset: social_protection_registry
           entity: program_enrollment
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            max_source_age_seconds: 86400
+            source_observed_at_field: observed_at
+            ecosystem_binding:
+              id: baseline-dpi/v1
           lookup:
             input: target.identifiers.national_id
             field: national_id
@@ -175,6 +220,19 @@ evidence:
           required_scope: health_registry:evidence_verification
           dataset: health_registry
           entity: health_facility
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            max_source_age_seconds: 86400
+            source_observed_at_field: observed_at
+            ecosystem_binding:
+              id: baseline-dpi/v1
           lookup:
             input: target.identifiers.national_id
             field: national_id

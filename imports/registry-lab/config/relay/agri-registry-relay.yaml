@@ -15,7 +15,7 @@ config_trust:
 metadata:
   source:
     path: agri-registry-relay.metadata.yaml
-    digest: sha256:ce6bc79189207721c9b4f24d12ab01036b1be89c4724c77f7a5d73bc1f401f39
+    digest: sha256:70ea93450db69603c7a347625da0f76e33c65e5990e95ad9417656fd4d8119fb
 
 catalog:
   title: NAgDI Agricultural Registry Relay (Decentralized Demo)
@@ -34,14 +34,14 @@ auth:
       fingerprint:
         provider: env
         name: AGRI_METADATA_CLIENT_HASH
-        commitment: sha256:80d48b5c8bce69a697fe0f3e1b37bb87da41d1231b62e82b6d07ea88adb2c167
+        commitment: sha256:c02832f2a3f2b283dce9b4018ee45550d179847d6e1682d011960d32052936d1
       scopes:
         - agri_registry:metadata
     - id: agri_evidence_source
       fingerprint:
         provider: env
         name: AGRI_EVIDENCE_SOURCE_HASH
-        commitment: sha256:77dd3221a118ecee40deeb08116d7b78e3a43be022cc7a3f829fa7057c679cb0
+        commitment: sha256:4e97a7f015298f61a8c6db26c78798add6c387a1e159cbd8498f145302a04385
       scopes:
         - agri_registry:metadata
         - agri_registry:rows
@@ -50,7 +50,7 @@ auth:
       fingerprint:
         provider: env
         name: AGRI_EVIDENCE_ONLY_HASH
-        commitment: sha256:d58350f0f494183aaf85ae10ac235001e282193b24cf4bbbbaee825bb02485df
+        commitment: sha256:373af592840722eeae4855f03acc4b66a62ae61019a901b6f5b9c2a64574c094
       scopes:
         - agri_registry:metadata
         - agri_registry:evidence_verification
@@ -58,7 +58,7 @@ auth:
       fingerprint:
         provider: env
         name: AGRI_ROW_READER_HASH
-        commitment: sha256:62757e81374c245d53ae5231812846059798603c83267498cfed9a2d513c7e28
+        commitment: sha256:aed1243575548a56fa906ef8573291e873cdf302bc790b731328b738d234394b
       scopes:
         - agri_registry:metadata
         - agri_registry:rows
@@ -66,7 +66,7 @@ auth:
       fingerprint:
         provider: env
         name: AGRI_AGGREGATE_READER_HASH
-        commitment: sha256:bcc060ac8d644d8815e575e8565eea4c3e6ebfc423dc1c592b896f75b0ec7be1
+        commitment: sha256:4ff3b8e0e9a22b94265a46fd6fa2e95e595850f7ae567154501ba9d5395b09bd
       scopes:
         - agri_registry:metadata
         - agri_registry:aggregate

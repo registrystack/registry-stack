@@ -1,0 +1,86 @@
+{
+  "schema_version": "registry-lab/evidence-gateway-binding/v1",
+  "binding": {
+    "id": "sp-dci/v1",
+    "version": "v1",
+    "profile": "sp-dci",
+    "type": "governed-evidence",
+    "description": "Social Protection DCI governed evidence binding for OpenCRVS-style DCI source requests.",
+    "source_configs": [
+      "config/notary/opencrvs-dci-notary.yaml"
+    ],
+    "synthetic_data": "config/evidence-gateway/synthetic/sp-dci.v1.json",
+    "golden_fixtures": "config/evidence-gateway/golden/sp-dci.v1.json"
+  },
+  "evidence_pack": {
+    "policy_id": "lab.sp-dci.governed-evidence.v1",
+    "policy_hash": "sha256:479cfba9c5895f5f827b855244436a5b4a9f84c76fbd5472e861ad56983254db",
+    "odrl_enforcement": {
+      "profile": "registry-evidence-gateway-pdp/v1",
+      "constraint_terms": [
+        "odrl:purpose",
+        "odrl:spatial"
+      ],
+      "unsupported_terms_fail_closed": true,
+      "compile_target": "native-pdp"
+    },
+    "pdp_gates": [
+      {
+        "term": "registry:pdp:source_binding",
+        "operator": "odrl:isA",
+        "rightOperand": "sp-dci/v1"
+      },
+      {
+        "term": "registry:pdp:assurance",
+        "operator": "odrl:gteq",
+        "rightOperand": "substantial"
+      },
+      {
+        "term": "registry:pdp:source_age",
+        "operator": "odrl:lteq",
+        "rightOperand": 86400
+      },
+      {
+        "term": "registry:pdp:legal_basis",
+        "operator": "odrl:isA",
+        "rightOperand": "demo:birth-registration-verification"
+      },
+      {
+        "term": "registry:pdp:consent",
+        "operator": "odrl:isA",
+        "rightOperand": "demo:birth-registration-consent"
+      }
+    ]
+  },
+  "odrl_policy": {
+    "@context": [
+      "https://www.w3.org/ns/odrl.jsonld",
+      {
+        "registry": "https://registrystack.org/ns/evidence-gateway#",
+        "spdci": "https://schema.spdci.org/"
+      }
+    ],
+    "@type": "Set",
+    "uid": "urn:registry-lab:policy:sp-dci:governed-evidence:v1",
+    "profile": "registry-evidence-gateway-pdp/v1",
+    "permission": [
+      {
+        "uid": "urn:registry-lab:rule:sp-dci:purpose:opencrvs-dci-lab",
+        "action": "odrl:use",
+        "target": "urn:registry-lab:evidence:sp-dci:v1",
+        "constraint": [
+          {
+            "leftOperand": "odrl:purpose",
+            "operator": "odrl:isA",
+            "rightOperand": "https://demo.example.gov/purpose/opencrvs-dci-lab"
+          },
+          {
+            "leftOperand": "odrl:spatial",
+            "operator": "odrl:isA",
+            "rightOperand": "ZZ"
+          }
+        ]
+      }
+    ]
+  }
+}

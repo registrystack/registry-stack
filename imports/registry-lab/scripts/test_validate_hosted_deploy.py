@@ -977,7 +977,11 @@ evidence:
         workflow = IMAGE_PIN_WORKFLOW_PATH.read_text(encoding="utf-8")
         self.assertIn("validate_image REGISTRY_RELAY_IMAGE", workflow)
         self.assertIn("@sha256:[0-9a-f]{64}", workflow)
-        self.assertIn("/deployments/${DEPLOYMENT_UUID}", workflow)
+        self.assertIn("COOLIFY_HOSTED_SOCIAL_APP_UUID", workflow)
+        self.assertIn("COOLIFY_HOSTED_AGRI_APP_UUID", workflow)
+        self.assertIn('patch_product_images "${COOLIFY_HOSTED_SOCIAL_APP_UUID}" social', workflow)
+        self.assertIn('patch_product_images "${COOLIFY_HOSTED_AGRI_APP_UUID}" agri', workflow)
+        self.assertIn("/deployments/${deployment_uuid}", workflow)
         self.assertIn("python3 scripts/hosted-smoke.py", workflow)
 
     def test_hosted_workflow_paths_cover_deployment_automation(self) -> None:

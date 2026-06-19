@@ -280,6 +280,7 @@ SCANNED_FILE_SUFFIXES = {
 }
 HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 HOSTED_CONFIG_DIRS = (
+    Path("config/relay"),
     Path("config/coolify/notary"),
     Path("config/coolify/relay"),
 )
@@ -2527,7 +2528,7 @@ def load_yaml_mapping_strict(path: Path) -> dict[str, Any]:
 
 def assert_no_duplicate_yaml_keys_text(text: str) -> None:
     scopes: list[tuple[int, set[str]]] = []
-    key_re = re.compile(r"^(?P<indent>\s*)(?P<dash>-\s+)?(?P<key>[A-Za-z0-9_.-]+)\s*:")
+    key_re = re.compile(r"^(?P<indent>\s*)(?P<dash>-\s+)?(?P<key>[A-Za-z0-9_./-]+)\s*:")
     for lineno, raw_line in enumerate(text.splitlines(), start=1):
         stripped = raw_line.strip()
         if not stripped or stripped.startswith("#"):

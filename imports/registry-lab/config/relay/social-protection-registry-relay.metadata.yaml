@@ -33,12 +33,43 @@ ecosystem_bindings:
     profile: baseline-dpi
     type: governed-evidence
     evidence_pack:
-      policy_id: demo.social-protection-row-purpose.v1
-      policy_hash: sha256:388352668467809d19e2039fdb13048a45ce59690b7ed1eeae82c2a083aeb2c3
+      pack_id: baseline-dpi/v1
+      pack_version: v1
+      source_basis:
+        family: dpi
+        evidence_type: household_support_evidence
+      semantic_profile:
+        vocabulary: registry-lab
+        fit: strong
+      evidence_envelope:
+        format: minimized_json
+        fields:
+          - claim_id
+          - result
+      required_gates:
+        - purpose
+        - jurisdiction
+        - legal_basis
+        - consent
+        - authority_basis
+        - requester_identity
+        - subject_identity
+        - subject_relationship
+        - assurance
+        - source_binding
+        - source_freshness
+        - requested_disclosure
+        - credential_format
+        - route_scope
+      allowed_outputs:
+        - minimized_json
+      policy_id: lab.baseline-dpi.governed-evidence.v1
+      policy_hash: sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb
       odrl_enforcement:
         profile: registry-evidence-gateway-pdp/v1
         constraint_terms:
           - odrl:purpose
+          - odrl:spatial
 requirements:
   - id: household_support_requirement
     iri: https://demo.example.gov/requirements/household-support-eligibility
@@ -127,6 +158,9 @@ datasets:
           - name: deceased_member_count
             type: integer
             required: true
+          - name: observed_at
+            type: string
+            required: true
         relationships:
           - name: members
             target_entity: person
@@ -175,6 +209,9 @@ datasets:
           - name: disability_status
             type: string
             required: true
+          - name: observed_at
+            type: string
+            required: true
         relationships:
           - name: household
             target_entity: household
@@ -210,6 +247,9 @@ datasets:
             unit: USD
           - name: enrolled_on
             type: date
+            required: true
+          - name: observed_at
+            type: string
             required: true
         relationships:
           - name: household
@@ -423,6 +463,9 @@ datasets:
           - name: source_version
             type: string
             required: true
+          - name: observed_at
+            type: string
+            required: true
       - name: disability_determination
         title: Disability Determination
         description: Disability support determination source record.
@@ -456,6 +499,9 @@ datasets:
             required: true
           - name: review_due
             type: date
+            required: true
+          - name: observed_at
+            type: string
             required: true
 vocabularies:
   registry_relay: https://registry-relay.dev/

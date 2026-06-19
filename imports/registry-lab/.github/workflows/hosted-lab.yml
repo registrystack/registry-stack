@@ -12,6 +12,7 @@ on:
       - "compose.walt-hosted.yaml"
       - "config/coolify/**"
       - "config/static-metadata/**"
+      - "config/evidence-gateway/**"
       - "config/lab-homepage/**"
       - "config/esignet/nginx-hosted.conf"
       - "config/walt/**"
@@ -28,6 +29,10 @@ on:
       - "scripts/test_lab_homepage_server.py"
       - "scripts/credential-commitment.py"
       - "scripts/test_credential_commitment.py"
+      - "scripts/check-evidence-gateway-fixtures.py"
+      - "scripts/test_evidence_gateway_fixtures.py"
+      - "scripts/run-evidence-gateway-live-fixtures.py"
+      - "scripts/test_evidence_gateway_live_fixtures.py"
       - "scripts/summarize-dhis2-programme-vc.py"
       - "scripts/test_dhis2_programme_vc_config.py"
       - "scripts/hosted-smoke.py"
@@ -53,6 +58,7 @@ on:
       - "compose.walt-hosted.yaml"
       - "config/coolify/**"
       - "config/static-metadata/**"
+      - "config/evidence-gateway/**"
       - "config/lab-homepage/**"
       - "config/esignet/nginx-hosted.conf"
       - "config/walt/**"
@@ -69,6 +75,10 @@ on:
       - "scripts/test_lab_homepage_server.py"
       - "scripts/credential-commitment.py"
       - "scripts/test_credential_commitment.py"
+      - "scripts/check-evidence-gateway-fixtures.py"
+      - "scripts/test_evidence_gateway_fixtures.py"
+      - "scripts/run-evidence-gateway-live-fixtures.py"
+      - "scripts/test_evidence_gateway_live_fixtures.py"
       - "scripts/summarize-dhis2-programme-vc.py"
       - "scripts/test_dhis2_programme_vc_config.py"
       - "scripts/hosted-smoke.py"
@@ -113,6 +123,7 @@ jobs:
             compose.walt-hosted.yaml \
             config/coolify \
             config/static-metadata \
+            config/evidence-gateway \
             config/lab-homepage \
             config/esignet/nginx-hosted.conf \
             config/walt \
@@ -129,6 +140,10 @@ jobs:
             scripts/test_lab_homepage_server.py \
             scripts/credential-commitment.py \
             scripts/test_credential_commitment.py \
+            scripts/check-evidence-gateway-fixtures.py \
+            scripts/test_evidence_gateway_fixtures.py \
+            scripts/run-evidence-gateway-live-fixtures.py \
+            scripts/test_evidence_gateway_live_fixtures.py \
             scripts/summarize-dhis2-programme-vc.py \
             scripts/test_dhis2_programme_vc_config.py \
             scripts/hosted-smoke.py \
@@ -183,6 +198,15 @@ jobs:
 
       - name: Run credential commitment tests
         run: python3 scripts/test_credential_commitment.py
+
+      - name: Run evidence gateway fixture tests
+        run: python3 scripts/test_evidence_gateway_fixtures.py
+
+      - name: Validate evidence gateway fixtures
+        run: python3 scripts/check-evidence-gateway-fixtures.py
+
+      - name: Run evidence gateway live fixture runner tests
+        run: python3 scripts/test_evidence_gateway_live_fixtures.py
 
       - name: Run hosted smoke tests
         run: python3 scripts/test_hosted_smoke.py

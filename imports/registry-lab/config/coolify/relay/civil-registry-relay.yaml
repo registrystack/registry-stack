@@ -15,7 +15,10 @@ config_trust:
 metadata:
   source:
     path: civil-registry-relay.metadata.yaml
-    digest: sha256:a2791fac749f3021f6a39f71b8722342d8b52714143fb1cd2ff53297488c7e6f
+    digest: sha256:23feaa1681277c7a4acc59b7dc3616d07598ad29c58bf02462e93505da0db33e
+  ecosystem_binding:
+    id: baseline-dpi/v1
+    version: v1
 
 catalog:
   title: Civil Registry Relay (Decentralized Demo)
@@ -155,6 +158,9 @@ datasets:
             - name: district
               type: string
               nullable: false
+            - name: observed_at
+              type: string
+              nullable: true
       - id: civil_person_details_table
         materialization: snapshot
         source:
@@ -419,6 +425,7 @@ datasets:
           - name: life_stage
           - name: deceased
           - name: district
+          - name: observed_at
         access:
           metadata_scope: civil_registry:metadata
           aggregate_scope: civil_registry:aggregate

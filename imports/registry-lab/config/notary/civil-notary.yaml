@@ -14,7 +14,7 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_NOTARY_OPS_TOKEN_HASH
-        commitment: sha256:8f609eae10331f2ac32cb3bf575a612064fd1cda0d9c4a3f34ae831081e4c45a
+        commitment: sha256:c52f9b132c88dd351a90efeb385bbdf5a31d7b43a3a5efe6ba903cc94aff22aa
       scopes:
         - registry_notary:ops_read
         - registry_notary:metrics_read
@@ -22,7 +22,7 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_EVIDENCE_CLIENT_TOKEN_HASH
-        commitment: sha256:809094ad7d8b5836f2eea14208f4d40c139c5e1ebabcecd7f5272d040447a614
+        commitment: sha256:7d537df5a3c58149ff213ad12298b30e890829528f270dfea566572b059f345f
       scopes:
         - civil_registry:evidence_verification
   bearer_tokens:
@@ -30,7 +30,7 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_EVIDENCE_CLIENT_BEARER_HASH
-        commitment: sha256:459b5ba57bd97b9b082087e15b0714266ccc2117811e9465c714fcccfc4fd6a9
+        commitment: sha256:228ec46d788fc994fbd8516ef56f06867efdde7737486fd7c55143831f177a65
       scopes:
         - civil_registry:evidence_verification
 
@@ -124,6 +124,15 @@ evidence:
           surname: /person/surname
           birth_date: /person/birth_date
           deceased: /person/deceased
+  ecosystem_bindings:
+    oots-birth-evidence/v1:
+      profile: registry-notary/source-policy/v1
+      policy_id: lab.oots-birth-evidence.governed-evidence.v1
+      policy_hash: sha256:a4804f81f3287b7922e8c3d5bad49377584b7ab8727fe62cbae23c1f5bc85e1c
+    oots-marriage-evidence/v1:
+      profile: registry-notary/source-policy/v1
+      policy_id: lab.oots-marriage-evidence.governed-evidence.v1
+      policy_hash: sha256:e5193284535dfa9689dd081942ec847f51eacd50ebc71d93b482247207b63dcf
   signing_keys:
     civil-evidence-demo:
       provider: local_jwk_env
@@ -172,6 +181,9 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
           lookup:
             input: target.identifiers.national_id
             field: NATIONAL_ID
@@ -210,6 +222,9 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
           lookup:
             input: target.identifiers.national_id
             field: NATIONAL_ID
@@ -248,6 +263,9 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
           lookup:
             input: target.identifiers.national_id
             field: NATIONAL_ID
@@ -288,6 +306,9 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
           lookup:
             input: target.identifiers.national_id
             field: NATIONAL_ID
@@ -345,6 +366,8 @@ evidence:
               field: birth_date
               op: eq
           matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
             target_type: Person
             method: configured_demographic_lookup
             sufficient_target_inputs:

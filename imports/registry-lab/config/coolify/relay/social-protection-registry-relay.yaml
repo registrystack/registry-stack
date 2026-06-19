@@ -15,7 +15,10 @@ config_trust:
 metadata:
   source:
     path: social-protection-registry-relay.metadata.yaml
-    digest: sha256:3bc1399124d7f9bdce6ec2db9ed7eec7a1f214779ccf2ea424b709d696fa0dad
+    digest: sha256:117ead5ee4a81664b572fa63b0b322896e72ffa395eae0f10e872cef7e902e96
+  ecosystem_binding:
+    id: baseline-dpi/v1
+    version: v1
 
 catalog:
   title: Social Protection Registry Relay (Decentralized Demo)
@@ -136,6 +139,9 @@ datasets:
             - name: deceased_member_count
               type: integer
               nullable: false
+            - name: observed_at
+              type: string
+              nullable: true
       - id: persons_table
         materialization: snapshot
         source:
@@ -171,6 +177,9 @@ datasets:
             - name: disability_status
               type: string
               nullable: false
+            - name: observed_at
+              type: string
+              nullable: true
       - id: enrollments_table
         materialization: snapshot
         source:
@@ -209,6 +218,9 @@ datasets:
             - name: enrolled_on
               type: date
               nullable: false
+            - name: observed_at
+              type: string
+              nullable: true
       - id: group_memberships_table
         materialization: snapshot
         source:
@@ -457,6 +469,9 @@ datasets:
             - name: source_version
               type: string
               nullable: false
+            - name: observed_at
+              type: string
+              nullable: true
       - id: disability_determinations_table
         materialization: snapshot
         source:
@@ -498,6 +513,9 @@ datasets:
             - name: review_due
               type: date
               nullable: false
+            - name: observed_at
+              type: string
+              nullable: true
       - id: district_geometries_table
         materialization: snapshot
         source:
@@ -582,6 +600,7 @@ datasets:
           - name: household_size
           - name: active_members
           - name: deceased_member_count
+          - name: observed_at
         relationships:
           - name: members
             kind: has_many
@@ -628,7 +647,7 @@ datasets:
         api:
           default_limit: 25
           max_limit: 10000
-          require_purpose_header: false
+          require_purpose_header: true
           allowed_filters:
             - field: id
               ops: [eq, in]
@@ -646,6 +665,7 @@ datasets:
           - name: age
           - name: alive
           - name: disability_status
+          - name: observed_at
         relationships:
           - name: household
             kind: belongs_to
@@ -685,6 +705,7 @@ datasets:
             from: status
           - name: benefit_amount
           - name: enrolled_on
+          - name: observed_at
         relationships:
           - name: household
             kind: belongs_to
@@ -925,6 +946,7 @@ datasets:
           - name: disability_identifier_met
           - name: domains_triggering_identifier
           - name: source_version
+          - name: observed_at
         access:
           metadata_scope: social_protection_registry:metadata
           aggregate_scope: social_protection_registry:aggregate
@@ -959,6 +981,7 @@ datasets:
           - name: valid_from
           - name: valid_until
           - name: review_due
+          - name: observed_at
         access:
           metadata_scope: social_protection_registry:metadata
           aggregate_scope: social_protection_registry:aggregate

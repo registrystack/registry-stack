@@ -41,8 +41,30 @@ FIXED_CORE_CREATED = (
     b'<dcterms:created xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
     b'xsi:type="dcterms:W3CDTF">2026-01-01T00:00:00Z</dcterms:created>'
 )
+SOURCE_OBSERVED_AT_NOW = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+FRESH_SOURCE_OBSERVED_AT = SOURCE_OBSERVED_AT_NOW.isoformat().replace("+00:00", "Z")
+STALE_SOURCE_OBSERVED_AT = (
+    SOURCE_OBSERVED_AT_NOW - dt.timedelta(days=2)
+).isoformat().replace("+00:00", "Z")
+MISSING_SOURCE_OBSERVED_AT_NATIONAL_ID = "NID-1011"
 
-CIVIL_ROWS = [
+
+def observed_at_for_national_id(national_id: str) -> str:
+    if national_id == "NID-1010":
+        return STALE_SOURCE_OBSERVED_AT
+    if national_id == MISSING_SOURCE_OBSERVED_AT_NATIONAL_ID:
+        return ""
+    return FRESH_SOURCE_OBSERVED_AT
+
+
+def append_observed_at(rows: list[list[object]], *, national_id_index: int) -> list[list[object]]:
+    return [
+        rows[0] + ["observed_at"],
+        *[row + [observed_at_for_national_id(str(row[national_id_index]))] for row in rows[1:]],
+    ]
+
+
+CIVIL_ROWS = append_observed_at([
     ["national_id", "given_name", "surname", "birth_date", "life_stage", "deceased", "district"],
     ["NID-1001", "Miguel", "Santos", "2016-01-15", "child", "false", "north"],
     ["NID-1002", "Maria", "Dela Cruz", "2018-01-15", "child", "false", "south"],
@@ -59,7 +81,8 @@ CIVIL_ROWS = [
     ["NID-2004", "Rosario", "Aquino", "1988-01-15", "adult", "false", "east"],
     ["NID-2005", "Eduardo", "Bautista", "1978-01-15", "adult", "false", "west"],
     ["NID-2006", "David", "Martinez", "1978-01-15", "adult", "false", "north"],
-]
+    ["NID-1011", "Miguel", "Santos", "2016-01-15", "child", "false", "south"],
+], national_id_index=0)
 
 # PublicSchema anchors:
 # Person / Identifier / CivilStatusRecord / Birth / Death / Certificate / Relationship.
@@ -174,7 +197,7 @@ RELATIONSHIPS = [
     ["REL-1006-FATHER", "CP-1006", "CP-2006", "father", "CSR-BIRTH-1006", "2014-01-15", "", "established"],
 ]
 
-HOUSEHOLDS = [
+HOUSEHOLDS = append_observed_at([
     ["household_id", "national_id", "district", "poverty_score", "eligibility_band", "household_size", "active_members", "deceased_member_count"],
     ["HH-100", "NID-1001", "north", 29.0, "priority", 5, 5, 0],
     ["HH-200", "NID-1002", "south", 45.0, "standard", 4, 4, 0],
@@ -184,9 +207,10 @@ HOUSEHOLDS = [
     ["HH-600", "NID-1006", "north", 38.0, "priority", 3, 3, 0],
     ["HH-700", "NID-1008", "west", 42.0, "standard", 1, 1, 0],
     ["HH-800", "NID-1010", "central", 54.0, "standard", 6, 6, 0],
-]
+    ["HH-900", "NID-1011", "south", 28.0, "priority", 3, 3, 0],
+], national_id_index=1)
 
-PERSONS = [
+PERSONS = append_observed_at([
     ["person_id", "household_id", "national_id", "relationship", "age", "alive", "disability_status"],
     ["PER-1001", "HH-100", "NID-1001", "child", 10, True, "none"],
     ["PER-1007", "HH-100", "NID-1007", "grandparent", 68, True, "none"],
@@ -219,9 +243,10 @@ PERSONS = [
     ["PER-3014", "HH-800", "NID-3014", "household_member", 45, True, "none"],
     ["PER-3015", "HH-800", "NID-3015", "child", 14, True, "none"],
     ["PER-3016", "HH-800", "NID-3016", "child", 10, True, "none"],
-]
+    ["PER-1011", "HH-900", "NID-1011", "child", 10, True, "none"],
+], national_id_index=2)
 
-ENROLLMENTS = [
+ENROLLMENTS = append_observed_at([
     ["enrollment_id", "household_id", "person_id", "national_id", "program_code", "status", "benefit_amount", "enrolled_on"],
     ["ENR-100", "HH-100", "PER-1001", "NID-1001", "CHILD_SUPPORT", "active", 85.50, dt.date(2025, 1, 1)],
     ["ENR-200", "HH-200", "PER-1002", "NID-1002", "CHILD_SUPPORT", "inactive", 0.0, dt.date(2024, 3, 1)],
@@ -233,7 +258,8 @@ ENROLLMENTS = [
     ["ENR-800", "HH-700", "PER-1008", "NID-1008", "ELDERLY_PENSION", "active", 100.00, dt.date(2025, 4, 4)],
     ["ENR-900", "HH-800", "PER-1009", "NID-1009", "COMMUNITY_REGISTRY", "none", 0.0, dt.date(2025, 5, 1)],
     ["ENR-1000", "HH-800", "PER-1010", "NID-1010", "COMMUNITY_REGISTRY", "none", 0.0, dt.date(2025, 5, 1)],
-]
+    ["ENR-1011", "HH-900", "PER-1011", "NID-1011", "CHILD_SUPPORT", "active", 85.50, dt.date(2025, 1, 1)],
+], national_id_index=3)
 
 # PublicSchema anchors:
 # Household / GroupMembership / SocioEconomicProfile / ScoringEvent /
@@ -312,7 +338,7 @@ PAYMENT_EVENTS = [
     ["PAY-900-JAN", "ENT-900", "2026-01", "not_paid_policy_denied", "none", dt.date(2026, 1, 16), False],
 ]
 
-FUNCTIONING_PROFILES = [
+FUNCTIONING_PROFILES = append_observed_at([
     [
         "profile_id",
         "person_id",
@@ -327,13 +353,13 @@ FUNCTIONING_PROFILES = [
     ],
     ["FUNC-1006", "PER-1006", "NID-1006", "WG-SS-2025", dt.date(2025, 12, 5), "caregiver", "mobility=severe;self_care=moderate", True, "mobility;self_care", "2025.4"],
     ["FUNC-1003", "PER-1003", "NID-1003", "WG-SS-2025", dt.date(2025, 6, 1), "self", "mobility=severe", True, "mobility", "2025.2"],
-]
+], national_id_index=2)
 
-DISABILITY_DETERMINATIONS = [
+DISABILITY_DETERMINATIONS = append_observed_at([
     ["determination_id", "person_id", "national_id", "authority", "determination_status", "support_category", "valid_from", "valid_until", "review_due"],
     ["DIS-1006", "PER-1006", "NID-1006", "Disability Assessment Authority", "approved", "top_up", dt.date(2025, 12, 20), dt.date(2026, 12, 20), dt.date(2026, 10, 20)],
     ["DIS-1003", "PER-1003", "NID-1003", "Disability Assessment Authority", "closed_deceased", "none", dt.date(2025, 6, 1), dt.date(2025, 11, 2), dt.date(2025, 11, 2)],
-]
+], national_id_index=2)
 
 DISTRICT_GEOMETRIES = [
     ["district", "geometry"],
@@ -457,7 +483,21 @@ APPLICANT_SERVICE_AVAILABILITY_PROJECTION = [
         "practitioner_credential_active": False,
         "updated_on": dt.date(2026, 1, 16),
     },
+    {
+        "facility_id": "HF-110",
+        "national_id": "NID-1011",
+        "facility_name": "South Pediatric Clinic",
+        "district": "south",
+        "license_status": "active",
+        "maternal_service_available": True,
+        "pediatric_service_available": True,
+        "practitioner_credential_active": True,
+        "updated_on": dt.date(2026, 1, 16),
+    },
 ]
+
+for row in APPLICANT_SERVICE_AVAILABILITY_PROJECTION:
+    row["observed_at"] = observed_at_for_national_id(row["national_id"])
 
 # Compatibility alias for existing relay and notary configs.
 HEALTH_ROWS = APPLICANT_SERVICE_AVAILABILITY_PROJECTION
@@ -646,6 +686,25 @@ def validate_fixture_coverage() -> None:
         raise ValueError("enrollment fixture must include a non-active status")
     if not any(row["license_status"] != "active" for row in HEALTH_ROWS):
         raise ValueError("health fixture must include a non-active license")
+    allowed_missing = {MISSING_SOURCE_OBSERVED_AT_NATIONAL_ID}
+    for row in data_rows(CIVIL_ROWS):
+        if row[0] not in allowed_missing and not str(row[7]).endswith("Z"):
+            raise ValueError("civil fixture observed_at values must be RFC3339 UTC timestamps")
+    for row in data_rows(ENROLLMENTS):
+        if row[3] not in allowed_missing and not str(row[8]).endswith("Z"):
+            raise ValueError("enrollment fixture observed_at values must be RFC3339 UTC timestamps")
+    for label, rows, national_id_index, observed_at_index in [
+        ("household", HOUSEHOLDS, 1, 8),
+        ("person", PERSONS, 2, 7),
+        ("functioning profile", FUNCTIONING_PROFILES, 2, 10),
+        ("disability determination", DISABILITY_DETERMINATIONS, 2, 9),
+    ]:
+        for row in data_rows(rows):
+            if row[national_id_index] not in allowed_missing and not str(row[observed_at_index]).endswith("Z"):
+                raise ValueError(f"{label} fixture observed_at values must be RFC3339 UTC timestamps")
+    for row in HEALTH_ROWS:
+        if row["national_id"] not in allowed_missing and not row["observed_at"].endswith("Z"):
+            raise ValueError("health fixture observed_at values must be RFC3339 UTC timestamps")
     if HEALTH_PROJECTION_NAME != "ApplicantServiceAvailabilityProjection":
         raise ValueError("health national_id compatibility data must be framed as ApplicantServiceAvailabilityProjection")
     expected_persona_outcomes = {"positive", "negative", "ambiguous_match", "stale", "expired", "policy_denied"}
@@ -740,6 +799,7 @@ def write_health_parquet() -> None:
             ("pediatric_service_available", pa.bool_()),
             ("practitioner_credential_active", pa.bool_()),
             ("updated_on", pa.date32()),
+            ("observed_at", pa.string()),
         ]
     )
     table = pa.Table.from_pydict(

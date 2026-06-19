@@ -89,7 +89,6 @@ OPENCRVS_DCI_CLIENT_ID=<your OpenCRVS DCI client id>
 OPENCRVS_DCI_CLIENT_SECRET=<your OpenCRVS DCI client secret>
 OPENCRVS_DCI_SHA_SECRET=<your OpenCRVS DCI sha secret>
 OPENCRVS_EVIDENCE_CLIENT_TOKEN=api-token
-OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH=sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51
 OPENCRVS_DCI_NOTARY_PORT=4352
 EOF
 chmod 600 .env.local
@@ -100,6 +99,9 @@ OpenCRVS.
 
 `.env.local` is ignored by Git. Keep it local to your machine and do not paste
 it into tickets, commits, screenshots, or chat.
+The smoke script derives local Registry Notary API-key hashes from the token
+values when the hash env vars are unset or still contain placeholder zero
+digests.
 
 `OPENCRVS_DCI_SHA_SECRET` is recorded for later signed-request testing. The
 current OpenCRVS DCI smoke uses OAuth bearer-token authentication and unsigned

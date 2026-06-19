@@ -35,7 +35,12 @@ V1_MATRIX = [
     {"id": "NID-1007", "alive": True, "health": True, "combined": False},
     {"id": "NID-1008", "alive": True, "health": True, "combined": True},
     {"id": "NID-1009", "alive": True, "health": True, "combined": False},
-    {"id": "NID-1010", "alive": True, "health": False, "combined": False},
+    {
+        "id": "NID-1010",
+        "alive": True,
+        "health": {"status": 403, "code": "pdp.evidence_stale"},
+        "combined": {"status": 403, "code": "pdp.evidence_stale"},
+    },
 ]
 # The full matrix above covers all subjects. Keep the batch proof smaller so a
 # single request does not saturate Notary's intentional no-queue CEL worker pool.
@@ -468,7 +473,12 @@ def main() -> int:
         headers={"Data-Purpose": "https://demo.example.gov/purpose/not-authorized"},
     )
     save(out, step, "purpose-policy-denial", {"status": purpose_denial.status, "body": purpose_denial.body})
-    require_problem_code(purpose_denial, 403, "auth.purpose_denied", "purpose policy denial")
+    require_problem_code(
+        purpose_denial,
+        403,
+        "pdp.purpose_not_permitted",
+        "purpose policy denial",
+    )
     step += 1
 
     edr_area_path = "/ogc/edr/v1/collections/social_protection_households_by_district/area?" + urllib.parse.urlencode(
@@ -544,26 +554,35 @@ def main() -> int:
     for case in V1_MATRIX:
         subject = str(case["id"])
         for service, claim, expected_key in matrix_claims:
-            expected = bool(case[expected_key])
+            expected = case[expected_key]
             label = f"v1 matrix {claim} {subject}"
-            result = require(
-                request(
-                    "POST",
-                    service.url,
-                    "/v1/evaluations",
-                    env(service.token_env),
-                    evaluate_payload(subject, [claim], "predicate", CLAIM_RESULT_FORMAT),
-                    {"Data-Purpose": PURPOSE, "Accept": CLAIM_RESULT_FORMAT},
-                ),
-                200,
-                label,
+            result = request(
+                "POST",
+                service.url,
+                "/v1/evaluations",
+                env(service.token_env),
+                evaluate_payload(subject, [claim], "predicate", CLAIM_RESULT_FORMAT),
+                {"Data-Purpose": PURPOSE, "Accept": CLAIM_RESULT_FORMAT},
             )
-            claim_result = require_boolean_result(result, claim, expected, label)
+            if isinstance(expected, dict):
+                require_problem_code(result, int(expected["status"]), str(expected["code"]), label)
+                matrix_results.append(
+                    {
+                        "subject": subject,
+                        "claim_id": claim,
+                        "expected_problem": expected,
+                        "observed_problem": result.body,
+                    }
+                )
+                continue
+            result_body = require(result, 200, label)
+            expected_bool = bool(expected)
+            claim_result = require_boolean_result(result_body, claim, expected_bool, label)
             matrix_results.append(
                 {
                     "subject": subject,
                     "claim_id": claim,
-                    "expected": expected,
+                    "expected": expected_bool,
                     "observed": claim_result.get("satisfied")
                     if claim_result.get("satisfied") is not None
                     else claim_result.get("value"),

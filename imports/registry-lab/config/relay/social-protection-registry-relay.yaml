@@ -15,7 +15,7 @@ config_trust:
 metadata:
   source:
     path: social-protection-registry-relay.metadata.yaml
-    digest: sha256:f4bc330f2d6e276993a438023f6540c4bfa051fce92934c20597f7e2d9bf497b
+    digest: sha256:fc608b2d12003e4f4ac3dfcfa27707be65b47a632c05458993e14cf17bedd3a8
   ecosystem_binding:
     id: baseline-dpi/v1
     version: v1
@@ -36,14 +36,14 @@ auth:
       fingerprint:
         provider: env
         name: SOCIAL_METADATA_CLIENT_HASH
-        commitment: sha256:7de1f94fc7cd8ea0ef8b93c351d7c76b7f1343e34821b57b07bd03c1e2e80e3f
+        commitment: sha256:4bcf29bf69e24b3b05937c90e1477e01516b28101f982dcbbe138a3dcf2ec742
       scopes:
         - social_protection_registry:metadata
     - id: evidence_source
       fingerprint:
         provider: env
         name: SOCIAL_EVIDENCE_SOURCE_HASH
-        commitment: sha256:f72eac419eb212c27397c871cf143d768850c44c67f31de29409e566a6e258ec
+        commitment: sha256:99ac4769bd30358977898ca333a3589c9349c4613f63feb1d1ef6061bab851d3
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:rows
@@ -52,7 +52,7 @@ auth:
       fingerprint:
         provider: env
         name: SOCIAL_EVIDENCE_ONLY_HASH
-        commitment: sha256:32a1c1339a7848452720f06a8bb45460f0fe3279b9d9791d831d17b8e8a3b35e
+        commitment: sha256:e94f9200258219b0f154395ee374ca8f0523342b3cfff12d52182505b1326150
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:evidence_verification
@@ -60,7 +60,7 @@ auth:
       fingerprint:
         provider: env
         name: SOCIAL_ROW_READER_HASH
-        commitment: sha256:02e7a87e53cbe98e7eb776595d8d574fc216e3b56ef26e7b19d1d35e5ab21db6
+        commitment: sha256:e975a71802995517f87deb926da845c85c2cd2c7249cd744318a6d382968e48a
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:rows
@@ -68,7 +68,7 @@ auth:
       fingerprint:
         provider: env
         name: SOCIAL_AGGREGATE_READER_HASH
-        commitment: sha256:be0cbd3cb13b4b81100f704e27082c4c2f1968ca3255c9b304d70689b49f5098
+        commitment: sha256:cad3ebb0239b9d70f481a8e90b46a0d8abb8e15877138b57a4b028a16e43e522
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:aggregate
@@ -76,7 +76,7 @@ auth:
       fingerprint:
         provider: env
         name: SHARED_SOCIAL_EVIDENCE_SOURCE_HASH
-        commitment: sha256:26bfe57f8ac6f3d6416c12151d4ec51b6db925fa068057f04ede8d6ddb790156
+        commitment: sha256:e4ed86923c2fd7527c3bc8cb1e0986675f3a42e976ab3bd8c31cd404601b5283
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:rows
@@ -139,6 +139,9 @@ datasets:
             - name: deceased_member_count
               type: integer
               nullable: false
+            - name: observed_at
+              type: string
+              nullable: true
       - id: persons_table
         materialization: snapshot
         source:
@@ -174,6 +177,9 @@ datasets:
             - name: disability_status
               type: string
               nullable: false
+            - name: observed_at
+              type: string
+              nullable: true
       - id: enrollments_table
         materialization: snapshot
         source:
@@ -212,6 +218,9 @@ datasets:
             - name: enrolled_on
               type: date
               nullable: false
+            - name: observed_at
+              type: string
+              nullable: true
       - id: group_memberships_table
         materialization: snapshot
         source:
@@ -460,6 +469,9 @@ datasets:
             - name: source_version
               type: string
               nullable: false
+            - name: observed_at
+              type: string
+              nullable: true
       - id: disability_determinations_table
         materialization: snapshot
         source:
@@ -501,6 +513,9 @@ datasets:
             - name: review_due
               type: date
               nullable: false
+            - name: observed_at
+              type: string
+              nullable: true
       - id: district_geometries_table
         materialization: snapshot
         source:
@@ -585,6 +600,7 @@ datasets:
           - name: household_size
           - name: active_members
           - name: deceased_member_count
+          - name: observed_at
         relationships:
           - name: members
             kind: has_many
@@ -631,7 +647,7 @@ datasets:
         api:
           default_limit: 25
           max_limit: 10000
-          require_purpose_header: false
+          require_purpose_header: true
           allowed_filters:
             - field: id
               ops: [eq, in]
@@ -649,6 +665,7 @@ datasets:
           - name: age
           - name: alive
           - name: disability_status
+          - name: observed_at
         relationships:
           - name: household
             kind: belongs_to
@@ -688,6 +705,7 @@ datasets:
             from: status
           - name: benefit_amount
           - name: enrolled_on
+          - name: observed_at
         relationships:
           - name: household
             kind: belongs_to
@@ -928,6 +946,7 @@ datasets:
           - name: disability_identifier_met
           - name: domains_triggering_identifier
           - name: source_version
+          - name: observed_at
         access:
           metadata_scope: social_protection_registry:metadata
           aggregate_scope: social_protection_registry:aggregate
@@ -962,6 +981,7 @@ datasets:
           - name: valid_from
           - name: valid_until
           - name: review_due
+          - name: observed_at
         access:
           metadata_scope: social_protection_registry:metadata
           aggregate_scope: social_protection_registry:aggregate

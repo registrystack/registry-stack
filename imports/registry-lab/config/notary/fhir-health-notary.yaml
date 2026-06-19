@@ -14,7 +14,7 @@ auth:
       fingerprint:
         provider: env
         name: FHIR_EVIDENCE_CLIENT_TOKEN_HASH
-        commitment: sha256:cc101129e15ec156ce8da624c895e1908ae544ce8900a25c3090d00f3f786838
+        commitment: sha256:726d945c2135a13646b7cc0fdab56968717877ce3f633524a86e4f6a6790b874
       scopes:
         - health_registry:evidence_verification
   bearer_tokens:
@@ -22,7 +22,7 @@ auth:
       fingerprint:
         provider: env
         name: FHIR_EVIDENCE_CLIENT_BEARER_HASH
-        commitment: sha256:d0a49901a6aa01641a46b5c0ed44c536800033ded99e34a29d34907c7eb7a45b
+        commitment: sha256:6b4585927c51985f1c19034743167ab533c35dc0bceb33f4cc0cac99fad543d3
       scopes:
         - health_registry:evidence_verification
 

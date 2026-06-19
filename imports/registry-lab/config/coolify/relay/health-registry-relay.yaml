@@ -15,7 +15,10 @@ config_trust:
 metadata:
   source:
     path: health-registry-relay.metadata.yaml
-    digest: sha256:96490a7028dd9d5a13cdf7ed8f3fbd2738ca0c64bc42283144315112754ea270
+    digest: sha256:e1ad4de4598595ab424b0883e6e9afe8b3ec8e2c806891f5b5c06f699836bd50
+  ecosystem_binding:
+    id: baseline-dpi/v1
+    version: v1
 
 catalog:
   title: Health Registry Relay (Decentralized Demo)
@@ -129,6 +132,9 @@ datasets:
             - name: updated_on
               type: date
               nullable: false
+            - name: observed_at
+              type: string
+              nullable: true
     entities:
       - name: health_facility
         title: Applicant Service Availability
@@ -146,6 +152,7 @@ datasets:
           - name: pediatric_service_available
           - name: practitioner_credential_active
           - name: updated_on
+          - name: observed_at
         access:
           metadata_scope: health_registry:metadata
           aggregate_scope: health_registry:aggregate

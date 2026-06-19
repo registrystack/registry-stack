@@ -1,0 +1,516 @@
+{
+  "schema_version": "registry-lab/evidence-gateway-golden-fixtures/v1",
+  "binding_id": "baseline-dpi/v1",
+  "policy_id": "lab.baseline-dpi.governed-evidence.v1",
+  "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
+  "freshness_reference_time": "2026-06-19T00:00:00Z",
+  "cases": [
+    {
+      "id": "baseline-success-combined-support",
+      "type": "success",
+      "synthetic_data_refs": [
+        "baseline-success-child"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/decentralized-evidence-demo",
+        "binding_id": "baseline-dpi/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:child-support-eligibility",
+        "consent_ref": "demo:child-support-consent",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "national_id",
+              "value": "NID-1001"
+            }
+          ]
+        },
+        "claims": [
+          "eligible-for-combined-support"
+        ],
+        "disclosure": "predicate",
+        "format": "application/vnd.registry-notary.claim-result+json"
+      },
+      "expected": {
+        "status": 200,
+        "result": {
+          "claim_id": "eligible-for-combined-support",
+          "satisfied": true,
+          "disclosure": "predicate"
+        },
+        "audit": {
+          "binding_id": "baseline-dpi/v1",
+          "binding_version": "v1",
+          "policy_id": "lab.baseline-dpi.governed-evidence.v1",
+          "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
+          "evaluated_rule_ids": [
+            "source-binding-policy:*"
+          ]
+        }
+      }
+    },
+    {
+      "id": "baseline-denial-purpose",
+      "type": "denial",
+      "synthetic_data_refs": [
+        "baseline-denied-purpose"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/not-authorized",
+        "binding_id": "baseline-dpi/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:child-support-eligibility",
+        "consent_ref": "demo:child-support-consent",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "national_id",
+              "value": "NID-1009"
+            }
+          ]
+        },
+        "claims": [
+          "eligible-for-combined-support"
+        ],
+        "disclosure": "predicate"
+      },
+      "expected": {
+        "status": 403,
+        "problem": {
+          "code": "pdp.purpose_not_permitted"
+        },
+        "zero_source_reads": true,
+        "audit": {
+          "binding_id": "baseline-dpi/v1",
+          "policy_id": "lab.baseline-dpi.governed-evidence.v1",
+          "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
+          "decision": "deny"
+        }
+      }
+    },
+    {
+      "id": "baseline-denial-assurance",
+      "type": "denial",
+      "synthetic_data_refs": [
+        "baseline-denied-purpose"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/decentralized-evidence-demo",
+        "binding_id": "baseline-dpi/v1",
+        "assurance_level": "low",
+        "jurisdiction": "ZZ",
+        "legal_basis_ref": "demo:child-support-eligibility",
+        "consent_ref": "demo:child-support-consent",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "national_id",
+              "value": "NID-1009"
+            }
+          ]
+        },
+        "claims": [
+          "eligible-for-combined-support"
+        ],
+        "disclosure": "predicate"
+      },
+      "expected": {
+        "status": 403,
+        "problem": {
+          "code": "pdp.assurance_insufficient"
+        },
+        "zero_source_reads": true,
+        "audit": {
+          "binding_id": "baseline-dpi/v1",
+          "policy_id": "lab.baseline-dpi.governed-evidence.v1",
+          "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
+          "decision": "deny"
+        }
+      }
+    },
+    {
+      "id": "baseline-denial-stale-evidence",
+      "type": "denial",
+      "synthetic_data_refs": [
+        "baseline-stale-evidence"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/decentralized-evidence-demo",
+        "binding_id": "baseline-dpi/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:child-support-eligibility",
+        "consent_ref": "demo:child-support-consent",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "national_id",
+              "value": "NID-1010"
+            }
+          ]
+        },
+        "claims": [
+          "eligible-for-combined-support"
+        ],
+        "disclosure": "predicate"
+      },
+      "expected": {
+        "status": 403,
+        "problem": {
+          "code": "pdp.evidence_stale"
+        },
+        "zero_source_reads": false,
+        "audit": {
+          "binding_id": "baseline-dpi/v1",
+          "policy_id": "lab.baseline-dpi.governed-evidence.v1",
+          "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
+          "decision": "deny"
+        }
+      }
+    },
+    {
+      "id": "baseline-denial-missing-freshness",
+      "type": "denial",
+      "synthetic_data_refs": [
+        "baseline-missing-observed-at"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/decentralized-evidence-demo",
+        "binding_id": "baseline-dpi/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:child-support-eligibility",
+        "consent_ref": "demo:child-support-consent",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "national_id",
+              "value": "NID-1011"
+            }
+          ]
+        },
+        "claims": [
+          "eligible-for-combined-support"
+        ],
+        "disclosure": "predicate"
+      },
+      "expected": {
+        "status": 403,
+        "problem": {
+          "code": "pdp.evidence_stale"
+        },
+        "zero_source_reads": false,
+        "audit": {
+          "binding_id": "baseline-dpi/v1",
+          "policy_id": "lab.baseline-dpi.governed-evidence.v1",
+          "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
+          "decision": "deny"
+        }
+      }
+    },
+    {
+      "id": "baseline-denial-jurisdiction",
+      "type": "denial",
+      "synthetic_data_refs": [
+        "baseline-denied-purpose"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/decentralized-evidence-demo",
+        "binding_id": "baseline-dpi/v1",
+        "jurisdiction": "XY",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:child-support-eligibility",
+        "consent_ref": "demo:child-support-consent",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "national_id",
+              "value": "NID-1009"
+            }
+          ]
+        },
+        "claims": [
+          "eligible-for-combined-support"
+        ],
+        "disclosure": "predicate"
+      },
+      "expected": {
+        "status": 403,
+        "problem": {
+          "code": "pdp.jurisdiction_not_permitted"
+        },
+        "zero_source_reads": true,
+        "audit": {
+          "binding_id": "baseline-dpi/v1",
+          "policy_id": "lab.baseline-dpi.governed-evidence.v1",
+          "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
+          "decision": "deny"
+        }
+      }
+    },
+    {
+      "id": "baseline-denial-legal-basis",
+      "type": "denial",
+      "synthetic_data_refs": [
+        "baseline-denied-purpose"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/decentralized-evidence-demo",
+        "binding_id": "baseline-dpi/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "",
+        "consent_ref": "demo:child-support-consent",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "national_id",
+              "value": "NID-1009"
+            }
+          ]
+        },
+        "claims": [
+          "eligible-for-combined-support"
+        ],
+        "disclosure": "predicate"
+      },
+      "expected": {
+        "status": 403,
+        "problem": {
+          "code": "pdp.legal_basis_required"
+        },
+        "zero_source_reads": true,
+        "audit": {
+          "binding_id": "baseline-dpi/v1",
+          "policy_id": "lab.baseline-dpi.governed-evidence.v1",
+          "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
+          "decision": "deny"
+        }
+      }
+    },
+    {
+      "id": "baseline-denial-consent",
+      "type": "denial",
+      "synthetic_data_refs": [
+        "baseline-denied-purpose"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/decentralized-evidence-demo",
+        "binding_id": "baseline-dpi/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:child-support-eligibility",
+        "consent_ref": "",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "national_id",
+              "value": "NID-1009"
+            }
+          ]
+        },
+        "claims": [
+          "eligible-for-combined-support"
+        ],
+        "disclosure": "predicate"
+      },
+      "expected": {
+        "status": 403,
+        "problem": {
+          "code": "pdp.consent_required"
+        },
+        "zero_source_reads": true,
+        "audit": {
+          "binding_id": "baseline-dpi/v1",
+          "policy_id": "lab.baseline-dpi.governed-evidence.v1",
+          "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
+          "decision": "deny"
+        }
+      }
+    },
+    {
+      "id": "baseline-denial-unsupported-odrl-term",
+      "type": "denial",
+      "synthetic_data_refs": [
+        "baseline-denied-purpose"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/decentralized-evidence-demo",
+        "binding_id": "baseline-dpi/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:child-support-eligibility",
+        "consent_ref": "demo:child-support-consent",
+        "odrl_terms": [
+          "odrl:targetPolicy"
+        ],
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "national_id",
+              "value": "NID-1009"
+            }
+          ]
+        },
+        "claims": [
+          "eligible-for-combined-support"
+        ],
+        "disclosure": "predicate"
+      },
+      "expected": {
+        "status": 403,
+        "problem": {
+          "code": "pdp.unsupported_policy_term"
+        },
+        "zero_source_reads": true,
+        "audit": {
+          "binding_id": "baseline-dpi/v1",
+          "policy_id": "lab.baseline-dpi.governed-evidence.v1",
+          "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
+          "decision": "deny"
+        }
+      }
+    },
+    {
+      "id": "baseline-redaction-household-summary",
+      "type": "redaction",
+      "synthetic_data_refs": [
+        "baseline-redaction-household"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/decentralized-evidence-demo",
+        "binding_id": "baseline-dpi/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:child-support-eligibility",
+        "consent_ref": "demo:child-support-consent",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "national_id",
+              "value": "NID-1001"
+            }
+          ]
+        },
+        "claims": [
+          "household-summary-redacted"
+        ],
+        "disclosure": "value"
+      },
+      "expected": {
+        "status": 200,
+        "absent_fields": [
+          "national_id",
+          "poverty_score"
+        ],
+        "present_fields": [
+          "district",
+          "eligibility_band",
+          "household_size",
+          "active_members"
+        ],
+        "audit": {
+          "binding_id": "baseline-dpi/v1",
+          "policy_id": "lab.baseline-dpi.governed-evidence.v1",
+          "redacted_fields": [
+            "national_id",
+            "poverty_score"
+          ]
+        }
+      }
+    },
+    {
+      "id": "baseline-credential-sd-jwt",
+      "type": "credential",
+      "synthetic_data_refs": [
+        "baseline-success-child"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/decentralized-evidence-demo",
+        "binding_id": "baseline-dpi/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:child-support-eligibility",
+        "consent_ref": "demo:child-support-consent",
+        "claims": [
+          "person-is-alive"
+        ],
+        "format": "application/dc+sd-jwt"
+      },
+      "expected": {
+        "status": 200,
+        "credential_format": "application/dc+sd-jwt",
+        "audit": {
+          "binding_id": "baseline-dpi/v1",
+          "policy_id": "lab.baseline-dpi.governed-evidence.v1"
+        }
+      }
+    },
+    {
+      "id": "baseline-audit-permit",
+      "type": "audit",
+      "synthetic_data_refs": [
+        "baseline-success-child"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/decentralized-evidence-demo",
+        "binding_id": "baseline-dpi/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+      "legal_basis_ref": "demo:child-support-eligibility",
+      "consent_ref": "demo:child-support-consent",
+      "target": {
+        "type": "Person",
+        "identifiers": [
+          {
+            "scheme": "national_id",
+            "value": "NID-1001"
+          }
+        ]
+      },
+      "claims": [
+        "health-service-available"
+      ]
+      },
+      "expected": {
+        "audit": {
+          "decision": "permit",
+          "binding_id": "baseline-dpi/v1",
+          "binding_version": "v1",
+          "policy_id": "lab.baseline-dpi.governed-evidence.v1",
+          "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
+          "evaluated_rule_ids": [
+            "source-binding-policy:health_facility.policy_identity",
+            "source-binding-policy:health_facility.odrl_terms",
+            "source-binding-policy:health_facility.purpose",
+            "source-binding-policy:health_facility.jurisdiction",
+            "source-binding-policy:health_facility.assurance_allowed_set",
+            "source-binding-policy:health_facility.legal_basis_required",
+            "source-binding-policy:health_facility.consent_required",
+            "source-binding-policy:health_facility.requested_fact",
+            "source-binding-policy:health_facility.requested_disclosure",
+            "source-binding-policy:health_facility.credential_format",
+            "source-binding-policy:health_facility.source_binding",
+            "source-binding-policy:health_facility.route_identity",
+            "source-binding-policy:health_facility.checked_scope"
+          ],
+          "target_ref_hash": "sha256",
+          "claim_hash": "sha256",
+          "correlation_id_hash": "sha256"
+        }
+      }
+    }
+  ]
+}

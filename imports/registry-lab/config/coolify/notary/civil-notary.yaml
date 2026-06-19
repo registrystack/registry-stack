@@ -59,6 +59,15 @@ evidence:
           surname: /person/surname
           birth_date: /person/birth_date
           deceased: /person/deceased
+  ecosystem_bindings:
+    oots-birth-evidence/v1:
+      profile: registry-notary/source-policy/v1
+      policy_id: lab.oots-birth-evidence.governed-evidence.v1
+      policy_hash: sha256:a4804f81f3287b7922e8c3d5bad49377584b7ab8727fe62cbae23c1f5bc85e1c
+    oots-marriage-evidence/v1:
+      profile: registry-notary/source-policy/v1
+      policy_id: lab.oots-marriage-evidence.governed-evidence.v1
+      policy_hash: sha256:e5193284535dfa9689dd081942ec847f51eacd50ebc71d93b482247207b63dcf
   claims:
     - id: person-is-alive
       title: Vital Status Attestation
@@ -73,6 +82,9 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
           lookup:
             input: target.identifiers.national_id
             field: NATIONAL_ID
@@ -122,6 +134,8 @@ evidence:
               field: birth_date
               op: eq
           matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
             target_type: Person
             method: configured_demographic_lookup
             sufficient_target_inputs:

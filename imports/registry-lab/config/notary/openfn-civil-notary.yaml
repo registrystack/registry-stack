@@ -14,7 +14,7 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_EVIDENCE_CLIENT_TOKEN_HASH
-        commitment: sha256:b6c6ad92de0c44220a77a4f6cf96aaa71161f0ce4deeeb7989f41ee72e41a775
+        commitment: sha256:6d4747f7222df2970fa64d8914c50ff78a438e8e7f105283c1f08b900c8066b2
       scopes:
         - civil_registry:evidence_verification
   bearer_tokens:
@@ -22,7 +22,7 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_EVIDENCE_CLIENT_BEARER_HASH
-        commitment: sha256:ef6f8b6646627e2519f5e0ab7fd21dafe1a411e4a980c30c72035715c9156ea2
+        commitment: sha256:f9afe14f147b1565b014a0dd2217716971fba598bea66dae305ae6c580d16f67
       scopes:
         - civil_registry:evidence_verification
 
@@ -82,6 +82,9 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/openfn-sidecar-demo
           lookup:
             input: target.identifiers.national_id
             field: national_id
