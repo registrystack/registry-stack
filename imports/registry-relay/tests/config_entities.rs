@@ -160,6 +160,19 @@ fn governed_redaction_field_must_be_top_level_projectable_path() {
 }
 
 #[test]
+fn governed_redaction_field_must_exist_on_entity() {
+    let tmp = TempDir::new().expect("tempdir");
+    let invalid = valid_dataset().replace(
+        "          allowed_filters:\n            - field: household_id",
+        "          governed_policy:\n            permitted_purposes: [testing]\n            redaction_fields: [missing_field]\n            trusted_context: {}\n          allowed_filters:\n            - field: household_id",
+    );
+    let config_path = write_config(&tmp, &base_config(&invalid));
+    let err = registry_relay::config::load(&config_path)
+        .expect_err("config rejects governed redaction field missing from entity");
+    assert_eq!(err.code(), "config.validation_error");
+}
+
+#[test]
 fn governed_policy_rejects_static_trusted_source_freshness() {
     let tmp = TempDir::new().expect("tempdir");
     let invalid = valid_dataset().replace(

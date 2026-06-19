@@ -1406,28 +1406,6 @@ audit:
 }
 
 #[tokio::test]
-async fn governed_entity_missing_redaction_field_denies_before_read() {
-    let policy = r#"          governed_policy:
-            permitted_purposes:
-              - https://data.example.test/purposes/testing
-            redaction_fields: [missing_field]
-            trusted_context: {}
-"#;
-    let server = server_with_query_and_governed_entity_policy(policy).await;
-
-    let response = server
-        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
-        .add_header("data-purpose", "https://data.example.test/purposes/testing")
-        .await;
-
-    response.assert_status(StatusCode::FORBIDDEN);
-    assert_eq!(
-        response.json::<Value>()["code"],
-        "pdp.unsupported_policy_term"
-    );
-}
-
-#[tokio::test]
 async fn governed_entity_collection_audit_records_selector_pdp_provenance() {
     let (server, audit_sink) = server_with_query_audit_and_ecosystem_binding_selector().await;
     let resp = server

@@ -3406,6 +3406,17 @@ fn validate_entity_governed_policy(
                 "redaction_fields entries must be top-level exposed entity fields",
             );
         }
+        if !entity
+            .fields
+            .iter()
+            .any(|configured| configured.name == *field)
+        {
+            return entity_governed_policy_error(
+                dataset,
+                entity,
+                "redaction_fields entries must exist as fields on the entity",
+            );
+        }
     }
     let trusted = &policy.trusted_context;
     if trusted
