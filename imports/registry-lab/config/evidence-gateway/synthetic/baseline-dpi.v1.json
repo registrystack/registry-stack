@@ -1,0 +1,109 @@
+{
+  "schema_version": "registry-lab/evidence-gateway-synthetic-data/v1",
+  "binding_id": "baseline-dpi/v1",
+  "records": [
+    {
+      "id": "baseline-success-child",
+      "source_metadata": {
+        "source_system": "baseline-dpi-synthetic-source",
+        "freshness_source": "source_row.observed_at",
+        "observed_at": "2026-06-18T12:00:00Z"
+      },
+      "national_id": "NID-1001",
+      "civil": {
+        "alive": true,
+        "life_stage": "child",
+        "district": "north"
+      },
+      "social_protection": {
+        "household_id": "HH-100",
+        "eligibility_band": "priority",
+        "household_size": 5,
+        "poverty_score": 29.0
+      },
+      "health": {
+        "facility_id": "HF-10",
+        "license_status": "active",
+        "maternal_service_available": true
+      }
+    },
+    {
+      "id": "baseline-denied-purpose",
+      "source_metadata": {
+        "source_system": "baseline-dpi-synthetic-source",
+        "freshness_source": "source_row.observed_at",
+        "observed_at": "2026-06-18T12:00:00Z"
+      },
+      "national_id": "NID-1009",
+      "civil": {
+        "alive": true,
+        "life_stage": "adult",
+        "district": "east"
+      },
+      "social_protection": {
+        "household_id": "HH-800",
+        "eligibility_band": "not_eligible",
+        "household_size": 6,
+        "poverty_score": 54.0
+      }
+    },
+    {
+      "id": "baseline-stale-evidence",
+      "source_metadata": {
+        "source_system": "baseline-dpi-synthetic-source",
+        "freshness_source": "source_row.observed_at",
+        "observed_at": "2026-06-17T00:00:00Z"
+      },
+      "national_id": "NID-1010",
+      "civil": {
+        "alive": true,
+        "life_stage": "child",
+        "district": "west"
+      },
+      "social_protection": {
+        "household_id": "HH-900",
+        "eligibility_band": "priority",
+        "household_size": 4,
+        "poverty_score": 27.0
+      }
+    },
+    {
+      "id": "baseline-missing-observed-at",
+      "source_metadata": {
+        "source_system": "baseline-dpi-synthetic-source",
+        "freshness_source": "source_row.observed_at"
+      },
+      "national_id": "NID-1011",
+      "civil": {
+        "alive": true,
+        "life_stage": "child",
+        "district": "south"
+      },
+      "social_protection": {
+        "household_id": "HH-901",
+        "eligibility_band": "priority",
+        "household_size": 3,
+        "poverty_score": 25.0
+      }
+    },
+    {
+      "id": "baseline-redaction-household",
+      "source_metadata": {
+        "source_system": "baseline-dpi-synthetic-source",
+        "freshness_source": "source_row.observed_at",
+        "observed_at": "2026-06-18T12:00:00Z"
+      },
+      "national_id": "NID-1001",
+      "social_protection": {
+        "district": "north",
+        "eligibility_band": "priority",
+        "household_size": 5,
+        "active_members": 5,
+        "redacted_fields": [
+          "national_id",
+          "poverty_score"
+        ]
+      }
+    }
+  ]
+}

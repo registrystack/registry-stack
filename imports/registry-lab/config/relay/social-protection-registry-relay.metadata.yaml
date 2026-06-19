@@ -211,6 +211,9 @@ datasets:
           - name: enrolled_on
             type: date
             required: true
+          - name: observed_at
+            type: string
+            required: true
         relationships:
           - name: household
             target_entity: household

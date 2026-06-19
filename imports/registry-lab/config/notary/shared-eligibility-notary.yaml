@@ -14,21 +14,97 @@ auth:
       fingerprint:
         provider: env
         name: SHARED_EVIDENCE_CLIENT_TOKEN_HASH
-        commitment: sha256:8e648b5b98bdd659efff501239b91b00010980eff197aaa7325e06ee46adfc85
+        commitment: sha256:ab6ed74b43ff7182235e0843b07ac12d8ce015ae0998d5da40014bf02da98443
       scopes:
         - civil_registry:evidence_verification
         - social_protection_registry:evidence_verification
         - health_registry:evidence_verification
+      authorization_details:
+        type: registry-notary/evidence-authorization/v1
+        schema_version: v1
+        legal_basis_ref: demo:child-support-eligibility
+        consent_ref: demo:child-support-consent
+        jurisdiction: ZZ
+        assurance_level: substantial
+    - id: shared_evidence_deny_assurance
+      fingerprint:
+        provider: env
+        name: SHARED_EVIDENCE_DENY_ASSURANCE_TOKEN_HASH
+        commitment: sha256:7885d6fd3866f50ee1157ae2669f71a6068c4ef6907db8dea7d2e5f614e70906
+      scopes:
+        - civil_registry:evidence_verification
+        - social_protection_registry:evidence_verification
+        - health_registry:evidence_verification
+      authorization_details:
+        type: registry-notary/evidence-authorization/v1
+        schema_version: v1
+        legal_basis_ref: demo:child-support-eligibility
+        consent_ref: demo:child-support-consent
+        jurisdiction: ZZ
+        assurance_level: low
+    - id: shared_evidence_deny_jurisdiction
+      fingerprint:
+        provider: env
+        name: SHARED_EVIDENCE_DENY_JURISDICTION_TOKEN_HASH
+        commitment: sha256:a279c09d237b758a9c664ba7841cc5fefb517a8652f2087a65e3ebd3e8cd0fa6
+      scopes:
+        - civil_registry:evidence_verification
+        - social_protection_registry:evidence_verification
+        - health_registry:evidence_verification
+      authorization_details:
+        type: registry-notary/evidence-authorization/v1
+        schema_version: v1
+        legal_basis_ref: demo:child-support-eligibility
+        consent_ref: demo:child-support-consent
+        jurisdiction: XY
+        assurance_level: substantial
+    - id: shared_evidence_deny_legal_basis
+      fingerprint:
+        provider: env
+        name: SHARED_EVIDENCE_DENY_LEGAL_BASIS_TOKEN_HASH
+        commitment: sha256:0c1c9318b08cad1c80f9d2db53396bf80920b5436ee39620513cf122eb858a56
+      scopes:
+        - civil_registry:evidence_verification
+        - social_protection_registry:evidence_verification
+        - health_registry:evidence_verification
+      authorization_details:
+        type: registry-notary/evidence-authorization/v1
+        schema_version: v1
+        consent_ref: demo:child-support-consent
+        jurisdiction: ZZ
+        assurance_level: substantial
+    - id: shared_evidence_deny_consent
+      fingerprint:
+        provider: env
+        name: SHARED_EVIDENCE_DENY_CONSENT_TOKEN_HASH
+        commitment: sha256:1f5e1f72e14a06e091549df88492055ebba0643f2f4029bdfe83a25a427f3204
+      scopes:
+        - civil_registry:evidence_verification
+        - social_protection_registry:evidence_verification
+        - health_registry:evidence_verification
+      authorization_details:
+        type: registry-notary/evidence-authorization/v1
+        schema_version: v1
+        legal_basis_ref: demo:child-support-eligibility
+        jurisdiction: ZZ
+        assurance_level: substantial
   bearer_tokens:
     - id: shared_evidence_client
       fingerprint:
         provider: env
         name: SHARED_EVIDENCE_CLIENT_BEARER_HASH
-        commitment: sha256:d694ab6afd0b4da6e50009841d8da2a1ab29a393cbaca33605167326438718f4
+        commitment: sha256:07ab8e1503ed1d7a68a7531f6aaba29f959fcb8c88cbce6c329f671b7662cd6c
       scopes:
         - civil_registry:evidence_verification
         - social_protection_registry:evidence_verification
         - health_registry:evidence_verification
+      authorization_details:
+        type: registry-notary/evidence-authorization/v1
+        schema_version: v1
+        legal_basis_ref: demo:child-support-eligibility
+        consent_ref: demo:child-support-consent
+        jurisdiction: ZZ
+        assurance_level: substantial
 
 audit:
   sink: stdout
@@ -62,6 +138,11 @@ evidence:
       base_url: http://health-registry-relay:8080
       allow_insecure_private_network: true
       token_env: SHARED_HEALTH_EVIDENCE_SOURCE_RAW
+  ecosystem_bindings:
+    baseline-dpi/v1:
+      profile: registry-notary/source-policy/v1
+      policy_id: lab.baseline-dpi.governed-evidence.v1
+      policy_hash: sha256:9b0861b94d7706bd9d00a9a03480ede66a0a5aa5ea5f81a3717783de50154812
   signing_keys:
     shared-eligibility-evidence-demo:
       provider: local_jwk_env
@@ -103,6 +184,19 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            max_source_age_seconds: 86400
+            source_observed_at_field: observed_at
+            ecosystem_binding:
+              id: baseline-dpi/v1
           lookup:
             input: target.identifiers.national_id
             field: national_id
@@ -142,6 +236,19 @@ evidence:
           required_scope: social_protection_registry:evidence_verification
           dataset: social_protection_registry
           entity: program_enrollment
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            max_source_age_seconds: 86400
+            source_observed_at_field: observed_at
+            ecosystem_binding:
+              id: baseline-dpi/v1
           lookup:
             input: target.identifiers.national_id
             field: national_id
@@ -177,6 +284,19 @@ evidence:
           required_scope: health_registry:evidence_verification
           dataset: health_registry
           entity: health_facility
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            max_source_age_seconds: 86400
+            source_observed_at_field: observed_at
+            ecosystem_binding:
+              id: baseline-dpi/v1
           lookup:
             input: target.identifiers.national_id
             field: national_id

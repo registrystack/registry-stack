@@ -13,6 +13,13 @@ fail() {
   exit 1
 }
 
+check() {
+  local name="$1"
+  shift
+  echo "check: ${name}"
+  "$@" || fail "${name}"
+}
+
 load_env_file() {
   local path="$1"
   if [[ -f "${path}" ]]; then
@@ -148,15 +155,31 @@ fi
 
 : "${OPENCRVS_DCI_BASE_URL:=https://dci-crvs-api.farajaland-integration.opencrvs.dev}"
 : "${OPENCRVS_EVIDENCE_CLIENT_TOKEN:=api-token}"
+: "${OPENCRVS_EVIDENCE_DENY_ASSURANCE_TOKEN:=api-deny-assurance-token}"
+: "${OPENCRVS_EVIDENCE_DENY_JURISDICTION_TOKEN:=api-deny-jurisdiction-token}"
+: "${OPENCRVS_EVIDENCE_DENY_LEGAL_BASIS_TOKEN:=api-deny-legal-basis-token}"
+: "${OPENCRVS_EVIDENCE_DENY_CONSENT_TOKEN:=api-deny-consent-token}"
 : "${OPENCRVS_DCI_NOTARY_PORT:=4352}"
 : "${OPENCRVS_DCI_CLIENT_ID:?missing OPENCRVS_DCI_CLIENT_ID in .env.local}"
 : "${OPENCRVS_DCI_CLIENT_SECRET:?missing OPENCRVS_DCI_CLIENT_SECRET in .env.local}"
 : "${REGISTRY_NOTARY_AUDIT_HASH_SECRET:?missing REGISTRY_NOTARY_AUDIT_HASH_SECRET; run scripts/generate-demo-secrets.py first}"
 
 OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH="${OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH:-$(hash_token "${OPENCRVS_EVIDENCE_CLIENT_TOKEN}")}"
+OPENCRVS_EVIDENCE_DENY_ASSURANCE_TOKEN_HASH="${OPENCRVS_EVIDENCE_DENY_ASSURANCE_TOKEN_HASH:-$(hash_token "${OPENCRVS_EVIDENCE_DENY_ASSURANCE_TOKEN}")}"
+OPENCRVS_EVIDENCE_DENY_JURISDICTION_TOKEN_HASH="${OPENCRVS_EVIDENCE_DENY_JURISDICTION_TOKEN_HASH:-$(hash_token "${OPENCRVS_EVIDENCE_DENY_JURISDICTION_TOKEN}")}"
+OPENCRVS_EVIDENCE_DENY_LEGAL_BASIS_TOKEN_HASH="${OPENCRVS_EVIDENCE_DENY_LEGAL_BASIS_TOKEN_HASH:-$(hash_token "${OPENCRVS_EVIDENCE_DENY_LEGAL_BASIS_TOKEN}")}"
+OPENCRVS_EVIDENCE_DENY_CONSENT_TOKEN_HASH="${OPENCRVS_EVIDENCE_DENY_CONSENT_TOKEN_HASH:-$(hash_token "${OPENCRVS_EVIDENCE_DENY_CONSENT_TOKEN}")}"
 export OPENCRVS_DCI_BASE_URL
 export OPENCRVS_EVIDENCE_CLIENT_TOKEN
 export OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH
+export OPENCRVS_EVIDENCE_DENY_ASSURANCE_TOKEN
+export OPENCRVS_EVIDENCE_DENY_ASSURANCE_TOKEN_HASH
+export OPENCRVS_EVIDENCE_DENY_JURISDICTION_TOKEN
+export OPENCRVS_EVIDENCE_DENY_JURISDICTION_TOKEN_HASH
+export OPENCRVS_EVIDENCE_DENY_LEGAL_BASIS_TOKEN
+export OPENCRVS_EVIDENCE_DENY_LEGAL_BASIS_TOKEN_HASH
+export OPENCRVS_EVIDENCE_DENY_CONSENT_TOKEN
+export OPENCRVS_EVIDENCE_DENY_CONSENT_TOKEN_HASH
 export OPENCRVS_DCI_NOTARY_PORT
 export REGISTRY_NOTARY_SOURCE_DIR="${REGISTRY_NOTARY_SOURCE_DIR:-../registry-notary}"
 export REGISTRY_NOTARY_PLATFORM_SOURCE_DIR="${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-../registry-platform}}"
@@ -173,6 +196,14 @@ opencrvs_dci_token="$(fetch_opencrvs_token)"
 update_local_env "OPENCRVS_DCI_BASE_URL" "${OPENCRVS_DCI_BASE_URL}"
 update_local_env "OPENCRVS_EVIDENCE_CLIENT_TOKEN" "${OPENCRVS_EVIDENCE_CLIENT_TOKEN}"
 update_local_env "OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH" "${OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH}"
+update_local_env "OPENCRVS_EVIDENCE_DENY_ASSURANCE_TOKEN" "${OPENCRVS_EVIDENCE_DENY_ASSURANCE_TOKEN}"
+update_local_env "OPENCRVS_EVIDENCE_DENY_ASSURANCE_TOKEN_HASH" "${OPENCRVS_EVIDENCE_DENY_ASSURANCE_TOKEN_HASH}"
+update_local_env "OPENCRVS_EVIDENCE_DENY_JURISDICTION_TOKEN" "${OPENCRVS_EVIDENCE_DENY_JURISDICTION_TOKEN}"
+update_local_env "OPENCRVS_EVIDENCE_DENY_JURISDICTION_TOKEN_HASH" "${OPENCRVS_EVIDENCE_DENY_JURISDICTION_TOKEN_HASH}"
+update_local_env "OPENCRVS_EVIDENCE_DENY_LEGAL_BASIS_TOKEN" "${OPENCRVS_EVIDENCE_DENY_LEGAL_BASIS_TOKEN}"
+update_local_env "OPENCRVS_EVIDENCE_DENY_LEGAL_BASIS_TOKEN_HASH" "${OPENCRVS_EVIDENCE_DENY_LEGAL_BASIS_TOKEN_HASH}"
+update_local_env "OPENCRVS_EVIDENCE_DENY_CONSENT_TOKEN" "${OPENCRVS_EVIDENCE_DENY_CONSENT_TOKEN}"
+update_local_env "OPENCRVS_EVIDENCE_DENY_CONSENT_TOKEN_HASH" "${OPENCRVS_EVIDENCE_DENY_CONSENT_TOKEN_HASH}"
 update_local_env "OPENCRVS_DCI_NOTARY_PORT" "${OPENCRVS_DCI_NOTARY_PORT}"
 
 subject_uin="${OPENCRVS_DEMO_SUBJECT_UIN:-}"
@@ -194,6 +225,8 @@ summary_body="${output_dir}/summary.json"
 vc_evaluation_body="${output_dir}/vc-evaluation.json"
 credential_body="${output_dir}/credential.json"
 credential_summary_body="${output_dir}/credential-summary.json"
+live_fixture_output="${output_dir}/evidence-gateway-live-sp-dci.json"
+check "SP DCI live evidence gateway fixtures" python3 "${script_dir}/run-evidence-gateway-live-fixtures.py" --profile sp-dci/v1 --base-url "${notary_url}" --auth api-key --token "${OPENCRVS_EVIDENCE_CLIENT_TOKEN}" --subject-id "${subject_uin}" --output "${live_fixture_output}" --correlation-prefix "${correlation_id}-evidence-gateway"
 payload="$(
   jq -nc --arg subject "${subject_uin}" '{
     target: {
@@ -247,8 +280,16 @@ if missing:
     raise SystemExit(f"missing claims: {missing}")
 if by_claim["opencrvs-birth-record-exists"].get("value") is not True:
     raise SystemExit("OpenCRVS birth record existence claim was not true")
+def source_count(result):
+    provenance = result.get("provenance", {})
+    if isinstance(provenance.get("source_count"), int):
+        return provenance["source_count"]
+    used = provenance.get("used", {})
+    if isinstance(used, dict):
+        return used.get("source_count")
+    return None
 for claim in expected:
-    if by_claim[claim].get("provenance", {}).get("source_count") != 1:
+    if source_count(by_claim[claim]) != 1:
         raise SystemExit(f"{claim} did not record exactly one source")
 summary = {
     "claims": [
@@ -257,7 +298,7 @@ summary = {
             "value": by_claim[claim].get("value"),
             "satisfied": by_claim[claim].get("satisfied"),
             "disclosure": by_claim[claim].get("disclosure"),
-            "source_count": by_claim[claim].get("provenance", {}).get("source_count"),
+            "source_count": source_count(by_claim[claim]),
         }
         for claim in expected
     ]
@@ -343,3 +384,23 @@ PY
 printf "\nIssued OpenCRVS SD-JWT VC summary:\n"
 cat "${credential_summary_body}"
 printf "\nIssued OpenCRVS birth attribute SD-JWT VC\n"
+
+log_file="${output_dir}/opencrvs-dci-service-logs.txt"
+docker compose -f "${compose_file}" logs --no-color opencrvs-dci-notary > "${log_file}"
+check "SP DCI live evidence gateway audit log" python3 "${script_dir}/run-evidence-gateway-live-fixtures.py" --profile sp-dci/v1 --output "${live_fixture_output}" --audit-log-path "${log_file}" --audit-only
+
+for secret_var in \
+  OPENCRVS_DCI_CLIENT_SECRET \
+  OPENCRVS_EVIDENCE_CLIENT_TOKEN \
+  OPENCRVS_EVIDENCE_DENY_ASSURANCE_TOKEN \
+  OPENCRVS_EVIDENCE_DENY_JURISDICTION_TOKEN \
+  OPENCRVS_EVIDENCE_DENY_LEGAL_BASIS_TOKEN \
+  OPENCRVS_EVIDENCE_DENY_CONSENT_TOKEN
+do
+  secret_value="${!secret_var:-}"
+  if [[ -n "${secret_value}" ]] && grep -F -- "${secret_value}" "${log_file}" >/dev/null; then
+    fail "service logs leaked ${secret_var}"
+  fi
+done
+
+echo "OpenCRVS DCI smoke OK"

@@ -62,6 +62,13 @@ class GenerateFixturesTest(unittest.TestCase):
             "NID-1009": {"alive": True, "health": True, "combined": False},
             "NID-1010": {"alive": True, "health": False, "combined": False},
         }
+        stale_problem = {"status": 403, "code": "pdp.evidence_stale"}
+        cls.expected_runtime_outcomes = {
+            national_id: dict(expected)
+            for national_id, expected in cls.expected_outcomes.items()
+        }
+        cls.expected_runtime_outcomes["NID-1010"]["health"] = stale_problem
+        cls.expected_runtime_outcomes["NID-1010"]["combined"] = stale_problem
 
     def test_v1_registry_lab_matrix_matches_openspp_story_people(self) -> None:
         expected = {
@@ -212,7 +219,7 @@ class GenerateFixturesTest(unittest.TestCase):
         )
         self.assertEqual(
             self.generator.ENROLLMENTS[0],
-            ["enrollment_id", "household_id", "person_id", "national_id", "program_code", "status", "benefit_amount", "enrolled_on"],
+            ["enrollment_id", "household_id", "person_id", "national_id", "program_code", "status", "benefit_amount", "enrolled_on", "observed_at"],
         )
 
         memberships_by_person = self._rows_by(self.generator.GROUP_MEMBERSHIPS, "person_id")
@@ -241,6 +248,78 @@ class GenerateFixturesTest(unittest.TestCase):
         self.assertIs(self.generator.HEALTH_ROWS, self.generator.APPLICANT_SERVICE_AVAILABILITY_PROJECTION)
         self.assertTrue(all("national_id" in row for row in self.generator.HEALTH_ROWS))
         self.assertTrue(all("facility_name" in row for row in self.generator.HEALTH_ROWS))
+        self.assertTrue(all("observed_at" in row for row in self.generator.HEALTH_ROWS))
+
+    def test_live_baseline_sources_carry_row_level_observed_at(self) -> None:
+        self.assertEqual(self.generator.CIVIL_ROWS[0][-1], "observed_at")
+        self.assertEqual(self.generator.ENROLLMENTS[0][-1], "observed_at")
+
+        sources = [
+            (row[0], row[-1])
+            for row in self.generator.data_rows(self.generator.CIVIL_ROWS)
+        ] + [
+            (row[3], row[-1])
+            for row in self.generator.data_rows(self.generator.ENROLLMENTS)
+        ] + [
+            (row["national_id"], row["observed_at"])
+            for row in self.generator.HEALTH_ROWS
+        ]
+        self.assertTrue(sources)
+        for national_id, value in sources:
+            with self.subTest(national_id=national_id, value=value):
+                self.assertEqual(value, self.generator.observed_at_for_national_id(national_id))
+                if national_id == self.generator.MISSING_SOURCE_OBSERVED_AT_NATIONAL_ID:
+                    self.assertEqual(value, "")
+                    continue
+                parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+                self.assertIsNotNone(parsed.tzinfo)
+                if national_id == "NID-1010":
+                    self.assertEqual(value, self.generator.STALE_SOURCE_OBSERVED_AT)
+
+    def test_baseline_freshness_configs_reference_observed_at(self) -> None:
+        relay_paths = [
+            self.generator.ROOT / "config" / "relay" / "civil-registry-relay.yaml",
+            self.generator.ROOT / "config" / "relay" / "civil-registry-relay.metadata.yaml",
+            self.generator.ROOT / "config" / "relay" / "social-protection-registry-relay.yaml",
+            self.generator.ROOT / "config" / "relay" / "social-protection-registry-relay.metadata.yaml",
+            self.generator.ROOT / "config" / "relay" / "health-registry-relay.yaml",
+            self.generator.ROOT / "config" / "relay" / "health-registry-relay.metadata.yaml",
+            self.generator.ROOT / "config" / "coolify" / "relay" / "civil-registry-relay.yaml",
+            self.generator.ROOT / "config" / "coolify" / "relay" / "civil-registry-relay.metadata.yaml",
+            self.generator.ROOT / "config" / "coolify" / "relay" / "social-protection-registry-relay.yaml",
+            self.generator.ROOT / "config" / "coolify" / "relay" / "social-protection-registry-relay.metadata.yaml",
+            self.generator.ROOT / "config" / "coolify" / "relay" / "health-registry-relay.yaml",
+            self.generator.ROOT / "config" / "coolify" / "relay" / "health-registry-relay.metadata.yaml",
+        ]
+        for path in relay_paths:
+            with self.subTest(path=path.relative_to(self.generator.ROOT)):
+                text = path.read_text(encoding="utf-8")
+                self.assertIn("- name: observed_at", text)
+
+        notary_paths = [
+            self.generator.ROOT / "config" / "notary" / "shared-eligibility-notary.yaml",
+            self.generator.ROOT / "config" / "coolify" / "notary" / "shared-eligibility-notary.yaml",
+        ]
+        for path in notary_paths:
+            with self.subTest(path=path.relative_to(self.generator.ROOT)):
+                text = path.read_text(encoding="utf-8")
+                self.assertEqual(text.count("max_source_age_seconds: 86400"), 3)
+                self.assertEqual(text.count("source_observed_at_field: observed_at"), 3)
+
+    def test_opencrvs_dci_freshness_uses_source_response_timestamp(self) -> None:
+        notary_paths = [
+            self.generator.ROOT / "config" / "notary" / "opencrvs-dci-notary.yaml",
+            self.generator.ROOT / "config" / "coolify" / "notary" / "opencrvs-dci-notary.yaml",
+        ]
+        for path in notary_paths:
+            with self.subTest(path=path.relative_to(self.generator.ROOT)):
+                text = path.read_text(encoding="utf-8")
+                self.assertIn(
+                    'observed_at: "$response:/message/search_response/0/timestamp"',
+                    text,
+                )
+                self.assertEqual(text.count("max_source_age_seconds: 86400"), 8)
+                self.assertEqual(text.count("source_observed_at_field: observed_at"), 8)
 
     def test_refresh_persona_invariants_cover_source_outcomes(self) -> None:
         personas = self.generator.FIXTURE_PERSONAS
@@ -296,7 +375,10 @@ class GenerateFixturesTest(unittest.TestCase):
 
         with civil_path.open(newline="", encoding="utf-8") as handle:
             civil_rows = list(csv.reader(handle))
-        self.assertEqual(civil_rows, self.generator.CIVIL_ROWS)
+        self.assertEqual(
+            self._normalize_observed_at_rows(civil_rows, national_id_column="national_id"),
+            self._normalize_observed_at_rows(self.generator.CIVIL_ROWS, national_id_column="national_id"),
+        )
 
         workbook = load_workbook(social_path, data_only=True)
         expected_sheets = {
@@ -309,14 +391,56 @@ class GenerateFixturesTest(unittest.TestCase):
             with self.subTest(sheet_name=sheet_name):
                 sheet = workbook[sheet_name]
                 actual_rows = [
-                    [value.date() if isinstance(value, dt.datetime) else value for value in row]
+                    [value.date() if isinstance(value, dt.datetime) else "" if value is None else value for value in row]
                     for row in sheet.iter_rows(values_only=True)
                 ]
-                self.assertEqual(actual_rows, expected_rows)
+                if sheet_name == "Enrollments":
+                    self.assertEqual(
+                        self._normalize_observed_at_rows(actual_rows, national_id_column="national_id"),
+                        self._normalize_observed_at_rows(expected_rows, national_id_column="national_id"),
+                    )
+                else:
+                    self.assertEqual(actual_rows, expected_rows)
 
         health_table = pq.read_table(health_path)
         health_rows = health_table.to_pylist()
-        self.assertEqual(health_rows, self.generator.HEALTH_ROWS)
+        self.assertEqual(
+            self._normalize_health_observed_at(health_rows),
+            self._normalize_health_observed_at(self.generator.HEALTH_ROWS),
+        )
+
+    def _normalize_observed_at_rows(
+        self,
+        rows: list[list[object]],
+        *,
+        national_id_column: str,
+    ) -> list[list[object]]:
+        header = rows[0]
+        if "observed_at" not in header:
+            return rows
+        observed_at_index = header.index("observed_at")
+        national_id_index = header.index(national_id_column)
+        normalized = [header]
+        for row in rows[1:]:
+            normalized_row = list(row)
+            normalized_row[observed_at_index] = self._observed_at_category(str(row[national_id_index]))
+            normalized.append(normalized_row)
+        return normalized
+
+    def _normalize_health_observed_at(self, rows: list[dict[str, object]]) -> list[dict[str, object]]:
+        normalized = []
+        for row in rows:
+            normalized_row = dict(row)
+            normalized_row["observed_at"] = self._observed_at_category(str(row["national_id"]))
+            normalized.append(normalized_row)
+        return normalized
+
+    def _observed_at_category(self, national_id: str) -> str:
+        if national_id == "NID-1010":
+            return "stale"
+        if national_id == self.generator.MISSING_SOURCE_OBSERVED_AT_NATIONAL_ID:
+            return "missing"
+        return "fresh"
 
     def test_generator_writes_refreshed_fixture_model_outputs(self) -> None:
         original_data_dir = self.generator.DATA_DIR
@@ -370,10 +494,10 @@ class GenerateFixturesTest(unittest.TestCase):
                     }
                     for item in module.V1_MATRIX
                 }
-                self.assertEqual(matrix, self.expected_outcomes)
+                self.assertEqual(matrix, self.expected_runtime_outcomes)
 
         smoke_matrix = self._smoke_shell_matrix()
-        for national_id, expected in self.expected_outcomes.items():
+        for national_id, expected in self.expected_runtime_outcomes.items():
             with self.subTest(path="smoke.sh", national_id=national_id):
                 self.assertEqual(smoke_matrix[("person-is-alive", national_id)], expected["alive"])
                 self.assertEqual(smoke_matrix[("health-service-available", national_id)], expected["health"])
@@ -398,10 +522,17 @@ class GenerateFixturesTest(unittest.TestCase):
         return [["" if value is None else str(value) for value in row] for row in rows]
 
     @staticmethod
-    def _smoke_shell_matrix() -> dict[tuple[str, str], bool]:
+    def _smoke_shell_matrix() -> dict[tuple[str, str], object]:
         text = (SCRIPT_DIR / "smoke.sh").read_text(encoding="utf-8")
-        entries = re.findall(r'"[^"]+\|[^"]+\|[^"]+\|([^|"]+)\|(NID-\d+)\|(true|false)"', text)
-        return {(claim, national_id): expected == "true" for claim, national_id, expected in entries}
+        entries = re.findall(r'"[^"]+\|[^"]+\|[^"]+\|([^|"]+)\|(NID-\d+)\|([^"]+)"', text)
+        matrix = {}
+        for claim, national_id, expected in entries:
+            if expected in {"true", "false"}:
+                matrix[(claim, national_id)] = expected == "true"
+            else:
+                status, code = expected.split(":", 1)
+                matrix[(claim, national_id)] = {"status": int(status), "code": code}
+        return matrix
 
 
 if __name__ == "__main__":

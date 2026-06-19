@@ -17,6 +17,13 @@ auth:
         commitment: sha256:66696f4ca124d37179cab186ade3a61151a95fdf94c7b4143ba400fddd0ce235
       scopes:
         - civil_registry:evidence_verification
+      authorization_details:
+        type: registry-notary/evidence-authorization/v1
+        schema_version: v1
+        legal_basis_ref: demo:birth-registration-verification
+        consent_ref: demo:birth-registration-consent
+        jurisdiction: ZZ
+        assurance_level: substantial
 
 audit:
   sink: stdout
@@ -56,6 +63,12 @@ evidence:
           child_family_name: /name/surname
           child_birth_date: /birth_date
           child_place_of_birth: /birth_place
+          observed_at: "$response:/message/search_response/0/timestamp"
+  ecosystem_bindings:
+    sp-dci/v1:
+      profile: registry-notary/source-policy/v1
+      policy_id: lab.sp-dci.governed-evidence.v1
+      policy_hash: sha256:3484ed6ff5e9ac01940e22f555661d63dd2473de1b8b94c9fcbe5b6949e70844
   signing_keys:
     opencrvs-dci-demo:
       provider: local_jwk_env
@@ -110,6 +123,19 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: birth_registration
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/opencrvs-dci-lab
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            max_source_age_seconds: 86400
+            source_observed_at_field: observed_at
+            ecosystem_binding:
+              id: sp-dci/v1
           lookup:
             input: target.identifiers.UIN
             field: UIN
@@ -141,6 +167,19 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: birth_registration
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/opencrvs-dci-lab
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            max_source_age_seconds: 86400
+            source_observed_at_field: observed_at
+            ecosystem_binding:
+              id: sp-dci/v1
           lookup:
             input: target.identifiers.UIN
             field: UIN
@@ -178,6 +217,19 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: birth_registration
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/opencrvs-dci-lab
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            max_source_age_seconds: 86400
+            source_observed_at_field: observed_at
+            ecosystem_binding:
+              id: sp-dci/v1
           lookup:
             input: target.identifiers.UIN
             field: UIN
@@ -215,6 +267,19 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: birth_registration
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/opencrvs-dci-lab
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            max_source_age_seconds: 86400
+            source_observed_at_field: observed_at
+            ecosystem_binding:
+              id: sp-dci/v1
           lookup:
             input: target.identifiers.UIN
             field: UIN
@@ -256,6 +321,19 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: birth_registration
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/opencrvs-dci-lab
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            max_source_age_seconds: 86400
+            source_observed_at_field: observed_at
+            ecosystem_binding:
+              id: sp-dci/v1
           lookup:
             input: target.identifiers.UIN
             field: UIN
@@ -293,6 +371,19 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: birth_registration
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/opencrvs-dci-lab
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            max_source_age_seconds: 86400
+            source_observed_at_field: observed_at
+            ecosystem_binding:
+              id: sp-dci/v1
           lookup:
             input: target.identifiers.UIN
             field: UIN
@@ -330,6 +421,19 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: birth_registration
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/opencrvs-dci-lab
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            max_source_age_seconds: 86400
+            source_observed_at_field: observed_at
+            ecosystem_binding:
+              id: sp-dci/v1
           lookup:
             input: target.identifiers.UIN
             field: UIN
@@ -367,6 +471,19 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: birth_registration
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/opencrvs-dci-lab
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            max_source_age_seconds: 86400
+            source_observed_at_field: observed_at
+            ecosystem_binding:
+              id: sp-dci/v1
           lookup:
             input: target.identifiers.UIN
             field: UIN

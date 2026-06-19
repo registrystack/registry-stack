@@ -14,17 +14,31 @@ auth:
       fingerprint:
         provider: env
         name: SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH
-        commitment: sha256:e79f6f8835922ce857613e12ea42051e6a30583557ff66ba18d03474f7899efa
+        commitment: sha256:80f6255cc62aa3a9132d99625aabed496e326afb1edef00e5493d35ccfd3c1d6
       scopes:
         - social_protection_registry:evidence_verification
+      authorization_details:
+        type: registry-notary/evidence-authorization/v1
+        schema_version: v1
+        legal_basis_ref: demo:child-support-eligibility
+        consent_ref: demo:child-support-consent
+        jurisdiction: ZZ
+        assurance_level: substantial
   bearer_tokens:
     - id: social_protection_evidence_client
       fingerprint:
         provider: env
         name: SOCIAL_EVIDENCE_CLIENT_BEARER_HASH
-        commitment: sha256:919a27d0d2f41e746c15f08fdc00fc2d3841c27b0534efd9bbfadda1e9cc5309
+        commitment: sha256:c0f3b0c1f5c8c5508c44404be9c3f06c49d5f3542ae3e4cb2a75a998b76756b1
       scopes:
         - social_protection_registry:evidence_verification
+      authorization_details:
+        type: registry-notary/evidence-authorization/v1
+        schema_version: v1
+        legal_basis_ref: demo:child-support-eligibility
+        consent_ref: demo:child-support-consent
+        jurisdiction: ZZ
+        assurance_level: substantial
 
 audit:
   sink: stdout
@@ -72,12 +86,20 @@ federation:
       subject_id_type: national_id
       disclosure: predicate
       max_source_observed_age_seconds: 86400
+      legal_basis_ref: demo:child-support-eligibility
+      consent_ref: demo:child-support-consent
+      jurisdiction: ZZ
+      assurance_level: substantial
     - id: household_eligibility_band_value
       ruleset: household-eligibility-band-v1
       claim_id: household-eligibility-band
       subject_id_type: national_id
       disclosure: value
       max_source_observed_age_seconds: 86400
+      legal_basis_ref: demo:child-support-eligibility
+      consent_ref: demo:child-support-consent
+      jurisdiction: ZZ
+      assurance_level: substantial
 
 evidence:
   enabled: true
@@ -89,6 +111,11 @@ evidence:
       base_url: http://social-protection-registry-relay:8080
       allow_insecure_private_network: true
       token_env: SOCIAL_EVIDENCE_SOURCE_RAW
+  ecosystem_bindings:
+    baseline-dpi/v1:
+      profile: registry-notary/source-policy/v1
+      policy_id: lab.baseline-dpi.governed-evidence.v1
+      policy_hash: sha256:9b0861b94d7706bd9d00a9a03480ede66a0a5aa5ea5f81a3717783de50154812
   signing_keys:
     social-protection-evidence-demo:
       provider: local_jwk_env
@@ -140,6 +167,17 @@ evidence:
           required_scope: social_protection_registry:evidence_verification
           dataset: social_protection_registry
           entity: program_enrollment
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: baseline-dpi/v1
           lookup:
             input: target.identifiers.national_id
             field: national_id
@@ -158,6 +196,7 @@ evidence:
         default: value
         allowed:
           - value
+          - predicate
           - redacted
       formats:
         - application/vnd.registry-notary.claim-result+json
@@ -177,6 +216,17 @@ evidence:
           required_scope: social_protection_registry:evidence_verification
           dataset: social_protection_registry
           entity: household
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: baseline-dpi/v1
           lookup:
             input: target.identifiers.national_id
             field: national_id
@@ -249,6 +299,17 @@ evidence:
           required_scope: social_protection_registry:evidence_verification
           dataset: social_protection_registry
           entity: household
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: baseline-dpi/v1
           lookup:
             input: target.identifiers.national_id
             field: national_id
@@ -299,6 +360,14 @@ evidence:
             policy_id: demo.household-summary-redaction.v1
             allowed_purposes:
               - https://demo.example.gov/purpose/decentralized-evidence-demo
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: baseline-dpi/v1
             redaction_fields:
               - national_id
               - poverty_score
@@ -354,6 +423,17 @@ evidence:
           required_scope: social_protection_registry:evidence_verification
           dataset: social_protection_registry
           entity: household
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: baseline-dpi/v1
           lookup:
             input: target.identifiers.national_id
             field: national_id
@@ -370,6 +450,17 @@ evidence:
           required_scope: social_protection_registry:evidence_verification
           dataset: social_protection_registry
           entity: person
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: baseline-dpi/v1
           lookup:
             input: requester.identifiers.national_id
             field: national_id
@@ -418,6 +509,17 @@ evidence:
           required_scope: social_protection_registry:evidence_verification
           dataset: social_protection_registry
           entity: disability_determination
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: baseline-dpi/v1
           lookup:
             input: target.identifiers.national_id
             field: national_id
@@ -459,6 +561,17 @@ evidence:
           required_scope: social_protection_registry:evidence_verification
           dataset: social_protection_registry
           entity: functioning_profile
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: baseline-dpi/v1
           lookup:
             input: target.identifiers.national_id
             field: national_id

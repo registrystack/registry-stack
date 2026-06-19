@@ -108,5 +108,8 @@ datasets:
           - name: updated_on
             type: date
             required: true
+          - name: observed_at
+            type: string
+            required: true
 vocabularies:
   registry_relay: https://registry-relay.dev/

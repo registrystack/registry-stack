@@ -1,0 +1,29 @@
+{
+  "schema_version": "registry-lab/odrl-enforcement-profile/v1",
+  "id": "registry-evidence-gateway-pdp/v1",
+  "version": "v1",
+  "description": "Lab fixture profile for governed evidence PDP compilation.",
+  "supported_terms": [
+    "odrl:purpose",
+    "odrl:spatial",
+    "registry:pdp:assurance",
+    "registry:pdp:source_age",
+    "registry:pdp:legal_basis",
+    "registry:pdp:consent",
+    "registry:pdp:redaction",
+    "registry:pdp:relationship_purpose",
+    "registry:pdp:requested_disclosure",
+    "registry:pdp:credential_format",
+    "registry:pdp:source_binding",
+    "registry:pdp:route_identity",
+    "registry:pdp:checked_scope"
+  ],
+  "supported_operators": [
+    "odrl:eq",
+    "odrl:gteq",
+    "odrl:isA",
+    "odrl:lteq"
+  ],
+  "unsupported_terms_fail_closed": true,
+  "audit_required": true
+}

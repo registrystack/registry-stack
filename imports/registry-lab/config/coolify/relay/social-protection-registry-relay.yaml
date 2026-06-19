@@ -15,7 +15,7 @@ config_trust:
 metadata:
   source:
     path: social-protection-registry-relay.metadata.yaml
-    digest: sha256:3bc1399124d7f9bdce6ec2db9ed7eec7a1f214779ccf2ea424b709d696fa0dad
+    digest: sha256:d19f13cd7af40d29c612a4905140c792935b14e2bb7165da0692791a224664eb
 
 catalog:
   title: Social Protection Registry Relay (Decentralized Demo)
@@ -209,6 +209,9 @@ datasets:
             - name: enrolled_on
               type: date
               nullable: false
+            - name: observed_at
+              type: string
+              nullable: true
       - id: group_memberships_table
         materialization: snapshot
         source:
@@ -685,6 +688,7 @@ datasets:
             from: status
           - name: benefit_amount
           - name: enrolled_on
+          - name: observed_at
         relationships:
           - name: household
             kind: belongs_to

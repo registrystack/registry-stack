@@ -24,7 +24,12 @@ V1_MATRIX = [
     {"id": "NID-1007", "alive": True, "health": True, "combined": False},
     {"id": "NID-1008", "alive": True, "health": True, "combined": True},
     {"id": "NID-1009", "alive": True, "health": True, "combined": False},
-    {"id": "NID-1010", "alive": True, "health": False, "combined": False},
+    {
+        "id": "NID-1010",
+        "alive": True,
+        "health": {"status": 403, "code": "pdp.evidence_stale"},
+        "combined": {"status": 403, "code": "pdp.evidence_stale"},
+    },
 ]
 
 
@@ -193,6 +198,21 @@ def main() -> None:
     def record(name: str, details: dict[str, Any] | None = None) -> None:
         artifact["checks"].append({"name": name, "ok": True, **(details or {})})
 
+    def evaluate_or_expected_problem(name: str, fn: Any, expected: Any) -> Any:
+        if not isinstance(expected, dict):
+            return check(name, fn)
+        print(f"check: {name} problem code")
+        try:
+            response = fn()
+        except NotaryProblemError as exc:
+            if exc.status != expected.get("status") or exc.code != expected.get("code"):
+                fail(
+                    f"{name}: expected problem {expected}, got "
+                    f"status={exc.status!r} code={exc.code!r}"
+                )
+            return {"problem": {"status": exc.status, "code": exc.code, "request_id": exc.request_id}}
+        fail(f"{name}: expected problem {expected}, got successful response {response!r}")
+
     service = check(
         "civil service discovery through client",
         lambda: civil.service_document(request_id=f"{correlation_id}-discovery"),
@@ -270,7 +290,7 @@ def main() -> None:
             }
         )
 
-        health_evaluation = check(
+        health_evaluation = evaluate_or_expected_problem(
             f"shared health evaluation through client for {subject}",
             lambda subject=subject: shared.evaluate_request(
                 {
@@ -285,19 +305,30 @@ def main() -> None:
                 },
                 request_id=f"{correlation_id}-health-evaluate-{subject}",
             ),
+            case["health"],
         )
-        health_result = assert_boolean_result(health_evaluation, "health-service-available", case["health"])
-        matrix_results.append(
-            {
-                "subject": subject,
-                "claim_id": "health-service-available",
-                "expected": case["health"],
-                "observed": health_result.get("satisfied") if health_result.get("satisfied") is not None else health_result.get("value"),
-                "provenance_source_count": provenance_source_count(health_result),
-            }
-        )
+        if isinstance(case["health"], dict):
+            matrix_results.append(
+                {
+                    "subject": subject,
+                    "claim_id": "health-service-available",
+                    "expected_problem": case["health"],
+                    "observed_problem": health_evaluation["problem"],
+                }
+            )
+        else:
+            health_result = assert_boolean_result(health_evaluation, "health-service-available", case["health"])
+            matrix_results.append(
+                {
+                    "subject": subject,
+                    "claim_id": "health-service-available",
+                    "expected": case["health"],
+                    "observed": health_result.get("satisfied") if health_result.get("satisfied") is not None else health_result.get("value"),
+                    "provenance_source_count": provenance_source_count(health_result),
+                }
+            )
 
-        shared_evaluation = check(
+        shared_evaluation = evaluate_or_expected_problem(
             f"shared combined-support evaluation through client for {subject}",
             lambda subject=subject: shared.evaluate_request(
                 {
@@ -312,7 +343,18 @@ def main() -> None:
                 },
                 request_id=f"{correlation_id}-shared-evaluate-{subject}",
             ),
+            case["combined"],
         )
+        if isinstance(case["combined"], dict):
+            matrix_results.append(
+                {
+                    "subject": subject,
+                    "claim_id": "eligible-for-combined-support",
+                    "expected_problem": case["combined"],
+                    "observed_problem": shared_evaluation["problem"],
+                }
+            )
+            continue
         shared_result = assert_boolean_result(shared_evaluation, "eligible-for-combined-support", case["combined"])
         source_count = provenance_source_count(shared_result)
         if case["combined"] and (not isinstance(source_count, int) or source_count < 2):

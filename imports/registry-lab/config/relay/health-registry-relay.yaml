@@ -15,7 +15,7 @@ config_trust:
 metadata:
   source:
     path: health-registry-relay.metadata.yaml
-    digest: sha256:908d84c9aa0433227da30c9129a27a0f10a2a279bb6a7f79e125e749695630d5
+    digest: sha256:c526bf1a8e19de7f0487b436620e48fbf595a5d8837061c9543f75003c89dcb1
   ecosystem_binding:
     id: baseline-dpi/v1
     version: v1
@@ -36,14 +36,14 @@ auth:
       fingerprint:
         provider: env
         name: HEALTH_METADATA_CLIENT_HASH
-        commitment: sha256:96134b2eb7951d68882a8340068af5b422806e752defcde8a2516f263a189bbd
+        commitment: sha256:6ce93bfaf95801294eb7df1449615604eb0262becb35deb6987105f67e13522b
       scopes:
         - health_registry:metadata
     - id: evidence_source
       fingerprint:
         provider: env
         name: HEALTH_EVIDENCE_SOURCE_HASH
-        commitment: sha256:6af4cfd990da802cc7deb8bdc576f0851cd0f040c224d9ccd15ca00bd6d78570
+        commitment: sha256:76940f407141f4ccc09b39212f205ad62c24b05c3f36ccddc1a79e9ad7a3fd1e
       scopes:
         - health_registry:metadata
         - health_registry:rows
@@ -52,7 +52,7 @@ auth:
       fingerprint:
         provider: env
         name: HEALTH_EVIDENCE_ONLY_HASH
-        commitment: sha256:c3b65a5f0329a99dae23424b3061e76d951b683c997e885343b925a90adbbb6a
+        commitment: sha256:521ae93b6964281ac99843451147595399bc9c3b72de239cd6145a3db97293e5
       scopes:
         - health_registry:metadata
         - health_registry:evidence_verification
@@ -60,7 +60,7 @@ auth:
       fingerprint:
         provider: env
         name: HEALTH_ROW_READER_HASH
-        commitment: sha256:94ab3c8ba3d7b9c94f5ece1a7d6281d10d64b07974b9377cacde567185091222
+        commitment: sha256:deae6d01fd7355591c02efe8ba0c420c2573168c160ee80d990cb4e1fa843714
       scopes:
         - health_registry:metadata
         - health_registry:rows
@@ -68,7 +68,7 @@ auth:
       fingerprint:
         provider: env
         name: SHARED_HEALTH_EVIDENCE_SOURCE_HASH
-        commitment: sha256:771842592dfe88a5372ed27724a463fe7635a95d22c62a28332dd2725b34ad4f
+        commitment: sha256:f295eaa20abfcfd56942fc414fbda5935c6504fba4caaabcaa0df0b0c28db5b8
       scopes:
         - health_registry:metadata
         - health_registry:rows
@@ -132,6 +132,9 @@ datasets:
             - name: updated_on
               type: date
               nullable: false
+            - name: observed_at
+              type: string
+              nullable: true
     entities:
       - name: health_facility
         title: Applicant Service Availability
@@ -149,6 +152,7 @@ datasets:
           - name: pediatric_service_available
           - name: practitioner_credential_active
           - name: updated_on
+          - name: observed_at
         access:
           metadata_scope: health_registry:metadata
           aggregate_scope: health_registry:aggregate

@@ -105,6 +105,9 @@ datasets:
           - name: district
             type: string
             required: true
+          - name: observed_at
+            type: string
+            required: true
       - name: civil_person_detail
         title: Civil Person Detail
         description: Event-linked person detail for identity and record matching demonstrations.

@@ -14,7 +14,7 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_NOTARY_OPS_TOKEN_HASH
-        commitment: sha256:8f609eae10331f2ac32cb3bf575a612064fd1cda0d9c4a3f34ae831081e4c45a
+        commitment: sha256:c52f9b132c88dd351a90efeb385bbdf5a31d7b43a3a5efe6ba903cc94aff22aa
       scopes:
         - registry_notary:ops_read
         - registry_notary:metrics_read
@@ -22,7 +22,7 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_EVIDENCE_CLIENT_TOKEN_HASH
-        commitment: sha256:809094ad7d8b5836f2eea14208f4d40c139c5e1ebabcecd7f5272d040447a614
+        commitment: sha256:7d537df5a3c58149ff213ad12298b30e890829528f270dfea566572b059f345f
       scopes:
         - civil_registry:evidence_verification
   bearer_tokens:
@@ -30,7 +30,7 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_EVIDENCE_CLIENT_BEARER_HASH
-        commitment: sha256:459b5ba57bd97b9b082087e15b0714266ccc2117811e9465c714fcccfc4fd6a9
+        commitment: sha256:228ec46d788fc994fbd8516ef56f06867efdde7737486fd7c55143831f177a65
       scopes:
         - civil_registry:evidence_verification
 

@@ -1,0 +1,540 @@
+{
+  "schema_version": "registry-lab/evidence-gateway-golden-fixtures/v1",
+  "binding_id": "sp-dci/v1",
+  "policy_id": "lab.sp-dci.governed-evidence.v1",
+  "policy_hash": "sha256:3484ed6ff5e9ac01940e22f555661d63dd2473de1b8b94c9fcbe5b6949e70844",
+  "freshness_reference_time": "2026-06-19T00:00:00Z",
+  "cases": [
+    {
+      "id": "sp-dci-success-birth-record",
+      "type": "success",
+      "synthetic_data_refs": [
+        "sp-dci-success-birth-record"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/opencrvs-dci-lab",
+        "binding_id": "sp-dci/v1",
+        "source_binding": "sp-dci/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:birth-registration-verification",
+        "consent_ref": "demo:birth-registration-consent",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "UIN",
+              "value": "UIN-DCI-1001",
+              "issuer": "opencrvs"
+            }
+          ]
+        },
+        "claims": [
+          "opencrvs-birth-record-exists",
+          "opencrvs-age-band"
+        ],
+        "disclosure": "value",
+        "format": "application/vnd.registry-notary.claim-result+json"
+      },
+      "expected": {
+        "status": 200,
+        "result": {
+          "claim_id": "opencrvs-birth-record-exists",
+          "value": true
+        },
+        "audit": {
+          "binding_id": "sp-dci/v1",
+          "binding_version": "v1",
+          "policy_id": "lab.sp-dci.governed-evidence.v1",
+          "policy_hash": "sha256:3484ed6ff5e9ac01940e22f555661d63dd2473de1b8b94c9fcbe5b6949e70844",
+          "evaluated_rule_ids": [
+            "source-binding-policy:*"
+          ]
+        }
+      }
+    },
+    {
+      "id": "sp-dci-denial-purpose",
+      "type": "denial",
+      "synthetic_data_refs": [
+        "sp-dci-denied-purpose"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/not-authorized",
+        "binding_id": "sp-dci/v1",
+        "source_binding": "sp-dci/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:birth-registration-verification",
+        "consent_ref": "demo:birth-registration-consent",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "UIN",
+              "value": "UIN-DCI-1009",
+              "issuer": "opencrvs"
+            }
+          ]
+        },
+        "claims": [
+          "opencrvs-birth-record-exists"
+        ],
+        "disclosure": "value"
+      },
+      "expected": {
+        "status": 403,
+        "problem": {
+          "code": "pdp.purpose_not_permitted"
+        },
+        "zero_source_reads": true,
+        "audit": {
+          "binding_id": "sp-dci/v1",
+          "policy_id": "lab.sp-dci.governed-evidence.v1",
+          "policy_hash": "sha256:3484ed6ff5e9ac01940e22f555661d63dd2473de1b8b94c9fcbe5b6949e70844",
+          "decision": "deny"
+        }
+      }
+    },
+    {
+      "id": "sp-dci-denial-assurance",
+      "type": "denial",
+      "synthetic_data_refs": [
+        "sp-dci-denied-purpose"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/opencrvs-dci-lab",
+        "binding_id": "sp-dci/v1",
+        "source_binding": "sp-dci/v1",
+        "assurance_level": "low",
+        "jurisdiction": "ZZ",
+        "legal_basis_ref": "demo:birth-registration-verification",
+        "consent_ref": "demo:birth-registration-consent",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "UIN",
+              "value": "UIN-DCI-1009",
+              "issuer": "opencrvs"
+            }
+          ]
+        },
+        "claims": [
+          "opencrvs-birth-record-exists"
+        ],
+        "disclosure": "value"
+      },
+      "expected": {
+        "status": 403,
+        "problem": {
+          "code": "pdp.assurance_insufficient"
+        },
+        "zero_source_reads": true,
+        "audit": {
+          "binding_id": "sp-dci/v1",
+          "policy_id": "lab.sp-dci.governed-evidence.v1",
+          "policy_hash": "sha256:3484ed6ff5e9ac01940e22f555661d63dd2473de1b8b94c9fcbe5b6949e70844",
+          "decision": "deny"
+        }
+      }
+    },
+    {
+      "id": "sp-dci-denial-stale-evidence",
+      "type": "denial",
+      "synthetic_data_refs": [
+        "sp-dci-stale-evidence"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/opencrvs-dci-lab",
+        "binding_id": "sp-dci/v1",
+        "source_binding": "sp-dci/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:birth-registration-verification",
+        "consent_ref": "demo:birth-registration-consent",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "UIN",
+              "value": "UIN-DCI-1010",
+              "issuer": "opencrvs"
+            }
+          ]
+        },
+        "claims": [
+          "opencrvs-birth-record-exists"
+        ],
+        "disclosure": "value"
+      },
+      "expected": {
+        "status": 403,
+        "problem": {
+          "code": "pdp.evidence_stale"
+        },
+        "zero_source_reads": false,
+        "audit": {
+          "binding_id": "sp-dci/v1",
+          "policy_id": "lab.sp-dci.governed-evidence.v1",
+          "policy_hash": "sha256:3484ed6ff5e9ac01940e22f555661d63dd2473de1b8b94c9fcbe5b6949e70844",
+          "decision": "deny"
+        }
+      }
+    },
+    {
+      "id": "sp-dci-denial-missing-freshness",
+      "type": "denial",
+      "synthetic_data_refs": [
+        "sp-dci-missing-observed-at"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/opencrvs-dci-lab",
+        "binding_id": "sp-dci/v1",
+        "source_binding": "sp-dci/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:birth-registration-verification",
+        "consent_ref": "demo:birth-registration-consent",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "UIN",
+              "value": "UIN-DCI-1011",
+              "issuer": "opencrvs"
+            }
+          ]
+        },
+        "claims": [
+          "opencrvs-birth-record-exists"
+        ],
+        "disclosure": "value"
+      },
+      "expected": {
+        "status": 403,
+        "problem": {
+          "code": "pdp.evidence_stale"
+        },
+        "zero_source_reads": false,
+        "audit": {
+          "binding_id": "sp-dci/v1",
+          "policy_id": "lab.sp-dci.governed-evidence.v1",
+          "policy_hash": "sha256:3484ed6ff5e9ac01940e22f555661d63dd2473de1b8b94c9fcbe5b6949e70844",
+          "decision": "deny"
+        }
+      }
+    },
+    {
+      "id": "sp-dci-denial-jurisdiction",
+      "type": "denial",
+      "synthetic_data_refs": [
+        "sp-dci-denied-purpose"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/opencrvs-dci-lab",
+        "binding_id": "sp-dci/v1",
+        "source_binding": "sp-dci/v1",
+        "jurisdiction": "XY",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:birth-registration-verification",
+        "consent_ref": "demo:birth-registration-consent",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "UIN",
+              "value": "UIN-DCI-1009",
+              "issuer": "opencrvs"
+            }
+          ]
+        },
+        "claims": [
+          "opencrvs-birth-record-exists"
+        ],
+        "disclosure": "value"
+      },
+      "expected": {
+        "status": 403,
+        "problem": {
+          "code": "pdp.jurisdiction_not_permitted"
+        },
+        "zero_source_reads": true,
+        "audit": {
+          "binding_id": "sp-dci/v1",
+          "policy_id": "lab.sp-dci.governed-evidence.v1",
+          "policy_hash": "sha256:3484ed6ff5e9ac01940e22f555661d63dd2473de1b8b94c9fcbe5b6949e70844",
+          "decision": "deny"
+        }
+      }
+    },
+    {
+      "id": "sp-dci-denial-legal-basis",
+      "type": "denial",
+      "synthetic_data_refs": [
+        "sp-dci-denied-purpose"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/opencrvs-dci-lab",
+        "binding_id": "sp-dci/v1",
+        "source_binding": "sp-dci/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "",
+        "consent_ref": "demo:birth-registration-consent",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "UIN",
+              "value": "UIN-DCI-1009",
+              "issuer": "opencrvs"
+            }
+          ]
+        },
+        "claims": [
+          "opencrvs-birth-record-exists"
+        ],
+        "disclosure": "value"
+      },
+      "expected": {
+        "status": 403,
+        "problem": {
+          "code": "pdp.legal_basis_required"
+        },
+        "zero_source_reads": true,
+        "audit": {
+          "binding_id": "sp-dci/v1",
+          "policy_id": "lab.sp-dci.governed-evidence.v1",
+          "policy_hash": "sha256:3484ed6ff5e9ac01940e22f555661d63dd2473de1b8b94c9fcbe5b6949e70844",
+          "decision": "deny"
+        }
+      }
+    },
+    {
+      "id": "sp-dci-denial-consent",
+      "type": "denial",
+      "synthetic_data_refs": [
+        "sp-dci-denied-purpose"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/opencrvs-dci-lab",
+        "binding_id": "sp-dci/v1",
+        "source_binding": "sp-dci/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:birth-registration-verification",
+        "consent_ref": "",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "UIN",
+              "value": "UIN-DCI-1009",
+              "issuer": "opencrvs"
+            }
+          ]
+        },
+        "claims": [
+          "opencrvs-birth-record-exists"
+        ],
+        "disclosure": "value"
+      },
+      "expected": {
+        "status": 403,
+        "problem": {
+          "code": "pdp.consent_required"
+        },
+        "zero_source_reads": true,
+        "audit": {
+          "binding_id": "sp-dci/v1",
+          "policy_id": "lab.sp-dci.governed-evidence.v1",
+          "policy_hash": "sha256:3484ed6ff5e9ac01940e22f555661d63dd2473de1b8b94c9fcbe5b6949e70844",
+          "decision": "deny"
+        }
+      }
+    },
+    {
+      "id": "sp-dci-denial-unsupported-odrl-term",
+      "type": "denial",
+      "synthetic_data_refs": [
+        "sp-dci-denied-purpose"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/opencrvs-dci-lab",
+        "binding_id": "sp-dci/v1",
+        "source_binding": "sp-dci/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:birth-registration-verification",
+        "consent_ref": "demo:birth-registration-consent",
+        "odrl_terms": [
+          "odrl:targetPolicy"
+        ],
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "UIN",
+              "value": "UIN-DCI-1009",
+              "issuer": "opencrvs"
+            }
+          ]
+        },
+        "claims": [
+          "opencrvs-birth-record-exists"
+        ],
+        "disclosure": "value"
+      },
+      "expected": {
+        "status": 403,
+        "problem": {
+          "code": "pdp.unsupported_policy_term"
+        },
+        "zero_source_reads": true,
+        "audit": {
+          "binding_id": "sp-dci/v1",
+          "policy_id": "lab.sp-dci.governed-evidence.v1",
+          "policy_hash": "sha256:3484ed6ff5e9ac01940e22f555661d63dd2473de1b8b94c9fcbe5b6949e70844",
+          "decision": "deny"
+        }
+      }
+    },
+    {
+      "id": "sp-dci-redaction-birth-attributes",
+      "type": "redaction",
+      "synthetic_data_refs": [
+        "sp-dci-redaction-birth-attributes"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/opencrvs-dci-lab",
+        "binding_id": "sp-dci/v1",
+        "source_binding": "sp-dci/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:birth-registration-verification",
+        "consent_ref": "demo:birth-registration-consent",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "UIN",
+              "value": "UIN-DCI-1001",
+              "issuer": "opencrvs"
+            }
+          ]
+        },
+        "claims": [
+          "opencrvs-age-band",
+          "opencrvs-sex"
+        ],
+        "disclosure": "redacted"
+      },
+      "expected": {
+        "status": 200,
+        "absent_fields": [
+          "given_name",
+          "family_name",
+          "place_of_birth"
+        ],
+        "present_fields": [
+          "age_band",
+          "sex"
+        ],
+        "audit": {
+          "binding_id": "sp-dci/v1",
+          "policy_id": "lab.sp-dci.governed-evidence.v1",
+          "redacted_fields": [
+            "opencrvs-age-band",
+            "opencrvs-sex"
+          ]
+        }
+      }
+    },
+    {
+      "id": "sp-dci-credential-sd-jwt",
+      "type": "credential",
+      "synthetic_data_refs": [
+        "sp-dci-success-birth-record"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/opencrvs-dci-lab",
+        "binding_id": "sp-dci/v1",
+        "source_binding": "sp-dci/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:birth-registration-verification",
+        "consent_ref": "demo:birth-registration-consent",
+        "claims": [
+          "opencrvs-child-date-of-birth",
+          "opencrvs-child-place-of-birth"
+        ],
+        "format": "application/dc+sd-jwt"
+      },
+      "expected": {
+        "status": 200,
+        "credential_format": "application/dc+sd-jwt",
+        "audit": {
+          "binding_id": "sp-dci/v1",
+          "policy_id": "lab.sp-dci.governed-evidence.v1"
+        }
+      }
+    },
+    {
+      "id": "sp-dci-audit-permit",
+      "type": "audit",
+      "synthetic_data_refs": [
+        "sp-dci-success-birth-record"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/opencrvs-dci-lab",
+        "binding_id": "sp-dci/v1",
+        "source_binding": "sp-dci/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:birth-registration-verification",
+        "consent_ref": "demo:birth-registration-consent",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "UIN",
+              "value": "UIN-DCI-1001",
+              "issuer": "opencrvs"
+            }
+          ]
+        },
+        "claims": [
+          "opencrvs-birth-record-exists"
+        ]
+      },
+      "expected": {
+        "audit": {
+          "decision": "permit",
+          "binding_id": "sp-dci/v1",
+          "binding_version": "v1",
+          "policy_id": "lab.sp-dci.governed-evidence.v1",
+          "policy_hash": "sha256:3484ed6ff5e9ac01940e22f555661d63dd2473de1b8b94c9fcbe5b6949e70844",
+          "evaluated_rule_ids": [
+            "source-binding-policy:birth_registration.policy_identity",
+            "source-binding-policy:birth_registration.odrl_terms",
+            "source-binding-policy:birth_registration.purpose",
+            "source-binding-policy:birth_registration.jurisdiction",
+            "source-binding-policy:birth_registration.assurance_allowed_set",
+            "source-binding-policy:birth_registration.legal_basis_required",
+            "source-binding-policy:birth_registration.consent_required",
+            "source-binding-policy:birth_registration.requested_fact",
+            "source-binding-policy:birth_registration.requested_disclosure",
+            "source-binding-policy:birth_registration.credential_format",
+            "source-binding-policy:birth_registration.source_binding",
+            "source-binding-policy:birth_registration.route_identity",
+            "source-binding-policy:birth_registration.checked_scope"
+          ],
+          "target_ref_hash": "sha256",
+          "claim_hash": "sha256",
+          "correlation_id_hash": "sha256"
+        }
+      }
+    }
+  ]
+}

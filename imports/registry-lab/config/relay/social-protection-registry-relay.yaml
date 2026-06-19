@@ -15,7 +15,7 @@ config_trust:
 metadata:
   source:
     path: social-protection-registry-relay.metadata.yaml
-    digest: sha256:f4bc330f2d6e276993a438023f6540c4bfa051fce92934c20597f7e2d9bf497b
+    digest: sha256:aae50b2101208fd294daf40507731a6d08bc7d45211e0e09e7b4df45c519ce1c
   ecosystem_binding:
     id: baseline-dpi/v1
     version: v1
@@ -36,14 +36,14 @@ auth:
       fingerprint:
         provider: env
         name: SOCIAL_METADATA_CLIENT_HASH
-        commitment: sha256:7de1f94fc7cd8ea0ef8b93c351d7c76b7f1343e34821b57b07bd03c1e2e80e3f
+        commitment: sha256:4bcf29bf69e24b3b05937c90e1477e01516b28101f982dcbbe138a3dcf2ec742
       scopes:
         - social_protection_registry:metadata
     - id: evidence_source
       fingerprint:
         provider: env
         name: SOCIAL_EVIDENCE_SOURCE_HASH
-        commitment: sha256:f72eac419eb212c27397c871cf143d768850c44c67f31de29409e566a6e258ec
+        commitment: sha256:99ac4769bd30358977898ca333a3589c9349c4613f63feb1d1ef6061bab851d3
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:rows
@@ -52,7 +52,7 @@ auth:
       fingerprint:
         provider: env
         name: SOCIAL_EVIDENCE_ONLY_HASH
-        commitment: sha256:32a1c1339a7848452720f06a8bb45460f0fe3279b9d9791d831d17b8e8a3b35e
+        commitment: sha256:e94f9200258219b0f154395ee374ca8f0523342b3cfff12d52182505b1326150
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:evidence_verification
@@ -60,7 +60,7 @@ auth:
       fingerprint:
         provider: env
         name: SOCIAL_ROW_READER_HASH
-        commitment: sha256:02e7a87e53cbe98e7eb776595d8d574fc216e3b56ef26e7b19d1d35e5ab21db6
+        commitment: sha256:e975a71802995517f87deb926da845c85c2cd2c7249cd744318a6d382968e48a
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:rows
@@ -68,7 +68,7 @@ auth:
       fingerprint:
         provider: env
         name: SOCIAL_AGGREGATE_READER_HASH
-        commitment: sha256:be0cbd3cb13b4b81100f704e27082c4c2f1968ca3255c9b304d70689b49f5098
+        commitment: sha256:cad3ebb0239b9d70f481a8e90b46a0d8abb8e15877138b57a4b028a16e43e522
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:aggregate
@@ -76,7 +76,7 @@ auth:
       fingerprint:
         provider: env
         name: SHARED_SOCIAL_EVIDENCE_SOURCE_HASH
-        commitment: sha256:26bfe57f8ac6f3d6416c12151d4ec51b6db925fa068057f04ede8d6ddb790156
+        commitment: sha256:e4ed86923c2fd7527c3bc8cb1e0986675f3a42e976ab3bd8c31cd404601b5283
       scopes:
         - social_protection_registry:metadata
         - social_protection_registry:rows
@@ -212,6 +212,9 @@ datasets:
             - name: enrolled_on
               type: date
               nullable: false
+            - name: observed_at
+              type: string
+              nullable: true
       - id: group_memberships_table
         materialization: snapshot
         source:
@@ -688,6 +691,7 @@ datasets:
             from: status
           - name: benefit_amount
           - name: enrolled_on
+          - name: observed_at
         relationships:
           - name: household
             kind: belongs_to

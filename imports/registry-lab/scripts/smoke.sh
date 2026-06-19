@@ -217,6 +217,7 @@ PY
 mkdir -p "${output_dir}"
 
 check "service-first manifest dependency" "${script_dir}/check-service-first-deps.sh" manifest
+check "evidence gateway binding fixtures" "${script_dir}/check-evidence-gateway-fixtures.py"
 
 wait_http "civil relay health" http://127.0.0.1:4311/healthz "${CIVIL_METADATA_CLIENT_RAW}"
 wait_http "social relay health" http://127.0.0.1:4312/healthz "${SOCIAL_METADATA_CLIENT_RAW}"
@@ -338,7 +339,7 @@ check "aggregate denial stable error code" json_path_equals "${output_dir}/smoke
 purpose_status="$(curl_status GET "http://127.0.0.1:4312/v1/datasets/social_protection_registry/entities/household/records?limit=1" "${SOCIAL_ROW_READER_RAW}" -H "Data-Purpose: https://demo.example.gov/purpose/not-authorized")"
 [[ "${purpose_status}" == "403" ]] || fail "purpose policy denial expected 403, got ${purpose_status}"
 cp /tmp/decentralized-smoke-response.json "${output_dir}/smoke-purpose-policy-denial.json"
-check "purpose policy denial stable error code" json_path_equals "${output_dir}/smoke-purpose-policy-denial.json" code auth.purpose_denied
+check "purpose policy denial stable error code" json_path_equals "${output_dir}/smoke-purpose-policy-denial.json" code pdp.purpose_not_permitted
 
 check "civil evidence evaluation" curl_json POST http://127.0.0.1:4321/v1/evaluations "${CIVIL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-civil-evaluation.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data "$(evaluation_payload "NID-1001" "national_id" "person-is-alive")"
 check "civil evidence evaluation results" json_has_key "${output_dir}/smoke-civil-evaluation.json" results
@@ -427,6 +428,9 @@ if source_count < 2:
     raise SystemExit(1)
 PY
 
+live_fixture_output="${output_dir}/evidence-gateway-live-baseline.json"
+check "baseline live evidence gateway fixtures" python3 "${script_dir}/run-evidence-gateway-live-fixtures.py" --profile baseline-dpi/v1 --output "${live_fixture_output}" --correlation-prefix "${correlation_id}-evidence-gateway"
+
 matrix_cases=(
   "civil|http://127.0.0.1:4321/v1/evaluations|CIVIL_EVIDENCE_CLIENT_BEARER|person-is-alive|NID-1001|true"
   "civil|http://127.0.0.1:4321/v1/evaluations|CIVIL_EVIDENCE_CLIENT_BEARER|person-is-alive|NID-1002|true"
@@ -447,7 +451,7 @@ matrix_cases=(
   "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|health-service-available|NID-1007|true"
   "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|health-service-available|NID-1008|true"
   "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|health-service-available|NID-1009|true"
-  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|health-service-available|NID-1010|false"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|health-service-available|NID-1010|403:pdp.evidence_stale"
   "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1001|true"
   "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1002|false"
   "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1003|false"
@@ -457,15 +461,23 @@ matrix_cases=(
   "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1007|false"
   "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1008|true"
   "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1009|false"
-  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1010|false"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1010|403:pdp.evidence_stale"
 )
 
 for matrix_case in "${matrix_cases[@]}"; do
   IFS='|' read -r service_name url token_var claim subject expected <<<"${matrix_case}"
   token="${!token_var}"
   matrix_output="${output_dir}/smoke-matrix-${service_name}-${claim}-${subject}.json"
-  check "v1 matrix ${claim} ${subject}" curl_json POST "${url}" "${token}" "${matrix_output}" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data "$(evaluation_payload "${subject}" "national_id" "${claim}")"
-  check "v1 matrix ${claim} ${subject} outcome" assert_claim_outcome "${matrix_output}" "${claim}" "${expected}"
+  if [[ "${expected}" == *:* ]]; then
+    IFS=':' read -r expected_status expected_code <<<"${expected}"
+    matrix_status="$(curl_status POST "${url}" "${token}" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data "$(evaluation_payload "${subject}" "national_id" "${claim}")")"
+    [[ "${matrix_status}" == "${expected_status}" ]] || fail "v1 matrix ${claim} ${subject} expected ${expected_status}, got ${matrix_status}"
+    cp /tmp/decentralized-smoke-response.json "${matrix_output}"
+    check "v1 matrix ${claim} ${subject} problem code" json_path_equals "${matrix_output}" code "${expected_code}"
+  else
+    check "v1 matrix ${claim} ${subject}" curl_json POST "${url}" "${token}" "${matrix_output}" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data "$(evaluation_payload "${subject}" "national_id" "${claim}")"
+    check "v1 matrix ${claim} ${subject} outcome" assert_claim_outcome "${matrix_output}" "${claim}" "${expected}"
+  fi
 done
 
 missing_status="$(curl_status POST http://127.0.0.1:4323/v1/evaluations "${SHARED_EVIDENCE_CLIENT_BEARER}" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data "$(evaluation_payload "NID-9999" "national_id" "eligible-for-combined-support")")"
@@ -482,15 +494,17 @@ decision_artifact="$(find "${output_dir}" -maxdepth 1 -name '*household-benefit-
 check "household decision has no Relay write-back" json_path_equals "${decision_artifact}" boundary.relay_write_back false
 
 log_file="/tmp/decentralized-smoke-service-logs.txt"
+check "baseline live evidence gateway fixtures for audit" python3 "${script_dir}/run-evidence-gateway-live-fixtures.py" --profile baseline-dpi/v1 --output "${live_fixture_output}" --correlation-prefix "${correlation_id}-evidence-gateway-audit"
 docker compose -f "${compose_file}" logs --no-color civil-registry-relay social-protection-registry-relay health-registry-relay civil-notary social-protection-notary shared-eligibility-notary > "${log_file}"
+check "baseline live evidence gateway audit log" python3 "${script_dir}/run-evidence-gateway-live-fixtures.py" --profile baseline-dpi/v1 --output "${live_fixture_output}" --audit-log-path "${log_file}" --audit-only
 grep '"error_code":"auth.scope_denied"' "${log_file}" >/dev/null || fail "Relay denied audit event"
-grep '"error_code":"auth.purpose_denied"' "${log_file}" >/dev/null || fail "Relay purpose policy denied audit event"
+grep '"error_code":"pdp.purpose_not_permitted"' "${log_file}" >/dev/null || fail "Relay purpose policy denied audit event"
 grep '"pdp_policy_id":"demo.civil-row-purpose.v1"' "${log_file}" >/dev/null || fail "Civil Relay PDP policy id audit event"
 grep '"pdp_policy_id":"demo.health-row-purpose.v1"' "${log_file}" >/dev/null || fail "Health Relay PDP policy id audit event"
 grep '"pdp_policy_id":"demo.social-protection-row-purpose.v1"' "${log_file}" >/dev/null || fail "Social Relay PDP policy id audit event"
-grep '"pdp_evaluated_rule_ids":\["entity-purpose-required:household"\]' "${log_file}" >/dev/null || fail "Relay PDP evaluated rule ids audit event"
+grep '"pdp_evaluated_rule_ids":\["entity-purpose-required:household.policy_identity","entity-purpose-required:household.odrl_terms","entity-purpose-required:household.purpose"' "${log_file}" >/dev/null || fail "Relay PDP evaluated rule ids audit event"
 grep '"decision":"evaluate"' "${log_file}" >/dev/null || fail "Evidence Server evaluation audit event"
-grep '"matching_policy_id":"demo.household-summary-redaction.v1"' "${log_file}" >/dev/null || fail "Evidence Server matching policy audit event"
+grep '"matching_policy_id":"lab.baseline-dpi.governed-evidence.v1"' "${log_file}" >/dev/null || fail "Evidence Server matching policy audit event"
 grep '"status_code":200' "${log_file}" >/dev/null || fail "Relay positive audit event"
 
 for secret_var in \
@@ -527,7 +541,11 @@ for secret_var in \
   SOCIAL_PROTECTION_EVIDENCE_CLIENT_TOKEN \
   SOCIAL_PROTECTION_EVIDENCE_CLIENT_BEARER \
   SHARED_EVIDENCE_CLIENT_TOKEN \
-  SHARED_EVIDENCE_CLIENT_BEARER
+  SHARED_EVIDENCE_CLIENT_BEARER \
+  SHARED_EVIDENCE_DENY_ASSURANCE_TOKEN \
+  SHARED_EVIDENCE_DENY_JURISDICTION_TOKEN \
+  SHARED_EVIDENCE_DENY_LEGAL_BASIS_TOKEN \
+  SHARED_EVIDENCE_DENY_CONSENT_TOKEN
 do
   secret_value="${!secret_var:-}"
   if [[ -n "${secret_value}" ]] && grep -F -- "${secret_value}" "${log_file}" >/dev/null; then

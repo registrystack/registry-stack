@@ -59,6 +59,7 @@ cd "${demo_dir}"
 
 scripts/check-release-source-model.sh "${source_mode}"
 scripts/check-service-first-deps.sh manifest
+scripts/check-evidence-gateway-fixtures.py
 uv run scripts/generate-fixtures.py
 scripts/generate-demo-secrets.py --print-summary >/dev/null
 scripts/ensure-postgres-ssl.sh
