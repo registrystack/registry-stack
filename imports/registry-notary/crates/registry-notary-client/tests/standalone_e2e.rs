@@ -142,6 +142,8 @@ evidence:
   enabled: true
   service_id: evidence.test
   api_base_url: https://evidence.example.test
+  allowed_purposes:
+    - {PURPOSE}
   source_connections:
     farmer_registry:
       base_url: "{base_url}"

@@ -1210,6 +1210,9 @@ evidence:
           required_scope: farmer_registry:evidence_verification
           dataset: farmer_registry
           entity: farmer
+          matching:
+            allowed_purposes:
+              - https://purpose.example.test/eligibility
           lookup:
             input: target.id
             field: id
@@ -1227,7 +1230,7 @@ evidence:
         field: {source_path}
       disclosure:
         default: value
-        allowed: [value, redacted]
+        allowed: [value, predicate, redacted]
       formats:
         - application/vnd.registry-notary.claim-result+json
     - id: farmer-under-4ha
@@ -1809,6 +1812,8 @@ evidence:
   enabled: true
   service_id: evidence.test
   api_base_url: https://evidence.example.test
+  allowed_purposes:
+    - https://purpose.example.test/eligibility
   source_connections:
     civil_registry:
       base_url: "{base_url}"
@@ -1873,6 +1878,8 @@ evidence:
           matching:
             target_type: Person
             method: configured_demographic_lookup
+            allowed_purposes:
+              - https://purpose.example.test/eligibility
             sufficient_target_inputs:
               - - target.attributes.given_name
                 - target.attributes.surname

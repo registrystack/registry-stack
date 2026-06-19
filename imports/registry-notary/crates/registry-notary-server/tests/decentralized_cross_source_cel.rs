@@ -153,9 +153,12 @@ audit:
   hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
 cel:
   worker_count: 4
+  eval_timeout_ms: 10000
 evidence:
   enabled: true
   service_id: shared-eligibility-registry-notary
+  allowed_purposes:
+    - https://purpose.example.test/combined-support
   source_connections:
     civil:
       base_url: "{civil_base_url}"
@@ -314,8 +317,10 @@ async fn cross_source_cel_claim_reads_dependencies_with_distinct_tokens() {
         }))
         .await;
 
-    response.assert_status_ok();
-    let body: Value = response.json();
+    let status = response.status_code();
+    let response_text = response.text();
+    assert_eq!(status, StatusCode::OK, "{response_text}");
+    let body: Value = serde_json::from_str(&response_text).expect("response is JSON");
     assert_eq!(body["results"][0]["value"], json!(true));
     assert_eq!(
         body["results"][0]["provenance"]["used"]["source_count"],
