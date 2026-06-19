@@ -186,11 +186,18 @@ def generate_holder_key(key_path: Path) -> dict[str, str]:
 
 
 def holder_did(public_jwk: dict[str, str]) -> str:
-    encoded = b64url(json.dumps(public_jwk, separators=(",", ":")).encode())
+    did_jwk = {key: public_jwk[key] for key in ("crv", "kty", "x")}
+    encoded = b64url(json.dumps(did_jwk, separators=(",", ":"), sort_keys=True).encode())
     return f"did:jwk:{encoded}"
 
 
-def sign_holder_proof(evaluation_id: str, credential_profile: str, claims: list[str]) -> tuple[str, str]:
+def sign_holder_proof(
+    evaluation_id: str,
+    credential_profile: str,
+    claims: list[str],
+    disclosure: str = "predicate",
+    audience: str = "civil-registry-notary",
+) -> tuple[str, str]:
     if shutil.which("openssl") is None:
         raise DemoError("openssl is required for the demo holder proof")
     with tempfile.TemporaryDirectory() as tmp:
@@ -201,18 +208,18 @@ def sign_holder_proof(evaluation_id: str, credential_profile: str, claims: list[
         holder_id = holder_did(generate_holder_key(key_path))
         now = int(time.time())
         jti = b64url(hashlib.sha256(f"{holder_id}:{evaluation_id}:{time.time_ns()}".encode()).digest()[:16])
-        header = b64url(json.dumps({"alg": "EdDSA", "typ": "JWT", "kid": holder_id}, separators=(",", ":")).encode())
+        header = b64url(json.dumps({"alg": "EdDSA", "typ": "kb+jwt", "kid": holder_id}, separators=(",", ":")).encode())
         payload = b64url(
             json.dumps(
                 {
                     "sub": holder_id,
-                    "aud": "evidence-server",
+                    "aud": audience,
                     "exp": now + 300,
                     "iat": now,
                     "jti": jti,
                     "evaluation_id": evaluation_id,
                     "credential_profile": credential_profile,
-                    "disclosure": "predicate",
+                    "disclosure": b64url(hashlib.sha256(disclosure.encode("utf-8")).digest()),
                     "claims": claims,
                 },
                 separators=(",", ":"),
@@ -291,7 +298,10 @@ def household_benefit_decision(row_response: dict[str, Any], aggregate_response:
 
 def evaluate_payload(subject: str, claims: list[str], disclosure: str = "predicate", fmt: str = CLAIM_RESULT_FORMAT) -> dict[str, Any]:
     return {
-        "subject": {"id": subject, "id_type": "national_id"},
+        "target": {
+            "type": "Person",
+            "identifiers": [{"scheme": "national_id", "value": subject}],
+        },
         "claims": claims,
         "disclosure": disclosure,
         "format": fmt,
@@ -380,7 +390,7 @@ def main() -> int:
         openapi = require(request("GET", service.url, "/openapi.json"), 200, f"{service.name} Registry Notary OpenAPI")
         save(out, step, f"{service.name}-evidence-openapi", openapi)
         step += 1
-        claims = require(request("GET", service.url, "/claims", token), 200, f"{service.name} claims")
+        claims = require(request("GET", service.url, "/v1/claims", token), 200, f"{service.name} claims")
         save(out, step, f"{service.name}-claims", claims)
         step += 1
 
@@ -450,7 +460,7 @@ def main() -> int:
             request(
                 "POST",
                 service.url,
-                "/claims/evaluate",
+                "/v1/evaluations",
                 env(service.token_env),
                 evaluate_payload(subject, claims, disclosure, fmt),
                 {"Data-Purpose": PURPOSE, "Accept": fmt},
@@ -465,7 +475,7 @@ def main() -> int:
     missing = request(
         "POST",
         evidence[2].url,
-        "/claims/evaluate",
+        "/v1/evaluations",
         env(evidence[2].token_env),
         evaluate_payload("NID-9999", ["eligible-for-combined-support"]),
         {"Data-Purpose": PURPOSE, "Accept": CLAIM_RESULT_FORMAT},
@@ -477,10 +487,18 @@ def main() -> int:
         request(
             "POST",
             evidence[2].url,
-            "/claims/batch-evaluate",
+            "/v1/batch-evaluations",
             env(evidence[2].token_env),
             {
-                "subjects": [{"id": "NID-1001"}, {"id": "NID-1002"}, {"id": "NID-9999"}],
+                "items": [
+                    {
+                        "target": {
+                            "type": "Person",
+                            "identifiers": [{"scheme": "national_id", "value": subject}],
+                        }
+                    }
+                    for subject in ["NID-1001", "NID-1002", "NID-9999"]
+                ],
                 "claims": ["eligible-for-combined-support"],
                 "disclosure": "predicate",
                 "format": CLAIM_RESULT_FORMAT,
@@ -497,7 +515,7 @@ def main() -> int:
         request(
             "POST",
             evidence[0].url,
-            "/claims/evaluate",
+            "/v1/evaluations",
             env(evidence[0].token_env),
             evaluate_payload("NID-1001", ["person-is-alive"], "predicate", CCCEV_FORMAT),
             {"Data-Purpose": PURPOSE, "Accept": CCCEV_FORMAT},
@@ -512,9 +530,9 @@ def main() -> int:
         request(
             "POST",
             evidence[0].url,
-            "/evidence/render",
+            f"/v1/evaluations/{evaluation_id}/render",
             env(evidence[0].token_env),
-            {"evaluation_id": evaluation_id, "claims": ["person-is-alive"], "disclosure": "predicate", "format": CCCEV_FORMAT},
+            {"claims": ["person-is-alive"], "disclosure": "predicate", "format": CCCEV_FORMAT},
         ),
         200,
         "CCCEV render",
@@ -526,7 +544,7 @@ def main() -> int:
         request(
             "POST",
             evidence[0].url,
-            "/claims/evaluate",
+            "/v1/evaluations",
             env(evidence[0].token_env),
             evaluate_payload("NID-1001", ["person-is-alive"], "predicate", SD_JWT_FORMAT),
             {"Data-Purpose": PURPOSE, "Accept": SD_JWT_FORMAT},
@@ -536,12 +554,18 @@ def main() -> int:
     )
     save(out, step, "credential-bound-evaluation", credential_eval)
     step += 1
-    holder_id, proof = sign_holder_proof(first_result_id(credential_eval), "civil_status_sd_jwt", ["person-is-alive"])
+    holder_id, proof = sign_holder_proof(
+        first_result_id(credential_eval),
+        "civil_status_sd_jwt",
+        ["person-is-alive"],
+        "predicate",
+        "civil-registry-notary",
+    )
     credential = require(
         request(
             "POST",
             evidence[0].url,
-            "/credentials/issue",
+            "/v1/credentials",
             env(evidence[0].token_env),
             {
                 "evaluation_id": first_result_id(credential_eval),

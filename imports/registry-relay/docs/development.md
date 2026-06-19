@@ -53,7 +53,7 @@ TOKEN="$(./scripts/mint-zitadel-token.sh)"
 cargo run -- --config config/example.oidc.yaml
 
 # 4. Hit a protected endpoint with the minted bearer.
-curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/metadata/catalog
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:18080/metadata/catalog
 ```
 
 The `tests/oidc_zitadel.rs` integration test exercises the same path and asserts the granular failure modes above. The test reads `OIDC_ISSUER`, `OIDC_SA_CLIENT_ID`, and `OIDC_SA_CLIENT_SECRET` from the environment, so source the bootstrap env file first:

@@ -185,6 +185,7 @@ async fn capabilities(runtime: RuntimeSnapshot, _ops: OpsReadPrincipal) -> Respo
     } else {
         ("disabled", "disabled")
     };
+    let config_apply_available = config.config_trust.is_some();
     let mut response = Json(json!({
         "schema": "registry.admin.capabilities.v1",
         "product": "registry-relay",
@@ -201,7 +202,7 @@ async fn capabilities(runtime: RuntimeSnapshot, _ops: OpsReadPrincipal) -> Respo
             },
             "apply": {
                 "supported": true,
-                "currently_available": true,
+                "currently_available": config_apply_available,
                 "supported_sources": ["tuf_local", "tuf_remote"],
                 "requires_signed_input": true
             }

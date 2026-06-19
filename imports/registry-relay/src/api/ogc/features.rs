@@ -17,7 +17,10 @@ use serde_json::{json, Map, Value};
 use time::format_description::well_known::Rfc3339;
 use time::{Date, OffsetDateTime};
 
-use crate::api::governed::{attach_pdp_audit, require_governed_read_access, GovernedAccessError};
+use crate::api::governed::{
+    attach_pdp_audit, require_governed_read_access, GovernedAccessError,
+    GovernedRedactionProjection, GovernedRequestInfo,
+};
 use crate::audit::{AuditContextExt, ErrorCodeExt};
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
@@ -218,25 +221,36 @@ async fn collection_items(
     ) else {
         return Error::from(OgcError::CollectionNotFound).into_response();
     };
-    let governed_decision =
-        match require_governed_read_access(&runtime, &path.dataset_id, entity, &headers) {
-            Ok(decision) => decision,
-            Err(error) => {
-                return ogc_access_error_response(
-                    error,
-                    entity,
-                    spatial,
-                    &path.dataset_id,
-                    OgcAuditContext {
-                        underlying_kind: "entity_collection",
-                        primary_key: None,
-                        row_count: None,
-                        null_geometry_count: None,
-                        invalid_geometry_count: None,
-                    },
-                )
-            }
-        };
+    let governed_decision = match require_governed_read_access(
+        &runtime,
+        &path.dataset_id,
+        entity,
+        &headers,
+        principal_ref,
+        GovernedRequestInfo {
+            route_identity: "registry-relay.ogc.features",
+            requested_disclosure: "ogc_features",
+            checked_scope: &entity.access.read_scope,
+            redaction_projection: GovernedRedactionProjection::EntityFields,
+        },
+    ) {
+        Ok(decision) => decision,
+        Err(error) => {
+            return ogc_access_error_response(
+                error,
+                entity,
+                spatial,
+                &path.dataset_id,
+                OgcAuditContext {
+                    underlying_kind: "entity_collection",
+                    primary_key: None,
+                    row_count: None,
+                    null_geometry_count: None,
+                    invalid_geometry_count: None,
+                },
+            )
+        }
+    };
 
     let parsed = match parse_items_query(entity, spatial, params, None) {
         Ok(parsed) => parsed,
@@ -359,30 +373,42 @@ async fn feature_item(
         &registry,
         &path.dataset_id,
         &path.collection_id,
-        principal,
+        principal.clone(),
         AccessKind::Read,
     ) else {
         return Error::from(OgcError::FeatureNotFound).into_response();
     };
-    let governed_decision =
-        match require_governed_read_access(&runtime, &path.dataset_id, entity, &headers) {
-            Ok(decision) => decision,
-            Err(error) => {
-                return ogc_access_error_response(
-                    error,
-                    entity,
-                    spatial,
-                    &path.dataset_id,
-                    OgcAuditContext {
-                        underlying_kind: "entity_record",
-                        primary_key: Some(path.feature_id.clone()),
-                        row_count: None,
-                        null_geometry_count: None,
-                        invalid_geometry_count: None,
-                    },
-                )
-            }
-        };
+    let principal_ref = principal.as_ref().map(|Extension(principal)| principal);
+    let governed_decision = match require_governed_read_access(
+        &runtime,
+        &path.dataset_id,
+        entity,
+        &headers,
+        principal_ref,
+        GovernedRequestInfo {
+            route_identity: "registry-relay.ogc.features",
+            requested_disclosure: "ogc_feature",
+            checked_scope: &entity.access.read_scope,
+            redaction_projection: GovernedRedactionProjection::EntityFields,
+        },
+    ) {
+        Ok(decision) => decision,
+        Err(error) => {
+            return ogc_access_error_response(
+                error,
+                entity,
+                spatial,
+                &path.dataset_id,
+                OgcAuditContext {
+                    underlying_kind: "entity_record",
+                    primary_key: Some(path.feature_id.clone()),
+                    row_count: None,
+                    null_geometry_count: None,
+                    invalid_geometry_count: None,
+                },
+            )
+        }
+    };
 
     let parsed = match parse_items_query(entity, spatial, params, Some(&path.feature_id)) {
         Ok(parsed) => parsed,

@@ -52,6 +52,12 @@ EVIDENCE_CLIENT_NAMES = [
     "SHARED_EVIDENCE_CLIENT",
 ]
 
+EVIDENCE_CLIENT_IDS = {
+    "CIVIL_EVIDENCE_CLIENT": "civil_evidence_client",
+    "SOCIAL_EVIDENCE_CLIENT": "social_protection_evidence_client",
+    "SHARED_EVIDENCE_CLIENT": "shared_evidence_client",
+}
+
 SCOPED_ENV_FILES: dict[str, list[str]] = {
     "civil-registry-relay.env": [
         "REGISTRY_RELAY_AUDIT_HASH_SECRET",
@@ -79,20 +85,26 @@ SCOPED_ENV_FILES: dict[str, list[str]] = {
         "SHARED_HEALTH_EVIDENCE_SOURCE_HASH",
     ],
     "civil-registry-notary.env": [
-        "CIVIL_EVIDENCE_CLIENT_TOKEN",
-        "CIVIL_EVIDENCE_CLIENT_BEARER",
+        "CIVIL_EVIDENCE_CLIENT_TOKEN_COMMITMENT",
+        "CIVIL_EVIDENCE_CLIENT_TOKEN_HASH",
+        "CIVIL_EVIDENCE_CLIENT_BEARER_COMMITMENT",
+        "CIVIL_EVIDENCE_CLIENT_BEARER_HASH",
         "CIVIL_EVIDENCE_SOURCE_RAW",
         "CIVIL_EVIDENCE_ISSUER_JWK",
     ],
     "social-protection-registry-notary.env": [
-        "SOCIAL_EVIDENCE_CLIENT_TOKEN",
-        "SOCIAL_EVIDENCE_CLIENT_BEARER",
+        "SOCIAL_EVIDENCE_CLIENT_TOKEN_COMMITMENT",
+        "SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH",
+        "SOCIAL_EVIDENCE_CLIENT_BEARER_COMMITMENT",
+        "SOCIAL_EVIDENCE_CLIENT_BEARER_HASH",
         "SOCIAL_EVIDENCE_SOURCE_RAW",
         "SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK",
     ],
     "shared-eligibility-registry-notary.env": [
-        "SHARED_EVIDENCE_CLIENT_TOKEN",
-        "SHARED_EVIDENCE_CLIENT_BEARER",
+        "SHARED_EVIDENCE_CLIENT_TOKEN_COMMITMENT",
+        "SHARED_EVIDENCE_CLIENT_TOKEN_HASH",
+        "SHARED_EVIDENCE_CLIENT_BEARER_COMMITMENT",
+        "SHARED_EVIDENCE_CLIENT_BEARER_HASH",
         "SHARED_CIVIL_EVIDENCE_SOURCE_RAW",
         "SHARED_SOCIAL_EVIDENCE_SOURCE_RAW",
         "SHARED_HEALTH_EVIDENCE_SOURCE_RAW",
@@ -116,6 +128,21 @@ def fingerprint(raw: str) -> str:
     return f"sha256:{hashlib.sha256(raw.encode('ascii')).hexdigest()}"
 
 
+def credential_commitment(
+    credential_id: str,
+    credential_type: str,
+    credential_fingerprint: str,
+) -> str:
+    payload = {
+        "product": "registry-notary",
+        "credential_type": credential_type,
+        "credential_id": credential_id,
+        "fingerprint": credential_fingerprint,
+    }
+    encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
 def env_line(key: str, value: str) -> str:
     if "\n" in value:
         raise ValueError(f"{key} contains a newline")
@@ -134,8 +161,26 @@ def generate_env() -> dict[str, str]:
         values[f"{name}_RAW"] = raw
         values[f"{name}_HASH"] = fingerprint(raw)
     for name in EVIDENCE_CLIENT_NAMES:
-        values[f"{name}_TOKEN"] = generate_raw_key()
-        values[f"{name}_BEARER"] = generate_raw_key()
+        credential_id = EVIDENCE_CLIENT_IDS[name]
+        token = generate_raw_key()
+        token_hash = fingerprint(token)
+        values[f"{name}_TOKEN"] = token
+        values[f"{name}_TOKEN_HASH"] = token_hash
+        values[f"{name}_TOKEN_COMMITMENT"] = credential_commitment(
+            credential_id,
+            "api_key",
+            token_hash,
+        )
+
+        bearer = generate_raw_key()
+        bearer_hash = fingerprint(bearer)
+        values[f"{name}_BEARER"] = bearer
+        values[f"{name}_BEARER_HASH"] = bearer_hash
+        values[f"{name}_BEARER_COMMITMENT"] = credential_commitment(
+            credential_id,
+            "bearer_token",
+            bearer_hash,
+        )
     return values
 
 

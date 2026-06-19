@@ -495,8 +495,10 @@ fn decentralized_secret_generator_writes_scoped_env_files_0600() {
     let civil_notary_values = assert_exact_env_keys(
         &civil_notary,
         &[
-            "CIVIL_EVIDENCE_CLIENT_BEARER",
-            "CIVIL_EVIDENCE_CLIENT_TOKEN",
+            "CIVIL_EVIDENCE_CLIENT_BEARER_COMMITMENT",
+            "CIVIL_EVIDENCE_CLIENT_BEARER_HASH",
+            "CIVIL_EVIDENCE_CLIENT_TOKEN_COMMITMENT",
+            "CIVIL_EVIDENCE_CLIENT_TOKEN_HASH",
             "CIVIL_EVIDENCE_ISSUER_JWK",
             "CIVIL_EVIDENCE_SOURCE_RAW",
         ],
@@ -504,8 +506,10 @@ fn decentralized_secret_generator_writes_scoped_env_files_0600() {
     let social_notary_values = assert_exact_env_keys(
         &social_notary,
         &[
-            "SOCIAL_EVIDENCE_CLIENT_BEARER",
-            "SOCIAL_EVIDENCE_CLIENT_TOKEN",
+            "SOCIAL_EVIDENCE_CLIENT_BEARER_COMMITMENT",
+            "SOCIAL_EVIDENCE_CLIENT_BEARER_HASH",
+            "SOCIAL_EVIDENCE_CLIENT_TOKEN_COMMITMENT",
+            "SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH",
             "SOCIAL_EVIDENCE_SOURCE_RAW",
             "SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK",
         ],
@@ -515,8 +519,10 @@ fn decentralized_secret_generator_writes_scoped_env_files_0600() {
         &[
             "SHARED_CIVIL_EVIDENCE_SOURCE_RAW",
             "SHARED_ELIGIBILITY_EVIDENCE_ISSUER_JWK",
-            "SHARED_EVIDENCE_CLIENT_BEARER",
-            "SHARED_EVIDENCE_CLIENT_TOKEN",
+            "SHARED_EVIDENCE_CLIENT_BEARER_COMMITMENT",
+            "SHARED_EVIDENCE_CLIENT_BEARER_HASH",
+            "SHARED_EVIDENCE_CLIENT_TOKEN_COMMITMENT",
+            "SHARED_EVIDENCE_CLIENT_TOKEN_HASH",
             "SHARED_HEALTH_EVIDENCE_SOURCE_RAW",
             "SHARED_SOCIAL_EVIDENCE_SOURCE_RAW",
         ],
@@ -561,6 +567,20 @@ fn decentralized_secret_generator_writes_scoped_env_files_0600() {
             .all(|key| !key.ends_with("_HASH") && !key.contains("JWK")),
         "demo client env file must not receive hashes or issuer keys"
     );
+    for values in [
+        &civil_notary_values,
+        &social_notary_values,
+        &shared_notary_values,
+    ] {
+        assert!(
+            values.keys().all(|key| {
+                !key.ends_with("_TOKEN") && !key.ends_with("_BEARER") && !key.ends_with("_RAW")
+                    || key.ends_with("_SOURCE_RAW")
+                    || key.starts_with("SHARED_") && key.ends_with("_EVIDENCE_SOURCE_RAW")
+            }),
+            "notary env files must not receive raw client credentials"
+        );
+    }
     assert_ne!(
         civil_notary_values["CIVIL_EVIDENCE_ISSUER_JWK"],
         social_notary_values["SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK"]

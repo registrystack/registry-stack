@@ -87,15 +87,17 @@ Credential classes:
 
 Relay env files contain only `*_HASH` values plus
 `REGISTRY_RELAY_AUDIT_HASH_SECRET`. Registry Notary env files contain only that
-service's client token, bearer token, source token, and issuer key. The demo
+service's client credential hashes, source tokens, and issuer key. The demo
 client env file contains only walkthrough tokens and no hashes or issuer keys.
 
 The social protection Relay config keeps row and aggregate scopes on separate
 credentials so the smoke flow can prove row-reader credentials cannot run the
 aggregate endpoint.
 
-Relay configs should reference only `*_HASH` env vars. Registry Notary configs
-should reference only `token_env` names. No raw token should be committed.
+Relay configs should reference only `*_HASH` env vars. Registry Notary auth
+configs should reference fingerprint hashes and commitments; Registry Notary
+source connections still use `token_env` names for upstream Relay credentials.
+No raw token should be committed.
 
 ## Static Metadata
 

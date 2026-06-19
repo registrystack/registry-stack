@@ -120,6 +120,13 @@ pub struct AuditContextExt {
     pub pdp_policy_id: Option<String>,
     pub pdp_policy_hash: Option<String>,
     pub pdp_evaluated_rule_ids: Option<Vec<String>>,
+    pub pdp_stable_problem_code: Option<String>,
+    pub pdp_ecosystem_binding_id: Option<String>,
+    pub pdp_ecosystem_binding_version: Option<String>,
+    pub pdp_route_identity: Option<String>,
+    pub pdp_source_binding: Option<String>,
+    pub pdp_checked_scopes: Option<Vec<String>>,
+    pub pdp_trust_provenance: Option<Vec<String>>,
     pub null_geometry_count: Option<u64>,
     pub invalid_geometry_count: Option<u64>,
     pub geometry_vertex_count: Option<u64>,
@@ -297,6 +304,20 @@ pub struct AuditRecord {
     pub pdp_policy_hash: Option<String>,
     /// PDP rule ids evaluated for governed access decisions.
     pub pdp_evaluated_rule_ids: Option<Vec<String>>,
+    /// Stable PDP denial code, present on governed denials.
+    pub pdp_stable_problem_code: Option<String>,
+    /// Selected governed ecosystem binding id when applicable.
+    pub pdp_ecosystem_binding_id: Option<String>,
+    /// Selected governed ecosystem binding version when applicable.
+    pub pdp_ecosystem_binding_version: Option<String>,
+    /// PDP route identity evaluated for governed access decisions.
+    pub pdp_route_identity: Option<String>,
+    /// PDP source binding evaluated for governed access decisions.
+    pub pdp_source_binding: Option<String>,
+    /// Scopes PDP was told had actually been checked.
+    pub pdp_checked_scopes: Option<Vec<String>>,
+    /// Redacted inventory of trust assertions PDP evaluated.
+    pub pdp_trust_provenance: Option<Vec<String>>,
     /// Scopes actually checked on this request, in declaration order.
     pub scopes_used: Vec<String>,
     /// Redacted parameter inventory (names + ops, never values).
@@ -455,6 +476,13 @@ impl OperationalAuditEvent {
             pdp_policy_id: None,
             pdp_policy_hash: None,
             pdp_evaluated_rule_ids: None,
+            pdp_stable_problem_code: None,
+            pdp_ecosystem_binding_id: None,
+            pdp_ecosystem_binding_version: None,
+            pdp_route_identity: None,
+            pdp_source_binding: None,
+            pdp_checked_scopes: None,
+            pdp_trust_provenance: None,
             scopes_used: Vec::new(),
             query_params: json!({}),
             purpose: None,
@@ -824,6 +852,13 @@ pub async fn audit_layer(
         pdp_policy_id: context.pdp_policy_id,
         pdp_policy_hash: context.pdp_policy_hash,
         pdp_evaluated_rule_ids: context.pdp_evaluated_rule_ids,
+        pdp_stable_problem_code: context.pdp_stable_problem_code,
+        pdp_ecosystem_binding_id: context.pdp_ecosystem_binding_id,
+        pdp_ecosystem_binding_version: context.pdp_ecosystem_binding_version,
+        pdp_route_identity: context.pdp_route_identity,
+        pdp_source_binding: context.pdp_source_binding,
+        pdp_checked_scopes: context.pdp_checked_scopes,
+        pdp_trust_provenance: context.pdp_trust_provenance,
         scopes_used,
         query_params,
         purpose,

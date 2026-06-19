@@ -248,6 +248,11 @@ pub fn validate_runtime_bindings(
     metadata: &CompiledMetadata,
 ) -> Result<(), RuntimeBindingError> {
     validate_ecosystem_binding_selector(config, metadata)?;
+    let selected_governed_binding = config
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.ecosystem_binding.as_ref())
+        .is_some();
     for dataset in &config.datasets {
         let Some(metadata_dataset) = metadata.dataset(dataset.id.as_str()) else {
             tracing::error!(
@@ -318,6 +323,15 @@ pub fn validate_runtime_bindings(
                     );
                     return Err(RuntimeBindingError::FilterMissing);
                 }
+            }
+            if selected_governed_binding && governed_runtime_surface_is_inert(dataset, entity) {
+                tracing::error!(
+                    code = "runtime.binding.ecosystem_binding_invalid",
+                    dataset_id = %dataset.id,
+                    entity = %entity.name,
+                    "selected governed ecosystem binding requires sensitive runtime entities to declare an enforced purpose header or governed policy gate"
+                );
+                return Err(RuntimeBindingError::EcosystemBindingInvalid);
             }
             for relationship in &entity.relationships {
                 if !metadata_dataset.entities.contains_key(&relationship.target) {
@@ -409,6 +423,18 @@ pub fn validate_runtime_bindings(
         }
     }
     Ok(())
+}
+
+fn governed_runtime_surface_is_inert(dataset: &DatasetConfig, entity: &EntityConfig) -> bool {
+    matches!(
+        dataset.sensitivity,
+        Sensitivity::Personal | Sensitivity::Confidential | Sensitivity::Secret
+    ) && !entity.api.require_purpose_header
+        && !entity
+            .api
+            .governed_policy
+            .as_ref()
+            .is_some_and(governed_policy_has_enforced_gate)
 }
 
 fn validate_ecosystem_binding_selector(
@@ -3329,6 +3355,13 @@ fn validate_entity_governed_policy(
     entity: &EntityConfig,
     policy: &GovernedPolicyConfig,
 ) -> Result<(), ConfigError> {
+    if !governed_policy_has_enforced_gate(policy) {
+        return entity_governed_policy_error(
+            dataset,
+            entity,
+            "governed_policy must declare at least one enforced gate",
+        );
+    }
     for purpose in &policy.permitted_purposes {
         if purpose.trim().is_empty() {
             return entity_governed_policy_error(dataset, entity, "empty permitted_purposes entry");
@@ -3365,6 +3398,20 @@ fn validate_entity_governed_policy(
     for field in &policy.redaction_fields {
         if field.trim().is_empty() {
             return entity_governed_policy_error(dataset, entity, "empty redaction_fields entry");
+        }
+        if !is_top_level_redaction_field(field) {
+            return entity_governed_policy_error(
+                dataset,
+                entity,
+                "redaction_fields entries must be top-level exposed entity fields",
+            );
+        }
+        if !redaction_field_exists_on_entity_or_aggregate_output(dataset, entity, field) {
+            return entity_governed_policy_error(
+                dataset,
+                entity,
+                "redaction_fields entries must exist as entity fields or aggregate output fields",
+            );
         }
     }
     let trusted = &policy.trusted_context;
@@ -3404,7 +3451,59 @@ fn validate_entity_governed_policy(
     {
         return entity_governed_policy_error(dataset, entity, "empty trusted_context.consent_ref");
     }
+    if trusted.jurisdiction.is_some()
+        || trusted.asserted_assurance.is_some()
+        || trusted.legal_basis_ref.is_some()
+        || trusted.consent_ref.is_some()
+        || trusted.source_observed_age_seconds.is_some()
+    {
+        return entity_governed_policy_error(
+            dataset,
+            entity,
+            "trusted_context values must be supplied by per-request trust headers",
+        );
+    }
     Ok(())
+}
+
+fn governed_policy_has_enforced_gate(policy: &GovernedPolicyConfig) -> bool {
+    !policy.permitted_purposes.is_empty()
+        || !policy.permitted_jurisdictions.is_empty()
+        || !policy.allowed_assurance.is_empty()
+        || policy.minimum_assurance.is_some()
+        || policy.max_source_age_seconds.is_some()
+        || policy.require_legal_basis
+        || policy.require_consent
+        || !policy.redaction_fields.is_empty()
+}
+
+fn is_top_level_redaction_field(field: &str) -> bool {
+    !field.contains('.') && !field.contains('[') && !field.contains(']') && !field.contains('*')
+}
+
+fn redaction_field_exists_on_entity_or_aggregate_output(
+    dataset: &DatasetConfig,
+    entity: &EntityConfig,
+    field: &str,
+) -> bool {
+    entity
+        .fields
+        .iter()
+        .any(|configured| configured.name == field)
+        || dataset
+            .aggregates
+            .iter()
+            .filter(|aggregate| aggregate.source_entity.as_deref() == Some(entity.name.as_str()))
+            .any(|aggregate| {
+                aggregate
+                    .dimensions
+                    .iter()
+                    .any(|dimension| dimension.id == field)
+                    || aggregate
+                        .indicators
+                        .iter()
+                        .any(|indicator| indicator.id == field)
+            })
 }
 
 fn entity_governed_policy_error(

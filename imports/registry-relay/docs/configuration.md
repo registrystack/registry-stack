@@ -270,9 +270,11 @@ the `metadata.manifest.*` / `runtime.binding.*` startup error codes.
 
 ODRL policy belongs in the portable metadata manifest, not in runtime dataset
 bindings. A dataset `policy` block is published as an `odrl:Offer` for discovery
-and review evidence only. It does not change API-key scopes, OIDC authorization,
-row filtering, evidence verification, SP DCI behavior, or any other runtime access
-decision.
+and review evidence. When a runtime config selects a governed ecosystem binding,
+Relay also uses supported metadata purpose constraints as governed PDP purpose
+constraints on entity-derived evidence routes. The metadata policy still does not
+grant API-key scopes, OIDC roles, row filters, evidence verification privileges,
+or SP DCI access by itself.
 
 ```yaml
 metadata:
@@ -441,7 +443,8 @@ auth:
     scope_map:
       "role:social-registry-reader": "social_registry:rows"
     scope_object_required_keys: []
-    allowed_clients: []
+    allowed_clients:
+      - registry-relay-client
     allowed_token_types:
       - JWT
       - at+jwt
@@ -462,7 +465,7 @@ A full drop-in alternative to `config/example.yaml` lives at `config/example.oid
 | `scope_claim`     | Name of the JWT claim to read scopes from (the config field itself is always a single string; defaults to `scope`). The claim's *value* in the token may be a space-separated string (RFC 8693 / RFC 9068), a JSON array of strings, or a JSON object whose keys are the scope names. The `aud` claim is rejected as a scope source because it is used only for token audience validation. Object-valued role keys grant scopes only when `scope_object_required_keys` names a key present in the role value and that nested value is active: `true`, a non-empty string, or a non-empty object/array containing an active value. |
 | `scope_map`       | Optional rename map applied before scope-based access checks. Adapt IdP role names to Registry Relay's `<dataset_id>:<level>` shape.                               |
 | `scope_object_required_keys` | Allowlist of keys that must appear inside object-valued role claim values before the role key is accepted. For Zitadel organization-scoped role objects, set this to the expected organization id key or keys. Defaults to empty, which means object-valued claims grant no scopes. String and array scope claims do not require this setting. |
-| `allowed_clients` | Optional allowlist matched against the token's `azp` (preferred) or `client_id`. Empty list means any client is accepted.                                     |
+| `allowed_clients` | Optional allowlist matched against the token's `azp` (preferred) or `client_id`. Empty list means any client is accepted and is intended only for tightly controlled development. |
 | `allowed_token_types`     | Accepted JOSE `typ` header values. Defaults to `JWT` and `at+jwt` (RFC 9068). ID tokens (`id+jwt`) are intentionally rejected by default, and tokens without `typ` are rejected by the shared verifier. |
 
 ### Discovery vs explicit JWKS

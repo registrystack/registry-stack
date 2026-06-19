@@ -175,6 +175,8 @@ pub enum PdpError {
     JurisdictionNotPermitted,
     #[error("unsupported policy term")]
     UnsupportedPolicyTerm,
+    #[error("policy required")]
+    PolicyRequired,
     #[error("policy id required")]
     PolicyIdRequired,
     #[error("policy hash invalid")]
@@ -755,6 +757,7 @@ impl PdpError {
             registry_platform_pdp::CONSENT_REQUIRED => Self::ConsentRequired,
             registry_platform_pdp::JURISDICTION_NOT_PERMITTED => Self::JurisdictionNotPermitted,
             registry_platform_pdp::UNSUPPORTED_POLICY_TERM => Self::UnsupportedPolicyTerm,
+            registry_platform_pdp::POLICY_REQUIRED => Self::PolicyRequired,
             registry_platform_pdp::POLICY_ID_REQUIRED => Self::PolicyIdRequired,
             registry_platform_pdp::POLICY_HASH_INVALID => Self::PolicyHashInvalid,
             _ => Self::UnsupportedPolicyTerm,
@@ -770,6 +773,7 @@ impl PdpError {
             Self::ConsentRequired => registry_platform_pdp::CONSENT_REQUIRED,
             Self::JurisdictionNotPermitted => registry_platform_pdp::JURISDICTION_NOT_PERMITTED,
             Self::UnsupportedPolicyTerm => registry_platform_pdp::UNSUPPORTED_POLICY_TERM,
+            Self::PolicyRequired => registry_platform_pdp::POLICY_REQUIRED,
             Self::PolicyIdRequired => registry_platform_pdp::POLICY_ID_REQUIRED,
             Self::PolicyHashInvalid => registry_platform_pdp::POLICY_HASH_INVALID,
         }
@@ -788,6 +792,7 @@ impl PdpError {
             Self::ConsentRequired => "Consent required",
             Self::JurisdictionNotPermitted => "Jurisdiction not permitted",
             Self::UnsupportedPolicyTerm => "Unsupported policy term",
+            Self::PolicyRequired => "Policy required",
             Self::PolicyIdRequired => "Policy id required",
             Self::PolicyHashInvalid => "Policy hash invalid",
         }
@@ -802,6 +807,7 @@ impl PdpError {
             Self::ConsentRequired => "consent reference is required by policy",
             Self::JurisdictionNotPermitted => "request jurisdiction is not permitted by policy",
             Self::UnsupportedPolicyTerm => "policy contains a term this service cannot enforce",
+            Self::PolicyRequired => "an enforceable policy constraint is required",
             Self::PolicyIdRequired => "policy identity is required",
             Self::PolicyHashInvalid => "policy hash is invalid",
         }

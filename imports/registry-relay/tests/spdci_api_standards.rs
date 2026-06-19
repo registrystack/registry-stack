@@ -1721,7 +1721,7 @@ async fn unknown_named_registry_returns_404_on_all_dr_endpoints() {
 // ---------------------------------------------------------------------------
 
 mod full_stack {
-    use super::{id, spdci_config, valid_header};
+    use super::{id, spdci_config, spdci_config_with_entity_api_extra, valid_header};
     use std::sync::Arc;
 
     use axum::http::StatusCode;
@@ -1780,9 +1780,21 @@ mod full_stack {
     /// installed when the config asks for it, and an `InMemorySink`
     /// captures one audit record per request.
     async fn build_harness(scopes: &[&str]) -> FullStackHarness {
+        build_harness_with_entity_api_extra(scopes, "").await
+    }
+
+    async fn build_harness_with_entity_api_extra(
+        scopes: &[&str],
+        entity_api_extra: &str,
+    ) -> FullStackHarness {
         let tmp = TempDir::new().expect("tempdir");
         let config_path = tmp.path().join("spdci.yaml");
-        std::fs::write(&config_path, spdci_config("")).expect("write config");
+        let config_contents = if entity_api_extra.is_empty() {
+            spdci_config("")
+        } else {
+            spdci_config_with_entity_api_extra("", entity_api_extra)
+        };
+        std::fs::write(&config_path, config_contents).expect("write config");
         std::env::set_var(
             "REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET",
             "relay-spdci-audit-secret-32-bytes",
@@ -2023,6 +2035,56 @@ mod full_stack {
         assert!(
             record["error_code"].is_null(),
             "successful request must not record an error code"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_governed_denial_records_pdp_provenance() {
+        let harness = build_harness_with_entity_api_extra(
+            &["disability_registry:rows"],
+            r#"          governed_policy:
+            permitted_purposes:
+              - benefits
+            trusted_context: {}
+"#,
+        )
+        .await;
+
+        let response = harness
+            .server
+            .post("/dci/dr/registry/sync/search")
+            .add_header("authorization", format!("Bearer {VALID_KEY}"))
+            .add_header("data-purpose", "casework")
+            .json(&search_body())
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::FORBIDDEN);
+        let body: Value = response.json();
+        assert_eq!(body["code"], "pdp.purpose_not_permitted");
+
+        let record = audit_record_for(&harness.audit_sink, "/dci/dr/registry/sync/search");
+        assert_eq!(record["status_code"], 403);
+        assert_eq!(record["error_code"], "pdp.purpose_not_permitted");
+        assert_eq!(record["principal_id"], CLIENT_ID);
+        assert_eq!(record["dataset_id"], "disability_registry");
+        assert_eq!(record["entity_name"], "disabled_person");
+        assert_eq!(record["purpose"], "casework");
+        assert_eq!(
+            record["pdp_policy_id"],
+            "relay.entity.disabled_person.purpose-required"
+        );
+        assert!(
+            record["pdp_policy_hash"]
+                .as_str()
+                .is_some_and(|hash| hash.starts_with("sha256:") && hash.len() == 71),
+            "audit record should include a stable sha256 PDP policy hash: {record}"
+        );
+        assert_eq!(
+            record["pdp_evaluated_rule_ids"],
+            json!([
+                "entity-purpose-required:disabled_person.policy_identity",
+                "entity-purpose-required:disabled_person.purpose"
+            ])
         );
     }
 

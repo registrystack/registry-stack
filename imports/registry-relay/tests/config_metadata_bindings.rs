@@ -152,6 +152,18 @@ fn insert_ecosystem_binding_selector(path: &std::path::Path, id: &str, version: 
     .expect("runtime config rewrites");
 }
 
+fn require_runtime_purpose_header(path: &std::path::Path) {
+    let yaml = std::fs::read_to_string(path).expect("runtime config reads");
+    std::fs::write(
+        path,
+        yaml.replace(
+            "        api:\n          default_limit: 100\n",
+            "        api:\n          default_limit: 100\n          require_purpose_header: true\n",
+        ),
+    )
+    .expect("runtime config rewrites");
+}
+
 fn write_metadata_manifest(tmp: &TempDir, include_region: bool) {
     let region_field = if include_region {
         r#"
@@ -231,19 +243,78 @@ ecosystem_bindings:
     type: governed-evidence
     title: Baseline DPI
     evidence_pack:
+      pack_id: baseline-dpi/v1
+      pack_version: v1
+      source_basis:
+        family: dpi
+        evidence_type: combined_support_evidence
+      semantic_profile:
+        vocabulary: registry-lab
+        fit: strong
+      evidence_envelope:
+        format: minimized_json
+        fields:
+          - claim_id
+          - result
+      required_gates:
+        - purpose
+        - jurisdiction
+        - legal_basis
+        - consent
+        - authority_basis
+        - requester_identity
+        - subject_identity
+        - subject_relationship
+        - assurance
+        - source_binding
+        - source_freshness
+        - requested_disclosure
+        - credential_format
+        - route_scope
+      allowed_outputs:
+        - minimized_json
       policy_id: baseline-dpi-policy
       policy_hash: sha256:3333333333333333333333333333333333333333333333333333333333333333
       odrl_enforcement:
         profile: registry-evidence-gateway-pdp/v1
         constraint_terms:
           - odrl:purpose
-          - registry:pdp:assurance
 {extra_term}  - id: sp-dci/v1
     version: v1
     profile: sp-dci
     type: governed-evidence
     title: Social Protection DCI
     evidence_pack:
+      pack_id: sp-dci/v1
+      pack_version: v1
+      source_basis:
+        family: oots
+        evidence_type: birth_record_evidence
+      semantic_profile:
+        vocabulary: publicschema
+        fit: partial
+      evidence_envelope:
+        format: minimized_json
+        fields:
+          - claim_id
+          - result
+      required_gates:
+        - purpose
+        - jurisdiction
+        - legal_basis
+        - consent
+        - authority_basis
+        - requester_identity
+        - subject_identity
+        - subject_relationship
+        - assurance
+        - source_binding
+        - source_freshness
+        - requested_disclosure
+        - credential_format
+        - route_scope
+      allowed_outputs:
+        - minimized_json
       policy_id: sp-dci-policy
       policy_hash: sha256:4444444444444444444444444444444444444444444444444444444444444444
       odrl_enforcement:
@@ -251,7 +322,6 @@ ecosystem_bindings:
         constraint_terms:
           - odrl:purpose
           - odrl:spatial
-          - registry:pdp:source_age
 "#
     ));
     std::fs::write(path, yaml).expect("metadata manifest rewrites");
@@ -269,6 +339,25 @@ fn remove_first_binding_policy_hash(tmp: &TempDir) {
         ),
     )
     .expect("metadata manifest rewrites");
+}
+
+fn remove_dataset_policy(tmp: &TempDir) {
+    let path = tmp.path().join("metadata.yaml");
+    let yaml = std::fs::read_to_string(&path).expect("metadata manifest reads");
+    let policy = r#"    policy:
+      uid: https://metadata.example.test/datasets/social_registry#offer
+      assigner: did:web:metadata.example.test
+      profile:
+        - https://metadata.example.test/odrl/profile/data-sharing
+      permissions:
+        - action: odrl:use
+          constraints:
+            - left_operand: odrl:purpose
+              operator: odrl:isA
+              right_operand:
+                iri: https://metadata.example.test/purpose/social-protection-planning
+"#;
+    std::fs::write(path, yaml.replace(policy, "")).expect("metadata manifest rewrites");
 }
 
 #[test]
@@ -313,7 +402,7 @@ fn load_with_metadata_accepts_governed_evidence_ecosystem_bindings() {
             .and_then(|pack| pack.odrl_enforcement.as_ref())
             .map(|profile| profile.constraint_terms.as_slice())
             .expect("baseline ODRL enforcement"),
-        ["odrl:purpose", "registry:pdp:assurance"]
+        ["odrl:purpose"]
     );
     assert_eq!(bindings[1].id, "sp-dci/v1");
     assert_eq!(bindings[1].profile, "sp-dci");
@@ -325,6 +414,7 @@ fn load_with_metadata_accepts_selected_governed_evidence_ecosystem_binding() {
     write_metadata_manifest(&tmp, true);
     append_ecosystem_bindings(&tmp, None);
     let runtime_path = write_runtime_config(&tmp, "metadata.yaml");
+    require_runtime_purpose_header(&runtime_path);
     insert_ecosystem_binding_selector(&runtime_path, "baseline-dpi/v1", Some("v1"));
 
     let loaded = config::load_with_metadata(&runtime_path).expect("split config loads");
@@ -338,6 +428,35 @@ fn load_with_metadata_accepts_selected_governed_evidence_ecosystem_binding() {
             .map(|selector| (selector.id.as_str(), selector.version.as_deref())),
         Some(("baseline-dpi/v1", Some("v1")))
     );
+}
+
+#[test]
+fn load_with_metadata_rejects_selected_binding_when_sensitive_runtime_surface_is_inert() {
+    let tmp = TempDir::new().expect("tempdir");
+    write_metadata_manifest(&tmp, true);
+    append_ecosystem_bindings(&tmp, None);
+    let runtime_path = write_runtime_config(&tmp, "metadata.yaml");
+    insert_ecosystem_binding_selector(&runtime_path, "baseline-dpi/v1", Some("v1"));
+
+    let err = config::load_with_metadata(&runtime_path)
+        .expect_err("selected governed binding without runtime enforcement should fail");
+
+    assert_eq!(err.code(), "runtime.binding.ecosystem_binding_invalid");
+}
+
+#[test]
+fn load_with_metadata_rejects_selected_binding_without_runtime_or_compiled_purpose_gate() {
+    let tmp = TempDir::new().expect("tempdir");
+    write_metadata_manifest(&tmp, true);
+    remove_dataset_policy(&tmp);
+    append_ecosystem_bindings(&tmp, None);
+    let runtime_path = write_runtime_config(&tmp, "metadata.yaml");
+    insert_ecosystem_binding_selector(&runtime_path, "baseline-dpi/v1", Some("v1"));
+
+    let err = config::load_with_metadata(&runtime_path)
+        .expect_err("selected governed binding without any enforced purpose gate should fail");
+
+    assert_eq!(err.code(), "runtime.binding.ecosystem_binding_invalid");
 }
 
 #[test]
