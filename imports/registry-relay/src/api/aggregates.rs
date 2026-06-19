@@ -655,6 +655,7 @@ fn require_principal_scope(
     require_scope(&principal, required)
 }
 
+#[allow(clippy::result_large_err)]
 fn require_source_entity_governed_access(
     runtime: &RuntimeSnapshot,
     dataset_id: &str,

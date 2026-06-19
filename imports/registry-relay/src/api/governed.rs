@@ -136,6 +136,7 @@ impl From<Error> for GovernedAccessError {
     }
 }
 
+#[allow(clippy::result_large_err)]
 pub(crate) fn require_governed_read_access<E: GovernedEntity + ?Sized>(
     runtime: &RuntimeSnapshot,
     dataset_id: &str,
@@ -273,6 +274,7 @@ fn governed_rule_ids_by_gate(rule_id: &str) -> std::collections::BTreeMap<Policy
     .collect()
 }
 
+#[allow(clippy::result_large_err)]
 fn request_pdp_context(
     purpose: &str,
     headers: &HeaderMap,
@@ -335,6 +337,7 @@ fn request_pdp_context(
     })
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_unix_seconds(value: &str) -> Result<u64, GovernedAccessError> {
     value.parse::<u64>().map_err(|_| {
         GovernedAccessError::from_error(PdpError::from_stable_code(
@@ -375,6 +378,7 @@ fn trust_context_scope(field: &str, value: &str) -> String {
     format!("{TRUST_SCOPE_PREFIX}:{field}:{value}")
 }
 
+#[allow(clippy::result_large_err)]
 fn source_observed_age_seconds(
     headers: &HeaderMap,
     principal: Option<&Principal>,
@@ -396,6 +400,7 @@ fn source_observed_age_seconds(
     })
 }
 
+#[allow(clippy::result_large_err)]
 fn validate_redaction_fields<E: GovernedEntity + ?Sized>(
     entity: &E,
     governed_policy: Option<&crate::config::GovernedPolicyConfig>,

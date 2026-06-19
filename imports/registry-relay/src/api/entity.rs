@@ -680,6 +680,7 @@ fn require_principal_scope(principal: Option<&Principal>, required: &str) -> Res
     require_scope(principal, required)
 }
 
+#[allow(clippy::result_large_err)]
 fn require_read_access(
     runtime: &RuntimeSnapshot,
     dataset_id: &str,
@@ -705,6 +706,7 @@ fn require_read_access(
     )
 }
 
+#[allow(clippy::result_large_err)]
 fn require_expansion_access(
     registry: &EntityRegistry,
     dataset_id: &str,
@@ -747,6 +749,7 @@ fn require_expansion_access(
     Ok(decisions)
 }
 
+#[allow(clippy::result_large_err)]
 fn require_relationship_target_access(
     registry: &EntityRegistry,
     dataset_id: &str,
