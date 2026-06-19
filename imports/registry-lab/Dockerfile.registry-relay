@@ -19,7 +19,7 @@ COPY --from=registry_relay_src benches ./benches
 COPY --from=registry_relay_src resources ./resources
 COPY --from=registry_relay_src src ./src
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/workspace/registry-relay/target \
     cargo build --release --locked --features "${REGISTRY_RELAY_FEATURES}" && \
     cp /workspace/registry-relay/target/release/registry-relay /usr/local/bin/registry-relay && \

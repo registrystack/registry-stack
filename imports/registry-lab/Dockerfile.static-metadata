@@ -32,7 +32,7 @@ COPY static-metadata/.gitignore /app/static-metadata/.gitignore
 
 ENV REGISTRY_MANIFEST_REPO=/app/vendor/registry-manifest
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/app/vendor/registry-manifest/target \
     python3 scripts/generate-demo-secrets.py --env-file /app/.env >/dev/null && \
     scripts/publish-static-metadata.sh /app/config/static-metadata/metadata.yaml /app/static-metadata/metadata && \
