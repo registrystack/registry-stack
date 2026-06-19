@@ -1187,6 +1187,8 @@ evidence:
   enabled: true
   service_id: evidence.test
   api_base_url: https://evidence.example.test
+  allowed_purposes:
+    - https://purpose.example.test/eligibility
   source_connections:
     farmer_registry:
       base_url: "{base_url}"
@@ -1914,6 +1916,8 @@ audit:
 evidence:
   enabled: true
   service_id: evidence.test
+  allowed_purposes:
+    - https://purpose.example.test/eligibility
   source_connections:
     farmer_registry:
       base_url: "{base_url}"
@@ -11164,7 +11168,7 @@ async fn standalone_server_rejects_cel_claim_without_cel_feature() {
         .json(&json!({
             "target": person_target("person-1"),
             "claims": ["farmer-under-4ha"],
-            "disclosure": "predicate"
+            "disclosure": "redacted"
         }))
         .await;
 

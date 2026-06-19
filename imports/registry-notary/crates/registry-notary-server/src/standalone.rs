@@ -8663,6 +8663,7 @@ credential_profiles:
 
     fn test_source_config(base_url: &str, allow_insecure_localhost: bool) -> EvidenceConfig {
         EvidenceConfig {
+            allowed_purposes: vec![OPENFN_SPIKE_PURPOSE.to_string()],
             source_connections: BTreeMap::from([(
                 "registry".to_string(),
                 SourceConnectionConfig {
@@ -8689,6 +8690,8 @@ credential_profiles:
             r#"
 enabled: true
 service_id: spike.registry-notary
+allowed_purposes:
+  - {OPENFN_SPIKE_PURPOSE}
 source_connections:
   openfn_crvs:
     base_url: "{base_url}"

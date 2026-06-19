@@ -229,6 +229,7 @@ fn fhir_demo_config(sidecar_base_url: &str) -> StandaloneRegistryNotaryConfig {
         .get_mut("fhir_sidecar")
         .expect("FHIR sidecar source exists")
         .expected_sidecar = None;
+    config.evidence.allowed_purposes = vec![PURPOSE.to_string()];
     config.cel.eval_timeout_ms = 10_000;
     let audit_path = std::env::temp_dir().join(format!(
         "registry-notary-fhir-claim-profiles-{}-{}.jsonl",

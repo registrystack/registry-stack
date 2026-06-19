@@ -150,6 +150,7 @@ jobs:
           curl -fsS -H "Authorization: Bearer ${REGISTRY_NOTARY_BEARER_TOKEN}" http://127.0.0.1:14255/v1/claims >/dev/null
           for scenario in list_claims evaluate_extract; do
             docker run --rm --network host \
+              --user "$(id -u):$(id -g)" \
               --env-file target/perf/perf.env \
               -e REGISTRY_NOTARY_DURATION=5s \
               -e REGISTRY_NOTARY_VUS=2 \

@@ -286,6 +286,7 @@ fn make_evidence(
     let mut cfg = EvidenceConfig {
         enabled: true,
         service_id: "registry-notary.test".to_string(),
+        allowed_purposes: vec!["test".to_string()],
         inline_batch_limit: subjects.max(1),
         claims,
         concurrency,

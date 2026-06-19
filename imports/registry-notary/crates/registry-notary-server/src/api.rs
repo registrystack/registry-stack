@@ -7431,7 +7431,7 @@ fn require_self_attestation_pdp_decision(
         permit_unconstrained: false,
         required_context: Default::default(),
         odrl_constraint_terms: Vec::new(),
-        purpose_constraints: Vec::new(),
+        purpose_constraints: vec![vec!["self_attestation".to_string()]],
         permitted_jurisdictions: Vec::new(),
         allowed_assurance: config.token_policy.required_acr_values.clone(),
         minimum_assurance: None,

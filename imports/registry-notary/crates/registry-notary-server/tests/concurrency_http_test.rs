@@ -259,6 +259,8 @@ audit:
 evidence:
   enabled: true
   service_id: evidence.test
+  allowed_purposes:
+    - https://purpose.example.test/eligibility
   concurrency:
     subjects: 32
     bindings: 16
@@ -350,6 +352,8 @@ audit:
 evidence:
   enabled: true
   service_id: evidence.test
+  allowed_purposes:
+    - https://purpose.example.test/eligibility
   source_connections:
     farmer_registry:
       base_url: "{base_url}"

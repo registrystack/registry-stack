@@ -177,6 +177,9 @@ audit:
 evidence:
   enabled: true
   service_id: evidence.test
+  allowed_purposes:
+    - https://purpose.example.test/eligibility
+    - https://purpose.example.test/subsidy
   concurrency:
     subjects: 32
     bindings: 16
@@ -259,6 +262,9 @@ audit:
 evidence:
   enabled: true
   service_id: evidence.test
+  allowed_purposes:
+    - https://purpose.example.test/eligibility
+    - https://purpose.example.test/subsidy
   concurrency:
     subjects: 32
     bindings: 16
@@ -374,6 +380,9 @@ audit:
 evidence:
   enabled: true
   service_id: evidence.test
+  allowed_purposes:
+    - https://purpose.example.test/eligibility
+    - https://purpose.example.test/subsidy
   concurrency:
     subjects: 32
     bindings: 16
@@ -527,6 +536,9 @@ audit:
 evidence:
   enabled: true
   service_id: evidence.test
+  allowed_purposes:
+    - https://purpose.example.test/eligibility
+    - https://purpose.example.test/subsidy
   concurrency:
     subjects: 32
     bindings: 16
@@ -632,6 +644,9 @@ audit:
 evidence:
   enabled: true
   service_id: evidence.test
+  allowed_purposes:
+    - https://purpose.example.test/eligibility
+    - https://purpose.example.test/subsidy
   concurrency:
     subjects: 32
     bindings: 16
@@ -1425,6 +1440,7 @@ async fn memo_counters_record_hits_and_misses_on_shared_binding_batch() {
     let evidence = Arc::new(EvidenceConfig {
         enabled: true,
         service_id: "registry-notary.test".to_string(),
+        allowed_purposes: vec!["test".to_string()],
         inline_batch_limit: subject_count,
         claims: {
             let mut a = shared_binding_claim("claim-a");

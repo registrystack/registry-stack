@@ -359,6 +359,8 @@ audit:
 evidence:
   enabled: true
   service_id: evidence.test
+  allowed_purposes:
+    - https://purpose.example.test/eligibility
   concurrency:
     subjects: 256
     bindings: 32
@@ -442,6 +444,8 @@ audit:
 evidence:
   enabled: true
   service_id: evidence.test
+  allowed_purposes:
+    - https://purpose.example.test/eligibility
   concurrency:
     subjects: 256
     bindings: 32
@@ -521,6 +525,8 @@ audit:
 evidence:
   enabled: true
   service_id: evidence.test
+  allowed_purposes:
+    - https://purpose.example.test/eligibility
   concurrency:
     subjects: 256
     bindings: 32
@@ -609,6 +615,8 @@ audit:
 evidence:
   enabled: true
   service_id: evidence.test
+  allowed_purposes:
+    - https://purpose.example.test/eligibility
   concurrency:
     subjects: 256
     bindings: 32
@@ -687,6 +695,8 @@ audit:
 evidence:
   enabled: true
   service_id: evidence.test
+  allowed_purposes:
+    - https://purpose.example.test/eligibility
   concurrency:
     subjects: 256
     bindings: 32
@@ -769,6 +779,8 @@ audit:
 evidence:
   enabled: true
   service_id: evidence.test
+  allowed_purposes:
+    - https://purpose.example.test/eligibility
   concurrency:
     subjects: 256
     bindings: 32

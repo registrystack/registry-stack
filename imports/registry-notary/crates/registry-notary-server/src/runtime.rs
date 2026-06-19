@@ -5447,6 +5447,10 @@ mod tests {
         }
     }
 
+    fn test_purpose_constraints(purpose: &str) -> Vec<Vec<String>> {
+        vec![vec![purpose.to_string()]]
+    }
+
     fn expect_pdp_denial(
         result: Result<BindingPolicyEffect, EvidenceError>,
         expected_code: &'static str,
@@ -6189,7 +6193,10 @@ mod tests {
     #[tokio::test]
     async fn evaluate_target_ref_serializes_as_opaque_handle() {
         let source = Arc::new(CountingSource::default());
-        let evidence = test_evidence(vec![test_claim("selected", Vec::new(), true)]);
+        let mut evidence_config =
+            (*test_evidence(vec![test_claim("selected", Vec::new(), true)])).clone();
+        evidence_config.allowed_purposes = vec!["test".to_string()];
+        let evidence = Arc::new(evidence_config);
         let store = EvidenceStore::default();
         let mut request = test_request("selected");
         request.target = Some(registry_notary_core::EvidenceEntity::with_identifier(
@@ -6436,7 +6443,9 @@ mod tests {
         let older_claim = test_claim("selected", Vec::new(), false);
         let mut newer_claim = test_claim("selected", Vec::new(), true);
         newer_claim.version = "2.0".to_string();
-        let evidence = test_evidence(vec![older_claim, newer_claim]);
+        let mut evidence_config = (*test_evidence(vec![older_claim, newer_claim])).clone();
+        evidence_config.allowed_purposes = vec!["test".to_string()];
+        let evidence = Arc::new(evidence_config);
         let store = EvidenceStore::default();
         let mut request = test_request("selected");
         request.claims = vec![ClaimRef::with_version("selected", "2.0")];
@@ -6464,7 +6473,9 @@ mod tests {
         let older_claim = test_claim("selected", Vec::new(), true);
         let mut newer_claim = test_claim("selected", Vec::new(), true);
         newer_claim.version = "2.0".to_string();
-        let evidence = test_evidence(vec![older_claim, newer_claim]);
+        let mut evidence_config = (*test_evidence(vec![older_claim, newer_claim])).clone();
+        evidence_config.allowed_purposes = vec!["test".to_string()];
+        let evidence = Arc::new(evidence_config);
         let store = EvidenceStore::default();
         let mut request = test_request("selected");
         request.claims = vec![ClaimRef::with_version("selected", "2.0")];
@@ -7038,6 +7049,7 @@ mod tests {
     #[test]
     fn default_matching_pdp_decision_records_permit_audit() {
         let binding = test_source_binding();
+        let purpose_constraints = test_purpose_constraints("benefits");
         let context = EvidenceRequestContext {
             requester: None,
             target: EvidenceEntity::new("Person"),
@@ -7052,7 +7064,7 @@ mod tests {
             &context,
             "benefits",
             &TrustedPolicyContext::default(),
-            &[],
+            &purpose_constraints,
             &["value".to_string(), "predicate".to_string()],
             &[FORMAT_CLAIM_RESULT_JSON.to_string()],
             DisclosureProfile::Value,
@@ -7067,7 +7079,7 @@ mod tests {
                 audit: Some(PdpDecisionAudit {
                     policy_id: matching_purpose_policy_id(&binding),
                     policy_hash: matching_purpose_policy_hash(&binding),
-                    evaluated_rule_ids: matching_gate_rule_ids(&[], false),
+                    evaluated_rule_ids: matching_gate_rule_ids(&["pdp.purpose"], false),
                     route_identity: Some("registry-notary.evaluate".to_string()),
                     source_binding: Some("default:people:person".to_string()),
                     ..PdpDecisionAudit::default()
@@ -7080,6 +7092,7 @@ mod tests {
     fn self_attestation_matching_pdp_uses_source_capability_instead_of_machine_scope() {
         let mut binding = test_source_binding();
         binding.required_scope = Some("people:evidence_verification".to_string());
+        let purpose_constraints = test_purpose_constraints("benefits");
         let context = EvidenceRequestContext {
             requester: None,
             target: EvidenceEntity::new("Person"),
@@ -7095,7 +7108,7 @@ mod tests {
                 &context,
                 "benefits",
                 &TrustedPolicyContext::default(),
-                &[],
+                &purpose_constraints,
                 &["value".to_string(), "predicate".to_string()],
                 &[FORMAT_CLAIM_RESULT_JSON.to_string()],
                 DisclosureProfile::Value,
@@ -7117,7 +7130,7 @@ mod tests {
             &context,
             "benefits",
             &trusted_policy,
-            &[],
+            &purpose_constraints,
             &["value".to_string(), "predicate".to_string()],
             &[FORMAT_CLAIM_RESULT_JSON.to_string()],
             DisclosureProfile::Value,
@@ -7138,7 +7151,7 @@ mod tests {
             &context,
             "benefits",
             &TrustedPolicyContext::default(),
-            &[],
+            &purpose_constraints,
             &["value".to_string(), "predicate".to_string()],
             &[FORMAT_CLAIM_RESULT_JSON.to_string()],
             DisclosureProfile::Value,
@@ -7156,6 +7169,7 @@ mod tests {
     #[test]
     fn matching_pdp_decision_enforces_requested_disclosure_and_format() {
         let binding = test_source_binding();
+        let purpose_constraints = test_purpose_constraints("benefits");
         let context = EvidenceRequestContext {
             requester: None,
             target: EvidenceEntity::new("Person"),
@@ -7171,7 +7185,7 @@ mod tests {
                 &context,
                 "benefits",
                 &TrustedPolicyContext::default(),
-                &[],
+                &purpose_constraints,
                 &["value".to_string()],
                 &[FORMAT_CLAIM_RESULT_JSON.to_string()],
                 DisclosureProfile::Predicate,
@@ -7189,7 +7203,7 @@ mod tests {
                 &context,
                 "benefits",
                 &TrustedPolicyContext::default(),
-                &[],
+                &purpose_constraints,
                 &["value".to_string(), "predicate".to_string()],
                 &[FORMAT_CLAIM_RESULT_JSON.to_string()],
                 DisclosureProfile::Value,
@@ -7205,6 +7219,7 @@ mod tests {
     fn matching_pdp_decision_enforces_source_freshness_only_when_requested() {
         let mut binding = test_source_binding();
         binding.matching.max_source_age_seconds = Some(60);
+        let purpose_constraints = test_purpose_constraints("benefits");
         let context = EvidenceRequestContext {
             requester: None,
             target: EvidenceEntity::new("Person"),
@@ -7219,7 +7234,7 @@ mod tests {
             &context,
             "benefits",
             &TrustedPolicyContext::default(),
-            &[],
+            &purpose_constraints,
             &["value".to_string(), "predicate".to_string()],
             &[FORMAT_CLAIM_RESULT_JSON.to_string()],
             DisclosureProfile::Value,
@@ -7234,7 +7249,7 @@ mod tests {
                 audit: Some(PdpDecisionAudit {
                     policy_id: matching_purpose_policy_id(&binding),
                     policy_hash: matching_purpose_policy_hash(&binding),
-                    evaluated_rule_ids: matching_gate_rule_ids(&[], false),
+                    evaluated_rule_ids: matching_gate_rule_ids(&["pdp.purpose"], false),
                     route_identity: Some("registry-notary.evaluate".to_string()),
                     source_binding: Some("default:people:person".to_string()),
                     ..PdpDecisionAudit::default()
@@ -7249,7 +7264,7 @@ mod tests {
                 &context,
                 "benefits",
                 &TrustedPolicyContext::default(),
-                &[],
+                &purpose_constraints,
                 &["value".to_string(), "predicate".to_string()],
                 &[FORMAT_CLAIM_RESULT_JSON.to_string()],
                 DisclosureProfile::Value,
@@ -7267,7 +7282,7 @@ mod tests {
                 &context,
                 "benefits",
                 &TrustedPolicyContext::default(),
-                &[],
+                &purpose_constraints,
                 &["value".to_string(), "predicate".to_string()],
                 &[FORMAT_CLAIM_RESULT_JSON.to_string()],
                 DisclosureProfile::Value,
@@ -7284,7 +7299,7 @@ mod tests {
             &context,
             "benefits",
             &TrustedPolicyContext::default(),
-            &[],
+            &purpose_constraints,
             &["value".to_string(), "predicate".to_string()],
             &[FORMAT_CLAIM_RESULT_JSON.to_string()],
             DisclosureProfile::Value,
@@ -7423,6 +7438,7 @@ mod tests {
             relationship: None,
             on_behalf_of: None,
         };
+        let purpose_constraints = test_purpose_constraints("benefits");
 
         let selected =
             selected_evidence_pack_policy(&evidence, &binding).expect("selected policy resolves");
@@ -7438,7 +7454,7 @@ mod tests {
             &context,
             "benefits",
             &TrustedPolicyContext::default(),
-            &[],
+            &purpose_constraints,
             &["value".to_string(), "predicate".to_string()],
             &[FORMAT_CLAIM_RESULT_JSON.to_string()],
             DisclosureProfile::Value,
@@ -7455,7 +7471,7 @@ mod tests {
                     policy_hash:
                         "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
                             .to_string(),
-                    evaluated_rule_ids: matching_gate_rule_ids(&[], false),
+                    evaluated_rule_ids: matching_gate_rule_ids(&["pdp.purpose"], false),
                     ecosystem_binding_id: Some("civil-pack/v1".to_string()),
                     ecosystem_binding_version: Some("v1".to_string()),
                     route_identity: Some("registry-notary.evaluate".to_string()),
@@ -7478,7 +7494,7 @@ mod tests {
                 &context,
                 "benefits",
                 &TrustedPolicyContext::default(),
-                &[],
+                &purpose_constraints,
                 &["value".to_string(), "predicate".to_string()],
                 &[FORMAT_CLAIM_RESULT_JSON.to_string()],
                 DisclosureProfile::Value,
@@ -7546,10 +7562,13 @@ mod tests {
     #[tokio::test]
     async fn self_attestation_capability_rejects_dependency_source_read_before_connector() {
         let source = Arc::new(CountingSource::default());
-        let evidence = test_evidence(vec![
+        let mut evidence_config = (*test_evidence(vec![
             test_claim("selected", vec!["dependency"], false),
             test_claim("dependency", Vec::new(), true),
-        ]);
+        ]))
+        .clone();
+        evidence_config.allowed_purposes = vec!["test".to_string()];
+        let evidence = Arc::new(evidence_config);
         let store = EvidenceStore::default();
 
         let err = RegistryNotaryRuntime::new()
@@ -7612,10 +7631,13 @@ mod tests {
     #[tokio::test]
     async fn machine_capability_preserves_dependency_source_read() {
         let source = Arc::new(CountingSource::default());
-        let evidence = test_evidence(vec![
+        let mut evidence_config = (*test_evidence(vec![
             test_claim("selected", vec!["dependency"], false),
             test_claim("dependency", Vec::new(), true),
-        ]);
+        ]))
+        .clone();
+        evidence_config.allowed_purposes = vec!["test".to_string()];
+        let evidence = Arc::new(evidence_config);
         let store = EvidenceStore::default();
 
         let results = RegistryNotaryRuntime::new()
@@ -7642,10 +7664,13 @@ mod tests {
     #[tokio::test]
     async fn derived_claim_provenance_preserves_dependency_source_runtime() {
         let source = Arc::new(RuntimeSummarySource::default());
-        let evidence = test_evidence(vec![
+        let mut evidence_config = (*test_evidence(vec![
             test_claim("selected", vec!["dependency"], false),
             test_claim("dependency", Vec::new(), true),
-        ]);
+        ]))
+        .clone();
+        evidence_config.allowed_purposes = vec!["test".to_string()];
+        let evidence = Arc::new(evidence_config);
         let store = EvidenceStore::default();
 
         let results = RegistryNotaryRuntime::new()
