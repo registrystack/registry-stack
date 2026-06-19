@@ -1829,6 +1829,7 @@ mod tests {
             value: Some(json!(true)),
             satisfied: Some(true),
             disclosure: "predicate".to_string(),
+            redacted_fields: Vec::new(),
             format: FORMAT_CLAIM_RESULT_JSON.to_string(),
             issued_at: "2026-05-31T00:00:00Z".to_string(),
             expires_at: None,
@@ -2174,6 +2175,7 @@ mod tests {
             matching_method: Some("configured_lookup".to_string()),
             matching_outcome: Some("matched".to_string()),
             matching_error_code: None,
+            redacted_fields: None,
             batch_items: Some(vec![EvidenceBatchItemAuditEvent {
                 input_index: 0,
                 target_type: Some("person".to_string()),

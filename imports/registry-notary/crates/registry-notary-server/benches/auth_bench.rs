@@ -34,6 +34,7 @@ fn cred(id: &str, token: &str) -> ResolvedCredential {
         id: id.to_string(),
         fingerprint: registry_platform_authcommon::fingerprint_api_key(token),
         scopes: vec!["civil-registry.read".into(), "farmer-registry.read".into()],
+        authorization_details: None,
     }
 }
 

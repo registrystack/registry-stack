@@ -796,6 +796,7 @@ mod tests {
             value: Some(json!({ "claim": claim_id })),
             satisfied: Some(true),
             disclosure: "redacted".to_string(),
+            redacted_fields: Vec::new(),
             format: "json".to_string(),
             issued_at: "2026-05-23T00:00:00Z".to_string(),
             expires_at: None,

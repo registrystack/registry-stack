@@ -6843,7 +6843,8 @@ fn parse_source_observed_at(
     let Some(value) = value.as_str() else {
         return Err(EvidenceError::TargetMatchingPolicyRejected);
     };
-    if value.trim().is_empty() {
+    let value = value.trim();
+    if value.is_empty() {
         return Ok(None);
     }
     OffsetDateTime::parse(value, &Rfc3339)
@@ -10896,6 +10897,24 @@ config_trust:
 
         assert_eq!(gte, json!({ "type": "range", "gte": "2020-01-01" }));
         assert_eq!(lte, json!({ "type": "range", "lte": "2020-12-31" }));
+    }
+
+    #[test]
+    fn parse_source_observed_at_trims_timestamp_before_parse() {
+        let mut binding = test_binding("people", "person");
+        binding.matching.source_observed_at_field = Some("observed_at".to_string());
+
+        let observed_at =
+            parse_source_observed_at(&binding, &json!({"observed_at": "\t2026-05-24T12:00:00Z "}))
+                .expect("trimmed observed_at parses")
+                .expect("observed_at is present");
+
+        assert_eq!(
+            observed_at
+                .format(&Rfc3339)
+                .expect("observed_at formats as RFC3339"),
+            "2026-05-24T12:00:00Z"
+        );
     }
 
     #[test]

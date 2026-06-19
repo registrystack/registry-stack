@@ -3393,7 +3393,8 @@ fn source_observed_at_from_row(
     let Some(value) = value.as_str() else {
         return Err(EvidenceError::TargetMatchingPolicyRejected);
     };
-    if value.trim().is_empty() {
+    let value = value.trim();
+    if value.is_empty() {
         return Ok(None);
     }
     OffsetDateTime::parse(value, &Rfc3339)
@@ -3401,6 +3402,7 @@ fn source_observed_at_from_row(
         .map_err(|_| EvidenceError::TargetMatchingPolicyRejected)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_matching_freshness_policy(
     evidence: &EvidenceConfig,
     binding: &registry_notary_core::SourceBindingConfig,
@@ -3499,6 +3501,7 @@ struct BindingPolicyEffect {
     audit: Option<PdpDecisionAudit>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_matching_policy(
     evidence: &EvidenceConfig,
     source_capability: &SourceCapability,
@@ -3614,6 +3617,7 @@ fn validate_matching_policy(
     Ok(binding_policy_effect)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn matching_pdp_decision(
     evidence: &EvidenceConfig,
     binding: &registry_notary_core::SourceBindingConfig,
@@ -6404,6 +6408,26 @@ mod tests {
         );
         assert_eq!(source.preflight_count.load(Ordering::SeqCst), 1);
         assert_eq!(memo.hits(), 0);
+    }
+
+    #[test]
+    fn source_observed_at_from_row_trims_timestamp_before_parse() {
+        let mut binding = test_source_binding();
+        binding.matching.source_observed_at_field = Some("observed_at".to_string());
+
+        let observed_at = source_observed_at_from_row(
+            &binding,
+            &json!({"observed_at": " 2026-05-24T12:00:00Z\n"}),
+        )
+        .expect("trimmed observed_at parses")
+        .expect("observed_at is present");
+
+        assert_eq!(
+            observed_at
+                .format(&Rfc3339)
+                .expect("observed_at formats as RFC3339"),
+            "2026-05-24T12:00:00Z"
+        );
     }
 
     #[tokio::test]

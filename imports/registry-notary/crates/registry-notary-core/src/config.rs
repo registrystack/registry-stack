@@ -5306,9 +5306,10 @@ fn validate_extract_semantics(
     let Some(source_field) = binding.fields.get(field) else {
         return Ok(());
     };
-    let Some(field_term) = source_field.semantic_term.as_deref() else {
+    let Some(field_term) = source_field.semantic_term.as_deref().map(str::trim) else {
         return Ok(());
     };
+    let property = property.trim();
     if field_term != property {
         return invalid_claim_semantics(
             &claim.id,
@@ -7074,6 +7075,7 @@ syslog_socket_path: /dev/log
                 subject_id_type: "national_id".to_string(),
                 disclosure: Some("predicate".to_string()),
                 max_source_observed_age_seconds: Some(300),
+                ..FederationEvaluationProfileConfig::default()
             }],
             ..FederationConfig::default()
         };
@@ -9381,7 +9383,7 @@ value:
   type: date
 semantics:
   concept: https://publicschema.org/Person
-  property: https://publicschema.org/date_of_birth
+  property: " https://publicschema.org/date_of_birth "
   value_mapping: publicschema
 source_bindings:
   civil:
@@ -9398,7 +9400,7 @@ source_bindings:
         field: birth_date
         type: date
         required: true
-        semantic_term: https://publicschema.org/date_of_birth
+        semantic_term: " https://publicschema.org/date_of_birth "
 rule:
   type: extract
   source: civil

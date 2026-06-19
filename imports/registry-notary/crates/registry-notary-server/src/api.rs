@@ -3026,9 +3026,11 @@ fn accepts_status_list_jwt(headers: &HeaderMap) -> bool {
         .get(header::ACCEPT)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| {
-            value
-                .split(',')
-                .any(|part| part.trim().starts_with("application/statuslist+jwt"))
+            value.split(',').any(|part| {
+                part.split(';')
+                    .next()
+                    .is_some_and(|media_type| media_type.trim() == "application/statuslist+jwt")
+            })
         })
 }
 
@@ -11305,6 +11307,22 @@ mod tests {
         assert_eq!(payload["ttl"], json!(300));
         assert_eq!(payload["status_list"]["bits"], json!(8));
         assert_eq!(payload["status_list"]["lst"], json!("eJxjAAAAAQAB"));
+    }
+
+    #[test]
+    fn accepts_status_list_jwt_matches_exact_media_type() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ACCEPT,
+            HeaderValue::from_static("application/statuslist+jwt; q=0.8"),
+        );
+        assert!(accepts_status_list_jwt(&headers));
+
+        headers.insert(
+            header::ACCEPT,
+            HeaderValue::from_static("application/statuslist+jwt-seq"),
+        );
+        assert!(!accepts_status_list_jwt(&headers));
     }
 
     #[cfg(feature = "registry-notary-cel")]
