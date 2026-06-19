@@ -22,6 +22,19 @@ fail() {
   exit 1
 }
 
+dump_compose_diagnostics() {
+  local name="$1"
+  echo "diagnostics: ${name}" >&2
+  docker compose -f "${compose_file}" ps >&2 || true
+  docker compose -f "${compose_file}" logs --no-color --tail 120 \
+    civil-registry-relay \
+    social-protection-registry-relay \
+    health-registry-relay \
+    civil-notary \
+    social-protection-notary \
+    shared-eligibility-notary >&2 || true
+}
+
 check() {
   local name="$1"
   shift
@@ -142,6 +155,7 @@ wait_http() {
     fi
     sleep 1
   done
+  dump_compose_diagnostics "${name}"
   fail "${name} did not become ready within ${deadline}s, last status ${status}"
 }
 

@@ -280,6 +280,7 @@ SCANNED_FILE_SUFFIXES = {
 }
 HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 HOSTED_CONFIG_DIRS = (
+    Path("config/relay"),
     Path("config/coolify/notary"),
     Path("config/coolify/relay"),
 )
