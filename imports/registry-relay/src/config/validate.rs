@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use crate::error::{ConfigError, Error, RuntimeBindingError};
 use crate::table_provider::table_name;
-use registry_manifest_core::{CompiledDatasetPolicy, CompiledMetadata, CompiledPolicyOperandValue};
+use registry_manifest_core::CompiledMetadata;
 use registry_platform_authcommon::{
     CredentialCommitmentContext, CredentialFingerprintRefError, CredentialProduct, CredentialType,
 };
@@ -35,8 +35,6 @@ const ADMIN_SCOPE: &str = "registry_relay:admin";
 const METRICS_SCOPE: &str = crate::observability::METRICS_SCOPE;
 const OPS_READ_SCOPE: &str = "registry_relay:ops_read";
 const RESERVED_SCOPE_DATASET_IDS: &[&str] = &["registry_relay"];
-const ODRL_PURPOSE: &str = "http://www.w3.org/ns/odrl/2/purpose";
-const ODRL_IS_A: &str = "http://www.w3.org/ns/odrl/2/isA";
 
 /// Run every cross-field check on a freshly deserialised [`Config`] loaded
 /// from a local YAML file.
@@ -326,14 +324,12 @@ pub fn validate_runtime_bindings(
                     return Err(RuntimeBindingError::FilterMissing);
                 }
             }
-            if selected_governed_binding
-                && governed_runtime_surface_is_inert(dataset, entity, &metadata_dataset.policy)
-            {
+            if selected_governed_binding && governed_runtime_surface_is_inert(dataset, entity) {
                 tracing::error!(
                     code = "runtime.binding.ecosystem_binding_invalid",
                     dataset_id = %dataset.id,
                     entity = %entity.name,
-                    "selected governed ecosystem binding requires sensitive runtime entities to declare an enforced purpose header, governed policy gate, or compiled purpose policy"
+                    "selected governed ecosystem binding requires sensitive runtime entities to declare an enforced purpose header or governed policy gate"
                 );
                 return Err(RuntimeBindingError::EcosystemBindingInvalid);
             }
@@ -429,11 +425,7 @@ pub fn validate_runtime_bindings(
     Ok(())
 }
 
-fn governed_runtime_surface_is_inert(
-    dataset: &DatasetConfig,
-    entity: &EntityConfig,
-    metadata_policy: &CompiledDatasetPolicy,
-) -> bool {
+fn governed_runtime_surface_is_inert(dataset: &DatasetConfig, entity: &EntityConfig) -> bool {
     matches!(
         dataset.sensitivity,
         Sensitivity::Personal | Sensitivity::Confidential | Sensitivity::Secret
@@ -443,20 +435,6 @@ fn governed_runtime_surface_is_inert(
             .governed_policy
             .as_ref()
             .is_some_and(governed_policy_has_enforced_gate)
-        && !metadata_policy_has_purpose_constraint(metadata_policy)
-}
-
-fn metadata_policy_has_purpose_constraint(policy: &CompiledDatasetPolicy) -> bool {
-    policy.permissions.iter().any(|permission| {
-        permission.constraints.iter().any(|constraint| {
-            constraint.left_operand == ODRL_PURPOSE
-                && constraint.operator == ODRL_IS_A
-                && matches!(
-                    &constraint.right_operand,
-                    CompiledPolicyOperandValue::Iri(value) if !value.trim().is_empty()
-                )
-        })
-    })
 }
 
 fn validate_ecosystem_binding_selector(
