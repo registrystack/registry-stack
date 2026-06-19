@@ -613,6 +613,7 @@ fn jwk_alg(jwk: &PublicJwk) -> Option<&'static str> {
     match jwk.algorithm().ok()? {
         SigningAlgorithm::EdDsa => Some("EdDSA"),
         SigningAlgorithm::Rs256 => Some("RS256"),
+        SigningAlgorithm::Es256 => Some("ES256"),
     }
 }
 

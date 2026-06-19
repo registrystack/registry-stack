@@ -7,8 +7,9 @@ named signing keys under `evidence.signing_keys`. Credential profiles and
 federation config reference those keys by id. This keeps profile policy,
 federation policy, and key storage separate while making rotation explicit.
 
-Only Ed25519 EdDSA is supported. Other algorithms are rejected at config
-validation time.
+Credential profile signing supports Ed25519 EdDSA and ES256 over P-256. RS256
+is reserved for the eSignet pre-authorized-code RP client assertion key and is
+rejected for credential profiles, access tokens, and federation responses.
 
 ## Runtime Contract
 
@@ -66,9 +67,10 @@ evidence:
       allowed_claims: [person-is-alive]
 ```
 
-The private JWK must be an Ed25519 private JWK. If it contains `kid` or `alg`,
-those values must match the configured key. Startup signs and verifies a fixed
-self-test payload before the key is accepted.
+The private JWK must be an Ed25519 or P-256 private JWK for credential profile
+signing. If it contains `kid` or `alg`, those values must match the configured
+key. Startup signs and verifies a fixed self-test payload before the key is
+accepted.
 
 Generate a local demo key with:
 
@@ -284,4 +286,4 @@ Note: some server tests bind local sockets and may need to run outside strict ne
 - No vendor HSM is certified by this repository yet. SoftHSM verifies the
   PKCS#11 integration path, not vendor-specific behavior.
 - PKCS#12 is not implemented.
-- Ed25519 EdDSA is the only supported issuer signing algorithm.
+- Credential issuer signing supports Ed25519 EdDSA and ES256 over P-256.

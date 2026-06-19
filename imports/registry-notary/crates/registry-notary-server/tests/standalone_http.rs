@@ -65,6 +65,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 use tempfile::TempDir;
+#[cfg(feature = "registry-notary-cel")]
+use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use tough::editor::signed::{PathExists, SignedRole};
 use tough::editor::RepositoryEditor;
@@ -239,6 +241,7 @@ fn add_admin_api_key(config: &mut StandaloneRegistryNotaryConfig) {
         id: "admin".to_string(),
         fingerprint: env_fingerprint_ref("admin", "TEST_EVIDENCE_ADMIN_KEY_HASH", fingerprint),
         scopes: vec!["registry_notary:admin".to_string()],
+        authorization_details: None,
     });
 }
 
@@ -249,6 +252,7 @@ fn add_ops_read_api_key(config: &mut StandaloneRegistryNotaryConfig) {
         id: "ops".to_string(),
         fingerprint: env_fingerprint_ref("ops", "TEST_EVIDENCE_OPS_KEY_HASH", fingerprint),
         scopes: vec!["registry_notary:ops_read".to_string()],
+        authorization_details: None,
     });
 }
 
@@ -259,6 +263,7 @@ fn add_metrics_read_api_key(config: &mut StandaloneRegistryNotaryConfig) {
         id: "metrics".to_string(),
         fingerprint: env_fingerprint_ref("metrics", "TEST_EVIDENCE_METRICS_KEY_HASH", fingerprint),
         scopes: vec!["registry_notary:metrics_read".to_string()],
+        authorization_details: None,
     });
 }
 
@@ -1058,7 +1063,13 @@ async fn dci_source(
         }))
         .into_response();
     }
-    if body["message"]["search_request"][0]["search_criteria"]["query"]["value"] != "person-1" {
+    let query_value = body["message"]["search_request"][0]["search_criteria"]["query"]["value"]
+        .as_str()
+        .unwrap_or_default();
+    if !matches!(
+        query_value,
+        "person-1" | "stale-person" | "missing-timestamp"
+    ) {
         return Json(json!({
             "message": {
                 "search_response": [{
@@ -1068,7 +1079,7 @@ async fn dci_source(
         }))
         .into_response();
     }
-    Json(json!({
+    let mut response = json!({
         "message": {
             "search_response": [{
                 "data": {
@@ -1078,6 +1089,18 @@ async fn dci_source(
                 }
             }]
         }
+    });
+    if query_value != "missing-timestamp" {
+        let observed_at = if query_value == "stale-person" {
+            OffsetDateTime::now_utc() - time::Duration::days(2)
+        } else {
+            OffsetDateTime::now_utc()
+        };
+        response["message"]["search_response"][0]["timestamp"] =
+            json!(observed_at.format(&Rfc3339).expect("timestamp formats"));
+    }
+    Json(json!({
+        "message": response["message"].clone()
     }))
     .into_response()
 }
@@ -3089,6 +3112,7 @@ async fn admin_reload_401_unauth_403_wrong_scope_501_admin() {
             "sha256:ac3dced2bcf7d2cb4166747790d67437b5cc5314ed33e01d06b274a7fe0c3b3c",
         ),
         scopes: vec!["farmer_registry:evidence_verification".to_string()],
+        authorization_details: None,
     });
     add_admin_api_key(&mut config);
 
@@ -3636,6 +3660,7 @@ async fn admin_config_apply_signed_client_access_change_swaps_auth_without_resta
             "registry_notary:admin".to_string(),
             "registry_notary:ops_read".to_string(),
         ],
+        authorization_details: None,
     });
     let candidate_yaml = serde_norway::to_string(&candidate).expect("candidate serializes");
     let local_approval_path = config
@@ -4120,6 +4145,7 @@ async fn admin_config_apply_antirollback_rejected_records_outcome_in_posture() {
             "registry_notary:admin".to_string(),
             "registry_notary:ops_read".to_string(),
         ],
+        authorization_details: None,
     });
     let candidate_yaml = serde_norway::to_string(&candidate).expect("candidate serializes");
     let local_approval_path = config
@@ -8676,11 +8702,15 @@ async fn service_document_advertises_credential_status_when_enabled() {
     let body: Value = response.json();
     assert_eq!(
         body["credential_capabilities"]["sd_jwt_vc"]["status_methods"],
-        json!(["RegistryNotaryCredentialStatus"])
+        json!(["status_list"])
     );
     assert_eq!(
         body["credential_capabilities"]["sd_jwt_vc"]["credential_status_url"],
         json!("/v1/credentials/{credential_id}/status")
+    );
+    assert_eq!(
+        body["credential_capabilities"]["sd_jwt_vc"]["credential_status_media_type"],
+        json!("application/statuslist+jwt")
     );
     assert!(!body["credential_capabilities"]["unsupported_features"]
         .as_array()
@@ -8720,6 +8750,7 @@ async fn credential_status_admin_edges_return_expected_http_statuses() {
             "sha256:10a4c7c9fc5206d6f36dc6944a81bb6f4a3cb0e25014ae3b12e6c3e52712292a",
         ),
         scopes: vec!["registry_notary:admin".to_string()],
+        authorization_details: None,
     });
     let enabled_server = TestServer::builder()
         .http_transport()
@@ -8763,6 +8794,7 @@ async fn credential_status_admin_edges_return_expected_http_statuses() {
                 "sha256:10a4c7c9fc5206d6f36dc6944a81bb6f4a3cb0e25014ae3b12e6c3e52712292a",
             ),
             scopes: vec!["registry_notary:admin".to_string()],
+            authorization_details: None,
         });
     let disabled_server = TestServer::builder()
         .http_transport()
@@ -8937,8 +8969,10 @@ async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
     assert_eq!(
         payload["status"],
         json!({
-            "type": "RegistryNotaryCredentialStatus",
-            "statusUrl": format!("http://127.0.0.1:4325/v1/credentials/{credential_id}/status")
+            "status_list": {
+                "idx": 0,
+                "uri": format!("http://127.0.0.1:4325/v1/credentials/{credential_id}/status")
+            }
         })
     );
     assert!(body["c_nonce"]
@@ -8955,6 +8989,33 @@ async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
     assert_eq!(
         status_body["credential_profile"],
         json!("civil_status_sd_jwt")
+    );
+    let status_list = server
+        .get(&format!("/v1/credentials/{credential_id}/status"))
+        .add_header(header::ACCEPT, "application/statuslist+jwt")
+        .await;
+    status_list.assert_status_ok();
+    assert_eq!(
+        status_list
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("application/statuslist+jwt")
+    );
+    let status_list_jwt = status_list.text();
+    assert_eq!(jwt_header(&status_list_jwt)["typ"], json!("statuslist+jwt"));
+    let status_list_payload = jwt_payload(&status_list_jwt);
+    assert_eq!(
+        status_list_payload["sub"],
+        json!(format!(
+            "http://127.0.0.1:4325/v1/credentials/{credential_id}/status"
+        ))
+    );
+    assert_eq!(status_list_payload["ttl"], json!(300));
+    assert_eq!(status_list_payload["status_list"]["bits"], json!(8));
+    assert_eq!(
+        status_list_payload["status_list"]["lst"],
+        json!("eJxjAAAAAQAB")
     );
 
     let admin_token = idp.mint_token(json!({
@@ -8981,6 +9042,16 @@ async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
     status_after_revoke.assert_status_ok();
     let status_after_revoke_body: Value = status_after_revoke.json();
     assert_eq!(status_after_revoke_body["status"], json!("revoked"));
+    let revoked_status_list = server
+        .get(&format!("/v1/credentials/{credential_id}/status"))
+        .add_header(header::ACCEPT, "application/statuslist+jwt")
+        .await;
+    revoked_status_list.assert_status_ok();
+    let revoked_status_list_payload = jwt_payload(&revoked_status_list.text());
+    assert_eq!(
+        revoked_status_list_payload["status_list"]["lst"],
+        json!("eJxjBAAAAgAC")
+    );
 
     for attempted_status in ["valid", "suspended"] {
         let rejected = server
@@ -10733,6 +10804,94 @@ async fn standalone_server_reads_dci_source_and_evaluates_cel_claim() {
         observed["message"]["search_request"][0]["search_criteria"]["query"]["value"],
         "person-1"
     );
+}
+
+#[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
+async fn standalone_server_uses_dci_response_timestamp_for_source_freshness() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let observed = Arc::new(Mutex::new(None));
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route("/dci/fr/registry/sync/search", post(dci_source))
+            .with_state(Arc::clone(&observed)),
+    );
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+
+    let mut config = dci_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    let connection = config
+        .evidence
+        .source_connections
+        .get_mut("farmer_registry")
+        .expect("farmer registry source exists");
+    connection.dci.field_paths.insert(
+        "observed_at".to_string(),
+        "$response:/message/search_response/0/timestamp".to_string(),
+    );
+    let binding = config
+        .evidence
+        .claims
+        .iter_mut()
+        .find(|claim| claim.id == "farmed-land-size")
+        .expect("farmed-land-size claim exists")
+        .source_bindings
+        .get_mut("farmer")
+        .expect("farmer binding exists");
+    binding.matching.max_source_age_seconds = Some(60);
+    binding.matching.source_observed_at_field = Some("observed_at".to_string());
+
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let response = server
+        .post("/v1/evaluations")
+        .add_header("x-api-key", "api-token")
+        .add_header("data-purpose", "https://purpose.example.test/eligibility")
+        .json(&json!({
+            "target": person_target("person-1"),
+            "claims": ["farmed-land-size"],
+            "disclosure": "value"
+        }))
+        .await;
+
+    response.assert_status_ok();
+    let body: Value = response.json();
+    assert_eq!(body["results"][0]["value"], json!(3.5));
+    assert_eq!(
+        body["results"][0]["provenance"]["used"]["source_count"],
+        json!(1)
+    );
+
+    for target_id in ["stale-person", "missing-timestamp"] {
+        let response = server
+            .post("/v1/evaluations")
+            .add_header("x-api-key", "api-token")
+            .add_header("data-purpose", "https://purpose.example.test/eligibility")
+            .json(&json!({
+                "target": person_target(target_id),
+                "claims": ["farmed-land-size"],
+                "disclosure": "value"
+            }))
+            .await;
+
+        response.assert_status(StatusCode::FORBIDDEN);
+        let body: Value = response.json();
+        assert_eq!(body["code"], json!("pdp.evidence_stale"));
+    }
 }
 
 #[tokio::test]

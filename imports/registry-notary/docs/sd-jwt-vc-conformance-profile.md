@@ -19,10 +19,10 @@ features that are not yet part of the product surface.
 | --- | --- |
 | Credential media type | `application/dc+sd-jwt` |
 | Compact JWT `typ` header | `dc+sd-jwt` |
-| Signing algorithm | `EdDSA` |
-| Issuer key type | `OKP/Ed25519` |
+| Signing algorithm | `EdDSA` or `ES256` |
+| Issuer key type | `OKP/Ed25519` or `EC/P-256` |
 | Holder binding DID method | `did:jwk` |
-| Credential status methods | Default: none. Optional: `RegistryNotaryCredentialStatus` when `credential_status.enabled = true`, with `statusUrl` at `/v1/credentials/{credential_id}/status`. StatusList and revocation-list profiles are not supported. |
+| Credential status methods | Default: none. Optional IETF Token Status List `status_list` when `credential_status.enabled = true`, with `uri` at `/v1/credentials/{credential_id}/status` and `idx: 0`. Aggregated status lists and external revocation-list profiles are not supported. |
 
 Registry Notary rejects credential profile format aliases such as
 `sd_jwt_vc` and `application/vc+sd-jwt`. Operator configuration must use the
@@ -137,7 +137,10 @@ Type Metadata convention, a consumer dereferences an HTTPS `vct` by inserting
 - **Document contents.** The Type Metadata document includes the exact configured
   `vct`, display metadata, and one claim metadata entry for the OID4VCI
   configuration's `claim_id`. Notary-issued claim results are always selectively
-  disclosable, so claim metadata uses `sd: "always"`.
+  disclosable, so claim metadata uses `sd: "always"`. If the claim declares
+  semantic bindings, the claim metadata also includes the Notary extension
+  `registry_notary_semantics`; this labels the claim with external terms such as
+  PublicSchema URIs but does not change the Notary claim-result payload shape.
 - **CORS.** Browser-based wallets from configured self-attestation wallet origins
   receive CORS headers on the `/.well-known/vct/...` metadata surface.
 

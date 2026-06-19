@@ -401,6 +401,40 @@
         ],
         "type": "object"
       },
+      "ClaimSemantics": {
+        "additionalProperties": false,
+        "description": "Optional semantic binding for a Notary claim. These fields label the claim output or predicate with external vocabulary terms such as PublicSchema URIs; they do not change the Notary result shape or by themselves prove privacy minimization.",
+        "properties": {
+          "concept": {
+            "description": "External concept URI, for example https://publicschema.org/Person.",
+            "type": "string"
+          },
+          "derived_from": {
+            "description": "External property URIs the predicate or derived value depends on.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "predicate": {
+            "description": "External or local predicate URI/URN for derived boolean claims.",
+            "type": "string"
+          },
+          "property": {
+            "description": "External property URI for raw value claims, for example https://publicschema.org/date_of_birth.",
+            "type": "string"
+          },
+          "value_mapping": {
+            "description": "Operator label for the value mapping/canonicalization applied before returning the claim.",
+            "type": "string"
+          },
+          "vocabulary": {
+            "description": "External vocabulary or value-set URI used by the claim value.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "ClaimSummary": {
         "additionalProperties": true,
         "properties": {
@@ -480,6 +514,9 @@
               "batch_evaluate"
             ],
             "type": "object"
+          },
+          "semantics": {
+            "$ref": "#/components/schemas/ClaimSemantics"
           },
           "subject_type": {
             "type": "string"
@@ -1544,6 +1581,9 @@
                   },
                   "type": "array"
                 },
+                "registry_notary_semantics": {
+                  "$ref": "#/components/schemas/ClaimSemantics"
+                },
                 "sd": {
                   "enum": [
                     "always"
@@ -2038,6 +2078,13 @@
                       "path": [
                         "person-is-alive"
                       ],
+                      "registry_notary_semantics": {
+                        "concept": "https://publicschema.org/Person",
+                        "derived_from": [
+                          "https://publicschema.org/date_of_death"
+                        ],
+                        "predicate": "urn:registry-notary:predicate:person-is-alive"
+                      },
                       "sd": "always"
                     }
                   ],
@@ -2743,6 +2790,13 @@
                       "path": [
                         "person-is-alive"
                       ],
+                      "registry_notary_semantics": {
+                        "concept": "https://publicschema.org/Person",
+                        "derived_from": [
+                          "https://publicschema.org/date_of_death"
+                        ],
+                        "predicate": "urn:registry-notary:predicate:person-is-alive"
+                      },
                       "sd": "always"
                     }
                   ],
@@ -3698,6 +3752,11 @@
                       "operations": {
                         "batch_evaluate": false,
                         "evaluate": true
+                      },
+                      "semantics": {
+                        "concept": "https://publicschema.org/Person",
+                        "property": "https://publicschema.org/date_of_birth",
+                        "value_mapping": "publicschema"
                       },
                       "subject_type": "person",
                       "title": "Date of birth",

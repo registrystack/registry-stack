@@ -100,6 +100,17 @@ impl EvidenceIssuer {
     pub fn public_jwk(&self) -> Value {
         self.public_jwk.clone()
     }
+
+    pub async fn sign_compact_jwt(
+        &self,
+        typ: &str,
+        payload: Value,
+    ) -> Result<String, EvidenceError> {
+        self.issuer
+            .sign_compact_jwt(typ, payload)
+            .await
+            .map_err(|_| EvidenceError::CredentialIssuanceFailed)
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -331,8 +342,10 @@ mod tests {
             .expect("test issuer builds");
         let credential_id = new_credential_id();
         let status = json!({
-            "type": "RegistryNotaryCredentialStatus",
-            "statusUrl": format!("https://issuer.example/v1/credentials/{credential_id}/status")
+            "status_list": {
+                "idx": 0,
+                "uri": format!("https://issuer.example/v1/credentials/{credential_id}/status")
+            }
         });
         let signed = issue(
             &test_profile(),

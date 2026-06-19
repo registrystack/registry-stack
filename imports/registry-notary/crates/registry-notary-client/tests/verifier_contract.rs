@@ -31,6 +31,7 @@ const NOW: i64 = 1_700_000_010;
 const KB_AUD: &str = "https://verifier.example/callback";
 const KB_NONCE: &str = "nonce-1700000010";
 const ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:web:issuer.test#key-1"}"#;
+const ISSUER_P256_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"did:web:issuer.test#p256-key-1"}"#;
 const ROTATED_ISSUER_JWK: &str = r#"{"crv":"Ed25519","d":"f4QIxnAyRWzhuBOmNRgvBTE56mWePdsPL0mvCtl8Gys","x":"pv4e_hXHBLN27rcs6VDFV1ED0TiU8M3xy9vsuWFEsec","kty":"OKP","alg":"EdDSA","kid":"did:web:issuer.test#key-2"}"#;
 const HOLDER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"holder-key-1"}"#;
 
@@ -62,6 +63,24 @@ async fn verify_sd_jwt_vc_accepts_credential_without_disclosures() {
 
     assert_eq!(verified.issuer, ISSUER);
     assert_eq!(verified.disclosure_count, 0);
+}
+
+#[tokio::test]
+async fn verify_sd_jwt_vc_accepts_es256_credential() {
+    let compact = issue_sd_jwt(ISSUER_P256_JWK, ISSUER, NOW, NOW + 50, None).await;
+
+    let verified = verifier::verify_sd_jwt_vc(
+        &compact,
+        &jwks(ISSUER_P256_JWK),
+        &options().accepted_algorithms(["ES256"]),
+    )
+    .expect("ES256 credential verifies");
+
+    assert_eq!(verified.issuer, ISSUER);
+    assert_eq!(verified.vct, VCT);
+    assert_eq!(verified.key_id, "did:web:issuer.test#p256-key-1");
+    assert_eq!(verified.algorithm, "ES256");
+    assert_eq!(verified.disclosure_count, 1);
 }
 
 #[tokio::test]

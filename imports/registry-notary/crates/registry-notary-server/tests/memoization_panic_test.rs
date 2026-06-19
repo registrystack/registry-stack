@@ -102,6 +102,7 @@ fn evaluate_claim() -> ClaimDefinition {
             value_type: "number".to_string(),
             unit: None,
         },
+        semantics: None,
         inputs: Vec::new(),
         depends_on: Vec::new(),
         purpose: None,

@@ -244,6 +244,9 @@ is disabled or no configured `vct` matches, and includes:
 - `claims[].display[].locale`/`claims[].display[].label`.
 - `claims[].sd: "always"`, because Notary emits evaluated claim results as
   selectively disclosable SD-JWT disclosures.
+- `claims[].registry_notary_semantics` when the underlying claim config
+  declares semantic bindings such as PublicSchema concept, property,
+  vocabulary, predicate, or `derived_from` terms.
 
 Browser-based wallets from configured self-attestation wallet origins receive
 CORS headers on the `/.well-known/vct/...` metadata surface (the response echoes

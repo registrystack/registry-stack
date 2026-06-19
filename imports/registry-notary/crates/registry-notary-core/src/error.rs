@@ -59,7 +59,12 @@ pub enum EvidenceError {
     #[error("purpose is not allowed")]
     PurposeNotAllowed,
     #[error("policy decision denied the request: {code}")]
-    PolicyDenied { code: &'static str },
+    PolicyDenied {
+        code: &'static str,
+        policy_id: Option<String>,
+        policy_hash: Option<String>,
+        evaluated_rule_ids: Vec<String>,
+    },
     #[error("evidence request profile is unsupported")]
     ProfileUnsupported,
     #[error("evidence is not available")]
@@ -135,7 +140,7 @@ impl EvidenceError {
             Self::RelationshipPolicyRejected => "relationship.policy_rejected",
             Self::RelationshipPurposeNotAllowed => "relationship.purpose_not_allowed",
             Self::PurposeNotAllowed => "purpose.not_allowed",
-            Self::PolicyDenied { code } => code,
+            Self::PolicyDenied { code, .. } => code,
             Self::ProfileUnsupported => "profile.unsupported",
             Self::EvidenceNotAvailable | Self::MatchingEvidenceNotAvailable { .. } => {
                 "evidence.not_available"
@@ -171,7 +176,7 @@ impl EvidenceError {
             Self::SelfAttestationAssuranceDenied => {
                 SelfAttestationDenialCode::AssuranceDenied.as_str()
             }
-            Self::PolicyDenied { code } => code,
+            Self::PolicyDenied { code, .. } => code,
             Self::MatchingEvidenceNotAvailable { audit_code } => audit_code,
             _ => self.code(),
         }
@@ -277,6 +282,9 @@ mod tests {
     fn policy_denials_keep_stable_pdp_code() {
         let error = EvidenceError::PolicyDenied {
             code: "pdp.assurance_insufficient",
+            policy_id: None,
+            policy_hash: None,
+            evaluated_rule_ids: Vec::new(),
         };
 
         assert_eq!(error.code(), "pdp.assurance_insufficient");

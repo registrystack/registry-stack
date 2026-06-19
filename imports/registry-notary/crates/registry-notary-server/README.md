@@ -96,10 +96,12 @@ Each credential profile controls the credential lifetime with
 `validity_seconds`, which defaults to 600 seconds when omitted.
 
 Set `credential_status.enabled = true` to add a storage-backed credential
-status endpoint. Issued SD-JWT VC payloads then include a `status.statusUrl`
-claim pointing at `/v1/credentials/{credential_id}/status`. The store supports
+status endpoint. Issued SD-JWT VC payloads then include a
+`status.status_list.uri` pointing at `/v1/credentials/{credential_id}/status`.
+The same URL serves `application/statuslist+jwt` for verifiers and the JSON
+lifecycle representation for operational compatibility. The store supports
 `in_memory` for lab deployments and `redis` for deployable multi-process
-instances. The public endpoint returns `valid`, `suspended`, `revoked`, or
+instances. The JSON endpoint returns `valid`, `suspended`, `revoked`, or
 derived `expired`; admins update mutable states through
 `POST /admin/v1/credentials/{credential_id}/status` with the
 `registry_notary:admin` scope. Status records contain only credential lifecycle

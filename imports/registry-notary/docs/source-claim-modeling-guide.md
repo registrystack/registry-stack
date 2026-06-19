@@ -319,6 +319,37 @@ Every claim should answer:
 - Is the output a value, a predicate, or a redacted assertion?
 - Can this claim be issued as a credential?
 
+## Semantic Bindings
+
+Use `semantics` when a claim should advertise the external meaning of its
+output. This is useful for PublicSchema alignment, wallet display, verifier
+portability, and canonical value mapping. It is not a replacement for claim
+authorization, disclosure policy, or full credential-shape conformance.
+
+For raw extracted values, map the claim to the external property it returns:
+
+```yaml
+semantics:
+  concept: https://publicschema.org/Person
+  property: https://publicschema.org/date_of_birth
+  value_mapping: publicschema
+```
+
+For derived or limited-value claims, map the predicate itself and list the
+external inputs it is derived from:
+
+```yaml
+semantics:
+  concept: https://publicschema.org/Person
+  predicate: urn:registry-notary:predicate:age-at-least-18
+  derived_from:
+    - https://publicschema.org/date_of_birth
+```
+
+Do not claim that a boolean predicate is the raw PublicSchema property. For
+example, `age-at-least-18` may be derived from `date_of_birth`, but it is not the
+same claim as `date_of_birth`.
+
 ## Source Bindings
 
 A source binding connects a claim to one source read:
@@ -345,6 +376,7 @@ source_bindings:
         field: birth_date
         type: date
         required: true
+        semantic_term: https://publicschema.org/date_of_birth
 ```
 
 Important choices:

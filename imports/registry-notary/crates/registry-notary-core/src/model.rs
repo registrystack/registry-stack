@@ -16,6 +16,15 @@ pub const SD_JWT_VC_JWT_TYP: &str = "dc+sd-jwt";
 pub const SD_JWT_VC_SIGNING_ALG: &str = "EdDSA";
 pub const SD_JWT_VC_ISSUER_KEY_TYPE: &str = "OKP/Ed25519";
 pub const SD_JWT_VC_HOLDER_BINDING_METHOD: &str = "did:jwk";
+pub const MATCHING_POLICY_BASE_RULE_SUFFIXES: &[&str] = &[
+    "policy_identity",
+    "odrl_terms",
+    "requested_fact",
+    "requested_disclosure",
+    "credential_format",
+    "source_binding",
+    "route_identity",
+];
 
 pub const MAX_BOUNDED_CLAIM_ID_LEN: usize = 128;
 pub const MAX_CONFIG_METADATA_LEN: usize = 256;
@@ -1123,6 +1132,8 @@ pub struct ClaimResultView {
     pub value: Option<Value>,
     pub satisfied: Option<bool>,
     pub disclosure: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub redacted_fields: Vec<String>,
     pub format: String,
     pub issued_at: String,
     pub expires_at: Option<String>,
@@ -1162,6 +1173,10 @@ pub struct MatchingMetadata {
     pub policy_hash: Option<String>,
     #[serde(default, skip)]
     pub evaluated_rule_ids: Vec<String>,
+    #[serde(default, skip)]
+    pub ecosystem_binding_id: Option<String>,
+    #[serde(default, skip)]
+    pub ecosystem_binding_version: Option<String>,
 }
 
 /// `schema_version` value carried by every [`ClaimProvenance`]. Frozen at beta
@@ -1468,6 +1483,10 @@ pub struct EvidenceAuditEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub row_count: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_read_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forwarded: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access_mode: Option<AccessMode>,
@@ -1518,11 +1537,17 @@ pub struct EvidenceAuditEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matching_evaluated_rule_ids: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ecosystem_binding_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ecosystem_binding_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matching_method: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matching_outcome: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matching_error_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redacted_fields: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batch_items: Option<Vec<EvidenceBatchItemAuditEvent>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1598,6 +1623,10 @@ pub struct EvidenceBatchItemAuditEvent {
     pub matching_policy_hash: Option<Hashed<PolicyIdentifier>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matching_evaluated_rule_ids: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ecosystem_binding_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ecosystem_binding_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matching_method: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2113,6 +2142,8 @@ mod tests {
             claim_hash: Some("sha256:claims".to_string()),
             purposes: None,
             row_count: None,
+            source_read_count: None,
+            forwarded: None,
             error_code: Some("self_attestation.denied".to_string()),
             access_mode: Some(AccessMode::SelfAttestation),
             federation_peer_id_hash: None,
@@ -2138,6 +2169,8 @@ mod tests {
             matching_policy_id: Some("civil-registry-v1".to_string()),
             matching_policy_hash: Some(Hashed::from_hash("sha256:matching-policy")),
             matching_evaluated_rule_ids: Some(vec!["source-binding-policy:person".to_string()]),
+            ecosystem_binding_id: Some("baseline-dpi/v1".to_string()),
+            ecosystem_binding_version: Some("2026-06-19".to_string()),
             matching_method: Some("configured_lookup".to_string()),
             matching_outcome: Some("matched".to_string()),
             matching_error_code: None,
@@ -2150,6 +2183,8 @@ mod tests {
                 matching_policy_id: Some("civil-registry-v1".to_string()),
                 matching_policy_hash: Some(Hashed::from_hash("sha256:matching-policy")),
                 matching_evaluated_rule_ids: Some(vec!["source-binding-policy:person".to_string()]),
+                ecosystem_binding_id: Some("baseline-dpi/v1".to_string()),
+                ecosystem_binding_version: Some("2026-06-19".to_string()),
                 matching_method: Some("configured_lookup".to_string()),
                 matching_outcome: Some("matched".to_string()),
                 matching_error_code: None,
