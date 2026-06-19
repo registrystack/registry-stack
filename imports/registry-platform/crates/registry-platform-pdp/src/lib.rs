@@ -1217,6 +1217,65 @@ mod tests {
     }
 
     #[test]
+    fn deny_audit_carries_binding_route_scope_and_trust_provenance() {
+        let mut policy = policy();
+        policy.ecosystem_binding_id = Some("baseline-dpi/v1".to_string());
+        policy.ecosystem_binding_version = Some("v1".to_string());
+
+        let mut request_context = context();
+        request_context.purpose = "unauthorized-purpose".to_string();
+
+        match decide(&request_context, &policy) {
+            Decision::Deny {
+                audit,
+                stable_problem_code,
+            } => {
+                assert_eq!(stable_problem_code, PURPOSE_NOT_PERMITTED);
+                assert_eq!(
+                    audit.stable_problem_code.as_deref(),
+                    Some(PURPOSE_NOT_PERMITTED)
+                );
+                assert_eq!(audit.policy_id, "policy-1");
+                assert_eq!(
+                    audit.policy_hash,
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                );
+                assert_eq!(
+                    audit.ecosystem_binding_id.as_deref(),
+                    Some("baseline-dpi/v1")
+                );
+                assert_eq!(audit.ecosystem_binding_version.as_deref(), Some("v1"));
+                assert_eq!(audit.route_identity.as_deref(), Some("route:benefits"));
+                assert_eq!(audit.source_binding.as_deref(), Some("baseline-dpi/v1"));
+                assert_eq!(
+                    audit.checked_scopes,
+                    BTreeSet::from(["evidence.read".to_string()])
+                );
+                assert_eq!(
+                    audit.trust_provenance,
+                    BTreeSet::from([
+                        "asserted_assurance".to_string(),
+                        "consent_ref".to_string(),
+                        "jurisdiction".to_string(),
+                        "legal_basis_ref".to_string(),
+                        "source_observed_age_seconds".to_string(),
+                        "source_observed_at_unix_seconds".to_string(),
+                    ])
+                );
+                assert!(audit
+                    .evaluated_rule_ids
+                    .iter()
+                    .any(|rule| rule == "pdp.policy_identity"));
+                assert!(audit
+                    .evaluated_rule_ids
+                    .iter()
+                    .any(|rule| rule == "pdp.purpose"));
+            }
+            other => panic!("expected Deny, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn permits_empty_policy_only_with_explicit_unconstrained_opt_out() {
         let mut policy = policy();
         policy.purpose_constraints.clear();
