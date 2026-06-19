@@ -855,6 +855,7 @@ where
     serde_json::from_str(&format!(r#""{value}""#)).ok()
 }
 
+#[allow(clippy::result_large_err)]
 fn require_collection_source_governed_access(
     runtime: &RuntimeSnapshot,
     config: &Config,

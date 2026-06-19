@@ -1125,6 +1125,7 @@ fn require_scope_for(principal: Option<&Principal>, required: &str) -> Result<()
     require_scope(principal, required)
 }
 
+#[allow(clippy::result_large_err)]
 fn require_entity_route_gates(
     runtime: &RuntimeSnapshot,
     dataset_id: &str,
