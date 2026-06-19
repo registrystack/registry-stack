@@ -253,13 +253,15 @@ OPENCRVS_DCI_CLIENT_ID='<client id>'
 OPENCRVS_DCI_CLIENT_SECRET='<client secret>'
 OPENCRVS_DCI_SHA_SECRET='<sha secret, reserved for signed-request testing>'
 OPENCRVS_EVIDENCE_CLIENT_TOKEN='api-token'
-OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH='sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51'
 OPENCRVS_DCI_NOTARY_PORT=4352
 ```
 
 Registry Notary fetches OpenCRVS source tokens with OAuth client credentials.
 The smoke script also fetches a short-lived token to discover a seeded demo UIN
 when `OPENCRVS_DEMO_SUBJECT_UIN` is unset, but it does not store that token.
+It derives local Registry Notary API-key hashes from the corresponding token
+values when the hash env vars are unset or still contain placeholder zero
+digests.
 Set `OPENCRVS_DEMO_SUBJECT_UIN` locally for a fixed smoke subject.
 
 The VC profile uses `holder_binding.mode: none` so the lab can show direct
