@@ -81,6 +81,36 @@ ecosystem_bindings:
     profile: baseline-dpi
     type: governed-evidence
     evidence_pack:
+      pack_id: baseline-dpi/v1
+      pack_version: v1
+      source_basis:
+        family: dpi
+        evidence_type: name_evidence
+      semantic_profile:
+        vocabulary: registry-lab
+        fit: strong
+      evidence_envelope:
+        format: minimized_json
+        fields:
+          - claim_id
+          - result
+      required_gates:
+            - purpose
+            - jurisdiction
+            - legal_basis
+            - consent
+            - authority_basis
+            - requester_identity
+            - subject_identity
+            - subject_relationship
+            - assurance
+            - source_binding
+            - source_freshness
+            - requested_disclosure
+            - credential_format
+            - route_scope
+      allowed_outputs:
+            - minimized_json
       policy_id: baseline-dpi-policy
       policy_hash: sha256:3333333333333333333333333333333333333333333333333333333333333333
       odrl_enforcement:
@@ -92,6 +122,36 @@ ecosystem_bindings:
     profile: assurance-dpi
     type: governed-evidence
     evidence_pack:
+      pack_id: assurance-dpi/v1
+      pack_version: v1
+      source_basis:
+        family: dpi
+        evidence_type: name_evidence
+      semantic_profile:
+        vocabulary: registry-lab
+        fit: strong
+      evidence_envelope:
+        format: minimized_json
+        fields:
+          - claim_id
+          - result
+      required_gates:
+            - purpose
+            - jurisdiction
+            - legal_basis
+            - consent
+            - authority_basis
+            - requester_identity
+            - subject_identity
+            - subject_relationship
+            - assurance
+            - source_binding
+            - source_freshness
+            - requested_disclosure
+            - credential_format
+            - route_scope
+      allowed_outputs:
+            - minimized_json
       policy_id: assurance-dpi-policy
       policy_hash: sha256:5555555555555555555555555555555555555555555555555555555555555555
       odrl_enforcement:
