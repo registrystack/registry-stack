@@ -397,14 +397,21 @@ def assert_expected_result(case: dict[str, Any], body: dict[str, Any]) -> None:
 
 
 def assert_redaction(case: dict[str, Any], body: dict[str, Any]) -> None:
-    payload = json.dumps(body, sort_keys=True)
     for field in case.get("expected", {}).get("absent_fields") or []:
-        if field in payload:
+        if isinstance(field, str) and contains_json_key(body, field):
             problem(f"{case.get('id')} leaked redacted field {field!r}")
     for claim in case.get("request", {}).get("claims") or []:
         result = result_for(body, claim)
         if provenance_source_count(result) < 1:
             problem(f"{case.get('id')} {claim} did not record source_count")
+
+
+def contains_json_key(value: Any, key: str) -> bool:
+    if isinstance(value, dict):
+        return key in value or any(contains_json_key(item, key) for item in value.values())
+    if isinstance(value, list):
+        return any(contains_json_key(item, key) for item in value)
+    return False
 
 
 def audit_expectation_for(
@@ -694,18 +701,19 @@ def run_profile(runtime: ProfileRuntime, mode: str, correlation_prefix: str) -> 
 def parse_audit_records(path: Path) -> list[dict[str, Any]]:
     decoder = json.JSONDecoder()
     records: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        start = line.find("{")
-        while start != -1:
-            try:
-                value, _ = decoder.raw_decode(line[start:])
-            except json.JSONDecodeError:
+    with path.open(encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            start = line.find("{")
+            while start != -1:
+                try:
+                    value, _ = decoder.raw_decode(line[start:])
+                except json.JSONDecodeError:
+                    start = line.find("{", start + 1)
+                    continue
+                if isinstance(value, dict):
+                    records.append(value.get("record") if isinstance(value.get("record"), dict) else value)
+                    break
                 start = line.find("{", start + 1)
-                continue
-            if isinstance(value, dict):
-                records.append(value.get("record") if isinstance(value.get("record"), dict) else value)
-                break
-            start = line.find("{", start + 1)
     return records
 
 
@@ -844,7 +852,7 @@ def binding_qualified_rule_ids_match(actual: list[Any]) -> bool:
 def is_binding_qualified_rule_id(value: str) -> bool:
     if not value.startswith(BINDING_QUALIFIED_RULE_PREFIX):
         return False
-    remainder = value.removeprefix(BINDING_QUALIFIED_RULE_PREFIX)
+    remainder = value[len(BINDING_QUALIFIED_RULE_PREFIX) :]
     entity, separator, gate = remainder.rpartition(".")
     return bool(entity and separator and gate in BINDING_QUALIFIED_RULE_GATES)
 
@@ -859,10 +867,10 @@ def audit_hash_matches(actual: Any, expected: str) -> bool:
 
 def is_hash_ref(value: str) -> bool:
     if value.startswith("sha256:"):
-        digest = value.removeprefix("sha256:")
+        digest = value[len("sha256:") :]
         return len(digest) == 64 and all(ch in "0123456789abcdef" for ch in digest)
     if value.startswith("hmac-sha256:"):
-        digest = value.removeprefix("hmac-sha256:")
+        digest = value[len("hmac-sha256:") :]
         return len(digest) >= 32 and all(ch.isalnum() or ch in "-_=" for ch in digest)
     return False
 
