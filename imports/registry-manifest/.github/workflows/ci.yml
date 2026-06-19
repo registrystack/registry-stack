@@ -8,6 +8,8 @@ on:
 
 env:
   REGISTRY_MANIFEST_COVERAGE_THRESHOLD: "80"
+  REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
+  REGISTRY_PLATFORM_REF: 668f5092ad23bf6e0b61491b95ab470e3879dee9
 
 jobs:
   rust:
@@ -15,6 +17,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Checkout registry-platform
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          path: registry-platform
+
+      - name: Link registry-platform path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -47,6 +60,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Checkout registry-platform
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          path: registry-platform
+
+      - name: Link registry-platform path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -127,6 +151,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Checkout registry-platform
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          path: registry-platform
+
+      - name: Link registry-platform path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

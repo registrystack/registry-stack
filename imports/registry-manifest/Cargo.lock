@@ -720,6 +720,7 @@ name = "registry-manifest-core"
 version = "0.2.0"
 dependencies = [
  "oxiri",
+ "registry-platform-pdp",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -728,6 +729,13 @@ dependencies = [
  "sophia_jsonld",
  "sophia_term",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "registry-platform-pdp"
+version = "0.3.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

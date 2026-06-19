@@ -10,6 +10,8 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+pub use registry_platform_pdp::{ODRL_ENFORCEMENT_PROFILE, SUPPORTED_ODRL_ENFORCEMENT_TERMS};
+
 #[allow(dead_code)]
 const DATASETS_COLLECTION_ID: &str = "datasets";
 const JSON_SCHEMA_DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
@@ -37,8 +39,6 @@ const MAX_ENTITY_RELATIONSHIPS: usize = 512;
 const MAX_CODELIST_CONCEPTS: usize = 1024;
 const MAX_URI_LIST_ITEMS: usize = 128;
 const ECOSYSTEM_BINDING_TYPE_GOVERNED_EVIDENCE: &str = "governed-evidence";
-pub const ODRL_ENFORCEMENT_PROFILE: &str = "registry-evidence-gateway-pdp/v1";
-pub const SUPPORTED_ODRL_ENFORCEMENT_TERMS: &[&str] = &["odrl:purpose", "odrl:spatial"];
 pub const REQUIRED_EVIDENCE_PACK_GATES: &[&str] = &[
     "purpose",
     "jurisdiction",
@@ -1834,13 +1834,12 @@ fn validate_required_evidence_pack_gates(
         ));
         return;
     }
-    let declared = evidence_pack
-        .required_gates
-        .iter()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
     for required in REQUIRED_EVIDENCE_PACK_GATES {
-        if !declared.contains(required) {
+        if !evidence_pack
+            .required_gates
+            .iter()
+            .any(|gate| gate.as_str() == *required)
+        {
             errors.push(ValidationError::new(
                 field_path.clone(),
                 format!("required_gates must include {required}"),
