@@ -2183,6 +2183,38 @@ ecosystem_bindings:
         - id: success-person-is-alive
           path: fixtures/success/person-is-alive.json
     evidence_pack:
+      pack_id: oots-birth-evidence/v1
+      pack_version: v1
+      source_basis:
+        family: oots-common-data-model
+        evidence_type: Birth Evidence
+      semantic_profile:
+        vocabulary: publicschema
+        fit: strong
+      evidence_envelope:
+        identifier: required
+        issuing_date: required
+        issuing_authority: required
+        is_about: required
+        is_conformant_to: required
+        distribution: one_or_more
+      required_gates:
+        - purpose
+        - jurisdiction
+        - legal_basis
+        - consent
+        - authority_basis
+        - requester_identity
+        - subject_identity
+        - subject_relationship
+        - assurance
+        - source_binding
+        - source_freshness
+        - requested_disclosure
+        - credential_format
+        - route_scope
+      allowed_outputs:
+        - minimized_json
       policy_id: baseline-policy
       policy_version: "2026.06"
       policy_hash: sha256:54fcbb33655ddd98d628a0342af2ecd891e89067a167092d86e8a38d94552a3f
@@ -2272,6 +2304,18 @@ codelists: []
         json!("success-person-is-alive")
     );
     assert_eq!(
+        catalog["ecosystem_bindings"][0]["evidence_pack"]["pack_id"],
+        json!("oots-birth-evidence/v1")
+    );
+    assert_eq!(
+        catalog["ecosystem_bindings"][0]["evidence_pack"]["required_gates"][0],
+        json!("purpose")
+    );
+    assert_eq!(
+        catalog["ecosystem_bindings"][0]["evidence_pack"]["allowed_outputs"],
+        json!(["minimized_json"])
+    );
+    assert_eq!(
         catalog["ecosystem_bindings"][0]["evidence_pack"]["policy_id"],
         json!("baseline-policy")
     );
@@ -2326,6 +2370,38 @@ ecosystem_bindings:
     profile: baseline-dpi
     type: governed-evidence
     evidence_pack:
+      pack_id: oots-birth-evidence/v1
+      pack_version: v1
+      source_basis:
+        family: oots-common-data-model
+        evidence_type: Birth Evidence
+      semantic_profile:
+        vocabulary: publicschema
+        fit: strong
+      evidence_envelope:
+        identifier: required
+        issuing_date: required
+        issuing_authority: required
+        is_about: required
+        is_conformant_to: required
+        distribution: one_or_more
+      required_gates:
+        - purpose
+        - jurisdiction
+        - legal_basis
+        - consent
+        - authority_basis
+        - requester_identity
+        - subject_identity
+        - subject_relationship
+        - assurance
+        - source_binding
+        - source_freshness
+        - requested_disclosure
+        - credential_format
+        - route_scope
+      allowed_outputs:
+        - minimized_json
       policy_id: baseline-policy
       policy_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222
       odrl_enforcement:
@@ -2557,6 +2633,169 @@ codelists: []
                     .contains("must declare evidence_pack policy_hash")
         }),
         "expected missing policy_hash error; got {errors:?}"
+    );
+}
+
+#[test]
+fn validation_rejects_governed_evidence_binding_without_pack_metadata() {
+    let raw = r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: governed-without-pack-metadata
+  base_url: https://registry.example.test
+  title: Governed Without Pack Metadata
+  publisher:
+    name: Example Registry
+ecosystem_bindings:
+  - id: baseline-dpi/v1
+    version: v1
+    profile: baseline-dpi
+    type: governed-evidence
+    evidence_pack:
+      policy_id: baseline-policy
+      policy_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222
+      odrl_enforcement:
+        profile: registry-evidence-gateway-pdp/v1
+        constraint_terms:
+          - odrl:purpose
+datasets: []
+codelists: []
+"#;
+    let manifest: MetadataManifest =
+        serde_yaml_ng::from_str(raw).expect("governed manifest parses");
+
+    let error = validate_manifest(&manifest).expect_err("missing pack metadata rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    for expected_path in [
+        "ecosystem_bindings[0].evidence_pack.pack_id",
+        "ecosystem_bindings[0].evidence_pack.pack_version",
+        "ecosystem_bindings[0].evidence_pack.source_basis",
+        "ecosystem_bindings[0].evidence_pack.semantic_profile",
+        "ecosystem_bindings[0].evidence_pack.evidence_envelope",
+        "ecosystem_bindings[0].evidence_pack.required_gates",
+        "ecosystem_bindings[0].evidence_pack.allowed_outputs",
+    ] {
+        assert!(
+            errors.iter().any(|error| error.path == expected_path),
+            "expected missing pack metadata error at {expected_path}; got {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn validation_rejects_governed_evidence_binding_missing_required_gate() {
+    let raw = r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: governed-missing-required-gate
+  base_url: https://registry.example.test
+  title: Governed Missing Required Gate
+  publisher:
+    name: Example Registry
+ecosystem_bindings:
+  - id: baseline-dpi/v1
+    version: v1
+    profile: baseline-dpi
+    type: governed-evidence
+    evidence_pack:
+      pack_id: oots-birth-evidence/v1
+      pack_version: v1
+      source_basis: { family: oots-common-data-model, evidence_type: Birth Evidence }
+      semantic_profile: { vocabulary: publicschema, fit: strong }
+      evidence_envelope: { identifier: required, distribution: one_or_more }
+      required_gates:
+        - purpose
+      allowed_outputs:
+        - minimized_json
+      policy_id: baseline-policy
+      policy_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222
+      odrl_enforcement:
+        profile: registry-evidence-gateway-pdp/v1
+        constraint_terms:
+          - odrl:purpose
+datasets: []
+codelists: []
+"#;
+    let manifest: MetadataManifest =
+        serde_yaml_ng::from_str(raw).expect("governed manifest parses");
+
+    let error = validate_manifest(&manifest).expect_err("missing required gate rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(
+        errors.iter().any(|error| {
+            error.path == "ecosystem_bindings[0].evidence_pack.required_gates"
+                && error.message.contains("jurisdiction")
+        }),
+        "expected missing jurisdiction gate error; got {errors:?}"
+    );
+}
+
+#[test]
+fn validation_rejects_unsupported_evidence_pack_allowed_output() {
+    let raw = r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: governed-unsupported-output
+  base_url: https://registry.example.test
+  title: Governed Unsupported Output
+  publisher:
+    name: Example Registry
+ecosystem_bindings:
+  - id: baseline-dpi/v1
+    version: v1
+    profile: baseline-dpi
+    type: governed-evidence
+    evidence_pack:
+      pack_id: oots-birth-evidence/v1
+      pack_version: v1
+      source_basis: { family: oots-common-data-model, evidence_type: Birth Evidence }
+      semantic_profile: { vocabulary: publicschema, fit: strong }
+      evidence_envelope: { identifier: required, distribution: one_or_more }
+      required_gates:
+        - purpose
+        - jurisdiction
+        - legal_basis
+        - consent
+        - authority_basis
+        - requester_identity
+        - subject_identity
+        - subject_relationship
+        - assurance
+        - source_binding
+        - source_freshness
+        - requested_disclosure
+        - credential_format
+        - route_scope
+      allowed_outputs:
+        - sd_jwt_vc
+      policy_id: baseline-policy
+      policy_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222
+      odrl_enforcement:
+        profile: registry-evidence-gateway-pdp/v1
+        constraint_terms:
+          - odrl:purpose
+datasets: []
+codelists: []
+"#;
+    let manifest: MetadataManifest =
+        serde_yaml_ng::from_str(raw).expect("governed manifest parses");
+
+    let error = validate_manifest(&manifest).expect_err("unsupported output rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(
+        errors.iter().any(|error| {
+            error.path == "ecosystem_bindings[0].evidence_pack.allowed_outputs[0]"
+                && error
+                    .message
+                    .contains("unsupported evidence_pack allowed output")
+        }),
+        "expected unsupported output error; got {errors:?}"
     );
 }
 

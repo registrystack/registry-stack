@@ -10,6 +10,8 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+pub use registry_platform_pdp::{ODRL_ENFORCEMENT_PROFILE, SUPPORTED_ODRL_ENFORCEMENT_TERMS};
+
 #[allow(dead_code)]
 const DATASETS_COLLECTION_ID: &str = "datasets";
 const JSON_SCHEMA_DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
@@ -37,8 +39,23 @@ const MAX_ENTITY_RELATIONSHIPS: usize = 512;
 const MAX_CODELIST_CONCEPTS: usize = 1024;
 const MAX_URI_LIST_ITEMS: usize = 128;
 const ECOSYSTEM_BINDING_TYPE_GOVERNED_EVIDENCE: &str = "governed-evidence";
-pub const ODRL_ENFORCEMENT_PROFILE: &str = "registry-evidence-gateway-pdp/v1";
-pub const SUPPORTED_ODRL_ENFORCEMENT_TERMS: &[&str] = &["odrl:purpose", "odrl:spatial"];
+pub const REQUIRED_EVIDENCE_PACK_GATES: &[&str] = &[
+    "purpose",
+    "jurisdiction",
+    "legal_basis",
+    "consent",
+    "authority_basis",
+    "requester_identity",
+    "subject_identity",
+    "subject_relationship",
+    "assurance",
+    "source_binding",
+    "source_freshness",
+    "requested_disclosure",
+    "credential_format",
+    "route_scope",
+];
+pub const SUPPORTED_EVIDENCE_PACK_OUTPUTS: &[&str] = &["minimized_json"];
 const BUILTIN_VOCABULARIES: &[(&str, &str)] = &[
     ("adms", "http://www.w3.org/ns/adms#"),
     ("cccev", "http://data.europa.eu/m8g/"),
@@ -394,6 +411,20 @@ pub struct EvaluationProfileManifest {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct EvidencePackMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_basis: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semantic_profile: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_envelope: Option<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_gates: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_outputs: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1738,6 +1769,38 @@ fn validate_governed_evidence_pack(
         ));
         return;
     };
+    if evidence_pack.pack_id.is_none() {
+        errors.push(ValidationError::new(
+            format!("{path}.evidence_pack.pack_id"),
+            "governed-evidence bindings must declare evidence_pack pack_id",
+        ));
+    }
+    if evidence_pack.pack_version.is_none() {
+        errors.push(ValidationError::new(
+            format!("{path}.evidence_pack.pack_version"),
+            "governed-evidence bindings must declare evidence_pack pack_version",
+        ));
+    }
+    if evidence_pack.source_basis.is_none() {
+        errors.push(ValidationError::new(
+            format!("{path}.evidence_pack.source_basis"),
+            "governed-evidence bindings must declare evidence_pack source_basis",
+        ));
+    }
+    if evidence_pack.semantic_profile.is_none() {
+        errors.push(ValidationError::new(
+            format!("{path}.evidence_pack.semantic_profile"),
+            "governed-evidence bindings must declare evidence_pack semantic_profile",
+        ));
+    }
+    if evidence_pack.evidence_envelope.is_none() {
+        errors.push(ValidationError::new(
+            format!("{path}.evidence_pack.evidence_envelope"),
+            "governed-evidence bindings must declare evidence_pack evidence_envelope",
+        ));
+    }
+    validate_required_evidence_pack_gates(evidence_pack, path, errors);
+    validate_required_evidence_pack_outputs(evidence_pack, path, errors);
     if evidence_pack.policy_id.is_none() {
         errors.push(ValidationError::new(
             format!("{path}.evidence_pack.policy_id"),
@@ -1758,6 +1821,58 @@ fn validate_governed_evidence_pack(
     }
 }
 
+fn validate_required_evidence_pack_gates(
+    evidence_pack: &EvidencePackMetadata,
+    path: &str,
+    errors: &mut Vec<ValidationError>,
+) {
+    let field_path = format!("{path}.evidence_pack.required_gates");
+    if evidence_pack.required_gates.is_empty() {
+        errors.push(ValidationError::new(
+            field_path.clone(),
+            "governed-evidence bindings must declare evidence_pack required_gates",
+        ));
+        return;
+    }
+    for required in REQUIRED_EVIDENCE_PACK_GATES {
+        if !evidence_pack
+            .required_gates
+            .iter()
+            .any(|gate| gate.as_str() == *required)
+        {
+            errors.push(ValidationError::new(
+                field_path.clone(),
+                format!("required_gates must include {required}"),
+            ));
+        }
+    }
+}
+
+fn validate_required_evidence_pack_outputs(
+    evidence_pack: &EvidencePackMetadata,
+    path: &str,
+    errors: &mut Vec<ValidationError>,
+) {
+    let field_path = format!("{path}.evidence_pack.allowed_outputs");
+    if evidence_pack.allowed_outputs.is_empty() {
+        errors.push(ValidationError::new(
+            field_path.clone(),
+            "governed-evidence bindings must declare evidence_pack allowed_outputs",
+        ));
+        return;
+    }
+    if !evidence_pack
+        .allowed_outputs
+        .iter()
+        .any(|output| output == "minimized_json")
+    {
+        errors.push(ValidationError::new(
+            field_path,
+            "allowed_outputs must include minimized_json",
+        ));
+    }
+}
+
 fn validate_optional_evidence_pack_metadata(
     evidence_pack: Option<&EvidencePackMetadata>,
     path: String,
@@ -1766,6 +1881,45 @@ fn validate_optional_evidence_pack_metadata(
     let Some(evidence_pack) = evidence_pack else {
         return;
     };
+    validate_optional_non_empty(
+        evidence_pack.pack_id.as_deref(),
+        format!("{path}.pack_id"),
+        errors,
+    );
+    validate_optional_non_empty(
+        evidence_pack.pack_version.as_deref(),
+        format!("{path}.pack_version"),
+        errors,
+    );
+    validate_optional_object(
+        evidence_pack.source_basis.as_ref(),
+        format!("{path}.source_basis"),
+        errors,
+    );
+    validate_optional_object(
+        evidence_pack.semantic_profile.as_ref(),
+        format!("{path}.semantic_profile"),
+        errors,
+    );
+    validate_optional_object(
+        evidence_pack.evidence_envelope.as_ref(),
+        format!("{path}.evidence_envelope"),
+        errors,
+    );
+    validate_string_list(
+        &evidence_pack.required_gates,
+        REQUIRED_EVIDENCE_PACK_GATES,
+        format!("{path}.required_gates"),
+        "unsupported evidence_pack required gate",
+        errors,
+    );
+    validate_string_list(
+        &evidence_pack.allowed_outputs,
+        SUPPORTED_EVIDENCE_PACK_OUTPUTS,
+        format!("{path}.allowed_outputs"),
+        "unsupported evidence_pack allowed output",
+        errors,
+    );
     validate_optional_non_empty(
         evidence_pack.policy_id.as_deref(),
         format!("{path}.policy_id"),
@@ -1808,6 +1962,39 @@ fn validate_optional_evidence_pack_metadata(
         format!("{path}.odrl_enforcement"),
         errors,
     );
+}
+
+fn validate_optional_object(
+    value: Option<&Value>,
+    path: String,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(value) = value else {
+        return;
+    };
+    if !value.is_object() {
+        errors.push(ValidationError::new(path, "field must be an object"));
+    }
+}
+
+fn validate_string_list(
+    values: &[String],
+    supported: &[&str],
+    path: String,
+    unsupported_message: &str,
+    errors: &mut Vec<ValidationError>,
+) {
+    let mut seen = BTreeSet::new();
+    for (index, value) in values.iter().enumerate() {
+        let item_path = format!("{path}[{index}]");
+        validate_non_empty(value, item_path.clone(), errors);
+        if !value.trim().is_empty() && !supported.contains(&value.as_str()) {
+            errors.push(ValidationError::new(item_path.clone(), unsupported_message));
+        }
+        if !seen.insert(value.as_str()) {
+            errors.push(ValidationError::new(item_path, "values must be unique"));
+        }
+    }
 }
 
 fn validate_odrl_enforcement_profile(
