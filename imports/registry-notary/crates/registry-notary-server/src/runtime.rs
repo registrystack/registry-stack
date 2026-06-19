@@ -2184,6 +2184,7 @@ async fn evaluate_claim_task(
             .insert((summary.kind.clone(), summary.config_hash.clone()), summary);
     }
     let source_runtimes = source_runtime_summaries.into_values().collect();
+    let matching = claim_matching_metadata(&ctx.evidence, &claim, matching_policy_audit.as_ref());
     let mut provenance = ClaimProvenance::new(
         ctx.evidence.service_id.clone(),
         ctx.evaluation_id.clone(),
@@ -2198,6 +2199,10 @@ async fn evaluate_claim_task(
     provenance.generated_by.policy_id = ctx.policy.policy_id.clone();
     provenance.generated_by.policy_version = ctx.policy.policy_version.clone();
     provenance.generated_by.policy_hash = ctx.policy.policy_hash.clone();
+    if let Some(matching) = &matching {
+        provenance.generated_by.pack_id = matching.pack_id.clone();
+        provenance.generated_by.pack_version = matching.pack_version.clone();
+    }
     Ok(ClaimResultInternal {
         evaluation_id: ctx.evaluation_id.clone(),
         claim_id: claim.id.clone(),
@@ -2205,7 +2210,7 @@ async fn evaluate_claim_task(
         subject_type: claim.subject_type.clone(),
         target: ctx.context.target.clone(),
         requester: ctx.context.requester.clone(),
-        matching: claim_matching_metadata(&ctx.evidence, &claim, matching_policy_audit.as_ref()),
+        matching,
         value,
         redaction_fields,
         issued_at,
@@ -3884,6 +3889,8 @@ pub(crate) struct MatchingPolicyAuditIdentity {
     pub policy_hash: String,
     pub ecosystem_binding_id: Option<String>,
     pub ecosystem_binding_version: Option<String>,
+    pub pack_id: Option<String>,
+    pub pack_version: Option<String>,
     pub evaluated_rule_ids: Vec<String>,
 }
 
@@ -3907,6 +3914,12 @@ pub(crate) fn matching_policy_audit_identity(
         ecosystem_binding_version: selected_policy
             .as_ref()
             .and_then(|policy| policy.ecosystem_binding_version.clone()),
+        pack_id: selected_policy
+            .as_ref()
+            .and_then(|policy| policy.pack_id.clone()),
+        pack_version: selected_policy
+            .as_ref()
+            .and_then(|policy| policy.pack_version.clone()),
         evaluated_rule_ids: vec![format!("source-binding-policy:{}", binding.entity)],
     }
 }
@@ -3917,6 +3930,8 @@ struct SelectedEvidencePackPolicy {
     policy_hash: String,
     ecosystem_binding_id: Option<String>,
     ecosystem_binding_version: Option<String>,
+    pack_id: Option<String>,
+    pack_version: Option<String>,
     unsupported_odrl_terms: Vec<String>,
 }
 
@@ -3936,6 +3951,13 @@ fn selected_evidence_pack_policy(
                 .id
                 .as_deref()
                 .and_then(ecosystem_binding_version_from_id),
+            pack_id: selector.pack_id.clone().or_else(|| selector.id.clone()),
+            pack_version: selector.pack_version.clone().or_else(|| {
+                selector
+                    .id
+                    .as_deref()
+                    .and_then(ecosystem_binding_version_from_id)
+            }),
             unsupported_odrl_terms: selector.unsupported_odrl_terms.clone(),
         });
     }
@@ -3946,6 +3968,11 @@ fn selected_evidence_pack_policy(
             policy_hash: metadata.policy_hash.clone(),
             ecosystem_binding_id: Some(id.to_string()),
             ecosystem_binding_version: ecosystem_binding_version_from_id(id),
+            pack_id: selector.pack_id.clone().or_else(|| Some(id.to_string())),
+            pack_version: selector
+                .pack_version
+                .clone()
+                .or_else(|| ecosystem_binding_version_from_id(id)),
             unsupported_odrl_terms: metadata.unsupported_odrl_terms.clone(),
         });
     }
@@ -3959,6 +3986,11 @@ fn selected_evidence_pack_policy(
         policy_hash: metadata.policy_hash.clone(),
         ecosystem_binding_id: Some(id.clone()),
         ecosystem_binding_version: ecosystem_binding_version_from_id(id),
+        pack_id: selector.pack_id.clone().or_else(|| Some(id.clone())),
+        pack_version: selector
+            .pack_version
+            .clone()
+            .or_else(|| ecosystem_binding_version_from_id(id)),
         unsupported_odrl_terms: metadata.unsupported_odrl_terms.clone(),
     })
 }
@@ -4213,6 +4245,12 @@ fn claim_matching_metadata(
                 ecosystem_binding_version: selected_policy
                     .as_ref()
                     .and_then(|policy| policy.ecosystem_binding_version.clone()),
+                pack_id: selected_policy
+                    .as_ref()
+                    .and_then(|policy| policy.pack_id.clone()),
+                pack_version: selected_policy
+                    .as_ref()
+                    .and_then(|policy| policy.pack_version.clone()),
             })
         })
 }
@@ -7292,6 +7330,56 @@ mod tests {
             ),
             registry_platform_pdp::EVIDENCE_STALE,
         );
+        let mut evidence = EvidenceConfig::default();
+        evidence.ecosystem_bindings.insert(
+            "oots-birth-evidence/v1".to_string(),
+            registry_notary_core::EvidenceEcosystemBindingConfig {
+                profile: Some("registry-notary/source-policy/v1".to_string()),
+                policy_id: "lab.oots-birth-evidence.governed-evidence.v1".to_string(),
+                policy_hash:
+                    "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+                        .to_string(),
+                unsupported_odrl_terms: Vec::new(),
+            },
+        );
+        binding.matching.ecosystem_binding =
+            Some(registry_notary_core::EcosystemBindingSelectorConfig {
+                id: Some("oots-birth-evidence/v1".to_string()),
+                pack_id: Some("oots-birth-evidence/v1".to_string()),
+                pack_version: Some("v1".to_string()),
+                ..registry_notary_core::EcosystemBindingSelectorConfig::default()
+            });
+        let stale = matching_pdp_decision(
+            &evidence,
+            &binding,
+            &machine_capability(&[]),
+            &context,
+            "benefits",
+            &TrustedPolicyContext::default(),
+            &purpose_constraints,
+            &["value".to_string(), "predicate".to_string()],
+            &[FORMAT_CLAIM_RESULT_JSON.to_string()],
+            DisclosureProfile::Value,
+            FORMAT_CLAIM_RESULT_JSON,
+            Some(61),
+            true,
+        )
+        .expect_err("stale source denies with selected pack policy");
+        let EvidenceError::PolicyDenied {
+            code,
+            policy_id: Some(policy_id),
+            policy_hash: Some(policy_hash),
+            ..
+        } = stale
+        else {
+            panic!("expected pack-backed stale PolicyDenied");
+        };
+        assert_eq!(code, registry_platform_pdp::EVIDENCE_STALE);
+        assert_eq!(policy_id, "lab.oots-birth-evidence.governed-evidence.v1");
+        assert_eq!(
+            policy_hash,
+            "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+        );
         assert!(matching_pdp_decision(
             &EvidenceConfig::default(),
             &binding,
@@ -7430,6 +7518,8 @@ mod tests {
         binding.matching.ecosystem_binding =
             Some(registry_notary_core::EcosystemBindingSelectorConfig {
                 id: Some("civil-pack/v1".to_string()),
+                pack_id: Some("oots-birth-evidence/v1".to_string()),
+                pack_version: Some("v1".to_string()),
                 ..registry_notary_core::EcosystemBindingSelectorConfig::default()
             });
         let context = EvidenceRequestContext {
@@ -7443,6 +7533,8 @@ mod tests {
         let selected =
             selected_evidence_pack_policy(&evidence, &binding).expect("selected policy resolves");
         assert_eq!(selected.policy_id, "evidence-pack-policy");
+        assert_eq!(selected.pack_id.as_deref(), Some("oots-birth-evidence/v1"));
+        assert_eq!(selected.pack_version.as_deref(), Some("v1"));
         assert_eq!(
             selected.policy_hash,
             "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
@@ -7480,6 +7572,9 @@ mod tests {
                 })
             }
         );
+        let identity = matching_policy_audit_identity(&evidence, &binding);
+        assert_eq!(identity.pack_id.as_deref(), Some("oots-birth-evidence/v1"));
+        assert_eq!(identity.pack_version.as_deref(), Some("v1"));
 
         evidence
             .ecosystem_bindings
@@ -7504,6 +7599,85 @@ mod tests {
             ),
             registry_platform_pdp::UNSUPPORTED_POLICY_TERM,
         );
+    }
+
+    #[tokio::test]
+    async fn evaluate_claim_provenance_carries_selected_pack_identity() {
+        let mut claim = test_claim("birth.certificate_summary", Vec::new(), true);
+        claim.disclosure.default = "value".to_string();
+        claim.disclosure.allowed = vec!["value".to_string(), "predicate".to_string()];
+        let matching = &mut claim
+            .source_bindings
+            .get_mut("src")
+            .expect("test source binding exists")
+            .matching;
+        matching.allowed_purposes = vec!["benefits".to_string()];
+        matching.ecosystem_binding = Some(registry_notary_core::EcosystemBindingSelectorConfig {
+            id: Some("oots-birth-evidence/v1".to_string()),
+            pack_id: Some("oots-birth-evidence/v1".to_string()),
+            pack_version: Some("v1".to_string()),
+            ..registry_notary_core::EcosystemBindingSelectorConfig::default()
+        });
+
+        let mut evidence = EvidenceConfig {
+            enabled: true,
+            service_id: "runtime.test".to_string(),
+            claims: vec![claim],
+            ..EvidenceConfig::default()
+        };
+        evidence.ecosystem_bindings.insert(
+            "oots-birth-evidence/v1".to_string(),
+            registry_notary_core::EvidenceEcosystemBindingConfig {
+                profile: Some("registry-notary/source-policy/v1".to_string()),
+                policy_id: "lab.oots-birth-evidence.governed-evidence.v1".to_string(),
+                policy_hash:
+                    "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+                        .to_string(),
+                unsupported_odrl_terms: Vec::new(),
+            },
+        );
+
+        let principal = EvidencePrincipal {
+            principal_id: "caseworker".to_string(),
+            scopes: vec!["birth.certificate_summary:1.0".to_string()],
+            access_mode: AccessMode::MachineClient,
+            verified_claims: None,
+            authorization_details: None,
+        };
+        let results = crate::RegistryNotaryRuntime::new()
+            .evaluate(
+                Arc::new(evidence),
+                Arc::new(VersionScopedSource::default()),
+                &EvidenceStore::default(),
+                &principal,
+                EvaluateRequest {
+                    requester: None,
+                    target: Some(EvidenceEntity::from_subject_request(
+                        "Person",
+                        SubjectRequest {
+                            id: "person-123".to_string(),
+                            id_type: None,
+                        },
+                    )),
+                    relationship: None,
+                    on_behalf_of: None,
+                    claims: vec![ClaimRef::from("birth.certificate_summary")],
+                    disclosure: Some("value".to_string()),
+                    format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+                    purpose: Some("benefits".to_string()),
+                },
+                None,
+            )
+            .await
+            .expect("claim evaluates");
+
+        let generated_by = &results[0].provenance.generated_by;
+        assert_eq!(
+            generated_by.pack_id.as_deref(),
+            Some("oots-birth-evidence/v1")
+        );
+        assert_eq!(generated_by.pack_version.as_deref(), Some("v1"));
+        assert_eq!(results[0].disclosure, "value");
     }
 
     #[tokio::test]

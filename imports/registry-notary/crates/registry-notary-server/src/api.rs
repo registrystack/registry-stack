@@ -3718,6 +3718,8 @@ pub struct EvidenceAuditContext {
     pub matching_evaluated_rule_ids: Option<Vec<String>>,
     pub ecosystem_binding_id: Option<String>,
     pub ecosystem_binding_version: Option<String>,
+    pub pack_id: Option<String>,
+    pub pack_version: Option<String>,
     pub matching_method: Option<String>,
     pub matching_outcome: Option<String>,
     pub matching_error_code: Option<String>,
@@ -7461,6 +7463,7 @@ fn self_attestation_token_policy_hash(
     config: &SelfAttestationConfig,
 ) -> Result<String, EvidenceError> {
     let canonical = json!({
+        "purpose_constraints": [["self_attestation"]],
         "required_acr_values": config.token_policy.required_acr_values,
         "assurance_claim_source": config.token_policy.assurance_claim_source,
         "max_auth_age_seconds": config.token_policy.max_auth_age_seconds,
@@ -7808,6 +7811,8 @@ fn attach_evaluate_request_audit(
             (!matching.evaluated_rule_ids.is_empty()).then(|| matching.evaluated_rule_ids.clone());
         audit.ecosystem_binding_id = matching.ecosystem_binding_id.clone();
         audit.ecosystem_binding_version = matching.ecosystem_binding_version.clone();
+        audit.pack_id = matching.pack_id.clone();
+        audit.pack_version = matching.pack_version.clone();
         audit.matching_method = Some(matching.method.clone());
         audit.matching_outcome = Some("matched".to_string());
     } else if let Some(error_code) = matching_error_code.filter(|code| is_matching_audit_code(code))
@@ -7821,6 +7826,8 @@ fn attach_evaluate_request_audit(
                 (!policy.evaluated_rule_ids.is_empty()).then(|| policy.evaluated_rule_ids.clone());
             audit.ecosystem_binding_id = policy.ecosystem_binding_id.clone();
             audit.ecosystem_binding_version = policy.ecosystem_binding_version.clone();
+            audit.pack_id = policy.pack_id.clone();
+            audit.pack_version = policy.pack_version.clone();
         }
         audit.matching_outcome = Some("error".to_string());
         audit.matching_error_code = Some(error_code.to_string());
@@ -7935,6 +7942,20 @@ fn attach_batch_evaluate_response_audit(
                         .as_ref()
                         .and_then(|policy| policy.ecosystem_binding_version.clone())
                 }),
+            pack_id: matching
+                .and_then(|matching| matching.pack_id.clone())
+                .or_else(|| {
+                    denied_matching_policy
+                        .as_ref()
+                        .and_then(|policy| policy.pack_id.clone())
+                }),
+            pack_version: matching
+                .and_then(|matching| matching.pack_version.clone())
+                .or_else(|| {
+                    denied_matching_policy
+                        .as_ref()
+                        .and_then(|policy| policy.pack_version.clone())
+                }),
             matching_method: matching.map(|matching| matching.method.clone()),
             matching_outcome: if item.errors.is_empty() {
                 Some("matched".to_string())
@@ -7991,6 +8012,10 @@ fn matching_policy_audit_identity_from_error(
         ecosystem_binding_version: ecosystem_binding
             .as_deref()
             .and_then(ecosystem_binding_version_from_id),
+        pack_id: ecosystem_binding.clone(),
+        pack_version: ecosystem_binding
+            .as_deref()
+            .and_then(ecosystem_binding_version_from_id),
         evaluated_rule_ids: evaluated_rule_ids.clone(),
     })
 }
@@ -8024,6 +8049,12 @@ fn merge_matching_policy_audit_identity(
             }
             if primary.ecosystem_binding_version.is_none() {
                 primary.ecosystem_binding_version = fallback.ecosystem_binding_version;
+            }
+            if primary.pack_id.is_none() {
+                primary.pack_id = fallback.pack_id;
+            }
+            if primary.pack_version.is_none() {
+                primary.pack_version = fallback.pack_version;
             }
             if primary.evaluated_rule_ids.is_empty() {
                 primary.evaluated_rule_ids = fallback.evaluated_rule_ids;
@@ -8279,6 +8310,8 @@ fn attach_self_attestation_credential_audit(
         ecosystem_binding_id: matching.and_then(|matching| matching.ecosystem_binding_id.clone()),
         ecosystem_binding_version: matching
             .and_then(|matching| matching.ecosystem_binding_version.clone()),
+        pack_id: matching.and_then(|matching| matching.pack_id.clone()),
+        pack_version: matching.and_then(|matching| matching.pack_version.clone()),
         matching_method: matching.map(|matching| matching.method.clone()),
         matching_outcome: matching.map(|_| "matched".to_string()),
         matching_error_code: None,
@@ -9571,6 +9604,7 @@ mod tests {
                 "allowed_audiences": ["registry-notary-citizen"]
             },
             "token_policy": {
+                "required_acr_values": ["urn:example:loa:substantial"],
                 "max_auth_age_seconds": 900,
                 "max_access_token_lifetime_seconds": 900,
                 "max_evaluation_age_seconds": 600,
@@ -11475,6 +11509,8 @@ mod tests {
                         evaluated_rule_ids: vec!["source-binding-policy:person".to_string()],
                         ecosystem_binding_id: Some("baseline-dpi/v1".to_string()),
                         ecosystem_binding_version: Some("2026-06-19".to_string()),
+                        pack_id: Some("baseline-dpi/v1".to_string()),
+                        pack_version: Some("2026-06-19".to_string()),
                     }),
                     evaluation_id: Some("eval-1".to_string()),
                     status: registry_notary_core::BatchItemStatus::Succeeded,
@@ -11789,6 +11825,8 @@ mod tests {
             evaluated_rule_ids: vec!["source-binding-policy:person".to_string()],
             ecosystem_binding_id: Some("baseline-dpi/v1".to_string()),
             ecosystem_binding_version: Some("2026-06-19".to_string()),
+            pack_id: Some("baseline-dpi/v1".to_string()),
+            pack_version: Some("2026-06-19".to_string()),
         });
         let mut response = StatusCode::OK.into_response();
         attach_evidence_audit(
@@ -11825,6 +11863,8 @@ mod tests {
             audit.ecosystem_binding_version.as_deref(),
             Some("2026-06-19")
         );
+        assert_eq!(audit.pack_id.as_deref(), Some("baseline-dpi/v1"));
+        assert_eq!(audit.pack_version.as_deref(), Some("2026-06-19"));
         assert_eq!(audit.matching_method.as_deref(), Some("configured_lookup"));
         assert_eq!(audit.matching_outcome.as_deref(), Some("matched"));
         let target_hash = audit
@@ -11924,6 +11964,8 @@ mod tests {
             evaluated_rule_ids: Vec::new(),
             ecosystem_binding_id: Some("baseline-dpi/v1".to_string()),
             ecosystem_binding_version: Some("2026-06-19".to_string()),
+            pack_id: Some("baseline-dpi/v1".to_string()),
+            pack_version: Some("2026-06-19".to_string()),
         });
         let mut response = StatusCode::OK.into_response();
 
@@ -11959,6 +12001,8 @@ mod tests {
             audit.ecosystem_binding_version.as_deref(),
             Some("2026-06-19")
         );
+        assert_eq!(audit.pack_id.as_deref(), Some("baseline-dpi/v1"));
+        assert_eq!(audit.pack_version.as_deref(), Some("2026-06-19"));
         assert_eq!(audit.matching_outcome.as_deref(), Some("matched"));
         assert!(audit.target_ref_hash.is_some());
         assert!(audit.requester_ref_hash.is_some());
@@ -12006,6 +12050,8 @@ mod tests {
                         .to_string(),
                 ecosystem_binding_id: None,
                 ecosystem_binding_version: None,
+                pack_id: None,
+                pack_version: None,
                 evaluated_rule_ids: vec!["source-binding-policy:person".to_string()],
             }),
         )
@@ -12147,6 +12193,8 @@ mod tests {
             Some("baseline-dpi/v1")
         );
         assert_eq!(policy.ecosystem_binding_version.as_deref(), Some("v1"));
+        assert_eq!(policy.pack_id.as_deref(), Some("baseline-dpi/v1"));
+        assert_eq!(policy.pack_version.as_deref(), Some("v1"));
         assert!(
             denied_matching_policy_audit_identity(
                 &evidence,
@@ -12210,6 +12258,8 @@ mod tests {
             Some("baseline-dpi/v1")
         );
         assert_eq!(policy.ecosystem_binding_version.as_deref(), Some("v1"));
+        assert_eq!(policy.pack_id.as_deref(), Some("baseline-dpi/v1"));
+        assert_eq!(policy.pack_version.as_deref(), Some("v1"));
     }
 
     #[test]
@@ -12222,6 +12272,8 @@ mod tests {
                         .to_string(),
                 ecosystem_binding_id: None,
                 ecosystem_binding_version: None,
+                pack_id: None,
+                pack_version: None,
                 evaluated_rule_ids: vec!["actual-rule".to_string()],
             }),
             Some(MatchingPolicyAuditIdentity {
@@ -12231,6 +12283,8 @@ mod tests {
                         .to_string(),
                 ecosystem_binding_id: Some("baseline-dpi/v1".to_string()),
                 ecosystem_binding_version: Some("v1".to_string()),
+                pack_id: Some("baseline-dpi/v1".to_string()),
+                pack_version: Some("v1".to_string()),
                 evaluated_rule_ids: vec!["selected-rule".to_string()],
             }),
         )

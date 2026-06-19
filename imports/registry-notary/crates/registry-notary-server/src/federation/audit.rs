@@ -100,6 +100,8 @@ pub(super) fn federation_audit_event(
         matching_evaluated_rule_ids: None,
         ecosystem_binding_id: None,
         ecosystem_binding_version: None,
+        pack_id: None,
+        pack_version: None,
         matching_method: None,
         matching_outcome: None,
         matching_error_code: None,

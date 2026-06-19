@@ -74,6 +74,8 @@ fn claim_result(claim_id: &str, value: serde_json::Value) -> ClaimResultView {
             evaluated_rule_ids: Vec::new(),
             ecosystem_binding_id: None,
             ecosystem_binding_version: None,
+            pack_id: None,
+            pack_version: None,
         }),
         value: Some(value),
         satisfied: Some(true),

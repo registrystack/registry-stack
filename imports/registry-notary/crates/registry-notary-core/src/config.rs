@@ -4794,6 +4794,10 @@ pub struct EcosystemBindingSelectorConfig {
     #[serde(default)]
     pub profile: Option<String>,
     #[serde(default)]
+    pub pack_id: Option<String>,
+    #[serde(default)]
+    pub pack_version: Option<String>,
+    #[serde(default)]
     pub policy_id: Option<String>,
     #[serde(default)]
     pub policy_hash: Option<String>,

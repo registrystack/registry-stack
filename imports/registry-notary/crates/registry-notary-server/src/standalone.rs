@@ -3318,6 +3318,8 @@ pub(crate) fn pre_auth_audit_event(
         matching_evaluated_rule_ids: None,
         ecosystem_binding_id: None,
         ecosystem_binding_version: None,
+        pack_id: None,
+        pack_version: None,
         matching_method: None,
         matching_outcome: None,
         matching_error_code: None,
@@ -4578,6 +4580,8 @@ fn build_audit_event(
     let ecosystem_binding_id = audit.and_then(|context| context.ecosystem_binding_id.clone());
     let ecosystem_binding_version =
         audit.and_then(|context| context.ecosystem_binding_version.clone());
+    let pack_id = audit.and_then(|context| context.pack_id.clone());
+    let pack_version = audit.and_then(|context| context.pack_version.clone());
     let matching_method = audit.and_then(|context| context.matching_method.clone());
     let matching_outcome = audit.and_then(|context| context.matching_outcome.clone());
     let matching_error_code = audit.and_then(|context| context.matching_error_code.clone());
@@ -4644,6 +4648,8 @@ fn build_audit_event(
         matching_evaluated_rule_ids,
         ecosystem_binding_id,
         ecosystem_binding_version,
+        pack_id,
+        pack_version,
         matching_method,
         matching_outcome,
         matching_error_code,
@@ -7979,6 +7985,8 @@ credential_profiles:
             matching_evaluated_rule_ids: None,
             ecosystem_binding_id: None,
             ecosystem_binding_version: None,
+            pack_id: None,
+            pack_version: None,
             matching_method: None,
             matching_outcome: None,
             matching_error_code: None,
@@ -8725,6 +8733,9 @@ claims:
             field: birth_date
             type: date
             required: true
+        matching:
+          allowed_purposes:
+            - "{OPENFN_SPIKE_PURPOSE}"
     rule:
       type: extract
       source: crvs

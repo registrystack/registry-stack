@@ -1177,6 +1177,10 @@ pub struct MatchingMetadata {
     pub ecosystem_binding_id: Option<String>,
     #[serde(default, skip)]
     pub ecosystem_binding_version: Option<String>,
+    #[serde(default, skip)]
+    pub pack_id: Option<String>,
+    #[serde(default, skip)]
+    pub pack_version: Option<String>,
 }
 
 /// `schema_version` value carried by every [`ClaimProvenance`]. Frozen at beta
@@ -1230,6 +1234,8 @@ impl ClaimProvenance {
                 policy_id: None,
                 policy_version: None,
                 policy_hash: None,
+                pack_id: None,
+                pack_version: None,
             },
             used,
             derived_from: Vec::new(),
@@ -1267,6 +1273,10 @@ pub struct ProvenanceGeneratedBy {
     /// with a policy evidence-pack later.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack_version: Option<String>,
 }
 
 /// The consumed side of a claim provenance record: how many registry sources
@@ -1541,6 +1551,10 @@ pub struct EvidenceAuditEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ecosystem_binding_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matching_method: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matching_outcome: Option<String>,
@@ -1627,6 +1641,10 @@ pub struct EvidenceBatchItemAuditEvent {
     pub ecosystem_binding_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ecosystem_binding_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matching_method: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2172,6 +2190,8 @@ mod tests {
             matching_evaluated_rule_ids: Some(vec!["source-binding-policy:person".to_string()]),
             ecosystem_binding_id: Some("baseline-dpi/v1".to_string()),
             ecosystem_binding_version: Some("2026-06-19".to_string()),
+            pack_id: Some("baseline-dpi/v1".to_string()),
+            pack_version: Some("2026-06-19".to_string()),
             matching_method: Some("configured_lookup".to_string()),
             matching_outcome: Some("matched".to_string()),
             matching_error_code: None,
@@ -2187,6 +2207,8 @@ mod tests {
                 matching_evaluated_rule_ids: Some(vec!["source-binding-policy:person".to_string()]),
                 ecosystem_binding_id: Some("baseline-dpi/v1".to_string()),
                 ecosystem_binding_version: Some("2026-06-19".to_string()),
+                pack_id: Some("baseline-dpi/v1".to_string()),
+                pack_version: Some("2026-06-19".to_string()),
                 matching_method: Some("configured_lookup".to_string()),
                 matching_outcome: Some("matched".to_string()),
                 matching_error_code: None,
