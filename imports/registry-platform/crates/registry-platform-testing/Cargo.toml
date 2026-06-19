@@ -8,7 +8,7 @@ repository.workspace = true
 publish = false
 
 [features]
-default = []
+default = ["test-utils"]
 test-utils = []
 
 [dependencies]

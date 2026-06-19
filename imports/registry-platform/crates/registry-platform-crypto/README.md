@@ -4,8 +4,8 @@ Crypto primitives shared by registry services.
 
 ## What It Provides
 
-- `PrivateJwk` and `PublicJwk` parsing for OKP/Ed25519 JWKs.
-- EdDSA signing and verification helpers.
+- `PrivateJwk` and `PublicJwk` parsing for OKP/Ed25519, EC/P-256, and RSA JWKs.
+- EdDSA, ES256, and RS256 signing and verification helpers.
 - `SigningProvider` and `LocalJwkSigner` for code that should sign without
   depending directly on in-process private JWK ownership.
 - `KeyProviderKind`, `KeyStatus`, `KeyReadiness`, and `KeyReadinessSnapshot`
@@ -60,9 +60,10 @@ Ok(())
 
 ## Supported Algorithms
 
-This crate currently supports EdDSA with OKP/Ed25519 keys. Unsupported JWK
-algorithms are rejected at parse time. Add new algorithms only when a registry
-consumer needs them and can define the interoperability and security policy.
+This crate currently supports EdDSA with OKP/Ed25519 keys, ES256 with EC/P-256
+keys, and RS256 with RSA keys. Unsupported JWK algorithms are rejected at parse
+time. Add new algorithms only when a registry consumer needs them and can define
+the interoperability and security policy.
 
 ## Security Notes
 

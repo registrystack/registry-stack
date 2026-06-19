@@ -4,8 +4,15 @@
 use async_trait::async_trait;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::{
+    Signature as Ed25519Signature, Signer, SigningKey as Ed25519SigningKey,
+    VerifyingKey as Ed25519VerifyingKey,
+};
 use hmac::{Hmac, KeyInit, Mac};
+use p256::ecdsa::{
+    signature::Verifier as _, Signature as P256Signature, SigningKey as P256SigningKey,
+    VerifyingKey as P256VerifyingKey,
+};
 use rsa::pkcs1v15::Pkcs1v15Sign;
 use rsa::sha2::{Digest as RsaDigest, Sha256 as RsaSha256};
 use rsa::{BigUint, RsaPrivateKey, RsaPublicKey};
@@ -22,10 +29,9 @@ use zeroize::{Zeroize, Zeroizing};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SigningAlgorithm {
     /// Ed25519 EdDSA signatures using OKP/Ed25519 JWKs.
-    ///
-    /// This crate supports EdDSA and RS256 for signing and verification.
-    /// ES256 and PS256 JWKs are rejected as unsupported at parse time.
     EdDsa,
+    /// ECDSA over P-256 with SHA-256 (ES256) signatures using EC/P-256 JWKs.
+    Es256,
     /// RSASSA-PKCS1-v1_5 with SHA-256 (RS256) signatures using RSA JWKs.
     Rs256,
 }
@@ -263,8 +269,8 @@ pub struct LocalJwkSigner {
 }
 
 impl LocalJwkSigner {
-    /// Build a local signer from an EdDSA (Ed25519) or RS256 (RSA) private JWK
-    /// with a non-empty `kid`.
+    /// Build a local signer from an EdDSA (Ed25519), ES256 (P-256), or RS256
+    /// (RSA) private JWK with a non-empty `kid`.
     pub fn new(jwk: PrivateJwk) -> Result<Self, SigningError> {
         jwk.validate_private().map_err(SigningError::InvalidKey)?;
         let algorithm = jwk.algorithm().map_err(SigningError::InvalidKey)?;
@@ -347,6 +353,14 @@ impl PrivateJwk {
                 decode_fixed(self.d.as_deref(), 32, "d")?;
                 decode_fixed(self.x.as_deref(), 32, "x")?;
             }
+            Ok(SigningAlgorithm::Es256) => {
+                if self.kty != "EC" || self.crv.as_deref() != Some("P-256") {
+                    return Err(JwkError::Invalid("ES256 keys must be EC/P-256"));
+                }
+                decode_fixed(self.d.as_deref(), 32, "d")?;
+                decode_fixed(self.x.as_deref(), 32, "x")?;
+                decode_fixed(self.y.as_deref(), 32, "y")?;
+            }
             Ok(SigningAlgorithm::Rs256) => {
                 if self.kty != "RSA" {
                     return Err(JwkError::Invalid("RS256 keys must be RSA"));
@@ -417,6 +431,13 @@ impl PublicJwk {
                     return Err(JwkError::Invalid("EdDSA keys must be OKP/Ed25519"));
                 }
                 decode_fixed(self.x.as_deref(), 32, "x")?;
+            }
+            Ok(SigningAlgorithm::Es256) => {
+                if self.kty != "EC" || self.crv.as_deref() != Some("P-256") {
+                    return Err(JwkError::Invalid("ES256 keys must be EC/P-256"));
+                }
+                decode_fixed(self.x.as_deref(), 32, "x")?;
+                decode_fixed(self.y.as_deref(), 32, "y")?;
             }
             Ok(SigningAlgorithm::Rs256) => {
                 if self.kty != "RSA" {
@@ -678,9 +699,10 @@ pub fn pairwise_subject_ref_hash(
 
 /// Sign `payload` using the private key in `jwk`.
 ///
-/// Dispatches on the JWK algorithm: EdDSA (Ed25519) or RS256 (RSASSA-PKCS1-v1_5
-/// with SHA-256). Runs synchronously on the calling thread. EdDSA is measured
-/// ~15 µs/op (release, Apple M5 Max); RS256 is slower. Callers on a Tokio
+/// Dispatches on the JWK algorithm: EdDSA (Ed25519), ES256 (ECDSA P-256 with
+/// SHA-256), or RS256 (RSASSA-PKCS1-v1_5 with SHA-256). Runs synchronously on
+/// the calling thread. EdDSA is measured ~15 µs/op (release, Apple M5 Max);
+/// ES256 and RS256 are slower. Callers on a Tokio
 /// runtime that process many concurrent issuances should offload to
 /// `tokio::task::spawn_blocking` if latency becomes a concern. Run the ignored
 /// `eddsa_sign_microbench` test to re-measure on your hardware.
@@ -688,6 +710,7 @@ pub fn sign(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> {
     jwk.validate_private()?;
     match jwk.algorithm()? {
         SigningAlgorithm::EdDsa => sign_eddsa(payload, jwk),
+        SigningAlgorithm::Es256 => sign_es256(payload, jwk),
         SigningAlgorithm::Rs256 => sign_rs256(payload, jwk),
     }
 }
@@ -703,7 +726,15 @@ fn sign_eddsa(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> 
     if decoded_len != 32 {
         return Err(JwkError::Invalid("d length").into());
     }
-    let signature = SigningKey::from_bytes(&seed).sign(payload);
+    let signature = Ed25519SigningKey::from_bytes(&seed).sign(payload);
+    Ok(signature.to_bytes().to_vec())
+}
+
+fn sign_es256(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> {
+    let d = decode_fixed(jwk.d.as_deref(), 32, "d")?;
+    let signing_key = P256SigningKey::from_slice(&d)
+        .map_err(|_| CryptoError::Crypto("invalid ES256 private key"))?;
+    let signature: P256Signature = signing_key.sign(payload);
     Ok(signature.to_bytes().to_vec())
 }
 
@@ -734,14 +765,15 @@ fn decode_biguint(value: Option<&str>, field: &'static str) -> Result<BigUint, C
 
 /// Verify `signature` over `payload` using the public key in `jwk`.
 ///
-/// Dispatches on the JWK algorithm: EdDSA (Ed25519) or RS256 (RSASSA-PKCS1-v1_5
-/// with SHA-256). Runs synchronously on the calling thread. EdDSA is measured
-/// ~22 µs/op (release, Apple M5 Max). Run the ignored `eddsa_verify_microbench`
-/// test to re-measure on your hardware.
+/// Dispatches on the JWK algorithm: EdDSA (Ed25519), ES256 (ECDSA P-256 with
+/// SHA-256), or RS256 (RSASSA-PKCS1-v1_5 with SHA-256). Runs synchronously on
+/// the calling thread. EdDSA is measured ~22 µs/op (release, Apple M5 Max). Run
+/// the ignored `eddsa_verify_microbench` test to re-measure on your hardware.
 pub fn verify(payload: &[u8], signature: &[u8], jwk: &PublicJwk) -> Result<(), CryptoError> {
     jwk.validate_public()?;
     match jwk.algorithm()? {
         SigningAlgorithm::EdDsa => verify_eddsa(payload, signature, jwk),
+        SigningAlgorithm::Es256 => verify_es256(payload, signature, jwk),
         SigningAlgorithm::Rs256 => verify_rs256(payload, signature, jwk),
     }
 }
@@ -749,11 +781,32 @@ pub fn verify(payload: &[u8], signature: &[u8], jwk: &PublicJwk) -> Result<(), C
 fn verify_eddsa(payload: &[u8], signature: &[u8], jwk: &PublicJwk) -> Result<(), CryptoError> {
     let x = decode_fixed(jwk.x.as_deref(), 32, "x")?;
     let x: [u8; 32] = x.try_into().map_err(|_| JwkError::Invalid("x length"))?;
-    let verifying_key = VerifyingKey::from_bytes(&x).map_err(|_| CryptoError::InvalidSignature)?;
-    let signature = Signature::try_from(signature).map_err(|_| CryptoError::InvalidSignature)?;
+    let verifying_key =
+        Ed25519VerifyingKey::from_bytes(&x).map_err(|_| CryptoError::InvalidSignature)?;
+    let signature =
+        Ed25519Signature::try_from(signature).map_err(|_| CryptoError::InvalidSignature)?;
     verifying_key
         .verify_strict(payload, &signature)
         .map_err(|_| CryptoError::InvalidSignature)
+}
+
+fn verify_es256(payload: &[u8], signature: &[u8], jwk: &PublicJwk) -> Result<(), CryptoError> {
+    let verifying_key = p256_verifying_key(jwk)?;
+    let signature =
+        P256Signature::from_slice(signature).map_err(|_| CryptoError::InvalidSignature)?;
+    verifying_key
+        .verify(payload, &signature)
+        .map_err(|_| CryptoError::InvalidSignature)
+}
+
+fn p256_verifying_key(jwk: &PublicJwk) -> Result<P256VerifyingKey, CryptoError> {
+    let x = decode_fixed(jwk.x.as_deref(), 32, "x")?;
+    let y = decode_fixed(jwk.y.as_deref(), 32, "y")?;
+    let mut sec1 = Vec::with_capacity(65);
+    sec1.push(0x04);
+    sec1.extend_from_slice(&x);
+    sec1.extend_from_slice(&y);
+    P256VerifyingKey::from_sec1_bytes(&sec1).map_err(|_| CryptoError::InvalidSignature)
 }
 
 fn verify_rs256(payload: &[u8], signature: &[u8], jwk: &PublicJwk) -> Result<(), CryptoError> {
@@ -772,6 +825,7 @@ fn algorithm_from_fields(
 ) -> Result<SigningAlgorithm, JwkError> {
     match alg {
         Some("EdDSA") => Ok(SigningAlgorithm::EdDsa),
+        Some("ES256") => Ok(SigningAlgorithm::Es256),
         Some("RS256") => Ok(SigningAlgorithm::Rs256),
         Some(_) => Err(JwkError::UnsupportedAlgorithm),
         None if kty == "OKP" && crv == Some("Ed25519") => Ok(SigningAlgorithm::EdDsa),
@@ -990,6 +1044,7 @@ mod tests {
     use serde_json::json;
 
     const RAW_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:web:issuer.test#key-1"}"#;
+    const P256_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"did:web:issuer.test#p256-key-1"}"#;
 
     // Test-only 2048-bit RSA private JWK (kty=RSA, alg=RS256). Generated once
     // with openssl and converted to JWK; used only by RS256 tests. Not a
@@ -1144,23 +1199,50 @@ mod tests {
 
     #[test]
     fn unsupported_signing_algorithms_are_rejected_at_parse_time() {
-        let p256 = r#"{"kty":"EC","crv":"P-256","d":"jpsQnnGQmTMRzLC0W_9-v8RC0ZQ79OJWfZPOGdXGdP8","x":"f83OJ3D2xF4k1JQWctzS0r8uXH6Gz-l4WfXccj5WHv0","y":"x_FEzRu9dVvZt2pSuGQgH7u9tZxU7I5oUJu-4G8Azjo","alg":"ES256"}"#;
+        let ps256 = r#"{"kty":"RSA","n":"sXchDaQebHnPiGvyDOAT4saGEUetSyo9MKLOoWFsueri23bOdgWp4PBO8BxG7NXXjO4IhYGoOi0Lem4xXeUq7W57RtgGF4wSGZ4HAvY8R9H_JVU3tO7K0XG3L8m5vB2T2KQeJ0gJg9g4nG9QpXJYpJ2NmgH6L7ZqQHX7I4M","e":"AQAB","alg":"PS256"}"#;
         // RS256 is supported, but an RSA key missing the required private primes
         // p and q must still fail validation (not parse as a usable key).
         let rsa_without_primes = r#"{"kty":"RSA","n":"sXchDaQebHnPiGvyDOAT4saGEUetSyo9MKLOoWFsueri23bOdgWp4PBO8BxG7NXXjO4IhYGoOi0Lem4xXeUq7W57RtgGF4wSGZ4HAvY8R9H_JVU3tO7K0XG3L8m5vB2T2KQeJ0gJg9g4nG9QpXJYpJ2NmgH6L7ZqQHX7I4M","e":"AQAB","d":"V8tFoZRiEbWqT2DF3t5R6u9vS9LqQEVtGg5oQ2Y0t5k","alg":"RS256"}"#;
-        let public_p256 = r#"{"kty":"EC","crv":"P-256","x":"f83OJ3D2xF4k1JQWctzS0r8uXH6Gz-l4WfXccj5WHv0","y":"x_FEzRu9dVvZt2pSuGQgH7u9tZxU7I5oUJu-4G8Azjo","alg":"ES256"}"#;
 
         assert!(matches!(
-            PrivateJwk::parse(p256),
+            PublicJwk::parse(ps256),
             Err(JwkError::UnsupportedAlgorithm)
         ));
         assert!(matches!(
             PrivateJwk::parse(rsa_without_primes),
             Err(JwkError::Invalid("p"))
         ));
+    }
+
+    #[test]
+    fn es256_private_and_public_jwks_parse() {
+        let private = PrivateJwk::parse(P256_JWK).expect("p256 private jwk parses");
+        assert_eq!(
+            private.algorithm().expect("algorithm"),
+            SigningAlgorithm::Es256
+        );
+        let public = private.public();
+        let public_json = serde_json::to_value(&public).expect("public jwk serializes");
+
+        assert_eq!(public.kty, "EC");
+        assert_eq!(public.crv.as_deref(), Some("P-256"));
+        assert_eq!(public.alg.as_deref(), Some("ES256"));
+        assert!(public_json.get("d").is_none());
+        assert!(matches!(public.algorithm(), Ok(SigningAlgorithm::Es256)));
+    }
+
+    #[test]
+    fn es256_sign_then_verify_roundtrips() {
+        let private = PrivateJwk::parse(P256_JWK).expect("p256 private jwk parses");
+        let public = private.public();
+        let payload = b"registry-notary-es256";
+        let signature = sign(payload, &private).expect("payload signs");
+
+        assert_eq!(signature.len(), 64, "ES256 JWS signatures are raw r || s");
+        verify(payload, &signature, &public).expect("signature verifies");
         assert!(matches!(
-            PublicJwk::parse(public_p256),
-            Err(JwkError::UnsupportedAlgorithm)
+            verify(b"tampered", &signature, &public),
+            Err(CryptoError::InvalidSignature)
         ));
     }
 
@@ -1276,6 +1358,20 @@ mod tests {
         assert_eq!(signer.algorithm(), SigningAlgorithm::Rs256);
         let public = signer.public_jwk();
         assert_eq!(public.kty, "RSA");
+        verify(payload, &signature, &public).expect("signature verifies");
+    }
+
+    #[tokio::test]
+    async fn local_jwk_signer_es256() {
+        let private = PrivateJwk::parse(P256_JWK).expect("p256 private jwk parses");
+        let signer = LocalJwkSigner::new(private).expect("local signer builds");
+        let payload = b"registry-notary-es256-provider";
+        let signature = signer.sign(payload).await.expect("payload signs");
+
+        assert_eq!(signer.algorithm(), SigningAlgorithm::Es256);
+        let public = signer.public_jwk();
+        assert_eq!(public.kty, "EC");
+        assert_eq!(public.crv.as_deref(), Some("P-256"));
         verify(payload, &signature, &public).expect("signature verifies");
     }
 

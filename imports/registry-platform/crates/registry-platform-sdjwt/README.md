@@ -4,7 +4,7 @@ SD-JWT VC issuance and holder-proof validation helpers.
 
 ## What It Provides
 
-- `SdJwtIssuer` for provider-backed EdDSA SD-JWT VC issuance.
+- `SdJwtIssuer` for provider-backed EdDSA, ES256, and RS256 SD-JWT VC issuance.
 - `SdJwtIssuanceInput` with issuer, subject reference, optional caller-provided
   credential id, validity, profile, optional status claim, holder confirmation,
   and disclosures.
@@ -54,7 +54,7 @@ Ok(())
 
 ## Security Notes
 
-- This crate currently signs with EdDSA/Ed25519 through a
+- This crate currently signs with EdDSA/Ed25519, ES256/P-256, or RS256/RSA through a
   `registry-platform-crypto` `SigningProvider`.
 - `SdJwtIssuer::from_jwk` is intended for local development, tests, and simple
   deployments using mounted private JWK material. Production deployments that

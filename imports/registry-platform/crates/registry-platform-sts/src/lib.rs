@@ -889,6 +889,7 @@ fn duration_to_time(value: Duration) -> Result<time::Duration, StsError> {
 fn jwt_alg(algorithm: SigningAlgorithm) -> &'static str {
     match algorithm {
         SigningAlgorithm::EdDsa => "EdDSA",
+        SigningAlgorithm::Es256 => "ES256",
         SigningAlgorithm::Rs256 => "RS256",
     }
 }
