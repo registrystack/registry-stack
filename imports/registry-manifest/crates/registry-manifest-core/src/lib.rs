@@ -37,16 +37,8 @@ const MAX_ENTITY_RELATIONSHIPS: usize = 512;
 const MAX_CODELIST_CONCEPTS: usize = 1024;
 const MAX_URI_LIST_ITEMS: usize = 128;
 const ECOSYSTEM_BINDING_TYPE_GOVERNED_EVIDENCE: &str = "governed-evidence";
-const ODRL_ENFORCEMENT_PROFILE: &str = "registry-evidence-gateway-pdp/v1";
-const SUPPORTED_ODRL_ENFORCEMENT_TERMS: &[&str] = &[
-    "odrl:purpose",
-    "odrl:spatial",
-    "registry:pdp:assurance",
-    "registry:pdp:source_age",
-    "registry:pdp:legal_basis",
-    "registry:pdp:consent",
-    "registry:pdp:redaction",
-];
+pub const ODRL_ENFORCEMENT_PROFILE: &str = "registry-evidence-gateway-pdp/v1";
+pub const SUPPORTED_ODRL_ENFORCEMENT_TERMS: &[&str] = &["odrl:purpose", "odrl:spatial"];
 const BUILTIN_VOCABULARIES: &[(&str, &str)] = &[
     ("adms", "http://www.w3.org/ns/adms#"),
     ("cccev", "http://data.europa.eu/m8g/"),
@@ -124,6 +116,33 @@ pub fn source_manifest_digest(manifest: &MetadataManifest) -> Result<String, Man
     let value = serde_json::to_value(manifest)?;
     let canonical = canonicalize_json(&value)?;
     Ok(sha256_uri(&canonical))
+}
+
+pub fn compute_policy_hash(policy: &Value) -> Result<String, ManifestDigestError> {
+    let canonical = canonicalize_json(policy)?;
+    Ok(sha256_uri(&canonical))
+}
+
+pub fn compute_evidence_pack_policy_hash(
+    evidence_pack: &EvidencePackMetadata,
+) -> Result<Option<String>, ManifestDigestError> {
+    evidence_pack
+        .policy
+        .as_ref()
+        .map(compute_policy_hash)
+        .transpose()
+}
+
+pub fn verify_evidence_pack_policy_hash(
+    evidence_pack: &EvidencePackMetadata,
+) -> Result<Option<bool>, ManifestDigestError> {
+    let Some(declared) = evidence_pack.policy_hash.as_deref() else {
+        return Ok(None);
+    };
+    let Some(computed) = compute_evidence_pack_policy_hash(evidence_pack)? else {
+        return Ok(None);
+    };
+    Ok(Some(declared == computed))
 }
 
 #[must_use]
@@ -382,6 +401,14 @@ pub struct EvidencePackMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_mapping: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fixtures: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub synthetic_data: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub odrl_policy_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub odrl_enforcement: Option<OdrlEnforcementProfile>,
@@ -405,6 +432,22 @@ pub struct EcosystemBindingManifest {
     pub title: Option<LocalizedText>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<LocalizedText>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vocabulary: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_envelope: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_envelope: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transport: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trust_framework: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_format: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assurance_model: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conformance: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_pack: Option<EvidencePackMetadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1741,6 +1784,17 @@ fn validate_optional_evidence_pack_metadata(
     if let Some(policy_hash) = evidence_pack.policy_hash.as_deref() {
         validate_sha256_digest(policy_hash, format!("{path}.policy_hash"), errors);
     }
+    match verify_evidence_pack_policy_hash(evidence_pack) {
+        Ok(Some(false)) => errors.push(ValidationError::new(
+            format!("{path}.policy_hash"),
+            "policy_hash does not match the canonical inline evidence_pack policy",
+        )),
+        Ok(Some(true) | None) => {}
+        Err(error) => errors.push(ValidationError::new(
+            format!("{path}.policy_hash"),
+            format!("policy_hash could not be verified: {error}"),
+        )),
+    }
     validate_optional_non_empty(
         evidence_pack.odrl_policy_url.as_deref(),
         format!("{path}.odrl_policy_url"),
@@ -1798,6 +1852,7 @@ fn validate_odrl_enforcement_profile(
 
 fn validate_sha256_digest(value: &str, path: impl Into<String>, errors: &mut Vec<ValidationError>) {
     let path = path.into();
+    // Evidence policy hashes are externally supplied; manifest validation only checks digest shape.
     let is_valid = value.strip_prefix("sha256:").is_some_and(|hex| {
         hex.len() == 64
             && hex
