@@ -78,12 +78,33 @@ impl SourceReader for MatchingSource {
 
 #[derive(Debug)]
 struct ObservedAtSource {
-    observed_at: Option<String>,
+    preflight_observed_at: Option<String>,
+    row_observed_at: Option<String>,
+    reads: AtomicUsize,
 }
 
 impl ObservedAtSource {
     fn new(observed_at: Option<String>) -> Self {
-        Self { observed_at }
+        Self {
+            preflight_observed_at: observed_at.clone(),
+            row_observed_at: observed_at,
+            reads: AtomicUsize::new(0),
+        }
+    }
+
+    fn with_preflight_and_row(
+        preflight_observed_at: Option<String>,
+        row_observed_at: Option<String>,
+    ) -> Self {
+        Self {
+            preflight_observed_at,
+            row_observed_at,
+            reads: AtomicUsize::new(0),
+        }
+    }
+
+    fn reads(&self) -> usize {
+        self.reads.load(Ordering::SeqCst)
     }
 }
 
@@ -104,11 +125,29 @@ impl SourceReader for ObservedAtSource {
         _purpose: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
         Box::pin(async move {
+            self.reads.fetch_add(1, Ordering::SeqCst);
             let mut row = json!({"alive": true});
-            if let Some(observed_at) = self.observed_at.as_deref() {
+            if let Some(observed_at) = self.row_observed_at.as_deref() {
                 row["observed_at"] = json!(observed_at);
             }
             Ok(row)
+        })
+    }
+
+    fn source_observed_at_for_context<'a>(
+        &'a self,
+        _binding: &'a SourceBindingConfig,
+        _context: &'a EvidenceRequestContext,
+        _purpose: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<OffsetDateTime>, EvidenceError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let Some(observed_at) = self.preflight_observed_at.as_deref() else {
+                return Ok(None);
+            };
+            OffsetDateTime::parse(observed_at, &Rfc3339)
+                .map(Some)
+                .map_err(|_| EvidenceError::TargetMatchingPolicyRejected)
         })
     }
 
@@ -745,6 +784,7 @@ fn claim(
             value_type: "boolean".to_string(),
             unit: None,
         },
+        semantics: None,
         inputs: Vec::new(),
         depends_on: Vec::new(),
         purpose: None,
@@ -807,6 +847,13 @@ fn principal() -> EvidencePrincipal {
         verified_claims: None,
         authorization_details: None,
     }
+}
+
+fn matching_policy_rule_ids(entity: &str, suffixes: &[&str]) -> Vec<String> {
+    suffixes
+        .iter()
+        .map(|suffix| format!("source-binding-policy:{entity}.{suffix}"))
+        .collect()
 }
 
 fn principal_with_policy_context(
@@ -912,10 +959,11 @@ async fn source_observed_at_contract_enforces_matching_freshness() {
     let fresh_observed_at = (OffsetDateTime::now_utc() - time::Duration::seconds(10))
         .format(&Rfc3339)
         .expect("fresh observed timestamp formats");
+    let fresh_source = Arc::new(ObservedAtSource::new(Some(fresh_observed_at)));
     let fresh = runtime
         .evaluate(
             evidence_config(vec![freshness_gated_person_claim()]),
-            Arc::new(ObservedAtSource::new(Some(fresh_observed_at))),
+            fresh_source.clone(),
             &store,
             &principal(),
             evaluate_request(observed_person_target(), "fresh-person-is-alive"),
@@ -925,14 +973,16 @@ async fn source_observed_at_contract_enforces_matching_freshness() {
         .expect("fresh source observation satisfies max age");
 
     assert_eq!(fresh[0].value, Some(json!(true)));
+    assert_eq!(fresh_source.reads(), 1);
 
     let stale_observed_at = (OffsetDateTime::now_utc() - time::Duration::seconds(61))
         .format(&Rfc3339)
         .expect("stale observed timestamp formats");
+    let stale_source = Arc::new(ObservedAtSource::new(Some(stale_observed_at)));
     let stale = runtime
         .evaluate(
             evidence_config(vec![freshness_gated_person_claim()]),
-            Arc::new(ObservedAtSource::new(Some(stale_observed_at))),
+            stale_source.clone(),
             &store,
             &principal(),
             evaluate_request(observed_person_target(), "fresh-person-is-alive"),
@@ -942,11 +992,17 @@ async fn source_observed_at_contract_enforces_matching_freshness() {
         .expect_err("stale source observation is rejected");
 
     assert_eq!(stale.code(), "pdp.evidence_stale");
+    assert_eq!(
+        stale_source.reads(),
+        0,
+        "stale freshness must deny before reading the protected source row"
+    );
 
+    let missing_source = Arc::new(ObservedAtSource::new(None));
     let missing = runtime
         .evaluate(
             evidence_config(vec![freshness_gated_person_claim()]),
-            Arc::new(ObservedAtSource::new(None)),
+            missing_source.clone(),
             &store,
             &principal(),
             evaluate_request(observed_person_target(), "fresh-person-is-alive"),
@@ -956,6 +1012,69 @@ async fn source_observed_at_contract_enforces_matching_freshness() {
         .expect_err("missing source observation is rejected");
 
     assert_eq!(missing.code(), "pdp.evidence_stale");
+    assert_eq!(
+        missing_source.reads(),
+        0,
+        "missing freshness must deny before reading the protected source row"
+    );
+}
+
+#[tokio::test]
+async fn direct_freshness_rechecks_row_timestamp_after_fresh_preflight() {
+    let runtime = RegistryNotaryRuntime::new();
+    let store = EvidenceStore::default();
+    let fresh_preflight = (OffsetDateTime::now_utc() - time::Duration::seconds(10))
+        .format(&Rfc3339)
+        .expect("fresh preflight timestamp formats");
+    let stale_row = (OffsetDateTime::now_utc() - time::Duration::seconds(61))
+        .format(&Rfc3339)
+        .expect("stale row timestamp formats");
+    let stale_source = Arc::new(ObservedAtSource::with_preflight_and_row(
+        Some(fresh_preflight.clone()),
+        Some(stale_row),
+    ));
+
+    let stale = runtime
+        .evaluate(
+            evidence_config(vec![freshness_gated_person_claim()]),
+            stale_source.clone(),
+            &store,
+            &principal(),
+            evaluate_request(observed_person_target(), "fresh-person-is-alive"),
+            None,
+        )
+        .await
+        .expect_err("stale row observation is rejected even after fresh preflight");
+
+    assert_eq!(stale.code(), "pdp.evidence_stale");
+    assert_eq!(
+        stale_source.reads(),
+        1,
+        "fresh preflight allows one protected row read, but stale row freshness denies before disclosure"
+    );
+
+    let missing_source = Arc::new(ObservedAtSource::with_preflight_and_row(
+        Some(fresh_preflight),
+        None,
+    ));
+    let missing = runtime
+        .evaluate(
+            evidence_config(vec![freshness_gated_person_claim()]),
+            missing_source.clone(),
+            &store,
+            &principal(),
+            evaluate_request(observed_person_target(), "fresh-person-is-alive"),
+            None,
+        )
+        .await
+        .expect_err("missing row observation is rejected even after fresh preflight");
+
+    assert_eq!(missing.code(), "pdp.evidence_stale");
+    assert_eq!(
+        missing_source.reads(),
+        1,
+        "fresh preflight allows one protected row read, but missing row freshness denies before disclosure"
+    );
 }
 
 #[tokio::test]
@@ -971,6 +1090,7 @@ async fn multi_source_matching_metadata_uses_one_deterministic_policy_identity()
         SourceMatchingConfig {
             method: Some("configured_lookup".to_string()),
             confidence: Some("high".to_string()),
+            allowed_purposes: vec!["benefits".to_string()],
             ecosystem_binding: Some(EcosystemBindingSelectorConfig {
                 id: Some("alpha-pack".to_string()),
                 ..EcosystemBindingSelectorConfig::default()
@@ -1051,7 +1171,19 @@ async fn multi_source_matching_metadata_uses_one_deterministic_policy_identity()
     );
     assert_eq!(
         matching.evaluated_rule_ids,
-        vec!["source-binding-policy:person_alpha".to_string()]
+        matching_policy_rule_ids(
+            "person_alpha",
+            &[
+                "policy_identity",
+                "odrl_terms",
+                "purpose",
+                "requested_fact",
+                "requested_disclosure",
+                "credential_format",
+                "source_binding",
+                "route_identity",
+            ],
+        )
     );
 }
 
@@ -1574,6 +1706,57 @@ async fn assurance_policy_accepts_trusted_authorization_details() {
 }
 
 #[tokio::test]
+async fn minimum_assurance_policy_rejects_before_source_read_and_accepts_higher_rank() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching
+        .minimum_assurance = Some("substantial".to_string());
+    let low_principal = principal_with_policy_context(Some("low"), None, None, None);
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![claim.clone()]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &low_principal,
+            evaluate_request(
+                person_target("Amina", "Diallo", Some("1984-02-10")),
+                "person-is-alive",
+            ),
+            None,
+        )
+        .await
+        .expect_err("low assurance rejects substantial floor");
+
+    assert_eq!(error.code(), "pdp.assurance_insufficient");
+    assert_eq!(source.reads(), 0);
+
+    let high_principal = principal_with_policy_context(Some("high"), None, None, None);
+    let results = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &high_principal,
+            evaluate_request(
+                person_target("Amina", "Diallo", Some("1984-02-10")),
+                "person-is-alive",
+            ),
+            None,
+        )
+        .await
+        .expect("high assurance satisfies substantial floor");
+
+    assert_eq!(results[0].value, Some(json!(true)));
+    assert_eq!(source.reads(), 1);
+}
+
+#[tokio::test]
 async fn redaction_policy_forces_redacted_value_disclosure() {
     let runtime = RegistryNotaryRuntime::new();
     let source = Arc::new(MatchingSource::new());
@@ -1636,6 +1819,61 @@ async fn redaction_policy_fails_closed_when_redacted_disclosure_is_not_allowed()
         .expect_err("redaction must not leak through value-only disclosure");
 
     assert_eq!(error.code(), "claim.disclosure_not_allowed");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
+async fn requested_disclosure_denies_before_source_read() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    claim.disclosure.allowed = vec!["value".to_string()];
+    claim.disclosure.downgrade = "deny".to_string();
+    let mut request = evaluate_request(
+        person_target("Amina", "Diallo", Some("1984-02-10")),
+        "person-is-alive",
+    );
+    request.disclosure = Some("predicate".to_string());
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            request,
+            None,
+        )
+        .await
+        .expect_err("requested disclosure is denied before source read");
+
+    assert_eq!(error.code(), "claim.disclosure_not_allowed");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
+async fn requested_format_denies_before_source_read() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut request = evaluate_request(
+        person_target("Amina", "Diallo", Some("1984-02-10")),
+        "person-is-alive",
+    );
+    request.format = Some("application/unsupported".to_string());
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![person_claim()]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            request,
+            None,
+        )
+        .await
+        .expect_err("requested format is denied before source read");
+
+    assert_eq!(error.code(), "claim.format_not_supported");
     assert_eq!(source.reads(), 0);
 }
 
@@ -1815,6 +2053,39 @@ async fn required_legal_basis_and_consent_reject_before_source_read() {
 }
 
 #[tokio::test]
+async fn required_consent_rejects_before_source_read() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    let matching = &mut claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching;
+    matching.require_legal_basis = true;
+    matching.require_consent = true;
+    let principal = principal_with_policy_context(None, None, Some("legal-basis:benefits"), None);
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal,
+            evaluate_request(
+                person_target("Amina", "Diallo", Some("1984-02-10")),
+                "person-is-alive",
+            ),
+            None,
+        )
+        .await
+        .expect_err("missing consent rejects request");
+
+    assert_eq!(error.code(), "pdp.consent_required");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
 async fn unsupported_selected_odrl_terms_reject_before_source_read() {
     let runtime = RegistryNotaryRuntime::new();
     let source = Arc::new(MatchingSource::new());
@@ -1916,7 +2187,7 @@ async fn deployment_purpose_allow_list_rejects_before_source_read() {
         .await
         .expect_err("deployment purpose allow-list rejects request");
 
-    assert_eq!(error.code(), "purpose.not_allowed");
+    assert_eq!(error.code(), "pdp.purpose_not_permitted");
     assert_eq!(source.reads(), 0);
 }
 
@@ -1951,7 +2222,7 @@ async fn claim_purpose_rejects_before_source_read() {
         .await
         .expect_err("claim purpose rejects request");
 
-    assert_eq!(error.code(), "purpose.not_allowed");
+    assert_eq!(error.code(), "pdp.purpose_not_permitted");
     assert_eq!(source.reads(), 0);
 }
 
@@ -2091,7 +2362,10 @@ async fn profile_gate_covers_requester_relationship_and_state_outcomes() {
         )
         .await
         .expect_err("missing relationship is specific");
-    assert_eq!(missing_relationship.code(), "relationship.not_established");
+    assert_eq!(
+        missing_relationship.code(),
+        "pdp.relationship_not_permitted"
+    );
     assert_eq!(source.reads(), 0);
 
     let mut wrong_relationship = evaluate_request(
@@ -2113,7 +2387,10 @@ async fn profile_gate_covers_requester_relationship_and_state_outcomes() {
         )
         .await
         .expect_err("relationship policy rejects wrong relationship");
-    assert_eq!(rejected_relationship.code(), "relationship.policy_rejected");
+    assert_eq!(
+        rejected_relationship.code(),
+        "pdp.relationship_not_permitted"
+    );
     assert_eq!(source.reads(), 0);
 
     let invalid_state = runtime
@@ -2264,7 +2541,7 @@ async fn scoped_relationship_policy_rejects_unconfigured_purpose_before_source_r
         .await
         .expect_err("guardian relationship is not allowed for school enrollment");
 
-    assert_eq!(error.code(), "relationship.purpose_not_allowed");
+    assert_eq!(error.code(), "pdp.purpose_not_permitted");
     assert_eq!(source.reads(), 0);
 }
 
@@ -2302,7 +2579,7 @@ async fn scoped_relationship_policy_requires_flat_relationship_allowlist() {
         .await
         .expect_err("scopes narrow the flat relationship allow-list");
 
-    assert_eq!(error.code(), "relationship.policy_rejected");
+    assert_eq!(error.code(), "pdp.relationship_not_permitted");
     assert_eq!(source.reads(), 0);
 }
 
@@ -2417,10 +2694,10 @@ async fn profile_can_collapse_matching_oracle_errors() {
             None,
         )
         .await
-        .expect_err("relationship purpose failure is collapsed");
+        .expect_err("relationship purpose failure is denied");
 
-    assert_eq!(error.code(), "evidence.not_available");
-    assert_eq!(error.audit_code(), "relationship.purpose_not_allowed");
+    assert_eq!(error.code(), "pdp.purpose_not_permitted");
+    assert_eq!(error.audit_code(), "pdp.purpose_not_permitted");
 }
 
 #[tokio::test]
@@ -2789,7 +3066,7 @@ async fn batch_rejects_deployment_purpose_before_source_read() {
         .allowed_purposes
         .clear();
 
-    let error = runtime
+    let response = runtime
         .batch_evaluate(
             evidence_config_with_allowed_purposes(vec![claim], vec!["benefits".to_string()]),
             source.clone(),
@@ -2811,9 +3088,13 @@ async fn batch_rejects_deployment_purpose_before_source_read() {
             BatchEvaluateOptions::default(),
         )
         .await
-        .expect_err("deployment purpose allow-list rejects batch");
+        .expect("deployment purpose allow-list rejects batch item");
 
-    assert_eq!(error.code(), "purpose.not_allowed");
+    assert_eq!(response.summary.failed, 1);
+    assert_eq!(
+        response.items[0].errors[0].code,
+        "pdp.purpose_not_permitted"
+    );
     assert_eq!(source.reads(), 0);
 }
 

@@ -22,15 +22,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::deployment::DeploymentConfig;
 use crate::model::{
-    DisclosureProfile, FORMAT_SD_JWT_VC, SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_SIGNING_ALG,
+    DisclosureProfile, EvidenceAuthorizationDetails, FORMAT_SD_JWT_VC,
+    SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_SIGNING_ALG,
 };
 
 const PKCE_METHOD_S256: &str = "S256";
 
-/// The only non-EdDSA signing algorithm the Notary accepts. Credential profiles
-/// and the eSignet pre-authorized-code RP client assertion may use RS256.
+/// Non-EdDSA signing algorithms accepted for credential-profile signing.
 /// Access-token and federation signing stay EdDSA; `validate_signing_key_alg_usage`
 /// enforces that separation.
+pub const CREDENTIAL_SIGNING_ALG_ES256: &str = "ES256";
 pub const CLIENT_ASSERTION_SIGNING_ALG_RS256: &str = "RS256";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -391,6 +392,7 @@ impl StandaloneRegistryNotaryConfig {
             if claim.id.trim().is_empty() {
                 return Err(EvidenceConfigError::InvalidClaim);
             }
+            validate_claim_semantics(claim)?;
             for (binding_id, binding) in &claim.source_bindings {
                 if binding.connection.is_none() {
                     return Err(EvidenceConfigError::MissingSourceConnection);
@@ -457,6 +459,17 @@ impl StandaloneRegistryNotaryConfig {
                     &binding.matching,
                     &self.evidence.ecosystem_bindings,
                 )?;
+                for (field_id, field) in &binding.fields {
+                    if let Some(semantic_term) = field.semantic_term.as_deref() {
+                        validate_semantic_reference(
+                            &claim.id,
+                            &format!(
+                                "source_bindings.{binding_id}.fields.{field_id}.semantic_term"
+                            ),
+                            semantic_term,
+                        )?;
+                    }
+                }
             }
         }
         // Registry Notary currently resolves holder material only from
@@ -633,9 +646,9 @@ impl StandaloneRegistryNotaryConfig {
         scoped
     }
 
-    /// Confine non-EdDSA (RS256) signing keys to credential profiles and the
-    /// eSignet pre-authorized-code RP client assertion. Access-token signing and
-    /// federation signing must reference EdDSA keys.
+    /// Confine ES256 signing keys to credential profiles and confine RS256 to
+    /// the eSignet pre-authorized-code RP client assertion. Access-token
+    /// signing and federation signing must reference EdDSA keys.
     fn validate_signing_key_alg_usage(&self) -> Result<(), EvidenceConfigError> {
         for (key_id, key) in &self.evidence.signing_keys {
             if key.alg == CREDENTIAL_SIGNING_ALG_EDDSA {
@@ -657,6 +670,21 @@ impl StandaloneRegistryNotaryConfig {
                      (federation.signing.signing_key); non-EdDSA signing keys may only be used by \
                      credential profiles or as the eSignet pre-authorized-code RP client assertion \
                      key (oid4vci.pre_authorized_code.esignet.client_signing_key_id)",
+                );
+            }
+            if key.alg == CLIENT_ASSERTION_SIGNING_ALG_RS256
+                && self
+                    .evidence
+                    .credential_profiles
+                    .values()
+                    .any(|profile| profile.signing_key == *key_id)
+            {
+                return invalid_signing_key(
+                    key_id,
+                    "RS256 signing key is used by a credential profile; credential profile \
+                     signing keys must use EdDSA or ES256, and RS256 is reserved for the eSignet \
+                     pre-authorized-code RP client assertion key \
+                     (oid4vci.pre_authorized_code.esignet.client_signing_key_id)",
                 );
             }
         }
@@ -1597,6 +1625,14 @@ pub struct FederationEvaluationProfileConfig {
     pub disclosure: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_source_observed_age_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legal_basis_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jurisdiction: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assurance_level: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -3571,6 +3607,8 @@ pub struct EvidenceCredentialConfig {
     pub fingerprint: CredentialFingerprintRef,
     #[serde(default)]
     pub scopes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorization_details: Option<EvidenceAuthorizationDetails>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -3894,6 +3932,8 @@ pub enum EvidenceConfigError {
     InvalidExpectedSidecarConfig { connection: String, reason: String },
     #[error("claim id must not be empty")]
     InvalidClaim,
+    #[error("claim '{claim}' has invalid semantics config: {reason}")]
+    InvalidClaimSemantics { claim: String, reason: String },
     #[error("allowed purpose must not be empty")]
     InvalidPurpose,
     #[error("claim '{claim}' binding '{binding}' has invalid matching config: {reason}")]
@@ -4218,6 +4258,13 @@ fn validate_source_matching_config(
             binding,
             "allowed_assurance must not contain blanks",
         );
+    }
+    if matching
+        .minimum_assurance
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return invalid_matching_config(claim, binding, "minimum_assurance must not be empty");
     }
     if matching
         .permitted_jurisdictions
@@ -4584,6 +4631,8 @@ pub struct ClaimDefinition {
     pub subject_type: String,
     #[serde(default)]
     pub value: ClaimValueConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semantics: Option<ClaimSemanticConfig>,
     #[serde(default)]
     pub inputs: Vec<ClaimInputConfig>,
     #[serde(default)]
@@ -4605,6 +4654,23 @@ pub struct ClaimDefinition {
     pub cccev: Option<CccevConfig>,
     #[serde(default)]
     pub oots: Option<OotsConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClaimSemanticConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concept: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub property: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vocabulary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predicate: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub derived_from: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_mapping: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -4679,6 +4745,8 @@ pub struct SourceMatchingConfig {
     #[serde(default)]
     pub allowed_assurance: Vec<String>,
     #[serde(default)]
+    pub minimum_assurance: Option<String>,
+    #[serde(default)]
     pub permitted_jurisdictions: Vec<String>,
     #[serde(default)]
     pub max_source_age_seconds: Option<u64>,
@@ -4726,6 +4794,10 @@ pub struct EcosystemBindingSelectorConfig {
     #[serde(default)]
     pub profile: Option<String>,
     #[serde(default)]
+    pub pack_id: Option<String>,
+    #[serde(default)]
+    pub pack_version: Option<String>,
+    #[serde(default)]
     pub policy_id: Option<String>,
     #[serde(default)]
     pub policy_hash: Option<String>,
@@ -4742,6 +4814,7 @@ impl Default for SourceMatchingConfig {
             requester_type: None,
             allowed_purposes: Vec::new(),
             allowed_assurance: Vec::new(),
+            minimum_assurance: None,
             permitted_jurisdictions: Vec::new(),
             max_source_age_seconds: None,
             source_observed_at_field: None,
@@ -5178,6 +5251,108 @@ pub enum RuleConfig {
     },
 }
 
+fn validate_claim_semantics(claim: &ClaimDefinition) -> Result<(), EvidenceConfigError> {
+    let Some(semantics) = &claim.semantics else {
+        return Ok(());
+    };
+    let mut has_term = false;
+    for (field, value) in [
+        ("concept", semantics.concept.as_deref()),
+        ("property", semantics.property.as_deref()),
+        ("vocabulary", semantics.vocabulary.as_deref()),
+        ("predicate", semantics.predicate.as_deref()),
+    ] {
+        let Some(value) = value else {
+            continue;
+        };
+        has_term = true;
+        validate_semantic_reference(&claim.id, field, value)?;
+    }
+    for value in &semantics.derived_from {
+        has_term = true;
+        validate_semantic_reference(&claim.id, "derived_from", value)?;
+    }
+    if let Some(value_mapping) = semantics.value_mapping.as_deref() {
+        if value_mapping.trim().is_empty() {
+            return invalid_claim_semantics(&claim.id, "value_mapping must not be empty");
+        }
+    }
+    if !has_term {
+        return invalid_claim_semantics(
+            &claim.id,
+            "at least one of concept, property, vocabulary, predicate, or derived_from must be set",
+        );
+    }
+    if semantics.property.is_some() && semantics.predicate.is_some() {
+        return invalid_claim_semantics(
+            &claim.id,
+            "property and predicate are mutually exclusive; use derived_from for predicate inputs",
+        );
+    }
+    if let RuleConfig::Extract { source, field } = &claim.rule {
+        validate_extract_semantics(claim, semantics, source, field)?;
+    }
+    Ok(())
+}
+
+fn validate_extract_semantics(
+    claim: &ClaimDefinition,
+    semantics: &ClaimSemanticConfig,
+    source: &str,
+    field: &str,
+) -> Result<(), EvidenceConfigError> {
+    let Some(property) = semantics.property.as_deref() else {
+        return Ok(());
+    };
+    let Some(binding) = claim.source_bindings.get(source) else {
+        return Ok(());
+    };
+    let Some(source_field) = binding.fields.get(field) else {
+        return Ok(());
+    };
+    let Some(field_term) = source_field.semantic_term.as_deref().map(str::trim) else {
+        return Ok(());
+    };
+    let property = property.trim();
+    if field_term != property {
+        return invalid_claim_semantics(
+            &claim.id,
+            format!(
+                "property '{property}' conflicts with source field '{source}.{field}' semantic_term '{field_term}'"
+            ),
+        );
+    }
+    Ok(())
+}
+
+fn validate_semantic_reference(
+    claim_id: &str,
+    field: &str,
+    value: &str,
+) -> Result<(), EvidenceConfigError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return invalid_claim_semantics(claim_id, format!("{field} must not be empty"));
+    }
+    if value.starts_with("https://") || value.starts_with("http://") || value.starts_with("urn:") {
+        return Ok(());
+    }
+    invalid_claim_semantics(
+        claim_id,
+        format!("{field} must be an absolute http(s) URI or urn"),
+    )
+}
+
+fn invalid_claim_semantics<T>(
+    claim: &str,
+    reason: impl Into<String>,
+) -> Result<T, EvidenceConfigError> {
+    Err(EvidenceConfigError::InvalidClaimSemantics {
+        claim: claim.to_string(),
+        reason: reason.into(),
+    })
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CelBindingsConfig {
@@ -5325,12 +5500,13 @@ impl SigningKeyConfig {
     fn validate(&self, key_id: &str) -> Result<(), EvidenceConfigError> {
         validate_signing_key_non_empty(key_id, "alg", &self.alg)?;
         if self.alg != CREDENTIAL_SIGNING_ALG_EDDSA
+            && self.alg != CREDENTIAL_SIGNING_ALG_ES256
             && self.alg != CLIENT_ASSERTION_SIGNING_ALG_RS256
         {
             return invalid_signing_key(
                 key_id,
                 format!(
-                    "alg must be {CREDENTIAL_SIGNING_ALG_EDDSA} or {CLIENT_ASSERTION_SIGNING_ALG_RS256}"
+                    "alg must be {CREDENTIAL_SIGNING_ALG_EDDSA}, {CREDENTIAL_SIGNING_ALG_ES256}, or {CLIENT_ASSERTION_SIGNING_ALG_RS256}"
                 ),
             );
         }
@@ -6291,6 +6467,15 @@ auth:
         );
 
         assurance.allowed_assurance.clear();
+        assurance.minimum_assurance = Some(" ".to_string());
+        let err = validate_source_matching_config("claim", "src", &assurance, &ecosystem_bindings)
+            .expect_err("blank minimum assurance is rejected");
+        assert!(
+            matches!(err, EvidenceConfigError::InvalidMatchingConfig { ref reason, .. } if reason.contains("minimum_assurance")),
+            "expected minimum_assurance rejection, got {err:?}"
+        );
+
+        assurance.minimum_assurance = None;
         assurance.permitted_jurisdictions = vec!["RW".to_string(), " ".to_string()];
         let err = validate_source_matching_config("claim", "src", &assurance, &ecosystem_bindings)
             .expect_err("blank jurisdiction entry is rejected");
@@ -6894,6 +7079,7 @@ syslog_socket_path: /dev/log
                 subject_id_type: "national_id".to_string(),
                 disclosure: Some("predicate".to_string()),
                 max_source_observed_age_seconds: Some(300),
+                ..FederationEvaluationProfileConfig::default()
             }],
             ..FederationConfig::default()
         };
@@ -8028,6 +8214,7 @@ auth:
                         .to_string(),
             },
             scopes: vec!["self_attestation".to_string()],
+            authorization_details: None,
         });
 
         let reason = match config
@@ -9177,6 +9364,118 @@ allowed_claims: ["", "   "]
     }
 
     #[test]
+    fn claim_semantics_accepts_publicschema_property_mapping() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "civil_registry".to_string(),
+            serde_norway::from_str(
+                r#"
+base_url: https://registry.example.gov
+token_env: CIVIL_REGISTRY_TOKEN
+"#,
+            )
+            .expect("source connection parses"),
+        );
+        config.evidence.claims.push(
+            serde_norway::from_str(
+                r#"
+id: date-of-birth
+title: Date of birth
+version: "2026-06"
+subject_type: person
+value:
+  type: date
+semantics:
+  concept: https://publicschema.org/Person
+  property: " https://publicschema.org/date_of_birth "
+  value_mapping: publicschema
+source_bindings:
+  civil:
+    connector: registry_data_api
+    connection: civil_registry
+    dataset: civil_registry
+    entity: person
+    lookup:
+      input: target.identifiers.national_id
+      field: national_id
+      cardinality: one
+    fields:
+      birth_date:
+        field: birth_date
+        type: date
+        required: true
+        semantic_term: " https://publicschema.org/date_of_birth "
+rule:
+  type: extract
+  source: civil
+  field: birth_date
+"#,
+            )
+            .expect("claim parses"),
+        );
+
+        config
+            .validate()
+            .expect("matching PublicSchema semantics validate");
+    }
+
+    #[test]
+    fn claim_semantics_rejects_conflicting_extract_field_mapping() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "civil_registry".to_string(),
+            serde_norway::from_str(
+                r#"
+base_url: https://registry.example.gov
+token_env: CIVIL_REGISTRY_TOKEN
+"#,
+            )
+            .expect("source connection parses"),
+        );
+        config.evidence.claims.push(
+            serde_norway::from_str(
+                r#"
+id: date-of-birth
+title: Date of birth
+version: "2026-06"
+subject_type: person
+semantics:
+  property: https://publicschema.org/date_of_birth
+source_bindings:
+  civil:
+    connector: registry_data_api
+    connection: civil_registry
+    dataset: civil_registry
+    entity: person
+    lookup:
+      input: target.identifiers.national_id
+      field: national_id
+      cardinality: one
+    fields:
+      birth_date:
+        field: birth_date
+        type: date
+        required: true
+        semantic_term: https://publicschema.org/date_of_death
+rule:
+  type: extract
+  source: civil
+  field: birth_date
+"#,
+            )
+            .expect("claim parses"),
+        );
+
+        let error = config
+            .validate()
+            .expect_err("conflicting semantic terms must fail validation");
+        assert!(
+            matches!(error, EvidenceConfigError::InvalidClaimSemantics { ref reason, .. } if reason.contains("conflicts with source field")),
+            "unexpected error: {error:?}"
+        );
+    }
+
+    #[test]
     fn oid4vci_accepts_vct_under_path_prefixed_credential_issuer() {
         let mut config = valid_oid4vci_config();
         config.oid4vci.credential_issuer = "http://127.0.0.1:4325/notary".to_string();
@@ -9427,6 +9726,7 @@ allowed_claims: ["", "   "]
                         .to_string(),
             },
             scopes: Vec::new(),
+            authorization_details: None,
         });
 
         let reason = expect_self_attestation_error(&config);
@@ -10257,13 +10557,17 @@ access_token_ttl_seconds: 300
         assert!(reason.contains("publish_only"));
     }
 
-    /// An RS256 signing key entry. Config validation only checks the alg string
-    /// and the per-provider fields, so a dummy private_jwk_env name suffices; the
-    /// JWK itself is not decoded at validation time.
-    fn rs256_signing_key(private_jwk_env: &str, kid: &str) -> SigningKeyConfig {
+    /// A local JWK signing key entry. Config validation only checks the alg
+    /// string and the per-provider fields, so a dummy private_jwk_env name
+    /// suffices; the JWK itself is not decoded at validation time.
+    fn local_jwk_signing_key_with_alg(
+        alg: &str,
+        private_jwk_env: &str,
+        kid: &str,
+    ) -> SigningKeyConfig {
         SigningKeyConfig {
             provider: SigningKeyProviderConfig::LocalJwkEnv,
-            alg: CLIENT_ASSERTION_SIGNING_ALG_RS256.to_string(),
+            alg: alg.to_string(),
             kid: kid.to_string(),
             status: SigningKeyStatus::Active,
             publish_until_unix_seconds: None,
@@ -10277,6 +10581,14 @@ access_token_ttl_seconds: 300
             path: String::new(),
             password_env: String::new(),
         }
+    }
+
+    fn rs256_signing_key(private_jwk_env: &str, kid: &str) -> SigningKeyConfig {
+        local_jwk_signing_key_with_alg(CLIENT_ASSERTION_SIGNING_ALG_RS256, private_jwk_env, kid)
+    }
+
+    fn es256_signing_key(private_jwk_env: &str, kid: &str) -> SigningKeyConfig {
+        local_jwk_signing_key_with_alg(CREDENTIAL_SIGNING_ALG_ES256, private_jwk_env, kid)
     }
 
     fn expect_signing_key_error(config: &StandaloneRegistryNotaryConfig) -> String {
@@ -10357,7 +10669,7 @@ access_token_ttl_seconds: 300
     }
 
     #[test]
-    fn rs256_signing_key_may_be_credential_profile_key() {
+    fn rs256_signing_key_rejected_as_credential_profile_key() {
         let mut config = valid_pre_auth_config();
         config.evidence.signing_keys.insert(
             "esignet-rp-key".to_string(),
@@ -10370,17 +10682,35 @@ access_token_ttl_seconds: 300
             .get_mut("civil_status_sd_jwt")
             .expect("civil status credential profile exists")
             .signing_key = "esignet-rp-key".to_string();
-        config
-            .validate()
-            .expect("an RS256 credential profile signing key validates");
+        let reason = expect_signing_key_error(&config);
+        assert!(reason.contains("RS256"));
+        assert!(reason.contains("credential profile"));
     }
 
     #[test]
-    fn rs256_signing_key_rejected_as_access_token_key() {
+    fn es256_signing_key_may_be_credential_profile_key() {
+        let mut config = valid_pre_auth_config();
+        config.evidence.signing_keys.insert(
+            "issuer-p256-key".to_string(),
+            es256_signing_key("ISSUER_P256_KEY", "did:web:issuer.example#p256-key"),
+        );
+        config
+            .evidence
+            .credential_profiles
+            .get_mut("civil_status_sd_jwt")
+            .expect("civil status credential profile exists")
+            .signing_key = "issuer-p256-key".to_string();
+        config
+            .validate()
+            .expect("an ES256 credential profile signing key validates");
+    }
+
+    #[test]
+    fn non_eddsa_signing_key_rejected_as_access_token_key() {
         let mut config = valid_pre_auth_config();
         config.evidence.signing_keys.insert(
             "esignet-rp-key".to_string(),
-            rs256_signing_key("ESIGNET_RP_KEY", "did:web:rp.example#esignet-rp-key"),
+            es256_signing_key("ESIGNET_RP_KEY", "did:web:rp.example#esignet-rp-key"),
         );
         config.auth.access_token_signing.signing_key_id = "esignet-rp-key".to_string();
         let reason = expect_signing_key_error(&config);
@@ -10388,11 +10718,11 @@ access_token_ttl_seconds: 300
     }
 
     #[test]
-    fn rs256_signing_key_rejected_as_federation_key() {
+    fn non_eddsa_signing_key_rejected_as_federation_key() {
         let mut config = valid_federation_config();
         config.evidence.signing_keys.insert(
             "esignet-rp-key".to_string(),
-            rs256_signing_key("ESIGNET_RP_KEY", "did:web:rp.example#esignet-rp-key"),
+            es256_signing_key("ESIGNET_RP_KEY", "did:web:rp.example#esignet-rp-key"),
         );
         config.federation.signing.signing_key = "esignet-rp-key".to_string();
         let reason = expect_signing_key_error(&config);
@@ -10400,16 +10730,17 @@ access_token_ttl_seconds: 300
     }
 
     #[test]
-    fn signing_key_alg_must_be_eddsa_or_rs256() {
+    fn signing_key_alg_must_be_eddsa_es256_or_rs256() {
         let mut config = valid_pre_auth_config();
         config
             .evidence
             .signing_keys
             .get_mut("issuer-key")
             .expect("issuer-key exists")
-            .alg = "ES256".to_string();
+            .alg = "PS256".to_string();
         let reason = expect_signing_key_error(&config);
         assert!(reason.contains(CREDENTIAL_SIGNING_ALG_EDDSA));
+        assert!(reason.contains(CREDENTIAL_SIGNING_ALG_ES256));
         assert!(reason.contains(CLIENT_ASSERTION_SIGNING_ALG_RS256));
     }
 

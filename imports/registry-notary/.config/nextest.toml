@@ -1,0 +1,6 @@
+[test-groups]
+worker-pool = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary(worker_pool)'
+test-group = 'worker-pool'

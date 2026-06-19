@@ -171,8 +171,10 @@ impl CredentialStatusStore {
     pub(crate) fn status_claim(&self, credential_id: &str) -> Option<Value> {
         self.enabled.then(|| {
             json!({
-                "type": "RegistryNotaryCredentialStatus",
-                "statusUrl": self.status_url(credential_id),
+                "status_list": {
+                    "idx": 0,
+                    "uri": self.status_url(credential_id),
+                }
             })
         })
     }
@@ -301,6 +303,22 @@ pub(crate) fn is_mutable_status(value: &str) -> bool {
         value,
         CREDENTIAL_STATUS_VALID | CREDENTIAL_STATUS_SUSPENDED | CREDENTIAL_STATUS_REVOKED
     )
+}
+
+pub(crate) fn status_list_value(status: &str) -> u8 {
+    match status {
+        CREDENTIAL_STATUS_VALID => 0,
+        CREDENTIAL_STATUS_SUSPENDED => 2,
+        _ => 1,
+    }
+}
+
+pub(crate) fn encoded_single_entry_status_list(status: &str) -> &'static str {
+    match status_list_value(status) {
+        0 => "eJxjAAAAAQAB",
+        2 => "eJxjAgAAAwAD",
+        _ => "eJxjBAAAAgAC",
+    }
 }
 
 fn format_time(value: OffsetDateTime) -> String {
@@ -688,9 +706,23 @@ mod tests {
         assert_eq!(
             store.status_claim("credential-1"),
             Some(json!({
-                "type": "RegistryNotaryCredentialStatus",
-                "statusUrl": "https://issuer.example/v1/credentials/credential-1/status"
+                "status_list": {
+                    "idx": 0,
+                    "uri": "https://issuer.example/v1/credentials/credential-1/status"
+                }
             }))
+        );
+    }
+
+    #[test]
+    fn status_list_values_use_registered_token_status_codes() {
+        assert_eq!(status_list_value(CREDENTIAL_STATUS_VALID), 0);
+        assert_eq!(status_list_value(CREDENTIAL_STATUS_REVOKED), 1);
+        assert_eq!(status_list_value(CREDENTIAL_STATUS_EXPIRED), 1);
+        assert_eq!(status_list_value(CREDENTIAL_STATUS_SUSPENDED), 2);
+        assert_eq!(
+            encoded_single_entry_status_list(CREDENTIAL_STATUS_VALID),
+            "eJxjAAAAAQAB"
         );
     }
 }

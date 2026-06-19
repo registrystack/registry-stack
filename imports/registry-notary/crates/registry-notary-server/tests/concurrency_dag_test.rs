@@ -185,6 +185,7 @@ fn claim_with_two_bindings(id: &str) -> ClaimDefinition {
             value_type: "number".to_string(),
             unit: None,
         },
+        semantics: None,
         inputs: Vec::new(),
         depends_on: Vec::new(),
         purpose: None,
@@ -245,6 +246,7 @@ fn evaluate_claim(id: &str, entity: &str, depends_on: Vec<&str>) -> ClaimDefinit
             value_type: "number".to_string(),
             unit: None,
         },
+        semantics: None,
         inputs: Vec::new(),
         depends_on: depends_on.into_iter().map(String::from).collect(),
         purpose: None,
@@ -284,6 +286,7 @@ fn make_evidence(
     let mut cfg = EvidenceConfig {
         enabled: true,
         service_id: "registry-notary.test".to_string(),
+        allowed_purposes: vec!["test".to_string()],
         inline_batch_limit: subjects.max(1),
         claims,
         concurrency,

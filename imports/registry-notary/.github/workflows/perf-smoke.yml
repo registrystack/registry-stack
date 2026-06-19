@@ -19,7 +19,7 @@ env:
   RUST_BACKTRACE: 1
   K6_DOCKER_IMAGE: grafana/k6:0.57.0
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: 678d25c127735dde3f0ff0fdae880bfe8ed5e277
+  REGISTRY_PLATFORM_REF: 903511c24b37917316803790520a19afa9c26569
   CROSSWALK_REPOSITORY: PublicSchema/crosswalk
   CROSSWALK_REF: 54e0f537830837fcd0c9efa87990987b1846931c
 
@@ -150,6 +150,7 @@ jobs:
           curl -fsS -H "Authorization: Bearer ${REGISTRY_NOTARY_BEARER_TOKEN}" http://127.0.0.1:14255/v1/claims >/dev/null
           for scenario in list_claims evaluate_extract; do
             docker run --rm --network host \
+              --user "$(id -u):$(id -g)" \
               --env-file target/perf/perf.env \
               -e REGISTRY_NOTARY_DURATION=5s \
               -e REGISTRY_NOTARY_VUS=2 \

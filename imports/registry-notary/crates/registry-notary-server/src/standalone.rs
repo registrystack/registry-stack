@@ -1422,6 +1422,41 @@ impl SourceReader for HttpEvidenceSources {
         })
     }
 
+    fn source_observed_at_for_context<'a>(
+        &'a self,
+        binding: &'a SourceBindingConfig,
+        context: &'a EvidenceRequestContext,
+        purpose: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<OffsetDateTime>, EvidenceError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let connection = self
+                .source_connection(binding)
+                .ok_or(EvidenceError::SourceUnavailable)?;
+            match binding.connector {
+                SourceConnectorKind::RegistryDataApi => {
+                    read_remote_registry_data_api_source_observed_at_for_context(
+                        self, connection, binding, context, purpose,
+                    )
+                    .await
+                }
+                SourceConnectorKind::OpenFnSidecar => {
+                    ensure_openfn_sidecar_assurance(self, connection).await?;
+                    read_remote_registry_data_api_source_observed_at_for_context(
+                        self, connection, binding, context, purpose,
+                    )
+                    .await
+                }
+                SourceConnectorKind::Dci => {
+                    read_external_dci_source_observed_at_for_context(
+                        self, connection, binding, context, purpose,
+                    )
+                    .await
+                }
+            }
+        })
+    }
+
     fn read_many<'a>(
         &'a self,
         bindings: Vec<(SourceBindingConfig, SubjectRequest)>,
@@ -3254,6 +3289,8 @@ pub(crate) fn pre_auth_audit_event(
         claim_hash: None,
         purposes: None,
         row_count: None,
+        source_read_count: None,
+        forwarded: None,
         error_code: None,
         access_mode: Some(AccessMode::SelfAttestation),
         federation_peer_id_hash: None,
@@ -3279,9 +3316,14 @@ pub(crate) fn pre_auth_audit_event(
         matching_policy_id: None,
         matching_policy_hash: None,
         matching_evaluated_rule_ids: None,
+        ecosystem_binding_id: None,
+        ecosystem_binding_version: None,
+        pack_id: None,
+        pack_version: None,
         matching_method: None,
         matching_outcome: None,
         matching_error_code: None,
+        redacted_fields: None,
         batch_items: None,
         source_sidecar_config_hashes: None,
         config: None,
@@ -3726,6 +3768,7 @@ pub struct ResolvedCredential {
     pub id: String,
     pub fingerprint: String,
     pub scopes: Vec<String>,
+    pub authorization_details: Option<EvidenceAuthorizationDetails>,
 }
 
 impl std::fmt::Debug for ResolvedCredential {
@@ -3734,6 +3777,10 @@ impl std::fmt::Debug for ResolvedCredential {
             .field("id", &self.id)
             .field("fingerprint", &"<redacted>")
             .field("scopes", &self.scopes)
+            .field(
+                "authorization_details",
+                &self.authorization_details.as_ref().map(|_| "<configured>"),
+            )
             .finish()
     }
 }
@@ -4289,6 +4336,7 @@ async fn auth_audit_middleware(
             matching_method: None,
             matching_outcome: None,
             matching_error_code: None,
+            redacted_fields: None,
             batch_items: None,
             ..EvidenceAuditContext::default()
         });
@@ -4507,6 +4555,8 @@ fn build_audit_event(
     let claim_hash = audit.and_then(|context| context.claim_hash.clone());
     let purposes = audit.and_then(|context| context.purposes.clone());
     let row_count = audit.and_then(|context| context.row_count);
+    let source_read_count = audit.and_then(|context| context.source_read_count);
+    let forwarded = audit.and_then(|context| context.forwarded);
     let access_mode = audit
         .and_then(|context| context.access_mode)
         .or_else(|| principal.map(EvidencePrincipal::access_mode));
@@ -4527,9 +4577,15 @@ fn build_audit_event(
     let matching_policy_hash = audit.and_then(|context| context.matching_policy_hash.clone());
     let matching_evaluated_rule_ids =
         audit.and_then(|context| context.matching_evaluated_rule_ids.clone());
+    let ecosystem_binding_id = audit.and_then(|context| context.ecosystem_binding_id.clone());
+    let ecosystem_binding_version =
+        audit.and_then(|context| context.ecosystem_binding_version.clone());
+    let pack_id = audit.and_then(|context| context.pack_id.clone());
+    let pack_version = audit.and_then(|context| context.pack_version.clone());
     let matching_method = audit.and_then(|context| context.matching_method.clone());
     let matching_outcome = audit.and_then(|context| context.matching_outcome.clone());
     let matching_error_code = audit.and_then(|context| context.matching_error_code.clone());
+    let redacted_fields = audit.and_then(|context| context.redacted_fields.clone());
     let batch_items = audit.and_then(|context| context.batch_items.clone());
     let source_sidecar_config_hashes =
         audit.and_then(|context| context.source_sidecar_config_hashes.clone());
@@ -4561,6 +4617,8 @@ fn build_audit_event(
         claim_hash,
         purposes,
         row_count,
+        source_read_count,
+        forwarded,
         error_code,
         access_mode,
         federation_peer_id_hash: None,
@@ -4588,9 +4646,14 @@ fn build_audit_event(
         matching_policy_id,
         matching_policy_hash,
         matching_evaluated_rule_ids,
+        ecosystem_binding_id,
+        ecosystem_binding_version,
+        pack_id,
+        pack_version,
         matching_method,
         matching_outcome,
         matching_error_code,
+        redacted_fields,
         batch_items,
         source_sidecar_config_hashes,
         config,
@@ -4657,6 +4720,7 @@ fn resolve_credentials(
                 id: credential.id.clone(),
                 fingerprint,
                 scopes: credential.scopes.clone(),
+                authorization_details: credential.authorization_details.clone(),
             })
         })
         .collect()
@@ -5148,7 +5212,7 @@ fn principal_from_credential(credential: &ResolvedCredential) -> EvidencePrincip
         scopes: credential.scopes.clone(),
         access_mode: AccessMode::MachineClient,
         verified_claims: None,
-        authorization_details: None,
+        authorization_details: credential.authorization_details.clone(),
     }
 }
 
@@ -5390,6 +5454,42 @@ async fn read_remote_registry_data_api_one_for_context(
         .await
 }
 
+async fn read_remote_registry_data_api_source_observed_at_for_context(
+    sources: &HttpEvidenceSources,
+    connection: &ResolvedEvidenceSourceConnection,
+    binding: &SourceBindingConfig,
+    context: &EvidenceRequestContext,
+    purpose: &str,
+) -> Result<Option<OffsetDateTime>, EvidenceError> {
+    let Some(observed_field) = binding.matching.source_observed_at_field.as_deref() else {
+        return Ok(None);
+    };
+    if !binding.query_fields.is_empty() {
+        let query_values = source_query_values_for_context(binding, context)?;
+        let row = read_remote_registry_data_api_observed_at_query_values(
+            sources,
+            connection,
+            binding,
+            query_values,
+            observed_field,
+            purpose,
+        )
+        .await?;
+        return parse_source_observed_at(binding, &row);
+    }
+    let lookup_value = lookup_value_for_context(binding, context)?;
+    let row = read_remote_registry_data_api_observed_at_lookup(
+        sources,
+        connection,
+        binding,
+        lookup_value,
+        observed_field,
+        purpose,
+    )
+    .await?;
+    parse_source_observed_at(binding, &row)
+}
+
 async fn read_remote_registry_data_api_one_lookup(
     sources: &HttpEvidenceSources,
     connection: &ResolvedEvidenceSourceConnection,
@@ -5436,6 +5536,44 @@ async fn read_remote_registry_data_api_one_lookup(
             .ok_or(EvidenceError::SourceUnavailable),
         _ => Err(EvidenceError::SourceAmbiguous),
     }
+}
+
+async fn read_remote_registry_data_api_observed_at_lookup(
+    sources: &HttpEvidenceSources,
+    connection: &ResolvedEvidenceSourceConnection,
+    binding: &SourceBindingConfig,
+    lookup_value: Value,
+    observed_field: &str,
+    purpose: &str,
+) -> Result<Value, EvidenceError> {
+    ensure_openfn_sidecar_assurance(sources, connection).await?;
+    let lookup_field = binding.lookup.field.clone();
+    let fields = source_observed_at_fields_with_lookup(&lookup_field, observed_field);
+    let url = registry_data_api_url(&connection.base_url, binding)?;
+    let query_pairs = vec![
+        ("limit".to_string(), "2".to_string()),
+        ("fields".to_string(), fields.join(",")),
+        (lookup_field.clone(), value_query_string(&lookup_value)?),
+    ];
+    let body = send_request_with_retry(
+        sources,
+        connection,
+        "rda_observed_at",
+        &url,
+        reqwest::Method::GET,
+        sources.request_timeout,
+        move |request, token| {
+            add_correlation_header(
+                request
+                    .bearer_auth(token)
+                    .header("accept", "application/json")
+                    .header("data-purpose", purpose),
+            )
+            .query(&query_pairs)
+        },
+    )
+    .await?;
+    single_source_row(body)
 }
 
 async fn read_remote_registry_data_api_one_query_values(
@@ -5487,6 +5625,45 @@ async fn read_remote_registry_data_api_one_query_values(
     }
 }
 
+async fn read_remote_registry_data_api_observed_at_query_values(
+    sources: &HttpEvidenceSources,
+    connection: &ResolvedEvidenceSourceConnection,
+    binding: &SourceBindingConfig,
+    query_values: Vec<SourceQueryValue>,
+    observed_field: &str,
+    purpose: &str,
+) -> Result<Value, EvidenceError> {
+    ensure_openfn_sidecar_assurance(sources, connection).await?;
+    let fields = source_observed_at_fields_with_query_values(&query_values, observed_field);
+    let url = registry_data_api_url(&connection.base_url, binding)?;
+    let mut query_pairs = vec![
+        ("limit".to_string(), "2".to_string()),
+        ("fields".to_string(), fields.join(",")),
+    ];
+    for query_value in &query_values {
+        query_pairs.push(registry_data_api_query_pair(query_value)?);
+    }
+    let body = send_request_with_retry(
+        sources,
+        connection,
+        "rda_observed_at",
+        &url,
+        reqwest::Method::GET,
+        sources.request_timeout,
+        move |request, token| {
+            add_correlation_header(
+                request
+                    .bearer_auth(token)
+                    .header("accept", "application/json")
+                    .header("data-purpose", purpose),
+            )
+            .query(&query_pairs)
+        },
+    )
+    .await?;
+    single_source_row(body)
+}
+
 async fn read_external_dci_http_one(
     sources: &HttpEvidenceSources,
     connection: &ResolvedEvidenceSourceConnection,
@@ -5519,6 +5696,54 @@ async fn read_external_dci_http_one_for_context(
     let lookup_values = source_query_values_for_context(binding, context)?;
     read_external_dci_http_one_query_values(sources, connection, binding, lookup_values, purpose)
         .await
+}
+
+async fn read_external_dci_source_observed_at_for_context(
+    sources: &HttpEvidenceSources,
+    connection: &ResolvedEvidenceSourceConnection,
+    binding: &SourceBindingConfig,
+    context: &EvidenceRequestContext,
+    purpose: &str,
+) -> Result<Option<OffsetDateTime>, EvidenceError> {
+    let Some(observed_field) = binding.matching.source_observed_at_field.as_deref() else {
+        return Ok(None);
+    };
+    let lookup_values = source_query_values_for_context(binding, context)?;
+    let url = source_url(&connection.base_url, &connection.dci.search_path)?;
+    let request_body =
+        dci_search_request_body_for_values(&connection.dci, binding, &lookup_values)?;
+    let body = send_request_with_retry(
+        sources,
+        connection,
+        "dci_observed_at",
+        &url,
+        reqwest::Method::POST,
+        sources.request_timeout,
+        move |request, token| {
+            add_correlation_header(
+                request
+                    .bearer_auth(token)
+                    .header("accept", "application/json")
+                    .header("content-type", "application/json")
+                    .header("data-purpose", purpose),
+            )
+            .json(&request_body)
+        },
+    )
+    .await?;
+    let rows = match get_json_path(&body, &connection.dci.records_path).and_then(Value::as_array) {
+        Some(rows) => rows,
+        None if dci_search_response_not_found(&body) => return Err(EvidenceError::SourceNotFound),
+        None => return Err(EvidenceError::SourceUnavailable),
+    };
+    let row = match rows.len() {
+        0 => return Err(EvidenceError::SourceNotFound),
+        1 => {
+            source_observed_at_dci_row(connection, &lookup_values, observed_field, &body, &rows[0])
+        }
+        _ => return Err(EvidenceError::SourceAmbiguous),
+    };
+    parse_source_observed_at(binding, &row)
 }
 
 async fn read_external_dci_http_one_lookup(
@@ -5556,7 +5781,7 @@ async fn read_external_dci_http_one_lookup(
     };
     match rows.len() {
         0 => Err(EvidenceError::SourceNotFound),
-        1 => project_dci_record(connection, binding, &lookup_value, &rows[0]),
+        1 => project_dci_record(connection, binding, &lookup_value, &body, &rows[0]),
         _ => Err(EvidenceError::SourceAmbiguous),
     }
 }
@@ -5597,7 +5822,7 @@ async fn read_external_dci_http_one_query_values(
     };
     match rows.len() {
         0 => Err(EvidenceError::SourceNotFound),
-        1 => project_dci_record_for_values(connection, binding, &lookup_values, &rows[0]),
+        1 => project_dci_record_for_values(connection, binding, &lookup_values, &body, &rows[0]),
         _ => Err(EvidenceError::SourceAmbiguous),
     }
 }
@@ -6143,9 +6368,13 @@ async fn read_external_dci_http_many(
                     .unwrap_or_default();
                 let outcome = match rows.len() {
                     0 => Err(EvidenceError::SourceNotFound),
-                    1 => {
-                        project_dci_record(connection, binding, &lookup_value_for_subject, &rows[0])
-                    }
+                    1 => project_dci_record(
+                        connection,
+                        binding,
+                        &lookup_value_for_subject,
+                        &body,
+                        &rows[0],
+                    ),
                     _ => Err(EvidenceError::SourceAmbiguous),
                 };
                 results.push(outcome);
@@ -6589,6 +6818,90 @@ fn source_query_values_for_context(
         .collect()
 }
 
+fn single_source_row(body: Value) -> Result<Value, EvidenceError> {
+    let rows = body
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or(EvidenceError::SourceUnavailable)?;
+    match rows.len() {
+        0 => Err(EvidenceError::SourceNotFound),
+        1 => rows
+            .first()
+            .cloned()
+            .ok_or(EvidenceError::SourceUnavailable),
+        _ => Err(EvidenceError::SourceAmbiguous),
+    }
+}
+
+fn parse_source_observed_at(
+    binding: &SourceBindingConfig,
+    row: &Value,
+) -> Result<Option<OffsetDateTime>, EvidenceError> {
+    let Some(field) = binding.matching.source_observed_at_field.as_deref() else {
+        return Ok(None);
+    };
+    let Some(value) = get_json_path(row, field) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let Some(value) = value.as_str() else {
+        return Err(EvidenceError::TargetMatchingPolicyRejected);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    OffsetDateTime::parse(value, &Rfc3339)
+        .map(Some)
+        .map_err(|_| EvidenceError::TargetMatchingPolicyRejected)
+}
+
+fn source_observed_at_fields_with_lookup(lookup_field: &str, observed_field: &str) -> Vec<String> {
+    let mut fields = vec![lookup_field.to_string(), observed_field.to_string()];
+    fields.sort();
+    fields.dedup();
+    fields
+}
+
+fn source_observed_at_fields_with_query_values(
+    query_values: &[SourceQueryValue],
+    observed_field: &str,
+) -> Vec<String> {
+    let mut fields = query_values
+        .iter()
+        .map(|value| value.field.clone())
+        .collect::<Vec<_>>();
+    fields.push(observed_field.to_string());
+    fields.sort();
+    fields.dedup();
+    fields
+}
+
+fn source_observed_at_dci_row(
+    connection: &ResolvedEvidenceSourceConnection,
+    lookup_values: &[SourceQueryValue],
+    observed_field: &str,
+    response: &Value,
+    record: &Value,
+) -> Value {
+    let mut row = Map::new();
+    for lookup_value in lookup_values {
+        insert_row_path(&mut row, &lookup_value.field, lookup_value.value.clone());
+    }
+    let path = connection
+        .dci
+        .field_paths
+        .get(observed_field)
+        .map(String::as_str)
+        .unwrap_or(observed_field);
+    if let Some(value) = get_dci_json_path(response, record, path).cloned() {
+        insert_row_path(&mut row, observed_field, value);
+    }
+    Value::Object(row)
+}
+
 fn add_dci_envelope_options(dci: &DciSourceConnectionConfig, body: &mut Value) {
     if let Some(receiver_id) = &dci.receiver_id {
         if let Some(header) = body.pointer_mut("/header").and_then(Value::as_object_mut) {
@@ -6629,6 +6942,7 @@ fn project_dci_record(
     connection: &ResolvedEvidenceSourceConnection,
     binding: &SourceBindingConfig,
     lookup_value: &Value,
+    response: &Value,
     record: &Value,
 ) -> Result<Value, EvidenceError> {
     let lookup_values = [SourceQueryValue {
@@ -6636,13 +6950,14 @@ fn project_dci_record(
         op: binding.lookup.op.clone(),
         value: lookup_value.clone(),
     }];
-    project_dci_record_for_values(connection, binding, &lookup_values, record)
+    project_dci_record_for_values(connection, binding, &lookup_values, response, record)
 }
 
 fn project_dci_record_for_values(
     connection: &ResolvedEvidenceSourceConnection,
     binding: &SourceBindingConfig,
     lookup_values: &[SourceQueryValue],
+    response: &Value,
     record: &Value,
 ) -> Result<Value, EvidenceError> {
     let mut row = Map::new();
@@ -6657,10 +6972,31 @@ fn project_dci_record_for_values(
             .or_else(|| connection.dci.field_paths.get(alias))
             .map(String::as_str)
             .unwrap_or(field.field.as_str());
-        let value = get_json_path(record, path).cloned().unwrap_or(Value::Null);
+        let value = get_dci_json_path(response, record, path)
+            .cloned()
+            .unwrap_or(Value::Null);
         insert_row_path(&mut row, &field.field, value);
     }
+    if let Some(observed_field) = binding.matching.source_observed_at_field.as_deref() {
+        let path = connection
+            .dci
+            .field_paths
+            .get(observed_field)
+            .map(String::as_str)
+            .unwrap_or(observed_field);
+        if let Some(value) = get_dci_json_path(response, record, path).cloned() {
+            insert_row_path(&mut row, observed_field, value);
+        }
+    }
     Ok(Value::Object(row))
+}
+
+fn get_dci_json_path<'a>(response: &'a Value, record: &'a Value, path: &str) -> Option<&'a Value> {
+    const RESPONSE_PREFIX: &str = "$response:";
+    if let Some(response_path) = path.strip_prefix(RESPONSE_PREFIX) {
+        return get_json_path(response, response_path);
+    }
+    get_json_path(record, path)
 }
 
 pub(crate) fn get_json_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
@@ -6845,6 +7181,9 @@ fn projected_source_fields_with_lookup(
     for field in binding.fields.values() {
         fields.push(field.field.clone());
     }
+    if let Some(source_observed_at_field) = binding.matching.source_observed_at_field.as_ref() {
+        fields.push(source_observed_at_field.clone());
+    }
     fields.sort();
     fields.dedup();
     fields
@@ -6860,6 +7199,9 @@ fn projected_source_fields_with_query_values(
         .collect::<Vec<_>>();
     for field in binding.fields.values() {
         fields.push(field.field.clone());
+    }
+    if let Some(source_observed_at_field) = binding.matching.source_observed_at_field.as_ref() {
+        fields.push(source_observed_at_field.clone());
     }
     fields.sort();
     fields.dedup();
@@ -7614,6 +7956,8 @@ credential_profiles:
             claim_hash: None,
             purposes: None,
             row_count: None,
+            source_read_count: None,
+            forwarded: None,
             error_code: None,
             access_mode: Some(AccessMode::MachineClient),
             federation_peer_id_hash: None,
@@ -7639,9 +7983,14 @@ credential_profiles:
             matching_policy_id: None,
             matching_policy_hash: None,
             matching_evaluated_rule_ids: None,
+            ecosystem_binding_id: None,
+            ecosystem_binding_version: None,
+            pack_id: None,
+            pack_version: None,
             matching_method: None,
             matching_outcome: None,
             matching_error_code: None,
+            redacted_fields: None,
             batch_items: None,
             source_sidecar_config_hashes: None,
             config: None,
@@ -7655,6 +8004,7 @@ credential_profiles:
                     id: "caseworker".to_string(),
                     fingerprint: registry_platform_authcommon::fingerprint_api_key("api-token"),
                     scopes: Vec::new(),
+                    authorization_details: None,
                 }],
                 bearer_tokens: Vec::new(),
             })),
@@ -8096,6 +8446,7 @@ credential_profiles:
             value: Some(serde_json::json!({ "verified": true })),
             satisfied: Some(true),
             disclosure: "value".to_string(),
+            redacted_fields: Vec::new(),
             format: FORMAT_CLAIM_RESULT_JSON.to_string(),
             issued_at: "2026-05-23T00:00:00Z".to_string(),
             expires_at: None,
@@ -8206,6 +8557,8 @@ credential_profiles:
             claim_hash: Some("sha256:claim-hash".to_string()),
             purposes: None,
             row_count: None,
+            source_read_count: None,
+            forwarded: None,
             access_mode: Some(AccessMode::SelfAttestation),
             denial_code: Some(SelfAttestationDenialCode::SubjectMismatch),
             token_claim_name: Some(
@@ -8229,6 +8582,8 @@ credential_profiles:
             matching_policy_id: Some("civil-registry-v1".to_string()),
             matching_policy_hash: Some(Hashed::from_hash("sha256:matching-policy")),
             matching_evaluated_rule_ids: Some(vec!["source-binding-policy:person".to_string()]),
+            ecosystem_binding_id: Some("baseline-dpi/v1".to_string()),
+            ecosystem_binding_version: Some("2026-06-19".to_string()),
             matching_method: Some("configured_lookup".to_string()),
             matching_outcome: Some("matched".to_string()),
             matching_error_code: None,
@@ -8283,6 +8638,14 @@ credential_profiles:
             event.matching_policy_id.as_deref(),
             Some("civil-registry-v1")
         );
+        assert_eq!(
+            event.ecosystem_binding_id.as_deref(),
+            Some("baseline-dpi/v1")
+        );
+        assert_eq!(
+            event.ecosystem_binding_version.as_deref(),
+            Some("2026-06-19")
+        );
         assert_eq!(event.matching_method.as_deref(), Some("configured_lookup"));
         assert_eq!(event.matching_outcome.as_deref(), Some("matched"));
     }
@@ -8308,6 +8671,7 @@ credential_profiles:
 
     fn test_source_config(base_url: &str, allow_insecure_localhost: bool) -> EvidenceConfig {
         EvidenceConfig {
+            allowed_purposes: vec![OPENFN_SPIKE_PURPOSE.to_string()],
             source_connections: BTreeMap::from([(
                 "registry".to_string(),
                 SourceConnectionConfig {
@@ -8334,6 +8698,8 @@ credential_profiles:
             r#"
 enabled: true
 service_id: spike.registry-notary
+allowed_purposes:
+  - {OPENFN_SPIKE_PURPOSE}
 source_connections:
   openfn_crvs:
     base_url: "{base_url}"
@@ -8367,6 +8733,9 @@ claims:
             field: birth_date
             type: date
             required: true
+        matching:
+          allowed_purposes:
+            - "{OPENFN_SPIKE_PURPOSE}"
     rule:
       type: extract
       source: crvs
@@ -9863,6 +10232,7 @@ config_trust:
                     id: "caseworker".to_string(),
                     fingerprint: registry_platform_authcommon::fingerprint_api_key("api-token"),
                     scopes: vec!["farmer_registry:evidence_verification".to_string()],
+                    authorization_details: None,
                 }],
             })),
             audit: AuditPipeline::for_sink_dev_only(Arc::new(JsonlStdoutSink::new())),
@@ -9893,11 +10263,13 @@ config_trust:
                 id: "api-client".to_string(),
                 fingerprint: registry_platform_authcommon::fingerprint_api_key("api-token"),
                 scopes: vec!["farmer_registry:evidence_verification".to_string()],
+                authorization_details: None,
             }],
             bearer_tokens: vec![ResolvedCredential {
                 id: "bearer-client".to_string(),
                 fingerprint: registry_platform_authcommon::fingerprint_api_key("bearer-token"),
                 scopes: vec!["farmer_registry:evidence_verification".to_string()],
+                authorization_details: None,
             }],
         };
         let request = RequestCredentials {
@@ -9922,6 +10294,7 @@ config_trust:
                 id: "api-client".to_string(),
                 fingerprint: registry_platform_authcommon::fingerprint_api_key("api-token"),
                 scopes: vec!["farmer_registry:evidence_verification".to_string()],
+                authorization_details: None,
             }],
             bearer_tokens: Vec::new(),
         };
@@ -9975,6 +10348,7 @@ config_trust:
             id: "caseworker".to_string(),
             fingerprint: registry_platform_authcommon::fingerprint_api_key("api-token"),
             scopes: vec!["farmer_registry:evidence_verification".to_string()],
+            authorization_details: None,
         };
         let request = RequestCredentials {
             api_key: Some("api-token".to_string()),
@@ -9993,6 +10367,42 @@ config_trust:
             vec!["farmer_registry:evidence_verification".to_string()]
         );
         assert!(authenticated.verified_claims.is_none());
+        assert!(authenticated.authorization_details.is_none());
+    }
+
+    #[test]
+    fn static_credentials_can_carry_configured_authorization_details() {
+        let credential = ResolvedCredential {
+            id: "caseworker".to_string(),
+            fingerprint: registry_platform_authcommon::fingerprint_api_key("api-token"),
+            scopes: vec!["farmer_registry:evidence_verification".to_string()],
+            authorization_details: Some(EvidenceAuthorizationDetails {
+                detail_type: "registry-notary/evidence-authorization/v1".to_string(),
+                schema_version: "v1".to_string(),
+                legal_basis_ref: Some("demo:casework".to_string()),
+                consent_ref: Some("demo:consent".to_string()),
+                jurisdiction: Some("ZZ".to_string()),
+                assurance_level: Some("substantial".to_string()),
+                ..EvidenceAuthorizationDetails::default()
+            }),
+        };
+        let request = RequestCredentials {
+            api_key: Some("api-token".to_string()),
+            authorization_present: false,
+            bearer_token: None,
+            id_token: None,
+        };
+
+        let authenticated =
+            authenticate_static(&request, &[credential], &[]).expect("static auth succeeds");
+        let details = authenticated
+            .authorization_details
+            .expect("configured authorization details are trusted context");
+
+        assert_eq!(details.legal_basis_ref.as_deref(), Some("demo:casework"));
+        assert_eq!(details.consent_ref.as_deref(), Some("demo:consent"));
+        assert_eq!(details.jurisdiction.as_deref(), Some("ZZ"));
+        assert_eq!(details.assurance_level.as_deref(), Some("substantial"));
     }
 
     #[test]
@@ -10248,6 +10658,15 @@ config_trust:
             id: "caseworker".to_string(),
             fingerprint: registry_platform_authcommon::fingerprint_api_key("api-token"),
             scopes: vec!["farmer_registry:evidence_verification".to_string()],
+            authorization_details: Some(EvidenceAuthorizationDetails {
+                detail_type: "registry-notary/evidence-authorization/v1".to_string(),
+                schema_version: "v1".to_string(),
+                legal_basis_ref: Some("demo:casework".to_string()),
+                consent_ref: Some("demo:consent".to_string()),
+                jurisdiction: Some("ZZ".to_string()),
+                assurance_level: Some("substantial".to_string()),
+                ..EvidenceAuthorizationDetails::default()
+            }),
         };
         let connection = ResolvedEvidenceSourceConnection {
             id: "registry".to_string(),
@@ -10460,6 +10879,20 @@ config_trust:
                 "surname".to_string()
             ]
         );
+        binding.matching.source_observed_at_field = Some("observed_at".to_string());
+        assert_eq!(
+            projected_source_fields_with_query_values(&binding, &values),
+            vec![
+                "birth_date".to_string(),
+                "given_name".to_string(),
+                "observed_at".to_string(),
+                "surname".to_string()
+            ]
+        );
+        assert_eq!(
+            projected_source_fields_with_lookup(&binding, "national_id"),
+            vec!["national_id".to_string(), "observed_at".to_string()]
+        );
     }
 
     #[test]
@@ -10479,6 +10912,24 @@ config_trust:
 
         assert_eq!(gte, json!({ "type": "range", "gte": "2020-01-01" }));
         assert_eq!(lte, json!({ "type": "range", "lte": "2020-12-31" }));
+    }
+
+    #[test]
+    fn parse_source_observed_at_trims_timestamp_before_parse() {
+        let mut binding = test_binding("people", "person");
+        binding.matching.source_observed_at_field = Some("observed_at".to_string());
+
+        let observed_at =
+            parse_source_observed_at(&binding, &json!({"observed_at": "\t2026-05-24T12:00:00Z "}))
+                .expect("trimmed observed_at parses")
+                .expect("observed_at is present");
+
+        assert_eq!(
+            observed_at
+                .format(&Rfc3339)
+                .expect("observed_at formats as RFC3339"),
+            "2026-05-24T12:00:00Z"
+        );
     }
 
     #[test]

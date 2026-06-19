@@ -901,6 +901,7 @@ fn build_openapi_document() -> Value {
         ("EvidenceActor", evidence_actor_schema()),
         ("ListClaimsResponse", list_claims_response_schema()),
         ("ClaimSummary", claim_summary_schema()),
+        ("ClaimSemantics", claim_semantics_schema()),
         ("ClaimTargetInputMethod", claim_target_input_method_schema()),
         ("ClaimTargetInputGroup", claim_target_input_group_schema()),
         ("ClaimTargetInput", claim_target_input_schema()),
@@ -2003,6 +2004,7 @@ fn claim_summary_schema() -> Value {
             "subject_type": { "type": "string" },
             "evidence_type": { "type": "string" },
             "evidence_type_iri": { "type": "string", "format": "uri" },
+            "semantics": { "$ref": "#/components/schemas/ClaimSemantics" },
             "operations": {
                 "type": "object",
                 "required": ["evaluate", "batch_evaluate"],
@@ -2048,6 +2050,41 @@ fn claim_summary_schema() -> Value {
             }
         },
         "additionalProperties": true
+    })
+}
+
+fn claim_semantics_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "Optional semantic binding for a Notary claim. These fields label the claim output or predicate with external vocabulary terms such as PublicSchema URIs; they do not change the Notary result shape or by themselves prove privacy minimization.",
+        "properties": {
+            "concept": {
+                "type": "string",
+                "description": "External concept URI, for example https://publicschema.org/Person."
+            },
+            "property": {
+                "type": "string",
+                "description": "External property URI for raw value claims, for example https://publicschema.org/date_of_birth."
+            },
+            "vocabulary": {
+                "type": "string",
+                "description": "External vocabulary or value-set URI used by the claim value."
+            },
+            "predicate": {
+                "type": "string",
+                "description": "External or local predicate URI/URN for derived boolean claims."
+            },
+            "derived_from": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "External property URIs the predicate or derived value depends on."
+            },
+            "value_mapping": {
+                "type": "string",
+                "description": "Operator label for the value mapping/canonicalization applied before returning the claim."
+            }
+        },
+        "additionalProperties": false
     })
 }
 
@@ -2778,6 +2815,9 @@ fn sd_jwt_vc_type_metadata_schema() -> Value {
                         "sd": {
                             "type": "string",
                             "enum": ["always"]
+                        },
+                        "registry_notary_semantics": {
+                            "$ref": "#/components/schemas/ClaimSemantics"
                         }
                     },
                     "additionalProperties": true
@@ -3351,7 +3391,12 @@ fn sd_jwt_vc_type_metadata_example() -> Value {
                         "label": "Person is alive"
                     }
                 ],
-                "sd": "always"
+                "sd": "always",
+                "registry_notary_semantics": {
+                    "concept": "https://publicschema.org/Person",
+                    "predicate": "urn:registry-notary:predicate:person-is-alive",
+                    "derived_from": ["https://publicschema.org/date_of_death"]
+                }
             }
         ]
     })
@@ -3418,6 +3463,11 @@ fn date_of_birth_claim_example() -> Value {
         "title": "Date of birth",
         "version": "2026-05",
         "subject_type": "person",
+        "semantics": {
+            "concept": "https://publicschema.org/Person",
+            "property": "https://publicschema.org/date_of_birth",
+            "value_mapping": "publicschema"
+        },
         "operations": {
             "evaluate": true,
             "batch_evaluate": false

@@ -81,7 +81,10 @@ use crate::config_governed::{
 };
 use crate::{
     credential_profile_for,
-    credential_status::{is_mutable_status, CredentialStatusStore, CredentialStatusStoreError},
+    credential_status::{
+        encoded_single_entry_status_list, is_mutable_status, CredentialStatusRecord,
+        CredentialStatusStore, CredentialStatusStoreError,
+    },
     format_time,
     metrics::AppMetrics,
     openapi_document,
@@ -89,8 +92,8 @@ use crate::{
     preauth_state::{LoginState, SingleUseReserveError},
     replay::{require_replay_insert, ReplayReadiness, ReplayStores},
     runtime::{
-        claim_ids, find_claim, find_claim_version, matching_policy_audit_identity,
-        MatchingPolicyAuditIdentity,
+        claim_ids, claim_semantics_metadata, find_claim, find_claim_version,
+        matching_policy_audit_identity, MatchingPolicyAuditIdentity,
     },
     standalone::{
         constant_time_eq, generate_numeric_tx_code, generate_opaque_token, pkce_s256_challenge,
@@ -2979,6 +2982,7 @@ struct PostureQuery {
 
 async fn get_credential_status(
     Path(credential_id): Path<String>,
+    headers: HeaderMap,
     state: Option<Extension<Arc<RegistryNotaryApiState>>>,
 ) -> Response {
     let Some(Extension(state)) = state else {
@@ -2998,6 +3002,9 @@ async fn get_credential_status(
         );
     }
     match state.credential_status.get(&credential_id).await {
+        Ok(Some(record)) if accepts_status_list_jwt(&headers) => {
+            credential_status_list_response(&state, &record).await
+        }
         Ok(Some(record)) => Json(record.response_body(OffsetDateTime::now_utc())).into_response(),
         Ok(None) => credential_status_problem(
             StatusCode::NOT_FOUND,
@@ -3012,6 +3019,70 @@ async fn get_credential_status(
             "credential status store is unavailable",
         ),
     }
+}
+
+fn accepts_status_list_jwt(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value.split(',').any(|part| {
+                part.split(';').next().is_some_and(|media_type| {
+                    media_type
+                        .trim()
+                        .eq_ignore_ascii_case("application/statuslist+jwt")
+                })
+            })
+        })
+}
+
+async fn credential_status_list_response(
+    state: &RegistryNotaryApiState,
+    record: &CredentialStatusRecord,
+) -> Response {
+    let Ok(issuer) = state.issuer_resolver().issuer(&record.credential_profile) else {
+        return credential_status_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "credential_status.unavailable",
+            "Credential status unavailable",
+            "credential status issuer is unavailable",
+        );
+    };
+    let now = OffsetDateTime::now_utc();
+    let ttl_seconds = 300_u64;
+    let Some(expires_at) = now.checked_add(time::Duration::seconds(ttl_seconds as i64)) else {
+        return credential_status_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "credential_status.unavailable",
+            "Credential status unavailable",
+            "credential status token expiry could not be calculated",
+        );
+    };
+    let effective_status = record.effective_status(now);
+    let payload = json!({
+        "sub": state.credential_status.status_url(&record.credential_id),
+        "iat": now.unix_timestamp(),
+        "exp": expires_at.unix_timestamp(),
+        "ttl": ttl_seconds,
+        "status_list": {
+            "bits": 8,
+            "lst": encoded_single_entry_status_list(&effective_status),
+        }
+    });
+    let Ok(token) = issuer.sign_compact_jwt("statuslist+jwt", payload).await else {
+        return credential_status_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "credential_status.unavailable",
+            "Credential status unavailable",
+            "credential status token could not be signed",
+        );
+    };
+    let mut response = token.into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/statuslist+jwt"),
+    );
+    response
 }
 
 #[derive(Debug, Deserialize)]
@@ -3629,6 +3700,8 @@ pub struct EvidenceAuditContext {
     pub claim_hash: Option<String>,
     pub purposes: Option<Vec<String>>,
     pub row_count: Option<u64>,
+    pub source_read_count: Option<u64>,
+    pub forwarded: Option<bool>,
     pub access_mode: Option<AccessMode>,
     pub denial_code: Option<SelfAttestationDenialCode>,
     pub token_claim_name: Option<ConfigMetadata>,
@@ -3645,9 +3718,14 @@ pub struct EvidenceAuditContext {
     pub matching_policy_id: Option<String>,
     pub matching_policy_hash: Option<Hashed<PolicyIdentifier>>,
     pub matching_evaluated_rule_ids: Option<Vec<String>>,
+    pub ecosystem_binding_id: Option<String>,
+    pub ecosystem_binding_version: Option<String>,
+    pub pack_id: Option<String>,
+    pub pack_version: Option<String>,
     pub matching_method: Option<String>,
     pub matching_outcome: Option<String>,
     pub matching_error_code: Option<String>,
+    pub redacted_fields: Option<Vec<String>>,
     pub batch_items: Option<Vec<EvidenceBatchItemAuditEvent>>,
     pub source_sidecar_config_hashes: Option<Vec<String>>,
     pub config: Option<ConfigAuditEvent>,
@@ -3691,10 +3769,11 @@ async fn service_document(
 }
 
 fn advertise_credential_status(document: &mut Value) {
-    document["credential_capabilities"]["sd_jwt_vc"]["status_methods"] =
-        json!(["RegistryNotaryCredentialStatus"]);
+    document["credential_capabilities"]["sd_jwt_vc"]["status_methods"] = json!(["status_list"]);
     document["credential_capabilities"]["sd_jwt_vc"]["credential_status_url"] =
         json!("/v1/credentials/{credential_id}/status");
+    document["credential_capabilities"]["sd_jwt_vc"]["credential_status_media_type"] =
+        json!("application/statuslist+jwt");
     if let Some(features) =
         document["credential_capabilities"]["unsupported_features"].as_array_mut()
     {
@@ -3799,7 +3878,11 @@ fn oid4vci_type_metadata_response(
     else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    Json(oid4vci_type_metadata_document(configuration)).into_response()
+    Json(oid4vci_type_metadata_document(
+        &state.evidence,
+        configuration,
+    ))
+    .into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -5506,6 +5589,7 @@ async fn evaluate(
                 .observed_sidecar_config_hashes(evidence, &requested_claims)
                 .await;
             attach_source_sidecar_config_hashes(&mut response, sidecar_config_hashes);
+            attach_redacted_fields_audit(&mut response, &results);
             if let Err(error) = attach_evaluate_request_audit(
                 &mut response,
                 &state.self_attestation_rate_keys,
@@ -5520,8 +5604,16 @@ async fn evaluate(
         }
         Err(error) => {
             let audit_code = error.audit_code();
-            let denied_matching_policy =
+            let zero_source_no_forward = matches!(
+                &error,
+                EvidenceError::PolicyDenied { code, .. } if *code != registry_platform_pdp::EVIDENCE_STALE
+            );
+            let requested_matching_policy =
                 denied_matching_policy_audit_identity(evidence, &audit_request, Some(audit_code));
+            let denied_matching_policy = merge_matching_policy_audit_identity(
+                matching_policy_audit_identity_from_error(evidence, &error),
+                requested_matching_policy,
+            );
             let mut response = evidence_error_response(error);
             attach_evidence_audit(
                 &mut response,
@@ -5530,6 +5622,9 @@ async fn evaluate(
                 &requested_claims,
                 None,
             );
+            if zero_source_no_forward {
+                attach_zero_source_no_forward_audit(&mut response);
+            }
             if let Err(error) = attach_evaluate_request_audit(
                 &mut response,
                 &state.self_attestation_rate_keys,
@@ -6278,8 +6373,16 @@ fn oid4vci_credential_signing_alg(
     Ok(signing_key.alg.clone())
 }
 
-fn oid4vci_type_metadata_document(configuration: &Oid4vciCredentialConfigurationConfig) -> Value {
+fn oid4vci_type_metadata_document(
+    evidence: &EvidenceConfig,
+    configuration: &Oid4vciCredentialConfigurationConfig,
+) -> Value {
     let display = oid4vci_credential_type_display_metadata(configuration);
+    let claim_semantics = evidence
+        .claims
+        .iter()
+        .find(|claim| claim.id == configuration.claim_id)
+        .and_then(claim_semantics_metadata);
     let mut document = json!({
         "vct": configuration.vct,
         "name": configuration.display_name,
@@ -6297,6 +6400,9 @@ fn oid4vci_type_metadata_document(configuration: &Oid4vciCredentialConfiguration
             }
         ],
     });
+    if let Some(semantics) = claim_semantics {
+        document["claims"][0]["registry_notary_semantics"] = semantics;
+    }
     if let Some(description) = configuration.display.description.as_deref() {
         document["description"] = json!(description);
     }
@@ -7306,20 +7412,47 @@ fn require_self_attestation_pdp_decision(
         consent_ref: None,
         asserted_assurance: acr.map(str::to_string),
         jurisdiction: None,
+        requester_identity: None,
+        subject_ref: None,
+        relationship: None,
+        on_behalf_of: None,
+        requested_fact: None,
+        requested_disclosure: None,
+        requested_credential_format: None,
+        source_binding: None,
+        route_identity: Some("registry-notary.self-attestation".to_string()),
+        checked_scopes: Default::default(),
+        source_observed_at_unix_seconds: None,
         source_observed_age_seconds: Some(observed_age),
     };
     let policy = PdpPolicyInput {
         policy_id: "self-attestation".to_string(),
         policy_hash: self_attestation_token_policy_hash(config)?,
+        ecosystem_binding_id: None,
+        ecosystem_binding_version: None,
         rule_ids: vec!["self-attestation-token-policy".to_string()],
-        purpose_constraints: Vec::new(),
+        rule_ids_by_gate: Default::default(),
+        permit_unconstrained: false,
+        required_context: Default::default(),
+        odrl_constraint_terms: Vec::new(),
+        purpose_constraints: vec![vec!["self_attestation".to_string()]],
         permitted_jurisdictions: Vec::new(),
         allowed_assurance: config.token_policy.required_acr_values.clone(),
         minimum_assurance: None,
         max_source_age_seconds: Some(config.token_policy.max_auth_age_seconds + leeway as u64),
         require_legal_basis: false,
         require_consent: false,
+        allowed_legal_basis_refs: Vec::new(),
+        allowed_consent_refs: Vec::new(),
         redaction_fields: Default::default(),
+        allowed_relationships: Vec::new(),
+        relationship_purpose_constraints: Vec::new(),
+        allowed_requested_facts: Vec::new(),
+        allowed_requested_disclosures: Vec::new(),
+        allowed_credential_formats: Vec::new(),
+        allowed_source_bindings: Vec::new(),
+        allowed_route_identities: vec!["registry-notary.self-attestation".to_string()],
+        required_checked_scopes: Default::default(),
         unsupported_odrl_terms: Vec::new(),
     };
     match pdp_decide(&context, &policy) {
@@ -7332,6 +7465,7 @@ fn self_attestation_token_policy_hash(
     config: &SelfAttestationConfig,
 ) -> Result<String, EvidenceError> {
     let canonical = json!({
+        "purpose_constraints": [["self_attestation"]],
         "required_acr_values": config.token_policy.required_acr_values,
         "assurance_claim_source": config.token_policy.assurance_claim_source,
         "max_auth_age_seconds": config.token_policy.max_auth_age_seconds,
@@ -7566,6 +7700,8 @@ fn attach_evidence_audit_with_purposes(
         claim_hash: (!claim_ids.is_empty()).then(|| evidence_claim_hash(claim_ids)),
         purposes,
         row_count,
+        source_read_count: row_count,
+        forwarded: None,
         access_mode: None,
         denial_code: None,
         token_claim_name: None,
@@ -7588,12 +7724,32 @@ fn attach_evidence_audit_with_purposes(
     });
 }
 
+fn attach_zero_source_no_forward_audit(response: &mut Response) {
+    if let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() {
+        audit.source_read_count = Some(0);
+        audit.forwarded = Some(false);
+    }
+}
+
 fn attach_source_sidecar_config_hashes(response: &mut Response, config_hashes: Vec<String>) {
     if config_hashes.is_empty() {
         return;
     }
     if let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() {
         audit.source_sidecar_config_hashes = Some(config_hashes);
+    }
+}
+
+fn attach_redacted_fields_audit(response: &mut Response, results: &[ClaimResultView]) {
+    let redacted_fields: BTreeSet<String> = results
+        .iter()
+        .flat_map(|result| result.redacted_fields.iter().cloned())
+        .collect();
+    if redacted_fields.is_empty() {
+        return;
+    }
+    if let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() {
+        audit.redacted_fields = Some(redacted_fields.into_iter().collect());
     }
 }
 
@@ -7655,6 +7811,10 @@ fn attach_evaluate_request_audit(
             .map(|hash| Hashed::<PolicyIdentifier>::from_hash(hash.clone()));
         audit.matching_evaluated_rule_ids =
             (!matching.evaluated_rule_ids.is_empty()).then(|| matching.evaluated_rule_ids.clone());
+        audit.ecosystem_binding_id = matching.ecosystem_binding_id.clone();
+        audit.ecosystem_binding_version = matching.ecosystem_binding_version.clone();
+        audit.pack_id = matching.pack_id.clone();
+        audit.pack_version = matching.pack_version.clone();
         audit.matching_method = Some(matching.method.clone());
         audit.matching_outcome = Some("matched".to_string());
     } else if let Some(error_code) = matching_error_code.filter(|code| is_matching_audit_code(code))
@@ -7666,9 +7826,18 @@ fn attach_evaluate_request_audit(
             ));
             audit.matching_evaluated_rule_ids =
                 (!policy.evaluated_rule_ids.is_empty()).then(|| policy.evaluated_rule_ids.clone());
+            audit.ecosystem_binding_id = policy.ecosystem_binding_id.clone();
+            audit.ecosystem_binding_version = policy.ecosystem_binding_version.clone();
+            audit.pack_id = policy.pack_id.clone();
+            audit.pack_version = policy.pack_version.clone();
         }
         audit.matching_outcome = Some("error".to_string());
         audit.matching_error_code = Some(error_code.to_string());
+    }
+    if audit.redacted_fields.is_none() {
+        audit.redacted_fields = result.and_then(|result| {
+            (!result.redacted_fields.is_empty()).then(|| result.redacted_fields.clone())
+        });
     }
     Ok(())
 }
@@ -7761,6 +7930,34 @@ fn attach_batch_evaluate_response_audit(
                         .map(|policy| policy.evaluated_rule_ids.clone())
                         .filter(|rule_ids| !rule_ids.is_empty())
                 }),
+            ecosystem_binding_id: matching
+                .and_then(|matching| matching.ecosystem_binding_id.clone())
+                .or_else(|| {
+                    denied_matching_policy
+                        .as_ref()
+                        .and_then(|policy| policy.ecosystem_binding_id.clone())
+                }),
+            ecosystem_binding_version: matching
+                .and_then(|matching| matching.ecosystem_binding_version.clone())
+                .or_else(|| {
+                    denied_matching_policy
+                        .as_ref()
+                        .and_then(|policy| policy.ecosystem_binding_version.clone())
+                }),
+            pack_id: matching
+                .and_then(|matching| matching.pack_id.clone())
+                .or_else(|| {
+                    denied_matching_policy
+                        .as_ref()
+                        .and_then(|policy| policy.pack_id.clone())
+                }),
+            pack_version: matching
+                .and_then(|matching| matching.pack_version.clone())
+                .or_else(|| {
+                    denied_matching_policy
+                        .as_ref()
+                        .and_then(|policy| policy.pack_version.clone())
+                }),
             matching_method: matching.map(|matching| matching.method.clone()),
             matching_outcome: if item.errors.is_empty() {
                 Some("matched".to_string())
@@ -7794,6 +7991,81 @@ fn denied_batch_item_matching_policy_audit_identity(
         purpose: item.purpose.clone().or_else(|| request.purpose.clone()),
     };
     denied_matching_policy_audit_identity(evidence, &evaluate_request, Some(matching_error_code))
+}
+
+fn matching_policy_audit_identity_from_error(
+    evidence: &EvidenceConfig,
+    error: &EvidenceError,
+) -> Option<MatchingPolicyAuditIdentity> {
+    let EvidenceError::PolicyDenied {
+        policy_id: Some(policy_id),
+        policy_hash: Some(policy_hash),
+        evaluated_rule_ids,
+        ..
+    } = error
+    else {
+        return None;
+    };
+    let ecosystem_binding = ecosystem_binding_for_policy(evidence, policy_id, policy_hash);
+    Some(MatchingPolicyAuditIdentity {
+        policy_id: policy_id.clone(),
+        policy_hash: policy_hash.clone(),
+        ecosystem_binding_id: ecosystem_binding.clone(),
+        ecosystem_binding_version: ecosystem_binding
+            .as_deref()
+            .and_then(ecosystem_binding_version_from_id),
+        pack_id: ecosystem_binding.clone(),
+        pack_version: ecosystem_binding
+            .as_deref()
+            .and_then(ecosystem_binding_version_from_id),
+        evaluated_rule_ids: evaluated_rule_ids.clone(),
+    })
+}
+
+fn ecosystem_binding_for_policy(
+    evidence: &EvidenceConfig,
+    policy_id: &str,
+    policy_hash: &str,
+) -> Option<String> {
+    evidence
+        .ecosystem_bindings
+        .iter()
+        .find(|(_, binding)| binding.policy_id == policy_id && binding.policy_hash == policy_hash)
+        .map(|(id, _)| id.clone())
+}
+
+fn ecosystem_binding_version_from_id(id: &str) -> Option<String> {
+    let (_, version) = id.rsplit_once('/')?;
+    let version = version.trim();
+    (!version.is_empty()).then(|| version.to_string())
+}
+
+fn merge_matching_policy_audit_identity(
+    primary: Option<MatchingPolicyAuditIdentity>,
+    fallback: Option<MatchingPolicyAuditIdentity>,
+) -> Option<MatchingPolicyAuditIdentity> {
+    match (primary, fallback) {
+        (Some(mut primary), Some(fallback)) => {
+            if primary.ecosystem_binding_id.is_none() {
+                primary.ecosystem_binding_id = fallback.ecosystem_binding_id;
+            }
+            if primary.ecosystem_binding_version.is_none() {
+                primary.ecosystem_binding_version = fallback.ecosystem_binding_version;
+            }
+            if primary.pack_id.is_none() {
+                primary.pack_id = fallback.pack_id;
+            }
+            if primary.pack_version.is_none() {
+                primary.pack_version = fallback.pack_version;
+            }
+            if primary.evaluated_rule_ids.is_empty() {
+                primary.evaluated_rule_ids = fallback.evaluated_rule_ids;
+            }
+            Some(primary)
+        }
+        (Some(primary), None) => Some(primary),
+        (None, fallback) => fallback,
+    }
 }
 
 fn hash_audit_handle(
@@ -8037,6 +8309,11 @@ fn attach_self_attestation_credential_audit(
         requester_type,
         requester_ref_hash,
         matching_policy_id: matching.map(|matching| matching.policy_id.clone()),
+        ecosystem_binding_id: matching.and_then(|matching| matching.ecosystem_binding_id.clone()),
+        ecosystem_binding_version: matching
+            .and_then(|matching| matching.ecosystem_binding_version.clone()),
+        pack_id: matching.and_then(|matching| matching.pack_id.clone()),
+        pack_version: matching.and_then(|matching| matching.pack_version.clone()),
         matching_method: matching.map(|matching| matching.method.clone()),
         matching_outcome: matching.map(|_| "matched".to_string()),
         matching_error_code: None,
@@ -9329,6 +9606,7 @@ mod tests {
                 "allowed_audiences": ["registry-notary-citizen"]
             },
             "token_policy": {
+                "required_acr_values": ["urn:example:loa:substantial"],
                 "max_auth_age_seconds": 900,
                 "max_access_token_lifetime_seconds": 900,
                 "max_evaluation_age_seconds": 600,
@@ -9542,7 +9820,7 @@ mod tests {
             .signing_keys
             .get_mut("issuer-key")
             .expect("issuer key exists")
-            .alg = "RS256".to_string();
+            .alg = "ES256".to_string();
 
         let metadata =
             serde_json::to_value(oid4vci_metadata(&oid4vci, &evidence).expect("metadata builds"))
@@ -9552,7 +9830,7 @@ mod tests {
 
         assert_eq!(
             configuration["credential_signing_alg_values_supported"],
-            json!(["RS256"])
+            json!(["ES256"])
         );
         assert_eq!(
             configuration["proof_types_supported"]["jwt"]["proof_signing_alg_values_supported"],
@@ -9570,10 +9848,44 @@ mod tests {
             .expect("configuration exists");
         configuration.display.locale = None;
 
-        let metadata = oid4vci_type_metadata_document(configuration);
+        let evidence = evidence_config();
+        let metadata = oid4vci_type_metadata_document(&evidence, configuration);
 
         assert_eq!(metadata["display"][0]["locale"], "en-US");
         assert_eq!(metadata["claims"][0]["display"][0]["locale"], "en-US");
+    }
+
+    #[test]
+    fn oid4vci_type_metadata_advertises_claim_semantics_extension() {
+        let oid4vci = oid4vci_config();
+        let configuration = oid4vci
+            .credential_configurations
+            .get("person_is_alive_sd_jwt")
+            .expect("configuration exists");
+        let mut evidence = oid4vci_evidence_config();
+        evidence.claims.first_mut().expect("claim exists").semantics = Some(
+            serde_json::from_value(json!({
+                "concept": "https://publicschema.org/Person",
+                "predicate": "urn:registry-notary:predicate:person-is-alive",
+                "derived_from": ["https://publicschema.org/date_of_death"]
+            }))
+            .expect("claim semantics parses"),
+        );
+
+        let metadata = oid4vci_type_metadata_document(&evidence, configuration);
+
+        assert_eq!(
+            metadata["claims"][0]["registry_notary_semantics"]["concept"],
+            json!("https://publicschema.org/Person")
+        );
+        assert_eq!(
+            metadata["claims"][0]["registry_notary_semantics"]["predicate"],
+            json!("urn:registry-notary:predicate:person-is-alive")
+        );
+        assert_eq!(
+            metadata["claims"][0]["registry_notary_semantics"]["derived_from"],
+            json!(["https://publicschema.org/date_of_death"])
+        );
     }
 
     #[test]
@@ -10768,6 +11080,9 @@ mod tests {
     fn pdp_policy_denials_keep_public_stable_problem_codes() {
         let error = EvidenceError::PolicyDenied {
             code: "pdp.assurance_insufficient",
+            policy_id: None,
+            policy_hash: None,
+            evaluated_rule_ids: Vec::new(),
         };
 
         assert_eq!(error.code(), "pdp.assurance_insufficient");
@@ -10778,6 +11093,26 @@ mod tests {
             evidence_detail(&error),
             "the configured policy denied the evidence request"
         );
+    }
+
+    #[test]
+    fn pdp_pre_source_denial_audit_records_zero_source_and_no_forward() {
+        let mut response = StatusCode::FORBIDDEN.into_response();
+        attach_evidence_audit(
+            &mut response,
+            "evaluate_denied",
+            None,
+            &["person-is-alive".to_string()],
+            None,
+        );
+        attach_zero_source_no_forward_audit(&mut response);
+
+        let audit = response
+            .extensions()
+            .get::<EvidenceAuditContext>()
+            .expect("audit context is attached");
+        assert_eq!(audit.source_read_count, Some(0));
+        assert_eq!(audit.forwarded, Some(false));
     }
 
     #[test]
@@ -10943,6 +11278,95 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn credential_status_list_response_is_signed_status_list_jwt() {
+        let credential_status = CredentialStatusStore::from_config(&CredentialStatusConfig {
+            enabled: true,
+            base_url: "https://issuer.example".to_string(),
+            ..CredentialStatusConfig::default()
+        })
+        .expect("credential status builds");
+        let issued_at = OffsetDateTime::now_utc();
+        credential_status
+            .record_issued(
+                "credential-1".to_string(),
+                "did:web:issuer.example".to_string(),
+                "civil_status_sd_jwt".to_string(),
+                issued_at,
+                issued_at + time::Duration::seconds(600),
+            )
+            .await
+            .expect("status record writes");
+        let record = credential_status
+            .get("credential-1")
+            .await
+            .expect("status record reads")
+            .expect("status record exists");
+        let state = RegistryNotaryApiState::new_with_runtime_blocks(
+            Arc::new(evidence_config()),
+            Arc::new(SelfAttestationConfig::default()),
+            Arc::new(Oid4vciConfig::default()),
+            Arc::new(FederationConfig::default()),
+            None,
+            AuditKeyHasher::unkeyed_dev_only(),
+            ReplayStores::memory(),
+            credential_status,
+            Arc::new(AppMetrics::default()),
+            Arc::new(CountingSource::default()),
+            Arc::new(EvidenceStore::default()),
+            Arc::new(TestIssuerResolver),
+            SignerReadiness::default(),
+        );
+
+        let response = credential_status_list_response(&state, &record).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/statuslist+jwt")
+        );
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("status list body reads");
+        let jwt = std::str::from_utf8(&body).expect("status list JWT is UTF-8");
+        let header = decode_jwt_header(jwt);
+        let payload = decode_jwt_payload(jwt);
+        assert_eq!(header["typ"], json!("statuslist+jwt"));
+        assert_eq!(header["kid"], json!("did:web:issuer.example#key-1"));
+        assert_eq!(
+            payload["sub"],
+            json!("https://issuer.example/v1/credentials/credential-1/status")
+        );
+        assert_eq!(payload["ttl"], json!(300));
+        assert_eq!(payload["status_list"]["bits"], json!(8));
+        assert_eq!(payload["status_list"]["lst"], json!("eJxjAAAAAQAB"));
+    }
+
+    #[test]
+    fn accepts_status_list_jwt_matches_exact_media_type() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ACCEPT,
+            HeaderValue::from_static("application/statuslist+jwt; q=0.8"),
+        );
+        assert!(accepts_status_list_jwt(&headers));
+
+        headers.insert(
+            header::ACCEPT,
+            HeaderValue::from_static("Application/StatusList+JWT"),
+        );
+        assert!(accepts_status_list_jwt(&headers));
+
+        headers.insert(
+            header::ACCEPT,
+            HeaderValue::from_static("application/statuslist+jwt-seq"),
+        );
+        assert!(!accepts_status_list_jwt(&headers));
+    }
+
     #[cfg(feature = "registry-notary-cel")]
     struct StaticIssuerResolver;
 
@@ -11091,6 +11515,10 @@ mod tests {
                                 .to_string(),
                         ),
                         evaluated_rule_ids: vec!["source-binding-policy:person".to_string()],
+                        ecosystem_binding_id: Some("baseline-dpi/v1".to_string()),
+                        ecosystem_binding_version: Some("2026-06-19".to_string()),
+                        pack_id: Some("baseline-dpi/v1".to_string()),
+                        pack_version: Some("2026-06-19".to_string()),
                     }),
                     evaluation_id: Some("eval-1".to_string()),
                     status: registry_notary_core::BatchItemStatus::Succeeded,
@@ -11179,6 +11607,14 @@ mod tests {
         assert_eq!(items[0].target_type.as_deref(), Some("Person"));
         assert_eq!(items[0].matching_outcome.as_deref(), Some("matched"));
         assert_eq!(items[0].matching_policy_id.as_deref(), Some("policy-v1"));
+        assert_eq!(
+            items[0].ecosystem_binding_id.as_deref(),
+            Some("baseline-dpi/v1")
+        );
+        assert_eq!(
+            items[0].ecosystem_binding_version.as_deref(),
+            Some("2026-06-19")
+        );
         assert!(items[0]
             .target_ref_hash
             .as_ref()
@@ -11203,7 +11639,7 @@ mod tests {
         let evidence: EvidenceConfig = serde_json::from_value(json!({
             "enabled": true,
             "ecosystem_bindings": {
-                "baseline-dpi": {
+                "baseline-dpi/v1": {
                     "profile": "odrl:v1",
                     "policy_id": "baseline-dpi-policy",
                     "policy_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
@@ -11257,7 +11693,7 @@ mod tests {
                             }
                         },
                         "matching": {
-                            "ecosystem_binding": { "id": "baseline-dpi" }
+                            "ecosystem_binding": { "id": "baseline-dpi/v1" }
                         }
                     }
                 },
@@ -11395,6 +11831,10 @@ mod tests {
                     .to_string(),
             ),
             evaluated_rule_ids: vec!["source-binding-policy:person".to_string()],
+            ecosystem_binding_id: Some("baseline-dpi/v1".to_string()),
+            ecosystem_binding_version: Some("2026-06-19".to_string()),
+            pack_id: Some("baseline-dpi/v1".to_string()),
+            pack_version: Some("2026-06-19".to_string()),
         });
         let mut response = StatusCode::OK.into_response();
         attach_evidence_audit(
@@ -11423,6 +11863,16 @@ mod tests {
             audit.matching_evaluated_rule_ids.as_deref(),
             Some(&["source-binding-policy:person".to_string()][..])
         );
+        assert_eq!(
+            audit.ecosystem_binding_id.as_deref(),
+            Some("baseline-dpi/v1")
+        );
+        assert_eq!(
+            audit.ecosystem_binding_version.as_deref(),
+            Some("2026-06-19")
+        );
+        assert_eq!(audit.pack_id.as_deref(), Some("baseline-dpi/v1"));
+        assert_eq!(audit.pack_version.as_deref(), Some("2026-06-19"));
         assert_eq!(audit.matching_method.as_deref(), Some("configured_lookup"));
         assert_eq!(audit.matching_outcome.as_deref(), Some("matched"));
         let target_hash = audit
@@ -11438,6 +11888,35 @@ mod tests {
         assert!(!target_hash.contains("NID-TARGET"));
         assert!(!target_hash.contains("Amina"));
         assert!(!requester_hash.contains("NID-REQUESTER"));
+    }
+
+    #[test]
+    fn redacted_fields_audit_unions_all_result_redactions() {
+        let mut response = StatusCode::OK.into_response();
+        attach_evidence_audit(
+            &mut response,
+            "evaluate",
+            Some("eval-1".to_string()),
+            &["opencrvs-age-band".to_string(), "opencrvs-sex".to_string()],
+            Some(1),
+        );
+        let mut age_band = claim_result_view("eval-1", "opencrvs-age-band");
+        age_band.disclosure = "redacted".to_string();
+        age_band.redacted_fields = vec!["opencrvs-age-band".to_string()];
+        let mut sex = claim_result_view("eval-1", "opencrvs-sex");
+        sex.disclosure = "redacted".to_string();
+        sex.redacted_fields = vec!["opencrvs-sex".to_string()];
+
+        attach_redacted_fields_audit(&mut response, &[sex, age_band]);
+
+        let audit = response
+            .extensions()
+            .get::<EvidenceAuditContext>()
+            .expect("audit context is attached");
+        assert_eq!(
+            audit.redacted_fields.as_deref(),
+            Some(&["opencrvs-age-band".to_string(), "opencrvs-sex".to_string()][..])
+        );
     }
 
     #[test]
@@ -11491,6 +11970,10 @@ mod tests {
             score: None,
             policy_hash: None,
             evaluated_rule_ids: Vec::new(),
+            ecosystem_binding_id: Some("baseline-dpi/v1".to_string()),
+            ecosystem_binding_version: Some("2026-06-19".to_string()),
+            pack_id: Some("baseline-dpi/v1".to_string()),
+            pack_version: Some("2026-06-19".to_string()),
         });
         let mut response = StatusCode::OK.into_response();
 
@@ -11518,6 +12001,16 @@ mod tests {
         assert_eq!(audit.target_type.as_deref(), Some("Person"));
         assert_eq!(audit.requester_type.as_deref(), Some("Person"));
         assert_eq!(audit.matching_policy_id.as_deref(), Some("policy-v1"));
+        assert_eq!(
+            audit.ecosystem_binding_id.as_deref(),
+            Some("baseline-dpi/v1")
+        );
+        assert_eq!(
+            audit.ecosystem_binding_version.as_deref(),
+            Some("2026-06-19")
+        );
+        assert_eq!(audit.pack_id.as_deref(), Some("baseline-dpi/v1"));
+        assert_eq!(audit.pack_version.as_deref(), Some("2026-06-19"));
         assert_eq!(audit.matching_outcome.as_deref(), Some("matched"));
         assert!(audit.target_ref_hash.is_some());
         assert!(audit.requester_ref_hash.is_some());
@@ -11563,6 +12056,10 @@ mod tests {
                 policy_hash:
                     "sha256:2222222222222222222222222222222222222222222222222222222222222222"
                         .to_string(),
+                ecosystem_binding_id: None,
+                ecosystem_binding_version: None,
+                pack_id: None,
+                pack_version: None,
                 evaluated_rule_ids: vec!["source-binding-policy:person".to_string()],
             }),
         )
@@ -11606,7 +12103,7 @@ mod tests {
         let evidence: EvidenceConfig = serde_json::from_value(json!({
             "enabled": true,
             "ecosystem_bindings": {
-                "baseline-dpi": {
+                "baseline-dpi/v1": {
                     "profile": "odrl:v1",
                     "policy_id": "baseline-dpi-policy",
                     "policy_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
@@ -11660,7 +12157,7 @@ mod tests {
                             }
                         },
                         "matching": {
-                            "ecosystem_binding": { "id": "baseline-dpi" }
+                            "ecosystem_binding": { "id": "baseline-dpi/v1" }
                         }
                     }
                 },
@@ -11699,6 +12196,13 @@ mod tests {
             policy.evaluated_rule_ids,
             vec!["source-binding-policy:person".to_string()]
         );
+        assert_eq!(
+            policy.ecosystem_binding_id.as_deref(),
+            Some("baseline-dpi/v1")
+        );
+        assert_eq!(policy.ecosystem_binding_version.as_deref(), Some("v1"));
+        assert_eq!(policy.pack_id.as_deref(), Some("baseline-dpi/v1"));
+        assert_eq!(policy.pack_version.as_deref(), Some("v1"));
         assert!(
             denied_matching_policy_audit_identity(
                 &evidence,
@@ -11722,6 +12226,89 @@ mod tests {
             .is_none(),
             "pre-policy input errors must not claim PDP provenance"
         );
+    }
+
+    #[test]
+    fn matching_policy_audit_identity_from_error_uses_pdp_audit_payload() {
+        let mut evidence = EvidenceConfig::default();
+        evidence.ecosystem_bindings.insert(
+            "baseline-dpi/v1".to_string(),
+            registry_notary_core::EvidenceEcosystemBindingConfig {
+                profile: Some("registry-notary/source-policy/v1".to_string()),
+                policy_id: "actual-policy".to_string(),
+                policy_hash:
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        .to_string(),
+                unsupported_odrl_terms: Vec::new(),
+            },
+        );
+        let error = EvidenceError::PolicyDenied {
+            code: "pdp.assurance_insufficient",
+            policy_id: Some("actual-policy".to_string()),
+            policy_hash: Some(
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_string(),
+            ),
+            evaluated_rule_ids: vec!["actual-rule".to_string()],
+        };
+
+        let policy = matching_policy_audit_identity_from_error(&evidence, &error)
+            .expect("PDP error audit identity is available");
+
+        assert_eq!(policy.policy_id, "actual-policy");
+        assert_eq!(
+            policy.policy_hash,
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(policy.evaluated_rule_ids, vec!["actual-rule".to_string()]);
+        assert_eq!(
+            policy.ecosystem_binding_id.as_deref(),
+            Some("baseline-dpi/v1")
+        );
+        assert_eq!(policy.ecosystem_binding_version.as_deref(), Some("v1"));
+        assert_eq!(policy.pack_id.as_deref(), Some("baseline-dpi/v1"));
+        assert_eq!(policy.pack_version.as_deref(), Some("v1"));
+    }
+
+    #[test]
+    fn merge_matching_policy_audit_identity_preserves_pdp_rules_and_adds_binding() {
+        let policy = merge_matching_policy_audit_identity(
+            Some(MatchingPolicyAuditIdentity {
+                policy_id: "actual-policy".to_string(),
+                policy_hash:
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        .to_string(),
+                ecosystem_binding_id: None,
+                ecosystem_binding_version: None,
+                pack_id: None,
+                pack_version: None,
+                evaluated_rule_ids: vec!["actual-rule".to_string()],
+            }),
+            Some(MatchingPolicyAuditIdentity {
+                policy_id: "selected-policy".to_string(),
+                policy_hash:
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                        .to_string(),
+                ecosystem_binding_id: Some("baseline-dpi/v1".to_string()),
+                ecosystem_binding_version: Some("v1".to_string()),
+                pack_id: Some("baseline-dpi/v1".to_string()),
+                pack_version: Some("v1".to_string()),
+                evaluated_rule_ids: vec!["selected-rule".to_string()],
+            }),
+        )
+        .expect("merged policy exists");
+
+        assert_eq!(policy.policy_id, "actual-policy");
+        assert_eq!(
+            policy.policy_hash,
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(policy.evaluated_rule_ids, vec!["actual-rule".to_string()]);
+        assert_eq!(
+            policy.ecosystem_binding_id.as_deref(),
+            Some("baseline-dpi/v1")
+        );
+        assert_eq!(policy.ecosystem_binding_version.as_deref(), Some("v1"));
     }
 
     fn sign_holder_proof(holder_id: &str, payload: Value) -> String {
@@ -11934,6 +12521,7 @@ evaluation_profiles:
             value: Some(json!(true)),
             satisfied: Some(true),
             disclosure: "predicate".to_string(),
+            redacted_fields: Vec::new(),
             format: FORMAT_SD_JWT_VC.to_string(),
             issued_at: "2026-05-23T00:00:00Z".to_string(),
             expires_at: None,
@@ -11974,6 +12562,24 @@ evaluation_profiles:
             .expect("credential profile parses"),
         );
         evidence
+    }
+
+    fn decode_jwt_header(jwt: &str) -> Value {
+        decode_jwt_segment(jwt, 0)
+    }
+
+    fn decode_jwt_payload(jwt: &str) -> Value {
+        decode_jwt_segment(jwt, 1)
+    }
+
+    fn decode_jwt_segment(jwt: &str, index: usize) -> Value {
+        let segment = jwt.split('.').nth(index).expect("jwt segment exists");
+        serde_json::from_slice(
+            &URL_SAFE_NO_PAD
+                .decode(segment)
+                .expect("jwt segment is base64url"),
+        )
+        .expect("jwt segment is JSON")
     }
 
     #[tokio::test]

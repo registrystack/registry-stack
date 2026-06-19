@@ -102,6 +102,7 @@ fn evaluate_claim() -> ClaimDefinition {
             value_type: "number".to_string(),
             unit: None,
         },
+        semantics: None,
         inputs: Vec::new(),
         depends_on: Vec::new(),
         purpose: None,
@@ -127,6 +128,7 @@ fn evidence_for_batch(subject_count: usize) -> Arc<EvidenceConfig> {
     let mut cfg = EvidenceConfig {
         enabled: true,
         service_id: "registry-notary.test".to_string(),
+        allowed_purposes: vec!["test".to_string()],
         inline_batch_limit: subject_count.max(1),
         claims: vec![evaluate_claim()],
         concurrency: ConcurrencyConfig {

@@ -235,6 +235,7 @@ fn add_ops_read_api_key(config: &mut StandaloneRegistryNotaryConfig) {
         id: "ops".to_string(),
         fingerprint: env_fingerprint_ref("ops", "TEST_GATES_OPS_KEY_HASH", fingerprint),
         scopes: vec!["registry_notary:ops_read".to_string()],
+        authorization_details: None,
     });
 }
 

@@ -47,6 +47,8 @@ evidence:
   service_id: perf.registry-notary.small
   api_base_url: http://127.0.0.1:14255
   inline_batch_limit: 100
+  allowed_purposes:
+    - perf
   source_connections:
     crvs:
       base_url: http://127.0.0.1:14256

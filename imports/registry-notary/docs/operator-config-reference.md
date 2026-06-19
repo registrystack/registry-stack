@@ -333,6 +333,7 @@ evidence:
         records_path: /message/search_response/0/data/reg_records
         field_paths:
           birth_date: /birth_date
+          observed_at: "$response:/message/search_response/0/timestamp"
   signing_keys:
     issuer-2026-05:
       provider: local_jwk_env
@@ -465,7 +466,11 @@ For DCI sources, check these fields carefully:
 - `query_type`: `idtype-value` for one identifier lookup, or `expression` when
   the upstream supports fielded query expressions.
 - `records_path`: JSON Pointer to the records array in a single response.
-- `field_paths`: JSON Pointers for fields that the claim rule reads.
+- `field_paths`: JSON Pointers for fields that the claim rule reads. Paths are
+  record-relative by default. Prefix a path with `$response:` when a binding
+  needs source metadata from the full DCI response envelope, for example
+  `observed_at: "$response:/message/search_response/0/timestamp"` for
+  OpenCRVS response freshness.
 - `bulk_mode`: leave `none` until the source contract has been tested. Use
   `dci_batched_search` or `rda_in_filter` only when the upstream supports that
   access pattern.
@@ -534,6 +539,10 @@ evidence:
       subject_type: person
       value:
         type: date
+      semantics:
+        concept: https://publicschema.org/Person
+        property: https://publicschema.org/date_of_birth
+        value_mapping: publicschema
       inputs:
         - name: target.identifiers.national_id
           type: string
@@ -554,6 +563,7 @@ evidence:
               field: birth_date
               type: date
               required: true
+              semantic_term: https://publicschema.org/date_of_birth
       rule:
         type: extract
         source: crvs
@@ -705,6 +715,9 @@ Important fields:
 - `id`: stable machine id used by clients and credential profiles.
 - `title`, `version`, `subject_type`, and `value`: operator and verifier
   metadata.
+- `semantics`: optional external vocabulary binding for the claim output. Use it
+  to label raw values with PublicSchema properties or derived booleans with a
+  local predicate plus `derived_from` PublicSchema inputs.
 - `inputs`: request lookup paths. Supported paths include `target.id`,
   `target.identifiers.<scheme>`, `target.attributes.<name>`, `requester.id`,
   `requester.identifiers.<scheme>`, `requester.attributes.<name>`, and
@@ -717,6 +730,28 @@ Important fields:
 - `disclosure`: default and allowed response disclosure modes.
 - `formats`: response formats the claim can render.
 - `credential_profiles`: profiles allowed to issue from this claim.
+
+`semantics` is metadata, not a new credential shape. It helps clients understand
+and compare Notary claims across systems, for example by mapping `date-of-birth`
+to `https://publicschema.org/date_of_birth`. It does not turn a Notary claim
+result into a full PublicSchema `IdentityCredential` or `EnrollmentCredential`.
+For derived predicates, do not map the predicate as if it were the raw property;
+use `predicate` and `derived_from` instead.
+
+```yaml
+semantics:
+  concept: https://publicschema.org/Person
+  property: https://publicschema.org/date_of_birth
+  value_mapping: publicschema
+```
+
+```yaml
+semantics:
+  concept: https://publicschema.org/Person
+  predicate: urn:registry-notary:predicate:age-at-least-18
+  derived_from:
+    - https://publicschema.org/date_of_birth
+```
 
 Avoid broad source bindings. A claim should read only the fields needed to
 evaluate that claim. If two credentials need different fields, prefer two claims

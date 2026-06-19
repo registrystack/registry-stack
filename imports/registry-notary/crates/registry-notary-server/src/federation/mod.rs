@@ -18,7 +18,8 @@ use axum::routing::post;
 use axum::{Extension, Router};
 use jsonwebtoken::{decode_header, Algorithm};
 use registry_notary_core::{
-    AccessMode, ClaimRef, EvaluateRequest, EvidenceEntity, EvidencePrincipal, SourceCapability,
+    AccessMode, ClaimRef, EvaluateRequest, EvidenceAuthorizationDetails, EvidenceEntity,
+    EvidencePrincipal, FederationEvaluationProfileConfig, SourceCapability,
     FEDERATION_REQUEST_JWT_TYP, FORMAT_CLAIM_RESULT_JSON,
 };
 use registry_platform_crypto::pairwise_subject_ref_hash;
@@ -237,7 +238,7 @@ async fn handle_federated_evaluate(
         scopes: peer.config.source_scopes.clone(),
         access_mode: AccessMode::MachineClient,
         verified_claims: None,
-        authorization_details: None,
+        authorization_details: federation_authorization_details(profile, &purpose),
     };
     let source_capability = SourceCapability::Machine {
         scopes: peer
@@ -313,4 +314,81 @@ async fn handle_federated_evaluate(
         subject_hash,
         &results,
     ))
+}
+
+fn federation_authorization_details(
+    profile: &FederationEvaluationProfileConfig,
+    purpose: &str,
+) -> Option<EvidenceAuthorizationDetails> {
+    if profile.legal_basis_ref.is_none()
+        && profile.consent_ref.is_none()
+        && profile.jurisdiction.is_none()
+        && profile.assurance_level.is_none()
+    {
+        return None;
+    }
+    Some(EvidenceAuthorizationDetails {
+        detail_type: "registry-notary/evidence-authorization/v1".to_string(),
+        schema_version: "v1".to_string(),
+        purpose: Some(purpose.to_string()),
+        legal_basis_ref: profile.legal_basis_ref.clone(),
+        consent_ref: profile.consent_ref.clone(),
+        jurisdiction: profile.jurisdiction.clone(),
+        assurance_level: profile.assurance_level.clone(),
+        ..EvidenceAuthorizationDetails::default()
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn federation_profile_can_supply_trusted_policy_context() {
+        let profile = FederationEvaluationProfileConfig {
+            id: "beneficiary_active_predicate".to_string(),
+            legal_basis_ref: Some("demo:child-support-eligibility".to_string()),
+            consent_ref: Some("demo:child-support-consent".to_string()),
+            jurisdiction: Some("ZZ".to_string()),
+            assurance_level: Some("substantial".to_string()),
+            ..FederationEvaluationProfileConfig::default()
+        };
+
+        let details = federation_authorization_details(
+            &profile,
+            "https://demo.example.gov/purpose/decentralized-evidence-demo",
+        )
+        .expect("profile context should produce authorization details");
+
+        assert_eq!(
+            details.detail_type,
+            "registry-notary/evidence-authorization/v1"
+        );
+        assert_eq!(details.schema_version, "v1");
+        assert_eq!(
+            details.purpose.as_deref(),
+            Some("https://demo.example.gov/purpose/decentralized-evidence-demo")
+        );
+        assert_eq!(
+            details.legal_basis_ref.as_deref(),
+            Some("demo:child-support-eligibility")
+        );
+        assert_eq!(
+            details.consent_ref.as_deref(),
+            Some("demo:child-support-consent")
+        );
+        assert_eq!(details.jurisdiction.as_deref(), Some("ZZ"));
+        assert_eq!(details.assurance_level.as_deref(), Some("substantial"));
+    }
+
+    #[test]
+    fn federation_profile_without_policy_context_uses_peer_scopes_only() {
+        let profile = FederationEvaluationProfileConfig::default();
+
+        assert!(federation_authorization_details(
+            &profile,
+            "https://demo.example.gov/purpose/decentralized-evidence-demo",
+        )
+        .is_none());
+    }
 }

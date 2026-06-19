@@ -74,21 +74,25 @@ rolling deploys overlap traffic, or when status must survive restart.
 
 ## Credential Payload
 
-When status is enabled, issued SD-JWT VC payloads include a status object using
-the Registry Notary credential status profile. The status URL is anchored at the
-public base URL:
+When status is enabled, issued SD-JWT VC payloads include the IETF Token Status
+List `status.status_list` claim. The status-list URI is anchored at the public
+base URL:
 
 ```json
 {
   "status": {
-    "type": "RegistryNotaryCredentialStatus",
-    "statusUrl": "https://notary.example.gov/v1/credentials/urn:ulid:01HX.../status"
+    "status_list": {
+      "idx": 0,
+      "uri": "https://notary.example.gov/v1/credentials/urn:ulid:01HX.../status"
+    }
   }
 }
 ```
 
-The status URL is intentionally per credential. It is not a status list and it
-does not expose subject identifiers or claim values.
+Registry Notary uses one status-list token per credential in this profile. The
+same URL returns a signed `application/statuslist+jwt` token when requested with
+`Accept: application/statuslist+jwt`, and retains the JSON lifecycle response
+for operational compatibility.
 
 ## Status Values
 
@@ -207,14 +211,16 @@ Verifier policy should be explicit:
 
 - Accept status-free credentials only from profiles that are expected to be
   status-free.
-- For status-bearing credentials, fetch the status URL and require `valid`.
-- Treat `suspended`, `revoked`, missing status, malformed status, or network
-  failure according to the relying party's risk policy. High-assurance flows
-  should fail closed.
+- For status-bearing credentials, fetch the `status.status_list.uri` with
+  `Accept: application/statuslist+jwt` and require the indexed status value to
+  be `0x00` (`VALID`).
+- Treat `0x01` (`INVALID`), `0x02` (`SUSPENDED`), missing status, malformed
+  status, or network failure according to the relying party's risk policy.
+  High-assurance flows should fail closed.
 - Apply credential expiry even when status returns `valid`.
 
-Registry Notary does not currently publish StatusList or external revocation
-list profiles. The supported status profile is documented in
+Registry Notary does not currently publish aggregated status lists or external
+revocation-list profiles. The supported status profile is documented in
 [`sd-jwt-vc-conformance-profile.md`](sd-jwt-vc-conformance-profile.md).
 
 ## Rollout Checklist
