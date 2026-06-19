@@ -172,6 +172,9 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
           lookup:
             input: target.identifiers.national_id
             field: NATIONAL_ID
@@ -210,6 +213,9 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
           lookup:
             input: target.identifiers.national_id
             field: NATIONAL_ID
@@ -248,6 +254,9 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
           lookup:
             input: target.identifiers.national_id
             field: NATIONAL_ID
@@ -288,6 +297,9 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
           lookup:
             input: target.identifiers.national_id
             field: NATIONAL_ID
@@ -345,6 +357,8 @@ evidence:
               field: birth_date
               op: eq
           matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
             target_type: Person
             method: configured_demographic_lookup
             sufficient_target_inputs:

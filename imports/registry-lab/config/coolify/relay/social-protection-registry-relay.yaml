@@ -631,7 +631,7 @@ datasets:
         api:
           default_limit: 25
           max_limit: 10000
-          require_purpose_header: false
+          require_purpose_header: true
           allowed_filters:
             - field: id
               ops: [eq, in]

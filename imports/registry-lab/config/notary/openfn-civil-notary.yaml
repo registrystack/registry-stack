@@ -82,6 +82,9 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/openfn-sidecar-demo
           lookup:
             input: target.identifiers.national_id
             field: national_id
