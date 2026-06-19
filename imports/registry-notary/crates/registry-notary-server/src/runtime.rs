@@ -4883,11 +4883,10 @@ fn view_claim(
         redacted_fields: if field_redaction {
             result.redaction_fields.iter().cloned().collect()
         } else if effective_disclosure == DisclosureProfile::Redacted {
-            let fields: BTreeSet<String> = result.redaction_fields.iter().cloned().collect();
-            if fields.is_empty() {
+            if result.redaction_fields.is_empty() {
                 vec![result.claim_id.clone()]
             } else {
-                fields.into_iter().collect()
+                result.redaction_fields.iter().cloned().collect()
             }
         } else {
             Vec::new()

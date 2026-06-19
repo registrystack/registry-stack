@@ -3027,9 +3027,11 @@ fn accepts_status_list_jwt(headers: &HeaderMap) -> bool {
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| {
             value.split(',').any(|part| {
-                part.split(';')
-                    .next()
-                    .is_some_and(|media_type| media_type.trim() == "application/statuslist+jwt")
+                part.split(';').next().is_some_and(|media_type| {
+                    media_type
+                        .trim()
+                        .eq_ignore_ascii_case("application/statuslist+jwt")
+                })
             })
         })
 }
@@ -11349,6 +11351,12 @@ mod tests {
         headers.insert(
             header::ACCEPT,
             HeaderValue::from_static("application/statuslist+jwt; q=0.8"),
+        );
+        assert!(accepts_status_list_jwt(&headers));
+
+        headers.insert(
+            header::ACCEPT,
+            HeaderValue::from_static("Application/StatusList+JWT"),
         );
         assert!(accepts_status_list_jwt(&headers));
 
