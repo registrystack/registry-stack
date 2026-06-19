@@ -3406,15 +3406,11 @@ fn validate_entity_governed_policy(
                 "redaction_fields entries must be top-level exposed entity fields",
             );
         }
-        if !entity
-            .fields
-            .iter()
-            .any(|configured| configured.name == *field)
-        {
+        if !redaction_field_exists_on_entity_or_aggregate_output(dataset, entity, field) {
             return entity_governed_policy_error(
                 dataset,
                 entity,
-                "redaction_fields entries must exist as fields on the entity",
+                "redaction_fields entries must exist as entity fields or aggregate output fields",
             );
         }
     }
@@ -3483,6 +3479,31 @@ fn governed_policy_has_enforced_gate(policy: &GovernedPolicyConfig) -> bool {
 
 fn is_top_level_redaction_field(field: &str) -> bool {
     !field.contains('.') && !field.contains('[') && !field.contains(']') && !field.contains('*')
+}
+
+fn redaction_field_exists_on_entity_or_aggregate_output(
+    dataset: &DatasetConfig,
+    entity: &EntityConfig,
+    field: &str,
+) -> bool {
+    entity
+        .fields
+        .iter()
+        .any(|configured| configured.name == field)
+        || dataset
+            .aggregates
+            .iter()
+            .filter(|aggregate| aggregate.source_entity.as_deref() == Some(entity.name.as_str()))
+            .any(|aggregate| {
+                aggregate
+                    .dimensions
+                    .iter()
+                    .any(|dimension| dimension.id == field)
+                    || aggregate
+                        .indicators
+                        .iter()
+                        .any(|indicator| indicator.id == field)
+            })
 }
 
 fn entity_governed_policy_error(
