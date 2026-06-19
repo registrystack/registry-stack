@@ -38,6 +38,8 @@ evidence:
   service_id: fhir-health-notary
   api_base_url: http://fhir-health-notary:8080
   inline_batch_limit: 20
+  allowed_purposes:
+    - https://demo.example.gov/purpose/fhir-health-navigation
   source_connections:
     fhir_sidecar:
       base_url: http://fhir-source-adapter-sidecar:8080

@@ -35,6 +35,7 @@ EXPECTED_CLAIMS = [
 EXPECTED_CLAIM_TITLES = {
     "dhis2-child-program-active": "Health Programme Participation Attestation",
 }
+EXPECTED_PURPOSE = "https://demo.example.gov/purpose/dhis2-openfn-health-evidence"
 
 
 def read(path: Path) -> str:
@@ -79,6 +80,11 @@ class Dhis2ProgrammeVcConfigTest(unittest.TestCase):
     def assert_notary_profile(self, path: Path, issuer: str, vct: str) -> None:
         body = read(path)
         self.assertIn("max_credential_validity_seconds: 31536000", body)
+        self.assertRegex(
+            body,
+            rf"allowed_purposes:\n\s+- {re.escape(EXPECTED_PURPOSE)}",
+            msg=f"{path} must declare the DHIS2 purpose for Notary PDP enforcement",
+        )
         self.assertRegex(body, r"concurrency:\n\s+bindings: 4")
         self.assertIn("dhis2_programme_participation_sd_jwt:", body)
         self.assertIn("format: application/dc+sd-jwt", body)

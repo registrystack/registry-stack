@@ -628,6 +628,38 @@ metadata:
                             if "xlsx" in fmt:
                                 self.assertIn(fmt["xlsx"]["sheet"], self._xlsx_sheet_names(source_path))
 
+    def test_repo_source_bound_notary_claims_have_purpose_constraints(self) -> None:
+        repo = SCRIPT_DIR.parent
+        issues = []
+        for config_dir in (repo / "config" / "notary", repo / "config" / "coolify" / "notary"):
+            for path in sorted(config_dir.glob("*.yaml")):
+                config = self.validator.load_yaml_mapping_strict(path)
+                evidence = config.get("evidence", {})
+                if not evidence.get("enabled"):
+                    continue
+                global_purposes = evidence.get("allowed_purposes", [])
+                for claim in evidence.get("claims", []):
+                    source_bindings = claim.get("source_bindings", {})
+                    if not source_bindings:
+                        continue
+                    claim_purpose = claim.get("purpose")
+                    for binding_id, binding in source_bindings.items():
+                        matching = binding.get("matching", {})
+                        has_purpose_constraint = any(
+                            (
+                                global_purposes,
+                                claim_purpose,
+                                matching.get("allowed_purposes", []),
+                                matching.get("relationship_purpose_scopes", {}),
+                            )
+                        )
+                        if not has_purpose_constraint:
+                            issues.append(
+                                f"{path.relative_to(repo)} claim={claim.get('id')} binding={binding_id}"
+                            )
+
+        self.assertEqual([], issues)
+
     def test_repo_relay_runtime_entities_and_fields_exist_in_metadata_manifests(self) -> None:
         repo = SCRIPT_DIR.parent
         for config_dir in (repo / "config" / "relay", repo / "config" / "coolify" / "relay"):

@@ -43,6 +43,8 @@ evidence:
   api_base_url: https://dhis2-notary.lab.registrystack.org
   inline_batch_limit: 20
   max_credential_validity_seconds: 31536000
+  allowed_purposes:
+    - https://demo.example.gov/purpose/dhis2-openfn-health-evidence
   concurrency:
     bindings: 4
   source_connections:
