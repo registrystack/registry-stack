@@ -2527,7 +2527,7 @@ def load_yaml_mapping_strict(path: Path) -> dict[str, Any]:
 
 def assert_no_duplicate_yaml_keys_text(text: str) -> None:
     scopes: list[tuple[int, set[str]]] = []
-    key_re = re.compile(r"^(?P<indent>\s*)(?P<dash>-\s+)?(?P<key>[A-Za-z0-9_.-]+)\s*:")
+    key_re = re.compile(r"^(?P<indent>\s*)(?P<dash>-\s+)?(?P<key>[A-Za-z0-9_./-]+)\s*:")
     for lineno, raw_line in enumerate(text.splitlines(), start=1):
         stripped = raw_line.strip()
         if not stripped or stripped.startswith("#"):

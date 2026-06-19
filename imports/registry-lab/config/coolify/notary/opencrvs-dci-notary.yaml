@@ -68,7 +68,7 @@ evidence:
     sp-dci/v1:
       profile: registry-notary/source-policy/v1
       policy_id: lab.sp-dci.governed-evidence.v1
-      policy_hash: sha256:3484ed6ff5e9ac01940e22f555661d63dd2473de1b8b94c9fcbe5b6949e70844
+      policy_hash: sha256:479cfba9c5895f5f827b855244436a5b4a9f84c76fbd5472e861ad56983254db
   signing_keys:
     opencrvs-dci-demo:
       provider: local_jwk_env

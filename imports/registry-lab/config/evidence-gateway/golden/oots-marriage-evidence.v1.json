@@ -1,0 +1,234 @@
+{
+  "schema_version": "registry-lab/evidence-gateway-golden-fixtures/v1",
+  "binding_id": "oots-marriage-evidence/v1",
+  "policy_id": "lab.oots-marriage-evidence.governed-evidence.v1",
+  "policy_hash": "sha256:e5193284535dfa9689dd081942ec847f51eacd50ebc71d93b482247207b63dcf",
+  "freshness_reference_time": "2026-06-19T00:00:00Z",
+  "cases": [
+    {
+      "id": "oots-marriage-success-minimized-json",
+      "type": "success",
+      "synthetic_data_refs": [
+        "oots-marriage-success"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/oots-wave-a",
+        "binding_id": "oots-marriage-evidence/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:oots-marriage-evidence",
+        "consent_ref": "demo:oots-marriage-consent",
+        "target": {
+          "type": "Marriage",
+          "identifiers": [
+            {
+              "scheme": "registration_number",
+              "value": "MR-2026-2001"
+            }
+          ]
+        },
+        "claims": [
+          "marriage.certificate_summary"
+        ],
+        "disclosure": "value",
+        "format": "minimized_json"
+      },
+      "expected": {
+        "status": 200,
+        "result": {
+          "claim_id": "marriage.certificate_summary",
+          "value": true,
+          "disclosure": "value"
+        },
+        "audit": {
+          "binding_id": "oots-marriage-evidence/v1",
+          "binding_version": "v1",
+          "policy_id": "lab.oots-marriage-evidence.governed-evidence.v1",
+          "policy_hash": "sha256:e5193284535dfa9689dd081942ec847f51eacd50ebc71d93b482247207b63dcf",
+          "evaluated_rule_ids": [
+            "source-binding-policy:*"
+          ]
+        }
+      }
+    },
+    {
+      "id": "oots-marriage-success-predicate",
+      "type": "success",
+      "synthetic_data_refs": [
+        "oots-marriage-success"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/oots-wave-a",
+        "binding_id": "oots-marriage-evidence/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:oots-marriage-evidence",
+        "consent_ref": "demo:oots-marriage-consent",
+        "target": {
+          "type": "Marriage",
+          "identifiers": [
+            {
+              "scheme": "registration_number",
+              "value": "MR-2026-2001"
+            }
+          ]
+        },
+        "claims": [
+          "marriage.event_exists"
+        ],
+        "disclosure": "predicate",
+        "format": "minimized_json"
+      },
+      "expected": {
+        "status": 200,
+        "result": {
+          "claim_id": "marriage.event_exists",
+          "satisfied": true,
+          "disclosure": "predicate"
+        },
+        "audit": {
+          "binding_id": "oots-marriage-evidence/v1",
+          "binding_version": "v1",
+          "policy_id": "lab.oots-marriage-evidence.governed-evidence.v1",
+          "policy_hash": "sha256:e5193284535dfa9689dd081942ec847f51eacd50ebc71d93b482247207b63dcf",
+          "evaluated_rule_ids": [
+            "source-binding-policy:*"
+          ]
+        }
+      }
+    },
+    {
+      "id": "oots-marriage-denial-purpose",
+      "type": "denial",
+      "synthetic_data_refs": [
+        "oots-marriage-denial-target"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/not-authorized",
+        "binding_id": "oots-marriage-evidence/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:oots-marriage-evidence",
+        "consent_ref": "demo:oots-marriage-consent",
+        "target": {
+          "type": "Marriage",
+          "identifiers": [
+            {
+              "scheme": "registration_number",
+              "value": "MR-2026-2002"
+            }
+          ]
+        },
+        "claims": [
+          "marriage.certificate_summary"
+        ],
+        "disclosure": "value",
+        "format": "minimized_json"
+      },
+      "expected": {
+        "status": 403,
+        "problem": {
+          "code": "pdp.purpose_not_permitted"
+        },
+        "zero_source_reads": true,
+        "audit": {
+          "binding_id": "oots-marriage-evidence/v1",
+          "policy_id": "lab.oots-marriage-evidence.governed-evidence.v1",
+          "policy_hash": "sha256:e5193284535dfa9689dd081942ec847f51eacd50ebc71d93b482247207b63dcf",
+          "decision": "deny"
+        }
+      }
+    },
+    {
+      "id": "oots-marriage-denial-jurisdiction",
+      "type": "denial",
+      "synthetic_data_refs": [
+        "oots-marriage-denial-target"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/oots-wave-a",
+        "binding_id": "oots-marriage-evidence/v1",
+        "jurisdiction": "XY",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:oots-marriage-evidence",
+        "consent_ref": "demo:oots-marriage-consent",
+        "target": {
+          "type": "Marriage",
+          "identifiers": [
+            {
+              "scheme": "registration_number",
+              "value": "MR-2026-2002"
+            }
+          ]
+        },
+        "claims": [
+          "marriage.certificate_summary"
+        ],
+        "disclosure": "value",
+        "format": "minimized_json"
+      },
+      "expected": {
+        "status": 403,
+        "problem": {
+          "code": "pdp.jurisdiction_not_permitted"
+        },
+        "zero_source_reads": true,
+        "audit": {
+          "binding_id": "oots-marriage-evidence/v1",
+          "policy_id": "lab.oots-marriage-evidence.governed-evidence.v1",
+          "policy_hash": "sha256:e5193284535dfa9689dd081942ec847f51eacd50ebc71d93b482247207b63dcf",
+          "decision": "deny"
+        }
+      }
+    },
+    {
+      "id": "oots-marriage-audit-permit",
+      "type": "audit",
+      "synthetic_data_refs": [
+        "oots-marriage-success"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/oots-wave-a",
+        "binding_id": "oots-marriage-evidence/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:oots-marriage-evidence",
+        "consent_ref": "demo:oots-marriage-consent",
+        "target": {
+          "type": "Marriage",
+          "identifiers": [
+            {
+              "scheme": "registration_number",
+              "value": "MR-2026-2001"
+            }
+          ]
+        },
+        "claims": [
+          "marriage.certificate_summary"
+        ],
+        "disclosure": "value",
+        "format": "minimized_json"
+      },
+      "expected": {
+        "status": 200,
+        "result": {
+          "claim_id": "marriage.certificate_summary",
+          "value": true,
+          "disclosure": "value"
+        },
+        "audit": {
+          "binding_id": "oots-marriage-evidence/v1",
+          "binding_version": "v1",
+          "policy_id": "lab.oots-marriage-evidence.governed-evidence.v1",
+          "policy_hash": "sha256:e5193284535dfa9689dd081942ec847f51eacd50ebc71d93b482247207b63dcf",
+          "evaluated_rule_ids": [
+            "source-binding-policy:*"
+          ],
+          "target_ref_hash": "sha256",
+          "request_ref_hash": "sha256",
+          "correlation_ref_hash": "sha256"
+        }
+      }
+    }
+  ]
+}

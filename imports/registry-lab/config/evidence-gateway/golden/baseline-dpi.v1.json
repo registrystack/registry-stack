@@ -2,7 +2,7 @@
   "schema_version": "registry-lab/evidence-gateway-golden-fixtures/v1",
   "binding_id": "baseline-dpi/v1",
   "policy_id": "lab.baseline-dpi.governed-evidence.v1",
-  "policy_hash": "sha256:9b0861b94d7706bd9d00a9a03480ede66a0a5aa5ea5f81a3717783de50154812",
+  "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
   "freshness_reference_time": "2026-06-19T00:00:00Z",
   "cases": [
     {
@@ -44,7 +44,7 @@
           "binding_id": "baseline-dpi/v1",
           "binding_version": "v1",
           "policy_id": "lab.baseline-dpi.governed-evidence.v1",
-          "policy_hash": "sha256:9b0861b94d7706bd9d00a9a03480ede66a0a5aa5ea5f81a3717783de50154812",
+          "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
           "evaluated_rule_ids": [
             "source-binding-policy:*"
           ]
@@ -87,7 +87,7 @@
         "audit": {
           "binding_id": "baseline-dpi/v1",
           "policy_id": "lab.baseline-dpi.governed-evidence.v1",
-          "policy_hash": "sha256:9b0861b94d7706bd9d00a9a03480ede66a0a5aa5ea5f81a3717783de50154812",
+          "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
           "decision": "deny"
         }
       }
@@ -128,7 +128,7 @@
         "audit": {
           "binding_id": "baseline-dpi/v1",
           "policy_id": "lab.baseline-dpi.governed-evidence.v1",
-          "policy_hash": "sha256:9b0861b94d7706bd9d00a9a03480ede66a0a5aa5ea5f81a3717783de50154812",
+          "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
           "decision": "deny"
         }
       }
@@ -169,7 +169,7 @@
         "audit": {
           "binding_id": "baseline-dpi/v1",
           "policy_id": "lab.baseline-dpi.governed-evidence.v1",
-          "policy_hash": "sha256:9b0861b94d7706bd9d00a9a03480ede66a0a5aa5ea5f81a3717783de50154812",
+          "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
           "decision": "deny"
         }
       }
@@ -210,7 +210,7 @@
         "audit": {
           "binding_id": "baseline-dpi/v1",
           "policy_id": "lab.baseline-dpi.governed-evidence.v1",
-          "policy_hash": "sha256:9b0861b94d7706bd9d00a9a03480ede66a0a5aa5ea5f81a3717783de50154812",
+          "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
           "decision": "deny"
         }
       }
@@ -251,7 +251,7 @@
         "audit": {
           "binding_id": "baseline-dpi/v1",
           "policy_id": "lab.baseline-dpi.governed-evidence.v1",
-          "policy_hash": "sha256:9b0861b94d7706bd9d00a9a03480ede66a0a5aa5ea5f81a3717783de50154812",
+          "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
           "decision": "deny"
         }
       }
@@ -292,7 +292,7 @@
         "audit": {
           "binding_id": "baseline-dpi/v1",
           "policy_id": "lab.baseline-dpi.governed-evidence.v1",
-          "policy_hash": "sha256:9b0861b94d7706bd9d00a9a03480ede66a0a5aa5ea5f81a3717783de50154812",
+          "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
           "decision": "deny"
         }
       }
@@ -333,7 +333,7 @@
         "audit": {
           "binding_id": "baseline-dpi/v1",
           "policy_id": "lab.baseline-dpi.governed-evidence.v1",
-          "policy_hash": "sha256:9b0861b94d7706bd9d00a9a03480ede66a0a5aa5ea5f81a3717783de50154812",
+          "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
           "decision": "deny"
         }
       }
@@ -377,7 +377,7 @@
         "audit": {
           "binding_id": "baseline-dpi/v1",
           "policy_id": "lab.baseline-dpi.governed-evidence.v1",
-          "policy_hash": "sha256:9b0861b94d7706bd9d00a9a03480ede66a0a5aa5ea5f81a3717783de50154812",
+          "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
           "decision": "deny"
         }
       }
@@ -490,7 +490,7 @@
           "binding_id": "baseline-dpi/v1",
           "binding_version": "v1",
           "policy_id": "lab.baseline-dpi.governed-evidence.v1",
-          "policy_hash": "sha256:9b0861b94d7706bd9d00a9a03480ede66a0a5aa5ea5f81a3717783de50154812",
+          "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
           "evaluated_rule_ids": [
             "source-binding-policy:health_facility.policy_identity",
             "source-binding-policy:health_facility.odrl_terms",

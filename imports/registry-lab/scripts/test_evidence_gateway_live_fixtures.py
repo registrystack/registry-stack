@@ -66,6 +66,9 @@ class FakeNotaryHandler(BaseHTTPRequestHandler):
         if purpose == "https://demo.example.gov/purpose/not-authorized":
             self.respond_problem("pdp.purpose_not_permitted")
             return
+        if body.get("jurisdiction") == "XY":
+            self.respond_problem("pdp.jurisdiction_not_permitted")
+            return
         api_key = self.headers.get("x-api-key")
         token_denials = {
             "deny-assurance": "pdp.assurance_insufficient",
@@ -82,7 +85,7 @@ class FakeNotaryHandler(BaseHTTPRequestHandler):
         if value in {"NID-1010", "NID-1011"}:
             self.respond_problem("pdp.evidence_stale")
             return
-        if value in {"NID-LIVE-MISSING", "UIN-LIVE-MISSING"}:
+        if value in {"NID-LIVE-MISSING", "UIN-LIVE-MISSING", "WAVE-A-LIVE-MISSING"}:
             self.respond(
                 409,
                 {
@@ -193,16 +196,46 @@ class FakeNotaryHandler(BaseHTTPRequestHandler):
             "source-binding-policy:birth_registration.route_identity",
             "source-binding-policy:birth_registration.checked_scope",
         ]
+        oots_birth_rule_ids = [
+            "source-binding-policy:oots_birth.policy_identity",
+            "source-binding-policy:oots_birth.odrl_terms",
+            "source-binding-policy:oots_birth.purpose",
+            "source-binding-policy:oots_birth.jurisdiction",
+            "source-binding-policy:oots_birth.assurance_allowed_set",
+            "source-binding-policy:oots_birth.legal_basis_required",
+            "source-binding-policy:oots_birth.consent_required",
+            "source-binding-policy:oots_birth.credential_format",
+        ]
+        oots_marriage_rule_ids = [
+            "source-binding-policy:oots_marriage.policy_identity",
+            "source-binding-policy:oots_marriage.odrl_terms",
+            "source-binding-policy:oots_marriage.purpose",
+            "source-binding-policy:oots_marriage.jurisdiction",
+            "source-binding-policy:oots_marriage.assurance_allowed_set",
+            "source-binding-policy:oots_marriage.legal_basis_required",
+            "source-binding-policy:oots_marriage.consent_required",
+            "source-binding-policy:oots_marriage.credential_format",
+        ]
         policy = {
             "baseline-dpi/v1": (
                 "lab.baseline-dpi.governed-evidence.v1",
-                "sha256:9b0861b94d7706bd9d00a9a03480ede66a0a5aa5ea5f81a3717783de50154812",
+                "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
                 baseline_rule_ids,
             ),
             "sp-dci/v1": (
                 "lab.sp-dci.governed-evidence.v1",
-                "sha256:3484ed6ff5e9ac01940e22f555661d63dd2473de1b8b94c9fcbe5b6949e70844",
+                "sha256:479cfba9c5895f5f827b855244436a5b4a9f84c76fbd5472e861ad56983254db",
                 sp_dci_rule_ids,
+            ),
+            "oots-birth-evidence/v1": (
+                "lab.oots-birth-evidence.governed-evidence.v1",
+                "sha256:a4804f81f3287b7922e8c3d5bad49377584b7ab8727fe62cbae23c1f5bc85e1c",
+                oots_birth_rule_ids,
+            ),
+            "oots-marriage-evidence/v1": (
+                "lab.oots-marriage-evidence.governed-evidence.v1",
+                "sha256:e5193284535dfa9689dd081942ec847f51eacd50ebc71d93b482247207b63dcf",
+                oots_marriage_rule_ids,
             ),
         }[profile]
         claims = request_body.get("claims") or []
@@ -232,9 +265,14 @@ class FakeNotaryHandler(BaseHTTPRequestHandler):
         else:
             record.update(
                 {
-                    "target_ref_hash": "hmac-sha256:spdcitargettargettargettargettargettarget",
+                    "target_ref_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+                    if profile.startswith("oots-")
+                    else "hmac-sha256:spdcitargettargettargettargettargettarget",
                     "claim_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-                    "correlation_id_hash": "hmac-sha256:spdcicorrelationcorrelationcorrelation",
+                    "correlation_id_hash": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+                    if profile.startswith("oots-")
+                    else "hmac-sha256:spdcicorrelationcorrelationcorrelation",
+                    "request_ref_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
                 }
             )
         if status < 400:
@@ -252,6 +290,10 @@ class FakeNotaryHandler(BaseHTTPRequestHandler):
         claims = request_body.get("claims") or []
         if any(isinstance(claim, str) and claim.startswith("opencrvs-") for claim in claims):
             return "sp-dci/v1"
+        if set(claims) & {"birth.certificate_summary", "birth.event_exists"}:
+            return "oots-birth-evidence/v1"
+        if set(claims) & {"marriage.certificate_summary", "marriage.event_exists"}:
+            return "oots-marriage-evidence/v1"
         return "baseline-dpi/v1"
 
 
@@ -313,6 +355,10 @@ NEGATIVE_ENV = {
     "OPENCRVS_EVIDENCE_DENY_JURISDICTION_TOKEN": "deny-jurisdiction",
     "OPENCRVS_EVIDENCE_DENY_LEGAL_BASIS_TOKEN": "deny-legal-basis",
     "OPENCRVS_EVIDENCE_DENY_CONSENT_TOKEN": "deny-consent",
+    "CIVIL_EVIDENCE_DENY_ASSURANCE_TOKEN": "deny-assurance",
+    "CIVIL_EVIDENCE_DENY_JURISDICTION_TOKEN": "deny-jurisdiction",
+    "CIVIL_EVIDENCE_DENY_LEGAL_BASIS_TOKEN": "deny-legal-basis",
+    "CIVIL_EVIDENCE_DENY_CONSENT_TOKEN": "deny-consent",
 }
 
 
@@ -389,6 +435,52 @@ class EvidenceGatewayLiveFixtureRunnerTest(unittest.TestCase):
         audit_log = write_audit_log(server.audit_records)
         try:
             runner.assert_audit_log({"profiles": [summary]}, audit_log)
+        finally:
+            audit_log.unlink(missing_ok=True)
+
+    def test_wave_a_birth_and_marriage_minimized_json(self) -> None:
+        with temporary_env(NEGATIVE_ENV), FakeNotaryServer() as server:
+            profiles = []
+            for profile in ("oots-birth-evidence/v1", "oots-marriage-evidence/v1"):
+                runtime = runner.ProfileRuntime(
+                    profile=profile,
+                    base_url=server.url,
+                    token="token",
+                    auth="bearer",
+                    subject_override=None,
+                )
+                profiles.append(runner.run_profile(runtime, "prove-live", "test-live"))
+
+        executed = {item["id"] for profile in profiles for item in profile["executed"]}
+        self.assertIn("oots-birth-success-minimized-json", executed)
+        self.assertIn("oots-birth-success-predicate", executed)
+        self.assertIn("oots-birth-denial-purpose", executed)
+        self.assertIn("oots-birth-denial-jurisdiction", executed)
+        self.assertIn("oots-birth-audit-permit", executed)
+        self.assertIn("oots-birth-evidence.v1-runtime-missing-subject", executed)
+        self.assertIn("oots-marriage-success-minimized-json", executed)
+        self.assertIn("oots-marriage-success-predicate", executed)
+        self.assertIn("oots-marriage-denial-purpose", executed)
+        self.assertIn("oots-marriage-denial-jurisdiction", executed)
+        self.assertIn("oots-marriage-audit-permit", executed)
+        self.assertIn("oots-marriage-evidence.v1-runtime-missing-subject", executed)
+        wave_a_requests = [
+            request["body"]
+            for request in server.requests_seen
+            if request["path"] == "/v1/evaluations"
+            and set(request["body"].get("claims") or [])
+            & {
+                "birth.certificate_summary",
+                "birth.event_exists",
+                "marriage.certificate_summary",
+                "marriage.event_exists",
+            }
+        ]
+        self.assertTrue(wave_a_requests)
+        self.assertTrue(all(request.get("format") == "minimized_json" for request in wave_a_requests))
+        audit_log = write_audit_log(server.audit_records)
+        try:
+            runner.assert_audit_log({"profiles": profiles}, audit_log)
         finally:
             audit_log.unlink(missing_ok=True)
 

@@ -28,6 +28,7 @@ FIXTURE_ROOT = ROOT / "config" / "evidence-gateway"
 CLAIM_RESULT_JSON = "application/vnd.registry-notary.claim-result+json"
 SD_JWT_VC = "application/dc+sd-jwt"
 LIVE_REQUEST_KEYS = {
+    "binding_id",
     "requester",
     "target",
     "relationship",
@@ -36,6 +37,10 @@ LIVE_REQUEST_KEYS = {
     "disclosure",
     "format",
     "purpose",
+    "jurisdiction",
+    "assurance_level",
+    "legal_basis_ref",
+    "consent_ref",
 }
 AUDIT_FIELD_ALIASES = {
     "binding_id": ("binding_id", "ecosystem_binding_id", "matching_binding_id", "ecosystem_binding.id"),
@@ -180,6 +185,8 @@ def default_base_url(profile: str) -> str:
     if profile == "sp-dci/v1":
         port = os.environ.get("OPENCRVS_DCI_NOTARY_PORT", "4352")
         return os.environ.get("OPENCRVS_DCI_NOTARY_URL", f"http://127.0.0.1:{port}")
+    if profile in {"oots-birth-evidence/v1", "oots-marriage-evidence/v1"}:
+        return os.environ.get("CIVIL_NOTARY_URL", "http://127.0.0.1:4320")
     problem(f"unsupported profile {profile!r}")
 
 
@@ -197,6 +204,14 @@ def default_token_and_auth(profile: str) -> tuple[str, str]:
         if token:
             return token, "api-key"
         problem("missing OPENCRVS_EVIDENCE_CLIENT_TOKEN")
+    if profile in {"oots-birth-evidence/v1", "oots-marriage-evidence/v1"}:
+        bearer = os.environ.get("CIVIL_EVIDENCE_CLIENT_BEARER")
+        if bearer:
+            return bearer, "bearer"
+        token = os.environ.get("CIVIL_EVIDENCE_CLIENT_TOKEN")
+        if token:
+            return token, "api-key"
+        problem("missing CIVIL_EVIDENCE_CLIENT_BEARER or CIVIL_EVIDENCE_CLIENT_TOKEN")
     problem(f"unsupported profile {profile!r}")
 
 
@@ -210,6 +225,8 @@ def negative_token_env(profile: str, code: str) -> str | None:
     prefix = {
         "baseline-dpi/v1": "SHARED_EVIDENCE",
         "sp-dci/v1": "OPENCRVS_EVIDENCE",
+        "oots-birth-evidence/v1": "CIVIL_EVIDENCE",
+        "oots-marriage-evidence/v1": "CIVIL_EVIDENCE",
     }.get(profile)
     suffix = {
         "pdp.assurance_insufficient": "DENY_ASSURANCE_TOKEN",
@@ -441,6 +458,22 @@ def runnable_case_ids(profile: str) -> set[str]:
             "sp-dci-credential-sd-jwt",
             "sp-dci-audit-permit",
         }
+    if profile == "oots-birth-evidence/v1":
+        return {
+            "oots-birth-success-minimized-json",
+            "oots-birth-success-predicate",
+            "oots-birth-denial-purpose",
+            "oots-birth-denial-jurisdiction",
+            "oots-birth-audit-permit",
+        }
+    if profile == "oots-marriage-evidence/v1":
+        return {
+            "oots-marriage-success-minimized-json",
+            "oots-marriage-success-predicate",
+            "oots-marriage-denial-purpose",
+            "oots-marriage-denial-jurisdiction",
+            "oots-marriage-audit-permit",
+        }
     return set()
 
 
@@ -581,7 +614,12 @@ def run_missing_subject_negative(
     target = request.get("target")
     if not isinstance(target, dict):
         problem(f"{runtime.profile} success fixture has no live target")
-    missing_value = "NID-LIVE-MISSING" if runtime.profile == "baseline-dpi/v1" else "UIN-LIVE-MISSING"
+    if runtime.profile == "baseline-dpi/v1":
+        missing_value = "NID-LIVE-MISSING"
+    elif runtime.profile == "sp-dci/v1":
+        missing_value = "UIN-LIVE-MISSING"
+    else:
+        missing_value = "WAVE-A-LIVE-MISSING"
     override_first_identifier(target, missing_value)
     purpose = request.get("purpose") if isinstance(request.get("purpose"), str) else None
     status, body, request_id = json_request(
@@ -898,7 +936,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--profile",
         action="append",
-        choices=["baseline-dpi/v1", "sp-dci/v1"],
+        choices=[
+            "baseline-dpi/v1",
+            "sp-dci/v1",
+            "oots-birth-evidence/v1",
+            "oots-marriage-evidence/v1",
+        ],
         required=True,
         help="Fixture profile to run. Repeat to run multiple profiles.",
     )

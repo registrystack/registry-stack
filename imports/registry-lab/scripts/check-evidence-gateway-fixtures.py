@@ -19,8 +19,15 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_ROOT = ROOT / "config" / "evidence-gateway"
 PROFILE_PATH = FIXTURE_ROOT / "odrl-enforcement-profile.v1.json"
-REQUIRED_BINDINGS = {"baseline-dpi/v1", "sp-dci/v1"}
-REQUIRED_CASE_TYPES = {"success", "denial", "redaction", "credential", "audit"}
+REQUIRED_BINDINGS = {
+    "baseline-dpi/v1",
+    "sp-dci/v1",
+    "oots-birth-evidence/v1",
+    "oots-marriage-evidence/v1",
+}
+WAVE_A_BINDINGS = {"oots-birth-evidence/v1", "oots-marriage-evidence/v1"}
+LEGACY_REQUIRED_CASE_TYPES = {"success", "denial", "redaction", "credential", "audit"}
+WAVE_A_REQUIRED_CASE_TYPES = {"success", "denial", "audit"}
 PERMIT_CASE_TYPES = {"success", "redaction", "credential", "audit"}
 REQUIRED_DENIAL_CODES = {
     "pdp.assurance_insufficient",
@@ -48,6 +55,8 @@ DENIAL_CODE_POLICY_TERM = {
 PRODUCTION_ODRL_CONSTRAINT_TERMS = {
     "odrl:purpose",
     "odrl:spatial",
+}
+PRODUCTION_PDP_GATE_TERMS = {
     "registry:pdp:assurance",
     "registry:pdp:checked_scope",
     "registry:pdp:consent",
@@ -60,6 +69,7 @@ PRODUCTION_ODRL_CONSTRAINT_TERMS = {
     "registry:pdp:source_age",
     "registry:pdp:source_binding",
 }
+PRODUCTION_PROFILE_TERMS = PRODUCTION_ODRL_CONSTRAINT_TERMS | PRODUCTION_PDP_GATE_TERMS
 LEGACY_LAB_ODRL_TERMS = {
     "registry:assuranceLevel",
     "registry:audit",
@@ -170,6 +180,8 @@ def parse_timestamp(label: str, value: Any) -> datetime | None:
 
 
 def source_observed_at(record: dict[str, Any]) -> datetime | None:
+    if "observed_at" in record:
+        return parse_timestamp(f"{record.get('id')} observed_at", record.get("observed_at"))
     metadata = record.get("source_metadata")
     require(isinstance(metadata, dict), f"{record.get('id')} missing source_metadata")
     require(metadata.get("freshness_source"), f"{record.get('id')} source_metadata missing freshness_source")
@@ -188,6 +200,24 @@ def source_age_limit_seconds(policy_constraints: list[dict[str, Any]]) -> int | 
     limit = limits[0]
     require(isinstance(limit, int) and limit >= 0, "registry:pdp:source_age rightOperand must be a non-negative integer")
     return limit
+
+
+def collect_pdp_gates(evidence_pack: dict[str, Any]) -> list[dict[str, Any]]:
+    gates = evidence_pack.get("pdp_gates") or []
+    require(isinstance(gates, list), "evidence_pack.pdp_gates must be a list when present")
+    normalized: list[dict[str, Any]] = []
+    for gate in gates:
+        require(isinstance(gate, dict), "evidence_pack.pdp_gates entries must be objects")
+        term = gate.get("term")
+        require(term in PRODUCTION_PDP_GATE_TERMS, f"evidence_pack.pdp_gates has unsupported term {term!r}")
+        normalized.append(
+            {
+                "leftOperand": term,
+                "operator": gate.get("operator", "odrl:isA"),
+                "rightOperand": gate.get("rightOperand"),
+            }
+        )
+    return normalized
 
 
 def request_context_value(request: dict[str, Any], term: str) -> Any:
@@ -302,11 +332,21 @@ def validate_binding(path: Path, profile: dict[str, Any]) -> str:
         constraint_terms <= profile_terms,
         f"{binding_id} declares ODRL constraint terms outside the production profile",
     )
+    require(
+        constraint_terms <= PRODUCTION_ODRL_CONSTRAINT_TERMS,
+        f"{binding_id} declares registry-specific PDP terms as ODRL constraint terms",
+    )
     policy_terms = collect_left_operands(odrl_policy)
+    registry_policy_terms = sorted(policy_terms & PRODUCTION_PDP_GATE_TERMS)
+    require(
+        not registry_policy_terms,
+        f"{binding_id} ODRL policy uses registry-specific PDP terms: {', '.join(registry_policy_terms)}",
+    )
     require(
         policy_terms <= constraint_terms,
         f"{binding_id} policy uses undeclared ODRL constraint terms: {', '.join(sorted(policy_terms - constraint_terms))}",
     )
+    policy_constraints = collect_constraints(odrl_policy) + collect_pdp_gates(evidence_pack)
 
     for key in ("synthetic_data", "golden_fixtures"):
         relative = binding.get(key)
@@ -325,7 +365,7 @@ def validate_binding(path: Path, profile: dict[str, Any]) -> str:
         policy_id,
         policy_hash,
         synthetic_records,
-        collect_constraints(odrl_policy),
+        policy_constraints,
     )
     return binding_id
 
@@ -367,7 +407,8 @@ def validate_golden(
     cases = golden.get("cases")
     require(isinstance(cases, list) and cases, f"{path.name} must contain cases")
     case_types = {case.get("type") for case in cases if isinstance(case, dict)}
-    missing = REQUIRED_CASE_TYPES - case_types
+    required_case_types = WAVE_A_REQUIRED_CASE_TYPES if binding_id in WAVE_A_BINDINGS else LEGACY_REQUIRED_CASE_TYPES
+    missing = required_case_types - case_types
     require(not missing, f"{path.name} missing case types: {', '.join(sorted(missing))}")
 
     case_ids: set[str] = set()
@@ -380,7 +421,7 @@ def validate_golden(
         require(isinstance(case_id, str) and case_id, f"{path.name} has case without id")
         require(case_id not in case_ids, f"{path.name} duplicate case id {case_id}")
         case_ids.add(case_id)
-        require(case_type in REQUIRED_CASE_TYPES, f"{case_id} has unsupported case type {case_type!r}")
+        require(case_type in LEGACY_REQUIRED_CASE_TYPES, f"{case_id} has unsupported case type {case_type!r}")
         synthetic_data_refs = case.get("synthetic_data_refs")
         require(synthetic_data_refs, f"{case_id} must name synthetic_data_refs")
         require(isinstance(synthetic_data_refs, list), f"{case_id} synthetic_data_refs must be a list")
@@ -428,17 +469,23 @@ def validate_golden(
                 require(expected.get("zero_source_reads") is True, f"{case_id} denial must assert zero_source_reads")
             if code == "pdp.unsupported_policy_term":
                 unsupported_terms = set(request.get("odrl_terms") or [])
-                require(bool(unsupported_terms - set(PRODUCTION_ODRL_CONSTRAINT_TERMS)), f"{case_id} must name an unsupported ODRL term")
+                require(bool(unsupported_terms - PRODUCTION_PROFILE_TERMS), f"{case_id} must name an unsupported ODRL term")
         if case_type == "redaction":
             require(expected.get("absent_fields"), f"{case_id} redaction must list absent_fields")
             require(audit.get("redacted_fields"), f"{case_id} redaction audit must list redacted_fields")
         if case_type == "credential":
+            require(binding_id not in WAVE_A_BINDINGS, f"{case_id} Wave A fixtures must not cover deferred SD-JWT credentials")
             require(expected.get("credential_format") == "application/dc+sd-jwt", f"{case_id} must cover SD-JWT VC credential format")
-    missing_denials = REQUIRED_DENIAL_CODES - denial_codes
+    required_denial_codes = (
+        {"pdp.purpose_not_permitted", "pdp.jurisdiction_not_permitted"}
+        if binding_id in WAVE_A_BINDINGS
+        else REQUIRED_DENIAL_CODES
+    )
+    missing_denials = required_denial_codes - denial_codes
     unexpected_denials = denial_codes - REQUIRED_DENIAL_CODES
     require(not missing_denials, f"{path.name} missing denial codes: {', '.join(sorted(missing_denials))}")
     require(not unexpected_denials, f"{path.name} has unexpected denial codes: {', '.join(sorted(unexpected_denials))}")
-    if max_age_seconds is not None:
+    if max_age_seconds is not None and binding_id not in WAVE_A_BINDINGS:
         missing_modes = {"missing_timestamp", "stale_timestamp"} - freshness_failure_modes
         require(not missing_modes, f"{path.name} missing freshness denial modes: {', '.join(sorted(missing_modes))}")
 
@@ -449,8 +496,8 @@ def main() -> int:
     require(profile.get("id") == "registry-evidence-gateway-pdp/v1", "unexpected ODRL enforcement profile id")
     require(profile.get("unsupported_terms_fail_closed") is True, "ODRL profile must fail closed on unsupported terms")
     profile_terms = set(profile.get("supported_terms") or [])
-    missing_terms = PRODUCTION_ODRL_CONSTRAINT_TERMS - profile_terms
-    extra_terms = profile_terms - PRODUCTION_ODRL_CONSTRAINT_TERMS
+    missing_terms = PRODUCTION_PROFILE_TERMS - profile_terms
+    extra_terms = profile_terms - PRODUCTION_PROFILE_TERMS
     require(not missing_terms, f"ODRL profile missing production terms: {', '.join(sorted(missing_terms))}")
     require(not extra_terms, f"ODRL profile has non-production terms: {', '.join(sorted(extra_terms))}")
 
@@ -459,7 +506,8 @@ def main() -> int:
     missing = REQUIRED_BINDINGS - found
     require(not missing, f"missing binding fixtures: {', '.join(sorted(missing))}")
     print(f"evidence gateway fixtures OK: {', '.join(sorted(found))}")
-    print(f"production ODRL profile terms OK: {', '.join(sorted(PRODUCTION_ODRL_CONSTRAINT_TERMS))}")
+    print(f"production enforcement profile terms OK: {', '.join(sorted(PRODUCTION_PROFILE_TERMS))}")
+    print("registry-specific PDP gates OK: absent from ODRL policy constraints")
     print(f"stable PDP denial codes OK: {', '.join(sorted(REQUIRED_DENIAL_CODES))}")
     print("freshness source metadata OK: request-supplied freshness keys are forbidden")
     print("freshness denial modes OK: missing_timestamp, stale_timestamp")

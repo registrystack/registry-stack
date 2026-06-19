@@ -1,22 +1,26 @@
 {
   "schema_version": "registry-lab/evidence-gateway-binding/v1",
   "binding": {
-    "id": "baseline-dpi/v1",
+    "id": "oots-marriage-evidence/v1",
     "version": "v1",
-    "profile": "baseline-dpi",
+    "profile": "oots-marriage-evidence",
     "type": "governed-evidence",
-    "description": "Default governed evidence binding for PublicSchema-style REST evidence requests.",
+    "description": "Jurisdiction-neutral Wave A OOTS marriage evidence pack for minimized JSON responses.",
     "source_configs": [
       "config/relay/civil-registry-relay.metadata.yaml",
-      "config/relay/social-protection-registry-relay.metadata.yaml",
-      "config/relay/health-registry-relay.metadata.yaml"
+      "config/notary/civil-notary.yaml"
     ],
-    "synthetic_data": "config/evidence-gateway/synthetic/baseline-dpi.v1.json",
-    "golden_fixtures": "config/evidence-gateway/golden/baseline-dpi.v1.json"
+    "synthetic_data": "config/evidence-gateway/synthetic/oots-marriage-evidence.v1.json",
+    "golden_fixtures": "config/evidence-gateway/golden/oots-marriage-evidence.v1.json"
   },
   "evidence_pack": {
-    "policy_id": "lab.baseline-dpi.governed-evidence.v1",
-    "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
+    "policy_id": "lab.oots-marriage-evidence.governed-evidence.v1",
+    "policy_hash": "sha256:e5193284535dfa9689dd081942ec847f51eacd50ebc71d93b482247207b63dcf",
+    "output_profile": "minimized_json",
+    "deferred_outputs": [
+      "application/dc+sd-jwt",
+      "application/ld+json; profile=\"cccev\""
+    ],
     "odrl_enforcement": {
       "profile": "registry-evidence-gateway-pdp/v1",
       "constraint_terms": [
@@ -40,35 +44,37 @@
       {
         "term": "registry:pdp:legal_basis",
         "operator": "odrl:isA",
-        "rightOperand": "demo:child-support-eligibility"
+        "rightOperand": "demo:oots-marriage-evidence"
       },
       {
         "term": "registry:pdp:consent",
         "operator": "odrl:isA",
-        "rightOperand": "demo:child-support-consent"
+        "rightOperand": "demo:oots-marriage-consent"
+      },
+      {
+        "term": "registry:pdp:credential_format",
+        "operator": "odrl:isA",
+        "rightOperand": "minimized_json"
       }
     ]
   },
   "odrl_policy": {
     "@context": [
-      "https://www.w3.org/ns/odrl.jsonld",
-      {
-        "registry": "https://registrystack.org/ns/evidence-gateway#"
-      }
+      "https://www.w3.org/ns/odrl.jsonld"
     ],
     "@type": "Set",
-    "uid": "urn:registry-lab:policy:baseline-dpi:governed-evidence:v1",
+    "uid": "urn:registry-lab:policy:oots-marriage-evidence:wave-a:v1",
     "profile": "registry-evidence-gateway-pdp/v1",
     "permission": [
       {
-        "uid": "urn:registry-lab:rule:baseline-dpi:purpose:decentralized-evidence-demo",
+        "uid": "urn:registry-lab:rule:oots-marriage-evidence:purpose:wave-a",
         "action": "odrl:use",
-        "target": "urn:registry-lab:evidence:baseline-dpi:v1",
+        "target": "urn:registry-lab:evidence:oots-marriage-evidence:v1",
         "constraint": [
           {
             "leftOperand": "odrl:purpose",
             "operator": "odrl:isA",
-            "rightOperand": "https://demo.example.gov/purpose/decentralized-evidence-demo"
+            "rightOperand": "https://demo.example.gov/purpose/oots-wave-a"
           },
           {
             "leftOperand": "odrl:spatial",

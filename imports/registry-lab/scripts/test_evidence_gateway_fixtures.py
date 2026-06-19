@@ -24,7 +24,10 @@ class EvidenceGatewayFixtureCheckTest(unittest.TestCase):
 
         self.assertIn("baseline-dpi/v1", result.stdout)
         self.assertIn("sp-dci/v1", result.stdout)
-        self.assertIn("production ODRL profile terms OK", result.stdout)
+        self.assertIn("oots-birth-evidence/v1", result.stdout)
+        self.assertIn("oots-marriage-evidence/v1", result.stdout)
+        self.assertIn("production enforcement profile terms OK", result.stdout)
+        self.assertIn("registry-specific PDP gates OK: absent from ODRL policy constraints", result.stdout)
         self.assertIn("registry:pdp:source_age", result.stdout)
         self.assertIn("freshness source metadata OK", result.stdout)
         self.assertIn("request-supplied freshness keys are forbidden", result.stdout)

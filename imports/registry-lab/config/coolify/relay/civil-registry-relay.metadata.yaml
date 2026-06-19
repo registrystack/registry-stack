@@ -27,11 +27,116 @@ evaluation_profiles:
     claim_id: civil_child_status
     subject_id_type: id
     max_source_observed_age_seconds: 86400
+  - id: oots-birth-evidence-v1
+    ruleset: oots-birth-evidence-v1
+    claim_id: birth_certificate_summary
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
+  - id: oots-marriage-evidence-v1
+    ruleset: oots-marriage-evidence-v1
+    claim_id: marriage_certificate_summary
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
+ecosystem_bindings:
+  - id: oots-birth-evidence/v1
+    version: v1
+    profile: oots-birth-evidence
+    type: governed-evidence
+    evidence_pack:
+      pack_id: oots-birth-evidence/v1
+      pack_version: v1
+      source_basis:
+        family: oots-common-data-model
+        evidence_type: birth.certificate_summary
+      semantic_profile:
+        vocabulary: publicschema
+        fit: strong
+      evidence_envelope:
+        format: minimized_json
+        fields:
+          - claim_id
+          - result
+      required_gates:
+        - purpose
+        - jurisdiction
+        - legal_basis
+        - consent
+        - authority_basis
+        - requester_identity
+        - subject_identity
+        - subject_relationship
+        - assurance
+        - source_binding
+        - source_freshness
+        - requested_disclosure
+        - credential_format
+        - route_scope
+      allowed_outputs:
+        - minimized_json
+      policy_id: lab.oots-birth-evidence.governed-evidence.v1
+      policy_hash: sha256:a4804f81f3287b7922e8c3d5bad49377584b7ab8727fe62cbae23c1f5bc85e1c
+      output_profile: minimized_json
+      odrl_enforcement:
+        profile: registry-evidence-gateway-pdp/v1
+        constraint_terms:
+          - odrl:purpose
+          - odrl:spatial
+  - id: oots-marriage-evidence/v1
+    version: v1
+    profile: oots-marriage-evidence
+    type: governed-evidence
+    evidence_pack:
+      pack_id: oots-marriage-evidence/v1
+      pack_version: v1
+      source_basis:
+        family: oots-common-data-model
+        evidence_type: marriage.certificate_summary
+      semantic_profile:
+        vocabulary: publicschema
+        fit: strong
+      evidence_envelope:
+        format: minimized_json
+        fields:
+          - claim_id
+          - result
+      required_gates:
+        - purpose
+        - jurisdiction
+        - legal_basis
+        - consent
+        - authority_basis
+        - requester_identity
+        - subject_identity
+        - subject_relationship
+        - assurance
+        - source_binding
+        - source_freshness
+        - requested_disclosure
+        - credential_format
+        - route_scope
+      allowed_outputs:
+        - minimized_json
+      policy_id: lab.oots-marriage-evidence.governed-evidence.v1
+      policy_hash: sha256:e5193284535dfa9689dd081942ec847f51eacd50ebc71d93b482247207b63dcf
+      output_profile: minimized_json
+      odrl_enforcement:
+        profile: registry-evidence-gateway-pdp/v1
+        constraint_terms:
+          - odrl:purpose
+          - odrl:spatial
 requirements:
   - id: child_identity_requirement
     iri: https://metadata.lab.registrystack.org/requirements/child-identity-and-alive
     title: Child identity and alive-status requirement
     description: Requirement to confirm birth date and alive status for a child support decision.
+  - id: oots_birth_record_requirement
+    iri: https://metadata.lab.registrystack.org/requirements/birth.certificate_summary
+    title: OOTS birth record requirement
+    description: Requirement to confirm that a minimized registered birth record exists for Wave A.
+  - id: oots_marriage_record_requirement
+    iri: https://metadata.lab.registrystack.org/requirements/marriage.certificate_summary
+    title: OOTS marriage record requirement
+    description: Requirement to confirm that a minimized registered marriage record exists for Wave A.
 evidence_types:
   - id: civil_child_status_evidence
     iri: https://metadata.lab.registrystack.org/evidence-types/civil-child-status
@@ -39,6 +144,18 @@ evidence_types:
     description: Evidence that a submitted child identifier resolves to a civil registry record with birth date and alive status.
     proves:
       - child_identity_requirement
+  - id: oots_birth_record_evidence
+    iri: https://metadata.lab.registrystack.org/evidence-types/birth.certificate_summary
+    title: OOTS birth record evidence
+    description: Minimized JSON evidence that a registered birth record exists.
+    proves:
+      - oots_birth_record_requirement
+  - id: oots_marriage_record_evidence
+    iri: https://metadata.lab.registrystack.org/evidence-types/marriage.certificate_summary
+    title: OOTS marriage record evidence
+    description: Minimized JSON evidence that a registered marriage record exists.
+    proves:
+      - oots_marriage_record_requirement
 datasets:
   - id: civil_registry
     title: Civil Registry
@@ -75,6 +192,66 @@ datasets:
         policy:
           purpose:
             - https://metadata.lab.registrystack.org/purpose/child-support-eligibility
+      - id: oots_birth_evidence_service
+        iri: https://metadata.lab.registrystack.org/evidence-offerings/oots-birth-evidence
+        title: OOTS birth evidence service
+        description: Wave A minimized JSON evidence pack for a registered birth record.
+        evidence_type: oots_birth_record_evidence
+        issuing_authority:
+          id: civil_registration_authority
+          iri: did:web:civil-relay.lab.registrystack.org
+          name: Civil Registration Authority
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: birth_event
+        lookup_keys:
+          - id
+        evidence_pack:
+          id: oots-birth-evidence/v1
+          output_profile: minimized_json
+          policy_id: lab.oots-birth-evidence.governed-evidence.v1
+          policy_hash: sha256:a4804f81f3287b7922e8c3d5bad49377584b7ab8727fe62cbae23c1f5bc85e1c
+        access:
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://metadata.lab.registrystack.org/local-only/civil-notary
+          discovery_url: https://metadata.lab.registrystack.org/local-only/civil-notary/.well-known/evidence-service
+          ruleset: oots-birth-evidence-v1
+        policy:
+          purpose:
+            - https://metadata.lab.registrystack.org/purpose/oots-wave-a
+      - id: oots_marriage_evidence_service
+        iri: https://metadata.lab.registrystack.org/evidence-offerings/oots-marriage-evidence
+        title: OOTS marriage evidence service
+        description: Wave A minimized JSON evidence pack for a registered marriage record.
+        evidence_type: oots_marriage_record_evidence
+        issuing_authority:
+          id: civil_registration_authority
+          iri: did:web:civil-relay.lab.registrystack.org
+          name: Civil Registration Authority
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: civil_status_record
+        lookup_keys:
+          - registration_number
+        evidence_pack:
+          id: oots-marriage-evidence/v1
+          output_profile: minimized_json
+          policy_id: lab.oots-marriage-evidence.governed-evidence.v1
+          policy_hash: sha256:e5193284535dfa9689dd081942ec847f51eacd50ebc71d93b482247207b63dcf
+        access:
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://metadata.lab.registrystack.org/local-only/civil-notary
+          discovery_url: https://metadata.lab.registrystack.org/local-only/civil-notary/.well-known/evidence-service
+          ruleset: oots-marriage-evidence-v1
+        policy:
+          purpose:
+            - https://metadata.lab.registrystack.org/purpose/oots-wave-a
     entities:
       - name: civil_person
         title: Civil Person

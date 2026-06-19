@@ -14,21 +14,43 @@
   },
   "evidence_pack": {
     "policy_id": "lab.sp-dci.governed-evidence.v1",
-    "policy_hash": "sha256:3484ed6ff5e9ac01940e22f555661d63dd2473de1b8b94c9fcbe5b6949e70844",
+    "policy_hash": "sha256:479cfba9c5895f5f827b855244436a5b4a9f84c76fbd5472e861ad56983254db",
     "odrl_enforcement": {
       "profile": "registry-evidence-gateway-pdp/v1",
       "constraint_terms": [
         "odrl:purpose",
-        "registry:pdp:source_binding",
-        "odrl:spatial",
-        "registry:pdp:assurance",
-        "registry:pdp:source_age",
-        "registry:pdp:legal_basis",
-        "registry:pdp:consent"
+        "odrl:spatial"
       ],
       "unsupported_terms_fail_closed": true,
       "compile_target": "native-pdp"
-    }
+    },
+    "pdp_gates": [
+      {
+        "term": "registry:pdp:source_binding",
+        "operator": "odrl:isA",
+        "rightOperand": "sp-dci/v1"
+      },
+      {
+        "term": "registry:pdp:assurance",
+        "operator": "odrl:gteq",
+        "rightOperand": "substantial"
+      },
+      {
+        "term": "registry:pdp:source_age",
+        "operator": "odrl:lteq",
+        "rightOperand": 86400
+      },
+      {
+        "term": "registry:pdp:legal_basis",
+        "operator": "odrl:isA",
+        "rightOperand": "demo:birth-registration-verification"
+      },
+      {
+        "term": "registry:pdp:consent",
+        "operator": "odrl:isA",
+        "rightOperand": "demo:birth-registration-consent"
+      }
+    ]
   },
   "odrl_policy": {
     "@context": [
@@ -53,41 +75,9 @@
             "rightOperand": "https://demo.example.gov/purpose/opencrvs-dci-lab"
           },
           {
-            "leftOperand": "registry:pdp:source_binding",
-            "operator": "odrl:isA",
-            "rightOperand": "sp-dci/v1"
-          },
-          {
             "leftOperand": "odrl:spatial",
             "operator": "odrl:isA",
             "rightOperand": "ZZ"
-          },
-          {
-            "leftOperand": "registry:pdp:assurance",
-            "operator": "odrl:gteq",
-            "rightOperand": "substantial"
-          },
-          {
-            "leftOperand": "registry:pdp:source_age",
-            "operator": "odrl:lteq",
-            "rightOperand": 86400
-          }
-        ],
-        "duty": [
-          {
-            "action": "odrl:reviewPolicy",
-            "constraint": [
-              {
-                "leftOperand": "registry:pdp:legal_basis",
-                "operator": "odrl:isA",
-                "rightOperand": "demo:birth-registration-verification"
-              },
-              {
-                "leftOperand": "registry:pdp:consent",
-                "operator": "odrl:isA",
-                "rightOperand": "demo:birth-registration-consent"
-              }
-            ]
           }
         ]
       }
