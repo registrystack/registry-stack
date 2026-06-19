@@ -15,7 +15,10 @@ config_trust:
 metadata:
   source:
     path: health-registry-relay.metadata.yaml
-    digest: sha256:6cd09af9dc84bcc258303d2789083eb7ab80bf635c32bbe2abdd56c2b92a33a3
+    digest: sha256:e1ad4de4598595ab424b0883e6e9afe8b3ec8e2c806891f5b5c06f699836bd50
+  ecosystem_binding:
+    id: baseline-dpi/v1
+    version: v1
 
 catalog:
   title: Health Registry Relay (Decentralized Demo)

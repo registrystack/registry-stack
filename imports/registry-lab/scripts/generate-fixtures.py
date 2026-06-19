@@ -197,7 +197,7 @@ RELATIONSHIPS = [
     ["REL-1006-FATHER", "CP-1006", "CP-2006", "father", "CSR-BIRTH-1006", "2014-01-15", "", "established"],
 ]
 
-HOUSEHOLDS = [
+HOUSEHOLDS = append_observed_at([
     ["household_id", "national_id", "district", "poverty_score", "eligibility_band", "household_size", "active_members", "deceased_member_count"],
     ["HH-100", "NID-1001", "north", 29.0, "priority", 5, 5, 0],
     ["HH-200", "NID-1002", "south", 45.0, "standard", 4, 4, 0],
@@ -208,9 +208,9 @@ HOUSEHOLDS = [
     ["HH-700", "NID-1008", "west", 42.0, "standard", 1, 1, 0],
     ["HH-800", "NID-1010", "central", 54.0, "standard", 6, 6, 0],
     ["HH-900", "NID-1011", "south", 28.0, "priority", 3, 3, 0],
-]
+], national_id_index=1)
 
-PERSONS = [
+PERSONS = append_observed_at([
     ["person_id", "household_id", "national_id", "relationship", "age", "alive", "disability_status"],
     ["PER-1001", "HH-100", "NID-1001", "child", 10, True, "none"],
     ["PER-1007", "HH-100", "NID-1007", "grandparent", 68, True, "none"],
@@ -244,7 +244,7 @@ PERSONS = [
     ["PER-3015", "HH-800", "NID-3015", "child", 14, True, "none"],
     ["PER-3016", "HH-800", "NID-3016", "child", 10, True, "none"],
     ["PER-1011", "HH-900", "NID-1011", "child", 10, True, "none"],
-]
+], national_id_index=2)
 
 ENROLLMENTS = append_observed_at([
     ["enrollment_id", "household_id", "person_id", "national_id", "program_code", "status", "benefit_amount", "enrolled_on"],
@@ -338,7 +338,7 @@ PAYMENT_EVENTS = [
     ["PAY-900-JAN", "ENT-900", "2026-01", "not_paid_policy_denied", "none", dt.date(2026, 1, 16), False],
 ]
 
-FUNCTIONING_PROFILES = [
+FUNCTIONING_PROFILES = append_observed_at([
     [
         "profile_id",
         "person_id",
@@ -353,13 +353,13 @@ FUNCTIONING_PROFILES = [
     ],
     ["FUNC-1006", "PER-1006", "NID-1006", "WG-SS-2025", dt.date(2025, 12, 5), "caregiver", "mobility=severe;self_care=moderate", True, "mobility;self_care", "2025.4"],
     ["FUNC-1003", "PER-1003", "NID-1003", "WG-SS-2025", dt.date(2025, 6, 1), "self", "mobility=severe", True, "mobility", "2025.2"],
-]
+], national_id_index=2)
 
-DISABILITY_DETERMINATIONS = [
+DISABILITY_DETERMINATIONS = append_observed_at([
     ["determination_id", "person_id", "national_id", "authority", "determination_status", "support_category", "valid_from", "valid_until", "review_due"],
     ["DIS-1006", "PER-1006", "NID-1006", "Disability Assessment Authority", "approved", "top_up", dt.date(2025, 12, 20), dt.date(2026, 12, 20), dt.date(2026, 10, 20)],
     ["DIS-1003", "PER-1003", "NID-1003", "Disability Assessment Authority", "closed_deceased", "none", dt.date(2025, 6, 1), dt.date(2025, 11, 2), dt.date(2025, 11, 2)],
-]
+], national_id_index=2)
 
 DISTRICT_GEOMETRIES = [
     ["district", "geometry"],
@@ -693,6 +693,15 @@ def validate_fixture_coverage() -> None:
     for row in data_rows(ENROLLMENTS):
         if row[3] not in allowed_missing and not str(row[8]).endswith("Z"):
             raise ValueError("enrollment fixture observed_at values must be RFC3339 UTC timestamps")
+    for label, rows, national_id_index, observed_at_index in [
+        ("household", HOUSEHOLDS, 1, 8),
+        ("person", PERSONS, 2, 7),
+        ("functioning profile", FUNCTIONING_PROFILES, 2, 10),
+        ("disability determination", DISABILITY_DETERMINATIONS, 2, 9),
+    ]:
+        for row in data_rows(rows):
+            if row[national_id_index] not in allowed_missing and not str(row[observed_at_index]).endswith("Z"):
+                raise ValueError(f"{label} fixture observed_at values must be RFC3339 UTC timestamps")
     for row in HEALTH_ROWS:
         if row["national_id"] not in allowed_missing and not row["observed_at"].endswith("Z"):
             raise ValueError("health fixture observed_at values must be RFC3339 UTC timestamps")

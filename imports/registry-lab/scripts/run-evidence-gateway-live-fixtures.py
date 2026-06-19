@@ -28,7 +28,6 @@ FIXTURE_ROOT = ROOT / "config" / "evidence-gateway"
 CLAIM_RESULT_JSON = "application/vnd.registry-notary.claim-result+json"
 SD_JWT_VC = "application/dc+sd-jwt"
 LIVE_REQUEST_KEYS = {
-    "binding_id",
     "requester",
     "target",
     "relationship",
@@ -36,11 +35,6 @@ LIVE_REQUEST_KEYS = {
     "claims",
     "disclosure",
     "format",
-    "purpose",
-    "jurisdiction",
-    "assurance_level",
-    "legal_basis_ref",
-    "consent_ref",
 }
 AUDIT_FIELD_ALIASES = {
     "binding_id": ("binding_id", "ecosystem_binding_id", "matching_binding_id", "ecosystem_binding.id"),
@@ -324,6 +318,13 @@ def live_request(case: dict[str, Any], runtime: ProfileRuntime) -> dict[str, Any
     return request
 
 
+def live_purpose(case: dict[str, Any]) -> str | None:
+    raw = case.get("request")
+    if isinstance(raw, dict) and isinstance(raw.get("purpose"), str):
+        return raw["purpose"]
+    return None
+
+
 def override_first_identifier(target: dict[str, Any], value: str) -> None:
     identifiers = target.get("identifiers")
     if isinstance(identifiers, list) and identifiers and isinstance(identifiers[0], dict):
@@ -511,7 +512,7 @@ def run_evaluation_case(
 ) -> dict[str, Any]:
     case_runtime = runtime_for_case(runtime, case)
     request = live_request(case, case_runtime)
-    purpose = request.get("purpose") if isinstance(request.get("purpose"), str) else None
+    purpose = live_purpose(case)
     status, body, request_id = json_request(
         case_runtime,
         "POST",
@@ -554,7 +555,7 @@ def run_credential_case(
     request["target"] = first_success_target(golden, case_runtime)
     request.setdefault("disclosure", "value")
     request["format"] = case.get("request", {}).get("format", SD_JWT_VC)
-    purpose = request.get("purpose") if isinstance(request.get("purpose"), str) else None
+    purpose = live_purpose(case)
     eval_status, eval_body, eval_request_id = json_request(
         case_runtime,
         "POST",
@@ -628,7 +629,7 @@ def run_missing_subject_negative(
     else:
         missing_value = "WAVE-A-LIVE-MISSING"
     override_first_identifier(target, missing_value)
-    purpose = request.get("purpose") if isinstance(request.get("purpose"), str) else None
+    purpose = live_purpose(success)
     status, body, request_id = json_request(
         runtime,
         "POST",

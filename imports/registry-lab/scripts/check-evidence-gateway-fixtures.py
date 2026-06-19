@@ -25,6 +25,38 @@ REQUIRED_BINDINGS = {
     "oots-birth-evidence/v1",
     "oots-marriage-evidence/v1",
 }
+BASELINE_POLICY_ID = "lab.baseline-dpi.governed-evidence.v1"
+BASELINE_POLICY_HASH = "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb"
+BASELINE_RELAY_CONFIGS = [
+    ROOT / "config" / "relay" / "civil-registry-relay.yaml",
+    ROOT / "config" / "relay" / "health-registry-relay.yaml",
+    ROOT / "config" / "relay" / "social-protection-registry-relay.yaml",
+    ROOT / "config" / "coolify" / "relay" / "civil-registry-relay.yaml",
+    ROOT / "config" / "coolify" / "relay" / "health-registry-relay.yaml",
+    ROOT / "config" / "coolify" / "relay" / "social-protection-registry-relay.yaml",
+]
+BASELINE_METADATA_FILES = [
+    ROOT / "config" / "relay" / "civil-registry-relay.metadata.yaml",
+    ROOT / "config" / "relay" / "health-registry-relay.metadata.yaml",
+    ROOT / "config" / "relay" / "social-protection-registry-relay.metadata.yaml",
+    ROOT / "config" / "coolify" / "relay" / "civil-registry-relay.metadata.yaml",
+    ROOT / "config" / "coolify" / "relay" / "health-registry-relay.metadata.yaml",
+    ROOT / "config" / "coolify" / "relay" / "social-protection-registry-relay.metadata.yaml",
+]
+REGISTRY_DATA_CONNECTION_RELAY_CONFIGS = {
+    "civil": [
+        ROOT / "config" / "relay" / "civil-registry-relay.yaml",
+        ROOT / "config" / "coolify" / "relay" / "civil-registry-relay.yaml",
+    ],
+    "health": [
+        ROOT / "config" / "relay" / "health-registry-relay.yaml",
+        ROOT / "config" / "coolify" / "relay" / "health-registry-relay.yaml",
+    ],
+    "social_protection": [
+        ROOT / "config" / "relay" / "social-protection-registry-relay.yaml",
+        ROOT / "config" / "coolify" / "relay" / "social-protection-registry-relay.yaml",
+    ],
+}
 WAVE_A_BINDINGS = {"oots-birth-evidence/v1", "oots-marriage-evidence/v1"}
 LEGACY_REQUIRED_CASE_TYPES = {"success", "denial", "redaction", "credential", "audit"}
 WAVE_A_REQUIRED_CASE_TYPES = {"success", "denial", "audit"}
@@ -165,6 +197,143 @@ def collect_keys(value: Any, keys: set[str], path: str = "$") -> list[str]:
     return matches
 
 
+def leading_spaces(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def yaml_scalar(line: str, key: str) -> str | None:
+    stripped = line.strip()
+    prefix = f"{key}:"
+    if stripped == prefix:
+        return ""
+    if stripped.startswith(f"{prefix} "):
+        return stripped[len(prefix) + 1 :].strip().strip("'\"")
+    return None
+
+
+def yaml_section_has_key(path: Path, section: str, nested_key: str) -> bool:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    section_indent: int | None = None
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = leading_spaces(line)
+        if section_indent is not None and indent <= section_indent:
+            section_indent = None
+        if section_indent is not None and stripped == f"{nested_key}:":
+            return True
+        if stripped == f"{section}:":
+            section_indent = indent
+    return False
+
+
+def yaml_list_item_block(path: Path, section: str, item_id: str) -> list[str]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    section_indent: int | None = None
+    item_indent: int | None = None
+    block: list[str] = []
+    collecting = False
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            if collecting:
+                block.append(line)
+            continue
+        indent = leading_spaces(line)
+        if section_indent is not None and indent <= section_indent:
+            break
+        if section_indent is None:
+            if stripped == f"{section}:":
+                section_indent = indent
+            continue
+        if stripped.startswith("- id:"):
+            if collecting and item_indent is not None and indent == item_indent:
+                break
+            if yaml_scalar(stripped[2:].strip(), "id") == item_id:
+                collecting = True
+                item_indent = indent
+                block = [line]
+                continue
+        if collecting:
+            block.append(line)
+    return block
+
+
+def yaml_block_scalar(block: list[str], key: str) -> str | None:
+    for line in block:
+        value = yaml_scalar(line, key)
+        if value:
+            return value
+    return None
+
+
+def collect_relay_entity_fields(path: Path) -> dict[str, set[str]]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    entities_indent: int | None = None
+    current_entity: str | None = None
+    fields_indent: int | None = None
+    entity_indent: int | None = None
+    fields_by_entity: dict[str, set[str]] = {}
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = leading_spaces(line)
+        if entities_indent is not None and indent <= entities_indent:
+            entities_indent = None
+            current_entity = None
+            fields_indent = None
+        if entities_indent is None:
+            if stripped == "entities:":
+                entities_indent = indent
+            continue
+        if stripped.startswith("- name:") and indent == entities_indent + 2:
+            current_entity = yaml_scalar(stripped[2:].strip(), "name")
+            entity_indent = indent
+            fields_indent = None
+            if current_entity:
+                fields_by_entity.setdefault(current_entity, set())
+            continue
+        if current_entity and entity_indent is not None and indent <= entity_indent and not stripped.startswith("- name:"):
+            current_entity = None
+            fields_indent = None
+            continue
+        if current_entity and stripped == "fields:":
+            fields_indent = indent
+            continue
+        if current_entity and fields_indent is not None:
+            if indent <= fields_indent:
+                fields_indent = None
+                continue
+            if stripped.startswith("- name:"):
+                field = yaml_scalar(stripped[2:].strip(), "name")
+                if field:
+                    fields_by_entity[current_entity].add(field)
+    return fields_by_entity
+
+
+def collect_notary_registry_freshness_sources(path: Path) -> list[tuple[str, str, str]]:
+    current_connection: str | None = None
+    current_entity: str | None = None
+    sources: list[tuple[str, str, str]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        connection = yaml_scalar(line, "connection")
+        if connection:
+            current_connection = connection
+            current_entity = None
+            continue
+        entity = yaml_scalar(line, "entity")
+        if entity and current_connection:
+            current_entity = entity
+            continue
+        observed_at_field = yaml_scalar(line, "source_observed_at_field")
+        if observed_at_field and current_connection in REGISTRY_DATA_CONNECTION_RELAY_CONFIGS and current_entity:
+            sources.append((current_connection, current_entity, observed_at_field))
+    return sources
+
+
 def parse_timestamp(label: str, value: Any) -> datetime | None:
     if value in (None, ""):
         return None
@@ -296,6 +465,59 @@ def freshness_failure_mode(
 def validate_production_odrl_terms(label: str, value: Any) -> None:
     legacy_terms = sorted(json_strings(value) & LEGACY_LAB_ODRL_TERMS)
     require(not legacy_terms, f"{label} uses legacy lab ODRL terms: {', '.join(legacy_terms)}")
+
+
+def validate_relay_metadata_contracts() -> None:
+    for path in BASELINE_RELAY_CONFIGS:
+        text = path.read_text(encoding="utf-8")
+        label = str(path.relative_to(ROOT))
+        require("ecosystem_binding:" in text, f"{label} must select baseline-dpi/v1 metadata ecosystem binding")
+        require("id: baseline-dpi/v1" in text, f"{label} must select baseline-dpi/v1 metadata ecosystem binding")
+        require("version: v1" in text, f"{label} must select baseline-dpi/v1 version v1")
+
+    for path in BASELINE_METADATA_FILES:
+        label = str(path.relative_to(ROOT))
+        block = yaml_list_item_block(path, "ecosystem_bindings", "baseline-dpi/v1")
+        require(block, f"{label} missing baseline-dpi/v1 ecosystem binding")
+        require(
+            yaml_block_scalar(block, "policy_id") == BASELINE_POLICY_ID,
+            f"{label} baseline-dpi/v1 policy_id must match evidence-gateway binding fixture",
+        )
+        require(
+            yaml_block_scalar(block, "policy_hash") == BASELINE_POLICY_HASH,
+            f"{label} baseline-dpi/v1 policy_hash must match evidence-gateway binding fixture",
+        )
+
+    for path in sorted((ROOT / "config" / "relay").glob("*.metadata.yaml")) + sorted(
+        (ROOT / "config" / "coolify" / "relay").glob("*.metadata.yaml")
+    ):
+        text = path.read_text(encoding="utf-8")
+        label = str(path.relative_to(ROOT))
+        require("output_profile:" not in text, f"{label} uses output_profile, which Manifest drops from relay metadata")
+        require(
+            not yaml_section_has_key(path, "evidence_offerings", "evidence_pack"),
+            f"{label} has evidence_offerings.evidence_pack, which Manifest drops from relay metadata",
+        )
+
+
+def validate_registry_data_freshness_projection() -> None:
+    relay_fields_by_connection = {
+        connection: [collect_relay_entity_fields(path) for path in paths]
+        for connection, paths in REGISTRY_DATA_CONNECTION_RELAY_CONFIGS.items()
+    }
+    notary_paths = sorted((ROOT / "config" / "notary").glob("*.yaml")) + sorted(
+        (ROOT / "config" / "coolify" / "notary").glob("*.yaml")
+    )
+    for path in notary_paths:
+        for connection, entity, observed_at_field in collect_notary_registry_freshness_sources(path):
+            for relay_fields in relay_fields_by_connection[connection]:
+                require(
+                    observed_at_field in relay_fields.get(entity, set()),
+                    (
+                        f"{path.relative_to(ROOT)} requires {connection}.{entity}.{observed_at_field} "
+                        "for source freshness, but the paired relay entity does not project it"
+                    ),
+                )
 
 
 def validate_binding(path: Path, profile: dict[str, Any]) -> str:
@@ -505,7 +727,13 @@ def main() -> int:
     found = {validate_binding(path, profile) for path in binding_paths}
     missing = REQUIRED_BINDINGS - found
     require(not missing, f"missing binding fixtures: {', '.join(sorted(missing))}")
+    validate_relay_metadata_contracts()
+    validate_registry_data_freshness_projection()
     print(f"evidence gateway fixtures OK: {', '.join(sorted(found))}")
+    print("relay metadata binding selectors OK: local and hosted baseline-dpi/v1 selectors are aligned")
+    print("relay metadata policy hashes OK: baseline-dpi/v1 matches the evidence-gateway binding fixture")
+    print("manifest metadata shape OK: ignored output_profile and offering evidence_pack fields are absent")
+    print("registry-data freshness projections OK: Notary observed_at fields are exposed by paired Relay entities")
     print(f"production enforcement profile terms OK: {', '.join(sorted(PRODUCTION_PROFILE_TERMS))}")
     print("registry-specific PDP gates OK: absent from ODRL policy constraints")
     print(f"stable PDP denial codes OK: {', '.join(sorted(REQUIRED_DENIAL_CODES))}")

@@ -513,9 +513,43 @@ docker compose -f "${compose_file}" logs --no-color civil-registry-relay social-
 check "baseline live evidence gateway audit log" python3 "${script_dir}/run-evidence-gateway-live-fixtures.py" --profile baseline-dpi/v1 --output "${live_fixture_output}" --audit-log-path "${log_file}" --audit-only
 grep '"error_code":"auth.scope_denied"' "${log_file}" >/dev/null || fail "Relay denied audit event"
 grep '"error_code":"pdp.purpose_not_permitted"' "${log_file}" >/dev/null || fail "Relay purpose policy denied audit event"
-grep '"pdp_policy_id":"demo.civil-row-purpose.v1"' "${log_file}" >/dev/null || fail "Civil Relay PDP policy id audit event"
-grep '"pdp_policy_id":"demo.health-row-purpose.v1"' "${log_file}" >/dev/null || fail "Health Relay PDP policy id audit event"
-grep '"pdp_policy_id":"demo.social-protection-row-purpose.v1"' "${log_file}" >/dev/null || fail "Social Relay PDP policy id audit event"
+python3 - "${log_file}" <<'PY' || fail "Relay baseline PDP policy id/hash audit events"
+import json
+import sys
+
+log_path = sys.argv[1]
+expected_policy_id = "lab.baseline-dpi.governed-evidence.v1"
+expected_policy_hash = "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb"
+expected_datasets = {
+    "civil_registry",
+    "health_registry",
+    "social_protection_registry",
+}
+seen = set()
+
+with open(log_path, "r", encoding="utf-8") as handle:
+    for line in handle:
+        start = line.find("{")
+        if start < 0:
+            continue
+        try:
+            event = json.loads(line[start:])
+        except json.JSONDecodeError:
+            continue
+        record = event.get("record", event)
+        if record.get("pdp_policy_id") != expected_policy_id:
+            continue
+        if record.get("pdp_policy_hash") != expected_policy_hash:
+            continue
+        dataset_id = record.get("dataset_id")
+        if dataset_id in expected_datasets:
+            seen.add(dataset_id)
+
+missing = expected_datasets - seen
+if missing:
+    print(f"missing baseline PDP audit datasets: {', '.join(sorted(missing))}", file=sys.stderr)
+    sys.exit(1)
+PY
 grep '"pdp_evaluated_rule_ids":\["entity-purpose-required:household.policy_identity","entity-purpose-required:household.odrl_terms","entity-purpose-required:household.purpose"' "${log_file}" >/dev/null || fail "Relay PDP evaluated rule ids audit event"
 grep '"decision":"evaluate"' "${log_file}" >/dev/null || fail "Evidence Server evaluation audit event"
 grep '"matching_policy_id":"lab.baseline-dpi.governed-evidence.v1"' "${log_file}" >/dev/null || fail "Evidence Server matching policy audit event"

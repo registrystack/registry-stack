@@ -215,7 +215,7 @@ class GenerateFixturesTest(unittest.TestCase):
     def test_social_refresh_model_splits_household_evidence_from_benefits(self) -> None:
         self.assertEqual(
             self.generator.HOUSEHOLDS[0],
-            ["household_id", "national_id", "district", "poverty_score", "eligibility_band", "household_size", "active_members", "deceased_member_count"],
+            ["household_id", "national_id", "district", "poverty_score", "eligibility_band", "household_size", "active_members", "deceased_member_count", "observed_at"],
         )
         self.assertEqual(
             self.generator.ENROLLMENTS[0],
@@ -252,14 +252,30 @@ class GenerateFixturesTest(unittest.TestCase):
 
     def test_live_baseline_sources_carry_row_level_observed_at(self) -> None:
         self.assertEqual(self.generator.CIVIL_ROWS[0][-1], "observed_at")
+        self.assertEqual(self.generator.HOUSEHOLDS[0][-1], "observed_at")
+        self.assertEqual(self.generator.PERSONS[0][-1], "observed_at")
         self.assertEqual(self.generator.ENROLLMENTS[0][-1], "observed_at")
+        self.assertEqual(self.generator.FUNCTIONING_PROFILES[0][-1], "observed_at")
+        self.assertEqual(self.generator.DISABILITY_DETERMINATIONS[0][-1], "observed_at")
 
         sources = [
             (row[0], row[-1])
             for row in self.generator.data_rows(self.generator.CIVIL_ROWS)
         ] + [
+            (row[1], row[-1])
+            for row in self.generator.data_rows(self.generator.HOUSEHOLDS)
+        ] + [
+            (row[2], row[-1])
+            for row in self.generator.data_rows(self.generator.PERSONS)
+        ] + [
             (row[3], row[-1])
             for row in self.generator.data_rows(self.generator.ENROLLMENTS)
+        ] + [
+            (row[2], row[-1])
+            for row in self.generator.data_rows(self.generator.FUNCTIONING_PROFILES)
+        ] + [
+            (row[2], row[-1])
+            for row in self.generator.data_rows(self.generator.DISABILITY_DETERMINATIONS)
         ] + [
             (row["national_id"], row["observed_at"])
             for row in self.generator.HEALTH_ROWS
@@ -394,7 +410,7 @@ class GenerateFixturesTest(unittest.TestCase):
                     [value.date() if isinstance(value, dt.datetime) else "" if value is None else value for value in row]
                     for row in sheet.iter_rows(values_only=True)
                 ]
-                if sheet_name == "Enrollments":
+                if "observed_at" in expected_rows[0]:
                     self.assertEqual(
                         self._normalize_observed_at_rows(actual_rows, national_id_column="national_id"),
                         self._normalize_observed_at_rows(expected_rows, national_id_column="national_id"),
@@ -478,7 +494,13 @@ class GenerateFixturesTest(unittest.TestCase):
                             [value.date() if isinstance(value, dt.datetime) else value for value in row]
                             for row in workbook[sheet_name].iter_rows(values_only=True)
                         ]
-                        self.assertEqual(actual_rows, expected_rows)
+                        if "observed_at" in expected_rows[0]:
+                            self.assertEqual(
+                                self._normalize_observed_at_rows(actual_rows, national_id_column="national_id"),
+                                self._normalize_observed_at_rows(expected_rows, national_id_column="national_id"),
+                            )
+                        else:
+                            self.assertEqual(actual_rows, expected_rows)
             finally:
                 self.generator.DATA_DIR = original_data_dir
 

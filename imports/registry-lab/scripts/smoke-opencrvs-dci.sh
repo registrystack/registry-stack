@@ -79,10 +79,7 @@ PY
 ensure_token_hash() {
   local hash_var="$1"
   local token="$2"
-  local current="${!hash_var:-}"
-  if [[ -z "${current}" || "${current}" =~ ^sha256:0+$ ]]; then
-    printf -v "${hash_var}" '%s' "$(hash_token "${token}")"
-  fi
+  printf -v "${hash_var}" '%s' "$(hash_token "${token}")"
 }
 
 require_tool() {
@@ -164,11 +161,23 @@ else
   fail "missing .env; run scripts/generate-demo-secrets.py first"
 fi
 
+demo_opencrvs_evidence_client_token="${OPENCRVS_EVIDENCE_CLIENT_TOKEN:-}"
+demo_opencrvs_evidence_deny_assurance_token="${OPENCRVS_EVIDENCE_DENY_ASSURANCE_TOKEN:-}"
+demo_opencrvs_evidence_deny_jurisdiction_token="${OPENCRVS_EVIDENCE_DENY_JURISDICTION_TOKEN:-}"
+demo_opencrvs_evidence_deny_legal_basis_token="${OPENCRVS_EVIDENCE_DENY_LEGAL_BASIS_TOKEN:-}"
+demo_opencrvs_evidence_deny_consent_token="${OPENCRVS_EVIDENCE_DENY_CONSENT_TOKEN:-}"
+
 if [[ -f "${local_env}" ]]; then
   load_env_file "${local_env}"
 elif [[ -z "${OPENCRVS_DCI_CLIENT_ID:-}" || -z "${OPENCRVS_DCI_CLIENT_SECRET:-}" ]]; then
   fail "missing .env.local; copy .env.example OpenCRVS values or create it with OPENCRVS_DCI_CLIENT_ID and OPENCRVS_DCI_CLIENT_SECRET"
 fi
+
+OPENCRVS_EVIDENCE_CLIENT_TOKEN="${demo_opencrvs_evidence_client_token:-${OPENCRVS_EVIDENCE_CLIENT_TOKEN:-}}"
+OPENCRVS_EVIDENCE_DENY_ASSURANCE_TOKEN="${demo_opencrvs_evidence_deny_assurance_token:-${OPENCRVS_EVIDENCE_DENY_ASSURANCE_TOKEN:-}}"
+OPENCRVS_EVIDENCE_DENY_JURISDICTION_TOKEN="${demo_opencrvs_evidence_deny_jurisdiction_token:-${OPENCRVS_EVIDENCE_DENY_JURISDICTION_TOKEN:-}}"
+OPENCRVS_EVIDENCE_DENY_LEGAL_BASIS_TOKEN="${demo_opencrvs_evidence_deny_legal_basis_token:-${OPENCRVS_EVIDENCE_DENY_LEGAL_BASIS_TOKEN:-}}"
+OPENCRVS_EVIDENCE_DENY_CONSENT_TOKEN="${demo_opencrvs_evidence_deny_consent_token:-${OPENCRVS_EVIDENCE_DENY_CONSENT_TOKEN:-}}"
 
 : "${OPENCRVS_DCI_BASE_URL:=https://dci-crvs-api.farajaland-integration.opencrvs.dev}"
 : "${OPENCRVS_EVIDENCE_CLIENT_TOKEN:=api-token}"

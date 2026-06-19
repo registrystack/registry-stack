@@ -38,6 +38,48 @@ evaluation_profiles:
     subject_id_type: id
     max_source_observed_age_seconds: 86400
 ecosystem_bindings:
+  - id: baseline-dpi/v1
+    version: v1
+    profile: baseline-dpi
+    type: governed-evidence
+    evidence_pack:
+      pack_id: baseline-dpi/v1
+      pack_version: v1
+      source_basis:
+        family: dpi
+        evidence_type: civil_child_status_evidence
+      semantic_profile:
+        vocabulary: registry-lab
+        fit: strong
+      evidence_envelope:
+        format: minimized_json
+        fields:
+          - claim_id
+          - result
+      required_gates:
+        - purpose
+        - jurisdiction
+        - legal_basis
+        - consent
+        - authority_basis
+        - requester_identity
+        - subject_identity
+        - subject_relationship
+        - assurance
+        - source_binding
+        - source_freshness
+        - requested_disclosure
+        - credential_format
+        - route_scope
+      allowed_outputs:
+        - minimized_json
+      policy_id: lab.baseline-dpi.governed-evidence.v1
+      policy_hash: sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb
+      odrl_enforcement:
+        profile: registry-evidence-gateway-pdp/v1
+        constraint_terms:
+          - odrl:purpose
+          - odrl:spatial
   - id: oots-birth-evidence/v1
     version: v1
     profile: oots-birth-evidence
@@ -75,7 +117,6 @@ ecosystem_bindings:
         - minimized_json
       policy_id: lab.oots-birth-evidence.governed-evidence.v1
       policy_hash: sha256:a4804f81f3287b7922e8c3d5bad49377584b7ab8727fe62cbae23c1f5bc85e1c
-      output_profile: minimized_json
       odrl_enforcement:
         profile: registry-evidence-gateway-pdp/v1
         constraint_terms:
@@ -118,7 +159,6 @@ ecosystem_bindings:
         - minimized_json
       policy_id: lab.oots-marriage-evidence.governed-evidence.v1
       policy_hash: sha256:e5193284535dfa9689dd081942ec847f51eacd50ebc71d93b482247207b63dcf
-      output_profile: minimized_json
       odrl_enforcement:
         profile: registry-evidence-gateway-pdp/v1
         constraint_terms:
@@ -208,11 +248,6 @@ datasets:
         entity: birth_event
         lookup_keys:
           - id
-        evidence_pack:
-          id: oots-birth-evidence/v1
-          output_profile: minimized_json
-          policy_id: lab.oots-birth-evidence.governed-evidence.v1
-          policy_hash: sha256:a4804f81f3287b7922e8c3d5bad49377584b7ab8727fe62cbae23c1f5bc85e1c
         access:
           kind: registry-notary
           conforms_to: registry-notary-federation/v0.1
@@ -238,11 +273,6 @@ datasets:
         entity: civil_status_record
         lookup_keys:
           - registration_number
-        evidence_pack:
-          id: oots-marriage-evidence/v1
-          output_profile: minimized_json
-          policy_id: lab.oots-marriage-evidence.governed-evidence.v1
-          policy_hash: sha256:e5193284535dfa9689dd081942ec847f51eacd50ebc71d93b482247207b63dcf
         access:
           kind: registry-notary
           conforms_to: registry-notary-federation/v0.1

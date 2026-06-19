@@ -478,6 +478,7 @@ class EvidenceGatewayLiveFixtureRunnerTest(unittest.TestCase):
         ]
         self.assertTrue(wave_a_requests)
         self.assertTrue(all(request.get("format") == "minimized_json" for request in wave_a_requests))
+        self.assertTrue(all("binding_id" not in request for request in wave_a_requests))
         audit_log = write_audit_log(server.audit_records)
         try:
             runner.assert_audit_log({"profiles": profiles}, audit_log)
