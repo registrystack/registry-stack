@@ -35,13 +35,13 @@ PURPOSE = "https://demo.example.gov/purpose/decentralized-evidence-demo"
 
 CLAIM_ID = "civil-person-is-alive-by-demographics"
 PUBLIC_ATTESTATION = attestation("vital-status-attestation")
-SUBJECT_NAME = "Miguel Santos"
+SUBJECT_NAME = "Miguel Martinez"
 SUBJECT_PROFILE = person_profile(
     "",
     attributes={
         "given_name": "Miguel",
-        "surname": "Santos",
-        "birth_date": "2016-01-15",
+        "surname": "Martinez",
+        "birth_date": "2014-01-15",
     },
 )
 

@@ -998,7 +998,7 @@ class CivilBirthDemographicsScenarioTest(unittest.TestCase):
         self.assertEqual(preview["target_input_selection"]["group"], "Given name + Surname + Birth date")
         self.assertEqual(
             preview["body"]["target"]["attributes"],
-            {"given_name": "Miguel", "surname": "Santos", "birth_date": "2016-01-15"},
+            {"given_name": "Miguel", "surname": "Martinez", "birth_date": "2014-01-15"},
         )
         self.assertNotIn("identifiers", preview["body"]["target"])
 
@@ -1041,7 +1041,7 @@ class CivilBirthDemographicsScenarioTest(unittest.TestCase):
         self.assertEqual(body["disclosure"], "predicate")
         self.assertEqual(
             body["target"]["attributes"],
-            {"given_name": "Miguel", "surname": "Santos", "birth_date": "2016-01-15"},
+            {"given_name": "Miguel", "surname": "Martinez", "birth_date": "2014-01-15"},
         )
         self.assertNotIn("identifiers", body["target"])
         facts = {item["label"]: item["value"] for item in result["friendly"]["facts"]}
