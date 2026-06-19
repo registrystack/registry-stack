@@ -7,6 +7,8 @@ compose_file="${demo_dir}/compose.yaml"
 local_env="${demo_dir}/.env.local"
 output_dir="${demo_dir}/output/opencrvs-dci"
 correlation_id="${DEMO_CORRELATION_ID:-opencrvs-dci-demo-correlation-001}"
+curl_connect_timeout="${OPENCRVS_DCI_CURL_CONNECT_TIMEOUT_SECONDS:-10}"
+curl_max_time="${OPENCRVS_DCI_CURL_MAX_TIME_SECONDS:-60}"
 
 fail() {
   echo "FAILED: $1" >&2
@@ -98,6 +100,8 @@ wait_http() {
   while (( $(date +%s) - start < deadline )); do
     status="$(
       curl -sS -o /dev/null -w "%{http_code}" \
+        --connect-timeout "${curl_connect_timeout}" \
+        --max-time "${curl_max_time}" \
         -H "Accept: */*" \
         -H "x-api-key: ${api_key}" \
         -H "x-request-id: ${correlation_id}" \
@@ -113,6 +117,8 @@ wait_http() {
 
 fetch_opencrvs_token() {
   curl -fsS \
+    --connect-timeout "${curl_connect_timeout}" \
+    --max-time "${curl_max_time}" \
     -X POST "${OPENCRVS_DCI_BASE_URL}/oauth2/client/token" \
     -H "accept: application/json" \
     -H "content-type: application/json" \
@@ -132,6 +138,8 @@ discover_subject_uin() {
 {"header":{"version":"1.0.0","message_id":"${message_id}","message_ts":"${now}","action":"search","sender_id":"registry-lab","total_count":1,"is_msg_encrypted":false},"message":{"transaction_id":"${message_id}","search_request":[{"reference_id":"${message_id}","timestamp":"${now}","search_criteria":{"version":"1.0.0","reg_type":"ns:org:RegistryType:Civil","reg_event_type":"birth","query_type":"expression","query":{"type":"ns:org:QueryType:expression","value":{"expression":{"query":{}}}},"pagination":{"page_size":1,"page_number":1}}}]}}
 JSON
   curl -fsS \
+    --connect-timeout "${curl_connect_timeout}" \
+    --max-time "${curl_max_time}" \
     -X POST "${OPENCRVS_DCI_BASE_URL}/registry/sync/search" \
     -H "authorization: Bearer ${token}" \
     -H "accept: application/json" \
@@ -288,6 +296,8 @@ payload="$(
 )"
 
 curl -fsS \
+  --connect-timeout "${curl_connect_timeout}" \
+  --max-time "${curl_max_time}" \
   -X POST "${notary_url}/v1/evaluations" \
   -H "x-api-key: ${OPENCRVS_EVIDENCE_CLIENT_TOKEN}" \
   -H "content-type: application/json" \
@@ -364,6 +374,8 @@ vc_payload="$(
   }'
 )"
 curl -fsS \
+  --connect-timeout "${curl_connect_timeout}" \
+  --max-time "${curl_max_time}" \
   -X POST "${notary_url}/v1/evaluations" \
   -H "x-api-key: ${OPENCRVS_EVIDENCE_CLIENT_TOKEN}" \
   -H "content-type: application/json" \
@@ -388,6 +400,8 @@ issue_payload="$(
   }'
 )"
 curl -fsS \
+  --connect-timeout "${curl_connect_timeout}" \
+  --max-time "${curl_max_time}" \
   -X POST "${notary_url}/v1/credentials" \
   -H "x-api-key: ${OPENCRVS_EVIDENCE_CLIENT_TOKEN}" \
   -H "content-type: application/json" \
