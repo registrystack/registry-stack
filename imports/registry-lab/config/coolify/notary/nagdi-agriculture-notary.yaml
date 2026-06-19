@@ -181,6 +181,9 @@ evidence:
           required_scope: agri_registry:evidence_verification
           dataset: agri_registry
           entity: voucher_eligibility_snapshot
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/nagdi/climate-smart-input-support
           lookup:
             input: target.identifiers.farmer_id
             field: id
@@ -484,6 +487,9 @@ evidence:
           required_scope: agri_registry:evidence_verification
           dataset: agri_registry
           entity: purpose_policy
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/nagdi/agricultural-market-sizing
           lookup:
             input: target.id
             field: id
@@ -528,6 +534,9 @@ evidence:
           required_scope: agri_registry:evidence_verification
           dataset: agri_registry
           entity: livestock_movement_snapshot
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/nagdi/livestock-movement-permit-review
           lookup:
             input: target.identifiers.herd_id
             field: id
