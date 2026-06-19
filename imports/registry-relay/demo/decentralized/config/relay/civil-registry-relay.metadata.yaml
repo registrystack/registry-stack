@@ -69,12 +69,12 @@ datasets:
         access:
           kind: registry-notary
           conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://civil-notary:8080
-          discovery_url: https://civil-notary:8080/.well-known/evidence-service
+          endpoint_url: https://civil-registry-notary:8080
+          discovery_url: https://civil-registry-notary:8080/.well-known/evidence-service
           ruleset: civil-child-status-v1
         policy:
           purpose:
-            - https://demo.example.gov/purpose/child-support-eligibility
+            - https://demo.example.gov/purpose/decentralized-evidence-demo
     entities:
       - name: civil_person
         title: Civil Person

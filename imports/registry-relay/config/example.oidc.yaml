@@ -17,7 +17,7 @@
 # `compose/seed/zitadel.env`.
 
 server:
-  bind: 0.0.0.0:8080
+  bind: 127.0.0.1:18080
 
 catalog:
   title: Internal Government Registry Relay
@@ -79,8 +79,10 @@ auth:
     scope_object_required_keys:
       - orgId-123
     # Optional allowlist matched against the token's `azp` (preferred)
-    # or `client_id`. Empty list means any client is accepted.
-    allowed_clients: []
+    # or `client_id`. The publicschema.com dev bootstrap mints tokens
+    # through this machine client.
+    allowed_clients:
+      - publicschema-api
     # Accepted JOSE `typ` header values. Defaults to JWT and at+jwt
     # (RFC 9068). ID tokens (`id+jwt`) are intentionally rejected by
     # default; the relay verifies access tokens.

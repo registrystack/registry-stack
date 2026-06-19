@@ -5,14 +5,21 @@ server:
   openapi_requires_auth: false
 
 auth:
+  mode: api_key
   api_keys:
     - id: civil_evidence_client
-      token_env: CIVIL_EVIDENCE_CLIENT_TOKEN
+      fingerprint:
+        provider: env
+        name: CIVIL_EVIDENCE_CLIENT_TOKEN_HASH
+        commitment: "${CIVIL_EVIDENCE_CLIENT_TOKEN_COMMITMENT:?missing civil notary API key commitment}"
       scopes:
         - civil_registry:evidence_verification
   bearer_tokens:
     - id: civil_evidence_client
-      token_env: CIVIL_EVIDENCE_CLIENT_BEARER
+      fingerprint:
+        provider: env
+        name: CIVIL_EVIDENCE_CLIENT_BEARER_HASH
+        commitment: "${CIVIL_EVIDENCE_CLIENT_BEARER_COMMITMENT:?missing civil notary bearer commitment}"
       scopes:
         - civil_registry:evidence_verification
 
@@ -24,6 +31,8 @@ evidence:
   service_id: civil-registry-notary
   api_base_url: http://civil-registry-notary:8080
   inline_batch_limit: 20
+  allowed_purposes:
+    - https://demo.example.gov/purpose/decentralized-evidence-demo
   source_connections:
     civil:
       base_url: http://civil-registry-relay:8080
@@ -37,14 +46,20 @@ evidence:
           birth_date: /person/birth_date
           civil_status: /person/civil_status
           deceased: /person/deceased
+  signing_keys:
+    civil-evidence-demo:
+      provider: local_jwk_env
+      private_jwk_env: CIVIL_EVIDENCE_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:civil-evidence.demo.example#civil-evidence-demo-key-1
+      status: active
   credential_profiles:
     civil_status_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:civil-evidence.demo.example
-      issuer_key_env: CIVIL_EVIDENCE_ISSUER_JWK
-      issuer_kid: did:web:civil-evidence.demo.example#civil-evidence-demo-key-1
+      signing_key: civil-evidence-demo
       vct: https://demo.example/credentials/civil-status/v1
-      validity_seconds: 86400
+      validity_seconds: 600
       allowed_claims:
         - date-of-birth
         - civil-status
@@ -75,6 +90,9 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
           lookup:
             input: subject_id
             field: NATIONAL_ID
@@ -116,6 +134,9 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
           lookup:
             input: subject_id
             field: NATIONAL_ID
@@ -157,6 +178,9 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
           lookup:
             input: subject_id
             field: NATIONAL_ID

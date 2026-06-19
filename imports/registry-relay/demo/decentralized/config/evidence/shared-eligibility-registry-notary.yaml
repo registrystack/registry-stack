@@ -5,16 +5,23 @@ server:
   openapi_requires_auth: false
 
 auth:
+  mode: api_key
   api_keys:
     - id: shared_evidence_client
-      token_env: SHARED_EVIDENCE_CLIENT_TOKEN
+      fingerprint:
+        provider: env
+        name: SHARED_EVIDENCE_CLIENT_TOKEN_HASH
+        commitment: "${SHARED_EVIDENCE_CLIENT_TOKEN_COMMITMENT:?missing shared notary API key commitment}"
       scopes:
         - civil_registry:evidence_verification
         - social_protection_registry:evidence_verification
         - health_registry:evidence_verification
   bearer_tokens:
     - id: shared_evidence_client
-      token_env: SHARED_EVIDENCE_CLIENT_BEARER
+      fingerprint:
+        provider: env
+        name: SHARED_EVIDENCE_CLIENT_BEARER_HASH
+        commitment: "${SHARED_EVIDENCE_CLIENT_BEARER_COMMITMENT:?missing shared notary bearer commitment}"
       scopes:
         - civil_registry:evidence_verification
         - social_protection_registry:evidence_verification
@@ -28,6 +35,8 @@ evidence:
   service_id: shared-eligibility-registry-notary
   api_base_url: http://shared-eligibility-registry-notary:8080
   inline_batch_limit: 20
+  allowed_purposes:
+    - https://demo.example.gov/purpose/decentralized-evidence-demo
   source_connections:
     civil:
       base_url: http://civil-registry-relay:8080
@@ -38,14 +47,20 @@ evidence:
     health:
       base_url: http://health-registry-relay:8080
       token_env: SHARED_HEALTH_EVIDENCE_SOURCE_RAW
+  signing_keys:
+    shared-eligibility-evidence-demo:
+      provider: local_jwk_env
+      private_jwk_env: SHARED_ELIGIBILITY_EVIDENCE_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:shared-eligibility-evidence.demo.example#shared-eligibility-evidence-demo-key-1
+      status: active
   credential_profiles:
     combined_support_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:shared-eligibility-evidence.demo.example
-      issuer_key_env: SHARED_ELIGIBILITY_EVIDENCE_ISSUER_JWK
-      issuer_kid: did:web:shared-eligibility-evidence.demo.example#shared-eligibility-evidence-demo-key-1
+      signing_key: shared-eligibility-evidence-demo
       vct: https://demo.example/credentials/combined-support-eligibility/v1
-      validity_seconds: 86400
+      validity_seconds: 600
       allowed_claims:
         - civil-record-present
         - social-program-active
@@ -76,6 +91,9 @@ evidence:
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
           lookup:
             input: subject_id
             field: national_id
@@ -100,6 +118,8 @@ evidence:
           - redacted
       formats:
         - application/vnd.registry-notary.claim-result+json
+      credential_profiles:
+        - combined_support_sd_jwt
     - id: social-program-active
       title: Social program active
       version: 2026-05
@@ -116,6 +136,9 @@ evidence:
           required_scope: social_protection_registry:evidence_verification
           dataset: social_protection_registry
           entity: program_enrollment
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
           lookup:
             input: subject_id
             field: national_id
@@ -136,6 +159,8 @@ evidence:
           - redacted
       formats:
         - application/vnd.registry-notary.claim-result+json
+      credential_profiles:
+        - combined_support_sd_jwt
     - id: health-service-available
       title: Health service available
       version: 2026-05
@@ -152,6 +177,9 @@ evidence:
           required_scope: health_registry:evidence_verification
           dataset: health_registry
           entity: health_facility
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
           lookup:
             input: subject_id
             field: national_id
@@ -180,6 +208,8 @@ evidence:
           - redacted
       formats:
         - application/vnd.registry-notary.claim-result+json
+      credential_profiles:
+        - combined_support_sd_jwt
     - id: eligible-for-combined-support
       title: Eligible for combined support
       version: 2026-05

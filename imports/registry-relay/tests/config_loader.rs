@@ -1796,7 +1796,7 @@ fn example_oidc_config_loads_and_validates() {
         oidc.scope_object_required_keys,
         vec!["orgId-123".to_string()]
     );
-    assert!(oidc.allowed_clients.is_empty());
+    assert_eq!(oidc.allowed_clients, vec!["publicschema-api".to_string()]);
     assert_eq!(
         oidc.allowed_token_types,
         vec!["JWT".to_string(), "at+jwt".to_string()]

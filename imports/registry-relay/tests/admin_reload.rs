@@ -1018,6 +1018,23 @@ fn build_fixture_without_admin_bind() -> AdminFixture {
     build_fixture_from_config_path(tmp, config_path)
 }
 
+fn build_fixture_without_config_trust() -> AdminFixture {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config_with_instance_and_trust(
+        &tmp,
+        Some(
+            r#"instance:
+  id: relay-test-instance
+  environment: lab
+  owner: Test Ministry
+  jurisdiction: ZZ
+"#,
+        ),
+        false,
+    );
+    build_fixture_from_config_path(tmp, config_path)
+}
+
 fn build_fixture_without_metadata() -> AdminFixture {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = write_config(&tmp);
@@ -1239,6 +1256,7 @@ async fn capabilities_requires_ops_read_and_reports_relay_admin_surface() {
         body["config"]["apply"]["supported_sources"],
         json!(["tuf_local", "tuf_remote"])
     );
+    assert_eq!(body["config"]["apply"]["currently_available"], true);
     assert_eq!(body["break_glass"]["rate_limit_scope"], "instance");
     assert_eq!(
         body["listeners"],
@@ -1269,6 +1287,24 @@ async fn capabilities_requires_ops_read_and_reports_relay_admin_surface() {
     assert_eq!(body["reload"]["resource_reload"]["supported"], true);
     assert_eq!(body["reload"]["table_reload"]["supported"], true);
     assert_eq!(body["reload"]["config_reload"]["supported"], false);
+}
+
+#[tokio::test]
+async fn capabilities_reports_config_apply_unavailable_without_config_trust() {
+    let fixture = build_fixture_without_config_trust();
+
+    let resp = fixture
+        .server
+        .get("/admin/v1/capabilities")
+        .add_header("Authorization", format!("Bearer {OPS_KEY}"))
+        .await;
+    resp.assert_status(StatusCode::OK);
+
+    let body: Value = resp.json();
+    assert_matches_admin_capabilities_schema(&body);
+    assert_eq!(body["config"]["apply"]["supported"], true);
+    assert_eq!(body["config"]["apply"]["currently_available"], false);
+    assert_eq!(body["config"]["apply"]["requires_signed_input"], true);
 }
 
 #[tokio::test]

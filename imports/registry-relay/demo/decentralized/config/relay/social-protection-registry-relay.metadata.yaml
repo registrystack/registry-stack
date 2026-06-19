@@ -67,12 +67,12 @@ datasets:
         access:
           kind: registry-notary
           conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://social-protection-notary:8080
-          discovery_url: https://social-protection-notary:8080/.well-known/evidence-service
+          endpoint_url: https://social-protection-registry-notary:8080
+          discovery_url: https://social-protection-registry-notary:8080/.well-known/evidence-service
           ruleset: program-enrollment-status-v1
         policy:
           purpose:
-            - https://demo.example.gov/purpose/social-protection-review
+            - https://demo.example.gov/purpose/decentralized-evidence-demo
     entities:
       - name: household
         title: Household

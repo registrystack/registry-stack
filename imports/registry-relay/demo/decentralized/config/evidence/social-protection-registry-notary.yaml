@@ -5,14 +5,21 @@ server:
   openapi_requires_auth: false
 
 auth:
+  mode: api_key
   api_keys:
     - id: social_protection_evidence_client
-      token_env: SOCIAL_EVIDENCE_CLIENT_TOKEN
+      fingerprint:
+        provider: env
+        name: SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH
+        commitment: "${SOCIAL_EVIDENCE_CLIENT_TOKEN_COMMITMENT:?missing social notary API key commitment}"
       scopes:
         - social_protection_registry:evidence_verification
   bearer_tokens:
     - id: social_protection_evidence_client
-      token_env: SOCIAL_EVIDENCE_CLIENT_BEARER
+      fingerprint:
+        provider: env
+        name: SOCIAL_EVIDENCE_CLIENT_BEARER_HASH
+        commitment: "${SOCIAL_EVIDENCE_CLIENT_BEARER_COMMITMENT:?missing social notary bearer commitment}"
       scopes:
         - social_protection_registry:evidence_verification
 
@@ -24,18 +31,26 @@ evidence:
   service_id: social-protection-registry-notary
   api_base_url: http://social-protection-registry-notary:8080
   inline_batch_limit: 20
+  allowed_purposes:
+    - https://demo.example.gov/purpose/decentralized-evidence-demo
   source_connections:
     social_protection:
       base_url: http://social-protection-registry-relay:8080
       token_env: SOCIAL_EVIDENCE_SOURCE_RAW
+  signing_keys:
+    social-protection-evidence-demo:
+      provider: local_jwk_env
+      private_jwk_env: SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:social-protection-evidence.demo.example#social-protection-evidence-demo-key-1
+      status: active
   credential_profiles:
     enrollment_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:social-protection-evidence.demo.example
-      issuer_key_env: SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK
-      issuer_kid: did:web:social-protection-evidence.demo.example#social-protection-evidence-demo-key-1
+      signing_key: social-protection-evidence-demo
       vct: https://demo.example/credentials/program-enrollment/v1
-      validity_seconds: 86400
+      validity_seconds: 600
       allowed_claims:
         - program-enrollment-status
         - household-eligibility-band
@@ -66,6 +81,9 @@ evidence:
           required_scope: social_protection_registry:evidence_verification
           dataset: social_protection_registry
           entity: program_enrollment
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
           lookup:
             input: subject_id
             field: national_id
@@ -106,6 +124,9 @@ evidence:
           required_scope: social_protection_registry:evidence_verification
           dataset: social_protection_registry
           entity: household
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
           lookup:
             input: subject_id
             field: national_id
