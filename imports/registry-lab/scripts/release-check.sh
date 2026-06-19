@@ -87,4 +87,8 @@ if [[ "${REGISTRY_LAB_CHECK_OPENFN:-1}" == "1" ]]; then
   scripts/smoke-openfn.sh
 fi
 
+if [[ "${REGISTRY_LAB_CHECK_OPENCRVS_DCI:-1}" == "1" ]]; then
+  scripts/smoke-opencrvs-dci.sh
+fi
+
 echo "release check OK"

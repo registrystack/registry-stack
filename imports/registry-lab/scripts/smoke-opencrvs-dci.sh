@@ -149,7 +149,7 @@ fi
 
 if [[ -f "${local_env}" ]]; then
   load_env_file "${local_env}"
-else
+elif [[ -z "${OPENCRVS_DCI_CLIENT_ID:-}" || -z "${OPENCRVS_DCI_CLIENT_SECRET:-}" ]]; then
   fail "missing .env.local; copy .env.example OpenCRVS values or create it with OPENCRVS_DCI_CLIENT_ID and OPENCRVS_DCI_CLIENT_SECRET"
 fi
 
