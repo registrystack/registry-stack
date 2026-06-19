@@ -2102,6 +2102,7 @@ dependencies = [
  "base64",
  "ed25519-dalek",
  "hmac 0.13.0",
+ "p256",
  "proptest",
  "rsa",
  "serde",

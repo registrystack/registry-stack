@@ -98,6 +98,18 @@ impl SdJwtIssuer {
             jwt: format!("{}~{}~", jwt, disclosures.join("~")),
         })
     }
+
+    pub async fn sign_compact_jwt(&self, typ: &str, payload: Value) -> Result<String, SdJwtError> {
+        if typ.trim().is_empty() || self.signer.key_id().trim().is_empty() {
+            return Err(SdJwtError::Signing(SigningError::MissingKeyId));
+        }
+        let header = json!({
+            "alg": signing_algorithm_jwa(self.signer.algorithm()),
+            "typ": typ,
+            "kid": self.signer.key_id(),
+        });
+        sign_jwt(header, payload, self.signer.as_ref()).await
+    }
 }
 
 #[must_use]
@@ -353,6 +365,7 @@ fn map_signing_error(err: SigningError) -> SdJwtError {
 fn signing_algorithm_jwa(algorithm: SigningAlgorithm) -> &'static str {
     match algorithm {
         SigningAlgorithm::EdDsa => "EdDSA",
+        SigningAlgorithm::Es256 => "ES256",
         SigningAlgorithm::Rs256 => "RS256",
     }
 }
@@ -464,6 +477,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     const RAW_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:web:issuer.test#key-1"}"#;
+    const P256_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"did:web:issuer.test#p256-key-1"}"#;
     const HOLDER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:jwk:holder#key-1"}"#;
 
     #[test]
@@ -525,6 +539,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn issuer_can_sign_profiled_compact_jwt() {
+        let issuer =
+            SdJwtIssuer::from_jwk(PrivateJwk::parse(RAW_JWK).expect("jwk")).expect("issuer builds");
+
+        let compact = issuer
+            .sign_compact_jwt(
+                "statuslist+jwt",
+                json!({
+                    "sub": "https://issuer.example/status/1",
+                    "iat": 1_700_000_000,
+                    "status_list": {
+                        "bits": 2,
+                        "lst": "eNoDAAAAAAE"
+                    }
+                }),
+            )
+            .await
+            .expect("signs");
+
+        let header = jwt_header(&compact);
+        let payload = jwt_payload(&compact);
+        assert_eq!(header["alg"], "EdDSA");
+        assert_eq!(header["typ"], "statuslist+jwt");
+        assert_eq!(header["kid"], "did:web:issuer.test#key-1");
+        assert_eq!(payload["status_list"]["bits"], 2);
+    }
+
+    #[tokio::test]
     async fn sd_jwt_issuance_omits_cnf_when_unbound() {
         let issuer =
             SdJwtIssuer::from_jwk(PrivateJwk::parse(RAW_JWK).expect("jwk")).expect("issuer builds");
@@ -534,13 +576,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sd_jwt_issuance_maps_es256_signing_algorithm() {
+        let issuer = SdJwtIssuer::from_jwk(PrivateJwk::parse(P256_JWK).expect("jwk"))
+            .expect("issuer builds");
+        let signed = issuer.issue(issue_input(None)).await.expect("issues");
+        let header = jwt_header(&signed.jwt);
+
+        assert_eq!(header["alg"], "ES256");
+        assert_eq!(header["kid"], "did:web:issuer.test#p256-key-1");
+    }
+
+    #[tokio::test]
     async fn sd_jwt_issuance_accepts_caller_credential_id_and_status_claim() {
         let issuer =
             SdJwtIssuer::from_jwk(PrivateJwk::parse(RAW_JWK).expect("jwk")).expect("issuer builds");
         let credential_id = "urn:ulid:01HX7Y5F2WAJ7ZP0Q4M5K9E8NC".to_string();
         let status = json!({
-            "type": "RegistryNotaryCredentialStatus",
-            "statusUrl": "https://issuer.example/credentials/status/01HX7Y5F2WAJ7ZP0Q4M5K9E8NC"
+            "status_list": {
+                "idx": 0,
+                "uri": "https://issuer.example/credentials/status/01HX7Y5F2WAJ7ZP0Q4M5K9E8NC"
+            }
         });
 
         let signed = issuer
