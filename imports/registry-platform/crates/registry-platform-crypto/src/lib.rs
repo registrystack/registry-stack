@@ -357,7 +357,10 @@ impl PrivateJwk {
                 if self.kty != "EC" || self.crv.as_deref() != Some("P-256") {
                     return Err(JwkError::Invalid("ES256 keys must be EC/P-256"));
                 }
-                decode_fixed(self.d.as_deref(), 32, "d")?;
+                let d = decode_nonempty(self.d.as_deref(), "d")?;
+                if d.len() != 32 {
+                    return Err(JwkError::Invalid("d"));
+                }
                 decode_fixed(self.x.as_deref(), 32, "x")?;
                 decode_fixed(self.y.as_deref(), 32, "y")?;
             }
@@ -731,7 +734,10 @@ fn sign_eddsa(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> 
 }
 
 fn sign_es256(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> {
-    let d = decode_fixed(jwk.d.as_deref(), 32, "d")?;
+    let d = decode_nonempty(jwk.d.as_deref(), "d")?;
+    if d.len() != 32 {
+        return Err(JwkError::Invalid("d length").into());
+    }
     let signing_key = P256SigningKey::from_slice(&d)
         .map_err(|_| CryptoError::Crypto("invalid ES256 private key"))?;
     let signature: P256Signature = signing_key.sign(payload);
@@ -802,10 +808,10 @@ fn verify_es256(payload: &[u8], signature: &[u8], jwk: &PublicJwk) -> Result<(),
 fn p256_verifying_key(jwk: &PublicJwk) -> Result<P256VerifyingKey, CryptoError> {
     let x = decode_fixed(jwk.x.as_deref(), 32, "x")?;
     let y = decode_fixed(jwk.y.as_deref(), 32, "y")?;
-    let mut sec1 = Vec::with_capacity(65);
-    sec1.push(0x04);
-    sec1.extend_from_slice(&x);
-    sec1.extend_from_slice(&y);
+    let mut sec1 = [0u8; 65];
+    sec1[0] = 0x04;
+    sec1[1..33].copy_from_slice(&x);
+    sec1[33..65].copy_from_slice(&y);
     P256VerifyingKey::from_sec1_bytes(&sec1).map_err(|_| CryptoError::InvalidSignature)
 }
 

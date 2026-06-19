@@ -591,7 +591,8 @@ fn contains_exact(values: &[String], requested: &str) -> bool {
 }
 
 fn purpose_gate_is_declared(policy: &PolicyInput) -> bool {
-    !policy.purpose_constraints.is_empty()
+    !policy.permit_unconstrained
+        || !policy.purpose_constraints.is_empty()
         || policy
             .odrl_constraint_terms
             .iter()
@@ -1198,6 +1199,19 @@ mod tests {
         empty_inner.purpose_constraints = vec![Vec::new()];
         assert_eq!(
             deny_code(decide(&context(), &empty_inner)),
+            Some(PURPOSE_NOT_PERMITTED.to_string())
+        );
+    }
+
+    #[test]
+    fn denies_undeclared_empty_purpose_gate_even_when_other_gate_matches() {
+        let mut policy = policy();
+        policy.purpose_constraints.clear();
+        policy.odrl_constraint_terms.clear();
+        policy.permitted_jurisdictions = vec!["SN".to_string()];
+
+        assert_eq!(
+            deny_code(decide(&context(), &policy)),
             Some(PURPOSE_NOT_PERMITTED.to_string())
         );
     }
