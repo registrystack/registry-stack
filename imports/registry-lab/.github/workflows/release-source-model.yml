@@ -109,6 +109,19 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
 
+      - name: Configure OpenCRVS DCI proof
+        run: |
+          set -euo pipefail
+          if [[ -n "${OPENCRVS_DCI_CLIENT_ID}" && -n "${OPENCRVS_DCI_CLIENT_SECRET}" ]]; then
+            echo "REGISTRY_LAB_CHECK_OPENCRVS_DCI=1" >> "${GITHUB_ENV}"
+          elif [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            echo "REGISTRY_LAB_CHECK_OPENCRVS_DCI=0" >> "${GITHUB_ENV}"
+            echo "OpenCRVS DCI live smoke skipped because repository secrets are not configured for this PR."
+          else
+            echo "OpenCRVS DCI credentials are required for release proof outside pull requests." >&2
+            exit 1
+          fi
+
       - name: Run full release proof
         run: |
           set -euo pipefail
