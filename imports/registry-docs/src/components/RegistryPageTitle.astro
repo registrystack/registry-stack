@@ -31,6 +31,10 @@ const isHome = path === '/';
 // .md endpoint never generates /404.md. Skip the Markdown affordances there to
 // avoid a dangling link.
 const is404 = parts.length === 1 && parts[0] === '404';
+// starlight-openapi reference routes are virtual pages with no per-page .md
+// twin, so the Copy/View as Markdown affordances would dangle. Skip them.
+const isGeneratedApi =
+  path.startsWith('/reference/apis/relay/') || path.startsWith('/reference/apis/notary/');
 const section = parts[0] ? sectionLabels.get(parts[0]) : undefined;
 const current = currentLabels.get(path) ?? starlightRoute.entry.data.title;
 const isWide = starlightRoute.entry.data.wide === true;
@@ -70,7 +74,7 @@ const mdHref = mdHrefForPath(Astro.url.pathname, import.meta.env.BASE_URL);
      The .md URL follows the contract: strip trailing slash, append .md; root -> index.md.
      The click handler is bound in the <script> block below, re-attached on
      astro:page-load so it survives Starlight's client-side view transitions. -->
-{!is404 && (
+{!is404 && !isGeneratedApi && (
 <div class="registry-md-actions">
   <button
     class="registry-md-btn"

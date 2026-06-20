@@ -4,13 +4,21 @@ import { docsSchema } from '@astrojs/starlight/schema';
 import { z } from 'astro/zod';
 
 const registryLegendFrontmatter = z.object({
-  status: z.enum(['draft', 'current', 'historical', 'deprecated']),
-  owner: z.string().min(1),
-  source_repos: z.array(z.string()),
-  last_reviewed: z.coerce.string(),
-  doc_type: z.enum(['tutorial', 'how-to', 'explanation', 'reference', 'decision', 'specification']),
-  locale: z.literal('en'),
-  standards_referenced: z.array(z.string()),
+  // These seven keys are required for every hand-authored page, but they are
+  // declared optional here so that virtual pages injected by plugins (the
+  // starlight-openapi reference routes) still satisfy the StarlightPage schema,
+  // which they cannot carry. Required-ness for authored content under
+  // src/content/docs is enforced independently by scripts/check-doc-frontmatter.mjs
+  // (run as `npm run check:content`), which reads each file's raw frontmatter.
+  status: z.enum(['draft', 'current', 'historical', 'deprecated']).optional(),
+  owner: z.string().min(1).optional(),
+  source_repos: z.array(z.string()).optional(),
+  last_reviewed: z.coerce.string().optional(),
+  doc_type: z
+    .enum(['tutorial', 'how-to', 'explanation', 'reference', 'decision', 'specification'])
+    .optional(),
+  locale: z.literal('en').optional(),
+  standards_referenced: z.array(z.string()).optional(),
   wide: z.boolean().optional(),
   // Formal specification layer (doc_type: specification). The three axes are
   // defined in spec/RS-DOC. They are optional here so the single shared schema

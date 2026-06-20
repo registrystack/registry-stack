@@ -13,10 +13,19 @@ standards_referenced:
   - openapi
 ---
 
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
 Use this tutorial when you want to inspect the full Registry Lab FHIR profile:
 the local FHIR fixture API, the private source adapter, and Registry Notary
 working together. You will call the Notary evaluation API and inspect the claim
 results produced from a local FHIR R4 fixture server.
+
+<QuickstartMeta
+  outcome="Registry Notary evaluating health-navigation claims from local FHIR R4 fixture data, with the claim results inspected."
+  time="About 10 minutes after the container images build"
+  level="Local lab topology"
+  prerequisites={['Docker Compose 2.20+', 'just', 'A Registry Lab checkout with submodules']}
+/>
 
 This is a lab topology walkthrough, not the shortest adopter quickstart. For a
 normal local project generated without cloning product repositories, use the

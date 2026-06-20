@@ -1,0 +1,306 @@
+---
+title: Error and status code reference
+description: RFC 9457 problem codes returned by Registry Notary and Registry Relay, with their meaning and usual cause.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-notary
+  - registry-relay
+last_reviewed: "2026-06-20"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+Registry Notary and Registry Relay return errors as RFC 9457 problem details with the media type `application/problem+json`. Each problem carries a stable string in the `code` extension member alongside the standard `type`, `title`, `status`, and `detail` fields. The tables below list every `code` value, the message the source attaches to it, and the usual cause.
+
+The HTTP status is omitted from these tables. The Relay source maps each code to a status, but the same code can render at different statuses across versions, and the Notary public code does not carry a status in the taxonomy itself. Treat the standard `status` field of the problem response as authoritative for a given request.
+
+## Registry Notary
+
+Registry Notary returns the codes below from its evidence taxonomy. Several distinct internal conditions intentionally collapse to one public code so that the public response does not disclose more than the caller is entitled to know. The audit record can carry a more specific code than the public response.
+
+| Code | Meaning | Usual cause |
+| --- | --- | --- |
+| `evidence.server_disabled` | evidence server is disabled | The evidence surface is turned off in configuration. |
+| `claim.not_found` | claim was not found | The requested claim id is not configured. |
+| `claim.version_not_found` | claim version was not found | The requested claim version does not exist. |
+| `claim.operation_unsupported` | claim operation is unsupported | The requested operation is not supported for the claim. |
+| `request.invalid` | evidence request is invalid | The request body or parameters failed validation. |
+| `claim.disclosure_not_allowed` | requested disclosure is not allowed | The requested disclosure level is not permitted for the claim. |
+| `target.not_found` | source record was not found | The target lookup matched no source record. |
+| `target.match_ambiguous` | source lookup returned more than one record | The target lookup matched more than one source record. |
+| `target.identifier_missing` | target identifier is missing | The request omits a required target identifier. |
+| `target.attributes_insufficient` | target attributes are insufficient for matching | The supplied target attributes cannot resolve a match. |
+| `target.matching_policy_rejected` | target matching policy rejected the request | The target matching policy denied the request. |
+| `target.not_in_valid_state` | target is not in a valid state | The matched target is not in a state that allows evaluation. |
+| `target.match_low_confidence` | target match confidence is too low | The best target match scored below the configured threshold. |
+| `requester.not_found` | requester record was not found | The requester lookup matched no record. |
+| `requester.match_ambiguous` | requester lookup returned more than one record | The requester lookup matched more than one record. |
+| `requester.identifier_missing` | requester identifier is missing | The request omits a required requester identifier. |
+| `requester.attributes_insufficient` | requester attributes are insufficient for matching | The supplied requester attributes cannot resolve a match. |
+| `requester.matching_policy_rejected` | requester matching policy rejected the request | The requester matching policy denied the request. |
+| `requester.reauthentication_required` | requester must reauthenticate | The requester needs to authenticate again before the request can proceed. |
+| `relationship.not_established` | relationship was not established | The required relationship between requester and target was not found. |
+| `relationship.match_ambiguous` | relationship match is ambiguous | The relationship lookup matched more than one relationship. |
+| `relationship.attributes_insufficient` | relationship attributes are insufficient for matching | The supplied attributes cannot resolve a relationship match. |
+| `relationship.policy_rejected` | relationship policy rejected the request | The relationship policy denied the request. |
+| `relationship.purpose_not_allowed` | relationship is not allowed for the requested purpose | The relationship cannot be used for the requested purpose. |
+| `purpose.not_allowed` | purpose is not allowed | The requested purpose is not permitted for the claim. |
+| `profile.unsupported` | evidence request profile is unsupported | The requested evidence profile is not supported. |
+| `evidence.not_available` | evidence is not available | Evidence could not be produced; also the collapsed public code for several matching-evidence conditions. |
+| `source.unavailable` | source is unavailable | A configured source service could not be reached or did not respond. |
+| `batch.too_large` | batch request is too large | The batch request exceeds the configured item limit. |
+| `evaluation.not_found` | evaluation was not found | The referenced evaluation id does not exist. |
+| `evaluation.binding_mismatch` | evaluation binding mismatch | The referenced evaluation does not match the requested binding. |
+| `claim.format_not_supported` | format is unsupported | The requested response format is not supported. |
+| `credential.issuer_not_configured` | credential issuer is not configured | Credential issuance was requested but no issuer is configured. |
+| `credential.holder_proof_required` | holder proof is required | Credential issuance requires a holder proof that was not supplied. |
+| `credential.holder_proof_replay` | holder proof has already been used | The supplied holder proof was already consumed. |
+| `credential.issuance_failed` | credential issuance failed | The credential could not be issued for an internal reason. |
+| `claim.rule_evaluation_failed` | claim rule evaluation failed | A configured claim rule could not be evaluated. |
+| `idempotency.conflict` | idempotency key was reused with a different request | The idempotency key was reused with a different request body. |
+| `auth.purpose_required` | purpose is required | The request omits a required purpose. |
+| `auth.missing_credential` | credential is missing | No authentication credential was provided. |
+| `auth.multiple_credentials` | multiple authentication credentials were provided | More than one authentication credential was provided. |
+| `auth.scope_denied` | required scope is missing | The caller's scopes do not include the required scope. |
+| `self_attestation.denied` | self-attestation request is denied | A self-attestation request was denied; also the public code for invalid-token and assurance-denied conditions. The audit record carries the specific reason. |
+| `self_attestation.rate_limited` | self-attestation request is rate limited | Too many self-attestation requests in the configured window. |
+
+Policy decision denials surface a stable `pdp.*` code carried through from the shared Policy Decision Point, for example `pdp.purpose_not_permitted`, `pdp.assurance_insufficient`, or `pdp.evidence_stale`. The same `pdp.*` codes are listed under [Registry Relay policy](#policy).
+
+## Registry Relay
+
+Registry Relay returns namespaced codes from its error taxonomy. Codes in the configuration, metadata, runtime binding, and ingest namespaces are startup-only: they are surfaced on standard error at startup or in the `/ready` body, not as a direct response to a client request.
+
+### Authentication
+
+`auth.*` codes from credential and OIDC token checks.
+
+| Code | Meaning | Usual cause |
+| --- | --- | --- |
+| `auth.missing_credential` | missing credential | No credential in the `Authorization` or `x-api-key` header. |
+| `auth.invalid_credential` | invalid credential | The credential did not match any configured key. |
+| `auth.malformed_credential` | malformed credential | The credential header could not be parsed. |
+| `auth.scope_denied` | scope denied | The caller lacks the required scope. |
+| `auth.purpose_required` | purpose header required | The `Data-Purpose` header is required for the resource. |
+| `auth.purpose_denied` | purpose denied | The `Data-Purpose` header is not permitted by policy for the resource. |
+| `auth.admin_required` | admin scope required | The endpoint requires the admin scope. |
+| `auth.token_expired` | token expired | The bearer token `exp` is in the past beyond the configured leeway. |
+| `auth.token_not_yet_valid` | token not yet valid | The bearer token `nbf` is in the future beyond the configured leeway. |
+| `auth.token_signature_invalid` | token signature invalid | The bearer token signature did not verify against the resolved key. |
+| `auth.issuer_mismatch` | issuer mismatch | The bearer token `iss` does not equal the configured issuer. |
+| `auth.audience_mismatch` | audience mismatch | The bearer token `aud` does not intersect the configured audience set. |
+| `auth.kid_unknown` | kid unknown | The bearer token `kid` is not in the JWKS document after one refresh. |
+| `auth.algorithm_not_allowed` | algorithm not allowed | The bearer token `alg` is not in the configured allowlist. |
+| `auth.client_not_allowed` | client not allowed | The bearer token client is not in the configured `allowed_clients` list. |
+| `auth.jwks_unavailable` | jwks unavailable | The JWKS endpoint is unreachable and no cached keys are available. |
+
+### Policy
+
+`pdp.*` policy decision codes from the shared Registry Policy Decision Point.
+
+| Code | Meaning | Usual cause |
+| --- | --- | --- |
+| `pdp.purpose_not_permitted` | purpose not permitted | The request purpose is not permitted by policy. |
+| `pdp.assurance_insufficient` | assurance insufficient | The request assurance is insufficient for policy. |
+| `pdp.evidence_stale` | evidence stale | The source evidence is too old for policy. |
+| `pdp.legal_basis_required` | legal basis required | The policy requires a legal basis the request did not carry. |
+| `pdp.consent_required` | consent required | The policy requires a consent reference the request did not carry. |
+| `pdp.jurisdiction_not_permitted` | jurisdiction not permitted | The request jurisdiction is not permitted by policy. |
+| `pdp.unsupported_policy_term` | unsupported policy term | The policy contains a term the service cannot enforce. |
+| `pdp.policy_required` | policy required | An enforceable policy constraint is required but absent. |
+| `pdp.policy_id_required` | policy id required | The policy identity is required but absent. |
+| `pdp.policy_hash_invalid` | policy hash invalid | The policy hash did not validate. |
+
+### Entity
+
+`entity.*` codes for entity reads.
+
+| Code | Meaning | Usual cause |
+| --- | --- | --- |
+| `entity.filter_required` | filter required | A row-collection read on an entity with `required_filters` received no qualifying filter. |
+
+### Filter
+
+`filter.*` codes for query parameter validation.
+
+| Code | Meaning | Usual cause |
+| --- | --- | --- |
+| `filter.unknown_field` | unknown field | A query parameter references a field not in the resource schema. |
+| `filter.not_allowed` | filter not allowed | The field is not in the resource's `allowed_filters` list. |
+| `filter.unsupported_op` | unsupported operator | The operator is not allowed for the field. |
+| `filter.invalid_value` | invalid filter value | The value does not parse for the field's type. |
+| `filter.too_many_values` | too many filter values | An in-list exceeds the configured maximum of 100 values. |
+| `filter.too_many_filters` | too many filters | The request carries more filter parameters than the per-request cap allows. |
+| `filter.invalid_range` | invalid range | The range bounds are inverted or invalid. |
+| `filter.limit_out_of_range` | limit out of range | The limit exceeds the configured maximum or is non-positive. |
+
+### Schema
+
+`schema.*` codes for dataset, resource, and aggregate lookups.
+
+| Code | Meaning | Usual cause |
+| --- | --- | --- |
+| `schema.unknown_dataset` | unknown dataset | The dataset id is not registered. |
+| `schema.unknown_resource` | unknown resource | The resource id is not registered under the dataset. |
+| `schema.unknown_aggregate` | unknown aggregate | The aggregate id is not declared for the resource. |
+| `schema.resource_unavailable` | resource unavailable | The resource is configured but failed ingest or is mid-reload. |
+
+### Aggregate
+
+`aggregate.*` codes for aggregate queries.
+
+| Code | Meaning | Usual cause |
+| --- | --- | --- |
+| `aggregate.execution_failed` | aggregate execution failed | The query engine returned an execution error. |
+| `aggregate.format_unsupported` | aggregate format unsupported | The requested aggregate response format is not supported. |
+| `aggregate.measure_unsupported` | aggregate measure unsupported | A configured measure references a function that is not implemented. |
+| `aggregate.disclosure_violation` | disclosure violation | A disclosure-control invariant was violated before response. |
+| `aggregate.filter_required` | filter required | A required aggregate filter was not supplied. |
+
+### Admin
+
+`admin.*` codes for the admin surface.
+
+| Code | Meaning | Usual cause |
+| --- | --- | --- |
+| `admin.reload_failed` | reload failed | One or more resources failed to reload. |
+| `admin.unknown_resource` | unknown admin resource | The reload target id was not found. |
+
+### Provenance
+
+`provenance.*` runtime codes for signed response credentials. Provenance startup-config failures use `provenance.config.*` codes; see [Configuration](#configuration).
+
+| Code | Meaning | Usual cause |
+| --- | --- | --- |
+| `provenance.signer_unavailable` | provenance signer unavailable | The configured signing backend is not currently available. |
+| `provenance.issuance_failed` | provenance issuance failed | The request could not be served as a verifiable credential. |
+| `provenance.unknown_resource` | provenance unknown claim type or version | No resource is registered for the requested claim type or version. |
+| `provenance.did_document_unavailable` | provenance did document unavailable | The deployment does not host a `did:web` document. |
+
+### SP DCI
+
+`spdci.*` codes for SP DCI request validation and response mapping.
+
+| Code | Meaning | Usual cause |
+| --- | --- | --- |
+| `spdci.request.invalid_header` | invalid spdci header | The request header is missing or omits a required SP DCI field. |
+| `spdci.request.invalid_message` | invalid spdci message | The request message is missing or not an object. |
+| `spdci.request.missing_transaction_id` | missing transaction_id | `message.transaction_id` is absent or empty. |
+| `spdci.mapper.unavailable` | spdci response mapper unavailable | Response mapping is configured but the mapper extension is not installed. |
+
+### OGC
+
+`ogc.*` codes for OGC API collection, feature, and record lookups.
+
+| Code | Meaning | Usual cause |
+| --- | --- | --- |
+| `ogc.collection_not_found` | ogc collection not found | The collection is not registered, spatially exposed, or visible to the caller. |
+| `ogc.feature_not_found` | ogc feature not found | The feature is not registered, visible, or within the required filter context. |
+| `ogc.record_not_found` | ogc record not found | The record is not registered or visible to the caller. |
+
+### Spatial
+
+`spatial.*` codes for spatial parameters and geometry.
+
+| Code | Meaning | Usual cause |
+| --- | --- | --- |
+| `spatial.geometry_invalid` | spatial geometry invalid | The geometry field is malformed. |
+| `spatial.geometry_too_large` | spatial geometry too large | The geometry exceeds the configured vertex limit. |
+| `spatial.bbox_invalid` | spatial bbox invalid | The bbox parameter is malformed, uses an unsupported shape, or crosses the antimeridian. |
+| `spatial.filter_unsupported` | spatial filter unsupported | A supported parameter cannot be evaluated for the collection. |
+| `spatial.crs_unsupported` | spatial crs unsupported | The requested coordinate reference system is not supported. |
+
+### Query
+
+`query.*` codes for query cursors.
+
+| Code | Meaning | Usual cause |
+| --- | --- | --- |
+| `query.cursor_invalid` | query cursor invalid | The cursor is malformed, expired, or bound to a different query context. |
+
+### Internal
+
+`internal.*` codes for transport-level limits and unhandled errors.
+
+| Code | Meaning | Usual cause |
+| --- | --- | --- |
+| `internal.timeout` | request timed out | The request exceeded the configured timeout. |
+| `internal.payload_too_large` | payload too large | The request body or response cardinality exceeds configured caps. |
+| `internal.uri_too_long` | uri too long | The request URI exceeds the configured length cap. |
+| `internal.unhandled` | unhandled internal error | The request could not be served for an unexpected reason. |
+
+### Ingest
+
+`ingest.*` startup-only codes. These are surfaced on standard error and in the `/ready` body, not as a direct client response.
+
+| Code | Meaning | Usual cause |
+| --- | --- | --- |
+| `ingest.source_not_found` | source not found | A configured source is missing or unreadable. |
+| `ingest.source_unreadable` | source unreadable | A source could not be read or parsed. |
+| `ingest.schema_mismatch` | schema mismatch | The declared schema does not match observed columns or types. |
+| `ingest.strict_extra_column` | strict schema rejected extra column | A source contains columns absent from a strict schema. |
+| `ingest.cache_write_failed` | cache write failed | The parquet cache could not be written. |
+| `ingest.registration_failed` | table registration failed | Table registration in the query engine failed. |
+
+### Configuration
+
+`config.*` and the provenance and feature-flag startup codes below are startup-only. They are surfaced on standard error and a non-zero process exit, not as a direct client response.
+
+| Code | Meaning | Usual cause |
+| --- | --- | --- |
+| `config.parse_error` | config parse error | The configuration document did not deserialize. |
+| `config.validation_error` | config validation error | The configuration failed cross-field validation. |
+| `config.missing_secret` | missing secret | A required hash environment variable is unset. |
+| `config.duplicate_id` | duplicate identifier in config | Two configured ids collide. |
+| `provenance.config.missing_issuer` | provenance issuer missing | Provenance is enabled but no issuer block resolved. |
+| `provenance.config.issuer_did_mismatch` | provenance issuer did mismatch | The configured issuer DID does not match the deployment host. |
+| `provenance.config.signer_kind_invalid` | provenance signer kind invalid | The signer kind is not `software` or `file_watch`. |
+| `provenance.config.jwk_env_missing` | provenance jwk_env missing | The configured signing key material is unavailable. |
+| `provenance.config.algorithm_unsupported` | provenance signing algorithm unsupported | `signing_algorithm` is not EdDSA or ES256. |
+| `provenance.config.claim_validity_out_of_range` | provenance claim validity out of range | Claim validity is below 1 minute or above 365 days. |
+| `provenance.config.context_base_url_invalid` | provenance context base url invalid | `context_base_url` is not a valid http or https URL. |
+| `provenance.config.schema_base_url_invalid` | provenance schema base url invalid | `schema_base_url` is not a valid http or https URL. |
+| `provenance.config.verification_method_mismatch` | provenance verification method mismatch | `verification_method_id` does not start with the issuer DID plus a fragment. |
+| `publicschema.config.feature_disabled` | publicschema cel feature disabled | PublicSchema CEL mapping was configured but the binary lacks the feature. |
+| `spdci.config.feature_disabled` | spdci api standards feature disabled | SP DCI standards adapters were configured but the binary lacks the feature. |
+| `spdci.config.mapping_feature_disabled` | spdci cel mapping feature disabled | SP DCI response mapping was configured but the binary lacks the feature. |
+| `ogcapi.features.config.feature_disabled` | ogc api features feature disabled | OGC API Features config was set but the binary lacks the feature. |
+| `ogcapi.edr.config.feature_disabled` | ogc api edr feature disabled | OGC API EDR config was set but the binary lacks the feature. |
+| `ogcapi.records.config.feature_disabled` | ogc api records feature disabled | OGC API Records config was set but the binary lacks the feature. |
+
+### Metadata manifest
+
+`metadata.manifest.*` startup-only codes for split metadata manifest loading.
+
+| Code | Meaning | Usual cause |
+| --- | --- | --- |
+| `metadata.manifest.file_not_found` | metadata manifest file not found | The metadata manifest could not be read. |
+| `metadata.manifest.parse_failed` | metadata manifest parse failed | The metadata manifest did not deserialize. |
+| `metadata.manifest.version_unsupported` | metadata manifest version unsupported | The manifest `schema_version` is not supported. |
+| `metadata.manifest.validation_failed` | metadata manifest validation failed | The manifest failed semantic validation. |
+| `metadata.manifest.digest_invalid` | metadata manifest digest invalid | The manifest digest is not valid. |
+| `metadata.manifest.digest_required` | metadata manifest digest required | Governed configuration requires a manifest digest. |
+| `metadata.manifest.digest_mismatch` | metadata manifest digest mismatch | The manifest digest did not match the configured digest. |
+
+### Runtime binding
+
+`runtime.binding.*` startup-only codes for runtime config references into the compiled metadata manifest.
+
+| Code | Meaning | Usual cause |
+| --- | --- | --- |
+| `runtime.binding.dataset_missing` | runtime dataset missing from metadata | A runtime dataset id is absent from the metadata manifest. |
+| `runtime.binding.entity_missing` | runtime entity missing from metadata | A runtime entity name is absent from the metadata manifest. |
+| `runtime.binding.table_missing` | runtime table missing | A runtime entity references a table that is not configured. |
+| `runtime.binding.field_missing` | runtime field missing from metadata | A runtime field binding is absent from the metadata manifest. |
+| `runtime.binding.filter_missing` | runtime filter missing from metadata | A runtime filter binding is absent from the metadata manifest. |
+| `runtime.binding.scope_missing` | runtime scope missing or invalid | A runtime scope is missing or uses an unsupported shape. |
+| `runtime.binding.relationship_missing` | runtime relationship missing from metadata | A runtime relationship binding is absent from the metadata manifest. |
+| `runtime.binding.unsupported_evidence_offering` | runtime evidence offering kind is unsupported | An evidence offering is not an external Registry Notary offering. |
+| `runtime.binding.ecosystem_binding_missing` | runtime ecosystem binding missing from metadata | The configured ecosystem binding selector is absent from the metadata manifest. |
+| `runtime.binding.ecosystem_binding_invalid` | runtime ecosystem binding is invalid | The ecosystem binding does not reference a governed-evidence binding with policy identity and ODRL enforcement. |
+
+## Source
+
+The codes above are transcribed from the error taxonomies in the owning repos. For the canonical definitions, read the [Registry Notary `EvidenceError` taxonomy](https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-core/src/error.rs) and the [Registry Relay error taxonomy](https://github.com/jeremi/registry-relay/blob/main/src/error.rs).

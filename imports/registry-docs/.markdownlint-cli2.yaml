@@ -27,6 +27,8 @@ config:
       - SpecRegister
       - LegendList
       - HomeLanding
+      - QuickstartMeta
+      - Steps
 globs:
   - "**/*.{md,mdx}"
 ignores:

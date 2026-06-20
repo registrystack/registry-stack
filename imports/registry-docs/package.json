@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "npm run generate && astro dev",
-    "build": "npm run generate && npm run redoc && astro check && astro build",
+    "build": "npm run generate && astro check && astro build",
     "build:archive": "node scripts/build-archive.mjs",
     "build:archives": "node scripts/build-archives.mjs",
     "preview": "astro preview",
@@ -28,8 +28,7 @@
     "check:links": "npm run build && npm run check:links:built",
     "check": "npm run generate && npm run check:docset && npm run check:content && npm run check:markdown && npm run check:style && npm run check:style:fixtures && npm run check:openapi && npm run check:config-vocabulary && npm run check:tutorial:dry-run && npm run check:svg && npm run build && npm run check:llms:built && npm run build:archives && npm run check:seo:built && npm run check:links:built",
     "check:seo:built": "node scripts/check-seo.mjs",
-    "check:links:built": "node scripts/check-built-links.mjs",
-    "redoc": "redocly build-docs registry-relay --output public/api/registry-relay.html && redocly build-docs registry-notary --output public/api/registry-notary.html"
+    "check:links:built": "node scripts/check-built-links.mjs"
   },
   "dependencies": {
     "@astrojs/sitemap": "^3.7.2",
@@ -38,7 +37,8 @@
     "@fontsource/public-sans": "^5.2.7",
     "astro": "^6.3.7",
     "astro-mermaid": "^2.0.2",
-    "mermaid": "^11.15.0"
+    "mermaid": "^11.15.0",
+    "starlight-openapi": "^0.25.3"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.9",
@@ -50,5 +50,8 @@
     "starlight-llms-txt": "^0.10.0",
     "typescript": "^5.9.3",
     "yaml": "^2.8.1"
+  },
+  "overrides": {
+    "url-template": "^3.1.1"
   }
 }

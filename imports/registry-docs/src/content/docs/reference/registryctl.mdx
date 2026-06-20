@@ -1,0 +1,163 @@
+---
+title: registryctl CLI reference
+description: Commands, subcommands, and flags for registryctl, the tool that runs Registry Stack services locally.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-registryctl
+last_reviewed: "2026-06-20"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+`registryctl` is the local adopter command-line tool for Registry Stack. It creates a local project, starts and stops the generated services, and runs validation and smoke checks against them.
+
+This page lists the commands, subcommands, and flags defined in the source command tree. Run `registryctl <command> --help` for the built-in usage text. Most human-facing commands also perform a once-per-day update check; see [Update check](#update-check).
+
+## Project setup
+
+`init` creates a local project. `add` adds a product to the current project.
+
+| Subcommand or flag | Purpose |
+| --- | --- |
+| `init relay <dir>` | Create a local Relay-backed spreadsheet API project in `<dir>`. |
+| `init relay --sample <sample>` | Sample project to generate. Defaults to `benefits`. |
+| `init notary <dir>` | Create a standalone local Notary project for an existing API in `<dir>`. |
+| `init notary --source-kind <kind>` | Source kind for the starter Notary project: `registry-data-api` (default) or `fhir-sidecar`. |
+| `init notary --source-url <url>` | Source API base URL as seen from the Notary container. |
+| `init notary --source-token-from-env <var>` | Read the source API bearer token from this process environment variable. |
+| `init notary --source-token-env <var>` | Environment variable name Notary reads for the source API bearer token. |
+| `init notary --source-dataset <name>` | Source dataset used by the starter claim. |
+| `init notary --source-entity <name>` | Source entity used by the starter claim. |
+| `init notary --source-lookup-field <field>` | Source field used by the starter claim lookup. |
+| `init notary --source-network <name>` | Docker Compose network to join when the source API runs in another local Compose project. |
+| `init notary --source-claim <id>` | Starter claim id to generate. |
+| `init notary --source-claim-title <title>` | Starter claim title to generate. |
+| `init notary --smoke-target-id <id>` | Target id used by generated smoke and Bruno evaluation requests. |
+| `add notary --from <source>` | Add a local Notary backed by the generated project. `--from local-relay` uses the generated Relay project. |
+| `add notary --force` | Replace existing Notary generated files. |
+
+## Lifecycle
+
+Lifecycle commands run against the project in the current working directory.
+
+| Subcommand | Purpose |
+| --- | --- |
+| `start` | Start the local project with Docker Compose and wait for readiness. |
+| `stop` | Stop the local project. |
+| `status` | Print local runtime status, including health and readiness probes. |
+
+## Inspect
+
+Inspect commands report on a running or generated project.
+
+| Subcommand or flag | Purpose |
+| --- | --- |
+| `open` | Open or print the local API docs URL. |
+| `logs` | Stream Compose logs for the local project. |
+| `doctor` | Run product doctor validation and print a JSON report. |
+| `doctor --profile <profile>` | Deployment profile override passed through to product doctor commands. |
+| `doctor --format <format>` | Output format. Defaults to `json`. |
+| `config explain --product <product>` | Delegate to the product explain-config command for a generated config. `<product>` is `relay` or `notary`. |
+| `config explain --format <format>` | Output format. Defaults to `json`. |
+| `config diff --product <product>` | Compare committed product config with the generated validation view. `<product>` is `relay` or `notary`. |
+| `config diff --format <format>` | Output format. Defaults to `json`. |
+| `config package` | Package inspectable generated config files without local secrets or outputs. |
+| `config package --output <path>` | Zip file to write. Defaults to `output/registry-config-package.zip`. |
+| `config package --force` | Replace an existing package file. |
+
+## Testing
+
+Smoke commands run built-in local checks and write a JSON result file.
+
+| Subcommand | Purpose |
+| --- | --- |
+| `smoke` | Run built-in local smoke checks against the Relay surface. |
+
+## Notary subcommands
+
+`notary` works with the local Registry Notary product in the project.
+
+| Subcommand | Purpose |
+| --- | --- |
+| `notary smoke` | Run built-in local Notary smoke checks. |
+| `notary open` | Open or print the local Notary API docs URL. |
+
+## OpenFn
+
+`openfn` converts OpenFn workflow exports into Registry Notary OpenFn sidecar runtime files. The flags below apply to both `openfn import` and `openfn convert` unless noted.
+
+| Subcommand or flag | Purpose |
+| --- | --- |
+| `openfn import <input>` | Import an OpenFn workflow URL or exported YAML into a sidecar manifest. |
+| `openfn convert --input <path>` | Convert an exported OpenFn project YAML into a sidecar manifest. |
+| `--openfn-token-env <var>` | Environment variable holding an OpenFn API token for URL imports. Defaults to `OPENFN_TOKEN` (import only). |
+| `--workflow <key>` | Workflow key to import or convert. |
+| `--output <path>` | Sidecar manifest path to write. Defaults to `openfn/openfn-sidecar.yaml` for import and `openfn-sidecar.yaml` for convert. |
+| `--jobs-dir <dir>` | Local directory for OpenFn job expression files. Defaults to `openfn/jobs`. |
+| `--expression-prefix <path>` | Path prefix written into the manifest for expression files. Defaults to `/opt/openfn/jobs` for import. |
+| `--source <id>` | Sidecar source id to create. |
+| `--dataset <name>` | Registry Data API dataset served by this source. |
+| `--entity <name>` | Registry Data API entity served by this source. |
+| `--credential-env <var>` | Environment variable holding the sidecar credential JSON for this source. |
+| `--allowed-base-url <url>` | Allowed base URL for credential `baseUrl` validation. Can be repeated. |
+| `--smoke <field=value>` | Smoke lookup as `field=value` (import only). |
+| `--smoke-field <field>` | Smoke lookup field (convert only). |
+| `--smoke-value <value>` | Smoke lookup value (convert only). |
+| `--smoke-fields <list>` | Comma-separated smoke response fields. |
+| `--smoke-purpose <purpose>` | Smoke lookup purpose. Defaults to `startup-readiness-smoke`. |
+| `--auth-hash-env <var>` | Environment variable holding the notary-to-sidecar bearer token hash. Defaults to `DEV_SIDECAR_TOKEN_HASH`. |
+| `--server-bind <addr>` | Sidecar bind address. Defaults to `127.0.0.1:9191`. |
+| `--cli-build-tool <version>` | Pinned OpenFn compiler and build tool version. Defaults to `1.2.5`. |
+| `--runtime <version>` | Pinned OpenFn runtime version. Defaults to `1.9.3`. |
+| `--worker-command <path>` | Worker command. Defaults to `node`. |
+| `--worker-script <path>` | Worker script path as seen by the sidecar process. Defaults to `/opt/openfn/openfn_worker.mjs`. |
+| `--max-workers <n>` | Maximum worker processes. Defaults to `2`. |
+| `--worker-timeout-ms <ms>` | Worker timeout in milliseconds. Defaults to `10000`. |
+| `--max-worker-memory-mb <mb>` | Maximum worker memory in MiB. Defaults to `512`. |
+| `--max-output-bytes <n>` | Maximum worker output bytes. Defaults to `1048576`. |
+| `--max-request-bytes <n>` | Maximum request body bytes. Defaults to `16384`. |
+| `--max-query-parameter-bytes <n>` | Maximum query parameter bytes. Defaults to `1024`. |
+| `--max-batch-items <n>` | Maximum items accepted by sidecar `records:batchMatch`. Defaults to `100`. |
+| `--batch-mode <mode>` | How the sidecar invokes the workflow for `records:batchMatch`: `per-item` (default) or `native`. |
+| `--notary-snippet-output <path>` | Notary config snippet path to write. Defaults to `openfn/notary-source-snippet.yaml` for import. |
+| `--no-notary-snippet` | Do not write the generated Notary config snippet (import only). |
+| `--sidecar-base-url <url>` | Base URL Notary uses for the sidecar in the generated snippet. |
+| `--sidecar-token-env <var>` | Environment variable holding the raw notary-to-sidecar bearer token. Defaults to `OPENFN_SIDECAR_TOKEN`. |
+| `--allow-latest-adaptors` | Permit `@latest` adaptor specs in the generated sidecar manifest. |
+| `--allow-empty-job-bodies` | Permit empty OpenFn job bodies. |
+
+## Lab
+
+`lab` works with public hosted-lab quickstart helpers.
+
+| Subcommand or flag | Purpose |
+| --- | --- |
+| `lab env --credential <id>` | Emit SDK-ready environment values for a hosted lab credential id. |
+| `lab env --format <format>` | Output format: `shell` (default) or `json`. |
+
+## Bruno
+
+`bruno` works with the optional generated Bruno API collection.
+
+| Subcommand or flag | Purpose |
+| --- | --- |
+| `bruno generate` | Generate or refresh the optional Bruno API collection. |
+| `bruno generate --force` | Overwrite existing Bruno files even if registryctl did not generate them. |
+| `bruno open` | Open the generated Bruno collection when Bruno is installed. |
+| `bruno run` | Run the generated Bruno collection when the Bruno command-line tool is installed. |
+
+## Update check
+
+`registryctl` checks GitHub releases at most once per day for normal human-facing commands and prints an upgrade notice to standard error when a newer release is available. It skips the automatic check in continuous integration and while running `doctor`, `config`, `lab`, and the explicit update-check commands, so JSON output stays quiet.
+
+| Subcommand | Purpose |
+| --- | --- |
+| `update-check` | Check whether a newer registryctl release is available and print the result. |
+
+Related environment variables are listed in the [environment variable reference](../environment-variables/): `REGISTRYCTL_NO_UPDATE_CHECK`, `REGISTRYCTL_UPDATE_CHECK`, and `REGISTRYCTL_VERSION`.
+
+## Source
+
+The command tree, subcommands, and flags above come from the registryctl source. For the canonical definitions, read the [registryctl command tree in `src/main.rs`](https://github.com/jeremi/registry-registryctl/blob/main/src/main.rs).
