@@ -1,11 +1,11 @@
 use registry_config_report::{
     redact_config_value, ConfigDiagnosticReport, ConfigExplanation, ConfigHashes,
-    ConfigValueClassification, RegistryctlValidationReport, CONFIG_EXPLANATION_FIXTURE_V1,
-    CONFIG_EXPLANATION_SCHEMA_V1, NOTARY_DIAGNOSTIC_ERROR_FIXTURE_V1,
-    NOTARY_DIAGNOSTIC_OK_FIXTURE_V1, PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, REDACTED_VALUE,
-    REDACTION_INPUT_FIXTURE_V1, REGISTRYCTL_VALIDATION_FIXTURE_V1,
-    REGISTRYCTL_VALIDATION_REPORT_SCHEMA_V1, RELAY_DIAGNOSTIC_ERROR_FIXTURE_V1,
-    RELAY_DIAGNOSTIC_OK_FIXTURE_V1,
+    ConfigValueClassification, RedactedConfig, RegistryctlValidationReport, RequiredEnvStatus,
+    RequiredEnvVar, CONFIG_EXPLANATION_FIXTURE_V1, CONFIG_EXPLANATION_SCHEMA_V1,
+    NOTARY_DIAGNOSTIC_ERROR_FIXTURE_V1, NOTARY_DIAGNOSTIC_OK_FIXTURE_V1,
+    PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, REDACTED_VALUE, REDACTION_INPUT_FIXTURE_V1,
+    REGISTRYCTL_VALIDATION_FIXTURE_V1, REGISTRYCTL_VALIDATION_REPORT_SCHEMA_V1,
+    RELAY_DIAGNOSTIC_ERROR_FIXTURE_V1, RELAY_DIAGNOSTIC_OK_FIXTURE_V1,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -204,4 +204,109 @@ fn required_env_reports_names_and_classification_without_values() {
     assert_eq!(required.classification, ConfigValueClassification::Secret);
     let rendered = serde_json::to_string(&report).expect("report renders");
     assert!(!rendered.contains("super-secret-admin-token"));
+}
+
+#[test]
+fn redacted_config_constructor_runs_redaction() {
+    let input = json!({
+        "server": {
+            "public_base_url": "https://relay.example.test",
+            "admin_token": "super-secret-admin-token"
+        }
+    });
+
+    let redacted = RedactedConfig::redacted(&input, |path, _value| match path {
+        ["server", "admin_token"] => ConfigValueClassification::Secret,
+        _ => ConfigValueClassification::Public,
+    });
+
+    // A Secret-classified field can never reach a populated RedactedConfig in
+    // the clear: the only raw-Value constructor redacts.
+    assert_eq!(
+        redacted.as_value()["server"]["admin_token"],
+        json!(REDACTED_VALUE)
+    );
+    assert_eq!(
+        redacted.as_value()["server"]["public_base_url"],
+        json!("https://relay.example.test")
+    );
+
+    let rendered = serde_json::to_string(&redacted).expect("redacted config renders");
+    assert!(!rendered.contains("super-secret-admin-token"));
+
+    // into_value yields the same redacted tree.
+    assert_eq!(
+        redacted.into_value(),
+        json!({
+            "server": {
+                "public_base_url": "https://relay.example.test",
+                "admin_token": REDACTED_VALUE
+            }
+        })
+    );
+}
+
+#[test]
+fn redacted_config_is_transparent_on_the_wire() {
+    let explanation: ConfigExplanation =
+        serde_json::from_str(CONFIG_EXPLANATION_FIXTURE_V1).expect("fixture decodes");
+
+    // The newtype serializes exactly as the inner Value: the resolved_config
+    // member of the serialized explanation is the bare object, not a wrapper.
+    let serialized = serde_json::to_value(&explanation).expect("explanation serializes");
+    let fixture: Value =
+        serde_json::from_str(CONFIG_EXPLANATION_FIXTURE_V1).expect("fixture parses");
+    assert_eq!(serialized["resolved_config"], fixture["resolved_config"]);
+    assert_eq!(serialized, fixture);
+
+    // And the accessor exposes the inner Value transparently.
+    assert_eq!(
+        explanation.resolved_config.as_value(),
+        &fixture["resolved_config"]
+    );
+}
+
+#[test]
+fn required_env_public_safe_hides_sensitive_names() {
+    let secret = RequiredEnvVar {
+        name: "REGISTRY_RELAY_ADMIN_TOKEN".to_string(),
+        classification: ConfigValueClassification::Secret,
+        status: RequiredEnvStatus::Present,
+    };
+    let internal = RequiredEnvVar {
+        name: "REGISTRY_INTERNAL_FEATURE_FLAG".to_string(),
+        classification: ConfigValueClassification::InternalOnly,
+        status: RequiredEnvStatus::Missing,
+    };
+    let public = RequiredEnvVar {
+        name: "REGISTRY_PUBLIC_BASE_URL".to_string(),
+        classification: ConfigValueClassification::Public,
+        status: RequiredEnvStatus::Present,
+    };
+    let topology = RequiredEnvVar {
+        name: "REGISTRY_PRIVATE_BIND".to_string(),
+        classification: ConfigValueClassification::TopologySensitive,
+        status: RequiredEnvStatus::NotChecked,
+    };
+
+    // Secret and InternalOnly names are replaced; classification/status kept.
+    let safe_secret = secret.public_safe();
+    assert_eq!(safe_secret.name, REDACTED_VALUE);
+    assert_eq!(
+        safe_secret.classification,
+        ConfigValueClassification::Secret
+    );
+    assert_eq!(safe_secret.status, RequiredEnvStatus::Present);
+
+    let safe_internal = internal.public_safe();
+    assert_eq!(safe_internal.name, REDACTED_VALUE);
+    assert_eq!(
+        safe_internal.classification,
+        ConfigValueClassification::InternalOnly
+    );
+    assert_eq!(safe_internal.status, RequiredEnvStatus::Missing);
+
+    // Public and TopologySensitive entries are unchanged.
+    assert_eq!(public.public_safe(), public);
+    assert_eq!(topology.public_safe(), topology);
 }

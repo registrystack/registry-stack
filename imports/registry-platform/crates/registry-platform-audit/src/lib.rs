@@ -22,7 +22,7 @@ use subtle::ConstantTimeEq;
 use thiserror::Error;
 use time::OffsetDateTime;
 use ulid::Ulid;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 const DEFAULT_MAX_SIZE_BYTES: u64 = 10 * 1024 * 1024;
 const DEFAULT_MAX_FILES: u32 = 5;
@@ -31,6 +31,11 @@ const KEYED_HASH_PREFIX: &str = "hmac-sha256:";
 const UNKEYED_HASH_PREFIX: &str = "sha256:";
 const CHAIN_HMAC_CONTEXT: &[u8] = b"registry-platform-audit-chain-v1";
 const AUDIT_REFERENCE_HASH_CONTEXT: &str = "registry-platform:audit-reference:v1";
+
+/// HKDF-Expand `info` label deriving the chain-integrity sub-key (AUDIT-03).
+const CHAIN_KEY_DERIVATION_INFO: &[u8] = b"registry-platform-audit/chain-key/v1";
+/// HKDF-Expand `info` label deriving the identifier-hashing sub-key (AUDIT-03).
+const IDENTIFIER_KEY_DERIVATION_INFO: &[u8] = b"registry-platform-audit/identifier-key/v1";
 
 /// One chained audit record.
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
@@ -190,9 +195,14 @@ pub struct AuditChainProfile {
 
 impl AuditChainProfile {
     /// Production profile backed by the HMAC secret in `env_var_name`.
+    ///
+    /// The chain key is an HKDF-derived sub-key of the master env secret so it is
+    /// domain-separated from the identifier key derived by [`AuditProfile`]
+    /// (AUDIT-03). Both profiles derive the same chain sub-key from the same env
+    /// secret, so a chain bootstrapped via either profile stays consistent.
     pub fn production_from_env(env_var_name: &str) -> Result<Self, AuditError> {
         Ok(Self {
-            hasher: AuditChainHasher::from_env(env_var_name)?,
+            hasher: AuditChainHasher::from_env_derived(env_var_name)?,
         })
     }
 
@@ -237,10 +247,16 @@ pub struct AuditProfile {
 
 impl AuditProfile {
     /// Production profile backed by the HMAC secret in `env_var_name`.
+    ///
+    /// The chain key and identifier key are independent HKDF-derived sub-keys of
+    /// the master env secret, each bound to a distinct per-purpose `info` label
+    /// (AUDIT-03). A leak of one derived sub-key reveals neither the master nor
+    /// the sibling. The chain sub-key matches the one derived by
+    /// [`AuditChainProfile::production_from_env`] for the same env secret.
     pub fn production_from_env(env_var_name: &str) -> Result<Self, AuditError> {
         Ok(Self {
-            chain_hasher: AuditChainHasher::from_env(env_var_name)?,
-            key_hasher: AuditKeyHasher::from_env(env_var_name)?,
+            chain_hasher: AuditChainHasher::from_env_derived(env_var_name)?,
+            key_hasher: AuditKeyHasher::from_env_derived(env_var_name)?,
         })
     }
 
@@ -284,12 +300,37 @@ impl AuditProfile {
 #[async_trait]
 pub trait AuditSink: Send + Sync {
     async fn write(&self, envelope: &AuditEnvelope) -> Result<(), AuditError>;
+
+    /// Return the chain tail hash using the sink's own default hash mode.
+    ///
+    /// WARNING (AUDIT-06): for tailable sinks that recompute hashes while reading
+    /// (such as [`JsonlFileSink`]) this path is **UNKEYED / dev-only**. It cannot
+    /// authenticate a retained chain against the deployment HMAC secret, so an
+    /// attacker who rewrites the log can forge a self-consistent tail. Production
+    /// code MUST use [`Self::tail_hash_with_hasher`] with a keyed
+    /// [`AuditChainHasher`] (e.g. via [`ChainState::bootstrap_or_start_empty`]).
+    ///
+    /// Implementors must still provide this method (it is the read primitive);
+    /// the `#[deprecated]` marker is a guardrail against *calling* the bare,
+    /// unkeyed convenience from production code.
+    #[deprecated(
+        note = "tail_hash() recomputes UNKEYED for tailable sinks (dev/test only); use tail_hash_with_hasher with a keyed AuditChainHasher in production"
+    )]
     async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError>;
+
+    /// Return the chain tail hash recomputed under the caller-selected `hasher`.
+    ///
+    /// This is the keyed, production-safe entry point. The default implementation
+    /// IGNORES `hasher` and delegates to the UNKEYED [`Self::tail_hash`]; sinks
+    /// that recompute the chain while reading (such as [`JsonlFileSink`]) MUST
+    /// override this method so the keyed mode is actually honored. Sinks that
+    /// never recompute hashes (stdout, syslog) may keep the default.
     async fn tail_hash_with_hasher(
         &self,
         hasher: &AuditChainHasher,
     ) -> Result<Option<[u8; 32]>, AuditError> {
         let _ = hasher;
+        #[allow(deprecated)]
         self.tail_hash().await
     }
 }
@@ -386,11 +427,19 @@ impl AuditSink for JsonlFileSink {
             .map_err(join_error_to_io)?
     }
 
+    /// WARNING (AUDIT-06): this recomputes the retained chain with an **UNKEYED**
+    /// hasher and is dev/test only. It cannot detect a rewrite by a writer that
+    /// lacks the deployment HMAC secret. Production callers MUST use
+    /// [`Self::tail_hash_with_hasher`] with a keyed [`AuditChainHasher`].
     async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
         self.tail_hash_blocking(AuditChainHasher::unkeyed_dev_only())
             .await
     }
 
+    /// Recompute the retained chain tail under the caller-selected `hasher`.
+    ///
+    /// This is the keyed, production-safe path: pass a keyed [`AuditChainHasher`]
+    /// to authenticate the retained JSONL set against the deployment secret.
     async fn tail_hash_with_hasher(
         &self,
         hasher: &AuditChainHasher,
@@ -537,20 +586,31 @@ impl AuditSink for SyslogSink {
     }
 }
 
+/// Inner key bytes for [`AuditHashSecret`].
+///
+/// The raw HMAC key is zeroized when the last shared reference is dropped, so a
+/// leaked process image is far less likely to retain the deployment secret after
+/// the audit profile is torn down.
+#[derive(Zeroize, ZeroizeOnDrop)]
+struct SecretBytes(Vec<u8>);
+
 /// Shared per-deployment HMAC secret for audit identifiers.
+///
+/// The key material is held behind an `Arc<SecretBytes>` whose inner bytes are
+/// zeroized on drop of the last clone (AUDIT-02).
 #[derive(Clone)]
-pub struct AuditHashSecret(Arc<[u8]>);
+pub struct AuditHashSecret(Arc<SecretBytes>);
 
 impl AuditHashSecret {
     pub fn new(secret: impl Into<Vec<u8>>) -> Result<Self, AuditError> {
-        let secret = secret.into();
+        let secret = Zeroizing::new(secret.into());
         if secret.len() < MIN_AUDIT_SECRET_BYTES {
             return Err(AuditError::WeakSecret {
                 name: "explicit secret".to_string(),
                 min_bytes: MIN_AUDIT_SECRET_BYTES,
             });
         }
-        Ok(Self(Arc::from(secret.into_boxed_slice())))
+        Ok(Self(Arc::new(SecretBytes(secret.to_vec()))))
     }
 
     fn from_env_value(name: &str, value: String) -> Result<Self, AuditError> {
@@ -567,11 +627,15 @@ impl AuditHashSecret {
                 min_bytes: MIN_AUDIT_SECRET_BYTES,
             });
         }
-        Ok(Self(Arc::from(bytes.as_slice())))
+        Ok(Self(Arc::new(SecretBytes(bytes.to_vec()))))
+    }
+
+    fn from_bytes(secret: Zeroizing<Vec<u8>>) -> Self {
+        Self(Arc::new(SecretBytes(secret.to_vec())))
     }
 
     fn as_bytes(&self) -> &[u8] {
-        self.0.as_ref()
+        &self.0 .0
     }
 }
 
@@ -601,6 +665,11 @@ impl AuditChainHasher {
     }
 
     /// Load an HMAC chain secret from the named environment variable.
+    ///
+    /// The raw env value is used directly as the chain key. Prefer
+    /// [`Self::from_env_derived`] at the profile boundary so the chain key and
+    /// sibling identifier key are cryptographically separated sub-keys of the
+    /// master env secret (AUDIT-03).
     pub fn from_env(env_var_name: &str) -> Result<Self, AuditError> {
         if env_var_name.trim().is_empty() {
             return Err(AuditError::EmptyEnvVarName);
@@ -612,6 +681,15 @@ impl AuditChainHasher {
         Ok(Self::Keyed(AuditHashSecret::from_env_value(
             env_var_name,
             value,
+        )?))
+    }
+
+    /// Load a chain hasher whose key is an HKDF-derived sub-key of the master
+    /// env secret, domain-separated from the identifier key (AUDIT-03).
+    pub fn from_env_derived(env_var_name: &str) -> Result<Self, AuditError> {
+        Ok(Self::Keyed(derive_subkey_from_env(
+            env_var_name,
+            CHAIN_KEY_DERIVATION_INFO,
         )?))
     }
 
@@ -652,6 +730,15 @@ impl AuditKeyHasher {
         Ok(Self::Keyed(AuditHashSecret::from_env_value(
             env_var_name,
             value,
+        )?))
+    }
+
+    /// Load an identifier hasher whose key is an HKDF-derived sub-key of the
+    /// master env secret, domain-separated from the chain key (AUDIT-03).
+    pub fn from_env_derived(env_var_name: &str) -> Result<Self, AuditError> {
+        Ok(Self::Keyed(derive_subkey_from_env(
+            env_var_name,
+            IDENTIFIER_KEY_DERIVATION_INFO,
         )?))
     }
 
@@ -727,6 +814,21 @@ pub mod redact {
         "secret",
         "authorization",
         "auth",
+        // AUDIT-05: OAuth / OIDC / generic credential parameter names.
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "client_secret",
+        "client_assertion",
+        "assertion",
+        "bearer",
+        "code",
+        "private_key",
+        "credential",
+        "credentials",
+        "passwd",
+        "pwd",
+        "session_token",
     ];
 
     /// Fully redact an email address without preserving local-part or domain.
@@ -990,6 +1092,20 @@ fn verify_chain_expected_prev_hash(
     })
 }
 
+/// Verify a retained audit chain from JSONL lines using **UNKEYED** hashing.
+///
+/// This helper hardcodes [`AuditChainHasher::unkeyed_dev_only`], so it provides
+/// NO protection against an attacker who can rewrite the JSONL set: an adversary
+/// without the deployment HMAC secret can still forge a fully self-consistent
+/// chain. It is intended only for tests, fixtures, and migration checks of
+/// legacy pre-beta logs.
+///
+/// Production verification MUST use [`verify_jsonl_lines_with_hasher`] with an
+/// explicit keyed [`AuditChainHasher`] (and ideally
+/// [`verify_jsonl_lines_with_anchors`] with off-host anchors).
+#[deprecated(
+    note = "performs UNKEYED verification (dev/test only); use verify_jsonl_lines_with_hasher with an explicit AuditChainHasher in production"
+)]
 pub fn verify_jsonl_lines<I, S>(lines: I) -> Result<ChainVerification, ChainVerificationError>
 where
     I: IntoIterator<Item = S>,
@@ -1250,6 +1366,54 @@ fn hmac_sha256_bytes(secret: &[u8], context: &[u8], bytes: &[u8]) -> [u8; 32] {
     out
 }
 
+/// HKDF-Expand (RFC 5869) over SHA-256, producing one 32-byte output block.
+///
+/// The master env secret is already operator-supplied high-entropy material of
+/// at least 32 bytes, so it is used directly as the HKDF pseudorandom key (PRK)
+/// without a separate Extract step (Expand-only); a distinct per-purpose `info`
+/// label domain-separates each derived sub-key. Because the SHA-256 output is a
+/// single block, the counter byte is always `0x01` and no `T(0)` carry is
+/// needed. The result is wrapped in [`Zeroizing`] so the derived sub-key is
+/// scrubbed once copied into an [`AuditHashSecret`].
+fn hkdf_expand_sha256(prk: &[u8], info: &[u8]) -> Zeroizing<Vec<u8>> {
+    let mut mac =
+        <Hmac<Sha256> as KeyInit>::new_from_slice(prk).expect("HMAC-SHA256 accepts any key length");
+    mac.update(info);
+    mac.update(&[0x01]);
+    let okm = mac.finalize().into_bytes();
+    Zeroizing::new(okm.to_vec())
+}
+
+/// Derive a domain-separated [`AuditHashSecret`] sub-key from a master env
+/// secret using [`hkdf_expand_sha256`] (AUDIT-03).
+///
+/// A leak of one derived sub-key reveals neither the master secret nor the
+/// sibling sub-key, because each is a one-way HMAC over an independent `info`
+/// label.
+fn derive_subkey_from_env(env_var_name: &str, info: &[u8]) -> Result<AuditHashSecret, AuditError> {
+    if env_var_name.trim().is_empty() {
+        return Err(AuditError::EmptyEnvVarName);
+    }
+    let value = Zeroizing::new(env::var(env_var_name).map_err(|source| AuditError::EnvVar {
+        name: env_var_name.to_string(),
+        source,
+    })?);
+    if value.is_empty() {
+        return Err(AuditError::EmptySecret {
+            name: env_var_name.to_string(),
+        });
+    }
+    let master = Zeroizing::new(value.as_bytes().to_vec());
+    if master.len() < MIN_AUDIT_SECRET_BYTES {
+        return Err(AuditError::WeakSecret {
+            name: env_var_name.to_string(),
+            min_bytes: MIN_AUDIT_SECRET_BYTES,
+        });
+    }
+    let derived = hkdf_expand_sha256(&master, info);
+    Ok(AuditHashSecret::from_bytes(derived))
+}
+
 fn hex_lower(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -1439,7 +1603,9 @@ mod tests {
         assert!(first.prev_hash.is_none());
         assert_eq!(second.prev_hash, Some(first.record_hash));
         assert_eq!(
-            sink.tail_hash().await.expect("tail"),
+            sink.tail_hash_with_hasher(&AuditChainHasher::unkeyed_dev_only())
+                .await
+                .expect("tail"),
             Some(second.record_hash)
         );
 
@@ -1453,7 +1619,9 @@ mod tests {
         assert_eq!(third.prev_hash, Some(second.record_hash));
 
         let contents = fs::read_to_string(path).expect("audit file");
-        let verification = verify_jsonl_lines(contents.lines()).expect("valid chain");
+        let verification =
+            verify_jsonl_lines_with_hasher(contents.lines(), &AuditChainHasher::unkeyed_dev_only())
+                .expect("valid chain");
         assert_eq!(verification.records, 3);
         assert_eq!(verification.last_hash, Some(third.record_hash));
     }
@@ -1648,7 +1816,8 @@ mod tests {
         fs::write(&path, rewritten).expect("rewrite without first line");
 
         assert!(matches!(
-            sink.tail_hash().await,
+            sink.tail_hash_with_hasher(&AuditChainHasher::unkeyed_dev_only())
+                .await,
             Err(AuditError::ChainVerification(
                 ChainVerificationError::PrevHashMismatch {
                     line: 1,
@@ -1705,7 +1874,12 @@ mod tests {
             third_hash = Some(envelope.record_hash);
         }
 
-        assert_eq!(sink.tail_hash().await.expect("tail"), third_hash);
+        assert_eq!(
+            sink.tail_hash_with_hasher(&AuditChainHasher::unkeyed_dev_only())
+                .await
+                .expect("tail"),
+            third_hash
+        );
         let bootstrapped = ChainState::bootstrap_unkeyed_dev_only(&sink)
             .await
             .expect("bootstrap");
@@ -1734,7 +1908,8 @@ mod tests {
             .expect("tamper active file");
 
         assert!(matches!(
-            sink.tail_hash().await,
+            sink.tail_hash_with_hasher(&AuditChainHasher::unkeyed_dev_only())
+                .await,
             Err(AuditError::ChainVerification(
                 ChainVerificationError::RecordHashMismatch { line: 2 }
             ))
@@ -1751,7 +1926,7 @@ mod tests {
         let suffix = [second.to_jsonl().unwrap(), third.to_jsonl().unwrap()];
 
         assert!(matches!(
-            verify_jsonl_lines(suffix.iter()),
+            verify_jsonl_lines_with_hasher(suffix.iter(), &AuditChainHasher::unkeyed_dev_only()),
             Err(ChainVerificationError::PrevHashMismatch {
                 line: 1,
                 expected: None,
@@ -1917,7 +2092,11 @@ mod tests {
             .expect("append");
         let contents = fs::read_to_string(&path).expect("audit file");
 
-        assert!(verify_jsonl_lines(contents.lines()).is_err());
+        assert!(verify_jsonl_lines_with_hasher(
+            contents.lines(),
+            &AuditChainHasher::unkeyed_dev_only()
+        )
+        .is_err());
         verify_jsonl_lines_with_hasher(contents.lines(), &profile.chain_hasher())
             .expect("profile chain verifies");
         assert!(profile
@@ -2049,11 +2228,155 @@ mod tests {
         fs::write(&path, envelope.to_jsonl().expect("jsonl")).expect("rewrite");
 
         assert!(matches!(
-            sink.tail_hash().await,
+            sink.tail_hash_with_hasher(&AuditChainHasher::unkeyed_dev_only())
+                .await,
             Err(AuditError::ChainVerification(
                 ChainVerificationError::RecordHashMismatch { line: 1 }
             ))
         ));
+    }
+
+    #[test]
+    fn audit_hash_secret_round_trips_and_clones_share_bytes() {
+        // AUDIT-02: zeroize-on-drop newtype must not change observable behavior.
+        let raw = b"this-is-a-32-byte-chain-secret-ok".to_vec();
+        let secret = AuditHashSecret::new(raw.clone()).expect("secret builds");
+        assert_eq!(secret.as_bytes(), raw.as_slice());
+
+        let cloned = secret.clone();
+        // Clones share the same underlying Arc<SecretBytes> and observe equal bytes.
+        assert_eq!(cloned.as_bytes(), secret.as_bytes());
+
+        // Dropping one clone must not disturb the surviving clone's key material.
+        drop(secret);
+        assert_eq!(cloned.as_bytes(), raw.as_slice());
+
+        // The hasher built from the secret still produces stable keyed output.
+        let hasher = AuditKeyHasher::Keyed(cloned);
+        let hashed = hasher.hash("subject-123");
+        assert!(hashed.starts_with(KEYED_HASH_PREFIX));
+    }
+
+    #[test]
+    fn audit_hash_secret_rejects_weak_secret() {
+        // AUDIT-02: short keys still fail closed after the newtype change.
+        assert!(matches!(
+            AuditHashSecret::new(b"too-short".to_vec()),
+            Err(AuditError::WeakSecret { .. })
+        ));
+    }
+
+    #[test]
+    fn production_profile_derives_separated_chain_and_identifier_keys() {
+        // AUDIT-03: the chain key and identifier key must be independent derived
+        // sub-keys of the master env secret, and neither may equal the master.
+        let name = "REGISTRY_PLATFORM_AUDIT_KDF_TEST_SECRET";
+        let master = "0123456789abcdef0123456789abcdef-master";
+        env::set_var(name, master);
+
+        let chain_key = derive_subkey_from_env(name, CHAIN_KEY_DERIVATION_INFO).expect("chain key");
+        let ident_key =
+            derive_subkey_from_env(name, IDENTIFIER_KEY_DERIVATION_INFO).expect("identifier key");
+        env::remove_var(name);
+
+        // Sub-keys differ from each other.
+        assert_ne!(chain_key.as_bytes(), ident_key.as_bytes());
+        // Sub-keys differ from the raw master env material.
+        assert_ne!(chain_key.as_bytes(), master.as_bytes());
+        assert_ne!(ident_key.as_bytes(), master.as_bytes());
+        // HKDF-Expand over SHA-256 yields a single 32-byte block.
+        assert_eq!(chain_key.as_bytes().len(), 32);
+        assert_eq!(ident_key.as_bytes().len(), 32);
+    }
+
+    #[test]
+    fn production_profile_key_derivation_is_deterministic_and_stable() {
+        // AUDIT-03: the same env secret must yield the same derived sub-keys, so
+        // a chain stays verifiable across process restarts.
+        let name = "REGISTRY_PLATFORM_AUDIT_KDF_STABLE_SECRET";
+        let master = "stable-master-secret-0123456789abcdef";
+        env::set_var(name, master);
+
+        let chain_a = derive_subkey_from_env(name, CHAIN_KEY_DERIVATION_INFO).expect("chain a");
+        let chain_b = derive_subkey_from_env(name, CHAIN_KEY_DERIVATION_INFO).expect("chain b");
+        env::remove_var(name);
+
+        assert_eq!(chain_a.as_bytes(), chain_b.as_bytes());
+
+        // Known-answer vector pins the HKDF-Expand-only construction.
+        let expected = hkdf_expand_sha256(master.as_bytes(), CHAIN_KEY_DERIVATION_INFO);
+        assert_eq!(chain_a.as_bytes(), expected.as_slice());
+    }
+
+    #[tokio::test]
+    async fn audit_profile_chain_and_identifier_keys_are_domain_separated() {
+        // AUDIT-03: the two profiles must agree on the derived chain key while
+        // the identifier key stays distinct.
+        let name = "REGISTRY_PLATFORM_AUDIT_PROFILE_KDF_SECRET";
+        env::set_var(name, "profile-master-secret-0123456789abcdef");
+        let profile = AuditProfile::production_from_env(name).expect("profile");
+        let chain_profile = AuditChainProfile::production_from_env(name).expect("chain profile");
+        env::remove_var(name);
+
+        // Both profiles derive the same chain key, so a chain bootstrapped via
+        // either verifies under the other's chain hasher.
+        let first = AuditEnvelope::new_with_hasher(
+            json!({ "event": "first" }),
+            None,
+            &profile.chain_hasher(),
+        )
+        .expect("first");
+        verify_chain(std::slice::from_ref(&first), &chain_profile.hasher())
+            .expect("cross-profile chain agrees");
+
+        // The identifier key is keyed but domain-separated from the chain key.
+        let identifier_hash = profile.key_hasher().hash("subject-123");
+        assert!(identifier_hash.starts_with(KEYED_HASH_PREFIX));
+        let unkeyed = AuditKeyHasher::unkeyed_dev_only().hash("subject-123");
+        assert_ne!(identifier_hash, unkeyed);
+    }
+
+    #[test]
+    fn query_redactor_redacts_oauth_and_credential_param_names() {
+        // AUDIT-05: extended denylist covers OAuth/OIDC and credential params.
+        let redactor = QueryRedactor::new(Vec::<String>::new());
+        let redacted =
+            redactor.redact_query("access_token=x&refresh_token=y&client_secret=z&bearer=b");
+
+        assert_eq!(redacted["access_token"]["op"], "redacted");
+        assert_eq!(redacted["refresh_token"]["op"], "redacted");
+        assert_eq!(redacted["client_secret"]["op"], "redacted");
+        assert_eq!(redacted["bearer"]["op"], "redacted");
+
+        let serialized = redacted.to_string();
+        assert!(!serialized.contains("\"x\""));
+        assert!(!serialized.contains("\"y\""));
+        assert!(!serialized.contains("\"z\""));
+        assert!(!serialized.contains("\"b\""));
+    }
+
+    #[test]
+    fn query_redactor_redacts_remaining_new_credential_param_names() {
+        // AUDIT-05: exercise the rest of the added names for coverage.
+        let redactor = QueryRedactor::new(Vec::<String>::new());
+        let redacted = redactor.redact_query(
+            "id_token=a&client_assertion=b&assertion=c&code=d&private_key=e&credential=f&credentials=g&passwd=h&pwd=i&session_token=j",
+        );
+
+        for name in [
+            "id_token",
+            "client_assertion",
+            "assertion",
+            "code",
+            "private_key",
+            "credential",
+            "credentials",
+            "passwd",
+            "pwd",
+            "session_token",
+        ] {
+            assert_eq!(redacted[name]["op"], "redacted", "{name} must be redacted");
+        }
     }
 
     #[derive(Default)]

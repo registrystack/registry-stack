@@ -191,11 +191,50 @@ pub struct ConfigDiagnostic {
     pub documentation_key: Option<String>,
 }
 
+/// A required environment variable, its data classification, and presence.
+///
+/// # Operator-sensitive
+///
+/// This type is OPERATOR-SENSITIVE. It enumerates the *names* of secret- and
+/// internal-only-classified environment variables and whether each one is set.
+/// Disclosing these names and their presence can reveal which secrets a
+/// deployment expects and aid an attacker. It MUST only be exposed behind
+/// operator authentication and MUST NEVER appear on an unauthenticated or
+/// otherwise public diagnostic surface.
+///
+/// For a ready-made public-safe view, use [`RequiredEnvVar::public_safe`],
+/// which replaces sensitive names with a stable placeholder while preserving
+/// the classification and status.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct RequiredEnvVar {
     pub name: String,
     pub classification: ConfigValueClassification,
     pub status: RequiredEnvStatus,
+}
+
+impl RequiredEnvVar {
+    /// Returns a public-safe projection of this entry.
+    ///
+    /// For `Secret` and `InternalOnly` classifications the `name` is replaced
+    /// with [`REDACTED_VALUE`] so the concrete variable name is not disclosed;
+    /// `classification` and `status` are preserved unchanged. `Public` and
+    /// `TopologySensitive` entries are returned as-is.
+    ///
+    /// This does not change the default serialization of `RequiredEnvVar`;
+    /// consumers must opt in by calling this method (see the type-level
+    /// operator-sensitive warning).
+    pub fn public_safe(&self) -> Self {
+        match self.classification {
+            ConfigValueClassification::Secret | ConfigValueClassification::InternalOnly => Self {
+                name: REDACTED_VALUE.to_string(),
+                classification: self.classification,
+                status: self.status,
+            },
+            ConfigValueClassification::Public | ConfigValueClassification::TopologySensitive => {
+                self.clone()
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -221,6 +260,8 @@ pub struct ConfigDiagnosticReport {
     pub status: ReportStatus,
     pub summary: DiagnosticSummary,
     pub diagnostics: Vec<ConfigDiagnostic>,
+    /// Operator-sensitive: see [`RequiredEnvVar`]. Enumerates secret env-var
+    /// names and presence; must only be exposed behind operator authentication.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required_env: Vec<RequiredEnvVar>,
     #[serde(skip_serializing_if = "config_hashes_option_is_empty")]
@@ -247,12 +288,52 @@ pub struct LiveApplyComponent {
     pub class: LiveApplyClass,
 }
 
+/// A configuration tree that is guaranteed to have passed through redaction.
+///
+/// This newtype makes redaction unbypassable at the type level: the only way to
+/// build a populated `RedactedConfig` from a raw [`Value`] in producing code is
+/// [`RedactedConfig::redacted`], which runs [`redact_config_value`] internally.
+/// There is intentionally no public constructor that wraps an arbitrary
+/// `Value` without redacting.
+///
+/// `Deserialize` is transparent because consuming an already-rendered report
+/// means the producer already redacted the tree; the wire representation is
+/// identical to a bare `Value` (see `#[serde(transparent)]`).
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct RedactedConfig(Value);
+
+impl RedactedConfig {
+    /// Redacts `value` with `classify` and wraps the result.
+    ///
+    /// This is the only constructor that accepts a raw config tree, ensuring a
+    /// populated `RedactedConfig` can never hold un-redacted secrets.
+    pub fn redacted(
+        value: &Value,
+        classify: impl Fn(&[&str], &Value) -> ConfigValueClassification,
+    ) -> Self {
+        Self(redact_config_value(value, classify))
+    }
+
+    /// Borrows the redacted configuration tree.
+    pub fn as_value(&self) -> &Value {
+        &self.0
+    }
+
+    /// Consumes the newtype, returning the redacted configuration tree.
+    pub fn into_value(self) -> Value {
+        self.0
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct ConfigExplanation {
     pub schema_version: String,
     pub product: String,
     pub config_schema_version: String,
     pub source: ConfigSourceRef,
+    /// Operator-sensitive: see [`RequiredEnvVar`]. Enumerates secret env-var
+    /// names and presence; must only be exposed behind operator authentication.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required_env: Vec<RequiredEnvVar>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -261,7 +342,7 @@ pub struct ConfigExplanation {
     pub optional_sections_absent: Vec<OptionalSection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub live_apply: Vec<LiveApplyComponent>,
-    pub resolved_config: Value,
+    pub resolved_config: RedactedConfig,
     #[serde(skip_serializing_if = "config_hashes_option_is_empty")]
     pub hashes: Option<ConfigHashes>,
     pub generated_at: String,

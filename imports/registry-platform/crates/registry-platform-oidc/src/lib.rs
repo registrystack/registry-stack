@@ -61,6 +61,13 @@ pub async fn fetch_discovery_with_policy(
     fetch_url_policy: &FetchUrlPolicy,
 ) -> Result<DiscoveryDocument, OidcError> {
     if let Some(jwks_uri) = &cfg.jwks_uri_override {
+        // Security: when the normal discovery flow is skipped, the issuer field
+        // provides the only binding between the JWKS endpoint and the expected
+        // token issuer. An empty issuer would mean tokens could be validated
+        // against the override JWKS with no issuer constraint at all.
+        if cfg.issuer.trim().is_empty() {
+            return Err(OidcError::MissingIssuer);
+        }
         let url = Url::parse(jwks_uri).map_err(|_| OidcError::InvalidUrl)?;
         fetch_url_policy
             .validate_for_immediate_fetch_with_timeout(&url, cfg.discovery_timeout)
@@ -1139,6 +1146,8 @@ pub enum OidcError {
     InvalidToken,
     #[error("client is not allowed")]
     ClientNotAllowed,
+    #[error("issuer must not be empty when jwks_uri_override is set")]
+    MissingIssuer,
 }
 
 #[cfg(test)]
@@ -2552,5 +2561,43 @@ mod tests {
             err,
             OidcError::FetchUrl(FetchUrlError::PrivateRangeDenied { .. })
         ));
+    }
+
+    // OIDC-01: jwks_uri_override with empty issuer must be rejected so that
+    // there is always an issuer binding when normal discovery is skipped.
+    #[tokio::test]
+    async fn discovery_jwks_uri_override_rejects_empty_issuer() {
+        for empty_issuer in ["", "   ", "\t"] {
+            let cfg = OidcDiscoveryConfig {
+                issuer: empty_issuer.to_string(),
+                jwks_uri_override: Some("http://127.0.0.1/jwks".to_string()),
+                discovery_timeout: Duration::from_secs(1),
+                max_doc_bytes: DEFAULT_DOC_BYTES,
+            };
+            let err = fetch_discovery_with_policy(&cfg, &FetchUrlPolicy::dev())
+                .await
+                .expect_err("empty issuer with override must be rejected");
+            assert!(
+                matches!(err, OidcError::MissingIssuer),
+                "expected MissingIssuer for issuer={empty_issuer:?}, got {err:?}"
+            );
+        }
+    }
+
+    // OIDC-01: a non-empty issuer combined with jwks_uri_override must succeed
+    // (the existing security-warning behaviour is preserved).
+    #[tokio::test]
+    async fn discovery_jwks_uri_override_with_valid_issuer_succeeds() {
+        let cfg = OidcDiscoveryConfig {
+            issuer: "https://issuer.example".to_string(),
+            jwks_uri_override: Some("http://127.0.0.1/jwks".to_string()),
+            discovery_timeout: Duration::from_secs(1),
+            max_doc_bytes: DEFAULT_DOC_BYTES,
+        };
+        let document = fetch_discovery_with_policy(&cfg, &FetchUrlPolicy::dev())
+            .await
+            .expect("non-empty issuer with override succeeds under dev policy");
+        assert_eq!(document.issuer, "https://issuer.example");
+        assert_eq!(document.jwks_uri, "http://127.0.0.1/jwks");
     }
 }

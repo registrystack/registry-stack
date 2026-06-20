@@ -56,6 +56,16 @@ impl CorsPolicy {
         Ok(())
     }
 
+    /// Build a [`CorsLayer`] from this policy, panicking if the policy is invalid.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the policy fails validation (e.g. wildcard origin, credentialed
+    /// request without explicit allowed headers). Use [`try_layer`](Self::try_layer)
+    /// to handle the error gracefully instead.
+    #[deprecated(
+        note = "panics on invalid policy; use try_layer() and handle the CorsValidationError"
+    )]
     pub fn layer(&self) -> CorsLayer {
         self.validate()
             .expect("invalid CORS policy must not be converted into a layer");
@@ -138,15 +148,47 @@ impl CspBuilder {
     }
 }
 
+/// Default HSTS value applied by [`security_headers`]: two-year max-age with
+/// `includeSubDomains`. Use [`SecurityHeadersLayer::without_hsts`] to disable
+/// HSTS for deployments that terminate TLS upstream or serve plain HTTP.
+pub const DEFAULT_HSTS_VALUE: &str = "max-age=63072000; includeSubDomains";
+
 pub fn security_headers(csp: CspBuilder) -> SecurityHeadersLayer {
     SecurityHeadersLayer {
         csp: csp.header_value(),
+        hsts: Some(HeaderValue::from_static(DEFAULT_HSTS_VALUE)),
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct SecurityHeadersLayer {
     csp: HeaderValue,
+    /// When `Some`, a `Strict-Transport-Security` header is inserted (if not
+    /// already present) by the service. Set to `None` via
+    /// [`SecurityHeadersLayer::without_hsts`] for deployments that terminate
+    /// TLS upstream or serve plain HTTP.
+    hsts: Option<HeaderValue>,
+}
+
+impl SecurityHeadersLayer {
+    /// Disable the default `Strict-Transport-Security` header for deployments
+    /// that terminate TLS upstream (e.g. a load balancer or reverse proxy) or
+    /// that intentionally serve plain HTTP (e.g. internal cluster traffic).
+    #[must_use]
+    pub fn without_hsts(mut self) -> Self {
+        self.hsts = None;
+        self
+    }
+
+    /// Override the `Strict-Transport-Security` header value.
+    ///
+    /// The default is `"max-age=63072000; includeSubDomains"`. Use this to
+    /// add `preload` or reduce `max-age` for staged rollouts.
+    #[must_use]
+    pub fn with_hsts(mut self, value: HeaderValue) -> Self {
+        self.hsts = Some(value);
+        self
+    }
 }
 
 impl<S> Layer<S> for SecurityHeadersLayer {
@@ -156,6 +198,7 @@ impl<S> Layer<S> for SecurityHeadersLayer {
         SecurityHeadersService {
             inner,
             csp: self.csp.clone(),
+            hsts: self.hsts.clone(),
         }
     }
 }
@@ -164,6 +207,7 @@ impl<S> Layer<S> for SecurityHeadersLayer {
 pub struct SecurityHeadersService<S> {
     inner: S,
     csp: HeaderValue,
+    hsts: Option<HeaderValue>,
 }
 
 impl<S, ReqBody, ResBody> Service<Request<ReqBody>> for SecurityHeadersService<S>
@@ -184,6 +228,7 @@ where
     fn call(&mut self, request: Request<ReqBody>) -> Self::Future {
         let future = self.inner.call(request);
         let csp = self.csp.clone();
+        let hsts = self.hsts.clone();
         Box::pin(async move {
             let mut response = future.await?;
             insert_if_missing(
@@ -218,6 +263,13 @@ where
                 HeaderName::from_static("cross-origin-opener-policy"),
                 HeaderValue::from_static("same-origin"),
             );
+            if let Some(hsts_value) = hsts {
+                insert_if_missing(
+                    &mut response,
+                    HeaderName::from_static("strict-transport-security"),
+                    hsts_value,
+                );
+            }
             Ok(response)
         })
     }
@@ -522,6 +574,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "invalid CORS policy")]
+    #[allow(deprecated)]
     fn credentialed_cors_layer_rejects_wildcard_headers() {
         let _layer = CorsPolicy {
             allowed_origins: vec!["https://app.example.test".to_string()],
@@ -636,6 +689,57 @@ mod tests {
         assert_eq!(
             headers.get("cross-origin-opener-policy"),
             Some(&HeaderValue::from_static("same-origin"))
+        );
+        // HTTPSEC-01: HSTS is included in the default baseline.
+        assert_eq!(
+            headers.get("strict-transport-security"),
+            Some(&HeaderValue::from_static(DEFAULT_HSTS_VALUE))
+        );
+    }
+
+    // HTTPSEC-01: HSTS is present by default via security_headers().
+    #[tokio::test]
+    async fn security_headers_emits_hsts_by_default() {
+        use tower::service_fn;
+        use tower::ServiceExt;
+
+        let service = security_headers(CspBuilder::restrictive()).layer(service_fn(
+            |_request: Request<Body>| async {
+                Ok::<_, std::convert::Infallible>(Response::new(Body::empty()))
+            },
+        ));
+        let response = service
+            .oneshot(Request::new(Body::empty()))
+            .await
+            .expect("service responds");
+        assert_eq!(
+            response.headers().get("strict-transport-security"),
+            Some(&HeaderValue::from_static(DEFAULT_HSTS_VALUE)),
+            "HSTS must be present by default"
+        );
+    }
+
+    // HTTPSEC-01: without_hsts() opts out of the HSTS header.
+    #[tokio::test]
+    async fn security_headers_without_hsts_omits_hsts_header() {
+        use tower::service_fn;
+        use tower::ServiceExt;
+
+        let service = security_headers(CspBuilder::restrictive())
+            .without_hsts()
+            .layer(service_fn(|_request: Request<Body>| async {
+                Ok::<_, std::convert::Infallible>(Response::new(Body::empty()))
+            }));
+        let response = service
+            .oneshot(Request::new(Body::empty()))
+            .await
+            .expect("service responds");
+        assert!(
+            response
+                .headers()
+                .get("strict-transport-security")
+                .is_none(),
+            "HSTS must be absent after without_hsts()"
         );
     }
 
