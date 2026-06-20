@@ -1,13 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use axum::http::StatusCode;
+//! Engine-agnostic governed-startup security coverage for the source-adapter
+//! sidecar. These tests exercise the signed-TUF startup loader, assurance
+//! reporting, and anti-rollback enforcement that gate a real governed startup.
+//!
+//! The OpenFn engine that previously backed this file was retired; the governed
+//! runtime target, the TUF signing harness, and the anti-rollback/identity/
+//! change-class/apply-policy enforcement are NOT OpenFn-specific and remain a
+//! supported feature. The governed source here uses the `http_json` engine and
+//! is backed by a mock upstream so the startup smoke lookup performs a real
+//! request, just as a production governed startup would.
+
+use axum::{extract::Query, http::StatusCode, routing::get, Json, Router};
 use axum_test::TestServer;
 use chrono::{TimeDelta, Utc};
 use registry_notary_source_adapter_sidecar::{
     create_local_tuf_demo_repo_report_json, load_startup_config, load_startup_config_with_options,
-    print_expression_hashes_report_json, render_governed_runtime_target_json, sidecar_router,
-    verify_governed_bundle_report_json, CreateLocalTufRepoOptions, LocalTufBundleVerifyOptions,
-    SidecarConfig,
+    render_governed_runtime_target_json, sidecar_router, verify_governed_bundle_report_json,
+    CreateLocalTufRepoOptions, LocalTufBundleVerifyOptions,
 };
 use registry_platform_config::{
     sha256_uri, LocalTufRepositoryInput, TufConfigVerifier, VerificationContext,
@@ -21,113 +31,87 @@ use std::fs;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
+use tokio::sync::Mutex;
 use tough::editor::signed::PathExists;
 use tough::editor::RepositoryEditor;
 use tough::key_source::{KeySource, LocalKeySource};
 use tough::schema::Target;
 
-const TOKEN_HASH_ENV: &str = "OPENFN_GOVERNED_VALIDATION_TOKEN_HASH";
+const TOKEN_HASH_ENV: &str = "GOVERNED_RUNTIME_VALIDATION_TOKEN_HASH";
 const TOKEN: &str = "contract-sidecar-token";
 const TOKEN_HASH: &str = "sha256:98808b694f3b431dcc2459db07bbfb61b8e3287ad0ab7364a2ff510d35e21418";
-const CREDENTIAL_ENV: &str = "OPENFN_GOVERNED_VALIDATION_CREDENTIAL_JSON";
+const CREDENTIAL_ENV: &str = "GOVERNED_RUNTIME_VALIDATION_CREDENTIAL_JSON";
 const PRODUCT: &str = "registry-notary-source-adapter-sidecar";
 const INSTANCE_ID: &str = "demo";
 const ENVIRONMENT: &str = "staging";
 const STREAM_ID: &str = "openfn-sidecar-runtime";
 const TARGET_NAME: &str = "openfn-sidecar-runtime.json";
+const CHANGE_CLASS: &str = "openfn_sidecar_workflow_bundle";
+const SOURCE_ID: &str = "http_people";
 
+// The governed-startup tests mutate process-wide environment variables and rely
+// on a per-test mock upstream. Serialize env mutation across tests so the token
+// hash and credential JSON stay coherent for the source under test.
+static ENV_LOCK: Mutex<()> = Mutex::const_new(());
+
+/// Mock upstream record endpoint. The governed http_json source projects
+/// `body.results` into the RDA `data` array; the startup smoke lookup succeeds
+/// when a record's `national_id` matches the configured smoke value.
+async fn person_lookup(Query(query): Query<HashMap<String, String>>) -> Json<Value> {
+    let id = query.get("id").cloned().unwrap_or_default();
+    let results = match id.as_str() {
+        "smoke-person" => json!([
+            {
+                "national_id": "smoke-person",
+                "birth_date": "1990-01-01"
+            }
+        ]),
+        _ => json!([]),
+    };
+    Json(json!({ "results": results }))
+}
+
+fn server_base_url(server: &TestServer) -> String {
+    server
+        .server_address()
+        .expect("HTTP transport exposes server address")
+        .to_string()
+        .trim_end_matches('/')
+        .to_string()
+}
+
+/// Test harness owning the live mock upstream and the serialized env guard.
+/// Every governed test stands up a real upstream so the startup smoke lookup
+/// performs an actual request against the signed `allowed_base_urls`.
 struct Harness {
-    _tmp: TempDir,
-    jobs_root: PathBuf,
-    attempt_log: PathBuf,
+    _env_guard: tokio::sync::MutexGuard<'static, ()>,
+    _upstream: TestServer,
+    upstream_url: String,
 }
 
 impl Harness {
-    fn new() -> Self {
+    async fn new() -> Self {
+        let env_guard = ENV_LOCK.lock().await;
+        let upstream = TestServer::builder()
+            .http_transport()
+            .build(Router::new().route("/people", get(person_lookup)));
+        let upstream_url = server_base_url(&upstream);
         std::env::set_var(TOKEN_HASH_ENV, TOKEN_HASH);
         std::env::set_var(
             CREDENTIAL_ENV,
-            r#"{"baseUrl":"https://opencrvs.example.test","apiToken":"fixture-token"}"#,
+            json!({ "baseUrl": upstream_url, "apiToken": "fixture-token" }).to_string(),
         );
-        let tmp = TempDir::new().expect("temp dir");
-        let jobs_root = tmp.path().join("jobs");
-        fs::create_dir(&jobs_root).expect("jobs root created");
-        fs::write(jobs_root.join("lookup.js"), "fn(state => state);\n").expect("job writes");
-        let attempt_log = tmp.path().join("worker-attempts.jsonl");
         Self {
-            _tmp: tmp,
-            jobs_root,
-            attempt_log,
+            _env_guard: env_guard,
+            _upstream: upstream,
+            upstream_url,
         }
     }
 
-    fn raw_config(&self, expression: &str, expression_sha256: Option<&str>) -> String {
-        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-        let worker = fixtures.join("contract_worker.sh");
-        let hash_yaml = expression_sha256
-            .map(|hash| format!("          expression_sha256: {}\n", yaml_string(hash)))
-            .unwrap_or_default();
-        format!(
-            r#"
-server:
-  bind: "127.0.0.1:0"
-auth:
-  bearer_tokens:
-    - id: notary-contract
-      hash_env: {token_hash_env}
-jobs_root: {jobs_root}
-limits:
-  max_workers: 1
-  worker_timeout_ms: 250
-  max_output_bytes: 4096
-  max_request_bytes: 2048
-  max_query_parameter_bytes: 128
-  liveness_window_ms: 30000
-  max_batch_items: 100
-  max_worker_memory_mb: 256
-openfn:
-  cli_build_tool: "1.36.0"
-  runtime: "1.36.0"
-worker:
-  command: "/bin/sh"
-  args:
-    - {worker}
-    - {attempt_log}
-sources:
-  openfn_crvs:
-    engine: openfn
-    dataset: civil_registry
-    entity: civil_person
-    workflow:
-      steps:
-        - id: lookup
-          expression: {expression}
-{hash_yaml}          adaptors:
-            - "@openfn/language-http@7.2.0"
-    credential_env: {credential_env}
-    smoke_lookup:
-      field: national_id
-      value: smoke-person
-      fields:
-        - national_id
-      purpose: startup-smoke
-"#,
-            token_hash_env = yaml_string(TOKEN_HASH_ENV),
-            jobs_root = yaml_path(&self.jobs_root),
-            worker = yaml_path(&worker),
-            attempt_log = yaml_path(&self.attempt_log),
-            expression = yaml_string(expression),
-            hash_yaml = hash_yaml,
-            credential_env = yaml_string(CREDENTIAL_ENV),
-        )
-    }
-
-    fn config(&self, expression: &str, expression_sha256: Option<&str>) -> SidecarConfig {
-        serde_norway::from_str(&self.raw_config(expression, expression_sha256))
-            .expect("config parses")
-    }
-
-    fn raw_http_json_config(&self) -> String {
+    /// Governed http_json manifest pointing the source at the live mock
+    /// upstream. This is rendered into the signed runtime target, so the mock
+    /// URL is baked into the target's `allowed_base_urls`.
+    fn governed_manifest(&self) -> String {
         format!(
             r#"
 server:
@@ -145,7 +129,7 @@ limits:
   liveness_window_ms: 30000
   max_batch_items: 100
 sources:
-  http_people:
+  {source_id}:
     engine: http_json
     dataset: civil_registry
     entity: civil_person
@@ -153,7 +137,8 @@ sources:
     credential_public_fields:
       - baseUrl
     allowed_base_urls:
-      - "https://opencrvs.example.test"
+      - {base_url}
+    allow_insecure_localhost: true
     http_json:
       method: GET
       base_url:
@@ -173,95 +158,18 @@ sources:
       purpose: startup-smoke
 "#,
             token_hash_env = yaml_string(TOKEN_HASH_ENV),
+            source_id = SOURCE_ID,
             credential_env = yaml_string(CREDENTIAL_ENV),
+            base_url = yaml_string(&self.upstream_url),
         )
     }
 
-    fn raw_mixed_config(&self, expression: &str, expression_sha256: Option<&str>) -> String {
-        format!(
-            r#"{}  http_people:
-    engine: http_json
-    dataset: civil_registry
-    entity: civil_person
-    credential_env: {}
-    credential_public_fields:
-      - baseUrl
-    allowed_base_urls:
-      - "https://opencrvs.example.test"
-    http_json:
-      method: GET
-      base_url:
-        cel: credential_public.baseUrl
-      path: "/people"
-      query:
-        id:
-          cel: lookup.value
-      response:
-        records:
-          cel: body.results
-    smoke_lookup:
-      field: national_id
-      value: smoke-person
-      fields:
-        - national_id
-      purpose: startup-smoke
-"#,
-            self.raw_config(expression, expression_sha256),
-            yaml_string(CREDENTIAL_ENV),
-        )
-    }
-
-    fn governed_runtime_target(&self, expression_sha256: &str) -> Value {
-        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-        let worker = fixtures.join("contract_worker.sh");
-        json!({
-            "schema": "registry.notary.openfn_sidecar.runtime.v1",
-            "limits": {
-                "max_workers": 1,
-                "worker_timeout_ms": 250,
-                "max_output_bytes": 4096,
-                "max_request_bytes": 2048,
-                "max_query_parameter_bytes": 128,
-                "liveness_window_ms": 30000,
-                "max_batch_items": 100,
-                "max_worker_memory_mb": 256
-            },
-            "openfn": {
-                "cli_build_tool": "1.36.0",
-                "runtime": "1.36.0"
-            },
-            "jobs_root": self.jobs_root,
-            "worker": {
-                "command": "/bin/sh",
-                "args": [
-                    worker,
-                    self.attempt_log
-                ]
-            },
-            "sources": {
-                "openfn_crvs": {
-                    "dataset": "civil_registry",
-                    "entity": "civil_person",
-                    "workflow": {
-                        "steps": [
-                            {
-                                "id": "lookup",
-                                "expression": "lookup.js",
-                                "expression_sha256": expression_sha256,
-                                "adaptors": ["@openfn/language-http@7.2.0"]
-                            }
-                        ]
-                    },
-                    "credential_env": CREDENTIAL_ENV,
-                    "smoke_lookup": {
-                        "field": "national_id",
-                        "value": "smoke-person",
-                        "fields": ["national_id"],
-                        "purpose": "startup-smoke"
-                    }
-                }
-            }
-        })
+    /// Render the governed runtime target bytes from the manifest. These are the
+    /// exact bytes that get signed into the TUF target and re-parsed at startup,
+    /// keeping the config hash consistent end to end.
+    fn governed_runtime_target_bytes(&self) -> Vec<u8> {
+        render_governed_runtime_target_json(&self.governed_manifest())
+            .expect("governed http_json runtime target renders")
     }
 }
 
@@ -276,70 +184,9 @@ struct SignedRepo {
 }
 
 #[tokio::test]
-async fn governed_jobs_root_accepts_relative_expression_with_matching_hash() {
-    let harness = Harness::new();
-    let hash = registry_platform_config::sha256_uri(
-        &fs::read(harness.jobs_root.join("lookup.js")).expect("job reads"),
-    );
-    let config = harness.config("lookup.js", Some(&hash));
-
-    let _router = sidecar_router(config)
-        .await
-        .expect("matching governed expression hash builds router");
-}
-
-#[tokio::test]
-async fn release_helpers_render_hash_and_verify_plain_bundle() {
-    let harness = Harness::new();
-    let raw = harness.raw_config(
-        harness
-            .jobs_root
-            .join("lookup.js")
-            .to_str()
-            .expect("path is UTF-8"),
-        None,
-    );
-    let target_bytes =
-        render_governed_runtime_target_json(&raw, &harness.jobs_root).expect("target renders");
-    let target: Value = serde_json::from_slice(&target_bytes).expect("target is JSON");
-    let expression_hash =
-        sha256_uri(&fs::read(harness.jobs_root.join("lookup.js")).expect("job reads"));
-
-    assert_eq!(
-        target["sources"]["openfn_crvs"]["workflow"]["steps"][0]["expression"],
-        "lookup.js"
-    );
-    assert_eq!(
-        target["sources"]["openfn_crvs"]["workflow"]["steps"][0]["expression_sha256"],
-        expression_hash
-    );
-
-    let hash_report =
-        print_expression_hashes_report_json(&target_bytes).expect("expression hashes print");
-    assert_eq!(hash_report["config_hash"], sha256_uri(&target_bytes));
-    assert_eq!(
-        hash_report["expression_hashes"]["openfn_crvs.lookup"],
-        expression_hash
-    );
-
-    let verify_report = verify_governed_bundle_report_json(Some(&target_bytes), None)
-        .await
-        .expect("plain target verifies");
-    assert_eq!(verify_report["verified"], true);
-    assert_eq!(verify_report["config_hash"], sha256_uri(&target_bytes));
-    assert_eq!(
-        verify_report["expression_hashes"]["openfn_crvs.lookup"],
-        expression_hash
-    );
-    assert!(verify_report["tuf"].is_null());
-}
-
-#[tokio::test]
-async fn release_helpers_render_and_verify_http_json_only_target_without_openfn_runtime() {
-    let harness = Harness::new();
-    let target_bytes =
-        render_governed_runtime_target_json(&harness.raw_http_json_config(), &harness.jobs_root)
-            .expect("http_json-only target renders");
+async fn governed_target_renders_http_json_only_without_openfn_runtime() {
+    let harness = Harness::new().await;
+    let target_bytes = harness.governed_runtime_target_bytes();
     let target: Value = serde_json::from_slice(&target_bytes).expect("target is JSON");
 
     assert_eq!(
@@ -350,69 +197,23 @@ async fn release_helpers_render_and_verify_http_json_only_target_without_openfn_
     assert!(target["worker"].is_null());
     assert!(target["jobs_root"].is_null());
     assert!(target["limits"]["max_worker_memory_mb"].is_null());
-    assert_eq!(target["sources"]["http_people"]["engine"], "http_json");
-
-    let hash_report =
-        print_expression_hashes_report_json(&target_bytes).expect("expression hashes print");
-    assert_eq!(hash_report["expression_hashes"], json!({}));
+    assert_eq!(target["sources"][SOURCE_ID]["engine"], "http_json");
+    assert!(target["sources"][SOURCE_ID]["workflow"].is_null());
 
     let verify_report = verify_governed_bundle_report_json(Some(&target_bytes), None)
         .await
         .expect("plain http_json-only target verifies");
     assert_eq!(verify_report["verified"], true);
-    assert_eq!(verify_report["expression_hashes"], json!({}));
-}
-
-#[tokio::test]
-async fn release_helpers_render_mixed_engine_target_with_only_openfn_expression_hashes() {
-    let harness = Harness::new();
-    let target_bytes = render_governed_runtime_target_json(
-        &harness.raw_mixed_config("lookup.js", None),
-        &harness.jobs_root,
-    )
-    .expect("mixed-engine target renders");
-    let target: Value = serde_json::from_slice(&target_bytes).expect("target is JSON");
-    let expression_hash =
-        sha256_uri(&fs::read(harness.jobs_root.join("lookup.js")).expect("job reads"));
-
-    assert_eq!(target["sources"]["openfn_crvs"]["engine"], "openfn");
-    assert_eq!(target["sources"]["http_people"]["engine"], "http_json");
-    assert_eq!(
-        target["sources"]["openfn_crvs"]["workflow"]["steps"][0]["expression_sha256"],
-        expression_hash
-    );
-    assert!(target["jobs_root"].is_string());
-    assert!(target["openfn"].is_object());
-    assert!(target["worker"].is_object());
-
-    let hash_report =
-        print_expression_hashes_report_json(&target_bytes).expect("expression hashes print");
-    assert_eq!(
-        hash_report["expression_hashes"]["openfn_crvs.lookup"],
-        expression_hash
-    );
-    assert!(hash_report["expression_hashes"]
-        .as_object()
-        .expect("hash report object")
-        .get("http_people.lookup")
-        .is_none());
+    assert_eq!(verify_report["config_hash"], sha256_uri(&target_bytes));
+    assert!(verify_report["tuf"].is_null());
 }
 
 #[tokio::test]
 async fn release_helper_verify_bundle_reports_local_tuf_metadata() {
-    let harness = Harness::new();
-    let expression_hash =
-        sha256_uri(&fs::read(harness.jobs_root.join("lookup.js")).expect("job reads"));
+    let harness = Harness::new().await;
     let previous_config_hash =
         "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_string();
-    let repo = signed_runtime_repo(
-        &harness,
-        &expression_hash,
-        12,
-        "restart_required",
-        &previous_config_hash,
-    )
-    .await;
+    let repo = signed_runtime_repo(&harness, 12, "restart_required", &previous_config_hash).await;
 
     let report = verify_governed_bundle_report_json(
         None,
@@ -437,22 +238,13 @@ async fn release_helper_verify_bundle_reports_local_tuf_metadata() {
     assert_eq!(report["tuf"]["root_sha256"], repo.tuf_root_sha256);
     assert_eq!(report["tuf"]["targets_version"], 12);
     assert_eq!(report["metadata"]["apply_policy"], "restart_required");
-    assert_eq!(
-        report["metadata"]["change_classes"],
-        json!(["openfn_sidecar_workflow_bundle"])
-    );
-    assert_eq!(
-        report["expression_hashes"]["openfn_crvs.lookup"],
-        expression_hash
-    );
+    assert_eq!(report["metadata"]["change_classes"], json!([CHANGE_CLASS]));
 }
 
 #[tokio::test]
 async fn startup_loader_rejects_unsigned_manifest_without_dev_escape_hatch() {
-    let harness = Harness::new();
-    let expression_hash =
-        sha256_uri(&fs::read(harness.jobs_root.join("lookup.js")).expect("job reads"));
-    let error = load_startup_config(&harness.raw_config("lookup.js", Some(&expression_hash)))
+    let harness = Harness::new().await;
+    let error = load_startup_config(&harness.governed_manifest())
         .await
         .expect_err("unsigned startup manifest is rejected");
 
@@ -461,15 +253,10 @@ async fn startup_loader_rejects_unsigned_manifest_without_dev_escape_hatch() {
 
 #[tokio::test]
 async fn startup_loader_accepts_unsigned_manifest_only_with_dev_escape_hatch() {
-    let harness = Harness::new();
-    let expression_hash =
-        sha256_uri(&fs::read(harness.jobs_root.join("lookup.js")).expect("job reads"));
-    let config = load_startup_config_with_options(
-        &harness.raw_config("lookup.js", Some(&expression_hash)),
-        true,
-    )
-    .await
-    .expect("unsigned dev manifest parses with explicit escape hatch");
+    let harness = Harness::new().await;
+    let config = load_startup_config_with_options(&harness.governed_manifest(), true)
+        .await
+        .expect("unsigned dev manifest parses with explicit escape hatch");
 
     assert!(config.config_trust.is_none());
     assert!(config.assurance.is_none());
@@ -477,14 +264,8 @@ async fn startup_loader_accepts_unsigned_manifest_only_with_dev_escape_hatch() {
 
 #[tokio::test]
 async fn release_helper_create_local_tuf_demo_repo_signs_and_verifies() {
-    let harness = Harness::new();
-    let expression_hash =
-        sha256_uri(&fs::read(harness.jobs_root.join("lookup.js")).expect("job reads"));
-    let target_bytes = render_governed_runtime_target_json(
-        &harness.raw_config("lookup.js", None),
-        &harness.jobs_root,
-    )
-    .expect("target renders");
+    let harness = Harness::new().await;
+    let target_bytes = harness.governed_runtime_target_bytes();
     let tmp = TempDir::new().expect("repo temp dir");
     let target_path = tmp.path().join("rendered-runtime.json");
     fs::write(&target_path, &target_bytes).expect("target writes");
@@ -502,11 +283,11 @@ async fn release_helper_create_local_tuf_demo_repo_signs_and_verifies() {
         instance_id: INSTANCE_ID.to_string(),
         environment: ENVIRONMENT.to_string(),
         stream_id: STREAM_ID.to_string(),
-        bundle_id: "opencrvs-sidecar-cli-demo".to_string(),
+        bundle_id: "sidecar-cli-demo".to_string(),
         sequence: 13,
         previous_config_hash:
             "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_string(),
-        change_classes: vec!["openfn_sidecar_workflow_bundle".to_string()],
+        change_classes: vec![CHANGE_CLASS.to_string()],
         declared_signer_kids: vec!["declared-non-authoritative".to_string()],
         apply_policy: "restart_required".to_string(),
         targets_expiration_days: 30,
@@ -519,10 +300,6 @@ async fn release_helper_create_local_tuf_demo_repo_signs_and_verifies() {
     assert_eq!(report["created"], true);
     assert_eq!(report["target_name"], TARGET_NAME);
     assert_eq!(report["config_hash"], sha256_uri(&target_bytes));
-    assert_eq!(
-        report["expression_hashes"]["openfn_crvs.lookup"],
-        expression_hash
-    );
     let copied_targets = fs::read_dir(tmp.path().join("targets"))
         .expect("targets dir reads")
         .count();
@@ -551,19 +328,10 @@ async fn release_helper_create_local_tuf_demo_repo_signs_and_verifies() {
 
 #[tokio::test]
 async fn governed_startup_loads_signed_tuf_target_reports_assurance_and_accepts_antirollback() {
-    let harness = Harness::new();
-    let expression_hash =
-        sha256_uri(&fs::read(harness.jobs_root.join("lookup.js")).expect("job reads"));
+    let harness = Harness::new().await;
     let previous_config_hash =
         "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_string();
-    let repo = signed_runtime_repo(
-        &harness,
-        &expression_hash,
-        12,
-        "restart_required",
-        &previous_config_hash,
-    )
-    .await;
+    let repo = signed_runtime_repo(&harness, 12, "restart_required", &previous_config_hash).await;
     initialize_antirollback(&repo, &previous_config_hash, 11);
     let raw = bootstrap_yaml(&repo);
 
@@ -633,19 +401,10 @@ async fn governed_startup_loads_signed_tuf_target_reports_assurance_and_accepts_
 
 #[tokio::test]
 async fn governed_startup_rejects_non_restart_required_apply_policy() {
-    let harness = Harness::new();
-    let expression_hash =
-        sha256_uri(&fs::read(harness.jobs_root.join("lookup.js")).expect("job reads"));
+    let harness = Harness::new().await;
     let previous_config_hash =
         "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_string();
-    let repo = signed_runtime_repo(
-        &harness,
-        &expression_hash,
-        12,
-        "hot_swap",
-        &previous_config_hash,
-    )
-    .await;
+    let repo = signed_runtime_repo(&harness, 12, "hot_swap", &previous_config_hash).await;
     initialize_antirollback(&repo, &previous_config_hash, 11);
     let raw = bootstrap_yaml(&repo);
 
@@ -660,9 +419,7 @@ async fn governed_startup_rejects_non_restart_required_apply_policy() {
 
 #[tokio::test]
 async fn governed_startup_rejects_signed_target_identity_mismatches() {
-    let harness = Harness::new();
-    let expression_hash =
-        sha256_uri(&fs::read(harness.jobs_root.join("lookup.js")).expect("job reads"));
+    let harness = Harness::new().await;
     let previous_config_hash =
         "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_string();
     for (product, instance_id, environment, stream_id) in [
@@ -673,7 +430,6 @@ async fn governed_startup_rejects_signed_target_identity_mismatches() {
     ] {
         let repo = signed_runtime_repo_with_metadata(
             &harness,
-            &expression_hash,
             12,
             "restart_required",
             &previous_config_hash,
@@ -681,7 +437,7 @@ async fn governed_startup_rejects_signed_target_identity_mismatches() {
             instance_id,
             environment,
             stream_id,
-            vec!["openfn_sidecar_workflow_bundle"],
+            vec![CHANGE_CLASS],
         )
         .await;
         let raw = bootstrap_yaml(&repo);
@@ -700,14 +456,11 @@ async fn governed_startup_rejects_signed_target_identity_mismatches() {
 
 #[tokio::test]
 async fn governed_startup_rejects_unauthorized_change_class() {
-    let harness = Harness::new();
-    let expression_hash =
-        sha256_uri(&fs::read(harness.jobs_root.join("lookup.js")).expect("job reads"));
+    let harness = Harness::new().await;
     let previous_config_hash =
         "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_string();
     let repo = signed_runtime_repo_with_metadata(
         &harness,
-        &expression_hash,
         12,
         "restart_required",
         &previous_config_hash,
@@ -731,19 +484,10 @@ async fn governed_startup_rejects_unauthorized_change_class() {
 
 #[tokio::test]
 async fn governed_startup_rejects_lower_antirollback_sequence() {
-    let harness = Harness::new();
-    let expression_hash =
-        sha256_uri(&fs::read(harness.jobs_root.join("lookup.js")).expect("job reads"));
+    let harness = Harness::new().await;
     let previous_config_hash =
         "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_string();
-    let repo = signed_runtime_repo(
-        &harness,
-        &expression_hash,
-        12,
-        "restart_required",
-        &previous_config_hash,
-    )
-    .await;
+    let repo = signed_runtime_repo(&harness, 12, "restart_required", &previous_config_hash).await;
     initialize_antirollback(&repo, &repo.config_hash, 13);
     let raw = bootstrap_yaml(&repo);
     let config = load_startup_config(&raw)
@@ -761,19 +505,10 @@ async fn governed_startup_rejects_lower_antirollback_sequence() {
 
 #[tokio::test]
 async fn governed_startup_rejects_antirollback_previous_hash_mismatch() {
-    let harness = Harness::new();
-    let expression_hash =
-        sha256_uri(&fs::read(harness.jobs_root.join("lookup.js")).expect("job reads"));
+    let harness = Harness::new().await;
     let previous_config_hash =
         "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_string();
-    let repo = signed_runtime_repo(
-        &harness,
-        &expression_hash,
-        13,
-        "restart_required",
-        &previous_config_hash,
-    )
-    .await;
+    let repo = signed_runtime_repo(&harness, 13, "restart_required", &previous_config_hash).await;
     initialize_antirollback(
         &repo,
         "sha256:2222222222222222222222222222222222222222222222222222222222222222",
@@ -795,19 +530,10 @@ async fn governed_startup_rejects_antirollback_previous_hash_mismatch() {
 
 #[tokio::test]
 async fn governed_startup_smoke_failure_does_not_accept_antirollback() {
-    let harness = Harness::new();
-    let expression_hash =
-        sha256_uri(&fs::read(harness.jobs_root.join("lookup.js")).expect("job reads"));
+    let harness = Harness::new().await;
     let previous_config_hash =
         "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_string();
-    let repo = signed_runtime_repo(
-        &harness,
-        &expression_hash,
-        12,
-        "restart_required",
-        &previous_config_hash,
-    )
-    .await;
+    let repo = signed_runtime_repo(&harness, 12, "restart_required", &previous_config_hash).await;
     initialize_antirollback(&repo, &previous_config_hash, 11);
     let raw = bootstrap_yaml(&repo);
     let mut config = load_startup_config(&raw)
@@ -816,7 +542,7 @@ async fn governed_startup_smoke_failure_does_not_accept_antirollback() {
     config.limits.liveness_window_ms = 1;
     config
         .sources
-        .get_mut("openfn_crvs")
+        .get_mut(SOURCE_ID)
         .expect("source exists")
         .smoke_lookup
         .as_mut()
@@ -835,80 +561,6 @@ async fn governed_startup_smoke_failure_does_not_accept_antirollback() {
     assert_eq!(accepted.last_config_hash, previous_config_hash);
 }
 
-#[tokio::test]
-async fn governed_jobs_root_rejects_missing_expression_hash() {
-    let harness = Harness::new();
-    let config = harness.config("lookup.js", None);
-
-    let error = sidecar_router(config)
-        .await
-        .expect_err("missing expression hash must fail");
-
-    assert!(error.to_string().contains("expression_sha256 is required"));
-}
-
-#[tokio::test]
-async fn governed_jobs_root_rejects_hash_mismatch() {
-    let harness = Harness::new();
-    let config = harness.config(
-        "lookup.js",
-        Some("sha256:0000000000000000000000000000000000000000000000000000000000000000"),
-    );
-
-    let error = sidecar_router(config)
-        .await
-        .expect_err("mismatched expression hash must fail");
-
-    assert!(error.to_string().contains("hash mismatch"));
-}
-
-#[tokio::test]
-async fn governed_jobs_root_rejects_absolute_expression_path() {
-    let harness = Harness::new();
-    let absolute = harness.jobs_root.join("lookup.js");
-    let hash = registry_platform_config::sha256_uri(&fs::read(&absolute).expect("job reads"));
-    let config = harness.config(absolute.to_str().expect("path is UTF-8"), Some(&hash));
-
-    let error = sidecar_router(config)
-        .await
-        .expect_err("absolute expression path must fail");
-
-    assert!(error.to_string().contains("must be relative to jobs_root"));
-}
-
-#[tokio::test]
-async fn governed_jobs_root_rejects_parent_traversal() {
-    let harness = Harness::new();
-    let config = harness.config(
-        "../lookup.js",
-        Some("sha256:0000000000000000000000000000000000000000000000000000000000000000"),
-    );
-
-    let error = sidecar_router(config)
-        .await
-        .expect_err("parent traversal must fail");
-
-    assert!(error.to_string().contains("must not escape jobs_root"));
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn governed_jobs_root_rejects_symlink_escape() {
-    let harness = Harness::new();
-    let outside = harness._tmp.path().join("outside.js");
-    fs::write(&outside, "fn(state => state);\n").expect("outside job writes");
-    std::os::unix::fs::symlink(&outside, harness.jobs_root.join("escaped.js"))
-        .expect("symlink writes");
-    let hash = registry_platform_config::sha256_uri(&fs::read(&outside).expect("outside reads"));
-    let config = harness.config("escaped.js", Some(&hash));
-
-    let error = sidecar_router(config)
-        .await
-        .expect_err("symlink escape must fail");
-
-    assert!(error.to_string().contains("symlink escapes jobs_root"));
-}
-
 fn yaml_path(path: &Path) -> String {
     yaml_string(path.to_str().expect("fixture path is UTF-8"))
 }
@@ -919,14 +571,12 @@ fn yaml_string(value: &str) -> String {
 
 async fn signed_runtime_repo(
     harness: &Harness,
-    expression_hash: &str,
     sequence: u64,
     apply_policy: &str,
     previous_config_hash: &str,
 ) -> SignedRepo {
     signed_runtime_repo_with_metadata(
         harness,
-        expression_hash,
         sequence,
         apply_policy,
         previous_config_hash,
@@ -934,7 +584,7 @@ async fn signed_runtime_repo(
         INSTANCE_ID,
         ENVIRONMENT,
         STREAM_ID,
-        vec!["openfn_sidecar_workflow_bundle"],
+        vec![CHANGE_CLASS],
     )
     .await
 }
@@ -942,7 +592,6 @@ async fn signed_runtime_repo(
 #[allow(clippy::too_many_arguments)]
 async fn signed_runtime_repo_with_metadata(
     harness: &Harness,
-    expression_hash: &str,
     sequence: u64,
     apply_policy: &str,
     previous_config_hash: &str,
@@ -957,8 +606,7 @@ async fn signed_runtime_repo_with_metadata(
     let source_targets = repo.path().join("source-targets");
     fs::create_dir_all(&source_targets).expect("source targets dir");
     let target_path = source_targets.join(TARGET_NAME);
-    let target_bytes = serde_json::to_vec_pretty(&harness.governed_runtime_target(expression_hash))
-        .expect("target serializes");
+    let target_bytes = harness.governed_runtime_target_bytes();
     fs::write(&target_path, &target_bytes).expect("target writes");
     let config_hash = sha256_uri(&target_bytes);
     let custom = json!({
@@ -966,7 +614,7 @@ async fn signed_runtime_repo_with_metadata(
         "instance_id": instance_id,
         "environment": environment,
         "stream_id": stream_id,
-        "bundle_id": "opencrvs-sidecar-test",
+        "bundle_id": "sidecar-test",
         "sequence": sequence,
         "previous_config_hash": previous_config_hash,
         "config_hash": config_hash,
@@ -1103,7 +751,7 @@ config_trust:
       production: false
       tuf_root_sha256: {tuf_root_sha256}
       high_risk_change_classes:
-        - openfn_sidecar_workflow_bundle
+        - {change_class}
       signers:
 {signers}
       roles:
@@ -1112,7 +760,7 @@ config_trust:
           signer_kids:
 {role_signers}
           allowed_change_classes:
-            - openfn_sidecar_workflow_bundle
+            - {change_class}
 "#,
         token_hash_env = yaml_string(TOKEN_HASH_ENV),
         product = yaml_string(PRODUCT),
@@ -1126,6 +774,7 @@ config_trust:
         target_name = yaml_string(TARGET_NAME),
         antirollback_state_path = yaml_path(&repo.datastore_dir.join("antirollback.json")),
         tuf_root_sha256 = yaml_string(&repo.tuf_root_sha256),
+        change_class = CHANGE_CLASS,
         signers = signers,
         role_signers = role_signers,
     )

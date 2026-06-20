@@ -19,7 +19,6 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_norway.workspace = true
-registry-notary-worker-harness.workspace = true
 registry-platform-authcommon.workspace = true
 registry-platform-config.workspace = true
 registry-platform-ops.workspace = true
@@ -41,19 +40,4 @@ tempfile = { version = "3" }
 [[bin]]
 name = "registry-notary-source-adapter-sidecar"
 path = "src/main.rs"
-test = false
-
-[[bin]]
-name = "registry-notary-openfn-sidecar"
-path = "src/bin/registry_notary_openfn_sidecar.rs"
-test = false
-
-[[bin]]
-name = "openfn-sidecar-worker-fixture"
-path = "src/bin/openfn_sidecar_worker_fixture.rs"
-test = false
-
-[[bin]]
-name = "registry-notary-source-adapter-sidecar-test-worker"
-path = "src/bin/test_worker.rs"
 test = false

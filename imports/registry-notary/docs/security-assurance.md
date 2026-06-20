@@ -27,10 +27,13 @@ shell-free, package-manager-free, and compatible with a binary healthcheck and
 JSON-array entrypoint. The container CI guard enforces the runtime base,
 `registry-notary healthcheck`, and `ENTRYPOINT ["/usr/local/bin/registry-notary"]`.
 
-`Dockerfile.openfn-sidecar` is an intentional Node slim exception because it
-ships the OpenFn JavaScript worker runtime and npm dependencies. It still uses a
-JSON-array entrypoint, runs as the image's `node` user, and keeps its healthcheck
-runtime-native with `node /opt/openfn/container-healthcheck.mjs`.
+`Dockerfile.openfn-sidecar` is a distroless Rust image now that the OpenFn
+execution engine is retired; sources run through the built-in http_json,
+http_flow, and fhir engines, so the image no longer ships Node or npm. Its
+runtime stage stays `gcr.io/distroless/cc-debian12:nonroot` pinned by digest,
+shell-free, package-manager-free, and uses a JSON-array entrypoint. Liveness and
+readiness are served over HTTP at `/healthz` and `/ready`, so orchestrator
+probes replace a bundled container healthcheck binary.
 
 Security waivers live in `security/waivers.yml` when needed. Each waiver must
 name an owner, rationale, review trigger, and expiration. The default owner is

@@ -824,8 +824,8 @@
       "notes": "OpenFn sidecar route.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-source-adapter-sidecar/tests/rda_contract.rs::health_ready_and_metrics_are_available_without_secret_disclosure",
-        "crates/registry-notary-source-adapter-sidecar/tests/rda_contract.rs::missing_purpose_is_rejected_before_worker_dispatch"
+        "crates/registry-notary-source-adapter-sidecar/tests/http_json_adapter.rs::http_json_health_ready_and_metrics_are_available_without_secret_disclosure",
+        "crates/registry-notary-source-adapter-sidecar/tests/http_json_adapter.rs::http_json_missing_purpose_is_rejected_before_upstream_dispatch"
       ],
       "waiver": null
     },
@@ -848,8 +848,9 @@
       "notes": "OpenFn sidecar batch-match route. Bearer auth, data-purpose validation, request minimization, and worker-dispatch guards are enforced before source access.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-source-adapter-sidecar/tests/rda_contract.rs::batch_match_returns_per_item_projected_rda_data_and_sends_minimized_worker_request",
-        "crates/registry-notary-source-adapter-sidecar/tests/rda_contract.rs::batch_match_requires_auth_and_purpose_before_worker_dispatch"
+        "crates/registry-notary-source-adapter-sidecar/tests/http_json_adapter.rs::http_json_batch_match_runs_sequential_lookups_and_preserves_item_order",
+        "crates/registry-notary-source-adapter-sidecar/tests/http_json_adapter.rs::http_json_post_sends_minimized_body_without_configuration_or_secrets",
+        "crates/registry-notary-source-adapter-sidecar/tests/http_json_adapter.rs::http_json_batch_match_requires_auth_and_purpose_before_upstream_dispatch"
       ],
       "waiver": null
     }

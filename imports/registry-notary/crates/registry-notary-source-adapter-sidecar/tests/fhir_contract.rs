@@ -5,7 +5,6 @@ use axum_test::TestServer;
 use registry_notary_source_adapter_sidecar::{sidecar_router, SidecarConfig};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::path::Path;
 
 const TOKEN: &str = "fhir-sidecar-token";
 const TOKEN_HASH_ENV: &str = "FHIR_CONTRACT_SIDECAR_TOKEN_HASH";
@@ -1704,7 +1703,6 @@ async fn fhir_sidecar(fhir_base: &str) -> TestServer {
 }
 
 fn manifest_yaml(fhir_base: &str) -> String {
-    let worker = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/contract_worker.sh");
     let fhir_url = format!("{}/fhir", fhir_base.trim_end_matches('/'));
     format!(
         r#"
@@ -1723,14 +1721,6 @@ limits:
   liveness_window_ms: 1000
   max_batch_items: 100
   max_worker_memory_mb: 256
-openfn:
-  cli_build_tool: "1.36.0"
-  runtime: "1.36.0"
-worker:
-  command: "/bin/sh"
-  args:
-    - {worker}
-    - "/tmp/registry-notary-fhir-contract-unused.jsonl"
 sources:
   fhir_coverage:
     dataset: health_registry
@@ -2428,7 +2418,6 @@ sources:
 "#,
         token_hash_env = yaml_string(TOKEN_HASH_ENV),
         upstream_token_env = yaml_string(UPSTREAM_TOKEN_ENV),
-        worker = yaml_string(worker.to_str().expect("fixture worker path is UTF-8")),
         fhir_url = yaml_string(&fhir_url),
     )
 }
