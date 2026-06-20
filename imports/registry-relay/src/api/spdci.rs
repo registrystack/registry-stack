@@ -1256,7 +1256,6 @@ fn with_search_audit_context(
 mod tests {
     use super::{query_value, SearchRequest, MAX_SEARCH_ITEMS};
     use crate::config::SpdciRegistryConfig;
-    use crate::error::FilterError;
     use serde_json::{json, Value};
 
     fn minimal_spdci_registry_config() -> SpdciRegistryConfig {
@@ -1318,8 +1317,12 @@ mod tests {
     fn search_request_over_cap_is_rejected_with_too_many_items() {
         let config = minimal_spdci_registry_config();
         let body = valid_search_body_with_n_items(MAX_SEARCH_ITEMS + 1);
-        let err = SearchRequest::from_body(body, &config)
-            .expect_err("oversized search_request should be rejected");
+        // Use a match rather than `expect_err`/`unwrap_err`: those require the
+        // Ok type (`SearchRequest`) to implement `Debug`, which it does not.
+        let err = match SearchRequest::from_body(body, &config) {
+            Ok(_) => panic!("oversized search_request should be rejected"),
+            Err(err) => err,
+        };
         assert_eq!(
             err.code(),
             "filter.too_many_items",

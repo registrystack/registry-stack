@@ -144,7 +144,8 @@ impl FileConnector {
             // Fail closed: refuse to read when size is unknown. Future streaming
             // or HTTP sources must always provide a size or implement their own caps.
             return Err(ConnectorError::SourceUnreadable(
-                "source size is unknown; refusing to read without an enforceable size limit".to_string(),
+                "source size is unknown; refusing to read without an enforceable size limit"
+                    .to_string(),
             ));
         };
         if size_bytes > self.max_source_file_bytes {
@@ -1081,9 +1082,7 @@ mod tests {
         use std::sync::Arc;
 
         use crate::format::{DecodedStream, Format, FormatError, FormatFuture, FormatHints};
-        use crate::source::{
-            OpenedSource, Source, SourceDescriptor, SourceFuture, SourceMetadata,
-        };
+        use crate::source::{OpenedSource, Source, SourceDescriptor, SourceFuture, SourceMetadata};
 
         // Minimal test helper: Source that returns size_bytes: None
         struct TestSource;
@@ -1160,7 +1159,10 @@ mod tests {
         assert!(result.is_err());
         match result {
             Err(ConnectorError::SourceUnreadable(msg)) => {
-                assert!(msg.contains("unknown"), "error message should mention unknown size");
+                assert!(
+                    msg.contains("unknown"),
+                    "error message should mention unknown size"
+                );
             }
             _ => panic!("expected SourceUnreadable error"),
         }

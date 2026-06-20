@@ -1025,12 +1025,13 @@ fn is_public_key_name(key: &str) -> bool {
 /// first `/`, `?`, or `#` that ends the authority.
 fn url_contains_userinfo(value: &str) -> bool {
     let value = value.trim();
-    let Some(scheme_end) = value.find("://") else {
+    // Require a `scheme://` prefix so a bare `@` (e.g. an email address) is
+    // not matched as userinfo.
+    let Some((scheme, authority_and_rest)) = value.split_once("://") else {
         return false;
     };
     // A scheme must be non-empty and a valid scheme token to avoid matching
     // arbitrary text that merely happens to contain `://`.
-    let scheme = &value[..scheme_end];
     if scheme.is_empty()
         || !scheme
             .chars()
@@ -1042,13 +1043,11 @@ fn url_contains_userinfo(value: &str) -> bool {
     {
         return false;
     }
-    let authority_and_rest = &value[scheme_end + 3..];
     // The authority ends at the first `/`, `?`, or `#`.
     let authority_end = authority_and_rest
         .find(['/', '?', '#'])
         .unwrap_or(authority_and_rest.len());
-    let authority = &authority_and_rest[..authority_end];
-    authority.contains('@')
+    authority_and_rest[..authority_end].contains('@')
 }
 
 fn path_for_json(path: &std::path::Path) -> String {
