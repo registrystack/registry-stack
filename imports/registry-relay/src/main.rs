@@ -987,24 +987,26 @@ fn relay_config_value_classification(path: &[&str], value: &Value) -> ConfigValu
         || key.contains("private")
         || key.contains("passphrase")
         || key.contains("credential")
-        || key.contains("connection")
+    {
+        return ConfigValueClassification::Secret;
+    }
+    if key.contains("connection")
         || key.contains("dsn")
         || key.contains("url")
         || key.contains("uri")
-        // Catches `apikey`, `signing_key`, `api_key`, ... while the explicit
-        // checks below keep harmless public key material public.
-        || key.contains("key")
         || key == "jwk"
     {
-        // `key` substring is broad; carve out the well-known *public* key
-        // material so we do not over-redact harmless values.
-        if key.contains("key") && is_public_key_name(&key) {
+        return ConfigValueClassification::Secret;
+    }
+    if key.contains("key") {
+        // `key` substring is broad; carve out well-known public key material so
+        // harmless values stay public. Hard secret markers above still win.
+        if is_public_key_name(&key) {
             return ConfigValueClassification::Public;
         }
-        ConfigValueClassification::Secret
-    } else {
-        ConfigValueClassification::Public
+        return ConfigValueClassification::Secret;
     }
+    ConfigValueClassification::Public
 }
 
 /// Returns true for key names that contain `key` but denote *public* key
@@ -2828,6 +2830,8 @@ audit:
             "service_credential",
             "apikey",
             "signing_key",
+            "private_public_key",
+            "public_key_secret",
         ] {
             assert_eq!(
                 relay_config_value_classification(&["section", key], &json!("value")),
