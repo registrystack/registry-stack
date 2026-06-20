@@ -968,6 +968,121 @@ async fn http_json_batch_match_runs_sequential_lookups_and_preserves_item_order(
 }
 
 #[tokio::test]
+async fn http_json_missing_purpose_is_rejected_before_upstream_dispatch() {
+    let harness = http_json_harness().await;
+    harness.upstream_state.seen.lock().await.clear();
+
+    let response = harness
+        .sidecar
+        .get(&format!("/v1/datasets/{DATASET}/entities/{ENTITY}/records"))
+        .add_header("authorization", format!("Bearer {TOKEN}"))
+        .add_query_param("national_id", "person-123")
+        .add_query_param("fields", "national_id")
+        .await;
+
+    response.assert_status(StatusCode::BAD_REQUEST);
+    assert!(
+        harness.upstream_state.seen.lock().await.is_empty(),
+        "lookups without a Data-Purpose header must be rejected before upstream dispatch"
+    );
+}
+
+#[tokio::test]
+async fn http_json_batch_match_requires_auth_and_purpose_before_upstream_dispatch() {
+    let harness = http_json_harness().await;
+    harness.upstream_state.seen.lock().await.clear();
+    let path = format!("/v1/datasets/{DATASET}/entities/{ENTITY}/records:batchMatch");
+    let body = json!({
+        "fields": ["national_id"],
+        "query_signature": [{ "field": "national_id", "op": "eq" }],
+        "items": [{ "id": "0", "values": ["person-123"] }]
+    });
+
+    let missing_token = harness
+        .sidecar
+        .post(&path)
+        .add_header("data-purpose", "eligibility")
+        .json(&body)
+        .await;
+    missing_token.assert_status(StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        missing_token
+            .headers()
+            .get(header::WWW_AUTHENTICATE)
+            .and_then(|value| value.to_str().ok()),
+        Some("Bearer"),
+        "401 responses include a WWW-Authenticate challenge"
+    );
+
+    let malformed_token = harness
+        .sidecar
+        .post(&path)
+        .add_header("authorization", "Basic not-bearer")
+        .add_header("data-purpose", "eligibility")
+        .json(&body)
+        .await;
+    malformed_token.assert_status(StatusCode::UNAUTHORIZED);
+
+    let rejected_token = harness
+        .sidecar
+        .post(&path)
+        .add_header("authorization", "Bearer wrong-token")
+        .add_header("data-purpose", "eligibility")
+        .json(&body)
+        .await;
+    rejected_token.assert_status(StatusCode::FORBIDDEN);
+
+    let missing_purpose = harness
+        .sidecar
+        .post(&path)
+        .add_header("authorization", format!("Bearer {TOKEN}"))
+        .json(&body)
+        .await;
+    missing_purpose.assert_status(StatusCode::BAD_REQUEST);
+
+    assert!(
+        harness.upstream_state.seen.lock().await.is_empty(),
+        "batch match must enforce bearer auth and Data-Purpose before any upstream dispatch"
+    );
+}
+
+#[tokio::test]
+async fn http_json_health_ready_and_metrics_are_available_without_secret_disclosure() {
+    let harness = http_json_harness().await;
+
+    harness
+        .sidecar
+        .get(&format!("/v1/datasets/{DATASET}/entities/{ENTITY}/records"))
+        .add_header("authorization", format!("Bearer {TOKEN}"))
+        .add_header("data-purpose", "eligibility")
+        .add_query_param("national_id", "person-123")
+        .add_query_param("fields", "national_id,birth_date")
+        .await
+        .assert_status_ok();
+
+    harness.sidecar.get("/healthz").await.assert_status_ok();
+    harness.sidecar.get("/ready").await.assert_status_ok();
+
+    let metrics = harness.sidecar.get("/metrics").await;
+    metrics.assert_status_ok();
+    let metrics_body = metrics.text();
+    assert!(metrics_body.contains("registry_notary_openfn_sidecar_source_permits"));
+    assert!(metrics_body.contains("registry_notary_openfn_sidecar_lookup_total"));
+    assert!(
+        !metrics_body.contains("target-secret"),
+        "metrics must not disclose credential secrets"
+    );
+    assert!(
+        !metrics_body.contains("person-123"),
+        "metrics must not disclose looked-up subject identifiers"
+    );
+    assert!(
+        !metrics_body.contains(TOKEN),
+        "metrics must not disclose the sidecar bearer token"
+    );
+}
+
+#[tokio::test]
 async fn http_flow_runs_dependent_steps_and_returns_projected_rda_data() {
     let _env_guard = ENV_LOCK.lock().await;
     let upstream_state = UpstreamState::default();
