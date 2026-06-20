@@ -54,7 +54,7 @@ fi
 : "${CIVIL_EVIDENCE_CLIENT_BEARER:?missing CIVIL_EVIDENCE_CLIENT_BEARER; rerun scripts/generate-demo-secrets.py}"
 if [[ -z "${OPENFN_SIDECAR_TOKEN_HASH:-}" ]]; then
   OPENFN_SIDECAR_TOKEN_HASH="$(
-    python - "${OPENFN_SIDECAR_TOKEN_RAW}" <<'PY'
+    python3 - "${OPENFN_SIDECAR_TOKEN_RAW}" <<'PY'
 import hashlib
 import sys
 print(f"sha256:{hashlib.sha256(sys.argv[1].encode('ascii')).hexdigest()}")
@@ -124,7 +124,7 @@ curl -fsS \
   --data '{"target":{"type":"Person","identifiers":[{"scheme":"national_id","value":"person-123"}]},"claims":["date-of-birth"],"disclosure":"value","format":"application/dc+sd-jwt"}'
 
 evaluation_id="$(
-  python - "${vc_evaluation_body}" <<'PY'
+  python3 - "${vc_evaluation_body}" <<'PY'
 import json
 import sys
 body = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -147,7 +147,7 @@ curl -fsS \
     disclosure: "value"
   }')"
 
-python - "${notary_body}" "${vc_evaluation_body}" "${credential_body}" "${credential_summary_body}" <<'PY'
+python3 - "${notary_body}" "${vc_evaluation_body}" "${credential_body}" "${credential_summary_body}" <<'PY'
 import json
 import sys
 notary_body = json.load(open(sys.argv[1], encoding="utf-8"))

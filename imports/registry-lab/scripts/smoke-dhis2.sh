@@ -53,7 +53,7 @@ fi
 : "${DHIS2_EVIDENCE_CLIENT_BEARER:?missing DHIS2_EVIDENCE_CLIENT_BEARER; rerun scripts/generate-demo-secrets.py}"
 if [[ -z "${OPENFN_SIDECAR_TOKEN_HASH:-}" ]]; then
   OPENFN_SIDECAR_TOKEN_HASH="$(
-    python - "${OPENFN_SIDECAR_TOKEN_RAW}" <<'PY'
+    python3 - "${OPENFN_SIDECAR_TOKEN_RAW}" <<'PY'
 import hashlib
 import sys
 print(f"sha256:{hashlib.sha256(sys.argv[1].encode('ascii')).hexdigest()}")
@@ -118,7 +118,7 @@ issue_credential() {
   local holder_file="${6:-}"
   local evaluation_id
   evaluation_id="$(
-    python - "${evaluation_file}" <<'PY'
+    python3 - "${evaluation_file}" <<'PY'
 import json
 import sys
 
@@ -238,7 +238,7 @@ curl -fsS \
     }')"
 
 programme_evaluation_id="$(
-  python - "${output_dir}/smoke-dhis2-programme-participation-evaluation.json" <<'PY'
+  python3 - "${output_dir}/smoke-dhis2-programme-participation-evaluation.json" <<'PY'
 import json
 import sys
 
@@ -286,14 +286,14 @@ curl -fsS \
       format: "application/vnd.registry-notary.claim-result+json"
     }')"
 
-python "${script_dir}/summarize-dhis2-programme-vc.py" \
+python3 "${script_dir}/summarize-dhis2-programme-vc.py" \
   "${output_dir}/smoke-dhis2-programme-participation-evaluation.json" \
   "${output_dir}/smoke-dhis2-programme-participation-credential.json" \
   "${output_dir}/smoke-dhis2-programme-participation-holder.json" \
   "${output_dir}/smoke-dhis2-programme-participation-followup.json" \
   "${output_dir}/smoke-dhis2-programme-participation-credential-summary.json"
 
-python - "${output_dir}" "${output_dir}/smoke-dhis2-child-program-vc-evaluation.json" "${output_dir}/smoke-dhis2-child-program-credential.json" <<'PY'
+python3 - "${output_dir}" "${output_dir}/smoke-dhis2-child-program-vc-evaluation.json" "${output_dir}/smoke-dhis2-child-program-credential.json" <<'PY'
 import json
 import pathlib
 import sys
