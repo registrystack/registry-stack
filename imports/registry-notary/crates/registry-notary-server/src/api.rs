@@ -1245,12 +1245,25 @@ async fn break_glass_proposal(
     }
 }
 
+/// Validate a caller-supplied approval `reference` before it reaches the
+/// platform `FileLocalApprovalStore`. The store keys approvals by this value,
+/// so constrain it to a safe charset and reject path-traversal markers as
+/// defense-in-depth, regardless of how the store ultimately keys it.
+fn is_valid_approval_reference(reference: &str) -> bool {
+    if reference.trim().is_empty() || reference.contains("..") {
+        return false;
+    }
+    reference
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-'))
+}
+
 async fn stored_break_glass_approval(
     config_trust: &registry_notary_core::ConfigTrustConfig,
     candidate: &ResolvedConfigCandidate,
     reference: &str,
 ) -> Result<BreakGlassApproval, ()> {
-    if reference.trim().is_empty() {
+    if !is_valid_approval_reference(reference) {
         return Err(());
     }
     let config_trust = config_trust.clone();
@@ -1811,6 +1824,11 @@ fn load_local_approval(
         .local_approval_reference
         .as_deref()
         .ok_or(LocalApprovalStoreError::ApprovalNotFound)?;
+    // Validate the caller-supplied reference before it reaches the store; an
+    // invalid reference cannot match any stored approval.
+    if !is_valid_approval_reference(approval_reference) {
+        return Err(LocalApprovalStoreError::ApprovalNotFound);
+    }
     let governance = state.config_governance();
     let config_trust = governance
         .config_trust
@@ -3830,17 +3848,20 @@ async fn oid4vci_credential_offer(
 
 async fn oid4vci_type_metadata(
     state: Option<Extension<Arc<RegistryNotaryApiState>>>,
+    connect_info: Option<Extension<axum::extract::ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
     uri: Uri,
 ) -> Response {
     let Some(Extension(state)) = state else {
         return oid4vci_error_response(Oid4vciWireError::ServerError);
     };
-    oid4vci_type_metadata_response(&state, &headers, &uri, uri.path())
+    let trust_forwarded = forwarded_host_trusted(&state, connect_info.as_deref());
+    oid4vci_type_metadata_response(&state, &headers, &uri, uri.path(), trust_forwarded)
 }
 
 async fn oid4vci_well_known_type_metadata(
     state: Option<Extension<Arc<RegistryNotaryApiState>>>,
+    connect_info: Option<Extension<axum::extract::ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
     uri: Uri,
 ) -> Response {
@@ -3853,7 +3874,24 @@ async fn oid4vci_well_known_type_metadata(
     let Some(vct_path) = uri.path().strip_prefix(WELL_KNOWN_VCT_PREFIX) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    oid4vci_type_metadata_response(&state, &headers, &uri, vct_path)
+    let trust_forwarded = forwarded_host_trusted(&state, connect_info.as_deref());
+    oid4vci_type_metadata_response(&state, &headers, &uri, vct_path, trust_forwarded)
+}
+
+/// Whether `X-Forwarded-*` headers may be trusted for this request, i.e. the
+/// socket peer is in the configured `trusted_proxy_ips`. Mirrors the gate in
+/// `token_client_address_with_trusted_proxy_ips`.
+fn forwarded_host_trusted(
+    state: &RegistryNotaryApiState,
+    connect_info: Option<&axum::extract::ConnectInfo<SocketAddr>>,
+) -> bool {
+    let Some(axum::extract::ConnectInfo(addr)) = connect_info else {
+        return false;
+    };
+    state
+        .runtime_config()
+        .map(|config| config.server.trusted_proxy_ips.contains(&addr.ip()))
+        .unwrap_or(false)
 }
 
 fn oid4vci_type_metadata_response(
@@ -3861,13 +3899,18 @@ fn oid4vci_type_metadata_response(
     headers: &HeaderMap,
     uri: &Uri,
     request_path: &str,
+    trust_forwarded: bool,
 ) -> Response {
     if !state.oid4vci.enabled {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let Some(request_vct) =
-        oid4vci_requested_absolute_url_for_path(&state.oid4vci, headers, uri, request_path)
-    else {
+    let Some(request_vct) = oid4vci_requested_absolute_url_for_path(
+        &state.oid4vci,
+        headers,
+        uri,
+        request_path,
+        trust_forwarded,
+    ) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let Some(configuration) = state
@@ -6477,14 +6520,22 @@ fn oid4vci_requested_absolute_url_for_path(
     headers: &HeaderMap,
     uri: &Uri,
     request_path: &str,
+    trust_forwarded: bool,
 ) -> Option<String> {
     let (issuer_scheme, issuer_authority, issuer_path) =
         absolute_url_parts(&config.credential_issuer)?;
-    let scheme = forwarded_header_value(headers, "x-forwarded-proto")
+    // `X-Forwarded-*` headers are caller-controlled, so they are honored only
+    // when the socket peer is a trusted proxy (mirrors `token_client_address`).
+    // Otherwise fall back to the `Host` header / URI / configured issuer.
+    let scheme = trust_forwarded
+        .then(|| forwarded_header_value(headers, "x-forwarded-proto"))
+        .flatten()
         .or_else(|| uri.scheme_str())
         .unwrap_or(issuer_scheme)
         .to_lowercase();
-    let authority = forwarded_header_value(headers, "x-forwarded-host")
+    let authority = trust_forwarded
+        .then(|| forwarded_header_value(headers, "x-forwarded-host"))
+        .flatten()
         .or_else(|| {
             headers
                 .get(header::HOST)
@@ -9035,6 +9086,71 @@ mod tests {
             ),
             "203.0.113.11"
         );
+    }
+
+    #[test]
+    fn oid4vci_requested_url_ignores_forwarded_host_from_untrusted_peer() {
+        let config = Oid4vciConfig {
+            credential_issuer: "https://issuer.example".to_string(),
+            ..Oid4vciConfig::default()
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("http"));
+        headers.insert("x-forwarded-host", HeaderValue::from_static("evil.example"));
+        headers.insert(header::HOST, HeaderValue::from_static("host.example"));
+        let uri = "/credentials/identity".parse::<Uri>().unwrap();
+
+        // Untrusted peer: forwarded scheme/host are ignored, Host header wins.
+        assert_eq!(
+            oid4vci_requested_absolute_url_for_path(
+                &config,
+                &headers,
+                &uri,
+                "/credentials/identity",
+                false,
+            ),
+            Some("https://host.example/credentials/identity".to_string())
+        );
+    }
+
+    #[test]
+    fn oid4vci_requested_url_trusts_forwarded_host_from_trusted_peer() {
+        let config = Oid4vciConfig {
+            credential_issuer: "https://issuer.example".to_string(),
+            ..Oid4vciConfig::default()
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("http"));
+        headers.insert("x-forwarded-host", HeaderValue::from_static("proxy.example"));
+        headers.insert(header::HOST, HeaderValue::from_static("host.example"));
+        let uri = "/credentials/identity".parse::<Uri>().unwrap();
+
+        // Trusted peer: forwarded scheme/host are honored.
+        assert_eq!(
+            oid4vci_requested_absolute_url_for_path(
+                &config,
+                &headers,
+                &uri,
+                "/credentials/identity",
+                true,
+            ),
+            Some("http://proxy.example/credentials/identity".to_string())
+        );
+    }
+
+    #[test]
+    fn approval_reference_validator_rejects_path_traversal_and_separators() {
+        assert!(is_valid_approval_reference("approval-2026.01:abc_DEF"));
+        assert!(!is_valid_approval_reference(""));
+        assert!(!is_valid_approval_reference("   "));
+        assert!(!is_valid_approval_reference(".."));
+        assert!(!is_valid_approval_reference("../etc/passwd"));
+        assert!(!is_valid_approval_reference("a/b"));
+        assert!(!is_valid_approval_reference("a\\b"));
+        assert!(!is_valid_approval_reference("/abs/path"));
+        assert!(!is_valid_approval_reference("with space"));
+        assert!(!is_valid_approval_reference("nul\0byte"));
+        assert!(!is_valid_approval_reference("ctrl\nchar"));
     }
 
     #[test]

@@ -4921,6 +4921,13 @@ async fn consume_notary_token_jti(
     replay: &ReplayStores,
 ) -> Result<(), EvidenceError> {
     let Some(jti) = payload.get("jti").and_then(Value::as_str) else {
+        // Single-use tokens carry replay protection via `jti`. The transaction
+        // token typ is required to be single-use, so a missing `jti` for that
+        // typ must fail closed rather than silently skip replay protection.
+        // Other typs are not single-use and legitimately have no `jti`.
+        if anchor.token_typ == registry_notary_core::tokens::NOTARY_TRANSACTION_TOKEN_JWT_TYP {
+            return Err(EvidenceError::MissingCredential);
+        }
         return Ok(());
     };
     if jti.trim().is_empty() {
@@ -7492,6 +7499,40 @@ mod tests {
             .expect_err("second token use is replay");
 
         assert!(matches!(replay_error, EvidenceError::MissingCredential));
+    }
+
+    #[tokio::test]
+    async fn consume_notary_token_jti_rejects_missing_jti_for_transaction_typ() {
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let payload = json!({
+            "iss": "https://notary.example",
+            "exp": now + 300,
+        });
+        let anchor = NotaryTokenAnchor {
+            verification_keys: Vec::new(),
+            issuer: "https://notary.example".to_string(),
+            token_typ: NOTARY_TRANSACTION_TOKEN_JWT_TYP.to_string(),
+            audiences: vec!["registry-notary".to_string()],
+            principal_claim: "sub".to_string(),
+            subject_binding_claim: Some("civil_id".to_string()),
+        };
+        let replay = ReplayStores::memory();
+
+        // A single-use transaction-typ token without `jti` must fail closed
+        // rather than silently skip replay protection.
+        let error = consume_notary_token_jti(&payload, &anchor, &replay)
+            .await
+            .expect_err("missing jti for single-use typ fails closed");
+        assert!(matches!(error, EvidenceError::MissingCredential));
+
+        // A non-single-use typ legitimately has no `jti` and is accepted.
+        let other_anchor = NotaryTokenAnchor {
+            token_typ: "registry-notary-access+jwt".to_string(),
+            ..anchor
+        };
+        consume_notary_token_jti(&payload, &other_anchor, &replay)
+            .await
+            .expect("missing jti for non-single-use typ is accepted");
     }
 
     fn file_watch_key(path: &std::path::Path) -> SigningKeyConfig {
