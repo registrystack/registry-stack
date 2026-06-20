@@ -46,8 +46,13 @@ sources:
       method: GET
       base_url:
         cel: credential_public.baseUrl
-      path:
-        cel: '"/people/" + urlEncode(lookup.value)'
+      # http_json requires a LITERAL path, so the id travels as a query
+      # parameter against the collection endpoint (the vendored mock registry
+      # serves GET /people?id=<id> as well as the legacy GET /people/<id>).
+      path: "/people"
+      query:
+        id:
+          cel: lookup.value
       auth:
         type: bearer
         token:

@@ -3,8 +3,8 @@
 # Built-in http_json sidecar manifest for DHIS2 tracker health lookups.
 # Replaces the former OpenFn-engine dhis2-health sidecar.
 #
-# The source queries /api/tracker/trackedEntities/{id} with basic auth and maps
-# the JSON response to the same output fields that the retired OpenFn job produced:
+# The source maps the DHIS2 tracker response to the same output fields the
+# retired OpenFn job produced:
 #   tracked_entity, org_unit, first_name, last_name,
 #   child_program_code, child_program_status, child_program_active,
 #   child_age_band, reconciliation_ref,
@@ -12,21 +12,23 @@
 #   child_health_visit_recorded, child_health_visit_count,
 #   tb_program_status, tb_program_active
 #
-# CEL programme/attribute/stage IDs match the retired JS job exactly.
-# The CEL collection macros filter/map/exists/all are required (added in the
-# same release cycle by the registry-notary CEL engine work).
+# DHIS2 query shape (MUST be confirmed by the live smoke in CI):
+#   The OpenFn job fetched a single tracked entity via
+#   GET /api/tracker/trackedEntities/{id}, whose JSON root *is* the entity.
+#   http_json uses LITERAL paths, so the id cannot go in the path. Instead this
+#   manifest queries the tracker COLLECTION endpoint
+#   GET /api/tracker/trackedEntities?trackedEntities={id}&orgUnitMode=ALL&fields=...
+#   whose response root key is `trackedEntities` (an array). The CEL therefore
+#   selects element [0] and reproduces the JS output for that single entity.
 #
 # CEL notes:
-#  - No local variables: repeated sub-expressions are inlined. This is verbose
-#    but fully valid standard CEL.
-#  - The `filter`, `map`, `exists` macros follow the CEL spec:
-#      list.filter(e, predicate)  -> filtered list
-#      list.exists(e, predicate)  -> bool
-#      list.map(e, expr)          -> mapped list
-#  - `size(list)` or `list.size()` returns the length.
-#  - `has(field)` tests for field presence on a map/object.
+#  - No local variables: repeated sub-expressions are inlined (valid CEL).
+#  - Collection macros filter/map/exists and size() are required (added to
+#    crosswalk-core by the registry-notary CEL engine work). No `.flatten()`.
+#  - String methods startsWith()/substring() are assumed available; the live
+#    smoke must confirm they resolve (see the trackedEntities query below).
 #
-# Programme IDs  (match JS job constants):
+# Programme IDs  (match the retired JS job constants):
 #   CHILD_PROGRAM        = "IpHINAT79UW"
 #   MATERNAL_PNC_PROGRAM = "uy2gU8kT1jF"
 #   TB_PROGRAM           = "ur1Edk5Oe2n"
@@ -71,19 +73,22 @@ sources:
       method: GET
       base_url:
         cel: credential_public.baseUrl
-      path:
-        # lookup.value may arrive as "dhis2:tracked-entity:<id>" (reconciliation ref)
-        # or as a bare tracked-entity ID. Strip the prefix if present.
-        cel: >-
-          "/api/tracker/trackedEntities/" +
-          urlEncode(
-            lookup.value.startsWith("dhis2:tracked-entity:")
-              ? lookup.value.substring(21)
-              : lookup.value
-          )
+      path: "/api/tracker/trackedEntities"
       query:
+        # Strip the 'dhis2:tracked-entity:' reconciliation prefix the caller may
+        # carry, matching the OpenFn job's lookupValue.startsWith(...) handling.
+        # If startsWith()/substring() turn out to be unavailable in CEL, drop
+        # this guard and require the caller to pass the bare tracked-entity UID.
+        trackedEntities:
+          cel: >-
+            lookup.value.startsWith('dhis2:tracked-entity:')
+              ? lookup.value.substring(size('dhis2:tracked-entity:'))
+              : lookup.value
+        orgUnitMode:
+          cel: '"ALL"'
         fields:
-          cel: '"trackedEntity,orgUnit,attributes[attribute,value],enrollments[enrollment,program,status,enrolledAt,events[event,programStage,status,occurredAt,scheduledAt]]"'
+          cel: >-
+            "trackedEntity,orgUnit,attributes[attribute,value],enrollments[enrollment,program,status,enrolledAt,events[event,programStage,status,occurredAt,scheduledAt]]"
       auth:
         type: basic
         username:
@@ -91,104 +96,50 @@ sources:
         password:
           secret: password
       response:
+        # Reproduce the dhis2-health-lookup.js output for the single matched
+        # tracked entity. body.trackedEntities[0] is the first (and only) element
+        # of the tracker collection response. If the entity is not found the
+        # array is empty and we return an empty record list (RDA not-found).
+        #
+        # child_health_visit_count is computed from the events of the FIRST
+        # child-program enrollment: DHIS2 allows at most one enrollment per
+        # program per tracked entity, and the JS enrollment() helper itself uses
+        # .find (first match). CEL's macro set has no fold/sum, so a true
+        # cross-enrollment sum is not expressible; the single-enrollment form
+        # matches the OpenFn output for every real play-instance entity.
         records:
-          # Map the single tracked-entity object to the flat field list.
-          # Each sub-expression is inlined (CEL has no let-bindings).
-          #
-          # enrollments / attributes shorthand:
-          #   enr = has(body.enrollments) ? body.enrollments : []
-          #   att = has(body.attributes)  ? body.attributes  : []
-          #
-          # childEnr = enr.filter(e, e.program == "IpHINAT79UW")
-          #            [0 if non-empty else sentinel]
-          # etc.
           cel: >-
-            [
+            size(body.trackedEntities) == 0 ? [] : [
               {
-                "tracked_entity":   body.trackedEntity,
-                "org_unit":         body.orgUnit,
-
-                "first_name":
-                  (has(body.attributes) ? body.attributes : [])
-                    .filter(a, a.attribute == "w75KJ2mc4zz").size() > 0
-                  ? (has(body.attributes) ? body.attributes : [])
-                      .filter(a, a.attribute == "w75KJ2mc4zz")[0].value
-                  : null,
-
-                "last_name":
-                  (has(body.attributes) ? body.attributes : [])
-                    .filter(a, a.attribute == "zDhUuAYrxNC").size() > 0
-                  ? (has(body.attributes) ? body.attributes : [])
-                      .filter(a, a.attribute == "zDhUuAYrxNC")[0].value
-                  : null,
-
+                "tracked_entity": body.trackedEntities[0].trackedEntity,
+                "org_unit": body.trackedEntities[0].orgUnit,
+                "first_name": size(body.trackedEntities[0].attributes.filter(a, a.attribute == 'w75KJ2mc4zz')) == 0
+                  ? null
+                  : body.trackedEntities[0].attributes.filter(a, a.attribute == 'w75KJ2mc4zz')[0].value,
+                "last_name": size(body.trackedEntities[0].attributes.filter(a, a.attribute == 'zDhUuAYrxNC')) == 0
+                  ? null
+                  : body.trackedEntities[0].attributes.filter(a, a.attribute == 'zDhUuAYrxNC')[0].value,
                 "child_program_code": "DHIS2_CHILD_PROGRAM",
-
-                "child_program_status":
-                  (has(body.enrollments) ? body.enrollments : [])
-                    .filter(e, e.program == "IpHINAT79UW").size() > 0
-                  ? (has(body.enrollments) ? body.enrollments : [])
-                      .filter(e, e.program == "IpHINAT79UW")[0].status
-                  : null,
-
-                "child_program_active":
-                  (has(body.enrollments) ? body.enrollments : [])
-                    .filter(e, e.program == "IpHINAT79UW").size() > 0 &&
-                  (has(body.enrollments) ? body.enrollments : [])
-                    .filter(e, e.program == "IpHINAT79UW")[0].status == "ACTIVE",
-
-                "child_age_band":
-                  (has(body.enrollments) ? body.enrollments : [])
-                    .filter(e, e.program == "IpHINAT79UW").size() > 0
-                  ? "5_to_17"
-                  : "unknown",
-
-                "reconciliation_ref":
-                  "dhis2:tracked-entity:" + body.trackedEntity,
-
-                "maternal_pnc_status":
-                  (has(body.enrollments) ? body.enrollments : [])
-                    .filter(e, e.program == "uy2gU8kT1jF").size() > 0
-                  ? (has(body.enrollments) ? body.enrollments : [])
-                      .filter(e, e.program == "uy2gU8kT1jF")[0].status
-                  : null,
-
-                "maternal_pnc_active":
-                  (has(body.enrollments) ? body.enrollments : [])
-                    .filter(e, e.program == "uy2gU8kT1jF").size() > 0 &&
-                  (has(body.enrollments) ? body.enrollments : [])
-                    .filter(e, e.program == "uy2gU8kT1jF")[0].status == "ACTIVE",
-
-                "child_health_visit_recorded":
-                  (has(body.enrollments) ? body.enrollments : [])
-                    .filter(e, e.program == "IpHINAT79UW")
-                    .map(e, has(e.events) ? e.events : [])
-                    .flatten()
-                    .exists(ev,
-                      ev.status == "COMPLETED" &&
-                      (ev.programStage == "A03MvHHogjR" ||
-                       ev.programStage == "ZzYYXq4fJie")),
-
-                "child_health_visit_count":
-                  size(
-                    (has(body.enrollments) ? body.enrollments : [])
-                      .filter(e, e.program == "IpHINAT79UW")
-                      .map(e, has(e.events) ? e.events : [])
-                      .flatten()
-                  ),
-
-                "tb_program_status":
-                  (has(body.enrollments) ? body.enrollments : [])
-                    .filter(e, e.program == "ur1Edk5Oe2n").size() > 0
-                  ? (has(body.enrollments) ? body.enrollments : [])
-                      .filter(e, e.program == "ur1Edk5Oe2n")[0].status
-                  : null,
-
-                "tb_program_active":
-                  (has(body.enrollments) ? body.enrollments : [])
-                    .filter(e, e.program == "ur1Edk5Oe2n").size() > 0 &&
-                  (has(body.enrollments) ? body.enrollments : [])
-                    .filter(e, e.program == "ur1Edk5Oe2n")[0].status == "ACTIVE"
+                "child_program_status": size(body.trackedEntities[0].enrollments.filter(e, e.program == 'IpHINAT79UW')) == 0
+                  ? null
+                  : body.trackedEntities[0].enrollments.filter(e, e.program == 'IpHINAT79UW')[0].status,
+                "child_program_active": body.trackedEntities[0].enrollments.exists(e, e.program == 'IpHINAT79UW' && e.status == 'ACTIVE'),
+                "child_age_band": body.trackedEntities[0].enrollments.exists(e, e.program == 'IpHINAT79UW') ? '5_to_17' : 'unknown',
+                "reconciliation_ref": 'dhis2:tracked-entity:' + body.trackedEntities[0].trackedEntity,
+                "maternal_pnc_status": size(body.trackedEntities[0].enrollments.filter(e, e.program == 'uy2gU8kT1jF')) == 0
+                  ? null
+                  : body.trackedEntities[0].enrollments.filter(e, e.program == 'uy2gU8kT1jF')[0].status,
+                "maternal_pnc_active": body.trackedEntities[0].enrollments.exists(e, e.program == 'uy2gU8kT1jF' && e.status == 'ACTIVE'),
+                "child_health_visit_recorded": body.trackedEntities[0].enrollments.exists(e,
+                  e.program == 'IpHINAT79UW' && e.events.exists(ev,
+                    ev.status == 'COMPLETED' && (ev.programStage == 'A03MvHHogjR' || ev.programStage == 'ZzYYXq4fJie'))),
+                "child_health_visit_count": size(body.trackedEntities[0].enrollments.filter(e, e.program == 'IpHINAT79UW')) == 0
+                  ? 0
+                  : size(body.trackedEntities[0].enrollments.filter(e, e.program == 'IpHINAT79UW')[0].events),
+                "tb_program_status": size(body.trackedEntities[0].enrollments.filter(e, e.program == 'ur1Edk5Oe2n')) == 0
+                  ? null
+                  : body.trackedEntities[0].enrollments.filter(e, e.program == 'ur1Edk5Oe2n')[0].status,
+                "tb_program_active": body.trackedEntities[0].enrollments.exists(e, e.program == 'ur1Edk5Oe2n' && e.status == 'ACTIVE')
               }
             ]
     smoke_lookup:
