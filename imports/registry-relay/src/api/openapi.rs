@@ -43,6 +43,10 @@ const VC_JWT_MEDIA_TYPE: &str = "application/vc+jwt";
 const INFO_SUMMARY: &str = "Read-only data gateway exposing entity records, \
     catalog metadata, and SHACL/DCAT-AP shapes for governed datasets.";
 
+const INFO_DESCRIPTION: &str = "Read-only HTTP gateway over governed datasets. \
+    Serves entity records, catalog metadata, and SHACL/DCAT-AP shapes, with API \
+    discovery through the RFC 9727 catalog endpoint.";
+
 /// Sub-router for the best-effort OpenAPI document.
 pub fn router<S>() -> Router<S>
 where
@@ -981,7 +985,7 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
         "info": {
             "title": catalog.title,
             "summary": INFO_SUMMARY,
-            "description": "Best-effort Registry Relay API document generated from visible metadata.",
+            "description": INFO_DESCRIPTION,
             "version": env!("CARGO_PKG_VERSION"),
             "contact": { "name": catalog.publisher },
             "license": {
