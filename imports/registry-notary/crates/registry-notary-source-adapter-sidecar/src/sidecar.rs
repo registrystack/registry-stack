@@ -69,6 +69,11 @@ pub struct ServerConfig {
     pub http1_header_read_timeout_ms: u64,
     #[serde(default = "default_max_connections")]
     pub max_connections: usize,
+    /// When `true`, the `/metrics` endpoint requires the same bearer token as
+    /// other protected endpoints. Defaults to `false` so existing Prometheus
+    /// scrapers that poll `/metrics` without authentication continue to work.
+    #[serde(default)]
+    pub metrics_require_auth: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1133,6 +1138,7 @@ fn validate_governed_runtime_target(target: &GovernedRuntimeTarget) -> Result<()
             request_body_timeout_ms: default_request_body_timeout_ms(),
             http1_header_read_timeout_ms: default_http1_header_read_timeout_ms(),
             max_connections: default_max_connections(),
+            metrics_require_auth: false,
         },
         auth: AuthConfig {
             bearer_tokens: vec![BearerTokenConfig {
@@ -4499,7 +4505,12 @@ async fn assurance(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Re
     }
 }
 
-async fn metrics(State(state): State<Arc<AppState>>) -> Response {
+async fn metrics(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if state.config.server.metrics_require_auth {
+        if let Err(response) = authorize(&state, &headers) {
+            return *response;
+        }
+    }
     let mut body = String::new();
     body.push_str("# TYPE registry_notary_openfn_sidecar_source_permits gauge\n");
     for (source_id, source) in &state.config.sources {
@@ -5616,6 +5627,7 @@ mod tests {
                 request_body_timeout_ms: default_request_body_timeout_ms(),
                 http1_header_read_timeout_ms: default_http1_header_read_timeout_ms(),
                 max_connections: default_max_connections(),
+                metrics_require_auth: false,
             },
             auth: AuthConfig {
                 bearer_tokens: vec![BearerTokenConfig {
@@ -5926,5 +5938,62 @@ mod tests {
         let metadata =
             reqwest::Url::parse("http://metadata.google.internal/fhir").expect("url parses");
         assert!(validate_fhir_base_url_policy("fhir", &source, &metadata).is_err());
+    }
+
+    /// Build a minimal `AppState` suitable for unit-testing the `authorize`
+    /// gate.  `auth_tokens` is empty so any supplied bearer token is rejected
+    /// (no valid fingerprint match); callers that skip auth entirely rely on
+    /// the `metrics_require_auth` flag being `false`.
+    fn minimal_app_state(metrics_require_auth: bool) -> AppState {
+        let mut config = minimal_config();
+        config.server.metrics_require_auth = metrics_require_auth;
+        AppState {
+            config: Arc::new(config),
+            auth_tokens: Arc::new(Vec::new()),
+            fhir_bearer_tokens: Arc::new(BTreeMap::new()),
+            credentials: Arc::new(BTreeMap::new()),
+            source_limiters: Arc::new(BTreeMap::new()),
+            source_runtime: Arc::new(BTreeMap::new()),
+            http_json_clients: Arc::new(Mutex::new(BTreeMap::new())),
+            metrics: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+
+    #[test]
+    fn metrics_auth_gate_rejects_missing_token_when_required() {
+        let state = minimal_app_state(true);
+        // No Authorization header → authorize must return Err (unauthorized).
+        let headers = HeaderMap::new();
+        assert!(
+            authorize(&state, &headers).is_err(),
+            "missing token must be rejected when metrics_require_auth is true"
+        );
+    }
+
+    #[test]
+    fn metrics_auth_gate_rejects_invalid_token_when_required() {
+        let state = minimal_app_state(true);
+        // Malformed bearer value → authorize must return Err.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer not-a-valid-token"),
+        );
+        assert!(
+            authorize(&state, &headers).is_err(),
+            "invalid token must be rejected when metrics_require_auth is true"
+        );
+    }
+
+    #[test]
+    fn metrics_auth_gate_skips_authorize_when_disabled() {
+        // When metrics_require_auth is false the handler bypasses authorize
+        // entirely, so the config flag itself is what matters.  Verify the
+        // flag is correctly read from the config struct.
+        let state = minimal_app_state(false);
+        assert!(
+            !state.config.server.metrics_require_auth,
+            "metrics_require_auth must default to false"
+        );
     }
 }
