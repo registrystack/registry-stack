@@ -35,9 +35,7 @@ The demo verifies birth-record evidence for a seeded OpenCRVS record:
 - `opencrvs-child-date-of-birth`
 - `opencrvs-child-place-of-birth`
 
-The smoke also attempts the demographic lookup path without UIN, using child
-given name, family name, and date of birth. It then issues an
-`application/dc+sd-jwt` VC using credential profile:
+The smoke then issues an `application/dc+sd-jwt` VC using credential profile:
 
 ```text
 opencrvs_birth_attributes_sd_jwt
@@ -125,8 +123,7 @@ The script will:
    already set.
 5. Start `opencrvs-dci-notary` on port `4352`.
 6. Evaluate OpenCRVS evidence claims by UIN.
-7. Attempt a no-UIN lookup by child given name, family name, and date of birth.
-8. Issue an SD-JWT VC with child name, date of birth, and place of birth.
+7. Issue an SD-JWT VC with child name, date of birth, and place of birth.
 
 Expected ending:
 
@@ -146,7 +143,6 @@ Useful files:
 
 - `summary.json`: evidence claim summary
 - `evaluation.json`: full JSON evidence evaluation response
-- `demographic-evaluation.json`: no-UIN lookup result or problem response
 - `vc-evaluation.json`: evaluation response prepared for VC issuance
 - `credential-summary.json`: safe credential response summary
 - `credential.json`: full SD-JWT VC issuance response
@@ -209,39 +205,11 @@ curl -fsS -X POST http://127.0.0.1:4352/v1/evaluations \
 
 If this succeeds, you should see eight `results`.
 
-You can also test the no-UIN demographic lookup path after the smoke has
-written `summary.json`:
-
-```bash
-GIVEN_NAME="$(jq -r '.claims[] | select(.claim_id == "opencrvs-child-given-name") | .value' output/opencrvs-dci/summary.json)"
-FAMILY_NAME="$(jq -r '.claims[] | select(.claim_id == "opencrvs-child-family-name") | .value' output/opencrvs-dci/summary.json)"
-BIRTHDATE="$(jq -r '.claims[] | select(.claim_id == "opencrvs-child-date-of-birth") | .value' output/opencrvs-dci/summary.json)"
-
-curl -fsS -X POST http://127.0.0.1:4352/v1/evaluations \
-  -H "x-api-key: ${OPENCRVS_EVIDENCE_CLIENT_TOKEN:-api-token}" \
-  -H "content-type: application/json" \
-  -H "data-purpose: https://demo.example.gov/purpose/opencrvs-dci-lab" \
-  -d "$(jq -nc \
-    --arg given_name "$GIVEN_NAME" \
-    --arg family_name "$FAMILY_NAME" \
-    --arg birthdate "$BIRTHDATE" '{
-      target: {
-        type: "Person",
-        attributes: {
-          given_name: $given_name,
-          family_name: $family_name,
-          birthdate: $birthdate
-        }
-      },
-      claims: ["opencrvs-birth-record-exists-by-demographics"],
-      disclosure: "value",
-      format: "application/vnd.registry-notary.claim-result+json"
-    }')" | jq .
-```
-
-On the current Farajaland integration data this may return `409` when the live
-OpenCRVS search endpoint does not produce a unique match. That does not block
-the VC path, which uses the UIN-backed evidence evaluation.
+The current OpenCRVS DCI pack is UIN-backed. A no-UIN demographic lookup path is
+not configured in `config/notary/opencrvs-dci-notary.yaml`, so do not use
+`opencrvs-birth-record-exists-by-demographics` as a working claim. Demographic
+matching should be added with explicit unique-match, no-match, and
+multiple-match fixtures before it is presented as supported.
 
 ## Step 6: Issue a VC manually
 

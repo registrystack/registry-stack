@@ -281,8 +281,8 @@ summary_body="${output_dir}/summary.json"
 vc_evaluation_body="${output_dir}/vc-evaluation.json"
 credential_body="${output_dir}/credential.json"
 credential_summary_body="${output_dir}/credential-summary.json"
-live_fixture_output="${output_dir}/evidence-gateway-live-sp-dci.json"
-check "SP DCI live evidence gateway fixtures" python3 "${script_dir}/run-evidence-gateway-live-fixtures.py" --profile sp-dci/v1 --base-url "${notary_url}" --auth api-key --token "${OPENCRVS_EVIDENCE_CLIENT_TOKEN}" --subject-id "${subject_uin}" --output "${live_fixture_output}" --correlation-prefix "${correlation_id}-evidence-gateway"
+live_fixture_output="${output_dir}/evidence-gateway-live-birth-registration-evidence.json"
+check "Birth registration live evidence gateway fixtures" python3 "${script_dir}/run-evidence-gateway-live-fixtures.py" --profile birth-registration-evidence/v1 --base-url "${notary_url}" --auth api-key --token "${OPENCRVS_EVIDENCE_CLIENT_TOKEN}" --subject-id "${subject_uin}" --output "${live_fixture_output}" --correlation-prefix "${correlation_id}-evidence-gateway"
 payload="$(
   jq -nc --arg subject "${subject_uin}" '{
     target: {
@@ -449,7 +449,7 @@ printf "\nIssued OpenCRVS birth attribute SD-JWT VC\n"
 
 log_file="${output_dir}/opencrvs-dci-service-logs.txt"
 docker compose -f "${compose_file}" logs --no-color opencrvs-dci-notary > "${log_file}"
-check "SP DCI live evidence gateway audit log" python3 "${script_dir}/run-evidence-gateway-live-fixtures.py" --profile sp-dci/v1 --output "${live_fixture_output}" --audit-log-path "${log_file}" --audit-only
+check "Birth registration live evidence gateway audit log" python3 "${script_dir}/run-evidence-gateway-live-fixtures.py" --profile birth-registration-evidence/v1 --output "${live_fixture_output}" --audit-log-path "${log_file}" --audit-only
 
 for secret_var in \
   OPENCRVS_DCI_CLIENT_SECRET \

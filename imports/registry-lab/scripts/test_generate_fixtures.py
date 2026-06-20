@@ -193,16 +193,22 @@ class GenerateFixturesTest(unittest.TestCase):
         records_by_id = self._rows_by(self.generator.CIVIL_STATUS_RECORDS, "record_id")
         births_by_id = self._rows_by(self.generator.BIRTH_EVENTS, "event_id")
         deaths_by_id = self._rows_by(self.generator.DEATH_EVENTS, "event_id")
+        marriages_by_id = self._rows_by(self.generator.MARRIAGE_EVENTS, "event_id")
         certificates_by_record = self._rows_by(self.generator.CERTIFICATES, "record_id")
         relationships_by_id = self._rows_by(self.generator.RELATIONSHIPS, "relationship_id")
 
         self.assertEqual(person_by_nid["NID-1001"]["sex"], "M")
         self.assertEqual(records_by_id["CSR-BIRTH-1001"]["event_id"], "BE-1001")
         self.assertEqual(births_by_id["BE-1001"]["child_person_id"], "CP-1001")
+        self.assertEqual(births_by_id["BE-1001"]["father_person_id"], "CP-2002")
         self.assertEqual(certificates_by_record["CSR-BIRTH-1001"]["certificate_number"], "CERT-B-1001")
         self.assertEqual(relationships_by_id["REL-1001-MOTHER"]["related_person_id"], "CP-2001")
+        self.assertEqual(relationships_by_id["REL-1001-FATHER"]["related_person_id"], "CP-2002")
         self.assertEqual(records_by_id["CSR-DEATH-1003"]["event_id"], "DE-1003")
         self.assertEqual(deaths_by_id["DE-1003"]["deceased_person_id"], "CP-1003")
+        self.assertEqual(records_by_id["CSR-MARRIAGE-2001"]["event_id"], "ME-2001")
+        self.assertEqual(marriages_by_id["ME-2001"]["spouse_1_person_id"], "CP-2001")
+        self.assertEqual(certificates_by_record["CSR-MARRIAGE-2001"]["certificate_number"], "CERT-M-2001")
 
         ambiguous = [row for row in person_by_nid.values() if row["given_name"] == "Miguel" and row["surname"] == "Santos" and row["birth_date"] == "2016-01-15"]
         self.assertEqual({row["national_id"] for row in ambiguous}, {"NID-1001", "NID-1011"})
@@ -450,6 +456,7 @@ class GenerateFixturesTest(unittest.TestCase):
                     ("civil-identifiers.csv", self.generator.CIVIL_IDENTIFIERS),
                     ("birth-events.csv", self.generator.BIRTH_EVENTS),
                     ("death-events.csv", self.generator.DEATH_EVENTS),
+                    ("marriage-events.csv", self.generator.MARRIAGE_EVENTS),
                     ("civil-status-records.csv", self.generator.CIVIL_STATUS_RECORDS),
                     ("certificates.csv", self.generator.CERTIFICATES),
                     ("relationships.csv", self.generator.RELATIONSHIPS),

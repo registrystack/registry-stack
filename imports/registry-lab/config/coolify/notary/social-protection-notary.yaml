@@ -111,10 +111,10 @@ evidence:
       allow_insecure_private_network: true
       token_env: SOCIAL_EVIDENCE_SOURCE_RAW
   ecosystem_bindings:
-    baseline-dpi/v1:
+    combined-support-eligibility/v1:
       profile: registry-notary/source-policy/v1
-      policy_id: lab.baseline-dpi.governed-evidence.v1
-      policy_hash: sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb
+      policy_id: lab.combined-support-eligibility.governed-evidence.v1
+      policy_hash: sha256:4a680200c1095d2dbee608046d78d2399db5dfae7426c36a4580fe81e50dbeb9
   signing_keys:
     social-protection-evidence-demo:
       provider: local_jwk_env
@@ -176,7 +176,7 @@ evidence:
             require_legal_basis: true
             require_consent: true
             ecosystem_binding:
-              id: baseline-dpi/v1
+              id: combined-support-eligibility/v1
           lookup:
             input: target.identifiers.national_id
             field: national_id
@@ -225,7 +225,7 @@ evidence:
             require_legal_basis: true
             require_consent: true
             ecosystem_binding:
-              id: baseline-dpi/v1
+              id: combined-support-eligibility/v1
           lookup:
             input: target.identifiers.national_id
             field: national_id
@@ -308,7 +308,7 @@ evidence:
             require_legal_basis: true
             require_consent: true
             ecosystem_binding:
-              id: baseline-dpi/v1
+              id: combined-support-eligibility/v1
           lookup:
             input: target.identifiers.national_id
             field: national_id
@@ -360,7 +360,7 @@ evidence:
             require_legal_basis: true
             require_consent: true
             ecosystem_binding:
-              id: baseline-dpi/v1
+              id: combined-support-eligibility/v1
           lookup:
             input: target.identifiers.national_id
             field: national_id
@@ -387,7 +387,7 @@ evidence:
             require_legal_basis: true
             require_consent: true
             ecosystem_binding:
-              id: baseline-dpi/v1
+              id: combined-support-eligibility/v1
           lookup:
             input: requester.identifiers.national_id
             field: national_id
@@ -446,7 +446,7 @@ evidence:
             require_legal_basis: true
             require_consent: true
             ecosystem_binding:
-              id: baseline-dpi/v1
+              id: combined-support-eligibility/v1
           lookup:
             input: target.identifiers.national_id
             field: national_id
@@ -498,7 +498,7 @@ evidence:
             require_legal_basis: true
             require_consent: true
             ecosystem_binding:
-              id: baseline-dpi/v1
+              id: combined-support-eligibility/v1
           lookup:
             input: target.identifiers.national_id
             field: national_id

@@ -1,9 +1,9 @@
 {
   "schema_version": "registry-lab/evidence-gateway-synthetic-data/v1",
-  "binding_id": "sp-dci/v1",
+  "binding_id": "birth-registration-evidence/v1",
   "records": [
     {
-      "id": "sp-dci-success-birth-record",
+      "id": "birth-registration-evidence-success-birth-record",
       "source_metadata": {
         "source_system": "opencrvs-dci-synthetic-source",
         "freshness_source": "source_row.observed_at",
@@ -21,7 +21,7 @@
       }
     },
     {
-      "id": "sp-dci-denied-purpose",
+      "id": "birth-registration-evidence-denied-purpose",
       "source_metadata": {
         "source_system": "opencrvs-dci-synthetic-source",
         "freshness_source": "source_row.observed_at",
@@ -39,7 +39,7 @@
       }
     },
     {
-      "id": "sp-dci-stale-evidence",
+      "id": "birth-registration-evidence-stale-evidence",
       "source_metadata": {
         "source_system": "opencrvs-dci-synthetic-source",
         "freshness_source": "source_row.observed_at",
@@ -57,7 +57,7 @@
       }
     },
     {
-      "id": "sp-dci-missing-observed-at",
+      "id": "birth-registration-evidence-missing-observed-at",
       "source_metadata": {
         "source_system": "opencrvs-dci-synthetic-source",
         "freshness_source": "source_row.observed_at"
@@ -74,7 +74,7 @@
       }
     },
     {
-      "id": "sp-dci-redaction-birth-attributes",
+      "id": "birth-registration-evidence-redaction-birth-attributes",
       "source_metadata": {
         "source_system": "opencrvs-dci-synthetic-source",
         "freshness_source": "source_row.observed_at",

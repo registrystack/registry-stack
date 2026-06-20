@@ -10,6 +10,7 @@ from . import (
     agriculture_voucher,
     civil_alive,
     civil_birth_demographics,
+    civil_crvs_evidence,
     combined_support,
     dhis2_programme,
     social_aggregate,
@@ -21,6 +22,9 @@ from .attestations import public_label_violations
 SCENARIOS = [
     civil_alive,
     civil_birth_demographics,
+    civil_crvs_evidence.BIRTH,
+    civil_crvs_evidence.BIRTH_DEMOGRAPHICS,
+    civil_crvs_evidence.MARRIAGE,
     wallet_vc,
     dhis2_programme,
     social_aggregate,

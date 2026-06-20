@@ -1,0 +1,519 @@
+{
+  "schema_version": "registry-lab/evidence-gateway-golden-fixtures/v1",
+  "binding_id": "birth-certificate-evidence/v1",
+  "policy_id": "lab.birth-certificate-evidence.governed-evidence.v1",
+  "policy_hash": "sha256:0683b8cc550406aa570d404aaa617a15fe74c47799a2129306ed17e8829eb679",
+  "freshness_reference_time": "2026-06-19T00:00:00Z",
+  "cases": [
+    {
+      "id": "birth-certificate-success-minimized-json",
+      "type": "success",
+      "synthetic_data_refs": [
+        "birth-certificate-success"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/civil-certificate-evidence",
+        "binding_id": "birth-certificate-evidence/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:birth-certificate-evidence",
+        "consent_ref": "demo:birth-certificate-consent",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "registration_number",
+              "value": "B-2016-N-1001"
+            }
+          ]
+        },
+        "claims": [
+          "birth.certificate_summary"
+        ],
+        "disclosure": "value",
+        "format": "minimized_json"
+      },
+      "expected": {
+        "status": 200,
+        "result": {
+          "claim_id": "birth.certificate_summary",
+          "value": {
+            "type": "BirthEvidence",
+            "identifier": "CERT-B-1001",
+            "issuing_date": "2016-01-18",
+            "issuing_authority": {
+              "name": "Civil Registry Authority"
+            },
+            "issuing_place": {
+              "name": "North Civil Office"
+            },
+            "is_about": [
+              {
+                "type": "Person",
+                "id": "CP-1001",
+                "identifiers": [
+                  {
+                    "scheme": "national_id",
+                    "value": "NID-1001"
+                  }
+                ],
+                "given_name": "Miguel",
+                "surname": "Santos",
+                "birth_date": "2016-01-15"
+              }
+            ],
+            "is_conformant_to": [
+              "https://semiceu.github.io/OOTS-EDM/birth-evidence/v1"
+            ],
+            "distribution": {
+              "format": "application/json"
+            },
+            "certifies_birth": {
+              "identifier": "B-2016-N-1001",
+              "date_of_birth": "2016-01-15",
+              "place_of_birth": "North City",
+              "child": {
+                "type": "Person",
+                "id": "CP-1001",
+                "identifiers": [
+                  {
+                    "scheme": "national_id",
+                    "value": "NID-1001"
+                  }
+                ],
+                "given_name": "Miguel",
+                "surname": "Santos",
+                "birth_date": "2016-01-15",
+                "sex": "M"
+              },
+              "parents": [
+                {
+                  "relationship": "mother",
+                  "type": "Person",
+                  "id": "CP-2001",
+                  "identifiers": [
+                    {
+                      "scheme": "national_id",
+                      "value": "NID-2001"
+                    }
+                  ],
+                  "given_name": "Maria",
+                  "surname": "Santos",
+                  "birth_date": "1984-01-15"
+                },
+                {
+                  "relationship": "father",
+                  "type": "Person",
+                  "id": "CP-2002",
+                  "identifiers": [
+                    {
+                      "scheme": "national_id",
+                      "value": "NID-2002"
+                    }
+                  ],
+                  "given_name": "Juan",
+                  "surname": "Dela Cruz",
+                  "birth_date": "1988-01-15"
+                }
+              ]
+            }
+          },
+          "disclosure": "value"
+        },
+        "audit": {
+          "binding_id": "birth-certificate-evidence/v1",
+          "binding_version": "v1",
+          "policy_id": "lab.birth-certificate-evidence.governed-evidence.v1",
+          "policy_hash": "sha256:0683b8cc550406aa570d404aaa617a15fe74c47799a2129306ed17e8829eb679",
+          "evaluated_rule_ids": [
+            "source-binding-policy:*"
+          ]
+        }
+      }
+    },
+    {
+      "id": "birth-certificate-success-demographic",
+      "type": "success",
+      "synthetic_data_refs": [
+        "birth-certificate-demographic-success"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/civil-certificate-evidence",
+        "binding_id": "birth-certificate-evidence/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:birth-certificate-evidence",
+        "consent_ref": "demo:birth-certificate-consent",
+        "target": {
+          "type": "Person",
+          "attributes": {
+            "given_name": "Rafael",
+            "surname": "Aquino",
+            "birth_date": "2019-01-15"
+          }
+        },
+        "claims": [
+          "birth.certificate_summary_by_demographics"
+        ],
+        "disclosure": "value",
+        "format": "minimized_json"
+      },
+      "expected": {
+        "status": 200,
+        "result": {
+          "claim_id": "birth.certificate_summary_by_demographics",
+          "value": {
+            "type": "BirthEvidence",
+            "identifier": "CERT-B-1004",
+            "issuing_date": "2019-01-18",
+            "issuing_authority": {
+              "name": "Civil Registry Authority"
+            },
+            "issuing_place": {
+              "name": "East Civil Office"
+            },
+            "is_about": [
+              {
+                "type": "Person",
+                "id": "CP-1004",
+                "identifiers": [
+                  {
+                    "scheme": "national_id",
+                    "value": "NID-1004"
+                  }
+                ],
+                "given_name": "Rafael",
+                "surname": "Aquino",
+                "birth_date": "2019-01-15"
+              }
+            ],
+            "is_conformant_to": [
+              "https://semiceu.github.io/OOTS-EDM/birth-evidence/v1"
+            ],
+            "distribution": {
+              "format": "application/json"
+            },
+            "certifies_birth": {
+              "identifier": "B-2019-E-1004",
+              "date_of_birth": "2019-01-15",
+              "place_of_birth": "East City",
+              "child": {
+                "type": "Person",
+                "id": "CP-1004",
+                "identifiers": [
+                  {
+                    "scheme": "national_id",
+                    "value": "NID-1004"
+                  }
+                ],
+                "given_name": "Rafael",
+                "surname": "Aquino",
+                "birth_date": "2019-01-15",
+                "sex": "M"
+              },
+              "parents": [
+                {
+                  "relationship": "mother",
+                  "type": "Person",
+                  "id": "CP-2004",
+                  "identifiers": [
+                    {
+                      "scheme": "national_id",
+                      "value": "NID-2004"
+                    }
+                  ],
+                  "given_name": "Rosario",
+                  "surname": "Aquino",
+                  "birth_date": "1988-01-15"
+                },
+                {
+                  "relationship": "father",
+                  "type": "Person",
+                  "id": "CP-2005",
+                  "identifiers": [
+                    {
+                      "scheme": "national_id",
+                      "value": "NID-2005"
+                    }
+                  ],
+                  "given_name": "Eduardo",
+                  "surname": "Bautista",
+                  "birth_date": "1978-01-15"
+                }
+              ]
+            }
+          },
+          "disclosure": "value"
+        },
+        "audit": {
+          "binding_id": "birth-certificate-evidence/v1",
+          "binding_version": "v1",
+          "policy_id": "lab.birth-certificate-evidence.governed-evidence.v1",
+          "policy_hash": "sha256:0683b8cc550406aa570d404aaa617a15fe74c47799a2129306ed17e8829eb679",
+          "evaluated_rule_ids": [
+            "source-binding-policy:*"
+          ]
+        }
+      }
+    },
+    {
+      "id": "birth-certificate-success-predicate",
+      "type": "success",
+      "synthetic_data_refs": [
+        "birth-certificate-success"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/civil-certificate-evidence",
+        "binding_id": "birth-certificate-evidence/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:birth-certificate-evidence",
+        "consent_ref": "demo:birth-certificate-consent",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "registration_number",
+              "value": "B-2016-N-1001"
+            }
+          ]
+        },
+        "claims": [
+          "birth.event_exists"
+        ],
+        "disclosure": "predicate",
+        "format": "minimized_json"
+      },
+      "expected": {
+        "status": 200,
+        "result": {
+          "claim_id": "birth.event_exists",
+          "satisfied": true,
+          "disclosure": "predicate"
+        },
+        "audit": {
+          "binding_id": "birth-certificate-evidence/v1",
+          "binding_version": "v1",
+          "policy_id": "lab.birth-certificate-evidence.governed-evidence.v1",
+          "policy_hash": "sha256:0683b8cc550406aa570d404aaa617a15fe74c47799a2129306ed17e8829eb679",
+          "evaluated_rule_ids": [
+            "source-binding-policy:*"
+          ]
+        }
+      }
+    },
+    {
+      "id": "birth-certificate-denial-purpose",
+      "type": "denial",
+      "synthetic_data_refs": [
+        "birth-certificate-denial-target"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/not-authorized",
+        "binding_id": "birth-certificate-evidence/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:birth-certificate-evidence",
+        "consent_ref": "demo:birth-certificate-consent",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "registration_number",
+              "value": "B-2018-S-1002"
+            }
+          ]
+        },
+        "claims": [
+          "birth.certificate_summary"
+        ],
+        "disclosure": "value",
+        "format": "minimized_json"
+      },
+      "expected": {
+        "status": 403,
+        "problem": {
+          "code": "pdp.purpose_not_permitted"
+        },
+        "zero_source_reads": true,
+        "audit": {
+          "binding_id": "birth-certificate-evidence/v1",
+          "policy_id": "lab.birth-certificate-evidence.governed-evidence.v1",
+          "policy_hash": "sha256:0683b8cc550406aa570d404aaa617a15fe74c47799a2129306ed17e8829eb679",
+          "decision": "deny"
+        }
+      }
+    },
+    {
+      "id": "birth-certificate-denial-jurisdiction",
+      "type": "denial",
+      "synthetic_data_refs": [
+        "birth-certificate-denial-target"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/civil-certificate-evidence",
+        "binding_id": "birth-certificate-evidence/v1",
+        "jurisdiction": "XY",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:birth-certificate-evidence",
+        "consent_ref": "demo:birth-certificate-consent",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "registration_number",
+              "value": "B-2018-S-1002"
+            }
+          ]
+        },
+        "claims": [
+          "birth.certificate_summary"
+        ],
+        "disclosure": "value",
+        "format": "minimized_json"
+      },
+      "expected": {
+        "status": 403,
+        "problem": {
+          "code": "pdp.jurisdiction_not_permitted"
+        },
+        "zero_source_reads": true,
+        "audit": {
+          "binding_id": "birth-certificate-evidence/v1",
+          "policy_id": "lab.birth-certificate-evidence.governed-evidence.v1",
+          "policy_hash": "sha256:0683b8cc550406aa570d404aaa617a15fe74c47799a2129306ed17e8829eb679",
+          "decision": "deny"
+        }
+      }
+    },
+    {
+      "id": "birth-certificate-audit-permit",
+      "type": "audit",
+      "synthetic_data_refs": [
+        "birth-certificate-success"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/civil-certificate-evidence",
+        "binding_id": "birth-certificate-evidence/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:birth-certificate-evidence",
+        "consent_ref": "demo:birth-certificate-consent",
+        "target": {
+          "type": "Person",
+          "identifiers": [
+            {
+              "scheme": "registration_number",
+              "value": "B-2016-N-1001"
+            }
+          ]
+        },
+        "claims": [
+          "birth.certificate_summary"
+        ],
+        "disclosure": "value",
+        "format": "minimized_json"
+      },
+      "expected": {
+        "status": 200,
+        "result": {
+          "claim_id": "birth.certificate_summary",
+          "value": {
+            "type": "BirthEvidence",
+            "identifier": "CERT-B-1001",
+            "issuing_date": "2016-01-18",
+            "issuing_authority": {
+              "name": "Civil Registry Authority"
+            },
+            "issuing_place": {
+              "name": "North Civil Office"
+            },
+            "is_about": [
+              {
+                "type": "Person",
+                "id": "CP-1001",
+                "identifiers": [
+                  {
+                    "scheme": "national_id",
+                    "value": "NID-1001"
+                  }
+                ],
+                "given_name": "Miguel",
+                "surname": "Santos",
+                "birth_date": "2016-01-15"
+              }
+            ],
+            "is_conformant_to": [
+              "https://semiceu.github.io/OOTS-EDM/birth-evidence/v1"
+            ],
+            "distribution": {
+              "format": "application/json"
+            },
+            "certifies_birth": {
+              "identifier": "B-2016-N-1001",
+              "date_of_birth": "2016-01-15",
+              "place_of_birth": "North City",
+              "child": {
+                "type": "Person",
+                "id": "CP-1001",
+                "identifiers": [
+                  {
+                    "scheme": "national_id",
+                    "value": "NID-1001"
+                  }
+                ],
+                "given_name": "Miguel",
+                "surname": "Santos",
+                "birth_date": "2016-01-15",
+                "sex": "M"
+              },
+              "parents": [
+                {
+                  "relationship": "mother",
+                  "type": "Person",
+                  "id": "CP-2001",
+                  "identifiers": [
+                    {
+                      "scheme": "national_id",
+                      "value": "NID-2001"
+                    }
+                  ],
+                  "given_name": "Maria",
+                  "surname": "Santos",
+                  "birth_date": "1984-01-15"
+                },
+                {
+                  "relationship": "father",
+                  "type": "Person",
+                  "id": "CP-2002",
+                  "identifiers": [
+                    {
+                      "scheme": "national_id",
+                      "value": "NID-2002"
+                    }
+                  ],
+                  "given_name": "Juan",
+                  "surname": "Dela Cruz",
+                  "birth_date": "1988-01-15"
+                }
+              ]
+            }
+          },
+          "disclosure": "value"
+        },
+        "audit": {
+          "binding_id": "birth-certificate-evidence/v1",
+          "binding_version": "v1",
+          "policy_id": "lab.birth-certificate-evidence.governed-evidence.v1",
+          "policy_hash": "sha256:0683b8cc550406aa570d404aaa617a15fe74c47799a2129306ed17e8829eb679",
+          "evaluated_rule_ids": [
+            "source-binding-policy:*"
+          ],
+          "target_ref_hash": "sha256",
+          "request_ref_hash": "sha256",
+          "correlation_ref_hash": "sha256"
+        }
+      }
+    }
+  ]
+}

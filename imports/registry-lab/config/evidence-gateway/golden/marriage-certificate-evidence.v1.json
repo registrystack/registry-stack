@@ -1,0 +1,344 @@
+{
+  "schema_version": "registry-lab/evidence-gateway-golden-fixtures/v1",
+  "binding_id": "marriage-certificate-evidence/v1",
+  "policy_id": "lab.marriage-certificate-evidence.governed-evidence.v1",
+  "policy_hash": "sha256:cc32ee652001f5beb4a68ef0557ba558451311c6393889e0939288f8f09a0156",
+  "freshness_reference_time": "2026-06-19T00:00:00Z",
+  "cases": [
+    {
+      "id": "marriage-certificate-success-minimized-json",
+      "type": "success",
+      "synthetic_data_refs": [
+        "marriage-certificate-success"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/civil-certificate-evidence",
+        "binding_id": "marriage-certificate-evidence/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:marriage-certificate-evidence",
+        "consent_ref": "demo:marriage-certificate-consent",
+        "target": {
+          "type": "Marriage",
+          "identifiers": [
+            {
+              "scheme": "registration_number",
+              "value": "MR-2026-2001"
+            }
+          ]
+        },
+        "claims": [
+          "marriage.certificate_summary"
+        ],
+        "disclosure": "value",
+        "format": "minimized_json"
+      },
+      "expected": {
+        "status": 200,
+        "result": {
+          "claim_id": "marriage.certificate_summary",
+          "value": {
+            "type": "MarriageEvidence",
+            "identifier": "CERT-M-2001",
+            "issuing_date": "2026-06-02",
+            "issuing_authority": {
+              "name": "Civil Registry Authority"
+            },
+            "issuing_place": {
+              "name": "North Civil Office"
+            },
+            "is_about": [
+              {
+                "type": "Marriage",
+                "identifier": "MR-2026-2001"
+              }
+            ],
+            "is_conformant_to": [
+              "https://semiceu.github.io/OOTS-EDM/marriage-evidence/v1"
+            ],
+            "distribution": {
+              "format": "application/json"
+            },
+            "certifies_marriage": {
+              "identifier": "MR-2026-2001",
+              "marriage_date": "2020-08-15",
+              "marriage_place": "North City",
+              "spouses": [
+                {
+                  "type": "Person",
+                  "id": "CP-2001",
+                  "identifiers": [
+                    {
+                      "scheme": "national_id",
+                      "value": "NID-2001"
+                    }
+                  ],
+                  "given_name": "Maria",
+                  "surname": "Santos",
+                  "birth_date": "1984-01-15"
+                },
+                {
+                  "type": "Person",
+                  "id": "CP-2002",
+                  "identifiers": [
+                    {
+                      "scheme": "national_id",
+                      "value": "NID-2002"
+                    }
+                  ],
+                  "given_name": "Juan",
+                  "surname": "Dela Cruz",
+                  "birth_date": "1988-01-15"
+                }
+              ]
+            }
+          },
+          "disclosure": "value"
+        },
+        "audit": {
+          "binding_id": "marriage-certificate-evidence/v1",
+          "binding_version": "v1",
+          "policy_id": "lab.marriage-certificate-evidence.governed-evidence.v1",
+          "policy_hash": "sha256:cc32ee652001f5beb4a68ef0557ba558451311c6393889e0939288f8f09a0156",
+          "evaluated_rule_ids": [
+            "source-binding-policy:*"
+          ]
+        }
+      }
+    },
+    {
+      "id": "marriage-certificate-success-predicate",
+      "type": "success",
+      "synthetic_data_refs": [
+        "marriage-certificate-success"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/civil-certificate-evidence",
+        "binding_id": "marriage-certificate-evidence/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:marriage-certificate-evidence",
+        "consent_ref": "demo:marriage-certificate-consent",
+        "target": {
+          "type": "Marriage",
+          "identifiers": [
+            {
+              "scheme": "registration_number",
+              "value": "MR-2026-2001"
+            }
+          ]
+        },
+        "claims": [
+          "marriage.event_exists"
+        ],
+        "disclosure": "predicate",
+        "format": "minimized_json"
+      },
+      "expected": {
+        "status": 200,
+        "result": {
+          "claim_id": "marriage.event_exists",
+          "satisfied": true,
+          "disclosure": "predicate"
+        },
+        "audit": {
+          "binding_id": "marriage-certificate-evidence/v1",
+          "binding_version": "v1",
+          "policy_id": "lab.marriage-certificate-evidence.governed-evidence.v1",
+          "policy_hash": "sha256:cc32ee652001f5beb4a68ef0557ba558451311c6393889e0939288f8f09a0156",
+          "evaluated_rule_ids": [
+            "source-binding-policy:*"
+          ]
+        }
+      }
+    },
+    {
+      "id": "marriage-certificate-denial-purpose",
+      "type": "denial",
+      "synthetic_data_refs": [
+        "marriage-certificate-denial-target"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/not-authorized",
+        "binding_id": "marriage-certificate-evidence/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:marriage-certificate-evidence",
+        "consent_ref": "demo:marriage-certificate-consent",
+        "target": {
+          "type": "Marriage",
+          "identifiers": [
+            {
+              "scheme": "registration_number",
+              "value": "MR-2026-2002"
+            }
+          ]
+        },
+        "claims": [
+          "marriage.certificate_summary"
+        ],
+        "disclosure": "value",
+        "format": "minimized_json"
+      },
+      "expected": {
+        "status": 403,
+        "problem": {
+          "code": "pdp.purpose_not_permitted"
+        },
+        "zero_source_reads": true,
+        "audit": {
+          "binding_id": "marriage-certificate-evidence/v1",
+          "policy_id": "lab.marriage-certificate-evidence.governed-evidence.v1",
+          "policy_hash": "sha256:cc32ee652001f5beb4a68ef0557ba558451311c6393889e0939288f8f09a0156",
+          "decision": "deny"
+        }
+      }
+    },
+    {
+      "id": "marriage-certificate-denial-jurisdiction",
+      "type": "denial",
+      "synthetic_data_refs": [
+        "marriage-certificate-denial-target"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/civil-certificate-evidence",
+        "binding_id": "marriage-certificate-evidence/v1",
+        "jurisdiction": "XY",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:marriage-certificate-evidence",
+        "consent_ref": "demo:marriage-certificate-consent",
+        "target": {
+          "type": "Marriage",
+          "identifiers": [
+            {
+              "scheme": "registration_number",
+              "value": "MR-2026-2002"
+            }
+          ]
+        },
+        "claims": [
+          "marriage.certificate_summary"
+        ],
+        "disclosure": "value",
+        "format": "minimized_json"
+      },
+      "expected": {
+        "status": 403,
+        "problem": {
+          "code": "pdp.jurisdiction_not_permitted"
+        },
+        "zero_source_reads": true,
+        "audit": {
+          "binding_id": "marriage-certificate-evidence/v1",
+          "policy_id": "lab.marriage-certificate-evidence.governed-evidence.v1",
+          "policy_hash": "sha256:cc32ee652001f5beb4a68ef0557ba558451311c6393889e0939288f8f09a0156",
+          "decision": "deny"
+        }
+      }
+    },
+    {
+      "id": "marriage-certificate-audit-permit",
+      "type": "audit",
+      "synthetic_data_refs": [
+        "marriage-certificate-success"
+      ],
+      "request": {
+        "purpose": "https://demo.example.gov/purpose/civil-certificate-evidence",
+        "binding_id": "marriage-certificate-evidence/v1",
+        "jurisdiction": "ZZ",
+        "assurance_level": "substantial",
+        "legal_basis_ref": "demo:marriage-certificate-evidence",
+        "consent_ref": "demo:marriage-certificate-consent",
+        "target": {
+          "type": "Marriage",
+          "identifiers": [
+            {
+              "scheme": "registration_number",
+              "value": "MR-2026-2001"
+            }
+          ]
+        },
+        "claims": [
+          "marriage.certificate_summary"
+        ],
+        "disclosure": "value",
+        "format": "minimized_json"
+      },
+      "expected": {
+        "status": 200,
+        "result": {
+          "claim_id": "marriage.certificate_summary",
+          "value": {
+            "type": "MarriageEvidence",
+            "identifier": "CERT-M-2001",
+            "issuing_date": "2026-06-02",
+            "issuing_authority": {
+              "name": "Civil Registry Authority"
+            },
+            "issuing_place": {
+              "name": "North Civil Office"
+            },
+            "is_about": [
+              {
+                "type": "Marriage",
+                "identifier": "MR-2026-2001"
+              }
+            ],
+            "is_conformant_to": [
+              "https://semiceu.github.io/OOTS-EDM/marriage-evidence/v1"
+            ],
+            "distribution": {
+              "format": "application/json"
+            },
+            "certifies_marriage": {
+              "identifier": "MR-2026-2001",
+              "marriage_date": "2020-08-15",
+              "marriage_place": "North City",
+              "spouses": [
+                {
+                  "type": "Person",
+                  "id": "CP-2001",
+                  "identifiers": [
+                    {
+                      "scheme": "national_id",
+                      "value": "NID-2001"
+                    }
+                  ],
+                  "given_name": "Maria",
+                  "surname": "Santos",
+                  "birth_date": "1984-01-15"
+                },
+                {
+                  "type": "Person",
+                  "id": "CP-2002",
+                  "identifiers": [
+                    {
+                      "scheme": "national_id",
+                      "value": "NID-2002"
+                    }
+                  ],
+                  "given_name": "Juan",
+                  "surname": "Dela Cruz",
+                  "birth_date": "1988-01-15"
+                }
+              ]
+            }
+          },
+          "disclosure": "value"
+        },
+        "audit": {
+          "binding_id": "marriage-certificate-evidence/v1",
+          "binding_version": "v1",
+          "policy_id": "lab.marriage-certificate-evidence.governed-evidence.v1",
+          "policy_hash": "sha256:cc32ee652001f5beb4a68ef0557ba558451311c6393889e0939288f8f09a0156",
+          "evaluated_rule_ids": [
+            "source-binding-policy:*"
+          ],
+          "target_ref_hash": "sha256",
+          "request_ref_hash": "sha256",
+          "correlation_ref_hash": "sha256"
+        }
+      }
+    }
+  ]
+}

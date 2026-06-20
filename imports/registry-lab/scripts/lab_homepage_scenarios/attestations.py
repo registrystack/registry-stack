@@ -26,6 +26,11 @@ RAW_COMPATIBILITY_IDS = (
     "caregiver-link",
     "disability-determination",
     "functioning-assessment",
+    "birth.certificate_summary",
+    "birth.certificate_summary_by_demographics",
+    "birth.event_exists",
+    "marriage.certificate_summary",
+    "marriage.event_exists",
 )
 
 RAW_COMPATIBILITY_RE = re.compile(r"\b(" + "|".join(re.escape(item) for item in RAW_COMPATIBILITY_IDS) + r")\b")
@@ -52,6 +57,32 @@ ATTESTATIONS: dict[str, dict[str, Any]] = {
         "disclosure_profile": "predicate",
         "freshness": {"source_observed_at": "live registry lookup", "as_of": "request time"},
         "compatibility_claim_aliases": ["opencrvs-birth-record-exists"],
+    },
+    "birth-certificate-attestation": {
+        "offering_id": "birth-certificate-attestation",
+        "display_name": "Birth Evidence Attestation",
+        "source_authority": "Civil Registry",
+        "jurisdiction": "Demo civil registry",
+        "lookup_profiles": ["by-registration-number"],
+        "publicschema_anchor": "Birth",
+        "disclosure_profile": "minimized value",
+        "freshness": {"source_observed_at": "live registry lookup", "as_of": "request time"},
+        "compatibility_claim_aliases": [
+            "birth.certificate_summary",
+            "birth.certificate_summary_by_demographics",
+            "birth.event_exists",
+        ],
+    },
+    "marriage-certificate-attestation": {
+        "offering_id": "marriage-certificate-attestation",
+        "display_name": "Marriage Evidence Attestation",
+        "source_authority": "Civil Registry",
+        "jurisdiction": "Demo civil registry",
+        "lookup_profiles": ["by-registration-number"],
+        "publicschema_anchor": "Marriage",
+        "disclosure_profile": "minimized value",
+        "freshness": {"source_observed_at": "live registry lookup", "as_of": "request time"},
+        "compatibility_claim_aliases": ["marriage.certificate_summary", "marriage.event_exists"],
     },
     "health-programme-participation-attestation": {
         "offering_id": "health-programme-participation-attestation",

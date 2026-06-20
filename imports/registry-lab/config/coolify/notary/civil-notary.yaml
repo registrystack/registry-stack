@@ -17,6 +17,13 @@ auth:
         commitment: sha256:8f736e49fb826ac66cb41293507dd43a0f6125c6f3f96193eec75d8ff051ebe7
       scopes:
         - civil_registry:evidence_verification
+      authorization_details:
+        type: registry-notary/evidence-authorization/v1
+        schema_version: v1
+        legal_basis_ref: demo:civil-certificate-evidence
+        consent_ref: demo:civil-certificate-consent
+        jurisdiction: ZZ
+        assurance_level: substantial
 
 audit:
   sink: stdout
@@ -60,14 +67,14 @@ evidence:
           birth_date: /person/birth_date
           deceased: /person/deceased
   ecosystem_bindings:
-    oots-birth-evidence/v1:
+    birth-certificate-evidence/v1:
       profile: registry-notary/source-policy/v1
-      policy_id: lab.oots-birth-evidence.governed-evidence.v1
-      policy_hash: sha256:a4804f81f3287b7922e8c3d5bad49377584b7ab8727fe62cbae23c1f5bc85e1c
-    oots-marriage-evidence/v1:
+      policy_id: lab.birth-certificate-evidence.governed-evidence.v1
+      policy_hash: sha256:0683b8cc550406aa570d404aaa617a15fe74c47799a2129306ed17e8829eb679
+    marriage-certificate-evidence/v1:
       profile: registry-notary/source-policy/v1
-      policy_id: lab.oots-marriage-evidence.governed-evidence.v1
-      policy_hash: sha256:e5193284535dfa9689dd081942ec847f51eacd50ebc71d93b482247207b63dcf
+      policy_id: lab.marriage-certificate-evidence.governed-evidence.v1
+      policy_hash: sha256:cc32ee652001f5beb4a68ef0557ba558451311c6393889e0939288f8f09a0156
   claims:
     - id: person-is-alive
       title: Vital Status Attestation
@@ -103,6 +110,965 @@ evidence:
         allowed:
           - predicate
           - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+    - id: birth.certificate_summary
+      title: Birth Evidence
+      version: 2026-06
+      subject_type: person
+      value:
+        type: object
+      source_bindings:
+        birth_record:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_status_record
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/civil-certificate-evidence
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: birth-certificate-evidence/v1
+              pack_id: birth-certificate-evidence/v1
+              pack_version: v1
+            allowed_target_inputs:
+              - target.identifiers.registration_number
+          lookup:
+            input: target.identifiers.registration_number
+            field: registration_number
+            op: eq
+            cardinality: one
+          fields:
+            id:
+              field: id
+              type: string
+              required: true
+            record_type:
+              field: record_type
+              type: string
+              required: true
+            registration_number:
+              field: registration_number
+              type: string
+              required: true
+            person_id:
+              field: person_id
+              type: string
+              required: true
+            event_id:
+              field: event_id
+              type: string
+              required: true
+            authority:
+              field: authority
+              type: string
+              required: true
+            registration_status:
+              field: registration_status
+              type: string
+              required: true
+        birth_certificate:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: certificate
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/civil-certificate-evidence
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: birth-certificate-evidence/v1
+              pack_id: birth-certificate-evidence/v1
+              pack_version: v1
+            allowed_target_inputs:
+              - target.identifiers.registration_number
+          lookup:
+            input: sources.birth_record.id
+            field: record_id
+            op: eq
+            cardinality: one
+          fields:
+            id:
+              field: id
+              type: string
+              required: true
+            issue_date:
+              field: issue_date
+              type: date
+              required: true
+            issuing_office:
+              field: issuing_office
+              type: string
+              required: true
+            certificate_type:
+              field: certificate_type
+              type: string
+              required: true
+        birth_event:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: birth_event
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/civil-certificate-evidence
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: birth-certificate-evidence/v1
+              pack_id: birth-certificate-evidence/v1
+              pack_version: v1
+          lookup:
+            input: sources.birth_record.event_id
+            field: id
+            op: eq
+            cardinality: one
+          fields:
+            id:
+              field: id
+              type: string
+              required: true
+            child_person_id:
+              field: child_person_id
+              type: string
+              required: true
+            mother_person_id:
+              field: mother_person_id
+              type: string
+              required: true
+            father_person_id:
+              field: father_person_id
+              type: string
+              required: true
+            place_of_birth:
+              field: place_of_birth
+              type: string
+              required: true
+            date_of_birth:
+              field: date_of_birth
+              type: date
+              required: true
+            sex_at_birth:
+              field: sex_at_birth
+              type: string
+              required: true
+        child_person:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person_detail
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/civil-certificate-evidence
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: birth-certificate-evidence/v1
+              pack_id: birth-certificate-evidence/v1
+              pack_version: v1
+          lookup:
+            input: sources.birth_event.child_person_id
+            field: id
+            op: eq
+            cardinality: one
+          fields:
+            id:
+              field: id
+              type: string
+              required: true
+            national_id:
+              field: national_id
+              type: string
+              required: true
+            given_name:
+              field: given_name
+              type: string
+              required: true
+            surname:
+              field: surname
+              type: string
+              required: true
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+            sex:
+              field: sex
+              type: string
+              required: true
+        mother_person:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person_detail
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/civil-certificate-evidence
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: birth-certificate-evidence/v1
+              pack_id: birth-certificate-evidence/v1
+              pack_version: v1
+          lookup:
+            input: sources.birth_event.mother_person_id
+            field: id
+            op: eq
+            cardinality: one
+          fields:
+            id:
+              field: id
+              type: string
+              required: true
+            national_id:
+              field: national_id
+              type: string
+              required: true
+            given_name:
+              field: given_name
+              type: string
+              required: true
+            surname:
+              field: surname
+              type: string
+              required: true
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+        father_person:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person_detail
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/civil-certificate-evidence
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: birth-certificate-evidence/v1
+              pack_id: birth-certificate-evidence/v1
+              pack_version: v1
+          lookup:
+            input: sources.birth_event.father_person_id
+            field: id
+            op: eq
+            cardinality: one
+          fields:
+            id:
+              field: id
+              type: string
+              required: true
+            national_id:
+              field: national_id
+              type: string
+              required: true
+            given_name:
+              field: given_name
+              type: string
+              required: true
+            surname:
+              field: surname
+              type: string
+              required: true
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+      rule:
+        type: cel
+        expression: "{'type': 'BirthEvidence', 'identifier': source.birth_certificate.id, 'issuing_date': source.birth_certificate.issue_date, 'issuing_authority': {'name': source.birth_record.authority}, 'issuing_place': {'name': source.birth_certificate.issuing_office}, 'is_about': [{'type': 'Person', 'id': source.child_person.id, 'identifiers': [{'scheme': 'national_id', 'value': source.child_person.national_id}], 'given_name': source.child_person.given_name, 'surname': source.child_person.surname, 'birth_date': source.child_person.birth_date}], 'is_conformant_to': ['https://semiceu.github.io/OOTS-EDM/birth-evidence/v1'], 'distribution': {'format': 'application/json'}, 'certifies_birth': {'identifier': source.birth_record.registration_number, 'date_of_birth': source.birth_event.date_of_birth, 'place_of_birth': source.birth_event.place_of_birth, 'child': {'type': 'Person', 'id': source.child_person.id, 'identifiers': [{'scheme': 'national_id', 'value': source.child_person.national_id}], 'given_name': source.child_person.given_name, 'surname': source.child_person.surname, 'birth_date': source.child_person.birth_date, 'sex': source.child_person.sex}, 'parents': [{'relationship': 'mother', 'type': 'Person', 'id': source.mother_person.id, 'identifiers': [{'scheme': 'national_id', 'value': source.mother_person.national_id}], 'given_name': source.mother_person.given_name, 'surname': source.mother_person.surname, 'birth_date': source.mother_person.birth_date}, {'relationship': 'father', 'type': 'Person', 'id': source.father_person.id, 'identifiers': [{'scheme': 'national_id', 'value': source.father_person.national_id}], 'given_name': source.father_person.given_name, 'surname': source.father_person.surname, 'birth_date': source.father_person.birth_date}]}}"
+      disclosure:
+        default: value
+        allowed:
+          - value
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+    - id: birth.certificate_summary_by_demographics
+      title: Birth Evidence by demographics
+      version: 2026-06
+      subject_type: person
+      value:
+        type: object
+      source_bindings:
+        child_person:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person_detail
+          lookup:
+            input: target.attributes.given_name
+            field: given_name
+            op: eq
+            cardinality: one
+          query_fields:
+            - input: target.attributes.given_name
+              field: given_name
+              op: eq
+            - input: target.attributes.surname
+              field: surname
+              op: eq
+            - input: target.attributes.birth_date
+              field: birth_date
+              op: eq
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/civil-certificate-evidence
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: birth-certificate-evidence/v1
+              pack_id: birth-certificate-evidence/v1
+              pack_version: v1
+            target_type: Person
+            method: configured_demographic_lookup
+            sufficient_target_inputs:
+              - - target.attributes.given_name
+                - target.attributes.surname
+                - target.attributes.birth_date
+            allowed_target_inputs:
+              - target.attributes.given_name
+              - target.attributes.surname
+              - target.attributes.birth_date
+          fields:
+            id:
+              field: id
+              type: string
+              required: true
+            national_id:
+              field: national_id
+              type: string
+              required: true
+            given_name:
+              field: given_name
+              type: string
+              required: true
+            surname:
+              field: surname
+              type: string
+              required: true
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+            sex:
+              field: sex
+              type: string
+              required: true
+        birth_record:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_status_record
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/civil-certificate-evidence
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: birth-certificate-evidence/v1
+              pack_id: birth-certificate-evidence/v1
+              pack_version: v1
+          lookup:
+            input: sources.child_person.id
+            field: person_id
+            op: eq
+            cardinality: one
+          fields:
+            id:
+              field: id
+              type: string
+              required: true
+            record_type:
+              field: record_type
+              type: string
+              required: true
+            registration_number:
+              field: registration_number
+              type: string
+              required: true
+            event_id:
+              field: event_id
+              type: string
+              required: true
+            authority:
+              field: authority
+              type: string
+              required: true
+            registration_status:
+              field: registration_status
+              type: string
+              required: true
+        birth_certificate:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: certificate
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/civil-certificate-evidence
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: birth-certificate-evidence/v1
+              pack_id: birth-certificate-evidence/v1
+              pack_version: v1
+          lookup:
+            input: sources.birth_record.id
+            field: record_id
+            op: eq
+            cardinality: one
+          fields:
+            id:
+              field: id
+              type: string
+              required: true
+            issue_date:
+              field: issue_date
+              type: date
+              required: true
+            issuing_office:
+              field: issuing_office
+              type: string
+              required: true
+        birth_event:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: birth_event
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/civil-certificate-evidence
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: birth-certificate-evidence/v1
+              pack_id: birth-certificate-evidence/v1
+              pack_version: v1
+          lookup:
+            input: sources.birth_record.event_id
+            field: id
+            op: eq
+            cardinality: one
+          fields:
+            id:
+              field: id
+              type: string
+              required: true
+            mother_person_id:
+              field: mother_person_id
+              type: string
+              required: true
+            father_person_id:
+              field: father_person_id
+              type: string
+              required: true
+            place_of_birth:
+              field: place_of_birth
+              type: string
+              required: true
+            date_of_birth:
+              field: date_of_birth
+              type: date
+              required: true
+        mother_person:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person_detail
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/civil-certificate-evidence
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: birth-certificate-evidence/v1
+              pack_id: birth-certificate-evidence/v1
+              pack_version: v1
+          lookup:
+            input: sources.birth_event.mother_person_id
+            field: id
+            op: eq
+            cardinality: one
+          fields:
+            id:
+              field: id
+              type: string
+              required: true
+            national_id:
+              field: national_id
+              type: string
+              required: true
+            given_name:
+              field: given_name
+              type: string
+              required: true
+            surname:
+              field: surname
+              type: string
+              required: true
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+        father_person:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person_detail
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/civil-certificate-evidence
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: birth-certificate-evidence/v1
+              pack_id: birth-certificate-evidence/v1
+              pack_version: v1
+          lookup:
+            input: sources.birth_event.father_person_id
+            field: id
+            op: eq
+            cardinality: one
+          fields:
+            id:
+              field: id
+              type: string
+              required: true
+            national_id:
+              field: national_id
+              type: string
+              required: true
+            given_name:
+              field: given_name
+              type: string
+              required: true
+            surname:
+              field: surname
+              type: string
+              required: true
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+      rule:
+        type: cel
+        expression: "{'type': 'BirthEvidence', 'identifier': source.birth_certificate.id, 'issuing_date': source.birth_certificate.issue_date, 'issuing_authority': {'name': source.birth_record.authority}, 'issuing_place': {'name': source.birth_certificate.issuing_office}, 'is_about': [{'type': 'Person', 'id': source.child_person.id, 'identifiers': [{'scheme': 'national_id', 'value': source.child_person.national_id}], 'given_name': source.child_person.given_name, 'surname': source.child_person.surname, 'birth_date': source.child_person.birth_date}], 'is_conformant_to': ['https://semiceu.github.io/OOTS-EDM/birth-evidence/v1'], 'distribution': {'format': 'application/json'}, 'certifies_birth': {'identifier': source.birth_record.registration_number, 'date_of_birth': source.birth_event.date_of_birth, 'place_of_birth': source.birth_event.place_of_birth, 'child': {'type': 'Person', 'id': source.child_person.id, 'identifiers': [{'scheme': 'national_id', 'value': source.child_person.national_id}], 'given_name': source.child_person.given_name, 'surname': source.child_person.surname, 'birth_date': source.child_person.birth_date, 'sex': source.child_person.sex}, 'parents': [{'relationship': 'mother', 'type': 'Person', 'id': source.mother_person.id, 'identifiers': [{'scheme': 'national_id', 'value': source.mother_person.national_id}], 'given_name': source.mother_person.given_name, 'surname': source.mother_person.surname, 'birth_date': source.mother_person.birth_date}, {'relationship': 'father', 'type': 'Person', 'id': source.father_person.id, 'identifiers': [{'scheme': 'national_id', 'value': source.father_person.national_id}], 'given_name': source.father_person.given_name, 'surname': source.father_person.surname, 'birth_date': source.father_person.birth_date}]}}"
+      disclosure:
+        default: value
+        allowed:
+          - value
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+    - id: birth.event_exists
+      title: Birth event exists
+      version: 2026-06
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        birth_certificate:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_status_record
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/civil-certificate-evidence
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: birth-certificate-evidence/v1
+              pack_id: birth-certificate-evidence/v1
+              pack_version: v1
+            allowed_target_inputs:
+              - target.identifiers.registration_number
+          lookup:
+            input: target.identifiers.registration_number
+            field: registration_number
+            op: eq
+            cardinality: one
+          fields:
+            record_type:
+              field: record_type
+              type: string
+              required: true
+            registration_status:
+              field: registration_status
+              type: string
+              required: true
+      rule:
+        type: cel
+        expression: "source.birth_certificate.record_type == 'birth' && source.birth_certificate.registration_status == 'registered'"
+      disclosure:
+        default: predicate
+        allowed:
+          - predicate
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+    - id: marriage.certificate_summary
+      title: Marriage Evidence
+      version: 2026-06
+      subject_type: marriage
+      value:
+        type: object
+      source_bindings:
+        marriage_record:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_status_record
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/civil-certificate-evidence
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: marriage-certificate-evidence/v1
+              pack_id: marriage-certificate-evidence/v1
+              pack_version: v1
+            allowed_target_inputs:
+              - target.identifiers.registration_number
+          lookup:
+            input: target.identifiers.registration_number
+            field: registration_number
+            op: eq
+            cardinality: one
+          fields:
+            id:
+              field: id
+              type: string
+              required: true
+            record_type:
+              field: record_type
+              type: string
+              required: true
+            registration_number:
+              field: registration_number
+              type: string
+              required: true
+            event_id:
+              field: event_id
+              type: string
+              required: true
+            authority:
+              field: authority
+              type: string
+              required: true
+            registration_status:
+              field: registration_status
+              type: string
+              required: true
+        marriage_certificate:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: certificate
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/civil-certificate-evidence
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: marriage-certificate-evidence/v1
+              pack_id: marriage-certificate-evidence/v1
+              pack_version: v1
+            allowed_target_inputs:
+              - target.identifiers.registration_number
+          lookup:
+            input: sources.marriage_record.id
+            field: record_id
+            op: eq
+            cardinality: one
+          fields:
+            id:
+              field: id
+              type: string
+              required: true
+            issue_date:
+              field: issue_date
+              type: date
+              required: true
+            issuing_office:
+              field: issuing_office
+              type: string
+              required: true
+            certificate_type:
+              field: certificate_type
+              type: string
+              required: true
+        marriage_event:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: marriage_event
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/civil-certificate-evidence
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: marriage-certificate-evidence/v1
+              pack_id: marriage-certificate-evidence/v1
+              pack_version: v1
+          lookup:
+            input: sources.marriage_record.event_id
+            field: id
+            op: eq
+            cardinality: one
+          fields:
+            id:
+              field: id
+              type: string
+              required: true
+            spouse_1_person_id:
+              field: spouse_1_person_id
+              type: string
+              required: true
+            spouse_2_person_id:
+              field: spouse_2_person_id
+              type: string
+              required: true
+            marriage_date:
+              field: marriage_date
+              type: date
+              required: true
+            marriage_place:
+              field: marriage_place
+              type: string
+              required: true
+        spouse_1:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person_detail
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/civil-certificate-evidence
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: marriage-certificate-evidence/v1
+              pack_id: marriage-certificate-evidence/v1
+              pack_version: v1
+          lookup:
+            input: sources.marriage_event.spouse_1_person_id
+            field: id
+            op: eq
+            cardinality: one
+          fields:
+            id:
+              field: id
+              type: string
+              required: true
+            national_id:
+              field: national_id
+              type: string
+              required: true
+            given_name:
+              field: given_name
+              type: string
+              required: true
+            surname:
+              field: surname
+              type: string
+              required: true
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+        spouse_2:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person_detail
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/civil-certificate-evidence
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: marriage-certificate-evidence/v1
+              pack_id: marriage-certificate-evidence/v1
+              pack_version: v1
+          lookup:
+            input: sources.marriage_event.spouse_2_person_id
+            field: id
+            op: eq
+            cardinality: one
+          fields:
+            id:
+              field: id
+              type: string
+              required: true
+            national_id:
+              field: national_id
+              type: string
+              required: true
+            given_name:
+              field: given_name
+              type: string
+              required: true
+            surname:
+              field: surname
+              type: string
+              required: true
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+      rule:
+        type: cel
+        expression: "{'type': 'MarriageEvidence', 'identifier': source.marriage_certificate.id, 'issuing_date': source.marriage_certificate.issue_date, 'issuing_authority': {'name': source.marriage_record.authority}, 'issuing_place': {'name': source.marriage_certificate.issuing_office}, 'is_about': [{'type': 'Marriage', 'identifier': source.marriage_record.registration_number}], 'is_conformant_to': ['https://semiceu.github.io/OOTS-EDM/marriage-evidence/v1'], 'distribution': {'format': 'application/json'}, 'certifies_marriage': {'identifier': source.marriage_record.registration_number, 'marriage_date': source.marriage_event.marriage_date, 'marriage_place': source.marriage_event.marriage_place, 'spouses': [{'type': 'Person', 'id': source.spouse_1.id, 'identifiers': [{'scheme': 'national_id', 'value': source.spouse_1.national_id}], 'given_name': source.spouse_1.given_name, 'surname': source.spouse_1.surname, 'birth_date': source.spouse_1.birth_date}, {'type': 'Person', 'id': source.spouse_2.id, 'identifiers': [{'scheme': 'national_id', 'value': source.spouse_2.national_id}], 'given_name': source.spouse_2.given_name, 'surname': source.spouse_2.surname, 'birth_date': source.spouse_2.birth_date}]}}"
+      disclosure:
+        default: value
+        allowed:
+          - value
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+    - id: marriage.event_exists
+      title: Marriage event exists
+      version: 2026-06
+      subject_type: marriage
+      value:
+        type: boolean
+      source_bindings:
+        marriage_certificate:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_status_record
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/civil-certificate-evidence
+            allowed_assurance:
+              - substantial
+            permitted_jurisdictions:
+              - ZZ
+            require_legal_basis: true
+            require_consent: true
+            ecosystem_binding:
+              id: marriage-certificate-evidence/v1
+              pack_id: marriage-certificate-evidence/v1
+              pack_version: v1
+            allowed_target_inputs:
+              - target.identifiers.registration_number
+          lookup:
+            input: target.identifiers.registration_number
+            field: registration_number
+            op: eq
+            cardinality: one
+          fields:
+            record_type:
+              field: record_type
+              type: string
+              required: true
+            registration_status:
+              field: registration_status
+              type: string
+              required: true
+      rule:
+        type: cel
+        expression: "source.marriage_certificate.record_type == 'marriage' && source.marriage_certificate.registration_status == 'registered'"
+      disclosure:
+        default: predicate
+        allowed:
+          - predicate
       formats:
         - application/vnd.registry-notary.claim-result+json
     - id: civil-person-is-alive-by-demographics

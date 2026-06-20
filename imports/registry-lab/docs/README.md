@@ -75,5 +75,7 @@ flowchart TD
 
 ## Maintainer notes
 
+- [Evidence Gateway packs](evidence-gateway-packs.md): current pack IDs,
+  binding IDs, identifier/demographic lookup support, and fast test commands.
 - [Commons release cleanup plan](commons-release-cleanup-plan.md): maintainer
   cleanup plan for shared Platform, Notary, Relay, and Manifest release work.

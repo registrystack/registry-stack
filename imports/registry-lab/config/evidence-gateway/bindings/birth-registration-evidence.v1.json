@@ -1,20 +1,44 @@
 {
   "schema_version": "registry-lab/evidence-gateway-binding/v1",
   "binding": {
-    "id": "sp-dci/v1",
+    "id": "birth-registration-evidence/v1",
     "version": "v1",
-    "profile": "sp-dci",
+    "profile": "birth-registration-evidence",
     "type": "governed-evidence",
     "description": "Social Protection DCI governed evidence binding for OpenCRVS-style DCI source requests.",
     "source_configs": [
       "config/notary/opencrvs-dci-notary.yaml"
     ],
-    "synthetic_data": "config/evidence-gateway/synthetic/sp-dci.v1.json",
-    "golden_fixtures": "config/evidence-gateway/golden/sp-dci.v1.json"
+    "synthetic_data": "config/evidence-gateway/synthetic/birth-registration-evidence.v1.json",
+    "golden_fixtures": "config/evidence-gateway/golden/birth-registration-evidence.v1.json"
   },
   "evidence_pack": {
-    "policy_id": "lab.sp-dci.governed-evidence.v1",
-    "policy_hash": "sha256:479cfba9c5895f5f827b855244436a5b4a9f84c76fbd5472e861ad56983254db",
+    "pack_id": "birth-registration-evidence/v1",
+    "pack_version": "v1",
+    "pack_title": "Birth registration evidence",
+    "source_basis": {
+      "family": "crvs-birth-registration",
+      "evidence_type": "Birth registration",
+      "source_binding": "opencrvs-dci",
+      "adaptation": "jurisdiction-neutral-crvs"
+    },
+    "matching_modes": [
+      {
+        "mode": "identifier",
+        "status": "implemented",
+        "input": "target.identifiers.UIN",
+        "identifier_scheme": "UIN",
+        "issuer": "opencrvs"
+      },
+      {
+        "mode": "demographic",
+        "status": "not_implemented",
+        "input": "target.attributes.given_name + target.attributes.family_name + target.attributes.birthdate",
+        "reason": "The current OpenCRVS DCI Notary exposes UIN lookup only; demographic search is a future matching path."
+      }
+    ],
+    "policy_id": "lab.birth-registration-evidence.governed-evidence.v1",
+    "policy_hash": "sha256:1b239a9f1d158705364d444d8ea00ed26088ffbe69bb7e3477bf72c2522979c2",
     "odrl_enforcement": {
       "profile": "registry-evidence-gateway-pdp/v1",
       "constraint_terms": [
@@ -28,7 +52,7 @@
       {
         "term": "registry:pdp:source_binding",
         "operator": "odrl:isA",
-        "rightOperand": "sp-dci/v1"
+        "rightOperand": "birth-registration-evidence/v1"
       },
       {
         "term": "registry:pdp:assurance",
@@ -61,13 +85,13 @@
       }
     ],
     "@type": "Set",
-    "uid": "urn:registry-lab:policy:sp-dci:governed-evidence:v1",
+    "uid": "urn:registry-lab:policy:birth-registration-evidence:governed-evidence:v1",
     "profile": "registry-evidence-gateway-pdp/v1",
     "permission": [
       {
-        "uid": "urn:registry-lab:rule:sp-dci:purpose:opencrvs-dci-lab",
+        "uid": "urn:registry-lab:rule:birth-registration-evidence:purpose:opencrvs-dci-lab",
         "action": "odrl:use",
-        "target": "urn:registry-lab:evidence:sp-dci:v1",
+        "target": "urn:registry-lab:evidence:birth-registration-evidence:v1",
         "constraint": [
           {
             "leftOperand": "odrl:purpose",

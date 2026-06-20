@@ -20,13 +20,21 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_ROOT = ROOT / "config" / "evidence-gateway"
 PROFILE_PATH = FIXTURE_ROOT / "odrl-enforcement-profile.v1.json"
 REQUIRED_BINDINGS = {
-    "baseline-dpi/v1",
-    "sp-dci/v1",
-    "oots-birth-evidence/v1",
-    "oots-marriage-evidence/v1",
+    "combined-support-eligibility/v1",
+    "birth-registration-evidence/v1",
+    "birth-certificate-evidence/v1",
+    "marriage-certificate-evidence/v1",
 }
-BASELINE_POLICY_ID = "lab.baseline-dpi.governed-evidence.v1"
-BASELINE_POLICY_HASH = "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb"
+REQUIRED_PACK_IDS = {
+    "combined-support-eligibility/v1": "combined-support-eligibility/v1",
+    "birth-registration-evidence/v1": "birth-registration-evidence/v1",
+    "birth-certificate-evidence/v1": "birth-certificate-evidence/v1",
+    "marriage-certificate-evidence/v1": "marriage-certificate-evidence/v1",
+}
+MATCHING_MODE_STATUSES = {"implemented", "fixture_data_only", "not_implemented"}
+MATCHING_MODE_NAMES = {"identifier", "demographic", "party_demographic"}
+BASELINE_POLICY_ID = "lab.combined-support-eligibility.governed-evidence.v1"
+BASELINE_POLICY_HASH = "sha256:4a680200c1095d2dbee608046d78d2399db5dfae7426c36a4580fe81e50dbeb9"
 BASELINE_RELAY_CONFIGS = [
     ROOT / "config" / "relay" / "civil-registry-relay.yaml",
     ROOT / "config" / "relay" / "health-registry-relay.yaml",
@@ -57,7 +65,7 @@ REGISTRY_DATA_CONNECTION_RELAY_CONFIGS = {
         ROOT / "config" / "coolify" / "relay" / "social-protection-registry-relay.yaml",
     ],
 }
-WAVE_A_BINDINGS = {"oots-birth-evidence/v1", "oots-marriage-evidence/v1"}
+WAVE_A_BINDINGS = {"birth-certificate-evidence/v1", "marriage-certificate-evidence/v1"}
 LEGACY_REQUIRED_CASE_TYPES = {"success", "denial", "redaction", "credential", "audit"}
 WAVE_A_REQUIRED_CASE_TYPES = {"success", "denial", "audit"}
 PERMIT_CASE_TYPES = {"success", "redaction", "credential", "audit"}
@@ -471,21 +479,21 @@ def validate_relay_metadata_contracts() -> None:
     for path in BASELINE_RELAY_CONFIGS:
         text = path.read_text(encoding="utf-8")
         label = str(path.relative_to(ROOT))
-        require("ecosystem_binding:" in text, f"{label} must select baseline-dpi/v1 metadata ecosystem binding")
-        require("id: baseline-dpi/v1" in text, f"{label} must select baseline-dpi/v1 metadata ecosystem binding")
-        require("version: v1" in text, f"{label} must select baseline-dpi/v1 version v1")
+        require("ecosystem_binding:" in text, f"{label} must select combined-support-eligibility/v1 metadata ecosystem binding")
+        require("id: combined-support-eligibility/v1" in text, f"{label} must select combined-support-eligibility/v1 metadata ecosystem binding")
+        require("version: v1" in text, f"{label} must select combined-support-eligibility/v1 version v1")
 
     for path in BASELINE_METADATA_FILES:
         label = str(path.relative_to(ROOT))
-        block = yaml_list_item_block(path, "ecosystem_bindings", "baseline-dpi/v1")
-        require(block, f"{label} missing baseline-dpi/v1 ecosystem binding")
+        block = yaml_list_item_block(path, "ecosystem_bindings", "combined-support-eligibility/v1")
+        require(block, f"{label} missing combined-support-eligibility/v1 ecosystem binding")
         require(
             yaml_block_scalar(block, "policy_id") == BASELINE_POLICY_ID,
-            f"{label} baseline-dpi/v1 policy_id must match evidence-gateway binding fixture",
+            f"{label} combined-support-eligibility/v1 policy_id must match evidence-gateway binding fixture",
         )
         require(
             yaml_block_scalar(block, "policy_hash") == BASELINE_POLICY_HASH,
-            f"{label} baseline-dpi/v1 policy_hash must match evidence-gateway binding fixture",
+            f"{label} combined-support-eligibility/v1 policy_hash must match evidence-gateway binding fixture",
         )
 
     for path in sorted((ROOT / "config" / "relay").glob("*.metadata.yaml")) + sorted(
@@ -520,7 +528,62 @@ def validate_registry_data_freshness_projection() -> None:
                 )
 
 
-def validate_binding(path: Path, profile: dict[str, Any]) -> str:
+def validate_pack_metadata(binding_id: str, evidence_pack: dict[str, Any]) -> tuple[str, str]:
+    pack_id = evidence_pack.get("pack_id")
+    expected_pack_id = REQUIRED_PACK_IDS.get(binding_id)
+    require(isinstance(pack_id, str) and pack_id, f"{binding_id} missing pack_id")
+    require(pack_id == expected_pack_id, f"{binding_id} pack_id must be {expected_pack_id!r}")
+    require(evidence_pack.get("pack_version") == "v1", f"{binding_id} pack_version must be v1")
+    require(
+        isinstance(evidence_pack.get("pack_title"), str) and evidence_pack["pack_title"],
+        f"{binding_id} missing pack_title",
+    )
+    source_basis = evidence_pack.get("source_basis")
+    require(isinstance(source_basis, dict), f"{binding_id} missing source_basis")
+    require(
+        isinstance(source_basis.get("family"), str) and source_basis["family"],
+        f"{binding_id} source_basis.family missing",
+    )
+    require(
+        isinstance(source_basis.get("evidence_type"), str) and source_basis["evidence_type"],
+        f"{binding_id} source_basis.evidence_type missing",
+    )
+    require(
+        isinstance(source_basis.get("adaptation"), str) and source_basis["adaptation"],
+        f"{binding_id} source_basis.adaptation missing",
+    )
+
+    matching_modes = evidence_pack.get("matching_modes")
+    require(isinstance(matching_modes, list) and matching_modes, f"{binding_id} missing matching_modes")
+    implemented = 0
+    mode_summaries: list[str] = []
+    for mode in matching_modes:
+        require(isinstance(mode, dict), f"{binding_id} matching_modes entries must be objects")
+        mode_name = mode.get("mode")
+        status = mode.get("status")
+        require(mode_name in MATCHING_MODE_NAMES, f"{binding_id} has unsupported matching mode {mode_name!r}")
+        require(status in MATCHING_MODE_STATUSES, f"{binding_id} has unsupported matching mode status {status!r}")
+        require(
+            isinstance(mode.get("input"), str) and mode["input"],
+            f"{binding_id} {mode_name} matching mode missing input",
+        )
+        if status == "implemented":
+            implemented += 1
+            require(
+                isinstance(mode.get("identifier_scheme"), str) and mode["identifier_scheme"],
+                f"{binding_id} implemented matching mode must name identifier_scheme",
+            )
+        else:
+            require(
+                isinstance(mode.get("reason"), str) and mode["reason"],
+                f"{binding_id} non-implemented matching mode missing reason",
+            )
+        mode_summaries.append(f"{mode_name}:{status}")
+    require(implemented > 0, f"{binding_id} must have at least one implemented matching mode")
+    return pack_id, "/".join(mode_summaries)
+
+
+def validate_binding(path: Path, profile: dict[str, Any]) -> tuple[str, str, str]:
     require_no_private_internal_copy(path)
     binding_doc = load_json(path)
     validate_production_odrl_terms(path.name, binding_doc)
@@ -536,6 +599,7 @@ def validate_binding(path: Path, profile: dict[str, Any]) -> str:
     require(binding_id in REQUIRED_BINDINGS, f"{path.name} has unexpected binding id {binding_id!r}")
     require(binding_version == "v1", f"{binding_id} must be version v1")
     require(binding.get("type") == "governed-evidence", f"{binding_id} must be governed-evidence")
+    pack_id, matching_summary = validate_pack_metadata(binding_id, evidence_pack)
 
     policy_id = evidence_pack.get("policy_id")
     policy_hash = evidence_pack.get("policy_hash")
@@ -589,7 +653,7 @@ def validate_binding(path: Path, profile: dict[str, Any]) -> str:
         synthetic_records,
         policy_constraints,
     )
-    return binding_id
+    return binding_id, pack_id, matching_summary
 
 
 def validate_synthetic(path: Path, binding_id: str) -> dict[str, dict[str, Any]]:
@@ -724,14 +788,20 @@ def main() -> int:
     require(not extra_terms, f"ODRL profile has non-production terms: {', '.join(sorted(extra_terms))}")
 
     binding_paths = sorted((FIXTURE_ROOT / "bindings").glob("*.json"))
-    found = {validate_binding(path, profile) for path in binding_paths}
+    validated_bindings = [validate_binding(path, profile) for path in binding_paths]
+    found = {binding_id for binding_id, _, _ in validated_bindings}
     missing = REQUIRED_BINDINGS - found
     require(not missing, f"missing binding fixtures: {', '.join(sorted(missing))}")
     validate_relay_metadata_contracts()
     validate_registry_data_freshness_projection()
+    pack_summary = ", ".join(
+        f"{binding_id}->{pack_id} [{matching_summary}]"
+        for binding_id, pack_id, matching_summary in sorted(validated_bindings)
+    )
     print(f"evidence gateway fixtures OK: {', '.join(sorted(found))}")
-    print("relay metadata binding selectors OK: local and hosted baseline-dpi/v1 selectors are aligned")
-    print("relay metadata policy hashes OK: baseline-dpi/v1 matches the evidence-gateway binding fixture")
+    print(f"pack identity and matching modes OK: {pack_summary}")
+    print("relay metadata binding selectors OK: local and hosted combined-support-eligibility/v1 selectors are aligned")
+    print("relay metadata policy hashes OK: combined-support-eligibility/v1 matches the evidence-gateway binding fixture")
     print("manifest metadata shape OK: ignored output_profile and offering evidence_pack fields are absent")
     print("registry-data freshness projections OK: Notary observed_at fields are exposed by paired Relay entities")
     print(f"production enforcement profile terms OK: {', '.join(sorted(PRODUCTION_PROFILE_TERMS))}")
