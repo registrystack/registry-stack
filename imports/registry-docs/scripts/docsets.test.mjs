@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   applyDocsetRefs,
   currentProductsMatchRepoManifest,
+  filterRepoDocsForDocset,
   validateDocsets,
 } from './docsets.mjs';
 
@@ -88,6 +89,38 @@ test('applyDocsetRefs overrides active repo refs from an archive docset', () => 
   assert.equal(repos.repos['registry-relay'].ref, '2222222222222222222222222222222222222222');
   assert.equal(repos.repos['registry-relay'].version, 'v0.2.0');
   assert.equal(repos.repos['registry-platform'].ref, '3333333333333333333333333333333333333333');
+});
+
+test('filterRepoDocsForDocset removes entries excluded from selected archive', () => {
+  const repos = repoManifest();
+  repos.repos['registry-relay'].docs.push({
+    src: 'docs/new-page.md',
+    dest: 'products/registry-relay/new-page',
+    exclude_docsets: ['beta-2026-06-12'],
+  });
+
+  filterRepoDocsForDocset(repos, validDocsets().docsets[1]);
+
+  assert.deepEqual(
+    repos.repos['registry-relay'].docs.map((entry) => entry.src),
+    ['docs/README.md'],
+  );
+});
+
+test('filterRepoDocsForDocset keeps entries not excluded from selected docset', () => {
+  const repos = repoManifest();
+  repos.repos['registry-relay'].docs.push({
+    src: 'docs/new-page.md',
+    dest: 'products/registry-relay/new-page',
+    exclude_docsets: ['some-other-docset'],
+  });
+
+  filterRepoDocsForDocset(repos, validDocsets().docsets[1]);
+
+  assert.deepEqual(
+    repos.repos['registry-relay'].docs.map((entry) => entry.src),
+    ['docs/README.md', 'docs/new-page.md'],
+  );
 });
 
 test('currentProductsMatchRepoManifest reports latest drift', () => {

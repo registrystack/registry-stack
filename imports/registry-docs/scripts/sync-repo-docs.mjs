@@ -21,7 +21,13 @@ import { dirname, join, normalize, posix, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import YAML from 'yaml';
-import { applyDocsetRefs, getDocset, loadDocsets, selectedDocsetId } from './docsets.mjs';
+import {
+  applyDocsetRefs,
+  filterRepoDocsForDocset,
+  getDocset,
+  loadDocsets,
+  selectedDocsetId,
+} from './docsets.mjs';
 
 const run = promisify(execFile);
 
@@ -352,6 +358,7 @@ async function main() {
     applyDocsetRefs(manifest, docset);
     console.log(`Using archived docset ${docset.id} for product docs.`);
   }
+  filterRepoDocsForDocset(manifest, docset);
 
   // Clean and recreate the output dir so removed allowlist entries don't linger.
   await rm(outputRoot, { recursive: true, force: true });
