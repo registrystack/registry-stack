@@ -41,5 +41,5 @@ docsets:
         version: v0.1.0
         ref: 1a50752fe71417ff250f2ec99d6d0fdf67e4cf33
       crosswalk:
-        version: crosswalk-core-v0.1.1
-        ref: 54e0f537830837fcd0c9efa87990987b1846931c
+        version: crosswalk-core-v0.2.0
+        ref: 1d44ec735fdc8a7c719264b339574371e8330337
