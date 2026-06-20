@@ -8103,9 +8103,9 @@ async fn oid4vci_type_metadata_is_public_and_matches_configured_vct() {
     // Serve with connect-info so the forwarded-host trust gate can see the
     // loopback peer; a plain `Router` over http_transport injects no
     // `ConnectInfo`, which would make the trust gate reject every request.
-    let server = TestServer::builder().http_transport().build(
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    );
+    let server = TestServer::builder()
+        .http_transport()
+        .build(app.into_make_service_with_connect_info::<std::net::SocketAddr>());
 
     let response = server
         .get("/credentials/civil-status")
@@ -8211,9 +8211,9 @@ async fn oid4vci_type_metadata_normalizes_forwarded_scheme_and_host_case() {
     // Serve with connect-info so the forwarded-host trust gate can see the
     // loopback peer; a plain `Router` over http_transport injects no
     // `ConnectInfo`, which would make the trust gate reject every request.
-    let server = TestServer::builder().http_transport().build(
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    );
+    let server = TestServer::builder()
+        .http_transport()
+        .build(app.into_make_service_with_connect_info::<std::net::SocketAddr>());
 
     let response = server
         .get("/credentials/civil-status")
@@ -8322,9 +8322,9 @@ async fn oid4vci_type_metadata_supports_path_prefixed_issuer_behind_stripping_pr
     // Serve with connect-info so the forwarded-host trust gate can see the
     // loopback peer; a plain `Router` over http_transport injects no
     // `ConnectInfo`, which would make the trust gate reject every request.
-    let server = TestServer::builder().http_transport().build(
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    );
+    let server = TestServer::builder()
+        .http_transport()
+        .build(app.into_make_service_with_connect_info::<std::net::SocketAddr>());
 
     let response = server
         .get("/credentials/civil-status")
@@ -8393,9 +8393,9 @@ async fn oid4vci_type_metadata_well_known_is_public_and_matches_configured_vct()
     // Serve with connect-info so the forwarded-host trust gate can see the
     // loopback peer; a plain `Router` over http_transport injects no
     // `ConnectInfo`, which would make the trust gate reject every request.
-    let server = TestServer::builder().http_transport().build(
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    );
+    let server = TestServer::builder()
+        .http_transport()
+        .build(app.into_make_service_with_connect_info::<std::net::SocketAddr>());
 
     let response = server
         .get("/.well-known/vct/credentials/civil-status")

@@ -9121,7 +9121,10 @@ mod tests {
         };
         let mut headers = HeaderMap::new();
         headers.insert("x-forwarded-proto", HeaderValue::from_static("http"));
-        headers.insert("x-forwarded-host", HeaderValue::from_static("proxy.example"));
+        headers.insert(
+            "x-forwarded-host",
+            HeaderValue::from_static("proxy.example"),
+        );
         headers.insert(header::HOST, HeaderValue::from_static("host.example"));
         let uri = "/credentials/identity".parse::<Uri>().unwrap();
 
