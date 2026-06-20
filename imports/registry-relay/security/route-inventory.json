@@ -50,6 +50,8 @@
     {"listener": "public", "path": "/dci/{registry}/registry/sync/disabled", "methods": ["POST"], "source": "src/api/spdci.rs", "feature": "spdci-api-standards"},
     {"listener": "public", "path": "/dci/{registry}/registry/sync/get-disability-details", "methods": ["POST"], "source": "src/api/spdci.rs", "feature": "spdci-api-standards"},
     {"listener": "public", "path": "/dci/{registry}/registry/sync/get-disability-support", "methods": ["POST"], "source": "src/api/spdci.rs", "feature": "spdci-api-standards"},
+    {"listener": "public", "path": "/v1/attribute-releases", "methods": ["GET"], "source": "src/api/attribute_release.rs", "feature": "attribute-release"},
+    {"listener": "public", "path": "/v1/attribute-releases/{profile_id}/versions/{version}/resolve", "methods": ["POST"], "source": "src/api/attribute_release.rs", "feature": "attribute-release"},
     {"listener": "public", "path": "/ogc/v1", "methods": ["GET"], "source": "src/api/ogc/features.rs", "feature": "ogcapi-features"},
     {"listener": "public", "path": "/ogc/v1/conformance", "methods": ["GET"], "source": "src/api/ogc/features.rs", "feature": "ogcapi-features"},
     {"listener": "public", "path": "/ogc/v1/collections", "methods": ["GET"], "source": "src/api/ogc/features.rs", "feature": "ogcapi-features"},

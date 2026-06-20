@@ -16,6 +16,7 @@
 //! 5. [`server`] wires HTTP routes, auth, audit, limits, and observability.
 
 pub mod api;
+pub mod attribute_release;
 pub mod audit;
 pub mod auth;
 pub mod config;

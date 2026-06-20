@@ -522,6 +522,10 @@ fn endpoint_kind_from_pattern(pattern: &str) -> EndpointKind {
             EndpointKind::AggregateList
         }
         "/ogc/edr/v1/collections/{collection_id}/area" => EndpointKind::OgcEdrArea,
+        "/v1/attribute-releases"
+        | "/v1/attribute-releases/{profile_id}/versions/{version}/resolve" => {
+            EndpointKind::AttributeRelease
+        }
         "/openapi.json" => EndpointKind::Openapi,
         _ => EndpointKind::Other,
     }
@@ -540,6 +544,8 @@ fn endpoint_kind_from_path(path: &str) -> EndpointKind {
         EndpointKind::Openapi
     } else if path.starts_with("/ogc/edr/v1/") {
         classify_edr_endpoint(path)
+    } else if path == "/v1/attribute-releases" || path.starts_with("/v1/attribute-releases/") {
+        EndpointKind::AttributeRelease
     } else if path.starts_with("/v1/datasets/") {
         classify_dataset_endpoint(path)
     } else {
@@ -592,6 +598,7 @@ fn endpoint_kind_label(kind: EndpointKind) -> &'static str {
         EndpointKind::OgcFeature => "ogc_feature",
         EndpointKind::Admin => "admin",
         EndpointKind::Openapi => "openapi",
+        EndpointKind::AttributeRelease => "attribute_release",
         EndpointKind::Other => "other",
     }
 }
@@ -642,6 +649,32 @@ mod tests {
         assert_eq!(
             endpoint_kind_from_pattern("/v1/datasets/{dataset_id}/entities/{entity}/verify"),
             EndpointKind::Other
+        );
+    }
+
+    #[test]
+    fn attribute_release_routes_classify_as_attribute_release_not_other() {
+        // Both classifiers must label the discovery and resolve routes
+        // `attribute_release`, not `other`. The pattern classifier (primary
+        // whenever axum supplies a MatchedPath) keys on the route templates; the
+        // path classifier keys on the concrete `/v1/attribute-releases` prefix.
+        assert_eq!(
+            endpoint_kind_from_pattern("/v1/attribute-releases"),
+            EndpointKind::AttributeRelease
+        );
+        assert_eq!(
+            endpoint_kind_from_pattern(
+                "/v1/attribute-releases/{profile_id}/versions/{version}/resolve"
+            ),
+            EndpointKind::AttributeRelease
+        );
+        assert_eq!(
+            endpoint_kind_from_path("/v1/attribute-releases"),
+            EndpointKind::AttributeRelease
+        );
+        assert_eq!(
+            endpoint_kind_from_path("/v1/attribute-releases/civil_identity/versions/v1/resolve"),
+            EndpointKind::AttributeRelease
         );
     }
 

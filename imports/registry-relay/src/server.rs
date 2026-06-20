@@ -75,6 +75,7 @@ use tracing::Level;
 use ulid::Ulid;
 
 use crate::api;
+use crate::attribute_release::AttributeReleaseEvaluator;
 use crate::audit::{self, AuditPipeline, AuditSettings, OperationalAuditEvent};
 use crate::auth::middleware::{auth_layer, AuthProviderRef};
 use crate::config::{Config, CorsConfig};
@@ -237,6 +238,7 @@ fn build_app_with_provenance_metadata_and_metrics(
     #[cfg(feature = "ogcapi-records")]
     let protected = protected.merge(api::records_router());
     let protected = merge_spdci_routes(protected);
+    let protected = merge_attribute_release_routes(protected);
     let protected = auth_layer(protected, auth);
 
     // Merge public + protected; everything above this point is inside
@@ -248,7 +250,10 @@ fn build_app_with_provenance_metadata_and_metrics(
     // verification uses a configured stable HMAC key so audit hashes
     // survive process restarts.
     let cursor_signer = Arc::new(CursorSigner::new_random());
+    let attribute_release_evaluator =
+        Arc::new(AttributeReleaseEvaluator::from_config(config.as_ref()));
     let mut router = apply_cross_cutting_layers_with_metrics(merged, &config, audit_sink, metrics)?
+        .layer(Extension(attribute_release_evaluator))
         .layer(Extension(cursor_signer))
         .layer(Extension(config));
     if let Some(state) = provenance {
@@ -267,6 +272,16 @@ fn merge_spdci_routes(router: Router) -> Router {
 
 #[cfg(not(feature = "spdci-api-standards"))]
 fn merge_spdci_routes(router: Router) -> Router {
+    router
+}
+
+#[cfg(feature = "attribute-release")]
+fn merge_attribute_release_routes(router: Router) -> Router {
+    router.merge(api::attribute_release_router())
+}
+
+#[cfg(not(feature = "attribute-release"))]
+fn merge_attribute_release_routes(router: Router) -> Router {
     router
 }
 

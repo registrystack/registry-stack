@@ -1014,6 +1014,155 @@ pub struct EntityConfig {
     pub publicschema: Option<EntityPublicSchemaConfig>,
     #[serde(default)]
     pub spatial: Option<EntitySpatialConfig>,
+    /// Governed identity attribute-release profiles attached to this entity.
+    /// Each profile resolves exactly one subject and returns only the
+    /// configured, minimised claims. Empty by default (feature opt-in).
+    #[serde(default)]
+    pub attribute_release_profiles: Vec<AttributeReleaseProfile>,
+}
+
+/// A governed identity attribute-release profile. A profile is a
+/// projection-limited, exactly-one-subject lookup that maps a configured set of
+/// source fields (or CEL-computed expressions) into a minimised
+/// OIDC/UserInfo-style claim bundle. It is *optionally* purpose-bound: a profile
+/// that declares a `purpose` requires a matching `data-purpose` at resolve time;
+/// one that omits it does not. Identified globally by the `(id, version)` pair;
+/// both are required path segments at resolve time.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AttributeReleaseProfile {
+    /// Profile identifier, lower-kebab/snake (`^[a-z][a-z0-9_-]*$`). Globally
+    /// unique with `version`.
+    pub id: String,
+    /// Profile version. Globally unique with `id`; no silent "latest".
+    pub version: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Data-purpose this profile is bound to. Required (and must be a member
+    /// of the entity's `governed_policy.permitted_purposes`) when the backing
+    /// entity declares any permitted purposes.
+    #[serde(default)]
+    pub purpose: Option<String>,
+    /// Dataset-bound scope a caller must hold to invoke this release. Must
+    /// differ from the entity's `read_scope`.
+    pub release_scope: String,
+    /// How the subject is identified and looked up.
+    pub subject: ReleaseSubjectConfig,
+    /// Optional CEL release-condition gate evaluated before projection.
+    #[serde(default)]
+    pub release_conditions: Option<ReleaseConditionsConfig>,
+    /// Claims released on success. Non-empty; at least one `required`.
+    pub claims: Vec<ReleaseClaimConfig>,
+    /// Response envelope controls.
+    #[serde(default)]
+    pub response: ReleaseResponseConfig,
+}
+
+/// Subject-identification controls for an attribute-release profile.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseSubjectConfig {
+    /// Request input that carries the subject identifier.
+    pub input: String,
+    /// Source field used to match the subject. Must be an exposed entity field.
+    pub source_field: String,
+    /// Optional accepted identifier type label.
+    #[serde(default)]
+    pub id_type: Option<String>,
+    /// Expected subject cardinality. Defaults to exactly one.
+    #[serde(default = "default_subject_cardinality")]
+    pub cardinality: SubjectCardinality,
+}
+
+/// Expected number of subjects a release lookup may match.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SubjectCardinality {
+    One,
+    Many,
+}
+
+fn default_subject_cardinality() -> SubjectCardinality {
+    SubjectCardinality::One
+}
+
+/// CEL release-condition gate. When present, the predicate must hold before
+/// any claim is projected; failure fails closed (subject denied).
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseConditionsConfig {
+    pub expression: ReleaseExpressionConfig,
+    /// Optional internal audit code for a release-condition denial.
+    #[serde(default)]
+    pub denied_code: Option<String>,
+}
+
+/// A single CEL expression evaluated over the subject's source projection.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseExpressionConfig {
+    pub cel: String,
+}
+
+/// A single released claim. Exactly one of `source_field` or `expression`
+/// must be set: a claim is either a direct source-field projection or a
+/// CEL-computed value.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseClaimConfig {
+    /// Released claim name (lower-snake).
+    pub name: String,
+    /// Source field projected into the claim. XOR with `expression`.
+    #[serde(default)]
+    pub source_field: Option<String>,
+    /// CEL-computed claim value. XOR with `source_field`.
+    #[serde(default)]
+    pub expression: Option<ReleaseExpressionConfig>,
+    /// Whether the claim must be present; a missing required claim denies.
+    #[serde(default)]
+    pub required: bool,
+    /// Optional privacy sensitivity label.
+    #[serde(default)]
+    pub sensitivity: Option<ClaimSensitivity>,
+    /// Optional value format hint.
+    #[serde(default)]
+    pub format: Option<String>,
+    /// Optional locale hint.
+    #[serde(default)]
+    pub locale: Option<String>,
+    /// Whether the claim may be shared downstream. Defaults to true.
+    #[serde(default = "default_claim_shareable")]
+    pub shareable: bool,
+}
+
+fn default_claim_shareable() -> bool {
+    true
+}
+
+/// Closed privacy-sensitivity classification for a released claim. This is a
+/// separate, release-specific taxonomy and is intentionally not the
+/// dataset-level `Sensitivity` enum.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimSensitivity {
+    DirectIdentifier,
+    Personal,
+    Public,
+    Pseudonymous,
+}
+
+/// Response-envelope controls for an attribute-release profile.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseResponseConfig {
+    /// Whether to include profile-sourced metadata in the response body.
+    #[serde(default)]
+    pub include_source_metadata: bool,
+    /// Optional cache lifetime hint for the released bundle, in seconds.
+    #[serde(default)]
+    pub max_age_seconds: Option<u64>,
 }
 
 pub const CRS84: &str = "http://www.opengis.net/def/crs/OGC/1.3/CRS84";
@@ -1607,5 +1756,22 @@ mod tests {
     #[test]
     fn suppression_default_is_omit() {
         assert_eq!(Suppression::default(), Suppression::Omit);
+    }
+
+    #[test]
+    fn default_subject_cardinality_is_one() {
+        assert_eq!(default_subject_cardinality(), SubjectCardinality::One);
+    }
+
+    #[test]
+    fn default_claim_shareable_is_true() {
+        assert!(default_claim_shareable());
+    }
+
+    #[test]
+    fn release_response_config_default_is_minimal() {
+        let response = ReleaseResponseConfig::default();
+        assert!(!response.include_source_metadata);
+        assert_eq!(response.max_age_seconds, None);
     }
 }

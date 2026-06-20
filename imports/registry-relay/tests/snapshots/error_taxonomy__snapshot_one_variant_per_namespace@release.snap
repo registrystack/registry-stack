@@ -1,0 +1,11 @@
+---
+source: tests/error_taxonomy.rs
+expression: json
+---
+{
+  "code": "release.subject_denied",
+  "detail": "subject attributes cannot be released for this request",
+  "status": 403,
+  "title": "Subject denied",
+  "type": "https://registry-relay.dev/problems/release/subject_denied"
+}

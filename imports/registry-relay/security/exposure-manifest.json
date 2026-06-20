@@ -1193,6 +1193,54 @@
     {
       "service": "registry-relay",
       "listener": "public",
+      "method": "POST",
+      "path": "/v1/attribute-releases/{profile_id}/versions/{version}/resolve",
+      "feature": "attribute-release",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": false,
+      "stability": "beta",
+      "data_classification": "personal",
+      "notes": "Governed identity attribute release: purpose-bound, projection-limited, exactly-one-subject resolve returning only configured claims.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/attribute_release_api.rs::resolve_without_release_scope_is_denied_before_read",
+        "tests/attribute_release_api.rs::resolve_missing_purpose_denies_before_read"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/v1/attribute-releases",
+      "feature": "attribute-release",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": false,
+      "stability": "beta",
+      "data_classification": "metadata",
+      "notes": "Attribute release profile discovery (authenticated); lists visible profiles without exposing source internals.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/attribute_release_api.rs::discovery_hides_profiles_without_release_scope",
+        "tests/attribute_release_api.rs::discovery_does_not_leak_source_internals"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
       "method": "GET",
       "path": "/ogc/v1",
       "feature": "ogcapi-features",

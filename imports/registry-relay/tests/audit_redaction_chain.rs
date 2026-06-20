@@ -11,6 +11,15 @@ use registry_relay::audit::{AuditRecord, EndpointKind, InMemorySink};
 
 fn sample_record(request_id: usize) -> AuditRecord {
     AuditRecord {
+        ar_profile_id: None,
+        ar_profile_version: None,
+        ar_subject_id_type: None,
+        ar_subject_id_hash: None,
+        ar_requested_claims: None,
+        ar_released_claims: None,
+        ar_internal_outcome: None,
+        ar_source_cardinality_outcome: None,
+        ar_source_availability_class: None,
         ts: "2026-05-15T10:00:00.123Z".to_string(),
         request_id: format!("REQ-{request_id:05}"),
         principal_id: Some("statistics_office".to_string()),

@@ -2209,6 +2209,15 @@ mod tests {
 
     fn sample_audit_record() -> AuditRecord {
         AuditRecord {
+            ar_profile_id: None,
+            ar_profile_version: None,
+            ar_subject_id_type: None,
+            ar_subject_id_hash: None,
+            ar_requested_claims: None,
+            ar_released_claims: None,
+            ar_internal_outcome: None,
+            ar_source_cardinality_outcome: None,
+            ar_source_availability_class: None,
             ts: "2026-05-15T10:00:00.123Z".to_string(),
             request_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
             principal_id: Some("statistics_office".to_string()),

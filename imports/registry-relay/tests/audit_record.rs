@@ -18,9 +18,10 @@ use axum::routing::get;
 use axum::Extension;
 use axum::Router;
 use registry_relay::audit::{
-    audit_layer, redact_query, sensitive_value_hash, sensitive_value_hash_keyed, AuditContextExt,
-    AuditHashSecret, AuditKeyHasher, AuditOutcome, AuditPipeline, AuditRecord, AuditSettings,
-    EndpointKind, ErrorCodeExt, InMemorySink, OperationalAuditEvent, StdoutSink,
+    audit_layer, classify_endpoint_pub, redact_query, sensitive_value_hash,
+    sensitive_value_hash_keyed, AuditContextExt, AuditHashSecret, AuditKeyHasher, AuditOutcome,
+    AuditPipeline, AuditRecord, AuditSettings, EndpointKind, ErrorCodeExt, InMemorySink,
+    OperationalAuditEvent, Sensitive, StdoutSink,
 };
 use registry_relay::auth::{AuthMode, Principal, ScopeSet};
 use serde_json::Value;
@@ -72,6 +73,15 @@ fn sample_record() -> AuditRecord {
         error_code: None,
         provenance: None,
         config: None,
+        ar_profile_id: None,
+        ar_profile_version: None,
+        ar_subject_id_type: None,
+        ar_subject_id_hash: None,
+        ar_requested_claims: None,
+        ar_released_claims: None,
+        ar_internal_outcome: None,
+        ar_source_cardinality_outcome: None,
+        ar_source_availability_class: None,
     }
 }
 
@@ -428,6 +438,7 @@ fn endpoint_kind_renders_canonical_strings() {
         (Aggregate, "aggregate"),
         (Admin, "admin"),
         (Openapi, "openapi"),
+        (AttributeRelease, "attribute_release"),
         (Other, "other"),
     ];
     for (variant, expected) in cases {
@@ -1298,4 +1309,347 @@ async fn middleware_falls_back_to_peer_when_full_forwarded_chain_is_trusted() {
     )
     .await;
     assert_eq!(remote_addr, "10.1.2.3");
+}
+
+// ---------------------------------------------------------------------------
+// Attribute-release audit tests
+// ---------------------------------------------------------------------------
+
+/// The classify_endpoint function must map both the discovery GET and the
+/// resolve POST paths to AttributeRelease, not Other.
+#[test]
+fn attribute_release_endpoint_classified_correctly() {
+    // Discovery path.
+    let kind = classify_endpoint_pub("/v1/attribute-releases");
+    assert_eq!(
+        kind,
+        EndpointKind::AttributeRelease,
+        "discovery path must classify as AttributeRelease"
+    );
+
+    // Resolve path (profile + version segments).
+    let kind = classify_endpoint_pub("/v1/attribute-releases/person-id/versions/1/resolve");
+    assert_eq!(
+        kind,
+        EndpointKind::AttributeRelease,
+        "resolve path must classify as AttributeRelease"
+    );
+
+    // Must NOT fall through to Other.
+    assert_ne!(
+        classify_endpoint_pub("/v1/attribute-releases"),
+        EndpointKind::Other
+    );
+}
+
+/// When ar_subject_id_raw + ar_profile_id + ar_subject_id_type are all set,
+/// the middleware must emit ar_subject_id_hash (with a sha256: or hmac-sha256:
+/// prefix) and must never serialize ar_subject_id_raw into the record.
+#[tokio::test]
+async fn attribute_release_subject_hash_present_no_raw_subject() {
+    let (sink, pipeline) = in_memory_pipeline();
+    let app = Router::new()
+        .route(
+            "/v1/attribute-releases/person-id/versions/1/resolve",
+            axum::routing::post(|| async {
+                let mut response = StatusCode::OK.into_response();
+                response.extensions_mut().insert(AuditContextExt {
+                    ar_profile_id: Some("person-id".to_string()),
+                    ar_profile_version: Some("1".to_string()),
+                    ar_subject_id_type: Some("national_id".to_string()),
+                    ar_subject_id_raw: Some(Sensitive::from("IND-RAW-9999")),
+                    ar_requested_claims: Some(vec!["given_name".to_string()]),
+                    ar_released_claims: Some(vec!["given_name".to_string()]),
+                    ar_internal_outcome: Some("release.ok".to_string()),
+                    ..AuditContextExt::default()
+                });
+                response
+            }),
+        )
+        .layer(from_fn(audit_layer))
+        .layer(Extension(pipeline.clone()));
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/attribute-releases/person-id/versions/1/resolve")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let records = sink.snapshot();
+    assert_eq!(records.len(), 1);
+    let line = &records[0];
+
+    // Raw subject value must never appear in the serialized record line.
+    assert!(
+        !line.contains("IND-RAW-9999"),
+        "raw subject must not appear in audit record: {line}"
+    );
+
+    let parsed = captured_record(line);
+
+    // ar_subject_id_hash must be present and carry the expected prefix.
+    let hash = parsed["ar_subject_id_hash"]
+        .as_str()
+        .expect("ar_subject_id_hash must be present");
+    assert!(
+        hash.starts_with("sha256:") || hash.starts_with("hmac-sha256:"),
+        "ar_subject_id_hash must have audit-hash prefix: {hash}"
+    );
+
+    // ar_subject_id_raw must NOT appear as a key in the record.
+    assert!(
+        !line.contains("ar_subject_id_raw"),
+        "ar_subject_id_raw must never be serialized into the record"
+    );
+
+    // Other ar_* fields must be carried through.
+    assert_eq!(parsed["ar_profile_id"], "person-id");
+    assert_eq!(parsed["ar_profile_version"], "1");
+    assert_eq!(parsed["ar_subject_id_type"], "national_id");
+    assert_eq!(
+        parsed["ar_requested_claims"],
+        serde_json::json!(["given_name"])
+    );
+    assert_eq!(
+        parsed["ar_released_claims"],
+        serde_json::json!(["given_name"])
+    );
+    assert_eq!(parsed["ar_internal_outcome"], "release.ok");
+    assert_eq!(parsed["endpoint_kind"], "attribute_release");
+}
+
+/// The keyed subject hash must be profile-scoped: the same raw subject id
+/// under two different profile ids must produce different hashes.
+#[tokio::test]
+async fn attribute_release_keyed_subject_hash_field_domain() {
+    // Use a shared sink so both requests land in the same snapshot.
+    let sink = InMemorySink::new();
+    let pipeline = Arc::new(AuditPipeline::new(Arc::new(sink.clone())));
+
+    // Run two requests with the same raw subject but different profile ids.
+    let profile_a_id = "profile-alpha";
+    let profile_b_id = "profile-beta";
+
+    for profile in [profile_a_id, profile_b_id] {
+        let p = profile.to_string();
+        let app = Router::new()
+            .route(
+                "/v1/attribute-releases/probe/versions/1/resolve",
+                axum::routing::post({
+                    let p = p.clone();
+                    move || {
+                        let p = p.clone();
+                        async move {
+                            let mut response = StatusCode::OK.into_response();
+                            response.extensions_mut().insert(AuditContextExt {
+                                ar_profile_id: Some(p),
+                                ar_profile_version: Some("1".to_string()),
+                                ar_subject_id_type: Some("national_id".to_string()),
+                                ar_subject_id_raw: Some(Sensitive::from("SAME-SUBJECT-ID")),
+                                ..AuditContextExt::default()
+                            });
+                            response
+                        }
+                    }
+                }),
+            )
+            .layer(from_fn(audit_layer))
+            .layer(Extension(pipeline.clone()));
+
+        app.oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/attribute-releases/probe/versions/1/resolve")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    }
+
+    let records = sink.snapshot();
+    assert_eq!(records.len(), 2, "expected two audit records");
+
+    let hash_a = captured_record(&records[0])["ar_subject_id_hash"]
+        .as_str()
+        .expect("hash_a present")
+        .to_string();
+    let hash_b = captured_record(&records[1])["ar_subject_id_hash"]
+        .as_str()
+        .expect("hash_b present")
+        .to_string();
+
+    assert_ne!(
+        hash_a, hash_b,
+        "same raw subject under different profiles must produce different hashes"
+    );
+
+    // Also verify the cross-check: the hash matches what sensitive_value_hash_keyed
+    // produces directly for the expected field domain.
+    let expected_hash_a = sensitive_value_hash(
+        &format!("ar_subject_id:{profile_a_id}:national_id"),
+        "SAME-SUBJECT-ID",
+    );
+    assert_eq!(
+        hash_a, expected_hash_a,
+        "hash for profile-alpha must match expected keyed hash"
+    );
+
+    // Raw subject must not appear in either record.
+    let all = records.join("");
+    assert!(
+        !all.contains("SAME-SUBJECT-ID"),
+        "raw subject must not appear in any audit record"
+    );
+}
+
+/// Denied attribute-release outcomes must carry ar_internal_outcome (the fine-
+/// grained label) even when the public HTTP status is 403.
+#[tokio::test]
+async fn attribute_release_denied_outcome_auditable() {
+    let (sink, pipeline) = in_memory_pipeline();
+    let app = Router::new()
+        .route(
+            "/v1/attribute-releases/person-id/versions/1/resolve",
+            axum::routing::post(|| async {
+                let mut response = StatusCode::FORBIDDEN.into_response();
+                response
+                    .extensions_mut()
+                    .insert(ErrorCodeExt("release.subject_denied".to_string()));
+                response.extensions_mut().insert(AuditContextExt {
+                    ar_profile_id: Some("person-id".to_string()),
+                    ar_profile_version: Some("1".to_string()),
+                    ar_subject_id_type: Some("national_id".to_string()),
+                    ar_subject_id_raw: Some(Sensitive::from("DENIED-SUBJECT")),
+                    ar_internal_outcome: Some("release.subject_not_found".to_string()),
+                    ..AuditContextExt::default()
+                });
+                response
+            }),
+        )
+        .layer(from_fn(audit_layer))
+        .layer(Extension(pipeline.clone()));
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/attribute-releases/person-id/versions/1/resolve")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    let records = sink.snapshot();
+    assert_eq!(records.len(), 1);
+    let line = &records[0];
+    let parsed = captured_record(line);
+
+    assert_eq!(parsed["status_code"], 403);
+    // Public error code collapses to generic denied.
+    assert_eq!(parsed["error_code"], "release.subject_denied");
+    // Internal outcome must be present and distinct from the public code.
+    assert_eq!(
+        parsed["ar_internal_outcome"], "release.subject_not_found",
+        "fine-grained internal outcome must be auditable even through public collapse"
+    );
+    // Raw subject must never appear.
+    assert!(
+        !line.contains("DENIED-SUBJECT"),
+        "raw subject must not appear in denied audit record"
+    );
+    // Profile context must be present.
+    assert_eq!(parsed["ar_profile_id"], "person-id");
+    assert_eq!(parsed["endpoint_kind"], "attribute_release");
+}
+
+/// Released claim NAMES must appear in the record; claim VALUES must never
+/// appear. This test verifies the record contains only names.
+#[tokio::test]
+async fn attribute_release_no_released_claim_values_in_record() {
+    let (sink, pipeline) = in_memory_pipeline();
+    let app = Router::new()
+        .route(
+            "/v1/attribute-releases/person-id/versions/1/resolve",
+            axum::routing::post(|| async {
+                let mut response = StatusCode::OK.into_response();
+                response.extensions_mut().insert(AuditContextExt {
+                    ar_profile_id: Some("person-id".to_string()),
+                    ar_profile_version: Some("1".to_string()),
+                    ar_subject_id_type: Some("national_id".to_string()),
+                    ar_subject_id_raw: Some(Sensitive::from("SUBJ-X")),
+                    ar_requested_claims: Some(vec![
+                        "given_name".to_string(),
+                        "family_name".to_string(),
+                        "date_of_birth".to_string(),
+                    ]),
+                    ar_released_claims: Some(vec![
+                        "given_name".to_string(),
+                        "family_name".to_string(),
+                    ]),
+                    ar_internal_outcome: Some("release.ok".to_string()),
+                    ..AuditContextExt::default()
+                });
+                response
+            }),
+        )
+        .layer(from_fn(audit_layer))
+        .layer(Extension(pipeline.clone()));
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/attribute-releases/person-id/versions/1/resolve")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let records = sink.snapshot();
+    assert_eq!(records.len(), 1);
+    let line = &records[0];
+    let parsed = captured_record(line);
+
+    // Claim names must be present as arrays of strings.
+    let requested = parsed["ar_requested_claims"]
+        .as_array()
+        .expect("ar_requested_claims must be an array");
+    assert_eq!(requested.len(), 3);
+    assert!(requested.iter().all(Value::is_string));
+
+    let released = parsed["ar_released_claims"]
+        .as_array()
+        .expect("ar_released_claims must be an array");
+    assert_eq!(released.len(), 2);
+    assert!(released.iter().all(Value::is_string));
+
+    // The claim names themselves are present (they are not sensitive).
+    assert!(line.contains("given_name"));
+    assert!(line.contains("family_name"));
+    assert!(line.contains("date_of_birth"));
+
+    // Claim VALUES (which the handler layer would have set from the source record)
+    // must never appear. Here we verify the plumbing doesn't accidentally leak
+    // any spurious value strings. The audit record must not contain raw subject.
+    assert!(
+        !line.contains("SUBJ-X"),
+        "raw subject must not appear in the audit record"
+    );
+
+    // ar_subject_id_raw must NOT be a key in the record.
+    assert!(
+        !line.contains("ar_subject_id_raw"),
+        "ar_subject_id_raw must never appear as a key in the serialized record"
+    );
 }

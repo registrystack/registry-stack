@@ -99,6 +99,44 @@ impl Default for AuditSettings {
 /// an audit record cannot be written. Documented in `docs/configuration.md`.
 pub const AUDIT_WRITE_FAILED_CODE: &str = "audit.write_failed";
 
+/// A wrapper for sensitive string values that prints `[REDACTED]` via
+/// `Debug` and `Display`, defending against accidental inclusion in logs
+/// or panic messages. Convert from `String` or `&str` via `From`/`Into`.
+#[derive(Clone, Default)]
+pub struct Sensitive(pub String);
+
+impl std::fmt::Debug for Sensitive {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[REDACTED]")
+    }
+}
+
+impl std::fmt::Display for Sensitive {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[REDACTED]")
+    }
+}
+
+impl From<String> for Sensitive {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for Sensitive {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl Sensitive {
+    /// Expose the raw value. Call sites must ensure the value is not logged.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Optional structured context projected by handlers that have
 /// resolved entity-layer state. The middleware falls back to path
 /// parsing when this extension is absent.
@@ -132,6 +170,26 @@ pub struct AuditContextExt {
     pub geometry_vertex_count: Option<u64>,
     pub row_count: Option<u64>,
     pub suppressed_groups: Option<u64>,
+    // --- Attribute-release fields (set by the attribute-release handler) ---
+    /// Profile id for this release request.
+    pub ar_profile_id: Option<String>,
+    /// Profile version for this release request.
+    pub ar_profile_version: Option<String>,
+    /// Subject id type (e.g. "national_id"). Used as part of the hash domain.
+    pub ar_subject_id_type: Option<String>,
+    /// Raw subject identifier. CONTEXT ONLY — never serialized into AuditRecord.
+    /// Wrapped in `Sensitive` so `derive(Debug)` cannot leak it.
+    pub ar_subject_id_raw: Option<Sensitive>,
+    /// Claim names requested by the caller (names only, never values).
+    pub ar_requested_claims: Option<Vec<String>>,
+    /// Claim names actually released (names only, never values).
+    pub ar_released_claims: Option<Vec<String>>,
+    /// Fine-grained internal outcome label (from `ReleaseError::audit_code()`).
+    pub ar_internal_outcome: Option<String>,
+    /// Cardinality outcome from the subject lookup step.
+    pub ar_source_cardinality_outcome: Option<String>,
+    /// Availability class of the backing source.
+    pub ar_source_availability_class: Option<String>,
 }
 
 /// Redacted config-governance metadata attached by admin config handlers.
@@ -217,6 +275,8 @@ pub enum EndpointKind {
     OgcFeature,
     Admin,
     Openapi,
+    /// Identity attribute release endpoint family (discovery + resolve).
+    AttributeRelease,
     /// Catch-all for routes that don't match a documented family.
     Other,
 }
@@ -347,6 +407,35 @@ pub struct AuditRecord {
     /// Present on governed config verify, dry-run, and apply attempts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config: Option<ConfigAuditExt>,
+    // --- Attribute-release fields ---
+    /// Profile id for this release request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ar_profile_id: Option<String>,
+    /// Profile version for this release request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ar_profile_version: Option<String>,
+    /// Subject id type (e.g. "national_id").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ar_subject_id_type: Option<String>,
+    /// Keyed HMAC/SHA-256 hash of the raw subject id, scoped to the profile.
+    /// The raw value is NEVER stored here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ar_subject_id_hash: Option<String>,
+    /// Claim names requested by the caller (names only, never values).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ar_requested_claims: Option<Vec<String>>,
+    /// Claim names actually released (names only, never values).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ar_released_claims: Option<Vec<String>>,
+    /// Fine-grained internal outcome label for denied/collapsed outcomes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ar_internal_outcome: Option<String>,
+    /// Cardinality outcome from the subject lookup step.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ar_source_cardinality_outcome: Option<String>,
+    /// Availability class of the backing source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ar_source_availability_class: Option<String>,
 }
 
 /// Provenance issuance metadata embedded in an `AuditRecord` when the
@@ -496,6 +585,15 @@ impl OperationalAuditEvent {
             error_code: self.error_code.map(ToString::to_string),
             provenance: None,
             config: None,
+            ar_profile_id: None,
+            ar_profile_version: None,
+            ar_subject_id_type: None,
+            ar_subject_id_hash: None,
+            ar_requested_claims: None,
+            ar_released_claims: None,
+            ar_internal_outcome: None,
+            ar_source_cardinality_outcome: None,
+            ar_source_availability_class: None,
         }
     }
 }
@@ -827,6 +925,10 @@ pub async fn audit_layer(
     let table_id_hash = audit_table_id_hash(&context, &settings.hash_hasher);
     let record_path = audit_path(&path, &context, endpoint_kind);
 
+    // Compute the keyed subject hash for attribute-release requests.
+    // The raw value must NEVER be written to the record or logged here.
+    let ar_subject_id_hash = audit_ar_subject_id_hash(&context, &settings.hash_hasher);
+
     let record = AuditRecord {
         ts: now_iso8601_millis(),
         request_id,
@@ -872,6 +974,15 @@ pub async fn audit_layer(
         error_code,
         provenance,
         config: config_audit,
+        ar_profile_id: context.ar_profile_id,
+        ar_profile_version: context.ar_profile_version,
+        ar_subject_id_type: context.ar_subject_id_type,
+        ar_subject_id_hash,
+        ar_requested_claims: context.ar_requested_claims,
+        ar_released_claims: context.ar_released_claims,
+        ar_internal_outcome: context.ar_internal_outcome,
+        ar_source_cardinality_outcome: context.ar_source_cardinality_outcome,
+        ar_source_availability_class: context.ar_source_availability_class,
     };
 
     // Fire and await the write; the sink is responsible for making
@@ -959,6 +1070,20 @@ fn audit_table_id_hash(context: &AuditContextExt, hasher: &AuditKeyHasher) -> Op
         &table_id_hash_field(context),
         value,
     ))
+}
+
+/// Compute a profile-scoped keyed hash of the raw subject id for attribute-release
+/// audit records. Returns `None` when any of the three required context fields
+/// (`ar_subject_id_raw`, `ar_profile_id`, `ar_subject_id_type`) is absent.
+///
+/// The hash field domain is `"ar_subject_id:{profile_id}:{id_type}"` which
+/// prevents cross-profile collisions for the same raw subject value.
+fn audit_ar_subject_id_hash(context: &AuditContextExt, hasher: &AuditKeyHasher) -> Option<String> {
+    let raw = context.ar_subject_id_raw.as_ref()?.as_str();
+    let profile_id = context.ar_profile_id.as_deref()?;
+    let id_type = context.ar_subject_id_type.as_deref()?;
+    let field = format!("ar_subject_id:{profile_id}:{id_type}");
+    Some(sensitive_value_hash_keyed(hasher, &field, raw))
 }
 
 fn serialize_optional_table_id_hash<S>(
@@ -1199,6 +1324,8 @@ fn classify_endpoint(path: &str) -> EndpointKind {
         classify_edr_endpoint(path)
     } else if path.starts_with("/ogc/v1/") {
         classify_ogc_endpoint(path)
+    } else if path.starts_with("/v1/attribute-releases") {
+        EndpointKind::AttributeRelease
     } else if path.starts_with("/v1/datasets/") {
         classify_dataset_endpoint(path)
     } else {
@@ -1310,6 +1437,15 @@ fn infer_context_from_path(path: &str) -> AuditContextExt {
 // Re-export the middleware helper at this module level for tests and
 // for the server scaffold to consume without reaching into submodules.
 pub use self::audit_layer as audit_middleware;
+
+/// Public wrapper around `classify_endpoint` exposed for integration tests.
+/// Not part of the stable API surface; callers should use `EndpointKind`
+/// directly for production logic.
+#[doc(hidden)]
+#[must_use]
+pub fn classify_endpoint_pub(path: &str) -> EndpointKind {
+    classify_endpoint(path)
+}
 
 #[cfg(test)]
 mod tests {

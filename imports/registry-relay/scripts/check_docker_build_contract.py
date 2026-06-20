@@ -104,7 +104,7 @@ def main() -> int:
         require(
             dockerfile,
             "cargo build --release --locked",
-            "default cargo build path",
+            "default cargo build path (CEL attribute-release is in the Cargo default feature set)",
         )
     )
     failures.extend(
@@ -170,7 +170,7 @@ def main() -> int:
             "optional feature build arg forwarding",
         )
     )
-    release_features = "spdci-api-standards,standards-cel-mapping,ogcapi-features,ogcapi-edr,ogcapi-records"
+    release_features = "spdci-api-standards,standards-cel-mapping,attribute-release,ogcapi-features,ogcapi-edr,ogcapi-records"
     failures.extend(
         require(
             container_workflow,

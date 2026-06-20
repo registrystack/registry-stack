@@ -428,3 +428,197 @@ fn relationship_foreign_key_type_mismatch_is_rejected() {
     let err = registry_relay::config::load(&config_path).expect_err("config rejects FK mismatch");
     assert_eq!(err.code(), "config.validation_error");
 }
+
+// --- Attribute release profile validation -------------------------------
+
+/// Attach `attribute_release_profiles` (the block body, 8-space indented) to
+/// the `individual` entity in the valid dataset by inserting after the entity's
+/// `allowed_expansions` line.
+fn dataset_with_release_profiles(profiles_yaml: &str) -> String {
+    valid_dataset().replace(
+        "          allowed_expansions: [household]\n",
+        &format!(
+            "          allowed_expansions: [household]\n        attribute_release_profiles:\n{profiles_yaml}"
+        ),
+    )
+}
+
+/// A self-contained, valid single profile on the `individual` entity. Subject
+/// and the required claim both project the exposed `id` field; the release
+/// scope is dataset-bound and distinct from `read_scope`.
+fn valid_release_profile() -> String {
+    r#"          - id: basic_identity
+            version: "1"
+            release_scope: social_registry:identity_release
+            subject:
+              input: individual_id
+              source_field: id
+            claims:
+              - name: subject_identifier
+                source_field: id
+                required: true
+              - name: municipality
+                source_field: municipality_code
+"#
+    .to_string()
+}
+
+fn load_release_dataset(profiles_yaml: &str) -> Result<(), String> {
+    let tmp = TempDir::new().expect("tempdir");
+    let dataset = dataset_with_release_profiles(profiles_yaml);
+    let config_path = write_config(&tmp, &base_config(&dataset));
+    registry_relay::config::load(&config_path)
+        .map(|_| ())
+        .map_err(|err| err.code().to_string())
+}
+
+#[test]
+fn valid_release_profile_loads_cleanly() {
+    let tmp = TempDir::new().expect("tempdir");
+    let dataset = dataset_with_release_profiles(&valid_release_profile());
+    let config_path = write_config(&tmp, &base_config(&dataset));
+    let config = registry_relay::config::load(&config_path).expect("config loads");
+    let registry = EntityRegistry::from_config(&config).expect("entity registry compiles");
+    let dataset = registry.dataset("social_registry").expect("dataset");
+    let _ = dataset.entity("individual").expect("individual entity");
+}
+
+#[test]
+fn release_profile_subject_source_field_must_be_exposed() {
+    // Target the subject block's `source_field` (14-space indent) specifically.
+    let profile = valid_release_profile().replace(
+        "              source_field: id\n",
+        "              source_field: missing\n",
+    );
+    let err = load_release_dataset(&profile).expect_err("subject source_field must be exposed");
+    assert_eq!(err, "config.validation_error");
+}
+
+#[test]
+fn release_profile_claim_source_field_must_be_exposed() {
+    let profile = valid_release_profile().replace(
+        "source_field: municipality_code",
+        "source_field: not_a_field",
+    );
+    let err = load_release_dataset(&profile).expect_err("claim source_field must be exposed");
+    assert_eq!(err, "config.validation_error");
+}
+
+#[test]
+fn release_profile_empty_id_is_rejected() {
+    let profile = valid_release_profile().replace("id: basic_identity", "id: \"\"");
+    let err = load_release_dataset(&profile).expect_err("empty profile id rejected");
+    assert_eq!(err, "config.validation_error");
+}
+
+#[test]
+fn release_profile_empty_version_is_rejected() {
+    let profile = valid_release_profile().replace("version: \"1\"", "version: \"\"");
+    let err = load_release_dataset(&profile).expect_err("empty profile version rejected");
+    assert_eq!(err, "config.validation_error");
+}
+
+#[test]
+fn release_profile_requires_at_least_one_required_claim() {
+    let profile = valid_release_profile().replace("                required: true\n", "");
+    let err = load_release_dataset(&profile).expect_err("at least one required claim");
+    assert_eq!(err, "config.validation_error");
+}
+
+#[test]
+fn release_profile_rejects_claim_with_both_source_and_expression() {
+    let profile = valid_release_profile().replace(
+        "              - name: municipality\n                source_field: municipality_code\n",
+        "              - name: municipality\n                source_field: municipality_code\n                expression:\n                  cel: source.municipality_code\n",
+    );
+    let err = load_release_dataset(&profile).expect_err("claim source XOR expression");
+    assert_eq!(err, "config.validation_error");
+}
+
+#[test]
+fn release_profile_rejects_claim_with_neither_source_nor_expression() {
+    let profile = valid_release_profile().replace(
+        "              - name: municipality\n                source_field: municipality_code\n",
+        "              - name: municipality\n",
+    );
+    let err = load_release_dataset(&profile).expect_err("claim must have source or expression");
+    assert_eq!(err, "config.validation_error");
+}
+
+#[test]
+fn release_profile_rejects_duplicate_claim_names() {
+    let profile = valid_release_profile().replace(
+        "              - name: municipality\n                source_field: municipality_code\n",
+        "              - name: subject_identifier\n                source_field: municipality_code\n",
+    );
+    let err = load_release_dataset(&profile).expect_err("duplicate claim names rejected");
+    assert_eq!(err, "config.duplicate_id");
+}
+
+#[test]
+fn release_profile_release_scope_must_be_dataset_bound() {
+    let profile = valid_release_profile().replace(
+        "release_scope: social_registry:identity_release",
+        "release_scope: other_dataset:identity_release",
+    );
+    let err = load_release_dataset(&profile).expect_err("release scope must be dataset-bound");
+    assert_eq!(err, "config.validation_error");
+}
+
+#[test]
+fn release_profile_release_scope_must_differ_from_read_scope() {
+    let profile = valid_release_profile().replace(
+        "release_scope: social_registry:identity_release",
+        "release_scope: social_registry:rows",
+    );
+    let err =
+        load_release_dataset(&profile).expect_err("release scope must differ from read scope");
+    assert_eq!(err, "config.validation_error");
+}
+
+#[test]
+fn release_profile_id_version_pair_must_be_globally_unique() {
+    // Two profiles sharing the same (id, version) on the same entity.
+    let profiles = format!("{}{}", valid_release_profile(), valid_release_profile());
+    let err = load_release_dataset(&profiles).expect_err("(id, version) must be globally unique");
+    assert_eq!(err, "config.duplicate_id");
+}
+
+#[test]
+fn release_profile_distinct_version_is_accepted() {
+    let second = valid_release_profile().replace("version: \"1\"", "version: \"2\"");
+    let profiles = format!("{}{}", valid_release_profile(), second);
+    load_release_dataset(&profiles).expect("distinct (id, version) profiles load");
+}
+
+#[test]
+fn release_scope_is_grantable_to_api_keys() {
+    // `<dataset>:identity_release` must be an accepted API-key scope level.
+    let tmp = TempDir::new().expect("tempdir");
+    let dataset = dataset_with_release_profiles(&valid_release_profile());
+    let mut body = base_config(&dataset);
+    body = body.replace(
+        "  api_keys: []",
+        "  api_keys:\n    - id: release_client\n      fingerprint:\n        provider: env\n        name: RELEASE_CLIENT_HASH\n        commitment: sha256:069a5a49b48c64e1644c2c7ac9a746aa9785b2c18cee1eaee395f04d51736ff3\n      scopes:\n        - social_registry:identity_release",
+    );
+    let config_path = write_config(&tmp, &body);
+    // The `social_registry:identity_release` key scope must clear scope-level
+    // validation (`is_valid_scope_level`). With the env-provided fingerprint
+    // secret unset, loading then fails on the *later* missing-secret check
+    // rather than on scope validation. The distinct code proves the release
+    // scope is grantable (it never trips `config.validation_error`).
+    let err = registry_relay::config::load(&config_path)
+        .expect_err("missing fingerprint secret fails load after scope validation");
+    assert_eq!(err.code(), "config.missing_secret");
+}
+
+#[cfg(feature = "attribute-release")]
+#[test]
+fn release_profile_rejects_invalid_cel_expression() {
+    let profile = valid_release_profile().replace(
+        "              - name: municipality\n                source_field: municipality_code\n",
+        "              - name: full_name\n                expression:\n                  cel: \"this is ( not valid cel\"\n",
+    );
+    let err = load_release_dataset(&profile).expect_err("invalid CEL rejected");
+    assert_eq!(err, "config.validation_error");
+}

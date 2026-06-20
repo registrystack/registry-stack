@@ -22,6 +22,7 @@ use subtle::ConstantTimeEq;
 use tokio::sync::watch;
 use zeroize::Zeroizing;
 
+use crate::attribute_release::AttributeReleaseEvaluator;
 use crate::audit::AuditPipeline;
 use crate::auth::middleware::AuthProviderRef;
 use crate::config::Config;
@@ -123,6 +124,7 @@ pub struct RelayRuntimeSnapshot {
     pub cursor_signer: Arc<CursorSigner>,
     pub provenance_state: Option<Arc<ProvenanceState>>,
     pub publicschema_registry: Option<Arc<PublicSchemaVcRegistry>>,
+    pub attribute_release_evaluator: Arc<AttributeReleaseEvaluator>,
     #[cfg(feature = "spdci-api-standards")]
     pub spdci_response_mapper: Option<Arc<SpdciResponseMapper>>,
     pub metrics: Arc<RequestMetrics>,
@@ -157,6 +159,8 @@ impl RelayRuntimeSnapshot {
         >,
         metrics: Arc<RequestMetrics>,
     ) -> Self {
+        let attribute_release_evaluator =
+            Arc::new(AttributeReleaseEvaluator::from_config(config.as_ref()));
         Self {
             config,
             config_provenance,
@@ -178,6 +182,7 @@ impl RelayRuntimeSnapshot {
             cursor_signer,
             provenance_state,
             publicschema_registry,
+            attribute_release_evaluator,
             #[cfg(feature = "spdci-api-standards")]
             spdci_response_mapper,
             metrics,
@@ -277,6 +282,7 @@ pub struct RuntimeSnapshot {
     audit_sink: Option<Arc<AuditPipeline>>,
     provenance_state: Option<Arc<ProvenanceState>>,
     publicschema_registry: Option<Arc<PublicSchemaVcRegistry>>,
+    attribute_release_evaluator: Option<Arc<AttributeReleaseEvaluator>>,
     #[cfg(feature = "spdci-api-standards")]
     spdci_response_mapper: Option<Arc<SpdciResponseMapper>>,
     metrics: Option<Arc<RequestMetrics>>,
@@ -413,6 +419,14 @@ impl RuntimeSnapshot {
             .or_else(|| self.publicschema_registry.clone())
     }
 
+    #[must_use]
+    pub fn attribute_release_evaluator(&self) -> Option<Arc<AttributeReleaseEvaluator>> {
+        self.snapshot
+            .as_ref()
+            .map(|snapshot| Arc::clone(&snapshot.attribute_release_evaluator))
+            .or_else(|| self.attribute_release_evaluator.clone())
+    }
+
     #[cfg(feature = "spdci-api-standards")]
     #[must_use]
     pub fn spdci_response_mapper(&self) -> Option<Arc<SpdciResponseMapper>> {
@@ -517,6 +531,13 @@ where
                     .await
                     .unwrap_or(None)
                     .map(|Extension(value)| value),
+            attribute_release_evaluator:
+                Option::<Extension<Arc<AttributeReleaseEvaluator>>>::from_request_parts(
+                    parts, state,
+                )
+                .await
+                .unwrap_or(None)
+                .map(|Extension(value)| value),
             #[cfg(feature = "spdci-api-standards")]
             spdci_response_mapper:
                 Option::<Extension<Arc<SpdciResponseMapper>>>::from_request_parts(parts, state)

@@ -11,8 +11,8 @@ use axum::response::IntoResponse;
 use registry_relay::audit::ErrorCodeExt;
 use registry_relay::error::{
     AdminError, AggregateError, AuthError, ConfigError, Error, FilterError, IngestError,
-    InternalError, MetadataError, OgcError, PdpError, QueryError, RuntimeBindingError, SchemaError,
-    SpatialError,
+    InternalError, MetadataError, OgcError, PdpError, QueryError, ReleaseError,
+    RuntimeBindingError, SchemaError, SpatialError,
 };
 use serde_json::Value;
 
@@ -118,6 +118,14 @@ fn all_variants() -> Vec<Error> {
         Error::Spatial(SpatialError::CrsUnsupported),
         // query.*
         Error::Query(QueryError::CursorInvalid),
+        // release.*
+        Error::Release(ReleaseError::ProfileNotFound),
+        Error::Release(ReleaseError::SubjectInvalid),
+        Error::Release(ReleaseError::SubjectNotFound),
+        Error::Release(ReleaseError::SubjectAmbiguous),
+        Error::Release(ReleaseError::SubjectReleaseDenied),
+        Error::Release(ReleaseError::ClaimUnavailable),
+        Error::Release(ReleaseError::SourceUnavailable),
         // internal.*
         Error::Internal(InternalError::Timeout),
         Error::Internal(InternalError::PayloadTooLarge),
@@ -273,6 +281,19 @@ fn expected_table() -> Vec<(&'static str, StatusCode)> {
         ("spatial.filter_unsupported", StatusCode::BAD_REQUEST),
         ("spatial.crs_unsupported", StatusCode::BAD_REQUEST),
         ("query.cursor_invalid", StatusCode::BAD_REQUEST),
+        // release.*
+        ("release.profile_not_found", StatusCode::NOT_FOUND),
+        ("release.subject_invalid", StatusCode::BAD_REQUEST),
+        // SubjectNotFound, SubjectAmbiguous, SubjectReleaseDenied, ClaimUnavailable
+        // all collapse to the same public code and 403.
+        ("release.subject_denied", StatusCode::FORBIDDEN),
+        ("release.subject_denied", StatusCode::FORBIDDEN),
+        ("release.subject_denied", StatusCode::FORBIDDEN),
+        ("release.subject_denied", StatusCode::FORBIDDEN),
+        (
+            "release.source_unavailable",
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
         ("internal.timeout", StatusCode::GATEWAY_TIMEOUT),
         ("internal.payload_too_large", StatusCode::PAYLOAD_TOO_LARGE),
         ("internal.uri_too_long", StatusCode::URI_TOO_LONG),
@@ -417,6 +438,7 @@ async fn snapshot_one_variant_per_namespace() {
             }),
         ),
         ("query", Error::Query(QueryError::CursorInvalid)),
+        ("release", Error::Release(ReleaseError::SubjectNotFound)),
         ("internal", Error::Internal(InternalError::Timeout)),
     ];
     for (namespace, err) in samples {
@@ -485,6 +507,37 @@ async fn error_into_response_attaches_error_code_extension() {
             Error::Query(QueryError::CursorInvalid),
         ),
         ("internal.timeout", Error::Internal(InternalError::Timeout)),
+        // release.*: non-collapsed variants carry their own public code.
+        (
+            "release.profile_not_found",
+            Error::Release(ReleaseError::ProfileNotFound),
+        ),
+        (
+            "release.subject_invalid",
+            Error::Release(ReleaseError::SubjectInvalid),
+        ),
+        // The four collapsed variants must all attach the public code, not
+        // their internal audit label.
+        (
+            "release.subject_denied",
+            Error::Release(ReleaseError::SubjectNotFound),
+        ),
+        (
+            "release.subject_denied",
+            Error::Release(ReleaseError::SubjectAmbiguous),
+        ),
+        (
+            "release.subject_denied",
+            Error::Release(ReleaseError::SubjectReleaseDenied),
+        ),
+        (
+            "release.subject_denied",
+            Error::Release(ReleaseError::ClaimUnavailable),
+        ),
+        (
+            "release.source_unavailable",
+            Error::Release(ReleaseError::SourceUnavailable),
+        ),
     ];
     for (expected, err) in samples {
         let response = err.into_response();
@@ -505,6 +558,123 @@ async fn spatial_filter_unsupported_renders_parameter_extension() {
 
     assert_eq!(body["code"], "spatial.filter_unsupported");
     assert_eq!(body["parameter"], "bbox");
+}
+
+/// The four denial variants (`SubjectNotFound`, `SubjectAmbiguous`,
+/// `SubjectReleaseDenied`, `ClaimUnavailable`) must render byte-identical
+/// HTTP responses: same status, same JSON body including `code`, `title`,
+/// `detail`, and `type` URI. This is the public collapse required by the
+/// spec to prevent subject-existence oracles.
+#[tokio::test]
+async fn collapsed_subject_denied_variants_render_identically() {
+    let collapsed = [
+        Error::Release(ReleaseError::SubjectNotFound),
+        Error::Release(ReleaseError::SubjectAmbiguous),
+        Error::Release(ReleaseError::SubjectReleaseDenied),
+        Error::Release(ReleaseError::ClaimUnavailable),
+    ];
+
+    let mut rendered: Vec<(StatusCode, Value)> = Vec::new();
+    for variant in collapsed {
+        let (status, _ct, json) = render(variant).await;
+        rendered.push((status, json));
+    }
+
+    // All four must be identical.
+    let (first_status, ref first_json) = rendered[0];
+    for (i, (status, json)) in rendered.iter().enumerate() {
+        assert_eq!(
+            *status, first_status,
+            "status differs at index {i}: {status} vs {first_status}"
+        );
+        assert_eq!(json, first_json, "JSON body differs at index {i}");
+    }
+
+    // Verify the specific expected values.
+    assert_eq!(first_status, StatusCode::FORBIDDEN);
+    assert_eq!(first_json["code"], "release.subject_denied");
+    assert_eq!(first_json["status"], 403u16);
+}
+
+/// For the four collapsed denial variants, `audit_code()` must return a
+/// distinct internal label (not `"release.subject_denied"`), while
+/// `code()` — the public wire value — remains `"release.subject_denied"`.
+#[test]
+fn audit_code_differs_from_public_code_for_collapsed_variants() {
+    let cases = [
+        (ReleaseError::SubjectNotFound, "release.subject_not_found"),
+        (ReleaseError::SubjectAmbiguous, "release.subject_ambiguous"),
+        (
+            ReleaseError::SubjectReleaseDenied,
+            "release.subject_release_denied",
+        ),
+        (ReleaseError::ClaimUnavailable, "release.claim_unavailable"),
+    ];
+    for (variant, expected_audit) in cases {
+        let public_code = Error::Release(variant.clone()).code();
+        assert_eq!(
+            public_code, "release.subject_denied",
+            "public code() must be release.subject_denied for {variant:?}"
+        );
+        assert_eq!(
+            variant.audit_code(),
+            expected_audit,
+            "audit_code() mismatch for {variant:?}"
+        );
+        assert_ne!(
+            variant.audit_code(),
+            public_code,
+            "audit_code() must differ from public code() for {variant:?}"
+        );
+    }
+
+    // Non-collapsed variants: audit_code() == code().
+    let non_collapsed = [
+        ReleaseError::ProfileNotFound,
+        ReleaseError::SubjectInvalid,
+        ReleaseError::SourceUnavailable,
+    ];
+    for variant in non_collapsed {
+        let public_code = Error::Release(variant.clone()).code();
+        assert_eq!(
+            variant.audit_code(),
+            public_code,
+            "non-collapsed audit_code() should equal public code() for {variant:?}"
+        );
+    }
+}
+
+/// `SubjectInvalid` is a 400 Bad Request — it fires before any registry
+/// lookup, so it is not subject to the denial collapse.
+#[tokio::test]
+async fn subject_invalid_is_bad_request_not_forbidden() {
+    let (status, _ct, json) = render(Error::Release(ReleaseError::SubjectInvalid)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json["code"], "release.subject_invalid");
+    assert_eq!(json["status"], 400u16);
+}
+
+/// `ProfileNotFound` must return a generic 404 whose `detail` does not
+/// mention "profile" by name, preventing profile enumeration.
+#[tokio::test]
+async fn release_profile_not_found_is_generic_404() {
+    let err = Error::Release(ReleaseError::ProfileNotFound);
+    // detail() must not contain "profile" (case-insensitive).
+    let detail = err.detail();
+    assert!(
+        !detail.to_lowercase().contains("profile"),
+        "detail must not mention 'profile' to prevent enumeration: {detail:?}"
+    );
+    let (status, _ct, json) = render(err).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(json["code"], "release.profile_not_found");
+    assert_eq!(json["status"], 404u16);
+    // Verify the body detail also does not mention profile.
+    let body_detail = json["detail"].as_str().unwrap_or("");
+    assert!(
+        !body_detail.to_lowercase().contains("profile"),
+        "response detail must not mention 'profile': {body_detail:?}"
+    );
 }
 
 proptest::proptest! {

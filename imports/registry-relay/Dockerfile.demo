@@ -13,7 +13,7 @@ COPY src ./src
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/workspace/registry_relay/target \
-    cargo build --release --locked --features spdci-api-standards,standards-cel-mapping && \
+    cargo build --release --locked --features spdci-api-standards,standards-cel-mapping,attribute-release && \
     cp /workspace/registry_relay/target/release/registry-relay /usr/local/bin/registry-relay
 
 FROM debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb AS runtime

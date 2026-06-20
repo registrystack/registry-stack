@@ -86,6 +86,9 @@ pub enum Error {
     /// Query cursor and context errors.
     #[error("{0}")]
     Query(#[from] QueryError),
+    /// Attribute-release request and resolution errors.
+    #[error("{0}")]
+    Release(#[from] ReleaseError),
 }
 
 /// `entity.*` codes.
@@ -474,6 +477,45 @@ pub enum QueryError {
     CursorInvalid,
 }
 
+/// `release.*` attribute-release request and resolution codes.
+///
+/// The four denial variants (`SubjectNotFound`, `SubjectAmbiguous`,
+/// `SubjectReleaseDenied`, `ClaimUnavailable`) collapse to a single public
+/// code and identical response so callers cannot enumerate subject existence.
+/// Their distinct internal labels are exposed only through
+/// [`ReleaseError::audit_code`], which the handler writes to the audit
+/// record; they are **never** surfaced in HTTP responses.
+#[derive(Debug, Clone, Error)]
+pub enum ReleaseError {
+    /// The requested release profile id/version is not registered.
+    /// Renders as generic 404 — does **not** confirm profile enumeration.
+    #[error("release profile not found")]
+    ProfileNotFound,
+    /// The subject identifier type or value fails validation before any
+    /// registry lookup is attempted.
+    #[error("release subject invalid")]
+    SubjectInvalid,
+    /// No registry row matched the subject identifier.
+    /// Collapsed to `release.subject_denied` (403) in public responses.
+    #[error("release subject not found")]
+    SubjectNotFound,
+    /// More than one registry row matched the subject identifier.
+    /// Collapsed to `release.subject_denied` (403) in public responses.
+    #[error("release subject ambiguous")]
+    SubjectAmbiguous,
+    /// The release condition predicate evaluated to false for the row.
+    /// Collapsed to `release.subject_denied` (403) in public responses.
+    #[error("release subject release denied")]
+    SubjectReleaseDenied,
+    /// A required claim could not be produced from the row.
+    /// Collapsed to `release.subject_denied` (403) in public responses.
+    #[error("release claim unavailable")]
+    ClaimUnavailable,
+    /// The backing source store is unavailable at request time.
+    #[error("release source unavailable")]
+    SourceUnavailable,
+}
+
 /// `internal.*` codes.
 #[derive(Debug, Error)]
 pub enum InternalError {
@@ -510,6 +552,7 @@ impl Error {
             Error::Ogc(e) => e.code(),
             Error::Spatial(e) => e.code(),
             Error::Query(e) => e.code(),
+            Error::Release(e) => e.code(),
         }
     }
 
@@ -539,6 +582,7 @@ impl Error {
             Error::Ogc(e) => e.http_status(),
             Error::Spatial(e) => e.http_status(),
             Error::Query(e) => e.http_status(),
+            Error::Release(e) => e.http_status(),
         }
     }
 
@@ -564,6 +608,7 @@ impl Error {
             Error::Ogc(e) => e.title(),
             Error::Spatial(e) => e.title(),
             Error::Query(e) => e.title(),
+            Error::Release(e) => e.title(),
         }
     }
 
@@ -591,6 +636,7 @@ impl Error {
             Error::Ogc(e) => e.detail().to_string(),
             Error::Spatial(e) => e.detail(),
             Error::Query(e) => e.detail().to_string(),
+            Error::Release(e) => e.detail().to_string(),
         }
     }
 
@@ -1548,6 +1594,80 @@ impl SpatialError {
             SpatialError::AreaScanTooLarge => {
                 "area query would scan too many geometry rows; reduce the query area".to_string()
             }
+        }
+    }
+}
+
+impl ReleaseError {
+    fn code(&self) -> &'static str {
+        match self {
+            ReleaseError::ProfileNotFound => "release.profile_not_found",
+            ReleaseError::SubjectInvalid => "release.subject_invalid",
+            ReleaseError::SubjectNotFound
+            | ReleaseError::SubjectAmbiguous
+            | ReleaseError::SubjectReleaseDenied
+            | ReleaseError::ClaimUnavailable => "release.subject_denied",
+            ReleaseError::SourceUnavailable => "release.source_unavailable",
+        }
+    }
+
+    fn http_status(&self) -> StatusCode {
+        match self {
+            ReleaseError::ProfileNotFound => StatusCode::NOT_FOUND,
+            ReleaseError::SubjectInvalid => StatusCode::BAD_REQUEST,
+            ReleaseError::SubjectNotFound
+            | ReleaseError::SubjectAmbiguous
+            | ReleaseError::SubjectReleaseDenied
+            | ReleaseError::ClaimUnavailable => StatusCode::FORBIDDEN,
+            ReleaseError::SourceUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+        }
+    }
+
+    fn title(&self) -> &'static str {
+        match self {
+            ReleaseError::ProfileNotFound => "Not found",
+            ReleaseError::SubjectInvalid => "Subject invalid",
+            ReleaseError::SubjectNotFound
+            | ReleaseError::SubjectAmbiguous
+            | ReleaseError::SubjectReleaseDenied
+            | ReleaseError::ClaimUnavailable => "Subject denied",
+            ReleaseError::SourceUnavailable => "Source unavailable",
+        }
+    }
+
+    fn detail(&self) -> &'static str {
+        match self {
+            ReleaseError::ProfileNotFound => "the requested resource was not found",
+            ReleaseError::SubjectInvalid => {
+                "subject identifier type or value is not valid for this request"
+            }
+            ReleaseError::SubjectNotFound
+            | ReleaseError::SubjectAmbiguous
+            | ReleaseError::SubjectReleaseDenied
+            | ReleaseError::ClaimUnavailable => {
+                "subject attributes cannot be released for this request"
+            }
+            ReleaseError::SourceUnavailable => {
+                "the attribute source is temporarily unavailable; retry later"
+            }
+        }
+    }
+
+    /// Internal audit code for this variant. The four collapsed denial
+    /// variants return distinct labels here so the audit record can carry
+    /// the fine-grained outcome even though the public response is
+    /// identical. Non-collapsed variants return their `code()` string.
+    ///
+    /// **Never** include this value in HTTP responses.
+    pub fn audit_code(&self) -> &'static str {
+        match self {
+            ReleaseError::ProfileNotFound => "release.profile_not_found",
+            ReleaseError::SubjectInvalid => "release.subject_invalid",
+            ReleaseError::SubjectNotFound => "release.subject_not_found",
+            ReleaseError::SubjectAmbiguous => "release.subject_ambiguous",
+            ReleaseError::SubjectReleaseDenied => "release.subject_release_denied",
+            ReleaseError::ClaimUnavailable => "release.claim_unavailable",
+            ReleaseError::SourceUnavailable => "release.source_unavailable",
         }
     }
 }

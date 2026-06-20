@@ -24,10 +24,11 @@ use registry_platform_ops::ConfigSource;
 
 use super::capabilities::source_capabilities;
 use super::{
-    AggregateConfig, AggregateSpatialConfig, AllowedFilter, AuthMode, Config, DatasetConfig,
-    EntityConfig, EntityRelationshipConfig, EntitySpatialConfig, FieldConfig, FieldType, FilterOp,
-    GovernedPolicyConfig, OidcConfig, RefreshConfig, RelationshipKind, ResourceConfig, Sensitivity,
-    SourceConfig, SpatialBboxFieldsConfig, SpatialGeometryConfig, CRS84,
+    AggregateConfig, AggregateSpatialConfig, AllowedFilter, AttributeReleaseProfile, AuthMode,
+    Config, DatasetConfig, EntityConfig, EntityRelationshipConfig, EntitySpatialConfig,
+    FieldConfig, FieldType, FilterOp, GovernedPolicyConfig, OidcConfig, RefreshConfig,
+    RelationshipKind, ReleaseClaimConfig, ResourceConfig, Sensitivity, SourceConfig,
+    SpatialBboxFieldsConfig, SpatialGeometryConfig, CRS84,
 };
 
 /// Product-scoped admin capability required by private admin mutations.
@@ -1326,6 +1327,26 @@ fn is_valid_id(s: &str) -> bool {
     chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
+/// Attribute-release profile ids additionally allow hyphens. They are URL path
+/// segments and the eSignet contract uses ids like `esignet-civil-userinfo`, so
+/// the charset is `[a-z][a-z0-9_-]*` (the `is_valid_id` set plus `-`).
+fn is_valid_profile_id(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_lowercase() => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+}
+
+/// Release claim names map to OIDC/UserInfo claims, which include dotted names
+/// such as `address.region`. Each dot-separated segment must match the
+/// snake-case `is_valid_id` charset; a leading, trailing, or doubled dot (an
+/// empty segment) is rejected.
+fn is_valid_claim_name(s: &str) -> bool {
+    s.split('.').all(is_valid_id)
+}
+
 /// Match the deployment finding id pattern
 /// `^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9_-]*)*$` without pulling in a regex crate.
 ///
@@ -1442,6 +1463,10 @@ fn is_trusted_proxy_spec(s: &str) -> bool {
 fn validate_ids_and_uniqueness(config: &Config) -> Result<(), ConfigError> {
     let mut dataset_ids: HashSet<&str> = HashSet::new();
     let mut datafusion_table_names: BTreeMap<String, (String, String)> = BTreeMap::new();
+    // Attribute-release profiles are identified by a globally unique
+    // `(id, version)` pair across every dataset/entity (see plan §3). Hoist the
+    // accumulator above the dataset loop, mirroring `datafusion_table_names`.
+    let mut release_profile_ids: BTreeMap<(String, String), (String, String)> = BTreeMap::new();
     for dataset in &config.datasets {
         if !is_valid_id(dataset.id.as_str()) {
             tracing::error!(
@@ -1586,6 +1611,24 @@ fn validate_ids_and_uniqueness(config: &Config) -> Result<(), ConfigError> {
                     "duplicate entity name within dataset"
                 );
                 return Err(ConfigError::DuplicateId);
+            }
+            for profile in &entity.attribute_release_profiles {
+                if let Some((existing_dataset, existing_entity)) = release_profile_ids.insert(
+                    (profile.id.clone(), profile.version.clone()),
+                    (dataset.id.to_string(), entity.name.clone()),
+                ) {
+                    tracing::error!(
+                        code = "config.duplicate_id",
+                        dataset_id = %dataset.id,
+                        entity = %entity.name,
+                        profile_id = %profile.id,
+                        profile_version = %profile.version,
+                        existing_dataset,
+                        existing_entity,
+                        "duplicate attribute_release_profiles (id, version) across configuration"
+                    );
+                    return Err(ConfigError::DuplicateId);
+                }
             }
         }
     }
@@ -1879,6 +1922,25 @@ fn validate_scopes(config: &Config) -> Result<(), ConfigError> {
                 "evidence_verification_scope",
                 false,
             )?;
+            for profile in &entity.attribute_release_profiles {
+                validate_entity_scope(
+                    &profile.release_scope,
+                    dataset_id,
+                    &entity.name,
+                    "attribute_release_profiles.release_scope",
+                    true,
+                )?;
+                if profile.release_scope == entity.access.read_scope {
+                    tracing::error!(
+                        code = "config.validation_error",
+                        dataset_id = %dataset_id,
+                        entity = %entity.name,
+                        profile_id = %profile.id,
+                        "attribute_release_profiles release_scope must differ from the entity read_scope"
+                    );
+                    return Err(ConfigError::ValidationError);
+                }
+            }
         }
         for aggregate in &dataset.aggregates {
             if let Some(access) = &aggregate.access {
@@ -1982,7 +2044,7 @@ fn validate_scope(
             code = "config.validation_error",
             api_key_id = %api_key_id,
             scope = %scope,
-            "scope must be 'registry_relay:admin', 'registry_relay:ops_read', 'registry_relay:metrics_read', or '<dataset_id>:<metadata|aggregate|rows|verify|evidence_verification>'"
+            "scope must be 'registry_relay:admin', 'registry_relay:ops_read', 'registry_relay:metrics_read', or '<dataset_id>:<metadata|aggregate|rows|verify|evidence_verification|identity_release>'"
         );
         ConfigError::ValidationError
     })?;
@@ -1992,7 +2054,7 @@ fn validate_scope(
             code = "config.validation_error",
             api_key_id = %api_key_id,
             scope = %scope,
-            "unknown scope level (allowed: metadata, aggregate, rows, verify, evidence_verification)"
+            "unknown scope level (allowed: metadata, aggregate, rows, verify, evidence_verification, identity_release)"
         );
         return Err(ConfigError::ValidationError);
     }
@@ -2013,7 +2075,7 @@ fn validate_scope(
 fn is_valid_scope_level(level: &str) -> bool {
     matches!(
         level,
-        "metadata" | "aggregate" | "rows" | "verify" | "evidence_verification"
+        "metadata" | "aggregate" | "rows" | "verify" | "evidence_verification" | "identity_release"
     ) || level
         .strip_prefix("evidence_verification:")
         .is_some_and(|suffix| !suffix.trim().is_empty())
@@ -2779,6 +2841,7 @@ fn validate_entities(
         validate_entity_aggregates(dataset, entity, &exposed_fields)?;
         validate_entity_spatial(dataset, entity, table, &exposed_fields, &mut collection_ids)?;
         validate_entity_relationships(dataset, entity, table, &tables, &entities)?;
+        validate_entity_release_profiles(dataset, entity, &exposed_fields)?;
     }
 
     Ok(())
@@ -3466,6 +3529,208 @@ fn validate_entity_governed_policy(
     Ok(())
 }
 
+/// A release claim must declare exactly one of `source_field` or
+/// `expression.cel`: a claim is either a direct source-field projection or a
+/// CEL-computed value, never both and never neither.
+fn release_claim_has_exactly_one_source(claim: &ReleaseClaimConfig) -> bool {
+    claim.source_field.is_some() ^ claim.expression.is_some()
+}
+
+/// Validate the attribute-release profiles attached to an entity (plan §5.1).
+///
+/// `exposed_fields` is the entity's resolved projection (claim/subject
+/// `source_field`s must be members). Subject/claim membership reuses the
+/// `validate_entity_filters` membership discipline. CEL expressions are
+/// compile-checked through the Relay-owned adapter when the
+/// `attribute-release` feature is enabled (the default build); when it is
+/// disabled, any expression-bearing profile is rejected at load, mirroring the
+/// `SpdciMappingFeatureDisabled` negative path.
+fn validate_entity_release_profiles(
+    dataset: &DatasetConfig,
+    entity: &EntityConfig,
+    exposed_fields: &BTreeMap<String, String>,
+) -> Result<(), ConfigError> {
+    for profile in &entity.attribute_release_profiles {
+        validate_entity_release_profile(dataset, entity, exposed_fields, profile)?;
+    }
+    Ok(())
+}
+
+fn validate_entity_release_profile(
+    dataset: &DatasetConfig,
+    entity: &EntityConfig,
+    exposed_fields: &BTreeMap<String, String>,
+    profile: &AttributeReleaseProfile,
+) -> Result<(), ConfigError> {
+    let release_error = |message: &str| -> Result<(), ConfigError> {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            entity = %entity.name,
+            profile_id = %profile.id,
+            "{message}"
+        );
+        Err(ConfigError::ValidationError)
+    };
+
+    if profile.id.trim().is_empty() {
+        return release_error("attribute_release_profiles id must not be empty");
+    }
+    if !is_valid_profile_id(&profile.id) {
+        return release_error("attribute_release_profiles id does not match ^[a-z][a-z0-9_-]*$");
+    }
+    if profile.version.trim().is_empty() {
+        return release_error("attribute_release_profiles version must not be empty");
+    }
+
+    // Subject source field must be exposed by the entity projection.
+    if !exposed_fields.contains_key(&profile.subject.source_field) {
+        return release_error(
+            "attribute_release_profiles subject.source_field references a non-exposed field",
+        );
+    }
+    if profile.subject.input.trim().is_empty() {
+        return release_error("attribute_release_profiles subject.input must not be empty");
+    }
+
+    // Claims: non-empty, ≥1 required, unique names, each a valid id, and each
+    // declaring exactly one of source_field / expression.cel.
+    if profile.claims.is_empty() {
+        return release_error("attribute_release_profiles must declare at least one claim");
+    }
+    let mut claim_names: HashSet<&str> = HashSet::new();
+    let mut has_required = false;
+    for claim in &profile.claims {
+        if !is_valid_claim_name(&claim.name) {
+            return release_error(
+                "attribute_release_profiles claim name does not match \
+                 ^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+            );
+        }
+        if !claim_names.insert(claim.name.as_str()) {
+            tracing::error!(
+                code = "config.duplicate_id",
+                dataset_id = %dataset.id,
+                entity = %entity.name,
+                profile_id = %profile.id,
+                claim = %claim.name,
+                "duplicate attribute_release_profiles claim name"
+            );
+            return Err(ConfigError::DuplicateId);
+        }
+        if !release_claim_has_exactly_one_source(claim) {
+            return release_error(
+                "attribute_release_profiles claim must declare exactly one of source_field or expression.cel",
+            );
+        }
+        if let Some(source_field) = &claim.source_field {
+            if !exposed_fields.contains_key(source_field) {
+                return release_error(
+                    "attribute_release_profiles claim source_field references a non-exposed field",
+                );
+            }
+        }
+        has_required |= claim.required;
+    }
+    if !has_required {
+        return release_error(
+            "attribute_release_profiles must declare at least one required claim",
+        );
+    }
+
+    // Purpose coupling: when the backing entity governs purposes, the profile
+    // purpose must be set and a member of the permitted set.
+    if let Some(policy) = entity.api.governed_policy.as_ref() {
+        if !policy.permitted_purposes.is_empty() {
+            match profile.purpose.as_ref() {
+                Some(purpose) if policy.permitted_purposes.iter().any(|p| p == purpose) => {}
+                Some(_) => {
+                    return release_error(
+                        "attribute_release_profiles purpose must be one of the entity governed_policy permitted_purposes",
+                    );
+                }
+                None => {
+                    return release_error(
+                        "attribute_release_profiles purpose is required when the entity governs permitted_purposes",
+                    );
+                }
+            }
+        }
+    }
+
+    validate_release_profile_expressions(dataset, entity, profile)?;
+
+    Ok(())
+}
+
+/// Collect every CEL expression a profile carries (release condition +
+/// computed claims) and compile-check it through the Relay-owned adapter.
+///
+/// On the default build (`attribute-release` enabled) each expression is
+/// compiled at load so invalid CEL fails closed. When the feature is disabled,
+/// an expression-bearing profile is rejected with a feature-disabled error,
+/// mirroring `SpdciMappingFeatureDisabled`.
+fn validate_release_profile_expressions(
+    dataset: &DatasetConfig,
+    entity: &EntityConfig,
+    profile: &AttributeReleaseProfile,
+) -> Result<(), ConfigError> {
+    let has_expression = profile.release_conditions.is_some()
+        || profile
+            .claims
+            .iter()
+            .any(|claim| claim.expression.is_some());
+
+    #[cfg(not(feature = "attribute-release"))]
+    {
+        if has_expression {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                entity = %entity.name,
+                profile_id = %profile.id,
+                "attribute_release_profiles CEL expressions require the attribute-release feature"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "attribute-release")]
+    {
+        let _ = has_expression;
+        if let Some(conditions) = profile.release_conditions.as_ref() {
+            compile_release_expression(dataset, entity, profile, &conditions.expression.cel)?;
+        }
+        for claim in &profile.claims {
+            if let Some(expression) = claim.expression.as_ref() {
+                compile_release_expression(dataset, entity, profile, &expression.cel)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "attribute-release")]
+fn compile_release_expression(
+    dataset: &DatasetConfig,
+    entity: &EntityConfig,
+    profile: &AttributeReleaseProfile,
+    cel: &str,
+) -> Result<(), ConfigError> {
+    crate::attribute_release::validate_release_expression(cel).map_err(|err| {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            entity = %entity.name,
+            profile_id = %profile.id,
+            error = %err,
+            "attribute_release_profiles CEL expression failed to compile"
+        );
+        ConfigError::ValidationError
+    })
+}
+
 fn governed_policy_has_enforced_gate(policy: &GovernedPolicyConfig) -> bool {
     !policy.permitted_purposes.is_empty()
         || !policy.permitted_jurisdictions.is_empty()
@@ -3992,6 +4257,33 @@ mod tests {
     }
 
     #[test]
+    fn profile_id_allows_hyphens_but_not_uppercase_or_leading_dash() {
+        // eSignet contract ids use hyphens.
+        assert!(is_valid_profile_id("esignet-civil-userinfo"));
+        assert!(is_valid_profile_id("civil_identity"));
+        assert!(is_valid_profile_id("a1-b2_c3"));
+        assert!(!is_valid_profile_id(""));
+        assert!(!is_valid_profile_id("-leading"));
+        assert!(!is_valid_profile_id("1-leading-digit"));
+        assert!(!is_valid_profile_id("Esignet"));
+        assert!(!is_valid_profile_id("with space"));
+    }
+
+    #[test]
+    fn claim_name_allows_dotted_segments_but_not_empty_segments() {
+        // OIDC UserInfo claim names include dotted forms.
+        assert!(is_valid_claim_name("address.region"));
+        assert!(is_valid_claim_name("given_name"));
+        assert!(is_valid_claim_name("a.b.c"));
+        assert!(!is_valid_claim_name(""));
+        assert!(!is_valid_claim_name(".region"));
+        assert!(!is_valid_claim_name("address."));
+        assert!(!is_valid_claim_name("address..region"));
+        assert!(!is_valid_claim_name("Address.Region"));
+        assert!(!is_valid_claim_name("address-region"));
+    }
+
+    #[test]
     fn api_key_fingerprint_check_accepts_canonical_shape() {
         let sample = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         assert!(
@@ -4247,5 +4539,52 @@ datasets: []
         assert!(!is_valid_finding_id("relay.config."));
         assert!(!is_valid_finding_id("relay.Config"));
         assert!(!is_valid_finding_id("relay config"));
+    }
+
+    fn release_claim(source_field: Option<&str>, expression: Option<&str>) -> ReleaseClaimConfig {
+        ReleaseClaimConfig {
+            name: "given_name".to_string(),
+            source_field: source_field.map(str::to_string),
+            expression: expression.map(|cel| crate::config::ReleaseExpressionConfig {
+                cel: cel.to_string(),
+            }),
+            required: false,
+            sensitivity: None,
+            format: None,
+            locale: None,
+            shareable: true,
+        }
+    }
+
+    #[test]
+    fn scope_level_allowlist_includes_identity_release() {
+        assert!(is_valid_scope_level("identity_release"));
+        assert!(is_valid_scope_level("metadata"));
+        assert!(is_valid_scope_level("rows"));
+        assert!(!is_valid_scope_level("identity_release_extra"));
+        assert!(!is_valid_scope_level("unknown"));
+    }
+
+    #[test]
+    fn release_claim_source_xor_accepts_exactly_one() {
+        assert!(release_claim_has_exactly_one_source(&release_claim(
+            Some("given_name"),
+            None
+        )));
+        assert!(release_claim_has_exactly_one_source(&release_claim(
+            None,
+            Some("source.given_name")
+        )));
+    }
+
+    #[test]
+    fn release_claim_source_xor_rejects_both_or_neither() {
+        assert!(!release_claim_has_exactly_one_source(&release_claim(
+            Some("given_name"),
+            Some("source.given_name")
+        )));
+        assert!(!release_claim_has_exactly_one_source(&release_claim(
+            None, None
+        )));
     }
 }

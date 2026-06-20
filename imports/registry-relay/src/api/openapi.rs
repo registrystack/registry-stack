@@ -38,6 +38,7 @@ const TAG_OGC_RECORDS: &str = "OGC API Records";
 const TAG_OGC_EDR: &str = "OGC API EDR";
 #[cfg(feature = "spdci-api-standards")]
 const TAG_SPD_CI: &str = "SP DCI";
+const TAG_ATTRIBUTE_RELEASE: &str = "Attribute Releases";
 const VC_JWT_MEDIA_TYPE: &str = "application/vc+jwt";
 
 const INFO_SUMMARY: &str = "Read-only data gateway exposing entity records, \
@@ -500,6 +501,9 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
     #[cfg(feature = "spdci-api-standards")]
     if spdci_configured(config) {
         insert_spdci_paths(&mut paths);
+    }
+    if attribute_releases_configured(config) {
+        insert_attribute_release_paths(&mut paths);
     }
 
     insert_json_path(
@@ -1339,6 +1343,15 @@ fn spdci_configured(config: &Config) -> bool {
     config.standards.spdci.is_some()
 }
 
+fn attribute_releases_configured(config: &Config) -> bool {
+    config.datasets.iter().any(|dataset| {
+        dataset
+            .entities
+            .iter()
+            .any(|entity| !entity.attribute_release_profiles.is_empty())
+    })
+}
+
 fn entity_tag_name(dataset_id: &str, entity_name: &str) -> String {
     format!("{dataset_id} / {entity_name}")
 }
@@ -1393,6 +1406,15 @@ fn tag_definitions(catalog: &CatalogDocument, config: &Config) -> Value {
         tags.push(json!({
             "name": TAG_SPD_CI,
             "description": "Social Protection Digital Convergence Initiative sync adapter routes.",
+        }));
+    }
+    if attribute_releases_configured(config) {
+        tags.push(json!({
+            "name": TAG_ATTRIBUTE_RELEASE,
+            "description": "Projection-limited, exactly-one-subject identity attribute \
+                            release; a profile is purpose-bound when it declares a purpose. \
+                            Returns only the approved claim bundle for a named release \
+                            profile; never a raw registry row.",
         }));
     }
     for dataset in &catalog.datasets {
@@ -1452,6 +1474,9 @@ fn tag_groups(catalog: &CatalogDocument, config: &Config) -> Value {
     #[cfg(feature = "spdci-api-standards")]
     if spdci_configured(config) {
         groups.push(json!({ "name": "SP DCI", "tags": [TAG_SPD_CI] }));
+    }
+    if attribute_releases_configured(config) {
+        groups.push(json!({ "name": "Attribute Releases", "tags": [TAG_ATTRIBUTE_RELEASE] }));
     }
     for dataset in &catalog.datasets {
         let mut entity_tags: Vec<String> = Vec::new();
@@ -2331,6 +2356,24 @@ fn schemas(catalog: &CatalogDocument, config: &Config) -> Value {
         schemas.insert(
             "SpdciSyncResponse".to_string(),
             generic_object_schema("SP DCI sync response envelope."),
+        );
+    }
+    if attribute_releases_configured(config) {
+        schemas.insert(
+            "AttributeReleaseProfileList".to_string(),
+            attribute_release_profile_list_schema(),
+        );
+        schemas.insert(
+            "AttributeReleaseProfile".to_string(),
+            attribute_release_profile_schema(),
+        );
+        schemas.insert(
+            "AttributeReleaseResolveRequest".to_string(),
+            attribute_release_resolve_request_schema(),
+        );
+        schemas.insert(
+            "AttributeReleaseResolveResponse".to_string(),
+            attribute_release_resolve_response_schema(),
         );
     }
     #[cfg(feature = "ogcapi-features")]
@@ -3538,6 +3581,107 @@ fn insert_spdci_paths(paths: &mut Map<String, Value>) {
     }
 }
 
+fn insert_attribute_release_paths(paths: &mut Map<String, Value>) {
+    // GET /v1/attribute-releases — discovery
+    paths.insert(
+        "/v1/attribute-releases".to_string(),
+        json!({
+            "get": {
+                "operationId": "list_attribute_release_profiles",
+                "summary": "List attribute release profiles",
+                "description": "Returns all attribute release profiles visible to the calling \
+                                principal. Authenticated-only: the response includes \
+                                release_scope strings, which are never exposed anonymously.",
+                "parameters": [],
+                "responses": {
+                    "200": {
+                        "description": "Attribute release profile list.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/AttributeReleaseProfileList"
+                                }
+                            }
+                        }
+                    },
+                    "401": problem_response("Missing or invalid bearer credential."),
+                    "403": problem_response(
+                        "Authenticated principal lacks the scope required for this operation."
+                    ),
+                    "default": problem_response("Problem Details error response."),
+                }
+            }
+        }),
+    );
+    tag(
+        paths,
+        "/v1/attribute-releases",
+        "get",
+        TAG_ATTRIBUTE_RELEASE,
+    );
+
+    // POST /v1/attribute-releases/{profile_id}/versions/{version}/resolve
+    paths.insert(
+        "/v1/attribute-releases/{profile_id}/versions/{version}/resolve".to_string(),
+        json!({
+            "post": {
+                "operationId": "resolve_attribute_release",
+                "summary": "Resolve attribute release",
+                "description": "Resolves a single subject against a named release profile and \
+                                returns the approved claim bundle. The subject identifier is \
+                                sent in the request body so it does not appear in access logs.",
+                "parameters": [
+                    path_parameter("profile_id", "Attribute release profile identifier."),
+                    path_parameter("version", "Attribute release profile version."),
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AttributeReleaseResolveRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Resolved attribute release claim bundle.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/AttributeReleaseResolveResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": problem_response(
+                        "Invalid request: malformed body, unknown id_type, empty claims list, \
+                         or unsupported media type."
+                    ),
+                    "401": problem_response("Missing or invalid bearer credential."),
+                    "403": problem_response(
+                        "Subject denied: not found, ambiguous, release condition not met, \
+                         or required claim unavailable. The response does not distinguish \
+                         these cases."
+                    ),
+                    "404": problem_response(
+                        "Profile not found. Does not confirm whether the profile ever existed."
+                    ),
+                    "503": problem_response("Source unavailable."),
+                    "default": problem_response("Problem Details error response."),
+                }
+            }
+        }),
+    );
+    tag(
+        paths,
+        "/v1/attribute-releases/{profile_id}/versions/{version}/resolve",
+        "post",
+        TAG_ATTRIBUTE_RELEASE,
+    );
+}
+
 #[cfg(feature = "ogcapi-features")]
 fn insert_ogc_paths(paths: &mut Map<String, Value>) {
     paths.insert(
@@ -4510,6 +4654,186 @@ fn openapi_unavailable(detail: &'static str) -> Response {
     response
 }
 
+fn attribute_release_profile_list_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "List of attribute release profiles visible to the calling principal.",
+        "required": ["profiles"],
+        "properties": {
+            "profiles": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/AttributeReleaseProfile" }
+            }
+        },
+        "additionalProperties": false,
+    })
+}
+
+fn attribute_release_profile_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "A governed identity attribute-release profile. Identifies the release \
+                        scope, accepted subject id types, and the claim names that will be \
+                        returned on a successful resolve.",
+        "required": ["profile_id", "version", "release_scope", "claim_names", "required_claims",
+                     "accepted_subject_id_types", "response_media_type"],
+        "properties": {
+            "profile_id": {
+                "type": "string",
+                "description": "Profile identifier, lower-snake. Globally unique with `version`."
+            },
+            "version": {
+                "type": "string",
+                "description": "Profile version. Globally unique with `profile_id`."
+            },
+            "title": {
+                "type": "string",
+                "description": "Human-readable profile title.",
+                "nullable": true
+            },
+            "description": {
+                "type": "string",
+                "description": "Human-readable profile description.",
+                "nullable": true
+            },
+            "purpose": {
+                "type": "string",
+                "description": "Data-purpose IRI this profile is bound to.",
+                "nullable": true
+            },
+            "accepted_subject_id_types": {
+                "type": "array",
+                "description": "Subject identifier types accepted by this profile.",
+                "items": { "type": "string" }
+            },
+            "claim_names": {
+                "type": "array",
+                "description": "Names of all claims that may be returned by this profile.",
+                "items": { "type": "string" }
+            },
+            "required_claims": {
+                "type": "array",
+                "description": "Names of claims that must be present in any successful response.",
+                "items": { "type": "string" }
+            },
+            "response_media_type": {
+                "type": "string",
+                "description": "Media type of the resolve response. Always `application/json` in v1.",
+                "examples": ["application/json"]
+            },
+            "release_scope": {
+                "type": "string",
+                "description": "Dataset-bound scope a caller must hold to invoke this release. \
+                                Distinct from the entity read scope."
+            }
+        },
+        "additionalProperties": false,
+    })
+}
+
+fn attribute_release_resolve_request_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "Request body for resolving an attribute release profile against one subject.",
+        "required": ["subject"],
+        "properties": {
+            "subject": {
+                "type": "object",
+                "description": "The subject to look up.",
+                "required": ["id_type", "value"],
+                "properties": {
+                    "id_type": {
+                        "type": "string",
+                        "description": "Subject identifier type (e.g. `national_id`, `passport`)."
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "Subject identifier value. Never logged or echoed in responses."
+                    }
+                },
+                "additionalProperties": false
+            },
+            "claims": {
+                "type": "array",
+                "description": "Optional subset of claim names to return. Absent means the \
+                                profile default set; an empty array is rejected (400); \
+                                any unknown claim name is denied.",
+                "items": { "type": "string" },
+                "nullable": true
+            }
+        },
+        "additionalProperties": false,
+    })
+}
+
+fn attribute_release_resolve_response_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "Resolved attribute release claim bundle. Contains only the approved, \
+                        minimised claims for the matched subject. Never includes raw source \
+                        rows, subject identifiers outside released claims, or private \
+                        source internals.",
+        "required": ["profile_id", "profile_version", "claims"],
+        "properties": {
+            "profile_id": {
+                "type": "string",
+                "description": "Identifier of the release profile used to resolve this response."
+            },
+            "profile_version": {
+                "type": "string",
+                "description": "Version of the release profile used to resolve this response."
+            },
+            "purpose": {
+                "type": "string",
+                "description": "Data-purpose IRI bound to this release profile.",
+                "nullable": true
+            },
+            "claims": {
+                "type": "object",
+                "description": "Released claim bundle. Keys are claim names; values are the \
+                                projected or computed claim values.",
+                "additionalProperties": true
+            },
+            "source": {
+                "type": "object",
+                "description": "Profile-sourced metadata about the release. Present only when \
+                                the profile sets `response.include_source_metadata: true`; a \
+                                minimising profile omits it entirely. Contains only metadata \
+                                derived from the profile configuration — never private source \
+                                table ids, paths, or secrets.",
+                "required": ["dataset", "entity", "subject_id_type", "cardinality",
+                             "checked_at"],
+                "properties": {
+                    "dataset": {
+                        "type": "string",
+                        "description": "Dataset identifier for the backing source."
+                    },
+                    "entity": {
+                        "type": "string",
+                        "description": "Entity name for the backing source."
+                    },
+                    "subject_id_type": {
+                        "type": "string",
+                        "description": "Subject identifier type used in the lookup."
+                    },
+                    "cardinality": {
+                        "type": "string",
+                        "description": "Subject cardinality expectation from the profile.",
+                        "enum": ["one", "many"]
+                    },
+                    "checked_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "ISO 8601 timestamp at which the source was checked."
+                    }
+                },
+                "additionalProperties": false
+            }
+        },
+        "additionalProperties": false,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "spdci-api-standards")]
@@ -5023,6 +5347,196 @@ mod tests {
             .expect("format enum")
             .iter()
             .any(|value| value == "sdmx-json"));
+    }
+
+    #[test]
+    fn attribute_release_paths_absent_when_no_profiles_configured() {
+        let mut config = load_example_config();
+        // Remove all attribute_release_profiles from every entity so the
+        // predicate returns false and the paths/schemas are omitted.
+        for dataset in &mut config.datasets {
+            for entity in &mut dataset.entities {
+                entity.attribute_release_profiles.clear();
+            }
+        }
+        let doc = openapi_document(&catalog_with_individual(), &config);
+
+        assert!(
+            doc["paths"]["/v1/attribute-releases"].is_null(),
+            "GET /v1/attribute-releases must be absent when no profiles are configured"
+        );
+        assert!(
+            doc["paths"]["/v1/attribute-releases/{profile_id}/versions/{version}/resolve"]
+                .is_null(),
+            "POST resolve must be absent when no profiles are configured"
+        );
+
+        let schemas = doc["components"]["schemas"]
+            .as_object()
+            .expect("schemas object");
+        assert!(
+            !schemas.contains_key("AttributeReleaseProfileList"),
+            "AttributeReleaseProfileList must be absent when no profiles are configured"
+        );
+        assert!(
+            !schemas.contains_key("AttributeReleaseProfile"),
+            "AttributeReleaseProfile must be absent when no profiles are configured"
+        );
+        assert!(
+            !schemas.contains_key("AttributeReleaseResolveRequest"),
+            "AttributeReleaseResolveRequest must be absent when no profiles are configured"
+        );
+        assert!(
+            !schemas.contains_key("AttributeReleaseResolveResponse"),
+            "AttributeReleaseResolveResponse must be absent when no profiles are configured"
+        );
+
+        let tags = doc["tags"].as_array().expect("tags array");
+        assert!(
+            !tags.iter().any(|t| t["name"] == TAG_ATTRIBUTE_RELEASE),
+            "Attribute Releases tag must be absent when no profiles are configured"
+        );
+    }
+
+    #[test]
+    fn attribute_release_paths_present_when_profiles_configured() {
+        // The example config already has attribute_release_profiles on the
+        // `individual` entity; load_example_config() is sufficient.
+        let config = load_example_config();
+        let doc = openapi_document(&catalog_with_individual(), &config);
+
+        // Path: GET /v1/attribute-releases
+        let list_op = &doc["paths"]["/v1/attribute-releases"]["get"];
+        assert!(
+            list_op.is_object(),
+            "GET /v1/attribute-releases must be present"
+        );
+        assert_eq!(
+            list_op["operationId"], "list_attribute_release_profiles",
+            "operationId must match contract"
+        );
+        assert_eq!(
+            list_op["tags"],
+            json!([TAG_ATTRIBUTE_RELEASE]),
+            "must carry the Attribute Releases tag"
+        );
+        assert_eq!(
+            list_op["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/AttributeReleaseProfileList"
+        );
+
+        // Path: POST .../resolve
+        let resolve_op =
+            &doc["paths"]["/v1/attribute-releases/{profile_id}/versions/{version}/resolve"]["post"];
+        assert!(resolve_op.is_object(), "POST resolve must be present");
+        assert_eq!(
+            resolve_op["operationId"], "resolve_attribute_release",
+            "operationId must match contract"
+        );
+        assert_eq!(
+            resolve_op["tags"],
+            json!([TAG_ATTRIBUTE_RELEASE]),
+            "must carry the Attribute Releases tag"
+        );
+        assert_eq!(
+            resolve_op["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/AttributeReleaseResolveRequest"
+        );
+        assert_eq!(
+            resolve_op["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/AttributeReleaseResolveResponse"
+        );
+        // Standard denial responses must be present
+        assert!(
+            resolve_op["responses"]["400"].is_object(),
+            "400 must be present"
+        );
+        assert!(
+            resolve_op["responses"]["403"].is_object(),
+            "403 must be present"
+        );
+        assert!(
+            resolve_op["responses"]["404"].is_object(),
+            "404 must be present"
+        );
+        assert!(
+            resolve_op["responses"]["503"].is_object(),
+            "503 must be present"
+        );
+
+        // Schemas
+        let schemas = doc["components"]["schemas"]
+            .as_object()
+            .expect("schemas object");
+        assert!(
+            schemas.contains_key("AttributeReleaseProfileList"),
+            "AttributeReleaseProfileList schema must be present"
+        );
+        assert!(
+            schemas.contains_key("AttributeReleaseProfile"),
+            "AttributeReleaseProfile schema must be present"
+        );
+        assert!(
+            schemas.contains_key("AttributeReleaseResolveRequest"),
+            "AttributeReleaseResolveRequest schema must be present"
+        );
+        assert!(
+            schemas.contains_key("AttributeReleaseResolveResponse"),
+            "AttributeReleaseResolveResponse schema must be present"
+        );
+
+        // Required fields on AttributeReleaseProfile schema
+        let profile_required = &schemas["AttributeReleaseProfile"]["required"];
+        for field in [
+            "profile_id",
+            "version",
+            "release_scope",
+            "claim_names",
+            "required_claims",
+            "accepted_subject_id_types",
+            "response_media_type",
+        ] {
+            assert!(
+                profile_required
+                    .as_array()
+                    .expect("required array")
+                    .iter()
+                    .any(|v| v == field),
+                "AttributeReleaseProfile must require field `{field}`"
+            );
+        }
+
+        // Required fields on AttributeReleaseResolveResponse schema. `source` is
+        // intentionally NOT required: the runtime omits it for a minimising
+        // profile (`response.include_source_metadata: false`), so the contract
+        // must keep it optional.
+        let response_required = &schemas["AttributeReleaseResolveResponse"]["required"];
+        for field in ["profile_id", "profile_version", "claims"] {
+            assert!(
+                response_required
+                    .as_array()
+                    .expect("required array")
+                    .iter()
+                    .any(|v| v == field),
+                "AttributeReleaseResolveResponse must require field `{field}`"
+            );
+        }
+        assert!(
+            !response_required
+                .as_array()
+                .expect("required array")
+                .iter()
+                .any(|v| v == "source"),
+            "AttributeReleaseResolveResponse must NOT require `source` (omitted when \
+             include_source_metadata is false)"
+        );
+
+        // TAG appears in the document-level tags array
+        let tags = doc["tags"].as_array().expect("tags array");
+        assert!(
+            tags.iter().any(|t| t["name"] == TAG_ATTRIBUTE_RELEASE),
+            "Attribute Releases tag must be present in tags"
+        );
     }
 
     #[cfg(feature = "spdci-api-standards")]

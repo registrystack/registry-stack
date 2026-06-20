@@ -16,6 +16,15 @@ use registry_relay::audit::{AuditPipeline, AuditRecord, EndpointKind, InMemorySi
 
 fn sample_record() -> AuditRecord {
     AuditRecord {
+        ar_profile_id: None,
+        ar_profile_version: None,
+        ar_subject_id_type: None,
+        ar_subject_id_hash: None,
+        ar_requested_claims: None,
+        ar_released_claims: None,
+        ar_internal_outcome: None,
+        ar_source_cardinality_outcome: None,
+        ar_source_availability_class: None,
         ts: registry_relay::audit::now_iso8601_millis(),
         request_id: "01HZXK3PQJR8M2N4WVBT6SCDE7".to_string(),
         principal_id: Some("statistics_office".to_string()),
@@ -67,6 +76,15 @@ fn benchmark_record_construction(c: &mut Criterion) {
     c.bench_function("audit/record_construction", |b| {
         b.iter(|| {
             black_box(AuditRecord {
+                ar_profile_id: None,
+                ar_profile_version: None,
+                ar_subject_id_type: None,
+                ar_subject_id_hash: None,
+                ar_requested_claims: None,
+                ar_released_claims: None,
+                ar_internal_outcome: None,
+                ar_source_cardinality_outcome: None,
+                ar_source_availability_class: None,
                 ts: registry_relay::audit::now_iso8601_millis(),
                 request_id: "01HZXK3PQJR8M2N4WVBT6SCDE7".to_string(),
                 principal_id: Some("statistics_office".to_string()),
