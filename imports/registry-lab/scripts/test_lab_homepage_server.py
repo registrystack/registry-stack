@@ -1310,6 +1310,10 @@ class ExplorerPageHtmlTest(unittest.TestCase):
         self.assertIn("target.identifiers", CLAIMS_EXPLORER_JS)
         self.assertIn("payload.target = targetFromInputs(group)", CLAIMS_EXPLORER_JS)
 
+    def test_claims_explorer_js_reads_target_values_from_state_during_render(self) -> None:
+        self.assertIn("return state.targetValues[key] ?? defaultTargetValue(input)", CLAIMS_EXPLORER_JS)
+        self.assertNotIn("byId(`target-input-${index}`)?.value", CLAIMS_EXPLORER_JS)
+
     def test_claims_explorer_js_keeps_minimization_secondary(self) -> None:
         answer = CLAIMS_EXPLORER_JS.index("Answer")
         minimization = CLAIMS_EXPLORER_JS.index("Minimization details")
@@ -1614,6 +1618,41 @@ class ExplorerApiPayloadTest(unittest.TestCase):
         )
         self.assertEqual(normalized["target"], target)
         self.assertNotIn("subject", normalized)
+
+    def test_claim_evaluation_validation_accepts_legacy_subject_shape(self) -> None:
+        validated = server.claims_explorer.validate_evaluation_input(
+            "civil-notary",
+            {
+                "claim_id": "person-is-alive",
+                "subject": "NID-1001",
+                "identifier_scheme": "national_id",
+                "disclosure": "predicate",
+                "format": server.claims_explorer.CLAIM_RESULT_FORMAT,
+                "purpose": server.claims_explorer.PURPOSE,
+            },
+        )
+        self.assertEqual(validated["subject"], "NID-1001")
+        self.assertEqual(validated["identifier_scheme"], "national_id")
+        self.assertIsNone(validated["target"])
+
+    def test_claim_evaluation_validation_accepts_target_shape_without_legacy_subject(self) -> None:
+        target = {
+            "type": "Person",
+            "identifiers": [{"scheme": "registration_number", "value": "B-2016-N-1001"}],
+        }
+        validated = server.claims_explorer.validate_evaluation_input(
+            "civil-notary",
+            {
+                "claim_id": "birth.certificate_summary",
+                "target": target,
+                "disclosure": "value",
+                "format": server.claims_explorer.CLAIM_RESULT_FORMAT,
+                "purpose": "https://demo.example.gov/purpose/civil-certificate-evidence",
+            },
+        )
+        self.assertEqual(validated["target"], target)
+        self.assertEqual(validated["subject"], "B-2016-N-1001")
+        self.assertEqual(validated["identifier_scheme"], "registration_number")
 
     def test_default_claim_result_minimization_precedes_raw_row_access(self) -> None:
         payload = server.claims_explorer.run_evaluation(

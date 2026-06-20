@@ -539,7 +539,13 @@ def _civil_person_by_national_id(national_id: str) -> CivilRow | None:
 
 
 def validate_evaluation_input(service_id: str, body: dict[str, Any]) -> dict[str, Any]:
-    require_keys(body, {"claim_id", "subject", "identifier_scheme", "target", "disclosure", "format", "purpose"})
+    # require_keys is an allowlist guard, not a presence check. Legacy subject
+    # inputs and metadata target inputs are alternative request shapes, and
+    # internal previews may carry both while preserving the target payload.
+    require_keys(
+        body,
+        {"claim_id", "subject", "identifier_scheme", "target", "disclosure", "format", "purpose"},
+    )
     service = claim_service_config(service_id)
     claim_id = str(body.get("claim_id", service["default_claim"]))
     if claim_id not in service["claims"]:

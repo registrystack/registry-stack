@@ -218,8 +218,6 @@ function resetTargetValues(claim = selectedClaimSummary()) {
 }
 
 function readTargetValue(input, index) {
-  const value = byId(`target-input-${index}`)?.value;
-  if (value != null) return value;
   const key = targetValueKey(input);
   return state.targetValues[key] ?? defaultTargetValue(input);
 }
