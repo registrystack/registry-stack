@@ -99,6 +99,8 @@ repos:
         label: OpenCRVS onboarding model
         nav_order: 65
         doc_type: explanation
+        exclude_docsets:
+          - beta-2026-06-12
       - src: docs/operator-config-reference.md
         dest: products/registry-notary/operator-config-reference
         label: Operator configuration reference
