@@ -231,6 +231,16 @@ and pin adaptor versions. The sidecar must be reachable only from Notary over
 localhost or a private pod network. Do not expose it publicly, put it behind an
 internet-facing ingress, or allow callers to invoke adapter execution directly.
 
+For deployments with OpenFn sources, **network-layer egress controls on the
+sidecar pod are required**. The Node.js OpenFn engine path is not covered by
+the in-process SSRF defenses that protect the `http_json`, `http_flow`, and
+`fhir` paths. Apply a Kubernetes NetworkPolicy (with an enforcing CNI such as
+Calico or Cilium) or an allow-listing egress proxy to block the cloud metadata
+IP (`169.254.169.254`, `fd00:ec2::254`) and RFC 1918 ranges from the worker
+pod. See
+[`openfn-sidecar-egress-hardening.md`](openfn-sidecar-egress-hardening.md)
+for a ready-to-apply policy and verification checklist.
+
 Runbook gates for source adapter sidecar source connections:
 
 - Set `retry_on_5xx: false`. Notary does not retry sidecar adapter execution

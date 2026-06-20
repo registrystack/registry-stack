@@ -210,6 +210,15 @@ Docker image or a pinned git tag/revision.
 Report vulnerabilities through GitHub Security Advisories. See
 [`SECURITY.md`](SECURITY.md) for scope and acknowledgement expectations.
 
+Deployments using the source adapter sidecar with OpenFn sources require
+network-layer egress controls on the sidecar pod. The Rust `http_json`,
+`http_flow`, and `fhir` paths enforce in-process SSRF defenses; the Node.js
+OpenFn engine path does not, so a Kubernetes NetworkPolicy (with an enforcing
+CNI) or an allow-listing egress proxy is required to block the cloud metadata
+IP and RFC 1918 ranges from the worker. See
+[`docs/openfn-sidecar-egress-hardening.md`](docs/openfn-sidecar-egress-hardening.md)
+for the ready-to-apply policy and verification checklist.
+
 ## License
 
 Apache-2.0. See [`LICENSE`](LICENSE).

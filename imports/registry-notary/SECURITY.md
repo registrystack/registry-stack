@@ -23,6 +23,18 @@ identifiers.
 Known pilot limitations such as no revocation service, no
 `/.well-known/jwt-vc-issuer` endpoint, and no built-in data-subject erasure
 workflow should be reported as product gaps unless they create an exploitable
-security or privacy issue beyond the documented limitation. The source adapter
-sidecar also relies on deployment-network egress controls for outbound source
-traffic; see `crates/registry-notary-source-adapter-sidecar/README.md`.
+security or privacy issue beyond the documented limitation.
+
+The source adapter sidecar's `http_json`, `http_flow`, and `fhir` engine paths
+enforce in-process SSRF defenses (base-URL allow-list, DNS-resolved IP checks,
+cloud-metadata-IP block, redirect handling). The Node.js OpenFn engine path does
+not go through those checks. Deployments running OpenFn sources **must** enforce
+network-layer egress controls on the sidecar pod — a Kubernetes NetworkPolicy
+with an enforcing CNI (Calico, Cilium) or an allow-listing egress proxy — to
+block the cloud metadata IP (`169.254.169.254`, `fd00:ec2::254`) and RFC 1918
+ranges from the worker. This is a deployment requirement, not an optional
+hardening step. See
+[`docs/openfn-sidecar-egress-hardening.md`](docs/openfn-sidecar-egress-hardening.md)
+for a ready-to-apply NetworkPolicy, an egress-proxy alternative, and a
+verification checklist. See also
+`crates/registry-notary-source-adapter-sidecar/README.md`.
