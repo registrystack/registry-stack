@@ -1,5 +1,57 @@
 # Changelog
 
+## Unreleased
+
+### Security
+
+- (AUDIT-03) `registry-platform-audit` now derives independent, domain-separated
+  sub-keys for the audit chain HMAC and the identifier HMAC from the master
+  environment secret using an internal HKDF-Expand (RFC 5869) over SHA-256, with
+  distinct per-purpose `info` labels (`registry-platform-audit/chain-key/v1` and
+  `registry-platform-audit/identifier-key/v1`). Previously both HMACs used the
+  identical raw env material, so a leak of one key exposed the other. **This
+  changes persisted chain and identifier hash values**; acceptable pre-beta
+  (crate is `version 0.3.0`, `publish = false`) and only affects legacy
+  pre-beta logs, which were already unkeyed/dev-only. Explicit `keyed(secret)`
+  construction is unchanged (caller-owned key material).
+- (AUDIT-02) `AuditHashSecret` now holds its HMAC key behind a
+  `Zeroize`/`ZeroizeOnDrop` newtype so the raw key bytes are scrubbed when the
+  last shared reference is dropped.
+- (AUDIT-05) The query-redaction secret-parameter denylist now covers OAuth /
+  OIDC and generic credential parameter names (`access_token`, `refresh_token`,
+  `id_token`, `client_secret`, `client_assertion`, `assertion`, `bearer`,
+  `code`, `private_key`, `credential`, `credentials`, `passwd`, `pwd`,
+  `session_token`).
+- (AUDIT-01 / AUDIT-06) The unkeyed verification and tail-hash convenience paths
+  (`verify_jsonl_lines`, `AuditSink::tail_hash`) are now `#[deprecated]` and
+  carry prominent warnings; production callers must use the keyed
+  `*_with_hasher` variants with an explicit `AuditChainHasher`.
+  `AuditSink::tail_hash_with_hasher` now fails closed by default so legacy custom
+  tailable sinks cannot silently ignore the supplied keyed hasher through an
+  unkeyed trait fallback.
+- (REPORT-01) `registry-config-report` now exposes `ConfigExplanation::resolved_config`
+  as a `RedactedConfig` newtype that can only be constructed via
+  `RedactedConfig::redacted(..)` (which runs redaction internally), making
+  redaction unbypassable at the type level for producers. Deserializing
+  `RedactedConfig` now treats the input as untrusted and collapses it to
+  `REDACTED_VALUE`; consumers that need to inspect rendered report JSON can use
+  the wire-only `ConfigExplanationDocument` type. The wire format is unchanged
+  (`#[serde(transparent)]`).
+- (REPORT-03) `RequiredEnvVar` is documented as operator-sensitive (it enumerates
+  secret env-var names and presence) and now offers `RequiredEnvVar::public_safe()`,
+  a compatibility projection that collapses non-public entries to a generic
+  not-checked placeholder. `RequiredEnvVar::public_safe_entries(..)` omits
+  non-public entries entirely for public-facing lists so names, presence, and
+  sensitive-entry counts are not disclosed.
+- (OIDC-01) `registry-platform-oidc` `fetch_discovery_with_policy` now fails closed
+  with `OidcError::MissingIssuer` when `jwks_uri_override` is set but `issuer` is
+  empty, preserving an issuer binding when discovery is skipped.
+- (HTTPSEC-01) `registry-platform-httpsec` `security_headers` now emits
+  `Strict-Transport-Security` (`max-age=63072000; includeSubDomains`) by default,
+  with `SecurityHeadersLayer::without_hsts()` / `with_hsts(..)` opt-outs.
+- (HTTPSEC-02) `CorsPolicy::layer()` (which panics on an invalid policy) is now
+  `#[deprecated]` in favor of the fallible `CorsPolicy::try_layer()`.
+
 ## v0.3.0 — 2026-06-13
 
 ### Added

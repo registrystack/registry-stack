@@ -988,5 +988,18 @@ mod tests {
                 .last()
                 .map(|envelope| envelope.record_hash))
         }
+
+        async fn tail_hash_with_hasher(
+            &self,
+            hasher: &AuditChainHasher,
+        ) -> Result<Option<[u8; 32]>, AuditError> {
+            let _ = hasher;
+            Ok(self
+                .envelopes
+                .lock()
+                .expect("memory sink lock is healthy")
+                .last()
+                .map(|envelope| envelope.record_hash))
+        }
     }
 }

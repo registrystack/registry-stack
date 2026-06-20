@@ -73,7 +73,8 @@ async fn cors_layer_omits_acao_header_for_non_listed_origin() {
                 allowed_headers: Vec::new(),
                 allow_credentials: false,
             }
-            .layer(),
+            .try_layer()
+            .expect("valid CORS policy"),
         );
 
     let response = app

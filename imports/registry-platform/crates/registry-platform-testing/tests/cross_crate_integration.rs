@@ -42,7 +42,8 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_chain() {
                 allowed_headers: Vec::new(),
                 allow_credentials: false,
             }
-            .layer(),
+            .try_layer()
+            .expect("valid CORS policy"),
         )
         .layer(corp_conditional())
         .layer(request_body_limit(4));

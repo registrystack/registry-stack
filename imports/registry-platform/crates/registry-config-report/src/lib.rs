@@ -4,7 +4,7 @@
 //! crate owns only the report envelopes, schema assets, shared vocabulary, and
 //! redaction helpers used when those product-owned decisions are reported.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 pub const PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1: &str =
@@ -191,11 +191,62 @@ pub struct ConfigDiagnostic {
     pub documentation_key: Option<String>,
 }
 
+/// A required environment variable, its data classification, and presence.
+///
+/// # Operator-sensitive
+///
+/// This type is OPERATOR-SENSITIVE. It enumerates the *names* of secret- and
+/// internal-only-classified environment variables and whether each one is set.
+/// Disclosing these names and their presence can reveal which secrets a
+/// deployment expects and aid an attacker. It MUST only be exposed behind
+/// operator authentication and MUST NEVER appear on an unauthenticated or
+/// otherwise public diagnostic surface.
+///
+/// For a ready-made public-safe list projection, use
+/// [`RequiredEnvVar::public_safe_entries`], which omits sensitive entries
+/// entirely so names, presence, and counts are not disclosed.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct RequiredEnvVar {
     pub name: String,
     pub classification: ConfigValueClassification,
     pub status: RequiredEnvStatus,
+}
+
+impl RequiredEnvVar {
+    /// Returns a compatibility-safe projection of this single entry.
+    ///
+    /// `Public` entries are returned as-is. Non-public entries are collapsed to
+    /// one generic, not-checked placeholder so names, classifications, and
+    /// presence state do not leak from a single-entry projection.
+    ///
+    /// For lists, prefer [`Self::public_safe_entries`] so non-public entry counts
+    /// do not leak either.
+    #[must_use]
+    pub fn public_safe(&self) -> Self {
+        match self.classification {
+            ConfigValueClassification::Public => self.clone(),
+            ConfigValueClassification::Secret
+            | ConfigValueClassification::TopologySensitive
+            | ConfigValueClassification::InternalOnly => Self {
+                name: REDACTED_VALUE.to_string(),
+                classification: ConfigValueClassification::Public,
+                status: RequiredEnvStatus::NotChecked,
+            },
+        }
+    }
+
+    /// Returns only entries suitable for a public diagnostic surface.
+    ///
+    /// Non-public entries are omitted so their names, classifications, presence
+    /// state, and list cardinality do not leak.
+    #[must_use]
+    pub fn public_safe_entries(entries: &[Self]) -> Vec<Self> {
+        entries
+            .iter()
+            .filter(|entry| entry.classification == ConfigValueClassification::Public)
+            .cloned()
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -221,6 +272,8 @@ pub struct ConfigDiagnosticReport {
     pub status: ReportStatus,
     pub summary: DiagnosticSummary,
     pub diagnostics: Vec<ConfigDiagnostic>,
+    /// Operator-sensitive: see [`RequiredEnvVar`]. Enumerates secret env-var
+    /// names and presence; must only be exposed behind operator authentication.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required_env: Vec<RequiredEnvVar>,
     #[serde(skip_serializing_if = "config_hashes_option_is_empty")]
@@ -247,12 +300,67 @@ pub struct LiveApplyComponent {
     pub class: LiveApplyClass,
 }
 
+/// A configuration tree that is guaranteed to have passed through redaction.
+///
+/// This newtype makes redaction unbypassable at the type level: the only way to
+/// build a populated `RedactedConfig` from a raw [`Value`] in producing code is
+/// [`RedactedConfig::redacted`], which runs [`redact_config_value`] internally.
+/// There is intentionally no public constructor that wraps an arbitrary
+/// `Value` without redacting.
+///
+/// The wire representation is identical to a bare `Value` (see
+/// `#[serde(transparent)]`). Deserializing this producer-side type treats the
+/// incoming tree as untrusted and collapses it to [`REDACTED_VALUE`]; code that
+/// needs to inspect an already-rendered report should use
+/// [`ConfigExplanationDocument`], whose `resolved_config` is a plain [`Value`]
+/// and carries no producer-side redaction guarantee.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct RedactedConfig(Value);
+
+impl<'de> Deserialize<'de> for RedactedConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        Ok(Self(redact_config_value(&value, |_, _| {
+            ConfigValueClassification::Secret
+        })))
+    }
+}
+
+impl RedactedConfig {
+    /// Redacts `value` with `classify` and wraps the result.
+    ///
+    /// This is the only constructor that accepts a raw config tree, ensuring a
+    /// populated `RedactedConfig` can never hold un-redacted secrets.
+    pub fn redacted(
+        value: &Value,
+        classify: impl Fn(&[&str], &Value) -> ConfigValueClassification,
+    ) -> Self {
+        Self(redact_config_value(value, classify))
+    }
+
+    /// Borrows the redacted configuration tree.
+    pub fn as_value(&self) -> &Value {
+        &self.0
+    }
+
+    /// Consumes the newtype, returning the redacted configuration tree.
+    pub fn into_value(self) -> Value {
+        self.0
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct ConfigExplanation {
     pub schema_version: String,
     pub product: String,
     pub config_schema_version: String,
     pub source: ConfigSourceRef,
+    /// Operator-sensitive: see [`RequiredEnvVar`]. Enumerates secret env-var
+    /// names and presence; must only be exposed behind operator authentication.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required_env: Vec<RequiredEnvVar>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -261,8 +369,32 @@ pub struct ConfigExplanation {
     pub optional_sections_absent: Vec<OptionalSection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub live_apply: Vec<LiveApplyComponent>,
-    pub resolved_config: Value,
+    pub resolved_config: RedactedConfig,
     #[serde(skip_serializing_if = "config_hashes_option_is_empty")]
+    pub hashes: Option<ConfigHashes>,
+    pub generated_at: String,
+}
+
+/// Deserialize-only wire view of a rendered [`ConfigExplanation`].
+///
+/// Use this type when deserializing report JSON. It preserves the schema and
+/// wire format but does not claim that its `resolved_config` was produced by
+/// [`RedactedConfig::redacted`].
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+pub struct ConfigExplanationDocument {
+    pub schema_version: String,
+    pub product: String,
+    pub config_schema_version: String,
+    pub source: ConfigSourceRef,
+    #[serde(default)]
+    pub required_env: Vec<RequiredEnvVar>,
+    #[serde(default)]
+    pub defaults_applied: Vec<ConfigDefault>,
+    #[serde(default)]
+    pub optional_sections_absent: Vec<OptionalSection>,
+    #[serde(default)]
+    pub live_apply: Vec<LiveApplyComponent>,
+    pub resolved_config: Value,
     pub hashes: Option<ConfigHashes>,
     pub generated_at: String,
 }
