@@ -235,9 +235,10 @@ For deployments with OpenFn sources, **network-layer egress controls on the
 sidecar pod are required**. The Node.js OpenFn engine path is not covered by
 the in-process SSRF defenses that protect the `http_json`, `http_flow`, and
 `fhir` paths. Apply a Kubernetes NetworkPolicy (with an enforcing CNI such as
-Calico or Cilium) or an allow-listing egress proxy to block the cloud metadata
-IP (`169.254.169.254`, `fd00:ec2::254`) and RFC 1918 ranges from the worker
-pod. See
+Calico or Cilium) or an enforced allow-listing egress proxy to block the cloud
+metadata IP (`169.254.169.254`, `fd00:ec2::254`) and RFC 1918 ranges from the
+worker pod. Do not rely on proxy environment variables alone for the OpenFn
+worker path; the proxy must be enforced at the network layer. See
 [`openfn-sidecar-egress-hardening.md`](openfn-sidecar-egress-hardening.md)
 for a ready-to-apply policy and verification checklist.
 

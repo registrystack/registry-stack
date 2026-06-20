@@ -29,12 +29,12 @@ The source adapter sidecar's `http_json`, `http_flow`, and `fhir` engine paths
 enforce in-process SSRF defenses (base-URL allow-list, DNS-resolved IP checks,
 cloud-metadata-IP block, redirect handling). The Node.js OpenFn engine path does
 not go through those checks. Deployments running OpenFn sources **must** enforce
-network-layer egress controls on the sidecar pod — a Kubernetes NetworkPolicy
-with an enforcing CNI (Calico, Cilium) or an allow-listing egress proxy — to
-block the cloud metadata IP (`169.254.169.254`, `fd00:ec2::254`) and RFC 1918
+network-layer egress controls on the sidecar pod: a Kubernetes NetworkPolicy
+with an enforcing CNI (Calico, Cilium) or an enforced allow-listing egress proxy
+to block the cloud metadata IP (`169.254.169.254`, `fd00:ec2::254`) and RFC 1918
 ranges from the worker. This is a deployment requirement, not an optional
 hardening step. See
 [`docs/openfn-sidecar-egress-hardening.md`](docs/openfn-sidecar-egress-hardening.md)
-for a ready-to-apply NetworkPolicy, an egress-proxy alternative, and a
+for a ready-to-apply NetworkPolicy, an enforced egress-proxy alternative, and a
 verification checklist. See also
 `crates/registry-notary-source-adapter-sidecar/README.md`.

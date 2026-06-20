@@ -61,7 +61,7 @@ Egress controls are your only defense once signed workflow code is running.
 Treating them as optional in production deployments weakens the defense-in-depth
 posture documented in `sidecar-trust-and-secrets.md`.
 
-## Option 1 — Kubernetes NetworkPolicy
+## Option 1: Kubernetes NetworkPolicy
 
 Apply the following NetworkPolicy to the namespace and pods that run the
 sidecar. This policy denies egress to the cloud metadata IP, RFC 1918 ranges,
@@ -74,6 +74,9 @@ traffic the sidecar legitimately needs.
   do not enforce NetworkPolicy egress rules; verify your CNI before relying on
   this control.
 - Kubernetes 1.21 or later for stable `NetworkPolicy` API.
+- No broader egress-allowing `NetworkPolicy` selects the same sidecar pods.
+  Kubernetes NetworkPolicies are additive; a second policy that allows all
+  egress to the selected pods can bypass the narrower example below.
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -145,21 +148,24 @@ spec:
   helper blocks for the in-process paths. The intent is consistency: the
   network layer enforces the same denied set that the Rust code enforces for
   `http_json`, `http_flow`, and `fhir`.
-- After applying the policy, verify it with a test pod in the same namespace:
-  `kubectl run -it --rm test --image=curlimages/curl -- curl -s --max-time 3 http://169.254.169.254/` should time out or be refused.
+- After applying the policy, verify it from a pod selected by the same
+  `podSelector`, not from an unlabeled ad hoc pod. For example:
+  `kubectl run -n <your-namespace> registry-notary-sidecar-egress-test --rm -it --restart=Never --image=curlimages/curl --labels=app=registry-notary-sidecar --command -- curl -sS --max-time 3 http://169.254.169.254/`
+  should time out or be refused. You can also exec into the actual sidecar pod
+  or attach a disposable debug container to it.
 - This policy restricts **both** directions (`policyTypes: [Ingress, Egress]`):
   the `ingress` rule limits inbound connections on port 9191 to the Notary pod,
   and the `egress` rules constrain outbound traffic. Selecting a pod under a
-  `policyTypes` direction switches that direction to default-deny for the pod,
-  so only the explicitly listed flows are allowed. The minimal deny-only variant
-  below is egress-only; pair it with an ingress policy if you also need to
-  restrict who can reach the sidecar.
+  `policyTypes` direction switches that direction to default-deny for the pod.
+  Because policies are additive, only the union of all policies selecting the pod
+  is allowed. Audit every `NetworkPolicy` that selects the sidecar labels before
+  treating the example as an effective block.
 
-### Minimal deny-only variant
+### Minimal allow-list variant
 
 If you cannot enumerate all legitimate egress CIDRs but need to block the
-highest-risk destinations immediately, apply a deny-only policy targeting only
-the metadata and RFC 1918 ranges:
+highest-risk destinations immediately, apply this egress allow-list variant
+targeting the metadata and RFC 1918 ranges:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -194,42 +200,65 @@ spec:
               - 192.168.0.0/16
 ```
 
-This variant allows all public HTTPS egress except the blocked ranges and should
-be tightened to known upstream CIDRs before production use.
+This variant is not an explicit deny rule. It selects the sidecar pods, puts
+their egress into default-deny, then allows DNS and public HTTPS except the
+listed ranges. It is effective only when no other `NetworkPolicy` selecting the
+same pods allows the blocked ranges. Tighten it to known upstream CIDRs before
+production use.
 
-## Option 2 — Egress proxy (environments without CNI enforcement)
+## Option 2: Egress proxy (environments without CNI enforcement)
 
 If your cluster does not use a CNI that enforces `NetworkPolicy` egress rules,
-route all worker outbound HTTP through an allow-listing forward proxy.
+route all worker outbound HTTP through an allow-listing proxy or egress gateway
+that is enforced at the network layer.
 
-1. Run an allow-listing HTTP/HTTPS forward proxy (for example Squid with an
-   `acl` dstdomain allowlist, or an OPA-based policy proxy) as a sidecar
-   container or a shared cluster service.
-2. Set the `HTTP_PROXY` and `HTTPS_PROXY` environment variables on the sidecar
-   pod to point to the proxy. The Node.js `@openfn/runtime` and `@openfn/language-http`
-   packages respect standard Node.js proxy environment variables.
+Do **not** rely on `HTTP_PROXY` / `HTTPS_PROXY` environment variables alone for
+the current OpenFn worker image. The pinned OpenFn `@openfn/language-http` path
+uses Undici dispatchers inside the adaptor stack, and the sidecar worker does
+not install an `EnvHttpProxyAgent` or equivalent proxy dispatcher. Environment
+variables are acceptable only after you have tested the exact worker/adaptor
+traffic and confirmed it cannot bypass the proxy.
+
+1. Run an allow-listing HTTP/HTTPS proxy or egress gateway, for example Squid
+   with a destination-domain allowlist, an OPA-based policy proxy, a service-mesh
+   egress gateway, or a transparent sidecar proxy with traffic redirection.
+2. Enforce routing so all TCP egress from the sidecar pod to HTTP/HTTPS
+   destinations must go through that proxy or gateway. Use mesh sidecar
+   interception, host firewall rules, cloud security groups, or another
+   infrastructure control that prevents direct outbound connections from the
+   worker process.
 3. Configure the proxy to allow only the specific hostnames of your source
    registries and deny everything else, including by-IP requests to
    `169.254.169.254` and RFC 1918 addresses.
 4. Confirm the proxy rejects requests to `http://169.254.169.254/` and to a
    private IP (for example `http://10.0.0.1/`) before routing production traffic
-   through it.
+   through it. The test must originate from the actual sidecar pod or an
+   equivalently selected pod, and proxy logs should show the attempted request.
 
-The egress-proxy approach works even on clusters where the CNI does not enforce
+The egress-proxy approach works only when direct sidecar egress is blocked or
+transparently captured. It is useful on clusters where the CNI does not enforce
 `NetworkPolicy`, but it requires operating and monitoring an additional
-component.
+component and proving that the OpenFn worker cannot bypass it.
 
 ## Verification checklist
 
 Before routing production OpenFn source traffic through the sidecar, confirm:
 
 - [ ] A CNI that enforces `NetworkPolicy` egress is installed and active, **or**
-  an allow-listing egress proxy is configured and tested.
+  an enforced allow-listing egress proxy is configured and tested with the
+  actual sidecar pod.
+- [ ] Every `NetworkPolicy` selecting the sidecar pod labels has been reviewed;
+  no broader policy re-allows metadata, loopback, link-local, or RFC 1918
+  egress.
 - [ ] A NetworkPolicy or proxy rule explicitly blocks `169.254.169.254/32` and
   `169.254.0.0/16`.
 - [ ] RFC 1918 ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) and
   loopback (`127.0.0.0/8`) are blocked at the network layer for the sidecar pod.
-- [ ] The sidecar pod cannot reach `http://169.254.169.254/` (test before go-live).
+- [ ] The sidecar pod, or a test pod with the same selected labels, cannot reach
+  `http://169.254.169.254/` (test before go-live).
+- [ ] If using a proxy or gateway, direct outbound HTTP/HTTPS from the sidecar is
+  blocked or transparently captured, and proxy logs show the OpenFn worker's test
+  requests.
 - [ ] IPv6 metadata address `fd00:ec2::254` is blocked if the cluster uses IPv6.
 - [ ] Ingress to the sidecar is restricted so only the Notary pod can connect on
   port 9191.
