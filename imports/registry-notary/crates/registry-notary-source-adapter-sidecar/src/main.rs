@@ -6,8 +6,8 @@ use std::{env, path::PathBuf};
 use clap::{Parser, Subcommand};
 use registry_notary_source_adapter_sidecar::{
     create_local_tuf_demo_repo_report_json, load_startup_config_with_options,
-    print_expression_hashes_report_json, render_governed_runtime_target_json, run,
-    verify_governed_bundle_report_json, CreateLocalTufRepoOptions, LocalTufBundleVerifyOptions,
+    render_governed_runtime_target_json, run, verify_governed_bundle_report_json,
+    CreateLocalTufRepoOptions, LocalTufBundleVerifyOptions,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -56,8 +56,6 @@ enum Command {
 enum ConfigCommand {
     /// Render a governed runtime target from a sidecar manifest and jobs root.
     RenderTarget(RenderTargetArgs),
-    /// Print exact SHA-256 hashes for every workflow expression in a target.
-    PrintExpressionHashes(TargetFileArgs),
     /// Create a signed local TUF repository for demo and local verification.
     CreateLocalTufRepo(Box<CreateLocalTufRepoArgs>),
     /// Verify a target JSON file, or a local TUF target when TUF paths are supplied.
@@ -68,16 +66,11 @@ enum ConfigCommand {
 struct RenderTargetArgs {
     #[arg(long)]
     manifest: PathBuf,
+    // --jobs-root is accepted for compatibility but ignored now that the OpenFn engine is removed.
     #[arg(long)]
-    jobs_root: PathBuf,
+    jobs_root: Option<PathBuf>,
     #[arg(short, long)]
     output: Option<PathBuf>,
-}
-
-#[derive(Debug, clap::Args)]
-struct TargetFileArgs {
-    #[arg(long)]
-    target: PathBuf,
 }
 
 #[derive(Debug, clap::Args)]
@@ -203,17 +196,12 @@ async fn config_command(command: ConfigCommand) -> Result<(), Box<dyn std::error
     match command {
         ConfigCommand::RenderTarget(RenderTargetArgs {
             manifest,
-            jobs_root,
+            jobs_root: _,
             output,
         }) => {
             let raw = tokio::fs::read_to_string(manifest).await?;
-            let target = render_governed_runtime_target_json(&raw, &jobs_root)?;
+            let target = render_governed_runtime_target_json(&raw)?;
             write_or_print(output, &target).await?;
-        }
-        ConfigCommand::PrintExpressionHashes(TargetFileArgs { target }) => {
-            let target = tokio::fs::read(target).await?;
-            let report = print_expression_hashes_report_json(&target)?;
-            println!("{}", serde_json::to_string_pretty(&report)?);
         }
         ConfigCommand::CreateLocalTufRepo(args) => {
             let report = create_local_tuf_demo_repo_report_json(CreateLocalTufRepoOptions {

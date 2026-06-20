@@ -1,4 +1,3 @@
-use crate::{WorkerCommand, WorkerError, WorkerPool, WorkerPoolConfig};
 use axum::{
     body::{to_bytes, Body},
     extract::{Path, Query, RawQuery, State},
@@ -26,7 +25,6 @@ use serde_json::{json, Map, Value};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     convert::Infallible,
-    ffi::OsString,
     fmt,
     net::{IpAddr, SocketAddr},
     num::NonZeroU64,
@@ -35,7 +33,6 @@ use std::{
     time::{Duration, Instant},
 };
 use thiserror::Error;
-use tokio::process::Command;
 use tokio::sync::{watch, Mutex, OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 use tough::{
@@ -53,13 +50,7 @@ pub struct SidecarConfig {
     pub auth: AuthConfig,
     #[serde(default)]
     pub config_trust: Option<SidecarConfigTrustConfig>,
-    #[serde(default)]
-    pub jobs_root: Option<PathBuf>,
     pub limits: LimitConfig,
-    #[serde(default)]
-    pub openfn: Option<OpenFnConfig>,
-    #[serde(default)]
-    pub worker: Option<WorkerProcessConfig>,
     pub sources: BTreeMap<String, SourceConfig>,
     #[serde(skip)]
     pub assurance: Option<SidecarAssurance>,
@@ -140,28 +131,11 @@ pub struct LimitConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct OpenFnConfig {
-    pub cli_build_tool: String,
-    pub runtime: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct WorkerProcessConfig {
-    pub command: PathBuf,
-    #[serde(default)]
-    pub args: Vec<String>,
-    #[serde(default)]
-    pub version_args: Option<Vec<String>>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SourceConfig {
     pub dataset: String,
     pub entity: String,
     #[serde(default)]
     pub engine: SourceEngine,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workflow: Option<SourceWorkflowConfig>,
     #[serde(default)]
     pub credential_env: String,
     #[serde(default)]
@@ -192,8 +166,6 @@ pub struct SourceConfig {
 #[serde(rename_all = "snake_case")]
 pub enum SourceEngine {
     #[default]
-    #[serde(rename = "openfn", alias = "open_fn")]
-    OpenFn,
     HttpJson,
     HttpFlow,
     Fhir,
@@ -202,7 +174,6 @@ pub enum SourceEngine {
 impl SourceEngine {
     fn worker_id(self) -> &'static str {
         match self {
-            SourceEngine::OpenFn => "openfn",
             SourceEngine::HttpJson => "http_json",
             SourceEngine::HttpFlow => "http_flow",
             SourceEngine::Fhir => "fhir",
@@ -324,34 +295,6 @@ impl SourceRuntimeLimitConfig {
     fn is_default(&self) -> bool {
         self == &Self::default()
     }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct SourceWorkflowConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub start: Option<String>,
-    #[serde(default)]
-    pub batch_mode: SourceWorkflowBatchMode,
-    pub steps: Vec<SourceWorkflowStepConfig>,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SourceWorkflowBatchMode {
-    #[default]
-    PerItem,
-    Native,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct SourceWorkflowStepConfig {
-    pub id: String,
-    pub expression: PathBuf,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expression_sha256: Option<String>,
-    pub adaptors: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub next: Option<SourceWorkflowNextConfig>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -534,47 +477,7 @@ struct GovernedAcceptance {
 struct GovernedRuntimeTarget {
     schema: String,
     limits: LimitConfig,
-    #[serde(default)]
-    openfn: Option<OpenFnConfig>,
-    #[serde(default)]
-    jobs_root: Option<PathBuf>,
-    #[serde(default)]
-    worker: Option<WorkerProcessConfig>,
     sources: BTreeMap<String, SourceConfig>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum SourceWorkflowNextConfig {
-    Step(String),
-    Edges(BTreeMap<String, SourceWorkflowEdgeConfig>),
-}
-
-impl SourceWorkflowNextConfig {
-    fn target_ids(&self) -> Vec<&str> {
-        match self {
-            Self::Step(step) => vec![step.as_str()],
-            Self::Edges(edges) => edges.keys().map(String::as_str).collect(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum SourceWorkflowEdgeConfig {
-    Enabled(bool),
-    Condition(String),
-    Edge(SourceWorkflowEdgeObjectConfig),
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct SourceWorkflowEdgeObjectConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub condition: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub disabled: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -615,8 +518,6 @@ struct BatchMatchItem {
 pub enum SidecarError {
     #[error("sidecar config error: {0}")]
     Config(String),
-    #[error("worker pool error: {0}")]
-    Worker(#[from] WorkerError),
     #[error("failed to bind or serve sidecar: {0}")]
     Io(#[from] std::io::Error),
     #[error("credential env {env} for source {source_id} is missing")]
@@ -645,7 +546,6 @@ struct AppState {
     config: Arc<SidecarConfig>,
     auth_tokens: Arc<Vec<ResolvedBearerToken>>,
     fhir_bearer_tokens: Arc<BTreeMap<String, String>>,
-    pool: Option<Arc<WorkerPool>>,
     credentials: Arc<BTreeMap<String, Value>>,
     source_limiters: Arc<BTreeMap<String, Arc<Semaphore>>>,
     source_runtime: Arc<BTreeMap<String, Arc<SourceRuntimeState>>>,
@@ -744,8 +644,11 @@ struct PreparedHttpJsonRequest {
     client: reqwest::Client,
 }
 
+// All variants are http_json-engine error categories; the shared prefix is
+// intentional now that the OpenFn engine (and its differently-prefixed
+// variants) is retired. Renaming would churn ~110 call sites for no clarity.
+#[allow(clippy::enum_variant_names)]
 enum SourceExecutionError {
-    Worker(WorkerError),
     HttpJson,
     HttpJsonBadRequest,
     HttpJsonTimeout,
@@ -825,46 +728,20 @@ pub struct CreateLocalTufRepoOptions {
     pub timestamp_expiration_days: i64,
 }
 
-pub fn render_governed_runtime_target_json(
-    raw_manifest: &str,
-    jobs_root: &FsPath,
-) -> Result<Vec<u8>, SidecarError> {
+pub fn render_governed_runtime_target_json(raw_manifest: &str) -> Result<Vec<u8>, SidecarError> {
     let config: SidecarConfig = serde_norway::from_str(raw_manifest)
         .map_err(|error| SidecarError::Config(error.to_string()))?;
-    let has_openfn_sources = has_openfn_sources(&config);
-    let canonical_jobs_root = if has_openfn_sources {
-        Some(canonical_jobs_root(jobs_root)?)
-    } else {
-        None
-    };
-    let mut target = GovernedRuntimeTarget {
+    let target = GovernedRuntimeTarget {
         schema: "registry.notary.openfn_sidecar.runtime.v1".to_string(),
         limits: config.limits,
-        openfn: config.openfn,
-        jobs_root: has_openfn_sources.then(|| jobs_root.to_path_buf()),
-        worker: config.worker,
         sources: config.sources,
     };
-    if let Some(canonical_jobs_root) = canonical_jobs_root.as_deref() {
-        populate_expression_hashes(&mut target, canonical_jobs_root)?;
-    }
     validate_governed_runtime_target(&target)?;
     let mut bytes = serde_json::to_vec_pretty(&target).map_err(|error| {
         SidecarError::Config(format!("target JSON could not be rendered: {error}"))
     })?;
     bytes.push(b'\n');
     Ok(bytes)
-}
-
-pub fn print_expression_hashes_report_json(target_bytes: &[u8]) -> Result<Value, SidecarError> {
-    let target = governed_target_from_bytes(target_bytes)?;
-    validate_governed_runtime_target(&target)?;
-    let expression_hashes = expression_hashes_for_target(&target)?;
-    Ok(json!({
-        "config_hash": registry_platform_config::sha256_uri(target_bytes),
-        "jobs_root": target.jobs_root,
-        "expression_hashes": expression_hashes,
-    }))
 }
 
 pub async fn create_local_tuf_demo_repo_report_json(
@@ -894,7 +771,6 @@ pub async fn create_local_tuf_demo_repo_report_json(
     })?;
     let target = governed_target_from_bytes(&target_bytes)?;
     validate_governed_runtime_target(&target)?;
-    let expression_hashes = expression_hashes_for_target(&target)?;
     let config_hash = registry_platform_config::sha256_uri(&target_bytes);
 
     let source_targets_dir = options.metadata_dir.join(".source-targets");
@@ -997,7 +873,6 @@ pub async fn create_local_tuf_demo_repo_report_json(
         "metadata_dir": options.metadata_dir,
         "targets_dir": options.targets_dir,
         "root_path": options.root_path,
-        "expression_hashes": expression_hashes,
         "metadata": {
             "product": options.product,
             "instance_id": options.instance_id,
@@ -1065,13 +940,10 @@ pub async fn verify_governed_bundle_report_json(
     };
     let target = governed_target_from_bytes(&target_bytes)?;
     validate_governed_runtime_target(&target)?;
-    let expression_hashes = expression_hashes_for_target(&target)?;
     Ok(json!({
         "verified": true,
         "target_name": target_name,
         "config_hash": registry_platform_config::sha256_uri(&target_bytes),
-        "jobs_root": target.jobs_root,
-        "expression_hashes": expression_hashes,
         "tuf": tuf_report,
         "metadata": metadata_report,
     }))
@@ -1231,10 +1103,7 @@ fn materialize_governed_config(
         server: bootstrap.server,
         auth: bootstrap.auth,
         config_trust: Some(bootstrap.config_trust.clone()),
-        jobs_root: target.jobs_root,
         limits: target.limits,
-        openfn: target.openfn,
-        worker: target.worker,
         sources: target.sources,
         assurance: Some(assurance),
         governed_acceptance: Some(GovernedAcceptance {
@@ -1275,135 +1144,12 @@ fn validate_governed_runtime_target(target: &GovernedRuntimeTarget) -> Result<()
             }],
         },
         config_trust: None,
-        jobs_root: target.jobs_root.clone(),
         limits: target.limits.clone(),
-        openfn: target.openfn.clone(),
-        worker: target.worker.clone(),
         sources: target.sources.clone(),
         assurance: None,
         governed_acceptance: None,
     };
     validate_config(&config)
-}
-
-fn populate_expression_hashes(
-    target: &mut GovernedRuntimeTarget,
-    canonical_jobs_root: &FsPath,
-) -> Result<(), SidecarError> {
-    for (source_id, source) in &mut target.sources {
-        if source.engine != SourceEngine::OpenFn {
-            continue;
-        }
-        let workflow = source.workflow.as_mut().ok_or_else(|| {
-            SidecarError::Config(format!(
-                "source {source_id} workflow is required for OpenFn sources"
-            ))
-        })?;
-        for step in &mut workflow.steps {
-            let (relative_expression, expression_hash) = resolve_render_expression(
-                source_id,
-                &format!("workflow step {} expression", step.id),
-                canonical_jobs_root,
-                &step.expression,
-            )?;
-            step.expression = relative_expression;
-            step.expression_sha256 = Some(expression_hash);
-        }
-    }
-    Ok(())
-}
-
-fn expression_hashes_for_target(
-    target: &GovernedRuntimeTarget,
-) -> Result<BTreeMap<String, String>, SidecarError> {
-    let has_openfn_sources = target
-        .sources
-        .values()
-        .any(|source| source.engine == SourceEngine::OpenFn);
-    let canonical_jobs_root = match (&target.jobs_root, has_openfn_sources) {
-        (Some(jobs_root), true) => Some(canonical_jobs_root(jobs_root)?),
-        (None, true) => {
-            return Err(SidecarError::Config(
-                "jobs_root is required when governed target contains OpenFn sources".to_string(),
-            ));
-        }
-        _ => None,
-    };
-    let mut expression_hashes = BTreeMap::new();
-    for (source_id, source) in &target.sources {
-        if source.engine != SourceEngine::OpenFn {
-            continue;
-        }
-        let workflow = source.workflow.as_ref().ok_or_else(|| {
-            SidecarError::Config(format!(
-                "source {source_id} workflow is required for OpenFn sources"
-            ))
-        })?;
-        let Some(canonical_jobs_root) = canonical_jobs_root.as_deref() else {
-            continue;
-        };
-        for step in &workflow.steps {
-            let expression_path = resolve_jobs_root_expression(
-                source_id,
-                &format!("workflow step {} expression", step.id),
-                canonical_jobs_root,
-                &step.expression,
-            )?;
-            let bytes = std::fs::read(&expression_path).map_err(|error| {
-                SidecarError::Config(format!(
-                    "source {source_id} workflow step {} expression {} could not be read: {error}",
-                    step.id,
-                    expression_path.display()
-                ))
-            })?;
-            expression_hashes.insert(
-                format!("{source_id}.{}", step.id),
-                registry_platform_config::sha256_uri(&bytes),
-            );
-        }
-    }
-    Ok(expression_hashes)
-}
-
-fn resolve_render_expression(
-    source_id: &str,
-    label: &str,
-    jobs_root: &FsPath,
-    expression: &FsPath,
-) -> Result<(PathBuf, String), SidecarError> {
-    let canonical_expression = if expression.is_absolute() {
-        expression.canonicalize().map_err(|error| {
-            SidecarError::Config(format!(
-                "source {source_id} {label} {} could not be canonicalized: {error}",
-                expression.display()
-            ))
-        })?
-    } else {
-        resolve_jobs_root_expression(source_id, label, jobs_root, expression)?
-    };
-    if !canonical_expression.starts_with(jobs_root) {
-        return Err(SidecarError::Config(format!(
-            "source {source_id} {label} must be under jobs_root"
-        )));
-    }
-    let relative_expression = canonical_expression
-        .strip_prefix(jobs_root)
-        .map_err(|_| {
-            SidecarError::Config(format!(
-                "source {source_id} {label} could not be made relative to jobs_root"
-            ))
-        })?
-        .to_path_buf();
-    let bytes = std::fs::read(&canonical_expression).map_err(|error| {
-        SidecarError::Config(format!(
-            "source {source_id} {label} {} could not be read: {error}",
-            canonical_expression.display()
-        ))
-    })?;
-    Ok((
-        relative_expression,
-        registry_platform_config::sha256_uri(&bytes),
-    ))
 }
 
 fn tuf_report(tuf: &TufVerifiedTarget) -> Value {
@@ -1440,37 +1186,6 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
     let request_timeout = Duration::from_millis(config.server.request_timeout_ms);
     let request_body_timeout = Duration::from_millis(config.server.request_body_timeout_ms);
 
-    let pool = if has_openfn_sources(&config) {
-        verify_openfn_runtime(&config).await?;
-        let worker = worker_config(&config)?;
-        let mut command = WorkerCommand::new(worker.command.clone());
-        for arg in &worker.args {
-            command = command.arg(OsString::from(arg));
-        }
-
-        Some(Arc::new(
-            WorkerPool::new(WorkerPoolConfig {
-                command,
-                forbidden_env_names: sensitive_worker_env_names(&config),
-                max_workers: config.limits.max_workers,
-                request_timeout: Duration::from_millis(config.limits.worker_timeout_ms),
-                max_request_bytes: config.limits.max_request_bytes,
-                max_stdout_bytes: config.limits.max_output_bytes,
-                max_stderr_bytes: config.limits.max_output_bytes,
-                max_memory_bytes: config
-                    .limits
-                    .max_worker_memory_mb
-                    .map(|megabytes| megabytes.saturating_mul(1024 * 1024)),
-                replacement_window: Duration::from_secs(60),
-                max_replacements_per_window: config.limits.max_workers.saturating_mul(4).max(4),
-                circuit_breaker_cooldown: Duration::from_secs(30),
-            })
-            .await?,
-        ))
-    } else {
-        None
-    };
-
     let credentials = load_credentials(&config)?;
     let source_limiters = config
         .sources
@@ -1494,7 +1209,6 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
         config: Arc::new(config),
         auth_tokens: Arc::new(auth_tokens),
         fhir_bearer_tokens: Arc::new(fhir_bearer_tokens),
-        pool,
         credentials: Arc::new(credentials),
         source_limiters: Arc::new(source_limiters),
         source_runtime: Arc::new(source_runtime),
@@ -1536,23 +1250,6 @@ fn accept_governed_config(config: &SidecarConfig) -> Result<(), SidecarError> {
             SidecarError::StartupCheck(format!("anti-rollback acceptance failed: {error}"))
         })?;
     Ok(())
-}
-
-fn sensitive_worker_env_names(config: &SidecarConfig) -> BTreeSet<OsString> {
-    config
-        .sources
-        .values()
-        .filter(|source| !source.credential_env.trim().is_empty())
-        .map(|source| OsString::from(&source.credential_env))
-        .chain(
-            config
-                .auth
-                .bearer_tokens
-                .iter()
-                .filter_map(|token| token.hash_env.as_ref())
-                .map(OsString::from),
-        )
-        .collect()
 }
 
 pub async fn run(config: SidecarConfig) -> Result<(), Box<dyn std::error::Error>> {
@@ -1700,10 +1397,6 @@ async fn serve_sidecar_connection(
 }
 
 fn validate_config(config: &SidecarConfig) -> Result<(), SidecarError> {
-    let canonical_jobs_root = match &config.jobs_root {
-        Some(jobs_root) => Some(canonical_jobs_root(jobs_root)?),
-        None => None,
-    };
     if config.auth.bearer_tokens.is_empty() {
         return Err(SidecarError::Config(
             "at least one sidecar bearer token is required".to_string(),
@@ -1774,11 +1467,6 @@ fn validate_config(config: &SidecarConfig) -> Result<(), SidecarError> {
             ));
         }
         Some(_) => {}
-        None if has_openfn_sources(config) => {
-            return Err(SidecarError::Config(
-                "limits.max_worker_memory_mb must be pinned".to_string(),
-            ));
-        }
         None => {}
     }
     if config.limits.max_output_bytes == 0
@@ -1794,15 +1482,6 @@ fn validate_config(config: &SidecarConfig) -> Result<(), SidecarError> {
         return Err(SidecarError::Config(
             "limits.batch_timeout_ms must be greater than zero".to_string(),
         ));
-    }
-    if has_openfn_sources(config) {
-        let openfn = openfn_config(config)?;
-        if openfn.cli_build_tool.trim().is_empty() || openfn.runtime.trim().is_empty() {
-            return Err(SidecarError::Config(
-                "openfn.cli_build_tool and openfn.runtime must be pinned".to_string(),
-            ));
-        }
-        worker_config(config)?;
     }
     for (source_id, source) in &config.sources {
         if source.limits.max_in_flight == Some(0) {
@@ -1847,7 +1526,7 @@ fn validate_config(config: &SidecarConfig) -> Result<(), SidecarError> {
                 )));
             }
         }
-        validate_source_execution(source_id, source, canonical_jobs_root.as_deref())?;
+        validate_source_execution(source_id, source)?;
         if source
             .allowed_base_urls
             .iter()
@@ -1872,58 +1551,8 @@ fn validate_config(config: &SidecarConfig) -> Result<(), SidecarError> {
     Ok(())
 }
 
-fn validate_source_execution(
-    source_id: &str,
-    source: &SourceConfig,
-    canonical_jobs_root: Option<&FsPath>,
-) -> Result<(), SidecarError> {
+fn validate_source_execution(source_id: &str, source: &SourceConfig) -> Result<(), SidecarError> {
     match source.engine {
-        SourceEngine::OpenFn => {
-            if matches!(
-                source.batch.mode,
-                SourceBatchMode::ParallelLookup | SourceBatchMode::NativeBatch
-            ) {
-                return Err(SidecarError::Config(format!(
-                    "source {source_id} batch.mode is only supported for http_json or http_flow sources"
-                )));
-            }
-            if source.batch.max_parallel.is_some() {
-                return Err(SidecarError::Config(format!(
-                    "source {source_id} batch.max_parallel is only supported for http_json parallel_lookup sources"
-                )));
-            }
-            if source.http_json.is_some() {
-                return Err(SidecarError::Config(format!(
-                    "source {source_id} http_json config is only valid for http_json sources"
-                )));
-            }
-            if source.http_flow.is_some() {
-                return Err(SidecarError::Config(format!(
-                    "source {source_id} http_flow config is only valid for http_flow sources"
-                )));
-            }
-            if source.fhir.is_some() {
-                return Err(SidecarError::Config(format!(
-                    "source {source_id} fhir config is only valid for fhir sources"
-                )));
-            }
-            if source.cache.is_some() {
-                return Err(SidecarError::Config(format!(
-                    "source {source_id} cache is only supported for http_json sources"
-                )));
-            }
-            if source.credential_env.trim().is_empty() {
-                return Err(SidecarError::Config(format!(
-                    "source {source_id} credential_env is required for OpenFn sources"
-                )));
-            }
-            let workflow = source.workflow.as_ref().ok_or_else(|| {
-                SidecarError::Config(format!(
-                    "source {source_id} workflow is required for OpenFn sources"
-                ))
-            })?;
-            validate_source_workflow(source_id, workflow, canonical_jobs_root)
-        }
         SourceEngine::HttpJson => validate_http_json_source(source_id, source),
         SourceEngine::HttpFlow => validate_http_flow_source(source_id, source),
         SourceEngine::Fhir => validate_fhir_source(source_id, source),
@@ -1931,11 +1560,6 @@ fn validate_source_execution(
 }
 
 fn validate_http_json_source(source_id: &str, source: &SourceConfig) -> Result<(), SidecarError> {
-    if source.workflow.is_some() {
-        return Err(SidecarError::Config(format!(
-            "source {source_id} workflow is not valid for http_json sources"
-        )));
-    }
     if source.http_flow.is_some() {
         return Err(SidecarError::Config(format!(
             "source {source_id} http_flow config is not valid when engine is http_json"
@@ -2054,11 +1678,6 @@ fn validate_http_json_source(source_id: &str, source: &SourceConfig) -> Result<(
 }
 
 fn validate_http_flow_source(source_id: &str, source: &SourceConfig) -> Result<(), SidecarError> {
-    if source.workflow.is_some() {
-        return Err(SidecarError::Config(format!(
-            "source {source_id} workflow is not valid for http_flow sources"
-        )));
-    }
     if source.http_json.is_some() {
         return Err(SidecarError::Config(format!(
             "source {source_id} http_json config is not valid when engine is http_flow"
@@ -2233,11 +1852,6 @@ fn validate_http_flow_source(source_id: &str, source: &SourceConfig) -> Result<(
 }
 
 fn validate_fhir_source(source_id: &str, source: &SourceConfig) -> Result<(), SidecarError> {
-    if source.workflow.is_some() {
-        return Err(SidecarError::Config(format!(
-            "source {source_id} workflow is not valid for fhir sources"
-        )));
-    }
     if source.http_json.is_some() {
         return Err(SidecarError::Config(format!(
             "source {source_id} http_json config is not valid when engine is fhir"
@@ -2591,260 +2205,6 @@ fn validate_http_header_or_query_name(
     Ok(())
 }
 
-fn validate_source_workflow(
-    source_id: &str,
-    workflow: &SourceWorkflowConfig,
-    canonical_jobs_root: Option<&FsPath>,
-) -> Result<(), SidecarError> {
-    if workflow.steps.is_empty() {
-        return Err(SidecarError::Config(format!(
-            "source {source_id} workflow.steps must not be empty"
-        )));
-    }
-
-    let mut step_ids = BTreeSet::new();
-    for step in &workflow.steps {
-        if step.id.trim().is_empty() {
-            return Err(SidecarError::Config(format!(
-                "source {source_id} workflow step id must be non-empty"
-            )));
-        }
-        if !step_ids.insert(step.id.as_str()) {
-            return Err(SidecarError::Config(format!(
-                "source {source_id} workflow step {} is duplicated",
-                step.id
-            )));
-        }
-        validate_source_expression(
-            source_id,
-            &format!("workflow step {} expression", step.id),
-            &step.expression,
-            step.expression_sha256.as_deref(),
-            canonical_jobs_root,
-        )?;
-        if step.adaptors.is_empty() {
-            return Err(SidecarError::Config(format!(
-                "source {source_id} workflow step {} adaptors must not be empty",
-                step.id
-            )));
-        }
-        for (index, adaptor) in step.adaptors.iter().enumerate() {
-            validate_source_adaptor(
-                source_id,
-                &format!("workflow step {} adaptors[{index}]", step.id),
-                adaptor,
-            )?;
-        }
-    }
-
-    if let Some(start) = &workflow.start {
-        if !step_ids.contains(start.as_str()) {
-            return Err(SidecarError::Config(format!(
-                "source {source_id} workflow start step {start} is not defined"
-            )));
-        }
-    }
-    let mut incoming_counts = BTreeMap::<&str, usize>::new();
-    let mut next_by_step = BTreeMap::<&str, Vec<&str>>::new();
-    for step in &workflow.steps {
-        let Some(next) = &step.next else {
-            continue;
-        };
-        let targets = next.target_ids();
-        for target in &targets {
-            if !step_ids.contains(*target) {
-                return Err(SidecarError::Config(format!(
-                    "source {source_id} workflow step {} next step {target} is not defined",
-                    step.id
-                )));
-            }
-            let count = incoming_counts.entry(*target).or_default();
-            *count += 1;
-        }
-        next_by_step.insert(step.id.as_str(), targets);
-    }
-    if let Some((step_id, _count)) = incoming_counts.iter().find(|(_step_id, count)| **count > 1) {
-        return Err(SidecarError::Config(format!(
-            "source {source_id} workflow step {step_id} has multiple input steps; Lightning-style merge runs a target once per incoming path and is not a join, so aggregation must be encoded in an explicit OpenFn step"
-        )));
-    }
-    let mut visited = BTreeSet::new();
-    let mut path = BTreeSet::new();
-    for start_step in &workflow.steps {
-        detect_workflow_cycle(
-            source_id,
-            &next_by_step,
-            start_step.id.as_str(),
-            &mut path,
-            &mut visited,
-        )?;
-    }
-
-    Ok(())
-}
-
-fn detect_workflow_cycle<'a>(
-    source_id: &str,
-    next_by_step: &BTreeMap<&'a str, Vec<&'a str>>,
-    current: &'a str,
-    path: &mut BTreeSet<&'a str>,
-    visited: &mut BTreeSet<&'a str>,
-) -> Result<(), SidecarError> {
-    if path.contains(current) {
-        return Err(SidecarError::Config(format!(
-            "source {source_id} workflow contains a cycle at step {current}"
-        )));
-    }
-    if !visited.insert(current) {
-        return Ok(());
-    }
-    path.insert(current);
-    if let Some(next_steps) = next_by_step.get(current) {
-        for next in next_steps {
-            detect_workflow_cycle(source_id, next_by_step, next, path, visited)?;
-        }
-    }
-    path.remove(current);
-    Ok(())
-}
-
-fn validate_source_expression(
-    source_id: &str,
-    label: &str,
-    expression: &FsPath,
-    expression_sha256: Option<&str>,
-    canonical_jobs_root: Option<&FsPath>,
-) -> Result<(), SidecarError> {
-    let resolved_expression = match canonical_jobs_root {
-        Some(jobs_root) => {
-            let expected_hash = expression_sha256.ok_or_else(|| {
-                SidecarError::Config(format!(
-                    "source {source_id} {label} expression_sha256 is required"
-                ))
-            })?;
-            validate_sha256_uri(expected_hash).map_err(|reason| {
-                SidecarError::Config(format!(
-                    "source {source_id} {label} expression_sha256 is invalid: {reason}"
-                ))
-            })?;
-            resolve_jobs_root_expression(source_id, label, jobs_root, expression)?
-        }
-        None => expression.to_path_buf(),
-    };
-    if !resolved_expression.is_file() {
-        return Err(SidecarError::Config(format!(
-            "source {source_id} {label} {} is missing",
-            resolved_expression.display()
-        )));
-    }
-    if let (Some(expected_hash), Some(_jobs_root)) = (expression_sha256, canonical_jobs_root) {
-        let bytes = std::fs::read(&resolved_expression).map_err(|error| {
-            SidecarError::Config(format!(
-                "source {source_id} {label} {} could not be read: {error}",
-                resolved_expression.display()
-            ))
-        })?;
-        let actual_hash = registry_platform_config::sha256_uri(&bytes);
-        if actual_hash != expected_hash {
-            return Err(SidecarError::Config(format!(
-                "source {source_id} {label} hash mismatch: expected {expected_hash}, got {actual_hash}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn canonical_jobs_root(jobs_root: &FsPath) -> Result<PathBuf, SidecarError> {
-    if jobs_root.as_os_str().is_empty() {
-        return Err(SidecarError::Config(
-            "jobs_root must be non-empty in governed mode".to_string(),
-        ));
-    }
-    let canonical = jobs_root.canonicalize().map_err(|error| {
-        SidecarError::Config(format!(
-            "jobs_root {} could not be canonicalized: {error}",
-            jobs_root.display()
-        ))
-    })?;
-    if !canonical.is_dir() {
-        return Err(SidecarError::Config(format!(
-            "jobs_root {} is not a directory",
-            canonical.display()
-        )));
-    }
-    Ok(canonical)
-}
-
-fn resolve_jobs_root_expression(
-    source_id: &str,
-    label: &str,
-    jobs_root: &FsPath,
-    expression: &FsPath,
-) -> Result<PathBuf, SidecarError> {
-    if expression.is_absolute() {
-        return Err(SidecarError::Config(format!(
-            "source {source_id} {label} must be relative to jobs_root"
-        )));
-    }
-    if expression.components().any(|component| {
-        matches!(
-            component,
-            Component::ParentDir | Component::Prefix(_) | Component::RootDir
-        )
-    }) {
-        return Err(SidecarError::Config(format!(
-            "source {source_id} {label} must not escape jobs_root"
-        )));
-    }
-    let joined = jobs_root.join(expression);
-    let canonical_expression = joined.canonicalize().map_err(|error| {
-        SidecarError::Config(format!(
-            "source {source_id} {label} {} could not be canonicalized: {error}",
-            expression.display()
-        ))
-    })?;
-    if !canonical_expression.starts_with(jobs_root) {
-        return Err(SidecarError::Config(format!(
-            "source {source_id} {label} symlink escapes jobs_root"
-        )));
-    }
-    Ok(canonical_expression)
-}
-
-fn validate_sha256_uri(value: &str) -> Result<(), &'static str> {
-    let Some(hex) = value.strip_prefix("sha256:") else {
-        return Err("missing sha256 prefix");
-    };
-    if hex.len() != 64 {
-        return Err("digest must be 64 lowercase hex characters");
-    }
-    if !hex
-        .bytes()
-        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err("digest must be lowercase hex");
-    }
-    Ok(())
-}
-
-fn validate_source_adaptor(
-    source_id: &str,
-    label: &str,
-    adaptor: &str,
-) -> Result<(), SidecarError> {
-    if adaptor.trim().is_empty() {
-        return Err(SidecarError::Config(format!(
-            "source {source_id} {label} must be pinned"
-        )));
-    }
-    adaptor_pin_version(adaptor).ok_or_else(|| {
-        SidecarError::Config(format!(
-            "source {source_id} {label} {adaptor} must include a version pin"
-        ))
-    })?;
-    Ok(())
-}
-
 fn resolve_auth_tokens(config: &SidecarConfig) -> Result<Vec<ResolvedBearerToken>, SidecarError> {
     let mut tokens = Vec::with_capacity(config.auth.bearer_tokens.len());
     for token in &config.auth.bearer_tokens {
@@ -2897,165 +2257,6 @@ fn resolve_fhir_bearer_tokens(
     Ok(tokens)
 }
 
-fn adaptor_pin_version(adaptor: &str) -> Option<&str> {
-    let module_specifier = adaptor
-        .split_once('=')
-        .map_or(adaptor, |(module, _)| module);
-    let (name, version) = module_specifier.rsplit_once('@')?;
-    if name.is_empty() || version.trim().is_empty() {
-        return None;
-    }
-    Some(version)
-}
-
-fn has_openfn_sources(config: &SidecarConfig) -> bool {
-    config
-        .sources
-        .values()
-        .any(|source| source.engine == SourceEngine::OpenFn)
-}
-
-fn openfn_config(config: &SidecarConfig) -> Result<&OpenFnConfig, SidecarError> {
-    config.openfn.as_ref().ok_or_else(|| {
-        SidecarError::Config("openfn config is required when any source uses OpenFn".to_string())
-    })
-}
-
-fn worker_config(config: &SidecarConfig) -> Result<&WorkerProcessConfig, SidecarError> {
-    config.worker.as_ref().ok_or_else(|| {
-        SidecarError::Config("worker config is required when any source uses OpenFn".to_string())
-    })
-}
-
-async fn verify_openfn_runtime(config: &SidecarConfig) -> Result<(), SidecarError> {
-    let openfn = openfn_config(config)?;
-    let worker = worker_config(config)?;
-    let mut version_args = worker.version_args.clone().unwrap_or_else(|| {
-        let mut args = worker.args.clone();
-        args.push("--version".to_string());
-        args
-    });
-    if version_args.is_empty() {
-        version_args.push("--version".to_string());
-    }
-
-    let output = tokio::time::timeout(Duration::from_secs(5), async {
-        Command::new(&worker.command)
-            .args(&version_args)
-            .output()
-            .await
-    })
-    .await
-    .map_err(|_| SidecarError::StartupCheck("OpenFn version check timed out".to_string()))?
-    .map_err(|_| SidecarError::StartupCheck("OpenFn version check failed".to_string()))?;
-
-    if !output.status.success() {
-        return Err(SidecarError::StartupCheck(
-            "OpenFn version check exited unsuccessfully".to_string(),
-        ));
-    }
-
-    let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
-    combined.push_str(&String::from_utf8_lossy(&output.stderr));
-    let reported = combined.split_whitespace().collect::<Vec<_>>();
-    for expected in [
-        format!("cli_build_tool={}", openfn.cli_build_tool),
-        format!("runtime={}", openfn.runtime),
-    ] {
-        if !reported.iter().any(|reported| *reported == expected) {
-            return Err(SidecarError::StartupCheck(format!(
-                "OpenFn version check did not report required pin {expected}"
-            )));
-        }
-    }
-    for source in config.sources.values() {
-        for adaptor in source_adaptors(source) {
-            let pinned_version = adaptor_pin_version(adaptor).ok_or_else(|| {
-                SidecarError::StartupCheck(format!(
-                    "OpenFn adaptor {adaptor} is missing a version pin"
-                ))
-            })?;
-            let expected_prefix = format!("{adaptor}:");
-            let Some(reported_suffix) = reported
-                .iter()
-                .find_map(|reported| reported.strip_prefix(&expected_prefix))
-            else {
-                return Err(SidecarError::StartupCheck(format!(
-                    "OpenFn version check did not report required adaptor {adaptor}"
-                )));
-            };
-            let installed_version = reported_suffix
-                .split_once('=')
-                .map_or(reported_suffix, |(version, _)| version);
-            if installed_version != pinned_version {
-                return Err(SidecarError::StartupCheck(format!(
-                    "OpenFn adaptor {adaptor} resolved to version {installed_version}, expected {pinned_version}"
-                )));
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn source_adaptors(source: &SourceConfig) -> Vec<&str> {
-    source
-        .workflow
-        .as_ref()
-        .map(|workflow| {
-            workflow
-                .steps
-                .iter()
-                .flat_map(|step| step.adaptors.iter().map(String::as_str))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn add_source_execution(request: &mut Value, config: &SidecarConfig, source: &SourceConfig) {
-    if source.engine != SourceEngine::OpenFn {
-        return;
-    }
-    let Some(object) = request.as_object_mut() else {
-        return;
-    };
-    if let Some(workflow) = &source.workflow {
-        object.insert(
-            "workflow".to_string(),
-            json!(workflow_for_worker(config, workflow)),
-        );
-    }
-}
-
-fn workflow_for_worker(
-    config: &SidecarConfig,
-    workflow: &SourceWorkflowConfig,
-) -> SourceWorkflowConfig {
-    let Some(jobs_root) = &config.jobs_root else {
-        return workflow.clone();
-    };
-    let mut workflow = workflow.clone();
-    for step in &mut workflow.steps {
-        if step.expression.is_relative() {
-            step.expression = jobs_root.join(&step.expression);
-        }
-    }
-    workflow
-}
-
-fn batch_for_worker(source: &SourceConfig) -> SourceBatchConfig {
-    let mut batch = source.batch.clone();
-    if source.engine == SourceEngine::OpenFn
-        && source.workflow.as_ref().is_some_and(|workflow| {
-            workflow.batch_mode == SourceWorkflowBatchMode::Native
-                || source.batch.mode == SourceBatchMode::WorkflowBatch
-        })
-    {
-        batch.mode = SourceBatchMode::WorkflowBatch;
-    }
-    batch
-}
-
 async fn execute_source_json(
     state: &AppState,
     source_id: &str,
@@ -3063,19 +2264,6 @@ async fn execute_source_json(
     request: Value,
 ) -> Result<SourceExecution, SourceExecutionError> {
     match source.engine {
-        SourceEngine::OpenFn => {
-            let Some(pool) = &state.pool else {
-                return Err(SourceExecutionError::HttpJson);
-            };
-            let execution = pool
-                .execute_json_with_metadata(request)
-                .await
-                .map_err(SourceExecutionError::Worker)?;
-            Ok(SourceExecution {
-                value: execution.value,
-                worker_id: execution.worker_id.to_string(),
-            })
-        }
         SourceEngine::HttpJson => execute_http_json(state, source_id, source, request).await,
         SourceEngine::HttpFlow => execute_http_flow(state, source_id, source, request).await,
         SourceEngine::Fhir => execute_fhir(state, source_id, source, request).await,
@@ -5229,7 +4417,6 @@ async fn run_smoke_lookups(state: &Arc<AppState>) -> Result<(), SidecarError> {
                     query_values.insert(key.clone(), Value::String(value.clone()));
                 }
             }
-            add_source_execution(&mut request, &state.config, source);
             match execute_source_json(state, source_id, source, request).await {
                 Ok(execution) => {
                     let response = execution.value;
@@ -5278,76 +4465,25 @@ async fn run_smoke_lookups(state: &Arc<AppState>) -> Result<(), SidecarError> {
 
 fn smoke_execution_error_reason(error: &SourceExecutionError) -> String {
     match error {
-        SourceExecutionError::Worker(error) => smoke_error_reason(error),
         SourceExecutionError::HttpJson
         | SourceExecutionError::HttpJsonBadRequest
         | SourceExecutionError::HttpJsonTimeout => "source adapter execution failed".to_string(),
     }
 }
 
-fn smoke_error_reason(error: &WorkerError) -> String {
-    match error {
-        WorkerError::Saturated { .. } => "worker pool saturated".to_string(),
-        WorkerError::CircuitOpen { .. } => "worker replacement circuit breaker is open".to_string(),
-        WorkerError::Timeout { .. } => "worker timed out".to_string(),
-        WorkerError::RequestTooLarge { .. } => "worker request too large".to_string(),
-        WorkerError::StdoutTooLarge { .. } => "worker output exceeded byte limit".to_string(),
-        WorkerError::InvalidOutput { .. } => "worker output was not valid JSON".to_string(),
-        WorkerError::WorkerExited { .. } => "worker exited before returning data".to_string(),
-        WorkerError::Io { .. } => "worker IO failed".to_string(),
-        WorkerError::InvalidConfig { .. } => "worker pool config is invalid".to_string(),
-        WorkerError::Encode { .. } => "worker request could not be encoded".to_string(),
-        WorkerError::Spawn { .. } => "worker could not be spawned".to_string(),
-    }
-}
-
-async fn healthz(State(state): State<Arc<AppState>>) -> Response {
-    let Some(pool) = &state.pool else {
-        return (StatusCode::OK, Json(json!({ "status": "ok" }))).into_response();
-    };
-    let snapshot = pool.snapshot().await;
-    if snapshot.idle_workers + snapshot.in_flight < snapshot.max_workers {
-        return problem(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "worker pool capacity degraded",
-        );
-    }
-    let liveness_window = Duration::from_millis(state.config.limits.liveness_window_ms);
-    if snapshot
-        .active_for
-        .is_some_and(|active_for| active_for > liveness_window)
-        && snapshot
-            .completed_within
-            .is_none_or(|completed_within| completed_within > liveness_window)
-    {
-        return problem(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "worker pool liveness failed",
-        );
-    }
+async fn healthz(State(_state): State<Arc<AppState>>) -> Response {
     (StatusCode::OK, Json(json!({ "status": "ok" }))).into_response()
 }
 
 async fn ready(State(state): State<Arc<AppState>>) -> Response {
-    let worker_ready = match &state.pool {
-        Some(pool) => pool.check_ready().await,
-        None => true,
-    };
-    if worker_ready {
-        let mut body = json!({ "status": "ready" });
-        if let Some(assurance) = &state.config.assurance {
-            body["config_hash"] = json!(assurance.config_hash);
-            body["expression_hashes_verified"] = json!(assurance.expression_hashes_verified);
-            body["runtime_verified"] = json!(assurance.runtime_verified);
-            body["smoke_verified"] = json!(assurance.smoke_verified);
-        }
-        (StatusCode::OK, Json(body)).into_response()
-    } else {
-        problem(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "worker pool is not fully available",
-        )
+    let mut body = json!({ "status": "ready" });
+    if let Some(assurance) = &state.config.assurance {
+        body["config_hash"] = json!(assurance.config_hash);
+        body["expression_hashes_verified"] = json!(assurance.expression_hashes_verified);
+        body["runtime_verified"] = json!(assurance.runtime_verified);
+        body["smoke_verified"] = json!(assurance.smoke_verified);
     }
+    (StatusCode::OK, Json(body)).into_response()
 }
 
 async fn assurance(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
@@ -5365,29 +4501,6 @@ async fn assurance(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Re
 
 async fn metrics(State(state): State<Arc<AppState>>) -> Response {
     let mut body = String::new();
-    if let Some(pool) = &state.pool {
-        let snapshot = pool.snapshot().await;
-        body.push_str(&format!(
-            concat!(
-                "# TYPE registry_notary_openfn_sidecar_workers gauge\n",
-                "registry_notary_openfn_sidecar_workers{{state=\"max\"}} {}\n",
-                "registry_notary_openfn_sidecar_workers{{state=\"idle\"}} {}\n",
-                "registry_notary_openfn_sidecar_workers{{state=\"in_flight\"}} {}\n",
-                "# TYPE registry_notary_openfn_sidecar_worker_completions_total counter\n",
-                "registry_notary_openfn_sidecar_worker_completions_total {}\n",
-                "# TYPE registry_notary_openfn_sidecar_worker_replacements_total counter\n",
-                "registry_notary_openfn_sidecar_worker_replacements_total {}\n",
-                "# TYPE registry_notary_openfn_sidecar_worker_circuit_open gauge\n",
-                "registry_notary_openfn_sidecar_worker_circuit_open {}\n"
-            ),
-            snapshot.max_workers,
-            snapshot.idle_workers,
-            snapshot.in_flight,
-            snapshot.completed_total,
-            snapshot.replacements_total,
-            u8::from(snapshot.circuit_open)
-        ));
-    }
     body.push_str("# TYPE registry_notary_openfn_sidecar_source_permits gauge\n");
     for (source_id, source) in &state.config.sources {
         let max_permits = source
@@ -5514,7 +4627,7 @@ async fn lookup(
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
 
-    let mut request = json!({
+    let request = json!({
         "source_id": source_id,
         "dataset": dataset,
         "entity": entity,
@@ -5529,15 +4642,7 @@ async fn lookup(
         "correlation_id": correlation_id.clone(),
         "configuration": state.credentials.get(source_id).cloned().unwrap_or(Value::Null),
     });
-    add_source_execution(&mut request, &state.config, source);
 
-    if source.engine == SourceEngine::OpenFn {
-        if let Err(response) =
-            acquire_source_rate(&state, source_id, "source_rate_limited", 1).await
-        {
-            return *response;
-        }
-    }
     let _source_permit = match acquire_source_permit(&state, source_id, "source_saturated", 1).await
     {
         Ok(permit) => permit,
@@ -5545,20 +4650,6 @@ async fn lookup(
     };
     let source_execution = match execute_source_json(&state, source_id, source, request).await {
         Ok(execution) => execution,
-        Err(SourceExecutionError::Worker(error)) => {
-            let worker_id = error.worker_id();
-            record_metric_with_items(&state, source_id, "worker_error", started_at.elapsed(), 1)
-                .await;
-            warn!(
-                correlation_id = correlation_id.as_deref().unwrap_or(""),
-                source_id = source_id.as_str(),
-                outcome = "worker_error",
-                worker_id,
-                duration_ms = started_at.elapsed().as_millis() as u64,
-                "sidecar lookup failed"
-            );
-            return worker_error_response(error, state.config.limits.retry_after_seconds);
-        }
         Err(SourceExecutionError::HttpJson) => {
             record_metric_with_items(&state, source_id, "source_error", started_at.elapsed(), 1)
                 .await;
@@ -5598,9 +4689,6 @@ async fn lookup(
         }
     };
 
-    if source.engine == SourceEngine::OpenFn {
-        remember_source_backoff(&state, source_id, &source_execution.value).await;
-    }
     let response = normalize_worker_response(source_execution.value, &query.fields, query.limit);
     let outcome = if response.status().is_success() {
         "success"
@@ -5661,35 +4749,21 @@ async fn batch_match(
         .get("x-correlation-id")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    let worker_batch = batch_for_worker(source);
-    let mut request = json!({
+    let request = json!({
         "mode": "batch_match",
         "source_id": source_id,
         "dataset": dataset,
         "entity": entity,
         "query_signature": body.query_signature,
         "items": body.items,
-        "batch": worker_batch,
+        "batch": source.batch.clone(),
         "fields": body.fields,
         "purpose": purpose,
         "correlation_id": correlation_id.clone(),
         "configuration": state.credentials.get(source_id).cloned().unwrap_or(Value::Null),
     });
-    add_source_execution(&mut request, &state.config, source);
 
     let batch_item_count = body.items.len();
-    if source.engine == SourceEngine::OpenFn {
-        if let Err(response) = acquire_source_rate(
-            &state,
-            source_id,
-            "batch_source_rate_limited",
-            batch_item_count,
-        )
-        .await
-        {
-            return *response;
-        }
-    }
     let _source_permit = match acquire_source_permit(
         &state,
         source_id,
@@ -5703,26 +4777,6 @@ async fn batch_match(
     };
     let source_execution = match execute_source_json(&state, source_id, source, request).await {
         Ok(execution) => execution,
-        Err(SourceExecutionError::Worker(error)) => {
-            let worker_id = error.worker_id();
-            record_metric_with_items(
-                &state,
-                source_id,
-                "batch_worker_error",
-                started_at.elapsed(),
-                batch_item_count,
-            )
-            .await;
-            warn!(
-                correlation_id = correlation_id.as_deref().unwrap_or(""),
-                source_id = source_id.as_str(),
-                outcome = "batch_worker_error",
-                worker_id,
-                duration_ms = started_at.elapsed().as_millis() as u64,
-                "sidecar batch match failed"
-            );
-            return worker_error_response(error, state.config.limits.retry_after_seconds);
-        }
         Err(SourceExecutionError::HttpJson) => {
             record_metric_with_items(
                 &state,
@@ -5780,9 +4834,6 @@ async fn batch_match(
         }
     };
 
-    if source.engine == SourceEngine::OpenFn {
-        remember_source_backoff(&state, source_id, &source_execution.value).await;
-    }
     let response = normalize_batch_worker_response(
         source_execution.value,
         &body.fields,
@@ -5904,42 +4955,6 @@ async fn record_http_flow_metric(
     .await;
 }
 
-async fn acquire_source_rate(
-    state: &Arc<AppState>,
-    source_id: &str,
-    rate_limited_outcome: &'static str,
-    items: usize,
-) -> Result<(), Box<Response>> {
-    let Some(runtime) = state.source_runtime.get(source_id) else {
-        return Err(Box::new(problem(
-            StatusCode::BAD_GATEWAY,
-            "source runtime unavailable",
-        )));
-    };
-    if let Some(retry_after) = source_backoff_retry_after(runtime).await {
-        record_metric_with_items(state, source_id, "source_backoff", Duration::ZERO, items).await;
-        return Err(Box::new(rate_limited_response(retry_after)));
-    }
-    let Some(rate_limiter) = &runtime.rate_limiter else {
-        return Ok(());
-    };
-    let mut bucket = rate_limiter.lock().await;
-    if let Err(wait) = bucket.try_take(Instant::now()) {
-        record_metric_with_items(
-            state,
-            source_id,
-            rate_limited_outcome,
-            Duration::ZERO,
-            items,
-        )
-        .await;
-        return Err(Box::new(rate_limited_response(
-            duration_retry_after_seconds(wait),
-        )));
-    }
-    Ok(())
-}
-
 async fn acquire_http_json_rate_or_error(state: &AppState, source_id: &str) -> Option<Value> {
     let runtime = state.source_runtime.get(source_id)?;
     if let Some(retry_after) = source_backoff_retry_after(runtime).await {
@@ -6013,18 +5028,6 @@ async fn remember_source_backoff_seconds(state: &AppState, source_id: &str, seco
         *runtime.backoff_until.lock().await =
             Some(Instant::now() + Duration::from_secs(seconds.max(1)));
     }
-}
-
-fn rate_limited_response(retry_after_seconds: u64) -> Response {
-    let mut response = problem_with_code(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "target rate limited",
-        "source.target_rate_limit",
-    );
-    if let Ok(value) = HeaderValue::from_str(&retry_after_seconds.to_string()) {
-        response.headers_mut().insert(header::RETRY_AFTER, value);
-    }
-    response
 }
 
 async fn acquire_source_permit(
@@ -6488,49 +5491,11 @@ fn target_error_response(error: &Map<String, Value>) -> Response {
             "source unavailable",
             "source.unavailable",
         ),
-        Some("openfn_execution") => problem_with_code(
-            StatusCode::BAD_GATEWAY,
-            "worker execution failed",
-            "openfn_execution",
-        ),
         _ => problem_with_code(
             StatusCode::BAD_GATEWAY,
             "source adapter execution failed",
             "source.unavailable",
         ),
-    }
-}
-
-fn worker_error_response(error: WorkerError, retry_after_seconds: u64) -> Response {
-    match error {
-        WorkerError::Saturated { .. } => {
-            let mut response = problem(StatusCode::SERVICE_UNAVAILABLE, "worker pool saturated");
-            if let Ok(value) = HeaderValue::from_str(&retry_after_seconds.to_string()) {
-                response.headers_mut().insert(header::RETRY_AFTER, value);
-            }
-            response
-        }
-        WorkerError::CircuitOpen { .. } => {
-            let mut response = problem(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "worker replacement circuit breaker is open",
-            );
-            if let Ok(value) = HeaderValue::from_str(&retry_after_seconds.to_string()) {
-                response.headers_mut().insert(header::RETRY_AFTER, value);
-            }
-            response
-        }
-        WorkerError::Timeout { .. } => problem(StatusCode::GATEWAY_TIMEOUT, "worker timed out"),
-        WorkerError::RequestTooLarge { .. } => {
-            problem(StatusCode::BAD_REQUEST, "worker request too large")
-        }
-        WorkerError::StdoutTooLarge { .. }
-        | WorkerError::InvalidOutput { .. }
-        | WorkerError::WorkerExited { .. }
-        | WorkerError::Io { .. } => problem(StatusCode::BAD_GATEWAY, "worker execution failed"),
-        WorkerError::InvalidConfig { .. }
-        | WorkerError::Encode { .. }
-        | WorkerError::Spawn { .. } => problem(StatusCode::BAD_GATEWAY, "worker unavailable"),
     }
 }
 
@@ -6660,7 +5625,6 @@ mod tests {
                 }],
             },
             config_trust: None,
-            jobs_root: None,
             limits: LimitConfig {
                 max_workers: 1,
                 worker_timeout_ms: 1_000,
@@ -6671,42 +5635,37 @@ mod tests {
                 retry_after_seconds: default_retry_after_seconds(),
                 max_batch_items: default_max_batch_items(),
                 batch_timeout_ms: None,
-                max_worker_memory_mb: Some(256),
+                max_worker_memory_mb: None,
             },
-            openfn: Some(OpenFnConfig {
-                cli_build_tool: "1.2.5".to_string(),
-                runtime: "1.9.3".to_string(),
-            }),
-            worker: Some(WorkerProcessConfig {
-                command: PathBuf::from("node"),
-                args: Vec::new(),
-                version_args: None,
-            }),
             sources: BTreeMap::from([(
                 "people".to_string(),
                 SourceConfig {
                     dataset: "civil_registry".to_string(),
                     entity: "person".to_string(),
-                    engine: SourceEngine::OpenFn,
-                    workflow: Some(SourceWorkflowConfig {
-                        start: Some("lookup".to_string()),
-                        batch_mode: SourceWorkflowBatchMode::PerItem,
-                        steps: vec![SourceWorkflowStepConfig {
-                            id: "lookup".to_string(),
-                            expression: PathBuf::from("lookup.js"),
-                            expression_sha256: None,
-                            adaptors: vec!["@openfn/language-common@3.2.3".to_string()],
-                            next: None,
-                        }],
-                    }),
-                    credential_env: "TEST_OPENFN_SOURCE_CREDENTIAL".to_string(),
-                    credential_public_fields: Vec::new(),
+                    engine: SourceEngine::HttpJson,
+                    credential_env: "TEST_HTTP_JSON_SOURCE_CREDENTIAL".to_string(),
+                    credential_public_fields: vec!["baseUrl".to_string()],
                     batch: SourceBatchConfig::default(),
                     limits: SourceRuntimeLimitConfig::default(),
-                    allowed_base_urls: Vec::new(),
+                    allowed_base_urls: vec!["https://source.example.test".to_string()],
                     allow_insecure_localhost: false,
                     allow_insecure_private_network: false,
-                    http_json: None,
+                    http_json: Some(HttpJsonSourceConfig {
+                        method: HttpJsonMethod::Get,
+                        base_url: HttpJsonCelExpression {
+                            cel: "credential_public.baseUrl".to_string(),
+                        },
+                        path: "/records".to_string(),
+                        query: BTreeMap::new(),
+                        headers: BTreeMap::new(),
+                        auth: None,
+                        response: HttpJsonResponseConfig {
+                            records: HttpJsonCelExpression {
+                                cel: "body.results".to_string(),
+                            },
+                        },
+                        batch: None,
+                    }),
                     http_flow: None,
                     fhir: None,
                     cache: None,
@@ -6725,32 +5684,7 @@ mod tests {
     }
 
     fn minimal_http_json_config() -> SidecarConfig {
-        let mut config = minimal_config();
-        config.openfn = None;
-        config.worker = None;
-        config.limits.max_worker_memory_mb = None;
-        let source = config.sources.get_mut("people").expect("source exists");
-        source.engine = SourceEngine::HttpJson;
-        source.workflow = None;
-        source.credential_public_fields = vec!["baseUrl".to_string()];
-        source.allowed_base_urls = vec!["https://source.example.test".to_string()];
-        source.http_json = Some(HttpJsonSourceConfig {
-            method: HttpJsonMethod::Get,
-            base_url: HttpJsonCelExpression {
-                cel: "credential_public.baseUrl".to_string(),
-            },
-            path: "/records".to_string(),
-            query: BTreeMap::new(),
-            headers: BTreeMap::new(),
-            auth: None,
-            response: HttpJsonResponseConfig {
-                records: HttpJsonCelExpression {
-                    cel: "body.results".to_string(),
-                },
-            },
-            batch: None,
-        });
-        config
+        minimal_config()
     }
 
     #[test]
@@ -6872,29 +5806,6 @@ mod tests {
         });
         let error = validate_config(&config).expect_err("zero cache cap is rejected");
         assert!(error.to_string().contains("cache.max_entries"));
-    }
-
-    #[test]
-    fn openfn_rejects_http_json_only_source_fields() {
-        let mut config = minimal_config();
-        config
-            .sources
-            .get_mut("people")
-            .expect("source exists")
-            .batch
-            .max_parallel = Some(2);
-        let error = validate_config(&config).expect_err("OpenFn max_parallel is rejected");
-        assert!(error.to_string().contains("batch.max_parallel"));
-
-        let mut config = minimal_config();
-        let source = config.sources.get_mut("people").expect("source exists");
-        source.cache = Some(SourceCacheConfig {
-            exact_match_ttl_ms: Some(60_000),
-            not_found_ttl_ms: None,
-            max_entries: None,
-        });
-        let error = validate_config(&config).expect_err("OpenFn cache is rejected");
-        assert!(error.to_string().contains("cache"));
     }
 
     #[test]

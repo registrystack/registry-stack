@@ -2981,7 +2981,6 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
- "registry-notary-worker-harness",
  "registry-platform-authcommon",
  "registry-platform-config",
  "registry-platform-ops",

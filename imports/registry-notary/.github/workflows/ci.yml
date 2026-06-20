@@ -52,28 +52,6 @@ jobs:
       - run: cargo install cargo-deny --version 0.19.8 --locked
       - run: ~/.cargo/bin/cargo-deny --all-features check --hide-inclusion-graph
 
-  openfn-worker:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout registry-notary
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          path: registry-notary
-      - name: Set up Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: registry-notary/crates/registry-notary-source-adapter-sidecar/workers/package-lock.json
-      - name: Install worker dependencies
-        run: npm ci --ignore-scripts --no-audit --no-fund --prefix crates/registry-notary-source-adapter-sidecar/workers
-      - name: Syntax-check OpenFn worker
-        run: node --check crates/registry-notary-source-adapter-sidecar/workers/openfn_worker.mjs
-      - name: Syntax-check sidecar container healthcheck
-        run: node --check crates/registry-notary-source-adapter-sidecar/scripts/container-healthcheck.mjs
-      - name: Smoke-test OpenFn worker
-        run: crates/registry-notary-source-adapter-sidecar/scripts/smoke-openfn-worker.sh
-
   rust:
     runs-on: ubuntu-latest
     env:
@@ -179,11 +157,14 @@ jobs:
             exit 1
           fi
 
-          require_any_literal registry-notary/Dockerfile.openfn-sidecar \
-            "FROM node:24-bookworm-slim@sha256:" \
-            "FROM node:26-bookworm-slim@sha256:"
-          require_literal registry-notary/Dockerfile.openfn-sidecar 'HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["node", "/opt/openfn/container-healthcheck.mjs"]'
+          # The sidecar image is pure Rust now that the OpenFn engine is
+          # retired: distroless runtime, no Node, readiness served over HTTP.
+          require_literal registry-notary/Dockerfile.openfn-sidecar "FROM gcr.io/distroless/cc-debian12:nonroot@sha256:"
           require_literal registry-notary/Dockerfile.openfn-sidecar 'ENTRYPOINT ["/usr/local/bin/registry-notary-source-adapter-sidecar"]'
+          if awk '/^FROM .* AS runtime$/ {runtime=1; next} runtime && /^RUN / {found=1} END {exit found ? 0 : 1}' registry-notary/Dockerfile.openfn-sidecar; then
+            echo "registry-notary/Dockerfile.openfn-sidecar runtime stage must stay distroless and must not add RUN/package-manager steps." >&2
+            exit 1
+          fi
       - name: Build release Docker image
         working-directory: ${{ github.workspace }}
         run: docker build --build-context registry-platform=registry-platform --build-context crosswalk=crosswalk --build-arg REGISTRY_NOTARY_FEATURES=registry-notary-cel,pkcs11 --file registry-notary/Dockerfile --tag registry-notary:ci registry-notary
