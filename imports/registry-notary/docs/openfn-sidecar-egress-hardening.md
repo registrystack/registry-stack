@@ -86,7 +86,21 @@ spec:
     matchLabels:
       app: registry-notary-sidecar   # adjust to match your pod labels
   policyTypes:
+    - Ingress
     - Egress
+  ingress:
+    # Allow Notary-to-sidecar traffic on the sidecar listener port (9191).
+    # The sidecar should only be reachable from the Notary pod, not from the
+    # public network. This is *inbound* traffic to the sidecar, so it belongs
+    # under `ingress`. Adjust the podSelector or namespaceSelector to match your
+    # Notary pod labels.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: registry-notary   # adjust to match your Notary pod labels
+      ports:
+        - protocol: TCP
+          port: 9191
   egress:
     # Allow DNS (UDP and TCP on port 53).
     - ports:
@@ -118,18 +132,6 @@ spec:
               - 10.0.0.0/8
               - 172.16.0.0/12
               - 192.168.0.0/16
-
-    # Allow Notary-to-sidecar traffic on the sidecar listener port (9191).
-    # The sidecar should only be reachable from the Notary pod, not from the
-    # public network. Adjust the podSelector or namespaceSelector to match
-    # your Notary pod labels.
-    - ports:
-        - protocol: TCP
-          port: 9191
-      to:
-        - podSelector:
-            matchLabels:
-              app: registry-notary   # adjust to match your Notary pod labels
 ```
 
 **Notes:**
@@ -145,10 +147,13 @@ spec:
   `http_json`, `http_flow`, and `fhir`.
 - After applying the policy, verify it with a test pod in the same namespace:
   `kubectl run -it --rm test --image=curlimages/curl -- curl -s --max-time 3 http://169.254.169.254/` should time out or be refused.
-- The `policyTypes: [Egress]` declaration without a matching `podSelector`
-  on the `from` side means ingress is **not** restricted by this policy. Apply
-  a separate ingress `NetworkPolicy` to ensure the sidecar is reachable only
-  from the Notary pod.
+- This policy restricts **both** directions (`policyTypes: [Ingress, Egress]`):
+  the `ingress` rule limits inbound connections on port 9191 to the Notary pod,
+  and the `egress` rules constrain outbound traffic. Selecting a pod under a
+  `policyTypes` direction switches that direction to default-deny for the pod,
+  so only the explicitly listed flows are allowed. The minimal deny-only variant
+  below is egress-only; pair it with an ingress policy if you also need to
+  restrict who can reach the sidecar.
 
 ### Minimal deny-only variant
 
@@ -187,9 +192,6 @@ spec:
               - 10.0.0.0/8
               - 172.16.0.0/12
               - 192.168.0.0/16
-    - ports:
-        - protocol: TCP
-          port: 9191
 ```
 
 This variant allows all public HTTPS egress except the blocked ranges and should
