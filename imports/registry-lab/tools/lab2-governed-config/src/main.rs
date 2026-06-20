@@ -25,6 +25,7 @@ const TUF_TARGETS_SIGNER_KID: &str =
     "8ec3a843a0f9328c863cac4046ab1cacbbc67888476ac7acf73d9bcd9a223ada";
 const RELAY_STREAM_ID: &str = "lab2-relay";
 const NOTARY_STREAM_ID: &str = "lab2-notary";
+const CONFIG_APPLY_REPORT_SCHEMA: &str = "registry.platform.config_apply_report.v1";
 
 #[derive(Clone)]
 struct RuntimeConfig {
@@ -1046,6 +1047,29 @@ async fn write_signed_bundle(
     fs::write(
         output.join("bundles").join(format!("{}.json", bundle.name)),
         serde_json::to_vec_pretty(&descriptor)?,
+    )?;
+    let apply_report = json!({
+        "schema": CONFIG_APPLY_REPORT_SCHEMA,
+        "attempt_id": format!("lab2-generate-{}", bundle.name),
+        "component": bundle.product,
+        "stream_id": bundle.stream_id,
+        "source": "signed_bundle_file",
+        "bundle_id": bundle.bundle_id,
+        "bundle_sequence": bundle.sequence,
+        "previous_config_hash": bundle.previous_config_hash,
+        "config_hash": sha256_uri(bundle.config_yaml.as_bytes()),
+        "result": "verified",
+        "restart_required": bundle.apply_policy == "restart_required",
+        "change_classes": bundle.change_classes,
+        "affected_components": [],
+        "warnings": [],
+        "errors": []
+    });
+    fs::write(
+        output
+            .join("bundles")
+            .join(format!("{}.apply-report.json", bundle.name)),
+        serde_json::to_vec_pretty(&apply_report)?,
     )?;
     Ok(())
 }
