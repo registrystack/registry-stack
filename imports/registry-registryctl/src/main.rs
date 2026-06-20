@@ -4,8 +4,9 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 use registryctl::{
-    DeploymentProfile, DoctorFormat, LabEnvFormat, NotaryInitOptions, NotaryInitSourceKind,
-    NotarySource, OpenFnBatchMode, OpenFnConvertOptions, OpenFnImportOptions, Sample,
+    ConfigProduct, DeploymentProfile, DoctorFormat, LabEnvFormat, NotaryInitOptions,
+    NotaryInitSourceKind, NotarySource, OpenFnBatchMode, OpenFnConvertOptions, OpenFnImportOptions,
+    Sample,
 };
 
 fn main() -> Result<()> {
@@ -78,6 +79,19 @@ fn main() -> Result<()> {
         Commands::Doctor { format, profile } => {
             registryctl::doctor_project(&std::env::current_dir()?, format, profile)?
         }
+        Commands::Config { command } => match command {
+            ConfigCommand::Explain { product, format } => {
+                registryctl::config_explain_project(&std::env::current_dir()?, product, format)?
+            }
+            ConfigCommand::Diff { product, format } => {
+                registryctl::config_diff_project(&std::env::current_dir()?, product, format)?
+            }
+            ConfigCommand::Package { output, force } => registryctl::config_package_project(
+                &std::env::current_dir()?,
+                output.as_deref(),
+                force,
+            )?,
+        },
         Commands::Logs => registryctl::logs_project(&std::env::current_dir()?)?,
         Commands::Notary { command } => match command {
             NotaryCommand::Smoke => registryctl::notary_smoke_project(&std::env::current_dir()?)?,
@@ -287,6 +301,11 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = DoctorFormat::Json)]
         format: DoctorFormat,
     },
+    /// Inspect, diff, and package generated product config files.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// Stream Compose logs for the local project.
     Logs,
     /// Work with the local Registry Notary product.
@@ -315,7 +334,11 @@ impl Commands {
     fn should_check_for_updates(&self) -> bool {
         !matches!(
             self,
-            Self::Doctor { .. } | Self::Lab { .. } | Self::UpdateCheck | Self::UpdateCheckRefresh
+            Self::Doctor { .. }
+                | Self::Config { .. }
+                | Self::Lab { .. }
+                | Self::UpdateCheck
+                | Self::UpdateCheckRefresh
         )
     }
 }
@@ -388,6 +411,63 @@ mod tests {
         let cli = Cli::try_parse_from(["registryctl", "doctor"]).unwrap();
 
         assert!(!cli.command.should_check_for_updates());
+    }
+
+    #[test]
+    fn config_cli_accepts_explain_diff_and_package() {
+        let explain = Cli::try_parse_from([
+            "registryctl",
+            "config",
+            "explain",
+            "--product",
+            "relay",
+            "--format",
+            "json",
+        ])
+        .unwrap();
+        let Commands::Config { command } = explain.command else {
+            panic!("expected config command");
+        };
+        assert!(matches!(
+            command,
+            ConfigCommand::Explain {
+                product: ConfigProduct::Relay,
+                format: DoctorFormat::Json
+            }
+        ));
+
+        let diff =
+            Cli::try_parse_from(["registryctl", "config", "diff", "--product", "notary"]).unwrap();
+        let Commands::Config { command } = diff.command else {
+            panic!("expected config command");
+        };
+        assert!(matches!(
+            command,
+            ConfigCommand::Diff {
+                product: ConfigProduct::Notary,
+                format: DoctorFormat::Json
+            }
+        ));
+
+        let package = Cli::try_parse_from([
+            "registryctl",
+            "config",
+            "package",
+            "--output",
+            "registry-config.zip",
+            "--force",
+        ])
+        .unwrap();
+        let Commands::Config { command } = package.command else {
+            panic!("expected config command");
+        };
+        assert!(matches!(
+            command,
+            ConfigCommand::Package {
+                output: Some(_),
+                force: true
+            }
+        ));
     }
 
     #[test]
@@ -508,6 +588,37 @@ enum NotaryCommand {
     Smoke,
     /// Open or print the local Notary API docs URL.
     Open,
+}
+
+#[derive(Debug, Subcommand)]
+enum ConfigCommand {
+    /// Delegate to the product explain-config command for a generated config.
+    Explain {
+        /// Product config to explain.
+        #[arg(long, value_enum)]
+        product: ConfigProduct,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = DoctorFormat::Json)]
+        format: DoctorFormat,
+    },
+    /// Compare committed product config with registryctl's generated validation view.
+    Diff {
+        /// Product config to diff.
+        #[arg(long, value_enum)]
+        product: ConfigProduct,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = DoctorFormat::Json)]
+        format: DoctorFormat,
+    },
+    /// Package inspectable generated config files without local secrets or outputs.
+    Package {
+        /// Zip file to write. Defaults to output/registry-config-package.zip.
+        #[arg(long)]
+        output: Option<PathBuf>,
+        /// Replace an existing package file.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
