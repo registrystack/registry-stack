@@ -86,7 +86,7 @@ REQ-PR-NOTARY-004: Registry Notary MUST enforce a claim's required scopes before
 
 When a claim source binding declares matching policy, Notary evaluates the supported Evidence Gateway PDP profile before reading protected source rows. The supported profile covers policy identity and hash, supported ODRL purpose and spatial terms, claim-level and source-bound purpose constraints, jurisdiction, assurance allow-list and minimum assurance, source freshness, required legal basis and consent, relationship and relationship-purpose constraints, requested fact, requested disclosure, requested credential format, source binding, route identity, checked scope, redaction, and unsupported policy terms. Self-asserted target fields do not satisfy trust-context gates that require a trusted principal authorization context.
 
-REQ-PR-NOTARY-023: Before a source read, Registry Notary MUST obtain the applicable policy decision for the claim and source binding. A denial MUST fail closed with the stable policy error produced for that gate, and MUST NOT be retried as an ungoverned source read.
+REQ-PR-NOTARY-023: Before a source read, Registry Notary MUST obtain the applicable policy decision for the claim and source binding. A denial MUST fail closed with the stable PDP denial code produced for that gate, and MUST NOT be retried as an ungoverned source read.
 
 REQ-PR-NOTARY-024: Source-bound purpose constraints MUST combine the claim's permitted purposes with the source binding's permitted purposes. If either configured purpose set rejects the request purpose, Notary MUST deny before source access.
 
