@@ -87,6 +87,17 @@ const cards: RouteCard[] = [
     then: [{ label: 'Registry Notary', href: '/products/registry-notary/' }],
   },
   {
+    id: 'opencrvs',
+    question: 'How do I verify claims from OpenCRVS?',
+    start: { label: 'Verify OpenCRVS claims with registryctl', href: '/tutorials/verify-opencrvs-claims/' },
+    then: [
+      {
+        label: 'OpenCRVS onboarding model',
+        href: 'https://docs.registrystack.org/products/registry-notary/opencrvs-onboarding/',
+      },
+    ],
+  },
+  {
     id: 'make-usable',
     question: 'How do existing files, extracts, databases, or legacy systems become usable?',
     start: { label: 'Protected Registry APIs with Registry Relay', href: '/products/registry-relay/' },

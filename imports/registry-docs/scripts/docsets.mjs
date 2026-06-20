@@ -102,6 +102,26 @@ export function applyDocsetRefs(repoManifest, docset, { requireAllActive = true 
   return repoManifest;
 }
 
+export function docEntryAppliesToDocset(entry, docset) {
+  const excluded = entry.exclude_docsets;
+  if (excluded === undefined) return true;
+  if (!Array.isArray(excluded)) {
+    throw new Error(`${entry.src ?? 'repo doc entry'} exclude_docsets must be a list`);
+  }
+  return !excluded.includes(docset.id);
+}
+
+export function filterRepoDocsForDocset(repoManifest, docset) {
+  if (!repoManifest?.repos || typeof repoManifest.repos !== 'object') {
+    throw new Error('repo-docs.yaml must contain a top-level repos map');
+  }
+  for (const repo of Object.values(repoManifest.repos)) {
+    if (!Array.isArray(repo.docs)) continue;
+    repo.docs = repo.docs.filter((entry) => docEntryAppliesToDocset(entry, docset));
+  }
+  return repoManifest;
+}
+
 export function currentProductsMatchRepoManifest(repoManifest, docsets) {
   const current = getDocset(docsets, docsets.current);
   const errors = [];

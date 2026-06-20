@@ -20,6 +20,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import YAML from 'yaml';
+import { filterRepoDocsForDocset, getDocset, loadDocsets, selectedDocsetId } from './docsets.mjs';
 
 // Products with more than this many non-index docs get Diataxis sub-groups.
 export const SUBGROUP_THRESHOLD = 6;
@@ -110,6 +111,8 @@ async function main() {
   if (!manifest || typeof manifest.repos !== 'object') {
     throw new Error('repo-docs.yaml must contain a top-level `repos` map');
   }
+  const docsets = await loadDocsets({ dataDir: resolve(root, 'src/data') });
+  filterRepoDocsForDocset(manifest, getDocset(docsets, selectedDocsetId(docsets)));
 
   const sidebar = buildProductSidebar(manifest);
 

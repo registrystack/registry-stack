@@ -68,6 +68,7 @@ export default defineConfig({
     '/start/your-first-call/': internalRedirect('/tutorials/first-run-with-registry-lab/'),
     // verify-claim-own-api merged into the claim-verification tutorial (2026-06).
     '/tutorials/verify-claim-own-api/': internalRedirect('/tutorials/verify-claim-registry-api/'),
+    '/tutorials/verify-opencrvs-dci-claims/': internalRedirect('/tutorials/verify-opencrvs-claims/'),
     // Problems -> marketing /why
     '/problems/': `${marketing}/why/`,
     '/problems/existing-data-not-service-ready/': `${marketing}/why/`,
@@ -104,6 +105,7 @@ export default defineConfig({
     '/projects/registry-notary/run-locally/': internalRedirect('/products/registry-notary/'),
     '/projects/registry-notary/configure-a-claim/': internalRedirect('/products/registry-notary/source-claim-modeling-guide/'),
     '/projects/registry-notary/reference/': internalRedirect('/products/registry-notary/operator-config-reference/'),
+    '/products/registry-notary/opencrvs-dci-onboarding/': 'https://docs.registrystack.org/products/registry-notary/opencrvs-onboarding/',
     // registry-manifest, registry-atlas, registry-platform, registry-lab projects/*
     // redirects removed: targets are deferred from the MVP docs cut.
     '/projects/registry-lab/demo-flow/': internalRedirect('/start/see-it-live/'),
@@ -196,6 +198,7 @@ export default defineConfig({
           items: [
             { label: 'Publish a spreadsheet', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
             { label: 'Verify a claim', slug: 'tutorials/verify-claim-registry-api' },
+            { label: 'OpenCRVS claims', slug: 'tutorials/verify-opencrvs-claims' },
             { label: 'Deploy with own data', slug: 'tutorials/deploy-standalone-with-own-data' },
             { label: 'Run the lab', slug: 'tutorials/first-run-with-registry-lab' },
             { label: 'FHIR evidence', slug: 'tutorials/getting-started-fhir-evidence' },
