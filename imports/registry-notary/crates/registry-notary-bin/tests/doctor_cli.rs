@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use registry_config_report::{CONFIG_EXPLANATION_SCHEMA_V1, PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
@@ -166,12 +167,66 @@ fn doctor_command(config_path: &Path, env_file: Option<&Path>) -> Command {
     command
 }
 
+fn explain_command(config_path: &Path, env_file: Option<&Path>) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_registry-notary"));
+    command.arg("--config").arg(config_path);
+    if let Some(env_file) = env_file {
+        command.arg("--env-file").arg(env_file);
+    }
+    command.arg("explain-config");
+    command
+}
+
 fn diagnostic_with_code<'a>(report: &'a Value, code: &str) -> Option<&'a Value> {
     report["diagnostics"]
         .as_array()
         .expect("diagnostics array")
         .iter()
         .find(|diagnostic| diagnostic["code"] == code)
+}
+
+fn assert_no_documentation_key(diagnostic: &Value) {
+    assert!(
+        diagnostic.get("documentation_key").is_none(),
+        "documentation_key is reserved for documentation references, not deployment gate state"
+    );
+}
+
+fn assert_active_finding(diagnostic: &Value) {
+    let message = diagnostic["message"]
+        .as_str()
+        .expect("diagnostic message is a string");
+    assert!(
+        message.contains(" is active "),
+        "active deployment gate state should be visible in the message: {message}"
+    );
+    assert_no_documentation_key(diagnostic);
+}
+
+fn assert_schema_valid(schema: &str, report: &Value) {
+    let schema: Value = serde_json::from_str(schema).expect("schema parses");
+    let compiled = jsonschema::JSONSchema::compile(&schema).expect("schema compiles");
+    if let Err(errors) = compiled.validate(report) {
+        let messages = errors.map(|error| error.to_string()).collect::<Vec<_>>();
+        panic!("report should validate against schema: {messages:?}");
+    };
+}
+
+fn assert_product_diagnostic_report(report: &Value) {
+    assert_schema_valid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, report);
+    assert_eq!(
+        report["schema_version"],
+        "registry.config.diagnostic_report.v1"
+    );
+    assert_eq!(report["product"], "registry-notary");
+    assert_eq!(report["config_schema_version"], "registry.notary.config.v1");
+}
+
+fn assert_config_explanation(report: &Value) {
+    assert_schema_valid(CONFIG_EXPLANATION_SCHEMA_V1, report);
+    assert_eq!(report["schema_version"], "registry.config.explanation.v1");
+    assert_eq!(report["product"], "registry-notary");
+    assert_eq!(report["config_schema_version"], "registry.notary.config.v1");
 }
 
 #[test]
@@ -217,15 +272,13 @@ fn doctor_json_reports_undeclared_deployment_profile() {
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
     let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+    assert_eq!(report["status"], "warning");
 
-    assert_eq!(
-        report["deployment_profile"],
-        json!({ "value": null, "source": "undeclared" })
-    );
     let diagnostic = diagnostic_with_code(&report, "deployment.profile_undeclared")
         .expect("undeclared profile finding");
-    assert_eq!(diagnostic["severity"], "finding_warn");
-    assert_eq!(diagnostic["status"], "active");
+    assert_eq!(diagnostic["severity"], "warning");
+    assert_no_documentation_key(diagnostic);
 }
 
 #[test]
@@ -247,11 +300,8 @@ fn doctor_json_profile_override_suppresses_undeclared_finding() {
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
     let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
 
-    assert_eq!(
-        report["deployment_profile"],
-        json!({ "value": "hosted_lab", "source": "override" })
-    );
     assert!(
         diagnostic_with_code(&report, "deployment.profile_undeclared").is_none(),
         "override must suppress undeclared profile finding"
@@ -261,7 +311,13 @@ fn doctor_json_profile_override_suppresses_undeclared_finding() {
 #[test]
 fn doctor_json_hosted_lab_unsigned_config_warns_and_succeeds() {
     let tmp = TempDir::new().expect("tempdir");
-    let config = write_config(&tmp);
+    let config = write_config_with_options(
+        &tmp,
+        TestConfigOptions {
+            durable_audit: Some(true),
+            ..TestConfigOptions::default()
+        },
+    );
     let env_file = write_env_file(&tmp);
 
     let output = doctor_command(&config, Some(&env_file))
@@ -277,17 +333,13 @@ fn doctor_json_hosted_lab_unsigned_config_warns_and_succeeds() {
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
     let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+    assert_eq!(report["status"], "warning");
 
-    assert_eq!(
-        report["deployment_profile"],
-        json!({ "value": "hosted_lab", "source": "override" })
-    );
-    assert_eq!(report["ok"], json!(true));
-    assert_eq!(report["result"], "passed");
     let diagnostic =
         diagnostic_with_code(&report, "notary.config.unsigned").expect("unsigned config finding");
-    assert_eq!(diagnostic["severity"], "finding_warn");
-    assert_eq!(diagnostic["status"], "active");
+    assert_eq!(diagnostic["severity"], "warning");
+    assert_active_finding(diagnostic);
 }
 
 #[test]
@@ -309,17 +361,13 @@ fn doctor_json_evidence_grade_unsigned_config_fails() {
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
     let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+    assert_eq!(report["status"], "error");
 
-    assert_eq!(
-        report["deployment_profile"],
-        json!({ "value": "evidence_grade", "source": "override" })
-    );
-    assert_eq!(report["ok"], json!(false));
-    assert_eq!(report["result"], "failed");
     let diagnostic =
         diagnostic_with_code(&report, "notary.config.unsigned").expect("unsigned config finding");
-    assert_eq!(diagnostic["severity"], "startup_fail");
-    assert_eq!(diagnostic["status"], "active");
+    assert_eq!(diagnostic["severity"], "error");
+    assert_active_finding(diagnostic);
 }
 
 #[test]
@@ -348,17 +396,17 @@ fn doctor_json_production_public_openapi_reports_error_but_succeeds() {
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
     let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+    assert_eq!(report["status"], "error");
 
-    assert_eq!(report["ok"], json!(true));
-    assert_eq!(report["result"], "passed");
     assert!(
         diagnostic_with_code(&report, "notary.config.unsigned").is_none(),
         "config_trust should isolate the OpenAPI finding"
     );
     let diagnostic =
         diagnostic_with_code(&report, "notary.openapi.public").expect("OpenAPI public finding");
-    assert_eq!(diagnostic["severity"], "finding_error");
-    assert_eq!(diagnostic["status"], "active");
+    assert_eq!(diagnostic["severity"], "error");
+    assert_active_finding(diagnostic);
 }
 
 #[test]
@@ -387,17 +435,17 @@ fn doctor_json_evidence_grade_public_openapi_reports_error_but_succeeds() {
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
     let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+    assert_eq!(report["status"], "error");
 
-    assert_eq!(report["ok"], json!(true));
-    assert_eq!(report["result"], "passed");
     assert!(
         diagnostic_with_code(&report, "notary.config.unsigned").is_none(),
         "config_trust should isolate the OpenAPI finding"
     );
     let diagnostic =
         diagnostic_with_code(&report, "notary.openapi.public").expect("OpenAPI public finding");
-    assert_eq!(diagnostic["severity"], "finding_error");
-    assert_eq!(diagnostic["status"], "active");
+    assert_eq!(diagnostic["severity"], "error");
+    assert_active_finding(diagnostic);
 }
 
 #[test]
@@ -425,6 +473,7 @@ fn doctor_json_local_public_openapi_has_no_profile_finding() {
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
     let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
 
     assert!(
         diagnostic_with_code(&report, "notary.openapi.public").is_none(),
@@ -458,12 +507,13 @@ fn doctor_json_production_insecure_source_url_fails_readiness() {
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
     let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+    assert_eq!(report["status"], "error");
 
-    assert_eq!(report["ok"], json!(false));
     let diagnostic = diagnostic_with_code(&report, "notary.source.insecure_url")
         .expect("insecure source URL finding");
-    assert_eq!(diagnostic["severity"], "readiness_fail");
-    assert_eq!(diagnostic["status"], "active");
+    assert_eq!(diagnostic["severity"], "error");
+    assert_active_finding(diagnostic);
 }
 
 #[test]
@@ -492,13 +542,13 @@ fn doctor_json_production_in_memory_replay_high_risk_fails_readiness() {
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
     let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+    assert_eq!(report["status"], "error");
 
-    assert_eq!(report["ok"], json!(false));
-    assert_eq!(report["result"], "failed");
     let diagnostic = diagnostic_with_code(&report, "notary.replay.in_memory_high_risk")
         .expect("high-risk replay finding");
-    assert_eq!(diagnostic["severity"], "readiness_fail");
-    assert_eq!(diagnostic["status"], "active");
+    assert_eq!(diagnostic["severity"], "error");
+    assert_active_finding(diagnostic);
 }
 
 #[test]
@@ -527,13 +577,13 @@ fn doctor_json_production_missing_durable_audit_sink_fails_startup() {
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
     let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+    assert_eq!(report["status"], "error");
 
-    assert_eq!(report["ok"], json!(false));
-    assert_eq!(report["result"], "failed");
     let diagnostic =
         diagnostic_with_code(&report, "notary.audit.sink_missing").expect("audit sink finding");
-    assert_eq!(diagnostic["severity"], "startup_fail");
-    assert_eq!(diagnostic["status"], "active");
+    assert_eq!(diagnostic["severity"], "error");
+    assert_active_finding(diagnostic);
 }
 
 #[test]
@@ -563,13 +613,13 @@ fn doctor_json_production_private_network_source_escape_reports_error() {
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
     let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+    assert_eq!(report["status"], "error");
 
-    assert_eq!(report["ok"], json!(true));
-    assert_eq!(report["result"], "passed");
     let diagnostic = diagnostic_with_code(&report, "notary.source.private_network_escape")
         .expect("private-network source escape finding");
-    assert_eq!(diagnostic["severity"], "finding_error");
-    assert_eq!(diagnostic["status"], "active");
+    assert_eq!(diagnostic["severity"], "error");
+    assert_active_finding(diagnostic);
 }
 
 #[test]
@@ -598,13 +648,13 @@ fn doctor_json_evidence_grade_openfn_without_expected_sidecar_fails_readiness() 
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
     let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+    assert_eq!(report["status"], "error");
 
-    assert_eq!(report["ok"], json!(false));
-    assert_eq!(report["result"], "failed");
     let diagnostic = diagnostic_with_code(&report, "notary.sidecar.expected_sidecar_missing")
         .expect("missing expected sidecar finding");
-    assert_eq!(diagnostic["severity"], "readiness_fail");
-    assert_eq!(diagnostic["status"], "active");
+    assert_eq!(diagnostic["severity"], "error");
+    assert_active_finding(diagnostic);
 }
 
 #[test]
@@ -633,13 +683,13 @@ fn doctor_json_evidence_grade_insecure_source_url_fails() {
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
     let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+    assert_eq!(report["status"], "error");
 
-    assert_eq!(report["ok"], json!(false));
-    assert_eq!(report["result"], "failed");
     let diagnostic = diagnostic_with_code(&report, "notary.source.insecure_url")
         .expect("insecure source URL finding");
-    assert_eq!(diagnostic["severity"], "startup_fail");
-    assert_eq!(diagnostic["status"], "active");
+    assert_eq!(diagnostic["severity"], "error");
+    assert_active_finding(diagnostic);
 }
 
 #[test]
@@ -667,6 +717,7 @@ fn doctor_json_local_insecure_source_url_has_no_profile_finding() {
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
     let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
 
     assert!(
         diagnostic_with_code(&report, "notary.source.insecure_url").is_none(),
@@ -694,31 +745,59 @@ fn doctor_json_reports_success_as_single_redacted_document() {
     let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
     let report: Value = serde_json::from_str(&stdout).expect("doctor emits one JSON document");
 
-    assert_eq!(report["schema"], "registry.validation.report.v1");
-    assert_eq!(report["product"], "registry-notary");
-    assert_eq!(report["command"], "doctor");
-    assert_eq!(report["ok"], json!(true));
-    assert_eq!(report["result"], "passed");
-    assert!(report["checks"]
-        .as_array()
-        .expect("checks array")
-        .iter()
-        .any(|check| check["code"] == "ok"
-            && check["status"] == "passed"
-            && check["message"] == "config file read"));
+    assert_product_diagnostic_report(&report);
+    assert_eq!(report["status"], "warning");
     assert!(report["diagnostics"]
         .as_array()
         .expect("diagnostics array")
         .iter()
         .all(|diagnostic| diagnostic["severity"].is_string()
-            && diagnostic["status"].is_string()
             && diagnostic["code"].is_string()
             && diagnostic["message"].is_string()));
-    assert!(report["expanded_config"].is_object());
+    assert!(report["required_env"]
+        .as_array()
+        .expect("required_env array")
+        .iter()
+        .any(
+            |env| env["name"] == "TEST_DOCTOR_JSON_ISSUER_JWK" && env["classification"] == "secret"
+        ));
+    assert!(report.get("expanded_config").is_none());
+    assert!(!stdout.contains(TEST_ISSUER_JWK));
+    assert!(!stdout.contains(TEST_AUDIT_SECRET));
+    assert!(!stdout.contains(TEST_API_HASH));
+    assert!(!stdout.contains(TEST_API_COMMITMENT));
+}
+
+#[test]
+fn explain_config_json_reports_redacted_resolved_config() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_config(&tmp);
+    let env_file = write_env_file(&tmp);
+
+    let output = explain_command(&config, Some(&env_file))
+        .args(["--format", "json"])
+        .output()
+        .expect("explain-config runs");
+
+    assert!(
+        output.status.success(),
+        "explain-config failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
+    let report: Value = serde_json::from_str(&stdout).expect("explain-config emits JSON");
+    assert_config_explanation(&report);
+    assert!(report["resolved_config"].is_object());
     assert_eq!(
-        report["expanded_config"]["evidence"]["signing_keys"]["issuer"]["private_jwk_env"],
+        report["resolved_config"]["evidence"]["signing_keys"]["issuer"]["private_jwk_env"],
         json!("[redacted]")
     );
+    assert!(report["live_apply"]
+        .as_array()
+        .expect("live_apply array")
+        .iter()
+        .any(|item| item["class"] == "restart_required"));
     assert!(!stdout.contains(TEST_ISSUER_JWK));
     assert!(!stdout.contains(TEST_AUDIT_SECRET));
     assert!(!stdout.contains(TEST_API_HASH));
@@ -741,20 +820,22 @@ fn doctor_json_reports_config_parse_failure_without_text_preamble() {
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
     let report: Value = serde_json::from_str(&stdout).expect("failure emits JSON");
+    assert_product_diagnostic_report(&report);
+    assert_eq!(report["status"], "error");
 
-    assert_eq!(report["schema"], "registry.validation.report.v1");
-    assert_eq!(report["ok"], json!(false));
-    assert_eq!(report["result"], "failed");
     assert!(report["diagnostics"]
         .as_array()
         .expect("diagnostics array")
         .iter()
-        .any(|diagnostic| diagnostic["status"] == "failed"
+        .any(|diagnostic| diagnostic["severity"] == "error"
             && diagnostic["message"]
                 .as_str()
                 .expect("message")
                 .contains("config YAML parse or validation failed")
-            && diagnostic["action"] == "fix the YAML syntax and field names"));
+            && diagnostic["message"]
+                .as_str()
+                .expect("message")
+                .contains("fix the YAML syntax and field names")));
     assert_eq!(
         String::from_utf8(output.stderr).expect("stderr is utf8"),
         ""

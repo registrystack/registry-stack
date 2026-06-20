@@ -19,6 +19,9 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use ed25519_dalek::SigningKey;
+use registry_config_report::{
+    ConfigValueClassification, LiveApplyClass, ReportStatus, RequiredEnvStatus,
+};
 use registry_notary_core::deployment::{
     evaluate_gates, DeploymentFindingStatus, DeploymentProfile, EvaluatedFinding,
 };
@@ -48,6 +51,7 @@ use tracing_subscriber::EnvFilter;
 use ulid::Ulid;
 
 const DEFAULT_LOG_FILTER: &str = "info";
+const NOTARY_CONFIG_SCHEMA_VERSION: &str = "registry.notary.config.v1";
 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -89,7 +93,8 @@ enum Command {
         /// Validate local VC issuing setup. This does not print credentials.
         #[arg(long)]
         issue_demo_vc: bool,
-        /// Print resolved config with no secret values.
+        /// Print resolved config with no secret values in text output.
+        /// For JSON output, use `explain-config --format json`.
         #[arg(long)]
         show_expanded_config: bool,
         /// Review-only deployment profile override for JSON doctor findings.
@@ -103,7 +108,11 @@ enum Command {
         format: DoctorOutputFormat,
     },
     /// Print resolved config and required env vars.
-    ExplainConfig,
+    ExplainConfig {
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = ExplainConfigOutputFormat::Json)]
+        format: ExplainConfigOutputFormat,
+    },
     /// Verify governed runtime configuration bundles without applying them.
     Config {
         #[command(subcommand)]
@@ -322,6 +331,21 @@ impl fmt::Display for DoctorOutputFormat {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ExplainConfigOutputFormat {
+    Json,
+    Text,
+}
+
+impl fmt::Display for ExplainConfigOutputFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Json => f.write_str("json"),
+            Self::Text => f.write_str("text"),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Diagnostic {
     ok: bool,
@@ -330,7 +354,6 @@ struct Diagnostic {
     action: Option<String>,
     report_code: Option<String>,
     report_severity: Option<&'static str>,
-    report_status: Option<&'static str>,
 }
 
 impl Diagnostic {
@@ -342,7 +365,6 @@ impl Diagnostic {
             action: None,
             report_code: None,
             report_severity: None,
-            report_status: None,
         }
     }
 
@@ -354,7 +376,6 @@ impl Diagnostic {
             action: Some(action.into()),
             report_code: None,
             report_severity: None,
-            report_status: None,
         }
     }
 
@@ -366,13 +387,11 @@ impl Diagnostic {
             action: Some(action.into()),
             report_code: None,
             report_severity: None,
-            report_status: None,
         }
     }
 
     fn deployment_finding(finding: &EvaluatedFinding, profile: Option<DeploymentProfile>) -> Self {
         let severity = finding.severity.as_str();
-        let status = finding.status.as_str();
         let label = deployment_finding_label(finding, profile);
         let action = deployment_finding_action(finding);
         Self {
@@ -384,7 +403,6 @@ impl Diagnostic {
             action: Some(action),
             report_code: Some(finding.id.clone()),
             report_severity: Some(severity),
-            report_status: Some(status),
         }
     }
 }
@@ -443,9 +461,9 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
                 ExitCode::FAILURE
             })
         }
-        Some(Command::ExplainConfig) => {
+        Some(Command::ExplainConfig { format }) => {
             let config_path = required_config_path(args.config.as_deref())?;
-            explain_config(config_path, &env_report, args.bind)?;
+            explain_config(config_path, &env_report, args.bind, format)?;
             Ok(ExitCode::SUCCESS)
         }
         Some(Command::Config {
@@ -1202,7 +1220,10 @@ async fn doctor(
                 &diagnostics,
                 options.format,
                 None,
-                Some(&deployment_profile),
+                config_path,
+                None,
+                None,
+                env_report,
             )?;
             return Ok(false);
         }
@@ -1263,7 +1284,10 @@ async fn doctor(
         &diagnostics,
         options.format,
         expanded_config.as_ref(),
-        Some(&deployment_profile),
+        config_path,
+        Some(&raw),
+        config.as_ref(),
+        env_report,
     )?;
     Ok(diagnostics.iter().all(|diag| diag.ok))
 }
@@ -1394,7 +1418,10 @@ fn render_doctor_output(
     diagnostics: &[Diagnostic],
     format: DoctorOutputFormat,
     expanded_config: Option<&Value>,
-    deployment_profile: Option<&DeploymentProfileReport>,
+    config_path: &Path,
+    raw_config: Option<&str>,
+    config: Option<&StandaloneRegistryNotaryConfig>,
+    env_report: &EnvFileReport,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match format {
         DoctorOutputFormat::Text => {
@@ -1408,8 +1435,10 @@ fn render_doctor_output(
                 "{}",
                 serde_json::to_string_pretty(&doctor_json_report(
                     diagnostics,
-                    expanded_config,
-                    deployment_profile,
+                    config_path,
+                    raw_config,
+                    config,
+                    env_report,
                 ))?
             );
         }
@@ -1419,59 +1448,120 @@ fn render_doctor_output(
 
 fn doctor_json_report(
     diagnostics: &[Diagnostic],
-    expanded_config: Option<&Value>,
-    deployment_profile: Option<&DeploymentProfileReport>,
+    config_path: &Path,
+    raw_config: Option<&str>,
+    config: Option<&StandaloneRegistryNotaryConfig>,
+    env_report: &EnvFileReport,
 ) -> Value {
-    let ok = diagnostics.iter().all(|diag| diag.ok);
-    let diagnostics = diagnostics
+    let diagnostics_json = diagnostics
         .iter()
         .map(doctor_json_diagnostic)
         .collect::<Vec<_>>();
+    let error_count = diagnostics_json
+        .iter()
+        .filter(|diag| diag["severity"] == "error")
+        .count();
+    let warning_count = diagnostics_json
+        .iter()
+        .filter(|diag| diag["severity"] == "warning")
+        .count();
     let mut report = json!({
-        "schema": "registry.validation.report.v1",
+        "schema_version": "registry.config.diagnostic_report.v1",
         "product": "registry-notary",
-        "command": "doctor",
-        "ok": ok,
-        "result": if ok { "passed" } else { "failed" },
-        "checks": diagnostics.clone(),
-        "diagnostics": diagnostics,
+        "config_schema_version": NOTARY_CONFIG_SCHEMA_VERSION,
+        "source": {
+            "kind": "local_file",
+            "path": path_for_json(config_path),
+        },
+        "status": if error_count > 0 {
+            ReportStatus::Error.as_str()
+        } else if warning_count > 0 {
+            ReportStatus::Warning.as_str()
+        } else {
+            ReportStatus::Ok.as_str()
+        },
+        "summary": {
+            "error_count": error_count,
+            "warning_count": warning_count,
+        },
+        "diagnostics": diagnostics_json,
+        "required_env": required_env_report(
+            config.map(required_env_vars).unwrap_or_default(),
+            env_report,
+        ),
+        "generated_at": now_rfc3339(),
     });
-    if let Some(config) = expanded_config {
-        report["expanded_config"] = config.clone();
-    }
-    if let Some(profile) = deployment_profile {
-        report["deployment_profile"] = json!({
-            "value": profile.value.as_deref(),
-            "source": profile.source,
+    if let Some(raw) = raw_config {
+        report["hashes"] = json!({
+            "internal_config_hash": sha256_hash(raw),
         });
     }
     report
 }
 
 fn doctor_json_diagnostic(diagnostic: &Diagnostic) -> Value {
-    let (severity, status, code) = if let (Some(severity), Some(status), Some(code)) = (
+    let (severity, code) = if let (Some(severity), Some(code)) = (
         diagnostic.report_severity,
-        diagnostic.report_status,
         diagnostic.report_code.as_deref(),
     ) {
-        (severity, status, code)
+        (shared_severity(severity), code)
     } else if diagnostic.warning {
-        ("warning", "warning", "warning")
+        ("warning", "warning")
     } else if diagnostic.ok {
-        ("info", "passed", "ok")
+        ("info", "ok")
     } else {
-        ("error", "failed", "failed")
+        ("error", "failed")
     };
-    let mut value = json!({
+    let message = if let Some(action) = &diagnostic.action {
+        format!("{} Next action: {action}", diagnostic.label)
+    } else {
+        diagnostic.label.clone()
+    };
+    let value = json!({
         "severity": severity,
-        "status": status,
         "code": code,
-        "message": diagnostic.label,
+        "message": message,
     });
-    if let Some(action) = &diagnostic.action {
-        value["action"] = json!(action);
-    }
     value
+}
+
+fn shared_severity(severity: &str) -> &'static str {
+    match severity {
+        "startup_fail" | "readiness_fail" | "finding_error" | "error" => "error",
+        "finding_warn" | "warning" => "warning",
+        _ => "info",
+    }
+}
+
+fn required_env_report(vars: BTreeSet<String>, env_report: &EnvFileReport) -> Vec<Value> {
+    vars.into_iter()
+        .map(|name| {
+            let status = if std::env::var_os(&name).is_some() || env_report.contains(&name) {
+                RequiredEnvStatus::Present
+            } else {
+                RequiredEnvStatus::Missing
+            };
+            json!({
+                "name": name,
+                "classification": env_classification(&name).as_str(),
+                "status": status.as_str(),
+            })
+        })
+        .collect()
+}
+
+fn env_classification(name: &str) -> ConfigValueClassification {
+    if name.to_ascii_uppercase().contains("PUBLIC") {
+        ConfigValueClassification::Public
+    } else {
+        ConfigValueClassification::Secret
+    }
+}
+
+fn now_rfc3339() -> String {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .expect("UTC timestamp formats as RFC3339")
 }
 
 fn local_env_diagnostics(
@@ -2160,39 +2250,120 @@ fn explain_config(
     config_path: &Path,
     env_report: &EnvFileReport,
     bind_override: Option<SocketAddr>,
+    format: ExplainConfigOutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut config = load_expanded_config(config_path)?;
+    let raw = fs::read_to_string(config_path)?;
+    let mut config = parse_expanded_config(&raw)?;
     apply_bind_override(&mut config, bind_override);
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&redacted_config(&config))?
-    );
-    println!();
-    println!("Required env vars:");
-    for env in required_env_vars(&config) {
-        let status = if std::env::var_os(&env).is_some() {
-            "present"
-        } else if env_report.contains(&env) {
-            "from env-file"
-        } else {
-            "missing"
-        };
-        println!("- {env}: {status}");
-    }
-    println!();
-    println!("Claim source bindings:");
-    for claim in &config.evidence.claims {
-        for (binding_id, binding) in &claim.source_bindings {
+    match format {
+        ExplainConfigOutputFormat::Json => {
             println!(
-                "- {}.{} uses connection {} via {:?}",
-                claim.id,
-                binding_id,
-                binding.connection.as_deref().unwrap_or("(default)"),
-                binding.connector
+                "{}",
+                serde_json::to_string_pretty(&config_explanation_json(
+                    config_path,
+                    &raw,
+                    &config,
+                    env_report,
+                ))?
             );
+        }
+        ExplainConfigOutputFormat::Text => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&redacted_config(&config))?
+            );
+            println!();
+            println!("Required env vars:");
+            for env in required_env_vars(&config) {
+                let status = if std::env::var_os(&env).is_some() {
+                    "present"
+                } else if env_report.contains(&env) {
+                    "from env-file"
+                } else {
+                    "missing"
+                };
+                println!("- {env}: {status}");
+            }
+            println!();
+            println!("Claim source bindings:");
+            for claim in &config.evidence.claims {
+                for (binding_id, binding) in &claim.source_bindings {
+                    println!(
+                        "- {}.{} uses connection {} via {:?}",
+                        claim.id,
+                        binding_id,
+                        binding.connection.as_deref().unwrap_or("(default)"),
+                        binding.connector
+                    );
+                }
+            }
         }
     }
     Ok(())
+}
+
+fn config_explanation_json(
+    config_path: &Path,
+    raw_config: &str,
+    config: &StandaloneRegistryNotaryConfig,
+    env_report: &EnvFileReport,
+) -> Value {
+    json!({
+        "schema_version": "registry.config.explanation.v1",
+        "product": "registry-notary",
+        "config_schema_version": NOTARY_CONFIG_SCHEMA_VERSION,
+        "source": {
+            "kind": "local_file",
+            "path": path_for_json(config_path),
+        },
+        "required_env": required_env_report(required_env_vars(config), env_report),
+        "defaults_applied": [],
+        "optional_sections_absent": optional_config_sections_absent(config),
+        "live_apply": notary_live_apply_classes(),
+        "resolved_config": redacted_config(config),
+        "hashes": {
+            "internal_config_hash": sha256_hash(raw_config),
+        },
+        "generated_at": now_rfc3339(),
+    })
+}
+
+fn optional_config_sections_absent(config: &StandaloneRegistryNotaryConfig) -> Vec<Value> {
+    let mut sections = Vec::new();
+    if config.evidence.source_connections.is_empty() {
+        sections.push(json!({
+            "path": "/evidence/source_connections",
+            "reason": "no external source connections configured",
+        }));
+    }
+    if !config.credential_status.enabled {
+        sections.push(json!({
+            "path": "/credential_status",
+            "reason": "credential status is disabled",
+        }));
+    }
+    sections
+}
+
+fn notary_live_apply_classes() -> Vec<Value> {
+    vec![
+        json!({
+            "path": "/evidence/source_connections",
+            "class": LiveApplyClass::RestartRequired.as_str(),
+        }),
+        json!({
+            "path": "/evidence/signing_keys",
+            "class": LiveApplyClass::RestartRequired.as_str(),
+        }),
+        json!({
+            "path": "/server",
+            "class": LiveApplyClass::RestartRequired.as_str(),
+        }),
+        json!({
+            "path": "/config_trust",
+            "class": LiveApplyClass::UnsupportedLiveApply.as_str(),
+        }),
+    ]
 }
 
 fn apply_bind_override(config: &mut StandaloneRegistryNotaryConfig, bind: Option<SocketAddr>) {
