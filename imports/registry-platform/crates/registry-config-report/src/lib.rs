@@ -140,6 +140,10 @@ impl RequiredEnvStatus {
     }
 }
 
+fn config_hashes_option_is_empty(hashes: &Option<ConfigHashes>) -> bool {
+    hashes.as_ref().is_none_or(ConfigHashes::is_empty)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -202,6 +206,12 @@ pub struct ConfigHashes {
     pub posture_safe_config_hash: Option<String>,
 }
 
+impl ConfigHashes {
+    pub fn is_empty(&self) -> bool {
+        self.internal_config_hash.is_none() && self.posture_safe_config_hash.is_none()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct ConfigDiagnosticReport {
     pub schema_version: String,
@@ -213,7 +223,7 @@ pub struct ConfigDiagnosticReport {
     pub diagnostics: Vec<ConfigDiagnostic>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required_env: Vec<RequiredEnvVar>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "config_hashes_option_is_empty")]
     pub hashes: Option<ConfigHashes>,
     pub generated_at: String,
 }
@@ -252,7 +262,7 @@ pub struct ConfigExplanation {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub live_apply: Vec<LiveApplyComponent>,
     pub resolved_config: Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "config_hashes_option_is_empty")]
     pub hashes: Option<ConfigHashes>,
     pub generated_at: String,
 }
@@ -279,10 +289,6 @@ pub struct RegistryctlValidationReport {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cross_product_diagnostics: Vec<ConfigDiagnostic>,
     pub generated_at: String,
-}
-
-pub fn redacted_message(message: impl Into<String>) -> String {
-    message.into()
 }
 
 pub fn redact_config_value(

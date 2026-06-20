@@ -1,10 +1,11 @@
 use registry_config_report::{
-    redact_config_value, ConfigDiagnosticReport, ConfigExplanation, ConfigValueClassification,
-    RegistryctlValidationReport, CONFIG_EXPLANATION_FIXTURE_V1, CONFIG_EXPLANATION_SCHEMA_V1,
-    NOTARY_DIAGNOSTIC_ERROR_FIXTURE_V1, NOTARY_DIAGNOSTIC_OK_FIXTURE_V1,
-    PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, REDACTED_VALUE, REDACTION_INPUT_FIXTURE_V1,
-    REGISTRYCTL_VALIDATION_FIXTURE_V1, REGISTRYCTL_VALIDATION_REPORT_SCHEMA_V1,
-    RELAY_DIAGNOSTIC_ERROR_FIXTURE_V1, RELAY_DIAGNOSTIC_OK_FIXTURE_V1,
+    redact_config_value, ConfigDiagnosticReport, ConfigExplanation, ConfigHashes,
+    ConfigValueClassification, RegistryctlValidationReport, CONFIG_EXPLANATION_FIXTURE_V1,
+    CONFIG_EXPLANATION_SCHEMA_V1, NOTARY_DIAGNOSTIC_ERROR_FIXTURE_V1,
+    NOTARY_DIAGNOSTIC_OK_FIXTURE_V1, PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, REDACTED_VALUE,
+    REDACTION_INPUT_FIXTURE_V1, REGISTRYCTL_VALIDATION_FIXTURE_V1,
+    REGISTRYCTL_VALIDATION_REPORT_SCHEMA_V1, RELAY_DIAGNOSTIC_ERROR_FIXTURE_V1,
+    RELAY_DIAGNOSTIC_OK_FIXTURE_V1,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -117,6 +118,34 @@ fn serde_types_round_trip_canonical_fixtures() {
     round_trip::<ConfigDiagnosticReport>(NOTARY_DIAGNOSTIC_ERROR_FIXTURE_V1);
     round_trip::<ConfigExplanation>(CONFIG_EXPLANATION_FIXTURE_V1);
     round_trip::<RegistryctlValidationReport>(REGISTRYCTL_VALIDATION_FIXTURE_V1);
+}
+
+#[test]
+fn serde_reports_omit_empty_hashes_to_preserve_schema_contract() {
+    let empty_hashes = ConfigHashes {
+        internal_config_hash: None,
+        posture_safe_config_hash: None,
+    };
+
+    let mut diagnostic_report: ConfigDiagnosticReport =
+        serde_json::from_str(RELAY_DIAGNOSTIC_OK_FIXTURE_V1).expect("fixture decodes");
+    diagnostic_report.hashes = Some(empty_hashes.clone());
+    let diagnostic_json = serde_json::to_value(&diagnostic_report).expect("report serializes");
+    assert!(
+        diagnostic_json.get("hashes").is_none(),
+        "empty hashes object must be omitted"
+    );
+    assert_valid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &diagnostic_json);
+
+    let mut explanation_report: ConfigExplanation =
+        serde_json::from_str(CONFIG_EXPLANATION_FIXTURE_V1).expect("fixture decodes");
+    explanation_report.hashes = Some(empty_hashes);
+    let explanation_json = serde_json::to_value(&explanation_report).expect("report serializes");
+    assert!(
+        explanation_json.get("hashes").is_none(),
+        "empty hashes object must be omitted"
+    );
+    assert_valid(CONFIG_EXPLANATION_SCHEMA_V1, &explanation_json);
 }
 
 #[test]
