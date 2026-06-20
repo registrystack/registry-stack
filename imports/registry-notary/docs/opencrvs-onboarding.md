@@ -42,7 +42,7 @@ opencrvs-birth-record-exists
 
 The generated Notary config uses the `dci` source connector, the
 `/registry/sync/search` source path, a birth registry event type, and a configured lookup on
-`target.identifiers.UIN`. The default disclosure is `predicate`, which means
+`target.identifiers.UIN`. The default disclosure is `value`, which means
 callers receive the truth of the claim rather than a copied source record.
 
 ## Signing literacy
@@ -98,9 +98,9 @@ tokens, test UINs, API keys, or private issuer key values.
 
 ## Next
 
-- `docs/opencrvs-dci-standalone-tutorial.md` for the lower-level Notary-only
+- [OpenCRVS tutorial](opencrvs-dci-standalone-tutorial.md) for the lower-level Notary-only
   OpenCRVS tutorial.
-- `docs/source-claim-modeling-guide.md` for source bindings, disclosure, and
+- [Source claim modeling guide](source-claim-modeling-guide.md) for source bindings, disclosure, and
   claim rules.
-- `docs/signing-key-provider.md` and `docs/deployment-hardening-runbook.md` for
+- [Signing key provider](signing-key-provider.md) and [Deployment hardening runbook](deployment-hardening-runbook.md) for
   production signing and deployment hardening.

@@ -25,7 +25,7 @@ For application and wallet developers calling the API or the SDKs.
 - [API reference](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/api-reference.md): the route-to-client-method matrix and the stable problem-code registry.
 - [Wallet interop with OID4VCI](oid4vci-wallet-interop.md): the OpenID4VCI wallet facade contract and compatibility checklist.
 - [SD-JWT VC conformance](sd-jwt-vc-conformance-profile.md): the supported credential wire contract and the explicit non-support list.
-- [OpenCRVS tutorial](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/opencrvs-dci-standalone-tutorial.md): issue local demo SD-JWT VCs from OpenCRVS birth-record evidence.
+- [OpenCRVS tutorial](opencrvs-dci-standalone-tutorial.md): issue local demo SD-JWT VCs from OpenCRVS birth-record evidence.
 - [OpenCRVS onboarding model](opencrvs-onboarding.md): understand the
   registryctl-generated project boundary, evidence question, demo signing
   posture, and lightweight PDP model.
