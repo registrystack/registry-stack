@@ -628,37 +628,128 @@ metadata:
                             if "xlsx" in fmt:
                                 self.assertIn(fmt["xlsx"]["sheet"], self._xlsx_sheet_names(source_path))
 
+    @staticmethod
+    def _non_empty_list(value: object) -> bool:
+        return isinstance(value, list) and bool(value)
+
+    @staticmethod
+    def _non_empty_mapping(value: object) -> bool:
+        return isinstance(value, dict) and bool(value)
+
+    def _source_bound_notary_purpose_constraint_issues(
+        self,
+        *,
+        repo: Path,
+        path: Path,
+        config: dict,
+    ) -> list[str]:
+        issues = []
+        evidence = config.get("evidence", {})
+        if not isinstance(evidence, dict) or not evidence.get("enabled"):
+            return issues
+
+        global_purposes = evidence.get("allowed_purposes", [])
+        claims = evidence.get("claims", [])
+        if not isinstance(claims, list):
+            return [f"{path.relative_to(repo)} evidence.claims must be a list"]
+
+        for claim in claims:
+            if not isinstance(claim, dict):
+                issues.append(f"{path.relative_to(repo)} claim must be a mapping")
+                continue
+            source_bindings = claim.get("source_bindings", {})
+            if source_bindings is None:
+                continue
+            if not isinstance(source_bindings, dict):
+                issues.append(
+                    f"{path.relative_to(repo)} claim={claim.get('id')} source_bindings must be a mapping"
+                )
+                continue
+            if not source_bindings:
+                continue
+            claim_purpose = claim.get("purpose")
+            for binding_id, binding in source_bindings.items():
+                if not isinstance(binding, dict):
+                    issues.append(
+                        f"{path.relative_to(repo)} claim={claim.get('id')} binding={binding_id} must be a mapping"
+                    )
+                    continue
+                matching = binding.get("matching", {})
+                if not isinstance(matching, dict):
+                    issues.append(
+                        f"{path.relative_to(repo)} claim={claim.get('id')} binding={binding_id} matching must be a mapping"
+                    )
+                    continue
+                has_purpose_constraint = any(
+                    (
+                        self._non_empty_list(global_purposes),
+                        isinstance(claim_purpose, str) and bool(claim_purpose),
+                        self._non_empty_list(matching.get("allowed_purposes", [])),
+                        self._non_empty_mapping(matching.get("relationship_purpose_scopes", {})),
+                    )
+                )
+                if not has_purpose_constraint:
+                    issues.append(
+                        f"{path.relative_to(repo)} claim={claim.get('id')} binding={binding_id}"
+                    )
+
+        return issues
+
     def test_repo_source_bound_notary_claims_have_purpose_constraints(self) -> None:
         repo = SCRIPT_DIR.parent
         issues = []
         for config_dir in (repo / "config" / "notary", repo / "config" / "coolify" / "notary"):
             for path in sorted(config_dir.glob("*.yaml")):
                 config = self.validator.load_yaml_mapping_strict(path)
-                evidence = config.get("evidence", {})
-                if not evidence.get("enabled"):
-                    continue
-                global_purposes = evidence.get("allowed_purposes", [])
-                for claim in evidence.get("claims", []):
-                    source_bindings = claim.get("source_bindings", {})
-                    if not source_bindings:
-                        continue
-                    claim_purpose = claim.get("purpose")
-                    for binding_id, binding in source_bindings.items():
-                        matching = binding.get("matching", {})
-                        has_purpose_constraint = any(
-                            (
-                                global_purposes,
-                                claim_purpose,
-                                matching.get("allowed_purposes", []),
-                                matching.get("relationship_purpose_scopes", {}),
-                            )
-                        )
-                        if not has_purpose_constraint:
-                            issues.append(
-                                f"{path.relative_to(repo)} claim={claim.get('id')} binding={binding_id}"
-                            )
+                issues.extend(
+                    self._source_bound_notary_purpose_constraint_issues(
+                        repo=repo,
+                        path=path,
+                        config=config,
+                    )
+                )
 
         self.assertEqual([], issues)
+
+    def test_source_bound_notary_purpose_constraint_check_handles_malformed_yaml(self) -> None:
+        repo = SCRIPT_DIR.parent
+        path = repo / "config" / "notary" / "malformed-notary.yaml"
+        issues = self._source_bound_notary_purpose_constraint_issues(
+            repo=repo,
+            path=path,
+            config={
+                "evidence": {
+                    "enabled": True,
+                    "allowed_purposes": None,
+                    "claims": [
+                        None,
+                        {"id": "claim-with-null-bindings", "source_bindings": None},
+                        {"id": "claim-with-list-bindings", "source_bindings": []},
+                        {"id": "claim-with-null-binding", "source_bindings": {"birth": None}},
+                        {"id": "claim-with-bad-matching", "source_bindings": {"birth": {"matching": []}}},
+                        {"id": "claim-without-purpose", "source_bindings": {"birth": {"matching": {}}}},
+                    ],
+                }
+            },
+        )
+
+        self.assertIn("config/notary/malformed-notary.yaml claim must be a mapping", issues)
+        self.assertIn(
+            "config/notary/malformed-notary.yaml claim=claim-with-list-bindings source_bindings must be a mapping",
+            issues,
+        )
+        self.assertIn(
+            "config/notary/malformed-notary.yaml claim=claim-with-null-binding binding=birth must be a mapping",
+            issues,
+        )
+        self.assertIn(
+            "config/notary/malformed-notary.yaml claim=claim-with-bad-matching binding=birth matching must be a mapping",
+            issues,
+        )
+        self.assertIn(
+            "config/notary/malformed-notary.yaml claim=claim-without-purpose binding=birth",
+            issues,
+        )
 
     def test_repo_relay_runtime_entities_and_fields_exist_in_metadata_manifests(self) -> None:
         repo = SCRIPT_DIR.parent
