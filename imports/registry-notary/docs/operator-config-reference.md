@@ -757,6 +757,55 @@ Avoid broad source bindings. A claim should read only the fields needed to
 evaluate that claim. If two credentials need different fields, prefer two claims
 or a small dependency graph over one over-broad claim.
 
+### Dependent Source Lookups
+
+When one source row contains the identifier needed to read another source, set
+the later binding's `lookup.input` or `query_fields[].input` to
+`sources.<binding>.<field_path>`. Notary loads the referenced binding first,
+extracts the scalar field value from its row, and uses that value as the later
+lookup input. Use the plural `sources.` form in new config; the singular
+`source.` form is accepted as a compatibility alias.
+
+```yaml
+source_bindings:
+  birth_event:
+    connector: registry_data_api
+    connection: civil_registry
+    dataset: civil_registry
+    entity: birth_events
+    lookup:
+      input: target.identifiers.registration_number
+      field: registration_number
+      op: eq
+      cardinality: one
+  child_person:
+    connector: registry_data_api
+    connection: civil_registry
+    dataset: civil_registry
+    entity: persons
+    lookup:
+      input: sources.birth_event.child_person_id
+      field: person_id
+      op: eq
+      cardinality: one
+  mother_person:
+    connector: registry_data_api
+    connection: civil_registry
+    dataset: civil_registry
+    entity: persons
+    lookup:
+      input: sources.birth_event.mother_person_id
+      field: person_id
+      op: eq
+      cardinality: one
+```
+
+Dependent lookups are resolved in dependency order. A missing prior binding,
+missing field, null field, or empty prior result is treated as source not found.
+Multiple prior rows are treated as source ambiguous. The referenced value must be
+a string, number, or boolean; arrays and objects are rejected as invalid request
+input. Cycles between source bindings fail claim evaluation.
+
 ## Matching Policy
 
 Each source binding has an optional `matching` block that gates and shapes how the
