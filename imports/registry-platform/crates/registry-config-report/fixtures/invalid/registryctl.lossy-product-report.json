@@ -1,0 +1,19 @@
+{
+  "schema_version": "registryctl.validation.report.v1",
+  "project": {
+    "path": ".",
+    "profile": "local"
+  },
+  "status": "ok",
+  "products": [
+    {
+      "product": "registry-relay",
+      "status": "ok",
+      "report": {
+        "schema_version": "registry.validation.report.v1",
+        "status": "ok"
+      }
+    }
+  ],
+  "generated_at": "2026-06-20T00:00:00Z"
+}

@@ -1,0 +1,26 @@
+{
+  "instance": {
+    "id": "relay-a",
+    "public_base_url": "https://relay.example.test",
+    "private_admin_bind": "10.0.0.5:9443"
+  },
+  "auth": {
+    "mode": "api_key",
+    "admin_token": "super-secret-admin-token",
+    "bearer": "Bearer eyJsecret.source.token"
+  },
+  "signing": {
+    "private_jwk": "-----BEGIN PRIVATE KEY-----secret-key-material"
+  },
+  "source_rows": [
+    {
+      "person_id": "person-123",
+      "birth_date": "2001-02-03"
+    }
+  ],
+  "env": {
+    "full_dump": {
+      "REGISTRY_RELAY_ADMIN_TOKEN": "full-env-secret"
+    }
+  }
+}

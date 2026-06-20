@@ -17,6 +17,7 @@ and integration-test fixtures.
 
 | Crate | Purpose |
 | --- | --- |
+| [`registry-config-report`](crates/registry-config-report/README.md) | Shared configuration diagnostic and explanation report schemas, fixtures, serde types, and redaction helpers. |
 | [`registry-platform-audit`](crates/registry-platform-audit/README.md) | Tamper-evident audit envelopes, async sinks, JSONL verification, and redaction helpers. |
 | [`registry-platform-authcommon`](crates/registry-platform-authcommon/README.md) | Provider-independent authentication helpers for Bearer tokens and API-key fingerprints. |
 | [`registry-platform-cache`](crates/registry-platform-cache/README.md) | Generic cache-store trait, redacted hashed keys, in-memory cache, and Redis backend for higher-level primitives. |

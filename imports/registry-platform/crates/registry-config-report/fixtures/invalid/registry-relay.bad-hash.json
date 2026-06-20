@@ -1,0 +1,19 @@
+{
+  "schema_version": "registry.config.diagnostic_report.v1",
+  "product": "registry-relay",
+  "config_schema_version": "registry.relay.config.v1",
+  "source": {
+    "kind": "local_file",
+    "path": "relay/config.yaml"
+  },
+  "status": "ok",
+  "summary": {
+    "error_count": 0,
+    "warning_count": 0
+  },
+  "diagnostics": [],
+  "hashes": {
+    "internal_config_hash": "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "generated_at": "2026-06-20T00:00:00Z"
+}

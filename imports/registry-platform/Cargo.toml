@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/registry-config-report",
     "crates/registry-platform-config",
     "crates/registry-platform-ops",
     "crates/registry-platform-cache",

@@ -1,0 +1,27 @@
+{
+  "schema_version": "registry.config.diagnostic_report.v1",
+  "product": "registry-relay",
+  "config_schema_version": "registry.relay.config.v1",
+  "source": {
+    "kind": "local_file",
+    "path": "relay/config.yaml"
+  },
+  "status": "ok",
+  "summary": {
+    "error_count": 0,
+    "warning_count": 0
+  },
+  "diagnostics": [],
+  "required_env": [
+    {
+      "name": "REGISTRY_RELAY_ADMIN_TOKEN",
+      "classification": "secret",
+      "status": "present"
+    }
+  ],
+  "hashes": {
+    "internal_config_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "posture_safe_config_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "generated_at": "2026-06-20T00:00:00Z"
+}
