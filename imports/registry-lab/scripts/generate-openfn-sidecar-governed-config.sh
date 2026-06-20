@@ -4,7 +4,6 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 notary_root="${REGISTRY_NOTARY_SOURCE_DIR:-${repo_root}/../registry-notary}"
-jobs_root="${REGISTRY_LAB_OPENFN_JOBS_ROOT:-/tmp/registry-lab-openfn-jobs}"
 manifest="${repo_root}/config/coolify/openfn/openfn-dhis2-sidecar.yaml.template"
 governed_dir="${repo_root}/config/coolify/openfn/governed"
 tuf_fixture_dir="${repo_root}/config/coolify/openfn/tuf-demo-fixtures"
@@ -30,23 +29,20 @@ if [[ ! -f "${tuf_fixture_dir}/simple-rsa/root.json" || ! -f "${tuf_fixture_dir}
 fi
 
 rm -rf "${governed_dir}" "${datastore_dir}"
-mkdir -p "${jobs_root}" "${metadata_dir}" "${targets_dir}" "${datastore_dir}"
-find "${jobs_root}" -mindepth 1 -delete
-cp -a "${repo_root}/config/openfn/jobs/." "${jobs_root}/"
+mkdir -p "${metadata_dir}" "${targets_dir}" "${datastore_dir}"
 
 cargo run -q \
   --manifest-path "${notary_root}/Cargo.toml" \
   -p registry-notary-source-adapter-sidecar \
-  --bin registry-notary-openfn-sidecar \
+  --bin registry-notary-source-adapter-sidecar \
   -- config render-target \
   --manifest "${manifest}" \
-  --jobs-root "${jobs_root}" \
   --output "${target}"
 
 cargo run -q \
   --manifest-path "${notary_root}/Cargo.toml" \
   -p registry-notary-source-adapter-sidecar \
-  --bin registry-notary-openfn-sidecar \
+  --bin registry-notary-source-adapter-sidecar \
   -- config create-local-tuf-repo \
   --target "${target}" \
   --target-name openfn-dhis2-sidecar-runtime.json \
@@ -69,7 +65,7 @@ cargo run -q \
 cargo run -q \
   --manifest-path "${notary_root}/Cargo.toml" \
   -p registry-notary-source-adapter-sidecar \
-  --bin registry-notary-openfn-sidecar \
+  --bin registry-notary-source-adapter-sidecar \
   -- config verify-bundle \
   --product registry-notary-openfn-sidecar \
   --instance-id hosted-dhis2-openfn-sidecar \
