@@ -1,7 +1,7 @@
 use registry_config_report::{
-    redact_config_value, ConfigDiagnosticReport, ConfigExplanation, ConfigHashes,
-    ConfigValueClassification, RedactedConfig, RegistryctlValidationReport, RequiredEnvStatus,
-    RequiredEnvVar, CONFIG_EXPLANATION_FIXTURE_V1, CONFIG_EXPLANATION_SCHEMA_V1,
+    redact_config_value, ConfigDiagnosticReport, ConfigExplanation, ConfigExplanationDocument,
+    ConfigHashes, ConfigValueClassification, RedactedConfig, RegistryctlValidationReport,
+    RequiredEnvStatus, RequiredEnvVar, CONFIG_EXPLANATION_FIXTURE_V1, CONFIG_EXPLANATION_SCHEMA_V1,
     NOTARY_DIAGNOSTIC_ERROR_FIXTURE_V1, NOTARY_DIAGNOSTIC_OK_FIXTURE_V1,
     PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, REDACTED_VALUE, REDACTION_INPUT_FIXTURE_V1,
     REGISTRYCTL_VALIDATION_FIXTURE_V1, REGISTRYCTL_VALIDATION_REPORT_SCHEMA_V1,
@@ -48,6 +48,31 @@ where
     let encoded = serde_json::to_value(&decoded).expect("fixture re-encodes");
     let decoded_again: T = serde_json::from_value(encoded).expect("encoded fixture decodes");
     assert_eq!(decoded, decoded_again);
+}
+
+fn decode<T>(fixture: &str) -> T
+where
+    T: DeserializeOwned,
+{
+    serde_json::from_str(fixture).expect("fixture decodes")
+}
+
+fn producer_explanation_from_document(document: ConfigExplanationDocument) -> ConfigExplanation {
+    ConfigExplanation {
+        schema_version: document.schema_version,
+        product: document.product,
+        config_schema_version: document.config_schema_version,
+        source: document.source,
+        required_env: document.required_env,
+        defaults_applied: document.defaults_applied,
+        optional_sections_absent: document.optional_sections_absent,
+        live_apply: document.live_apply,
+        resolved_config: RedactedConfig::redacted(&document.resolved_config, |_, _| {
+            ConfigValueClassification::Public
+        }),
+        hashes: document.hashes,
+        generated_at: document.generated_at,
+    }
 }
 
 #[test]
@@ -116,7 +141,8 @@ fn serde_types_round_trip_canonical_fixtures() {
     round_trip::<ConfigDiagnosticReport>(RELAY_DIAGNOSTIC_ERROR_FIXTURE_V1);
     round_trip::<ConfigDiagnosticReport>(NOTARY_DIAGNOSTIC_OK_FIXTURE_V1);
     round_trip::<ConfigDiagnosticReport>(NOTARY_DIAGNOSTIC_ERROR_FIXTURE_V1);
-    round_trip::<ConfigExplanation>(CONFIG_EXPLANATION_FIXTURE_V1);
+    let _: ConfigExplanation = decode(CONFIG_EXPLANATION_FIXTURE_V1);
+    let _: ConfigExplanationDocument = decode(CONFIG_EXPLANATION_FIXTURE_V1);
     round_trip::<RegistryctlValidationReport>(REGISTRYCTL_VALIDATION_FIXTURE_V1);
 }
 
@@ -137,8 +163,8 @@ fn serde_reports_omit_empty_hashes_to_preserve_schema_contract() {
     );
     assert_valid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &diagnostic_json);
 
-    let mut explanation_report: ConfigExplanation =
-        serde_json::from_str(CONFIG_EXPLANATION_FIXTURE_V1).expect("fixture decodes");
+    let mut explanation_report =
+        producer_explanation_from_document(decode(CONFIG_EXPLANATION_FIXTURE_V1));
     explanation_report.hashes = Some(empty_hashes);
     let explanation_json = serde_json::to_value(&explanation_report).expect("report serializes");
     assert!(
@@ -248,8 +274,7 @@ fn redacted_config_constructor_runs_redaction() {
 
 #[test]
 fn redacted_config_is_transparent_on_the_wire() {
-    let explanation: ConfigExplanation =
-        serde_json::from_str(CONFIG_EXPLANATION_FIXTURE_V1).expect("fixture decodes");
+    let explanation = producer_explanation_from_document(decode(CONFIG_EXPLANATION_FIXTURE_V1));
 
     // The newtype serializes exactly as the inner Value: the resolved_config
     // member of the serialized explanation is the bare object, not a wrapper.
@@ -267,7 +292,21 @@ fn redacted_config_is_transparent_on_the_wire() {
 }
 
 #[test]
-fn required_env_public_safe_hides_sensitive_names() {
+fn redacted_config_deserialization_collapses_untrusted_input() {
+    let untrusted = json!({
+        "public_base_url": "https://relay.example.test",
+        "admin_token": "super-secret-admin-token"
+    });
+    let redacted: RedactedConfig =
+        serde_json::from_value(untrusted).expect("untrusted config decodes conservatively");
+
+    assert_eq!(redacted.as_value(), &json!(REDACTED_VALUE));
+    let rendered = serde_json::to_string(&redacted).expect("redacted config renders");
+    assert!(!rendered.contains("super-secret-admin-token"));
+}
+
+#[test]
+fn required_env_public_safe_hides_sensitive_details() {
     let secret = RequiredEnvVar {
         name: "REGISTRY_RELAY_ADMIN_TOKEN".to_string(),
         classification: ConfigValueClassification::Secret,
@@ -289,24 +328,23 @@ fn required_env_public_safe_hides_sensitive_names() {
         status: RequiredEnvStatus::NotChecked,
     };
 
-    // Secret and InternalOnly names are replaced; classification/status kept.
-    let safe_secret = secret.public_safe();
-    assert_eq!(safe_secret.name, REDACTED_VALUE);
-    assert_eq!(
-        safe_secret.classification,
-        ConfigValueClassification::Secret
-    );
-    assert_eq!(safe_secret.status, RequiredEnvStatus::Present);
+    let placeholder = RequiredEnvVar {
+        name: REDACTED_VALUE.to_string(),
+        classification: ConfigValueClassification::Public,
+        status: RequiredEnvStatus::NotChecked,
+    };
 
-    let safe_internal = internal.public_safe();
-    assert_eq!(safe_internal.name, REDACTED_VALUE);
-    assert_eq!(
-        safe_internal.classification,
-        ConfigValueClassification::InternalOnly
-    );
-    assert_eq!(safe_internal.status, RequiredEnvStatus::Missing);
+    // Per-entry compatibility projection collapses non-public details.
+    assert_eq!(secret.public_safe(), placeholder.clone());
+    assert_eq!(internal.public_safe(), placeholder.clone());
+    assert_eq!(topology.public_safe(), placeholder);
 
-    // Public and TopologySensitive entries are unchanged.
+    // Public entries are unchanged.
     assert_eq!(public.public_safe(), public);
-    assert_eq!(topology.public_safe(), topology);
+
+    // List projection omits non-public entries entirely so counts do not leak.
+    assert_eq!(
+        RequiredEnvVar::public_safe_entries(&[secret, internal, public.clone(), topology]),
+        vec![public]
+    );
 }

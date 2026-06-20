@@ -26,15 +26,23 @@
   (`verify_jsonl_lines`, `AuditSink::tail_hash`) are now `#[deprecated]` and
   carry prominent warnings; production callers must use the keyed
   `*_with_hasher` variants with an explicit `AuditChainHasher`.
+  `AuditSink::tail_hash_with_hasher` now fails closed by default so legacy custom
+  tailable sinks cannot silently ignore the supplied keyed hasher through an
+  unkeyed trait fallback.
 - (REPORT-01) `registry-config-report` now exposes `ConfigExplanation::resolved_config`
   as a `RedactedConfig` newtype that can only be constructed via
   `RedactedConfig::redacted(..)` (which runs redaction internally), making
-  redaction unbypassable at the type level. The wire format is unchanged
+  redaction unbypassable at the type level for producers. Deserializing
+  `RedactedConfig` now treats the input as untrusted and collapses it to
+  `REDACTED_VALUE`; consumers that need to inspect rendered report JSON can use
+  the wire-only `ConfigExplanationDocument` type. The wire format is unchanged
   (`#[serde(transparent)]`).
 - (REPORT-03) `RequiredEnvVar` is documented as operator-sensitive (it enumerates
   secret env-var names and presence) and now offers `RequiredEnvVar::public_safe()`,
-  a projection that replaces `Secret`/`InternalOnly` names with a placeholder for
-  public-facing surfaces.
+  a compatibility projection that collapses non-public entries to a generic
+  not-checked placeholder. `RequiredEnvVar::public_safe_entries(..)` omits
+  non-public entries entirely for public-facing lists so names, presence, and
+  sensitive-entry counts are not disclosed.
 - (OIDC-01) `registry-platform-oidc` `fetch_discovery_with_policy` now fails closed
   with `OidcError::MissingIssuer` when `jwks_uri_override` is set but `issuer` is
   empty, preserving an issuer binding when discovery is skipped.

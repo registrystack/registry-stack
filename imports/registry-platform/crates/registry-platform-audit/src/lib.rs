@@ -320,18 +320,21 @@ pub trait AuditSink: Send + Sync {
 
     /// Return the chain tail hash recomputed under the caller-selected `hasher`.
     ///
-    /// This is the keyed, production-safe entry point. The default implementation
-    /// IGNORES `hasher` and delegates to the UNKEYED [`Self::tail_hash`]; sinks
-    /// that recompute the chain while reading (such as [`JsonlFileSink`]) MUST
-    /// override this method so the keyed mode is actually honored. Sinks that
-    /// never recompute hashes (stdout, syslog) may keep the default.
+    /// This is the keyed, production-safe entry point. Tailable sinks that
+    /// recompute the chain while reading (such as [`JsonlFileSink`]) MUST honor
+    /// the supplied hasher. Sinks that cannot provide a tail (stdout, syslog)
+    /// should return `Ok(None)`. Sinks that retain already-computed envelope
+    /// hashes without recomputing them may ignore `hasher`.
+    ///
+    /// The default fails closed instead of falling back to [`Self::tail_hash`],
+    /// so legacy custom sinks do not silently recompute an unkeyed production
+    /// tail.
     async fn tail_hash_with_hasher(
         &self,
         hasher: &AuditChainHasher,
     ) -> Result<Option<[u8; 32]>, AuditError> {
         let _ = hasher;
-        #[allow(deprecated)]
-        self.tail_hash().await
+        Err(AuditError::NonTailableSink)
     }
 }
 
@@ -545,6 +548,14 @@ impl AuditSink for JsonlStdoutSink {
     async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
         Ok(None)
     }
+
+    async fn tail_hash_with_hasher(
+        &self,
+        hasher: &AuditChainHasher,
+    ) -> Result<Option<[u8; 32]>, AuditError> {
+        let _ = hasher;
+        Ok(None)
+    }
 }
 
 /// Syslog sink over a local Unix datagram socket.
@@ -582,6 +593,14 @@ impl AuditSink for SyslogSink {
     }
 
     async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
+        Ok(None)
+    }
+
+    async fn tail_hash_with_hasher(
+        &self,
+        hasher: &AuditChainHasher,
+    ) -> Result<Option<[u8; 32]>, AuditError> {
+        let _ = hasher;
         Ok(None)
     }
 }
@@ -2401,6 +2420,19 @@ mod tests {
         }
 
         async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
+            Ok(self
+                .envelopes
+                .lock()
+                .await
+                .last()
+                .map(|envelope| envelope.record_hash))
+        }
+
+        async fn tail_hash_with_hasher(
+            &self,
+            hasher: &AuditChainHasher,
+        ) -> Result<Option<[u8; 32]>, AuditError> {
+            let _ = hasher;
             Ok(self
                 .envelopes
                 .lock()
