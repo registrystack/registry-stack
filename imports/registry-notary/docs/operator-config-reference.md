@@ -456,7 +456,7 @@ source_auth:
 ```
 
 `request_format` is `form` by default and may be set to `json` for sources such
-as the OpenCRVS DCI demo endpoint.
+as the OpenCRVS demo endpoint.
 
 For DCI sources, check these fields carefully:
 
