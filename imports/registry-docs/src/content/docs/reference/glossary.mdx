@@ -73,10 +73,10 @@ Product names are always in English, including on future translated pages.
   <dd>A Relay API route shaped around a domain resource such as `household` or `individual`, not around storage table identifiers.</dd>
 
   <dt>Evidence Gateway</dt>
-  <dd>Governed runtime path for evidence responses. A Relay read or Notary source-bound evaluation selects an evidence-pack or source policy, passes trusted request and source context to the shared PDP, and then permits, redacts, or denies the response. The manifest describes governed evidence bindings and evidence packs; runtime services enforce their configured surfaces.</dd>
+  <dd>Governed runtime path for evidence responses. A Relay read or Notary source-bound evaluation selects an evidence pack or source policy, passes trusted request and source context to the shared Policy Decision Point (PDP), and then permits, redacts, or denies the response. The manifest describes governed evidence bindings and evidence packs; runtime services enforce their configured surfaces.</dd>
 
   <dt>ecosystem binding</dt>
-  <dd>Manifest-level binding that connects an external ecosystem profile or governed evidence pack to a Registry Stack runtime surface. A governed evidence ecosystem binding names the evidence-pack metadata and policy identity a runtime service can use for PDP enforcement.</dd>
+  <dd>Manifest-level binding that connects an external ecosystem profile or governed evidence pack to a Registry Stack runtime surface. A governed evidence ecosystem binding names the evidence pack metadata and policy identity a runtime service can use for PDP enforcement.</dd>
 
   <dt>eSignet</dt>
   <dd>Open-source identity and authentication service (part of MOSIP). The hosted lab uses eSignet as the authorization server a citizen signs in to before Registry Notary issues a self-attestation credential.</dd>
@@ -154,7 +154,7 @@ Product names are always in English, including on future translated pages.
   <dd>Policy enforcement point. The runtime service surface, such as a Registry Relay governed read or a Registry Notary source-bound evaluation, that calls the PDP and enforces the resulting permit, redaction, or deny decision.</dd>
 
   <dt>policy hash</dt>
-  <dd>Lowercase `sha256:` digest that binds a governed evidence policy identity to canonical policy bytes or an externally supplied policy artifact. Manifest verifies it when an inline evidence-pack policy object is present; Relay records the selected hash in governed PDP audit provenance.</dd>
+  <dd>Lowercase `sha256:` digest that binds a governed evidence policy identity to canonical policy bytes or an externally supplied policy artifact. Manifest verifies it when an inline evidence pack policy object is present; Relay records the selected hash in governed PDP audit provenance.</dd>
 
   <dt>Protected Registry APIs</dt>
   <dd>Registry Stack runtime pattern for exposing existing registry source data through scoped, read-only HTTP routes with authentication, authorization, metadata, and audit. Registry Relay implements this pattern.</dd>

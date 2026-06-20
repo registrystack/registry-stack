@@ -6,7 +6,7 @@ owner: registry-notary
 source_repos:
   - registry-notary
   - registry-platform
-last_reviewed: "2026-06-05"
+last_reviewed: "2026-06-20"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -31,7 +31,8 @@ For exact routes and schemas, read the Redoc reference. For setup and operations
 
 ## What the API is
 
-Registry Notary is a standalone service for claim evaluation, disclosure policy, credential
+Registry Notary implements the claim-evaluation and credential-issuance parts of the Evidence
+Gateway pattern. It is a standalone service for claim evaluation, disclosure policy, credential
 issuance, and audit. It runs independently and does not require Registry Relay.
 Callers discover its capabilities and claim catalog at `GET /.well-known/evidence-service`.
 This route requires authentication (the same `x-api-key` or `Authorization: Bearer` token as other
