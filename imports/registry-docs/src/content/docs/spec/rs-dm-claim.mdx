@@ -1,12 +1,12 @@
 ---
 title: "RS-DM-CLAIM: Registry Notary claim definition data model"
-description: "The data model for a Registry Notary claim definition: its identity, inputs, source bindings and matching policy, rule, disclosure policy, response formats, credential eligibility, and batch behavior, and the invariants a conforming deployment enforces."
+description: "The data model for a Registry Notary claim definition: its identity, inputs, source bindings and matching policy, rule, disclosure policy, evaluation render formats, credential eligibility, and batch behavior, and the invariants a conforming deployment enforces."
 status: draft
 owner: registry-docs
 source_repos:
   - registry-notary
   - registry-platform
-last_reviewed: "2026-06-13"
+last_reviewed: "2026-06-20"
 doc_type: specification
 doc_id: RS-DM-CLAIM
 category: normative
@@ -70,7 +70,7 @@ flowchart TD
     bindings["Source bindings<br/>connector · required_scope · lookup · fields · matching"]
     rule["Rule (exactly one)<br/>extract · exists · cel (+ depends_on)"]
     disclosure["Disclosure policy<br/>default and allowed modes"]
-    formats["Formats<br/>claim-result JSON · CCCEV JSON-LD · SD-JWT VC"]
+    formats["Evaluation render formats<br/>claim-result JSON · CCCEV JSON-LD"]
     creds["Credential profiles<br/>two-way allow-list, issues SD-JWT VC"]
     claim --> inputs --> bindings --> rule
     rule --> disclosure
@@ -116,7 +116,7 @@ REQ-DM-CLAIM-008: Registry Notary MUST apply a claim's `default` disclosure mode
 
 A claim's `formats` list declares the response formats it can render, and its value descriptor declares the type the evaluated value takes.
 
-REQ-DM-CLAIM-009: A claim MUST be renderable as the claim-result JSON media type, and MAY additionally declare CCCEV-shaped JSON-LD or an SD-JWT VC in its `formats` (the data-model form of REQ-PR-NOTARY-011). A claim declares the type its evaluated value takes; where that type is one Registry Notary recognizes, the evaluated value MUST conform to it or the evaluation is refused rather than returned.
+REQ-DM-CLAIM-009: A claim MUST be renderable as the claim-result JSON media type, and MAY additionally declare CCCEV-shaped JSON-LD in its `formats` (the data-model form of REQ-PR-NOTARY-011). SD-JWT VC issuance is governed by credential profiles, not by the evaluation render `formats` list. A claim declares the type its evaluated value takes; where that type is one Registry Notary recognizes, the evaluated value MUST conform to it or the evaluation is refused rather than returned.
 
 ## 8. Credential eligibility
 

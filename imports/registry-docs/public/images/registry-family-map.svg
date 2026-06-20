@@ -1,15 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 864 232" role="img"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 232" role="img"
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title>Registry family map</title>
-  <desc>The six registry family projects, arranged left to right by structural role: Registry Platform provides shared primitives; Registry Manifest defines portable contracts; Registry Relay and Registry Notary are runtime services; Registry Atlas is the inspection client; Registry Lab is the compose-based runnable demo.</desc>
+  <desc>The five current registry family projects, arranged left to right by structural role: Registry Platform provides shared primitives; Registry Manifest defines portable contracts; Registry Relay and Registry Notary are runtime services; Registry Lab is the compose-based runnable demo.</desc>
 
   <g stroke="#e5e5e5" stroke-width="1">
     <line x1="144" y1="16" x2="144" y2="216"/>
     <line x1="288" y1="16" x2="288" y2="216"/>
     <line x1="432" y1="16" x2="432" y2="216"/>
     <line x1="576" y1="16" x2="576" y2="216"/>
-    <line x1="720" y1="16" x2="720" y2="216"/>
   </g>
 
   <g fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">
@@ -17,8 +16,7 @@
     <text x="160" y="30">CONTRACTS</text>
     <text x="304" y="30">RUNTIME</text>
     <text x="448" y="30">RUNTIME</text>
-    <text x="592" y="30">CLIENT</text>
-    <text x="736" y="30">DEMO</text>
+    <text x="592" y="30">DEMO</text>
   </g>
 
   <g fill="#000091">
@@ -27,7 +25,6 @@
     <rect x="304" y="38" width="32" height="2"/>
     <rect x="448" y="38" width="32" height="2"/>
     <rect x="592" y="38" width="32" height="2"/>
-    <rect x="736" y="38" width="32" height="2"/>
   </g>
 
   <g fill="#000091" font-size="16" font-weight="700">
@@ -36,7 +33,6 @@
     <text x="304" y="76">3</text>
     <text x="448" y="76">4</text>
     <text x="592" y="76">5</text>
-    <text x="736" y="76">6</text>
   </g>
 
   <g fill="#161616" font-size="13" font-weight="700">
@@ -44,8 +40,7 @@
     <text x="160" y="100">Registry Manifest</text>
     <text x="304" y="100">Registry Relay</text>
     <text x="448" y="100">Registry Notary</text>
-    <text x="592" y="100">Registry Atlas</text>
-    <text x="736" y="100">Registry Lab</text>
+    <text x="592" y="100">Registry Lab</text>
   </g>
 
   <g fill="#6a6a6a" font-size="11.5"
@@ -54,8 +49,7 @@
     <text x="160" y="118">registry-manifest</text>
     <text x="304" y="118">registry-relay</text>
     <text x="448" y="118">registry-notary</text>
-    <text x="592" y="118">registry-atlas</text>
-    <text x="736" y="118">registry-lab</text>
+    <text x="592" y="118">registry-lab</text>
   </g>
 
   <g fill="#3a3a3a" font-size="12.5">
@@ -78,13 +72,8 @@
     <text x="448" y="186">credential</text>
     <text x="448" y="204">issuance.</text>
 
-    <text x="592" y="150">Workbench UI for</text>
-    <text x="592" y="168">inspecting</text>
-    <text x="592" y="186">registry discovery</text>
-    <text x="592" y="204">artifacts.</text>
-
-    <text x="736" y="150">Compose-based</text>
-    <text x="736" y="168">runnable demo of</text>
-    <text x="736" y="186">the family.</text>
+    <text x="592" y="150">Compose-based</text>
+    <text x="592" y="168">runnable demo of</text>
+    <text x="592" y="186">the current stack.</text>
   </g>
 </svg>

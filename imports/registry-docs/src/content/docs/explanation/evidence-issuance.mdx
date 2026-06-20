@@ -6,7 +6,7 @@ owner: registry-notary
 source_repos:
   - registry-notary
   - registry-platform
-last_reviewed: "2026-06-13"
+last_reviewed: "2026-06-20"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -44,13 +44,15 @@ A single claim evaluation moves through five stages.
             from the caller, typed by the source connector. (2) Source connector:
             registry_data_api or dci, configured per binding. (3) Rule evaluation: one of
             extract, exists, cel, or plugin. (4) Disclosure mode: value, predicate, or
-            redacted. (5) Response format: claim-result JSON, CCCEV JSON-LD, or SD-JWT VC." />
+            redacted. (5) Evaluation render format: claim-result JSON or CCCEV JSON-LD.
+            Eligible stored evaluations can later be materialized as SD-JWT VC credentials." />
 </figure>
 
 The configuration that makes each stage concrete is the `ClaimDefinition` in
 [demo/config/registry-notary.yaml](https://github.com/jeremi/registry-notary/blob/2a866c1194f6f61db5680bb722c1da61c124252b/demo/config/registry-notary.yaml).
 Each `ClaimDefinition` names its `source_bindings`, declares its `rule`, sets its `disclosure`
-policy, and lists the `formats` it may emit.
+policy, lists the evaluation render `formats` it may emit, and names any credential profiles that
+can materialize an SD-JWT VC from the stored evaluation.
 
 ## Four ways to consume an evaluation
 

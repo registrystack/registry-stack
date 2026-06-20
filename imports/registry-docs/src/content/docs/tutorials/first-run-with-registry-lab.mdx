@@ -301,9 +301,10 @@ python3 -c "import json, glob; f = sorted(glob.glob('output/*-missing-subject-ev
 
 ## Inspect in Registry Atlas (optional)
 
-Registry Atlas is a separate web app, not part of the compose stack. To inspect the service-first
-graph the lab publishes, run Atlas from its own checkout. It needs Node 22 or later, `pnpm`, and a
-Rust toolchain (the dev script compiles a WebAssembly module first):
+Registry Atlas is a separate related web app, not part of the compose stack or the current formal
+v1 stack. To inspect the service-first graph the lab publishes, run Atlas from its own checkout.
+It needs Node 22 or later, `pnpm`, and a Rust toolchain (the dev script compiles a WebAssembly
+module first):
 
 ```sh
 cd ../registry-atlas
@@ -358,6 +359,6 @@ just down
   guide.
 - [Registry Notary](../../products/registry-notary/): claim configuration, disclosure modes, and
   credential issuance.
-- [Architecture overview](../../explanation/architecture/): how the six projects connect at runtime.
+- [Architecture overview](../../explanation/architecture/): how the five current formal projects connect at runtime.
 
 {/* Stable identifiers note: decentralized-demo-correlation-001 (correlation ID) is an intentionally stable protocol and log-correlation value baked into credentials and spec URLs. It is not renamed when the directory moves from decentralized-evidence-demo to registry-lab. */}

@@ -8,7 +8,7 @@ owner: registry-manifest
 source_repos:
   - registry-manifest
   - registry-relay
-last_reviewed: "2026-05-25"
+last_reviewed: "2026-06-20"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -37,9 +37,10 @@ The two paths share the same manifest input, but they serve different deployment
        alt="Publishing pipeline. One declarative input (metadata.yaml: catalog, dataset,
             entity, and policy blocks; no source paths, no credentials). Two publication
             paths, both using the same renderers. (1) Static path via registry-manifest-cli
-            publish emits DCAT, BRegDCAT-AP, SHACL, JSON Schema, CPSV-AP, and ODRL files
+            publish emits DCAT, BRegDCAT-AP, CPSV-AP, SHACL, JSON Schema, OGC Records,
+            ODRL, CCCEV, evidence offering, and embedded codelist metadata files
             with no service and no auth. (2) Runtime path via GET /metadata/* is served by
-            a running Relay using the same renderers, filtered by the caller's scope, with
+            a running Relay for its supported metadata subset, filtered by the caller's scope, with
             per-request audit." />
 </figure>
 
@@ -47,7 +48,8 @@ The two paths share the same manifest input, but they serve different deployment
 
 **Portable metadata** (Registry Manifest only) travels wherever files can travel.
 A civil registration authority can validate and publish a DCAT catalog, a BRegDCAT-AP
-profile, SHACL shapes, JSON Schemas, and an ODRL policy bundle from a single
+profile, CPSV-AP service catalogue, SHACL shapes, JSON Schemas, OGC Records item collection,
+embedded SKOS-shaped codelist metadata, and an ODRL policy bundle from a single
 `metadata.yaml` with no running service, no credentials, and no network.
 The output is a directory of static files that can be served from an object store, a CDN,
 or a government open-data portal.
@@ -97,9 +99,9 @@ catalog:
 
 From that catalog block plus the dataset and entity blocks below it, Registry Manifest
 derives a DCAT catalog document, a BRegDCAT-AP profile, a SHACL shapes document, a JSON
-Schema per entity, CPSV-AP service catalogue entries for declared public services, and
-ODRL policy documents per dataset. CCCEV evidence rendering is owned by Registry Notary,
-not Registry Manifest.
+Schema per entity, an OGC Records item collection, CPSV-AP service catalogue entries for
+declared public services, ODRL policy documents per dataset, and CCCEV evidence metadata.
+Embedded codelist nodes are SKOS-shaped inside the linked-data outputs.
 No renderer makes network calls or reads additional files.
 
 ## What Relay adds at runtime
@@ -119,8 +121,7 @@ GET /metadata/dcat/bregdcat-ap
 Authorization: Bearer <token>
 ```
 
-Relay calls the BRegDCAT-AP renderer on the validated manifest and returns the result, which
-includes the CPSV public service nodes the manifest declares.
+Relay calls the BRegDCAT-AP renderer on the validated manifest and returns the result.
 If the caller's scope covers only one dataset and the manifest has three, the response
 contains only the datasets visible under that scope.
 For the full route inventory (DCAT, SHACL, ODRL, per-dataset, per-entity, OGC Records,
@@ -145,7 +146,7 @@ Use Registry Manifest alone when:
 - You need static files for an open-data portal or a standards body's discovery index.
 - You want to validate a manifest in CI before any deployment.
 - Your deployment environment cannot run a persistent service.
-- You want interoperability artifacts (DCAT, CPSV-AP, SHACL) without a query API.
+- You want interoperability artifacts (DCAT, CPSV-AP, OGC Records, SHACL) without a query API.
 
 Add Registry Relay when:
 

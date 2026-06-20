@@ -1,6 +1,6 @@
 ---
 title: Boundaries and map
-description: The six registry stack projects, their responsibilities, flow across them, and what each project does not own.
+description: The five current registry stack projects, their responsibilities, flow across them, and what each project does not own.
 wide: true
 status: current
 owner: registry-docs
@@ -9,9 +9,8 @@ source_repos:
   - registry-platform
   - registry-manifest
   - registry-notary
-  - registry-atlas
   - registry-lab
-last_reviewed: "2026-06-10"
+last_reviewed: "2026-06-20"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -26,17 +25,16 @@ standards_referenced:
 
 import ProjectMap from '../../../components/ProjectMap.astro';
 
-The registry stack has six repositories with distinct responsibilities.
+The current formal registry stack has five repositories with distinct responsibilities.
 Use this page to decide which repository owns a question before opening implementation docs,
-and to understand how the six repositories connect at runtime.
+and to understand how the five repositories connect at runtime.
 
 <figure>
   <img src="../../images/registry-family-map.svg"
-       alt="Six registry stack projects and how they connect. Registry Platform provides shared
+       alt="Five current registry stack projects and how they connect. Registry Platform provides shared
             primitives. Registry Manifest compiles portable metadata. Registry Relay binds metadata
             to runtime sources and exposes protected APIs. Registry Notary evaluates claims and
-            issues credentials. Registry Atlas inspects published artifacts in a browser.
-            Registry Lab runs the runtime services together as a compose topology." />
+            issues credentials. Registry Lab runs the runtime services together as a compose topology." />
 </figure>
 
 <ProjectMap />
@@ -46,7 +44,7 @@ and to understand how the six repositories connect at runtime.
 
 ## Flow across the stack
 
-For how the six projects connect at runtime, see the [architecture overview](../../explanation/architecture/).
+For how the five projects connect at runtime, see the [architecture overview](../../explanation/architecture/).
 
 ## Ownership quick reference
 
@@ -56,7 +54,6 @@ For how the six projects connect at runtime, see the [architecture overview](../
 | How is a CSV, XLSX, Parquet, or PostgreSQL source exposed as authorized entity routes? | [Registry Relay](../../products/registry-relay/) |
 | How is `metadata.yaml` validated or rendered into standards-facing artifacts? | [Registry Manifest](https://github.com/jeremi/registry-manifest) |
 | How is a claim evaluated, delegated to a trusted Notary, or turned into an attestation or credential? | [Registry Notary](../../products/registry-notary/) |
-| How are discovery artifacts inspected or matched against capability needs? | [Registry Atlas](https://github.com/jeremi/registry-atlas) |
 | How do the services run together in a local demo? | [Registry Lab](https://github.com/jeremi/registry-lab/blob/main/README.md) |
 
 Cross-project explanation, standards evidence, and contract indexes live in these docs (not in any one project repo).
@@ -110,23 +107,11 @@ Registry Notary evaluates claims and issues SD-JWT VC credentials. It does not o
 - Portable metadata renderers owned by Registry Manifest. Registry Notary does not produce DCAT, SHACL, BRegDCAT-AP, or OGC Records artifacts. {/* Evidence: registry-notary evidence packet, standards not found in code section: "DCAT: no data.europa.eu/r8g references", "OGC API Records: no OGC references". */}
 - Shared auth, OIDC, audit, HTTP security, outbound HTTP, crypto, SD-JWT, and testing primitives owned by Registry Platform. Registry Notary owns the claim service behavior that composes those primitives.
 - Open federation, dynamic trust-chain discovery, shared replay storage, audit checkpoint exchange, or federated credential issuance. The current federation implementation is static-peer delegated evaluation only. {/* Evidence: registry-notary federation runtime loads peers from config at startup (FederationRuntime::new iterates config.peers); no dynamic discovery path exists at commit 01ee90a. */}
-- Browser inspection workflows owned by Registry Atlas. Inspecting published discovery artifacts, parsing DCAT catalogs, and running capability queries are Atlas responsibilities.
+- Browser inspection workflows are outside the current formal v1 stack scope. Registry Notary does not inspect published discovery artifacts, parse DCAT catalogs, or run capability queries.
 
 Registry Notary credentials are SD-JWT VC format (`application/dc+sd-jwt`), not W3C Verifiable
 Credentials Data Model JSON-LD envelopes. No W3C VC Data Model namespace or `@context` is present
 in the issued credential. {/* Evidence: registry-notary evidence packet, credential issuance section, "W3C Verifiable Credentials Data Model: NOT PRESENT". */}
-
-## Registry Atlas
-
-Registry Atlas is a browser workbench for inspecting published discovery artifacts. It does not own:
-
-- Registry runtime APIs. Atlas inspects artifacts that are already published; it does not own the APIs that serve them.
-- Natural-language inference in v0.1 capability discovery. The v0.1 capability matcher is strict: no fuzzy matching, synonym expansion, or AI inference. Every match requires exact label, IRI, or field name correspondence after documented canonicalization. Natural-language query assist is explicitly deferred. {/* Evidence: registry-atlas SYSTEM_CAPABILITY_DISCOVERY_SPEC.md lines 84-88, commit e4092a1 (file confirmed at that commit). */}
-- Persistent token storage in browser or proxy logs. Bearer tokens are session-only and are never written to browser storage or server logs. {/* Evidence: registry-atlas README lines 31-32. */}
-
-Atlas-derived hypotheses such as `candidate_route` and gap flags are not standards predicates and must
-not be published back into metadata catalogs as if they were source-verified claims.
-{/* Evidence: registry-atlas STANDARDS_ASSUMPTIONS.md lines 21-36. */}
 
 ## Registry Lab
 
@@ -145,4 +130,4 @@ When a page needs both, these docs summarize the decision and link to the owning
 
 ---
 
-**Next:** [Architecture overview](../../explanation/architecture/): how the six projects connect at runtime.
+**Next:** [Architecture overview](../../explanation/architecture/): how the five projects connect at runtime.

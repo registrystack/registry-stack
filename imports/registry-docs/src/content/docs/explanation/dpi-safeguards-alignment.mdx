@@ -1,14 +1,13 @@
 ---
 title: DPI safeguards alignment
-description: How the registry stack relates to the Universal DPI Safeguards Framework version 2.0 at the technical implementation layer.
+description: How the registry stack relates to the Universal DPI Safeguards Framework at the technical implementation layer.
 status: current
 owner: registry-docs
 source_repos:
   - registry-relay
   - registry-manifest
   - registry-notary
-  - registry-atlas
-last_reviewed: "2026-06-15"
+last_reviewed: "2026-06-20"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -21,179 +20,103 @@ standards_referenced:
   - sd-jwt-vc
 ---
 
-If you are a Digital Public Infrastructure (DPI) implementer or reviewer asking what part of a
-safeguards framework can become runtime infrastructure, this page explains the registry stack's
-safeguards model.
-Registry Stack helps DPI teams expose registry-backed evidence without opening registry records:
-systems are made legible before integration, access and disclosure rules are enforced at runtime,
-and minimized claims can be audited or verified later.
+If you are a DPI implementer or reviewer trying to place the registry stack inside a safeguards program,
+this page compares the stack to the Universal DPI Safeguards Framework at the technical implementation
+layer. It shows where it helps and where it does not.
 
-## Why this matters now
+The registry stack is not a complete safeguards program.
+The broader safeguards outcome depends on the institution that governs, deploys, audits, and operates
+the DPI system. Alignment with this page is not certification.
 
-AI-assisted development, workflow tools, and low-code integration platforms make it cheaper to
-connect systems.
-They also make unsafe joins, over-collection, semantic mismatch, and weak recourse easier to scale.
-When a registry integration can be generated quickly, the safeguards cannot live only in review
-meetings, data-sharing agreements, or handwritten interface notes.
+## Good fit and poor fit
 
-A safeguards program needs some controls to run inside the infrastructure:
+The registry stack fits best when a team needs to expose sensitive registry facts to authorized systems
+without making raw registry data broadly available.
 
-- The registry surface must be understandable before another team writes integration code.
-- Callers must be limited by purpose, scope, route, and disclosure policy.
-- Runtime services must return only the answer needed for the service purpose.
-- Audit records must show who asked which question, through which route, and what was disclosed.
-- Reviewers must be able to inspect evidence after deployment.
+Good fit:
 
-Registry Stack addresses that technical layer.
-It does not make the institutional decisions around mandate, lawful basis, oversight, or remedy.
+- Cross-ministry intake checks (one ministry asks another whether a person is registered, without
+  copying the record).
+- Social protection eligibility evidence (a program checks whether a household meets a criterion,
+  without fetching the underlying data).
+- Civil registration fact verification (a downstream service checks a vital fact against the
+  authoritative registry).
+- Interagency aggregate statistics (configured aggregates instead of raw rows).
+- Signed evidence receipts that a downstream reviewer can verify later.
 
-## Share answers, not records
+Poor fit:
 
-The implementation pattern is: share answers, not records.
-
-A service often needs a narrow answer from a registry:
-
-- Is this person registered?
-- Does this household meet a declared criterion?
-- Is this civil registration fact confirmed by the authoritative source?
-- What aggregate count answers this policy question?
-- Which signed evidence result did a downstream service receive?
-
-Registry Stack lets an accountable registry authority expose those answers without making raw
-registry records broadly available.
-Registry Manifest describes the registry surface.
-Registry Relay exposes governed read-only access to configured fields, filters, aggregates, and
-evidence offerings.
-Registry Notary evaluates configured claims and can return signed evaluations or SD-JWT VC
-credentials.
-Registry Atlas helps reviewers inspect published artifacts before integration.
-
-This pattern is useful when a registry-backed service needs a status, predicate, selected value,
-aggregate, or verifiable evidence result.
-It is not a substitute for the institutional decision about whether that question is authorized.
-
-## Runtime safeguards model
-
-The registry stack turns selected safeguards into runtime behavior through six mechanisms.
-
-| Mechanism | What becomes enforceable or reviewable |
-| --- | --- |
-| Discovery metadata | Datasets, entities, fields, codelists, policies, evidence offerings, schemas, and service endpoints are declared before integration. |
-| Purpose and scope | Callers are bound to configured scopes and purpose-bearing request paths instead of unrestricted registry access. |
-| Field projection and filters | Runtime routes expose only declared fields and accepted filters; storage tables and source paths stay private. |
-| Claim evaluation | A configured claim can answer a purpose-specific question without returning the source record. |
-| Disclosure policy | The response can be a value, predicate, redacted result, signed evaluation, or supported credential profile. |
-| Audit and verification | Audit events, stable error codes, signed response credentials, and SD-JWT VC credentials provide evidence for later review. |
-
-This is the boundary between policy and infrastructure.
-Policy still decides which purposes are legitimate, which institutions are accountable, and which
-remedy channels exist.
-Runtime infrastructure can make the approved policy legible, enforceable, and auditable.
+- Unrestricted public data portals.
+- Generic data warehouses or ad-hoc SQL access.
+- Unrestricted record export.
+- Service decision engines operating without external governance.
 
 ## Reference framework
 
-The [Universal DPI Safeguards website](https://www.dpi-safeguards.org/) is the online reference for
-the safeguards initiative.
-The [Universal DPI Safeguards Framework](https://www.dpi-safeguards.org/framework) describes
-version 2.0 as rights-based guidance for the governance, design, deployment, and use of DPI.
-The current framework is organized around:
+The [Universal DPI Safeguards website](https://www.dpi-safeguards.org/) is the online reference for the
+safeguards initiative and framework.
 
-- 18 principles, split between foundational and operational principles
-- 13 risks, grouped under safety, inclusion, and structural vulnerabilities
-- Five life cycle stages: conception and scoping, strategy and design, development, deployment, and
-  operations and maintenance
-- Five adoption pathways: legal and regulatory, institutional structures, technical foundations,
-  capacity and resources, and whole-of-society approach
-- An indicators library for assessing technical adherence and real-world impact
+## Technical alignment
 
-Registry Stack alignment is strongest in the technical foundations pathway and in the development,
-deployment, and operations stages.
-Alignment with this page is not certification.
+The registry stack is most relevant where safeguards depend on:
 
-## Framework 2.0 alignment
+- **Controlled access**: authorized systems only, with API key or OIDC.
+- **Data minimization**: configured fields, declared filters, selective disclosure on credentials.
+- **Purpose-bound exchange**: per-claim disclosure policy and per-caller metadata scoping.
+- **Auditability**: redacted audit events, signed evidence receipts.
+- **Reviewable metadata**: published DCAT, SHACL, JSON Schema, and policy documents.
+- **Verifiable provenance**: DID documents, SD-JWT VC credentials, signed response credentials.
 
-The registry stack's three commitments and its governance boundary map to selected Framework 2.0
-principles and pathways.
-The mapping is an implementation alignment view, not a compliance claim.
+These are technical foundations that can support a DPI program's governance work. They are not a
+substitute for it.
 
-| Registry Stack commitment | Framework 2.0 area | Implementation support |
-| --- | --- | --- |
-| Interoperability | O9. Build and share open assets; technical foundations pathway | Registry Manifest, Registry Relay, and Registry Notary produce or reference standards-shaped artifacts such as DCAT, SHACL, JSON Schema, ODRL, OpenAPI, and SD-JWT VC profiles. |
-| Safeguards | O3. Ensure data privacy by design; O5. Ensure data protection during use | Registry Relay can expose configured fields, require filters, separate metadata from runtime bindings, and evaluate evidence without returning raw registry rows by default. |
-| Safeguards | O4. Assure data security by design | Registry Relay enforces authorized access via API key or OpenID Connect (OIDC), keeps admin routes off the public listener, runs read-only against its sources, and applies body limits and timeouts at the gateway. |
-| Reviewability | F4. Reinforce transparency and accountability | Registry Manifest and Registry Relay publish OpenAPI, metadata routes, schemas, evidence offerings, policies, stable error codes, and signed response credentials so reviewers can inspect exposed surfaces before integration. |
-| Reviewability | O2. Evolve with evidence | Audit logs, aggregate disclosure records, validation reports, signed response credentials, and standards registers can provide material for review and impact assessment. |
-| Governance boundary | F5. Uphold the rule of law; O7. Practice inclusive governance | Registry components can expose purpose, policy, scope, and audit evidence, but lawful basis, public governance, oversight, and institutional accountability remain outside the software. |
+## Alignment pillars
+
+**Privacy by design.**
+Registry Relay can expose only configured fields, require filters, separate metadata from runtime
+bindings, and evaluate evidence without returning raw registry rows by default.
+
+**Data security by design.**
+Registry Relay enforces authorized access via API key or OIDC, keeps admin routes off the public
+listener, runs read-only against its sources, and applies body limits and timeouts at the gateway.
+
+**Transparency and accountability.**
+[Registry Manifest](https://registrystack.org/) and Registry Relay publish what a registry
+exposes (OpenAPI, metadata routes, schemas, evidence offerings, policies, stable error codes, and
+signed response credentials) so reviewers can inspect it before integration.
+
+**Open assets and interoperability.**
+Registry Manifest, Registry Relay, and [Registry Notary](../../products/registry-notary/) produce
+or reference standards-shaped artifacts (DCAT, SHACL, JSON Schema, ODRL, OpenAPI, and SD-JWT VC
+profiles) so downstream systems can consume them without bespoke contracts.
+
+**Evidence-based improvement.**
+Audit logs, aggregate disclosure records, validation reports, signed response credentials, and
+standards registers can provide material for review and impact assessment.
 
 This alignment is strongest at the implementation-evidence layer. It helps reviewers see what a
 registry system exposes, which project owns each surface, and which controls are available before
 deployment decisions are made.
 
-## Evidence artifacts
+## Stack commitments and framework pillars
 
-For a safeguards review, the most useful Registry Stack artifacts are:
+The registry stack's three commitments map to the framework's five pillars:
 
-| Artifact | Review question the artifact helps answer |
+| Stack commitment | DPI Safeguards pillar |
 | --- | --- |
-| OpenAPI and metadata routes | Which registry surface is exposed, which fields exist, and which callers can discover the surface? |
-| DCAT, SHACL, JSON Schema, and policy metadata | What meaning, structure, codelists, evidence offerings, and policy assumptions are declared before integration? |
-| Disclosure profiles and claim definitions | Does the caller receive a value, a predicate, a redacted result, or no response for the stated purpose? |
-| Audit events and stable error codes | Who asked for what, for which purpose, through which route, and what happened? |
-| Signed response credentials and SD-JWT VC credentials | Which evidence result was returned, under which issuer and validity context, and what can be verified later? |
-| Validation reports and standards registers | Which artifacts were checked, which standards are referenced, and where the stack claims comparison rather than conformance? |
-
-## Questions for responsible authorities
-
-The software evidence is useful only when a responsible institution can answer the policy questions
-around the exchange.
-A safeguards review can use the registry stack to ask:
-
-- Which responsible authority owns the registry surface, the disclosure policy, and the audit log?
-- Which lawful basis or data-sharing agreement authorizes each purpose-bound route or evidence
-  offering?
-- Which data fields, predicates, or credentials are necessary for the service outcome?
-- Which caller roles can discover metadata, read rows, request aggregates, verify facts, or receive
-  credentials?
-- Which audit events are reviewed, by whom, and on what schedule?
-- Which remedy, redress, and non-digital service channels exist when a person is excluded or a
-  downstream decision is disputed?
-- Which inclusion or impact assessment uses aggregate disclosure records, audit evidence, and
-  community feedback?
+| Interoperability | Open assets and interoperability |
+| Safeguards | Privacy by design; Data security by design |
+| Reviewability | Transparency and accountability; Evidence-based improvement |
 
 ## Governance boundary
 
-The Universal DPI Safeguards Framework covers more than software controls.
-A DPI program still needs lawful basis, public governance, procurement discipline, data protection
-operations, accessibility, remedies, oversight, security audits, capacity, sustainable financing,
-and community participation.
+The Universal DPI Safeguards Framework covers more than software controls. A DPI program still needs
+lawful basis, public governance, procurement discipline, data protection operations, accessibility,
+remedies, oversight, security audits, and community participation.
 
-Registry Stack can enforce configured access and disclosure rules.
-It can produce reviewable evidence about metadata, policy, runtime access, disclosure, signed
-results, and credentials.
-The responsible institution still provides the lawful basis, public mandate, appeal capacity,
-oversight, remedy, non-digital service channels, and final eligibility or entitlement decision.
+The registry stack does not obtain consent, approve data-sharing agreements, run grievance channels,
+certify production sources, or make final eligibility decisions. It also does not replace a data
+protection impact assessment, independent security review, or public consultation process.
 
-The intended boundary is practical: put enforceable safeguards in the infrastructure, and keep
-public accountability with the institutions that govern the DPI system.
-
-## Starting point
-
-A useful first implementation is small:
-
-- One registry
-- One high-value question that another service is authorized to ask
-- One accountable authority that answers the question
-- One declared set of fields, policies, evidence offerings, and disclosure modes
-- One governed route or claim that exposes the answer
-- One review loop for audit and evidence artifacts after real calls
-
-That path tests the safeguards model without turning the registry into a general data-sharing
-platform.
-
-## Next
-
-- Read the [architecture overview](../architecture/) for the project boundaries behind the
-  safeguards evidence.
-- Read [evidence issuance](../evidence-issuance/) for the claim, credential, and disclosure model.
-- Use the [standards register](../../reference/standards/) to see which standards are used,
-  referenced, or compared against.
+The intended boundary is clear: registry components produce evidence that responsible institutions
+can review. They do not hide governance decisions inside software.

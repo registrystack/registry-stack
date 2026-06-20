@@ -1,12 +1,12 @@
 ---
 title: "RS-PR-NOTARY: Registry Notary protocol"
-description: "The normative HTTP protocol contract for Registry Notary: discovery, authentication, claim evaluation, disclosure semantics, response formats, credential issuance (direct and OID4VCI), delegated evaluation, and audit behavior."
+description: "The normative HTTP protocol contract for Registry Notary: discovery, authentication, governed source policy decisions, claim evaluation, disclosure semantics, response formats, credential issuance (direct and OID4VCI), delegated evaluation, and audit behavior."
 status: draft
 owner: registry-docs
 source_repos:
   - registry-notary
   - registry-platform
-last_reviewed: "2026-06-13"
+last_reviewed: "2026-06-20"
 doc_type: specification
 doc_id: RS-PR-NOTARY
 category: normative
@@ -29,7 +29,7 @@ audience:
   - specification editor
 ---
 
-This document defines the HTTP protocol contract that Registry Notary exposes: how a caller authenticates, discovers capabilities, evaluates a claim, controls disclosure, receives a result in one of the supported formats, obtains a credential directly or through an OID4VCI wallet flow, delegates evaluation to a peer, and what audit and error behavior every request carries. It is the precise, citable version of the behavior the [Registry Notary API reference](../../reference/apis/registry-notary/) describes narratively.
+This document defines the HTTP protocol contract that Registry Notary exposes: how a caller authenticates, discovers capabilities, passes governed source policy decisions before source reads, evaluates a claim, controls disclosure, receives an evaluation result in a supported render format, obtains an SD-JWT VC credential directly or through an OID4VCI wallet flow, delegates evaluation to a peer, and what audit and error behavior every request carries. It is the precise, citable version of the behavior the [Registry Notary API reference](../../reference/apis/registry-notary/) describes narratively.
 
 It refines the Registry Notary component defined in [RS-ARC-G](../rs-arc-g/) Section 3 (specifically REQ-ARC-G-004, REQ-ARC-G-007, REQ-ARC-G-008, and REQ-ARC-G-009) one level of detail down, from architectural boundary to wire behavior. Where this document and RS-ARC-G state the same constraint, RS-ARC-G is the general invariant and this document is its protocol-level form.
 
@@ -40,6 +40,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | Version | Date | Status | Change |
 | --- | --- | --- | --- |
 | 0.1.0 | 2026-06-13 | draft | Initial protocol contract, distilled from the Registry Notary API reference, the evidence-issuance explanation, and the generated OpenAPI document. |
+| 0.1.1 | 2026-06-20 | draft | Document governed source policy decisions, source-bound purpose and freshness constraints, self-attestation trust context, audit provenance, and scoped OID4VCI behavior. |
 
 ## 1. Scope and references
 
@@ -47,6 +48,7 @@ This specification covers Registry Notary's externally observable protocol behav
 
 - Authentication and per-claim authorization.
 - The discovery surface and its access posture.
+- Governed source policy decisions before source reads.
 - The claim-evaluation request and response contract, including disclosure semantics and response formats.
 - Credential issuance over the direct API and over the OID4VCI wallet flow.
 - Delegated (federated) evaluation between configured peers.
@@ -55,8 +57,8 @@ This specification covers Registry Notary's externally observable protocol behav
 This specification does not define:
 
 - **Exact routes and schemas.** The generated OpenAPI document, rendered as the [Registry Notary API reference](../../reference/apis/registry-notary/), is the authoritative route and schema reference. This document states behavior a schema cannot, and does not restate request and response shapes that would drift from the generated source.
-- **The claim definition data model.** How a `ClaimDefinition` declares its source bindings, rule, disclosure policy, and formats belongs to a future RS-DM-\* specification. This document refers to those fields only where they govern protocol behavior.
-- **Security model internals.** Key management, token fingerprinting, and the OIDC trust configuration belong to a future RS-SEC-\* specification. This document states the authorization behavior a caller observes.
+- **The claim definition data model.** How a `ClaimDefinition` declares its source bindings, rule, disclosure policy, formats, and credential eligibility belongs to [RS-DM-CLAIM](../rs-dm-claim/). This document refers to those fields only where they govern protocol behavior.
+- **Security model internals.** Key management, token fingerprinting, and the OIDC trust configuration belong to [RS-SEC-G](../rs-sec-g/) and deeper security specifications. This document states the authorization behavior a caller observes.
 - **Registry Relay's protocol.** Relay's own consultation API is a separate surface, to be specified under RS-PR-RELAY. This document treats Relay only as a source a Notary connector reads over HTTP.
 
 For the motivation and worked examples behind this contract, see [Evidence issuance, end to end](../../explanation/evidence-issuance/). For the architecture this protocol sits in, see [RS-ARC-G](../rs-arc-g/). Media types are named per [RS-TERMS](../rs-terms/) Section 2.
@@ -82,7 +84,13 @@ REQ-PR-NOTARY-003: Every claim-bearing route MUST authenticate the caller, in st
 
 REQ-PR-NOTARY-004: Registry Notary MUST enforce a claim's required scopes before it evaluates the claim or reads any source. A caller whose credential lacks a required scope MUST be refused before source access, not after.
 
-The internals of key handling and OIDC trust configuration are a security-model concern reserved for a future RS-SEC-\* specification.
+When a claim source binding declares matching policy, Notary evaluates the supported Evidence Gateway PDP profile before reading protected source rows. The supported profile covers policy identity and hash, supported ODRL purpose and spatial terms, claim-level and source-bound purpose constraints, jurisdiction, assurance allow-list and minimum assurance, source freshness, required legal basis and consent, relationship and relationship-purpose constraints, requested fact, requested disclosure, requested credential format, source binding, route identity, checked scope, redaction, and unsupported policy terms. Self-asserted target fields do not satisfy trust-context gates that require a trusted principal authorization context.
+
+REQ-PR-NOTARY-023: Before a source read, Registry Notary MUST obtain the applicable policy decision for the claim and source binding. A denial MUST fail closed with the stable policy error produced for that gate, and MUST NOT be retried as an ungoverned source read.
+
+REQ-PR-NOTARY-024: Source-bound purpose constraints MUST combine the claim's permitted purposes with the source binding's permitted purposes. If either configured purpose set rejects the request purpose, Notary MUST deny before source access.
+
+The internals of key handling and OIDC trust configuration are a security-model concern specified by [RS-SEC-G](../rs-sec-g/).
 
 ## 4. Claim evaluation
 
@@ -94,17 +102,21 @@ flowchart LR
     connector["Source connector<br/>registry_data_api · dci · openfn_sidecar<br/>(HTTP only)"]
     rule["Rule<br/>extract · exists · cel"]
     disclosure["Disclosure mode<br/>value · predicate · redacted"]
-    format["Response format<br/>claim-result JSON · CCCEV JSON-LD · SD-JWT VC"]
+    format["Evaluation render format<br/>claim-result JSON · CCCEV JSON-LD"]
+    credential["Credential issuance<br/>SD-JWT VC"]
     subject --> connector --> rule --> disclosure --> format
+    disclosure --> credential
 ```
 
-The diagram restates the pipeline: a caller supplies a subject identifier and a claim id; the configured source connector reads facts over HTTP; the configured rule evaluates; the disclosure mode constrains the output; and the result is returned in one of the three formats. A caller does not supply the evaluated value.
+The diagram restates the pipeline: a caller supplies a subject identifier and a claim id; the configured source connector reads facts over HTTP; the configured rule evaluates; the disclosure mode constrains the output; and the result can be rendered as claim-result JSON or CCCEV-shaped JSON-LD. SD-JWT VC output is materialized through the credential issuance surface in Section 7. A caller does not supply the evaluated value.
 
 REQ-PR-NOTARY-005: Claim evaluation MUST be performed by Registry Notary against its configured sources. The caller supplies a subject identifier and a claim id and MUST NOT supply the evaluated value. This is the protocol-level form of REQ-ARC-G-007.
 
 REQ-PR-NOTARY-006: A source connector MUST reach its target over HTTP. The supported connector kinds are `registry_data_api` (a Registry Relay instance), `dci` (an SP DCI search source), and the OpenFn sidecar. There is no file-based or database connector, and a conforming deployment MUST NOT assume one.
 
 REQ-PR-NOTARY-007: A claim's rule MUST be one of the implemented rule types: `extract`, `exists`, or `cel`. The `plugin` rule type is declared in configuration but is unimplemented at the reviewed commit; a conforming claim MUST NOT depend on it.
+
+REQ-PR-NOTARY-025: When a source binding configures freshness, Registry Notary MUST derive freshness from configured source metadata, not from caller-supplied freshness. Where the connector can preflight the source observation time, stale or missing freshness MUST deny before the protected source row is read. Where the row itself carries the configured observation field, Notary MUST recheck that timestamp after the row read and before disclosure or credential materialization.
 
 `POST /v1/evaluations` evaluates a single claim; `POST /v1/batch-evaluations` evaluates several in one request. An evaluation is retained under an `evaluation_id` so it can later be rendered (Section 6) or materialized into a credential (Section 7) without re-reading the source.
 
@@ -120,15 +132,14 @@ REQ-PR-NOTARY-010: A `redacted` result MUST NOT carry the underlying source valu
 
 ## 6. Response formats
 
-An evaluation can be returned in three formats, selected by content negotiation and constrained by the claim's configured `formats`:
+An evaluation can be returned in two render formats, selected by content negotiation and constrained by the claim's configured `formats`:
 
 - Claim-result JSON: `application/vnd.registry-notary.claim-result+json`.
 - CCCEV-shaped JSON-LD: `application/ld+json; profile="cccev"`.
-- SD-JWT VC credential: `application/dc+sd-jwt` (Section 7).
 
-A stored evaluation can be re-rendered through `POST /v1/evaluations/{evaluation_id}/render`. The supported formats are listed at `GET /v1/formats`.
+A stored evaluation can be re-rendered through `POST /v1/evaluations/{evaluation_id}/render`. The supported render formats are listed at `GET /v1/formats`. SD-JWT VC credentials are materialized from stored evaluations through Section 7, not returned by the render endpoint.
 
-REQ-PR-NOTARY-011: Registry Notary MUST be able to return an evaluation as the claim-result JSON media type (`application/vnd.registry-notary.claim-result+json`). It MAY also return CCCEV-shaped JSON-LD or an SD-JWT VC when the claim's `formats` permit and the caller negotiates for it.
+REQ-PR-NOTARY-011: Registry Notary MUST be able to return an evaluation as the claim-result JSON media type (`application/vnd.registry-notary.claim-result+json`). It MAY also return CCCEV-shaped JSON-LD when the claim's `formats` permit and the caller negotiates for it. It MUST NOT treat SD-JWT VC credential issuance as a render format; SD-JWT VC materialization is governed by Section 7 and Section 8.
 
 REQ-PR-NOTARY-012: CCCEV-shaped output MUST NOT assert conformance to CCCEV 2.00. The output is a profiled subset, consumed by parsing the `@graph` for `cccev:Evidence` nodes; the [standards register](../../reference/standards/) records the claim level.
 
@@ -144,13 +155,19 @@ REQ-PR-NOTARY-015: A credential MUST bind its holder by naming the holder's publ
 
 The issuer signing key is sourced from configuration as an OKP Ed25519 JWK; its public half is the key published at `GET /.well-known/evidence/jwks.json`.
 
+Self-attestation is a constrained trust context, not a caller-provided claim value. It binds the authenticated citizen principal to configured claims, purposes, disclosures, formats, credential profiles, subject binding, assurance requirements, and token age limits before evaluation or issuance.
+
+REQ-PR-NOTARY-026: For self-attestation flows, Registry Notary MUST derive the subject and assurance context from the authenticated principal and configured subject binding. It MUST NOT let the caller choose a different subject, claim, purpose, disclosure, format, or credential profile outside the self-attestation policy, and MUST audit self-attestation decisions without raw subject identifiers or bearer tokens.
+
 ## 8. OID4VCI issuance flow
 
-For a wallet caller rather than a backend, Registry Notary exposes an OpenID for Verifiable Credential Issuance (OID4VCI) flow. The wallet learns the endpoints from the issuer metadata at `GET /.well-known/openid-credential-issuer`, obtains a credential offer, requests a nonce, signs a proof of possession with its `did:jwk` key, and posts the access token plus the proof to the credential endpoint.
+For a wallet caller rather than a backend, Registry Notary exposes a scoped OpenID for Verifiable Credential Issuance (OID4VCI) flow. The wallet learns the endpoints from the issuer metadata at `GET /.well-known/openid-credential-issuer`, obtains a credential offer, requests a nonce, signs a proof of possession with its `did:jwk` key, and posts the access token plus the proof to the credential endpoint. The flow is a Notary self-attestation issuance path, not a general-purpose wallet interoperability claim.
 
 REQ-PR-NOTARY-016: The OID4VCI surface is a profiled subset of OID4VCI Draft 13 advertising the `dc+sd-jwt` format. Registry Notary MUST NOT advertise full OID4VCI issuer conformance; its capability-discovery document (`GET /.well-known/evidence-service`) declares `openid4vci.support: not_full_issuer`.
 
 REQ-PR-NOTARY-017: The credential endpoint (`POST /oid4vci/credential`) MUST require a valid access token and a holder proof of possession. Registry Notary MUST NOT issue a credential without proof of possession. Where `oid4vci.nonce.enabled` is set (off by default), the proof MUST additionally be bound to a fresh issuer nonce. The offer MAY carry an authorization-code grant or a pre-authorized-code grant.
+
+REQ-PR-NOTARY-027: OID4VCI credential issuance MUST be scoped to configured credential configurations and the authenticated self-attestation principal. The credential endpoint MUST evaluate the configured claim under the self-attestation and source policies before issuance, MUST enforce the configured credential profile, and MUST NOT imply compatibility with arbitrary external wallets beyond the profiled endpoints and metadata this specification names.
 
 ## 9. Delegated (federated) evaluation
 
@@ -170,12 +187,15 @@ REQ-PR-NOTARY-021: An audit write failure MUST surface as a request error. Regis
 
 REQ-PR-NOTARY-022: Error responses on the claim, credential, and federation routes MUST use the problem-details media type `application/problem+json` ([RFC 9457](https://www.rfc-editor.org/info/rfc9457)). The OID4VCI routes (`/oid4vci/*`) instead return the OID4VCI error envelope their flow defines.
 
+REQ-PR-NOTARY-028: Public claim results MUST carry claim provenance using the `registry-notary-claim-provenance/v1` shape. Audit records for policy-governed evaluations and denials MUST preserve the relevant evaluation policy or matching-policy id, hash, and evaluated rule ids when that policy was selected, while omitting requester-side raw identifiers and secrets from public provenance.
+
 ## 11. Limitations
 
 These constraints are stated so a reader does not infer a capability from the route list that the reviewed implementation does not provide.
 
 - **Plugin rule type.** Declared in configuration, unimplemented (REQ-PR-NOTARY-007).
 - **Holder binding.** `did:jwk` is the only supported proof-of-possession binding method (REQ-PR-NOTARY-015).
+- **OID4VCI profile.** The OID4VCI surface is a scoped self-attestation issuance profile, not a full issuer or general external-wallet interoperability claim (REQ-PR-NOTARY-016, REQ-PR-NOTARY-027).
 - **Federation.** Static-peer delegated evaluation only; no dynamic discovery, shared replay storage, or federated credential issuance (REQ-PR-NOTARY-019).
 - **Admin reload.** The admin reload route returns HTTP 501 with code `registry.admin.capability.not_supported` in the standalone router; it performs no reload, and key and configuration changes require a service restart.
 
@@ -185,13 +205,14 @@ A Registry Notary deployment conforms to this specification when it:
 
 - runs independently of Registry Relay (REQ-PR-NOTARY-001) and gates capability discovery while publishing its JWKS openly (REQ-PR-NOTARY-002);
 - authenticates every claim-bearing route and enforces per-claim scopes before source access (REQ-PR-NOTARY-003, REQ-PR-NOTARY-004);
+- enforces governed source policy decisions, source-bound purpose constraints, and source-derived freshness before disclosure or issuance (REQ-PR-NOTARY-023, REQ-PR-NOTARY-024, REQ-PR-NOTARY-025);
 - evaluates claims itself, over HTTP-only source connectors, using only implemented rule types (REQ-PR-NOTARY-005, REQ-PR-NOTARY-006, REQ-PR-NOTARY-007);
 - records and honors the disclosure mode, and never leaks a redacted value (REQ-PR-NOTARY-008, REQ-PR-NOTARY-009, REQ-PR-NOTARY-010);
-- returns the claim-result format and states its CCCEV output as a profiled subset (REQ-PR-NOTARY-011, REQ-PR-NOTARY-012);
+- returns the claim-result format, may render CCCEV-shaped JSON-LD, and states its CCCEV output as a profiled subset (REQ-PR-NOTARY-011, REQ-PR-NOTARY-012);
 - issues only SD-JWT VC credentials, with digest-based selective disclosure and `did:jwk` holder binding (REQ-PR-NOTARY-013, REQ-PR-NOTARY-014, REQ-PR-NOTARY-015);
-- exposes OID4VCI as a declared non-full-issuer subset and requires a holder proof of possession to issue (REQ-PR-NOTARY-016, REQ-PR-NOTARY-017);
+- treats self-attestation as constrained authenticated trust context and exposes OID4VCI as a scoped non-full-issuer subset that requires holder proof of possession (REQ-PR-NOTARY-026, REQ-PR-NOTARY-016, REQ-PR-NOTARY-017, REQ-PR-NOTARY-027);
 - restricts federation to verified, static peers and never issues credentials over it (REQ-PR-NOTARY-018, REQ-PR-NOTARY-019);
-- audits every evaluation, fails the request when it cannot, and reports errors as problem+json (REQ-PR-NOTARY-020, REQ-PR-NOTARY-021, REQ-PR-NOTARY-022).
+- audits every evaluation, fails the request when it cannot, reports errors as problem+json, and carries policy/provenance context without raw requester secrets (REQ-PR-NOTARY-020, REQ-PR-NOTARY-021, REQ-PR-NOTARY-022, REQ-PR-NOTARY-028).
 
 Conformance to this specification does not imply conformance to any external standard cited in the `standards_referenced` frontmatter field. Each standard's adoption mode and scope are documented in the [standards register](../../reference/standards/).
 

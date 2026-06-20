@@ -79,12 +79,10 @@
     "adoption_mode": "profiled",
     "used_by": [
       "registry-manifest",
-      "registry-atlas",
       "registry-lab"
     ],
     "surfaces": [
       "public service catalogue rendering",
-      "service-first discovery",
       "channel and form linking",
       "competent authority and requirement links"
     ],
@@ -94,16 +92,12 @@
         "url": "https://github.com/jeremi/registry-manifest/tree/81eb005f1808415199d79e02e24e84a6649be318/fixtures/cpsv-ap"
       },
       {
-        "label": "Registry Atlas service-first spec",
-        "url": "https://github.com/jeremi/registry-atlas/blob/d46f943b9fdcbab787d1d4eed114058aa43980be/SERVICE_FIRST_DISCOVERY_SPEC.md"
-      },
-      {
         "label": "Registry Lab service-first discovery docs",
         "url": "https://github.com/jeremi/registry-lab/blob/5bb84d5b2500a8d37b989e0959e22287250d1e40/docs/service-first-discovery.md"
       }
     ],
     "last_checked": "2026-05-25",
-    "notes": "Registry Manifest emits CPSV-AP service catalogues. Registry Atlas consumes them for service-first discovery; Registry Lab demonstrates the flow with static metadata."
+    "notes": "Registry Manifest emits CPSV-AP service catalogues. Registry Lab demonstrates the static metadata flow. Registry Relay does not expose a current CPSV-AP runtime route."
   },
   {
     "id": "ogc-api-records",
@@ -137,7 +131,7 @@
       }
     ],
     "last_checked": "2026-06-13",
-    "notes": "Relay exposes records routes behind the ogcapi-records feature (route output asserted by the OGC records API tests), and Manifest renders OGC records artifacts."
+    "notes": "Relay exposes records routes behind the ogcapi-records feature (route output asserted by the OGC records API tests), and Manifest renders and publishes static OGC Records item collections."
   },
   {
     "id": "ogc-api-features",
@@ -145,23 +139,53 @@
     "standards_body": "Open Geospatial Consortium",
     "official_url": "https://ogcapi.ogc.org/features/",
     "version_or_profile": "OGC API Features (no numbered spec version asserted; URL-pinned)",
-    "status": "referenced",
-    "claim_level": "aligns_with",
-    "adoption_mode": "not adopted",
+    "status": "used",
+    "claim_level": "emits",
+    "adoption_mode": "profiled",
     "used_by": [
       "registry-relay"
     ],
     "surfaces": [
-      "standards adapter discussion"
+      "feature collection discovery",
+      "dataset-scoped feature items"
     ],
     "evidence_docs": [
       {
         "label": "Registry Relay README",
         "url": "https://github.com/jeremi/registry-relay/blob/05a4b249c74bd8f3788eda249a53277d02b22f12/README.md"
+      },
+      {
+        "label": "Registry Relay OGC Features API tests",
+        "url": "https://github.com/jeremi/registry-relay/blob/05a4b249c74bd8f3788eda249a53277d02b22f12/tests/ogc_api.rs"
       }
     ],
-    "last_checked": "2026-05-23",
-    "notes": "Listed as an optional standards integration. Keep the claim below implementation until route evidence is pinned."
+    "last_checked": "2026-06-20",
+    "notes": "Relay exposes OGC API Features routes behind the ogcapi-features feature. The claim is scoped to the profiled route output tested in Registry Relay, not full OGC conformance."
+  },
+  {
+    "id": "ogc-api-edr",
+    "name": "OGC API Environmental Data Retrieval",
+    "standards_body": "Open Geospatial Consortium",
+    "official_url": "https://ogcapi.ogc.org/edr/",
+    "version_or_profile": "OGC API EDR (no numbered spec version asserted; URL-pinned)",
+    "status": "used",
+    "claim_level": "emits",
+    "adoption_mode": "profiled",
+    "used_by": [
+      "registry-relay"
+    ],
+    "surfaces": [
+      "area queries over configured spatial aggregates",
+      "EDR collection discovery"
+    ],
+    "evidence_docs": [
+      {
+        "label": "Registry Relay OGC EDR API tests",
+        "url": "https://github.com/jeremi/registry-relay/blob/05a4b249c74bd8f3788eda249a53277d02b22f12/tests/ogc_edr_api.rs"
+      }
+    ],
+    "last_checked": "2026-06-20",
+    "notes": "Relay exposes OGC API EDR area routes behind the ogcapi-edr feature for configured spatial aggregates. The claim is scoped to the tested adapter surface, not full OGC conformance."
   },
   {
     "id": "openapi",
@@ -234,6 +258,36 @@
     ],
     "last_checked": "2026-06-13",
     "notes": "Relay emits SHACL/JSON-LD documents whose structure is asserted by its catalog tests, and Manifest renders SHACL. No SHACL validator run against the emitted shapes is pinned."
+  },
+  {
+    "id": "skos",
+    "name": "Simple Knowledge Organization System",
+    "standards_body": "W3C",
+    "official_url": "https://www.w3.org/TR/skos-reference/",
+    "version_or_profile": "SKOS Reference codelist concept-scheme profile",
+    "status": "used",
+    "claim_level": "emits",
+    "adoption_mode": "profiled",
+    "used_by": [
+      "registry-manifest"
+    ],
+    "surfaces": [
+      "embedded codelist concept schemes",
+      "SHACL field codelist bindings",
+      "BRegDCAT/DCAT dataset codelist references"
+    ],
+    "evidence_docs": [
+      {
+        "label": "Registry Manifest codelist renderer",
+        "url": "https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/src/lib.rs"
+      },
+      {
+        "label": "Registry Manifest codelist tests",
+        "url": "https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/tests/metadata_core.rs"
+      }
+    ],
+    "last_checked": "2026-06-20",
+    "notes": "Registry Manifest emits flat SKOS-shaped `skos:ConceptScheme` and `skos:Concept` nodes for manifest codelists inside SHACL and BRegDCAT/DCAT-shaped outputs. It does not yet publish a standalone SKOS artifact or claim full SKOS conformance."
   },
   {
     "id": "json-schema",
@@ -389,7 +443,6 @@
     "used_by": [
       "registry-manifest",
       "registry-notary",
-      "registry-atlas",
       "registry-lab"
     ],
     "surfaces": [
@@ -405,10 +458,6 @@
         "url": "https://github.com/jeremi/registry-manifest/tree/81eb005f1808415199d79e02e24e84a6649be318/fixtures/cpsv-ap"
       },
       {
-        "label": "Registry Atlas service-first navigation API",
-        "url": "https://github.com/jeremi/registry-atlas/blob/d46f943b9fdcbab787d1d4eed114058aa43980be/crates/semantic-asset-discovery-core/src/navigation.rs"
-      },
-      {
         "label": "Registry Notary CCCEV renderer",
         "url": "https://github.com/jeremi/registry-notary/blob/2a866c1194f6f61db5680bb722c1da61c124252b/crates/registry-notary-server/src/runtime.rs"
       },
@@ -418,7 +467,7 @@
       }
     ],
     "last_checked": "2026-05-25",
-    "notes": "Manifest emits CCCEV requirement and evidence type list metadata. Atlas treats each EvidenceTypeList as one grouped option and multiple lists as alternatives. Notary renders CCCEV-shaped claim results. Profile conformance is not claimed."
+    "notes": "Manifest emits CCCEV requirement and evidence type list metadata. Notary renders CCCEV-shaped claim results. Profile conformance is not claimed."
   },
   {
     "id": "odrl",
@@ -431,11 +480,13 @@
     "adoption_mode": "adopted",
     "used_by": [
       "registry-relay",
-      "registry-manifest"
+      "registry-manifest",
+      "registry-platform"
     ],
     "surfaces": [
       "dataset-scoped offers",
-      "policy documents"
+      "policy documents",
+      "governed evidence PDP constraint terms"
     ],
     "evidence_docs": [
       {
@@ -449,10 +500,18 @@
       {
         "label": "Registry Relay catalog tests (ODRL offer assertions)",
         "url": "https://github.com/jeremi/registry-relay/blob/05a4b249c74bd8f3788eda249a53277d02b22f12/tests/catalog_entity.rs"
+      },
+      {
+        "label": "Registry Platform PDP ODRL enforcement profile constants",
+        "url": "https://github.com/jeremi/registry-platform/blob/main/crates/registry-platform-pdp/src/lib.rs"
+      },
+      {
+        "label": "Registry Relay governed evidence PDP path",
+        "url": "https://github.com/jeremi/registry-relay/blob/main/src/api/governed.rs"
       }
     ],
-    "last_checked": "2026-06-13",
-    "notes": "Relay catalog JSON-LD can include dataset-scoped ODRL Offers; Manifest renders policies. Policies are published as metadata; Relay does not evaluate or enforce them at runtime."
+    "last_checked": "2026-06-20",
+    "notes": "Relay catalog JSON-LD can include dataset-scoped ODRL Offers, and Manifest renders ODRL policy metadata. That publication surface is descriptive and is not itself an access grant. Separately, Relay's governed Evidence Gateway runtime path can select a governed-evidence binding and call the shared PDP using the `registry-evidence-gateway-pdp/v1` profile; the implemented runtime enforcement terms are currently `odrl:purpose` and `odrl:spatial`, while unsupported ODRL terms are denied rather than treated as enforced."
   },
   {
     "id": "sdmx",
@@ -550,8 +609,7 @@
     "used_by": [
       "registry-relay",
       "registry-manifest",
-      "registry-notary",
-      "registry-atlas"
+      "registry-notary"
     ],
     "surfaces": [
       "Framework 2.0 principle and pathway comparison",
