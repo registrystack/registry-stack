@@ -183,7 +183,6 @@ Scopes are independent. Grant the narrowest scope that lets the caller do its jo
 | `rows` | Entity collection, single-record, and relationship reads |
 | `evidence_verification` | Evidence-oriented standards adapter calls and integrations that must stay separate from row reads |
 | `aggregate` | Aggregate discovery and configured aggregate execution |
-| `admin` | Admin listener operations |
 
 Global admin-listener scopes are independent of dataset scopes: `registry_relay:admin` for reload and configuration mutation, `registry_relay:metrics_read` for metrics, and `registry_relay:ops_read` for read-only posture and capability discovery.
 
