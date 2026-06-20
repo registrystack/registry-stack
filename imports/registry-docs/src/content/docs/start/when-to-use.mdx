@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-relay
   - registry-notary
-last_reviewed: "2026-06-10"
+last_reviewed: "2026-06-20"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -15,19 +15,22 @@ standards_referenced:
 ---
 
 Registry Stack is a registry-facing layer for institutions that already hold authoritative data.
-It does not store records or run a domain registry. It adds a governed service surface over data
-you already operate: a published metadata contract, protected read-only APIs, configured evidence
-answers, and tamper-evident audit records.
+It does not store records or run a domain registry. It adds controlled service surfaces over data
+you already operate: a published metadata contract, protected registry APIs, governed evidence
+responses, and tamper-evident audit records.
 
-This is the one "why" page these docs keep. For the full problem framings, who benefits, and where
-the stack fits in a wider stack, see the marketing site at
-[registrystack.org](https://registrystack.org/).
+This is the one "why" page these docs keep. For broader problem framing, who benefits, and where
+the stack fits in a wider ecosystem, see [registrystack.org](https://registrystack.org/).
 
 ## What it is
 
-Registry Stack is a set of repositories with distinct responsibilities, organized around one
-capability sequence: describe what a registry can provide, expose protected read-only access, then
-certify evidence that fits the purpose of the request.
+Registry Stack supports two runtime patterns:
+
+- Protected Registry APIs expose files, extracts, databases, and legacy registry systems through
+  scoped, read-only routes.
+- Evidence Gateway evaluates the request, source context, policy, freshness, redaction, and audit
+  requirements before returning a protected read, minimized fact, selected value, signed claim
+  result, credential, redacted result, or denial.
 
 These docs cover the two products you build against directly:
 
@@ -36,8 +39,8 @@ These docs cover the two products you build against directly:
 - Registry Notary evaluates configured claims and returns a status, predicate, selected value, or
   signed credential, instead of the full source record.
 
-The wider stack (Registry Manifest for portable metadata, Registry Atlas for inspection, Registry
-Platform for shared primitives, and Registry Lab for a local compose demo) is described at
+The wider current stack (Registry Manifest for portable metadata, Registry Platform for shared
+primitives, and Registry Lab for a local compose demo) is described at
 [registrystack.org](https://registrystack.org/). For how the pieces connect at runtime, see the
 [architecture overview](../../explanation/architecture/).
 
@@ -69,8 +72,8 @@ Registry Stack deliberately leaves these to other systems:
 - It does not solve foundational identity, deduplication, legal authority, semantic governance, or
   institutional approval by itself. It makes those boundaries explicit so they can be reviewed
   before data moves.
-- Registry Relay is read-only in v0: write operations (provisioning, inserts, updates) are out of
-  scope.
+- Registry Relay does not mutate source registry data: provisioning, inserts, updates, and write-back
+  are out of scope for its consultation API.
 - Registry Relay is not an open-data portal: it publishes restricted consultation APIs for
   authorized systems only.
 

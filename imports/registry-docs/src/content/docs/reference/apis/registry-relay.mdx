@@ -6,13 +6,15 @@ owner: registry-relay
 source_repos:
   - registry-relay
   - registry-platform
-last_reviewed: "2026-06-05"
+last_reviewed: "2026-06-20"
 doc_type: reference
 locale: en
 standards_referenced:
   - openapi
   - dcat
   - ogc-api-records
+  - ogc-api-features
+  - ogc-api-edr
   - odrl
   - shacl
   - json-ld
@@ -33,11 +35,11 @@ integration detail, see the [Registry Relay product documentation](../../../prod
 
 ## What the API is
 
-Registry Relay turns sensitive government tabular files and database tables into protected,
-read-only, domain-oriented consultation APIs. Callers read configured entities, schemas, declared
-aggregates, catalog and policy metadata, and evidence-offering descriptors. Relay never widens a
-caller's reach at request time: the routes, datasets, and scopes a gateway exposes are fixed by its
-configuration.
+Registry Relay implements the Protected Registry APIs pattern. It turns existing registry source
+data, such as files, extracts, and database tables, into protected, read-only, domain-oriented
+consultation APIs. Callers read configured entities, schemas, declared aggregates, catalog and
+policy metadata, and evidence-offering descriptors. Relay never widens a caller's reach at request
+time: the routes, datasets, and scopes a gateway exposes are fixed by its configuration.
 
 ## Authentication
 
@@ -61,10 +63,12 @@ For setup steps, scope strings, and credential configuration, see
   serialization; config key: `provenance`) only mount when the gateway is built and configured with
   the matching Cargo feature.
 - **Admin routes.** Reload and metrics routes are mounted on a separate, optional admin listener,
-  require `admin` scope, and do not appear in the public OpenAPI document.
+  require `registry_relay:admin` for reload/config mutation, `registry_relay:metrics_read` for
+  metrics, and `registry_relay:ops_read` for operational posture reads. They do not appear in the
+  public OpenAPI document.
 - **Evidence-offering discovery.** Relay publishes evidence-offering metadata at
   `GET /metadata/evidence-offerings` and `GET /metadata/evidence-offerings/{offering_id}`.
   These routes describe where to reach a Notary for verification; Relay does not execute the
   verification itself.
-- **Read-only, no streaming.** Relay performs no writes. Sources are read as batch snapshots or
-  table scans; there is no event-stream backend.
+- **Read-only, no streaming.** Relay does not mutate source registry data. Sources are read as batch
+  snapshots or table scans; there is no event-stream backend.

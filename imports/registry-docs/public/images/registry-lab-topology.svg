@@ -2,7 +2,7 @@
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title>Registry Lab topology</title>
-  <desc>The Registry Lab compose demo wires static manifest output and locally generated demo secrets into Registry Relay and Registry Notary, then exposes both services to Registry Atlas and a demo client. The smoke script verifies the running stack.</desc>
+  <desc>The Registry Lab compose demo wires static manifest output and locally generated demo secrets into Registry Relay and Registry Notary, then exposes both services to reviewer calls and a demo client. The smoke script verifies the running stack.</desc>
 
   <text x="16" y="22" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">REGISTRY LAB — COMPOSE TOPOLOGY</text>
   <rect x="16" y="30" width="32" height="2" fill="#000091"/>
@@ -56,10 +56,10 @@
     <polyline points="510,228 516,232 510,236"/>
   </g>
 
-  <text x="528" y="116" fill="#161616" font-size="13" font-weight="700">Registry Atlas</text>
-  <text x="528" y="134" fill="#3a3a3a" font-size="12">Workbench UI that</text>
-  <text x="528" y="152" fill="#3a3a3a" font-size="12">fetches the metadata</text>
-  <text x="528" y="170" fill="#3a3a3a" font-size="12">endpoint.</text>
+  <text x="528" y="116" fill="#161616" font-size="13" font-weight="700">reviewer calls</text>
+  <text x="528" y="134" fill="#3a3a3a" font-size="12">HTTP checks against</text>
+  <text x="528" y="152" fill="#3a3a3a" font-size="12">metadata and runtime</text>
+  <text x="528" y="170" fill="#3a3a3a" font-size="12">endpoints.</text>
 
   <text x="528" y="210" fill="#161616" font-size="13" font-weight="700">demo client</text>
   <text x="528" y="228" fill="#6a6a6a" font-size="11.5"

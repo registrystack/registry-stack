@@ -9,7 +9,7 @@ source_repos:
   - registry-relay
   - registry-notary
   - registry-lab
-last_reviewed: "2026-06-13"
+last_reviewed: "2026-06-20"
 doc_type: specification
 doc_id: RS-ARC-G
 category: normative
@@ -20,10 +20,13 @@ standards_referenced:
   - bregdcat-ap
   - cpsv-ap
   - ogc-api-records
+  - ogc-api-features
+  - ogc-api-edr
   - openapi
   - shacl
   - json-schema
   - json-ld
+  - skos
   - cccev
   - sd-jwt-vc
   - oid4vci
@@ -49,6 +52,7 @@ For a narrative explanation with worked examples, see the [architecture overview
 | --- | --- | --- | --- |
 | 0.1.0 | 2026-06-13 | draft | Initial architecture, distilled from the current architecture overview and boundary map. |
 | 0.2.0 | 2026-06-13 | draft | Added REQ-ARC-G-010: the portable metadata layer describes but does not authorize, enforce, or assert facts about live data. |
+| 0.3.0 | 2026-06-20 | draft | Clarified governed runtime PDP enforcement for the supported Evidence Gateway profile while preserving the descriptive metadata boundary. |
 
 ## 1. Scope and audience
 
@@ -67,7 +71,7 @@ The intended audience is implementors building or deploying registry stack compo
 
 The registry stack separates its concerns into two layers.
 
-The **portable metadata layer** is responsible for describing what a registry exposes. It operates entirely without touching production data sources. The layer produces static, standards-shaped artifacts (catalogs, schemas, policy documents, evidence offerings) that can be hosted, distributed, and inspected offline. A governance team, an integrator, or an auditor can validate the full description of a registry before any runtime service is deployed or connected.
+The **portable metadata layer** is responsible for describing what a registry exposes. It operates entirely without touching production data sources. The layer produces static, standards-shaped artifacts (catalogs, schemas, policy documents, evidence offerings, OGC Records item collections, and embedded codelist metadata) that can be hosted, distributed, and inspected offline. A governance team, an integrator, or an auditor can validate the full description of a registry before any runtime service is deployed or connected.
 
 The **runtime services layer** is responsible for enforcing what the registry description promises. It binds the portable metadata artifacts to actual data sources, enforces access control, evaluates claims against live data, and issues credentials. The runtime layer starts from the portable artifacts; it does not define the schema or policy contracts itself.
 
@@ -82,7 +86,7 @@ flowchart TD
     end
 
     subgraph runtime["Runtime services layer"]
-        relay["Registry Relay<br/>(registry-relay)<br/>Binds manifest artifacts to data sources;<br/>enforces read-only access control"]
+        relay["Registry Relay<br/>(registry-relay)<br/>Binds manifest artifacts to data sources;<br/>enforces read-only access control<br/>and governed PDP policy"]
         notary["Registry Notary<br/>(registry-notary)<br/>Evaluates claims; issues SD-JWT VC credentials;<br/>handles delegated evaluation"]
     end
 
@@ -109,15 +113,17 @@ Registry Platform (`registry-platform`) is a shared Rust crate workspace that pr
 
 ### Registry Manifest
 
-Registry Manifest (`registry-manifest`) is a pure Rust library and command-line interface (CLI) with no runtime data dependencies. It accepts a portable `metadata.yaml` document (schema version `registry-manifest/v1`) that describes datasets, entities, fields, public services, forms, requirements, policies, and evidence offerings. It validates the document and renders a static discovery bundle containing: a catalog (`catalog.json`), Data Catalog Vocabulary (DCAT) and BRegDCAT-AP JSON-LD, Core Public Service Vocabulary Application Profile (CPSV-AP) JSON-LD, Shapes Constraint Language (SHACL) node shapes, JSON Schema documents, OGC API Records items, Open Digital Rights Language (ODRL) policy documents, Core Criterion and Core Evidence Vocabulary (CCCEV) metadata, and an `index.json`. Registry Manifest does not serve HTTP, does not connect to databases, and does not handle authentication, audit, or secrets. Production source configuration (source paths, table identifiers, scopes) does not belong in the manifest; it belongs in Registry Relay configuration.
+Registry Manifest (`registry-manifest`) is a pure Rust library and command-line interface (CLI) with no runtime data dependencies. It accepts a portable `metadata.yaml` document (schema version `registry-manifest/v1`) that describes datasets, entities, fields, public services, forms, requirements, policies, codelists, and evidence offerings. It validates the document and renders a static discovery bundle containing: a catalog (`catalog.json`), Data Catalog Vocabulary (DCAT) and BRegDCAT-AP JSON-LD, Core Public Service Vocabulary Application Profile (CPSV-AP) JSON-LD, Shapes Constraint Language (SHACL) node shapes, JSON Schema documents, OGC API Records item collection, Open Digital Rights Language (ODRL) policy documents, Core Criterion and Core Evidence Vocabulary (CCCEV) metadata, embedded SKOS-shaped codelist metadata, and an `index.json`. Registry Manifest does not serve HTTP, does not connect to databases, and does not handle authentication, audit, or secrets. Production source configuration (source paths, table identifiers, scopes) does not belong in the manifest; it belongs in Registry Relay configuration.
 
 ### Registry Relay
 
-Registry Relay (`registry-relay`) is a config-driven Rust service that turns sensitive government tabular files and database tables into protected, read-only, domain-oriented consultation APIs. At startup it reads runtime configuration that binds the manifest's logical datasets and entities to actual data sources (CSV, XLSX, Parquet, PostgreSQL). It exposes entity routes, metadata routes, evidence-offering endpoints, and (behind feature flags) OGC API Records routes, an SP DCI adapter, and an SDMX-JSON aggregate output. It publishes a `did:web` document when signed response credentials are enabled. Registry Relay is not an open-data portal; it serves restricted consultation APIs for authorized systems only. Write operations are out of scope for v1. Registry Relay does not own the manifest schema, claim evaluation, credential issuance, or the shared primitives supplied by Registry Platform.
+Registry Relay (`registry-relay`) is a config-driven Rust service that turns sensitive government tabular files and database tables into protected, read-only, domain-oriented consultation APIs. At startup it reads runtime configuration that binds the manifest's logical datasets and entities to actual data sources (CSV, XLSX, Parquet, PostgreSQL). It exposes entity routes, metadata routes, evidence-offering endpoints, and (behind feature flags) OGC API Records, OGC API Features, OGC API EDR, SP DCI, and SDMX-JSON aggregate surfaces. It publishes a `did:web` document when signed response credentials are enabled in gateway issuer mode.
+
+Registry Relay is not an open-data portal; it serves restricted consultation APIs for authorized systems only. Source-registry data mutation is out of scope for v1. On governed runtime routes, Relay can enforce the supported Evidence Gateway PDP profile (`registry-evidence-gateway-pdp/v1`) for access, freshness, and redaction decisions using runtime configuration, compiled policy metadata, and trusted per-request context. This is runtime policy enforcement for the configured gateway surface; it is not claim evaluation, credential issuance, full Evidence Gateway interoperability, or full OID4VCI behavior. Registry Relay does not own the manifest schema, claim evaluation, credential issuance, or the shared primitives supplied by Registry Platform.
 
 ### Registry Notary
 
-Registry Notary (`registry-notary`) is a standalone Rust service for claim evaluation, disclosure policy, credential issuance, and audit. It is decoupled from Registry Relay application code by design; it calls Registry Relay over HTTP using a `registry_data_api` or `dci` source connector and does not import or link Registry Relay libraries. Registry Notary evaluates configured evidence rules against data from one or more source services and returns results as `application/vnd.registry-notary.claim-result+json`, CCCEV-shaped JSON-LD (`application/ld+json; profile="cccev"`), or SD-JWT VC credentials (`application/dc+sd-jwt`). It exposes an OpenID for Verifiable Credential Issuance (OID4VCI) issuance flow as a profiled subset of OID4VCI Draft 13. It supports static-peer delegated evaluation through `POST /federation/v1/evaluations`. Registry Notary does not produce DCAT, BRegDCAT-AP, SHACL, or OGC Records artifacts. The current federation implementation is static-peer only; dynamic trust-chain discovery, shared replay storage, and federated credential issuance are not part of this version.
+Registry Notary (`registry-notary`) is a standalone Rust service for claim evaluation, disclosure policy, credential issuance, and audit. It is decoupled from Registry Relay application code by design; it calls Registry Relay over HTTP using a `registry_data_api` or `dci` source connector and does not import or link Registry Relay libraries. Registry Notary evaluates configured evidence rules against data from one or more source services and returns evaluation results as `application/vnd.registry-notary.claim-result+json` or CCCEV-shaped JSON-LD (`application/ld+json; profile="cccev"`). It materializes SD-JWT VC credentials (`application/dc+sd-jwt`) through its credential issuance surfaces, including an OpenID for Verifiable Credential Issuance (OID4VCI) flow as a profiled subset of OID4VCI Draft 13. It supports static-peer delegated evaluation through `POST /federation/v1/evaluations`. Registry Notary does not produce DCAT, BRegDCAT-AP, SHACL, or OGC Records artifacts. The current federation implementation is static-peer only; dynamic trust-chain discovery, shared replay storage, and federated credential issuance are not part of this version.
 
 ### Registry Lab
 
@@ -131,11 +137,11 @@ The following ordered flow describes how a request moves through the stack from 
 
 2. **Manifest authoring.** An operator authors a portable `metadata.yaml` document (schema `registry-manifest/v1`) describing datasets, entities, fields, public services, forms, requirements, policies, and evidence offerings. The manifest does not contain runtime bindings.
 
-3. **Compilation and bundle rendering.** Registry Manifest validates the manifest and renders a static discovery bundle. The bundle contains the catalog, DCAT and BRegDCAT-AP JSON-LD, CPSV-AP JSON-LD, SHACL node shapes, JSON Schema documents, OGC API Records items, ODRL policy documents, CCCEV metadata, evidence-offering metadata, and an `index.json`. The bundle can be hosted as static files without running any runtime service.
+3. **Compilation and bundle rendering.** Registry Manifest validates the manifest and renders a static discovery bundle. The bundle contains the catalog, DCAT and BRegDCAT-AP JSON-LD, CPSV-AP JSON-LD, SHACL node shapes, JSON Schema documents, OGC API Records item collection, ODRL policy documents, CCCEV metadata, evidence-offering metadata, embedded SKOS-shaped codelist metadata, and an `index.json`. The bundle can be hosted as static files without running any runtime service.
 
-4. **Runtime binding and access control.** Registry Relay starts with runtime configuration that binds the manifest's logical datasets and entities to actual data sources. Clients reach entity routes, metadata routes, and evidence-offering endpoints through configured authentication. Relay records a `Data-Purpose` header in audit envelopes where present.
+4. **Runtime binding and access control.** Registry Relay starts with runtime configuration that binds the manifest's logical datasets and entities to actual data sources. Clients reach entity routes, metadata routes, and evidence-offering endpoints through configured authentication. Relay records a `Data-Purpose` header in audit envelopes where present. On governed runtime routes, Relay evaluates the supported Evidence Gateway PDP profile before disclosure and applies redaction when the decision permits only a minimized response.
 
-5. **Claim evaluation.** Registry Notary evaluates claims against configured HTTP sources (`registry_data_api` or `dci` connectors). It applies disclosure policy (value, predicate, or redacted) and returns results in one of its three response formats.
+5. **Claim evaluation.** Registry Notary evaluates claims against configured HTTP sources (`registry_data_api` or `dci` connectors). It applies disclosure policy (value, predicate, or redacted), returns evaluation results as claim-result JSON or CCCEV-shaped JSON-LD, and can materialize eligible stored evaluations into SD-JWT VC credentials.
 
 6. **Delegated evaluation.** A trusted Registry Notary instance can call another trusted Registry Notary instance through `POST /federation/v1/evaluations` for signed delegated evaluation. Registry Manifest can publish discovery metadata for that relationship, but local Notary peer policy grants access. Peer lists are loaded from configuration at startup.
 
@@ -147,7 +153,7 @@ REQ-ARC-G-001: The portable metadata layer MUST render discovery artifacts witho
 
 REQ-ARC-G-002: A metadata manifest (schema `registry-manifest/v1`) MUST NOT include runtime bindings such as source paths, table names, or scopes. Runtime bindings belong in Registry Relay configuration.
 
-REQ-ARC-G-003: In v1, runtime services MUST NOT expose write paths. Consultation APIs are read-only.
+REQ-ARC-G-003: In v1, runtime services MUST NOT expose source-registry data mutation routes. Consultation APIs are read-only.
 
 REQ-ARC-G-004: Every request that touches person-level data MUST be audited. Registry Platform provides the audit envelope primitives, verified to exist in the shared crate; Registry Relay and Registry Notary MUST compose those primitives on routes that return person-level records or claim results. This requirement states an invariant a conforming deployment meets; it is not a claim that every route in a given build has been individually audited.
 
@@ -155,13 +161,15 @@ REQ-ARC-G-005: A primitive that must behave identically across runtime services 
 
 REQ-ARC-G-006: Registry Relay MUST own the runtime binding between manifest logical concepts and data sources. The manifest schema and its renderers are owned by Registry Manifest; Registry Relay MUST NOT define or version the manifest format.
 
-REQ-ARC-G-007: Registry Notary MUST own claim evaluation, disclosure policy, and credential issuance. Registry Relay MUST NOT perform claim evaluation or issue credentials.
+REQ-ARC-G-007: Registry Notary MUST own claim evaluation, disclosure policy, and credential issuance. Registry Relay MUST NOT perform claim evaluation or issue credentials. This boundary does not prohibit Registry Relay from enforcing runtime access, freshness, and redaction policy for its own governed consultation routes.
 
 REQ-ARC-G-008: Registry Notary credentials MUST use SD-JWT VC format (`application/dc+sd-jwt`). No W3C Verifiable Credentials Data Model JSON-LD envelope or namespace is present in the issued credential.
 
 REQ-ARC-G-009: Registry Notary's federation implementation is static-peer delegated evaluation. Peer lists are loaded from configuration at startup. Dynamic trust-chain discovery, shared replay storage, audit checkpoint exchange, and federated credential issuance are not part of this version and MUST NOT be implied by conformance claims against this specification.
 
-REQ-ARC-G-010: The portable metadata layer describes; it does not authorize and it does not assert facts about live data. Publishing a dataset, schema, policy, evidence offering, or federation relationship in a discovery artifact MUST NOT be construed as granting access to it, as enforcing it, or as asserting that any particular record exists or satisfies it. Access control, policy enforcement, and the existence or value of a record are determined only by an authorized runtime read; a published ODRL policy, for instance, is descriptive metadata that Registry Relay does not evaluate at runtime. A conformance claim against a metadata artifact MUST NOT imply a runtime guarantee that the runtime layer has not made.
+REQ-ARC-G-010: The portable metadata layer describes; it does not authorize and it does not assert facts about live data. Publishing a dataset, schema, policy, evidence offering, ecosystem binding, or federation relationship in a discovery artifact MUST NOT be construed as granting access to it, as enforcing it, or as asserting that any particular record exists or satisfies it. Access control, governed PDP enforcement, and the existence or value of a record are determined only by an authorized runtime read under runtime configuration and trusted request or source context. A published ODRL policy is descriptive until a runtime service explicitly binds it into an enforced, supported profile. A conformance claim against a metadata artifact MUST NOT imply a runtime guarantee that the runtime layer has not made.
+
+REQ-ARC-G-011: Where Registry Relay exposes governed runtime routes, it MUST enforce only the supported Evidence Gateway PDP profile (`registry-evidence-gateway-pdp/v1`) as implemented by the runtime stack. A conformance claim against this specification MUST NOT imply full Evidence Gateway interoperability, full OID4VCI issuer behavior, dynamic external policy discovery, or enforcement of ODRL terms outside the supported profile.
 
 ## 6. Capability sequence
 
@@ -183,7 +191,7 @@ An implementation conforms to this specification when it respects the following 
 
 - REQ-ARC-G-001: the metadata compilation step does not access production sources.
 - REQ-ARC-G-002: the metadata manifest contains no runtime bindings.
-- REQ-ARC-G-003: runtime services expose no write paths in v1.
+- REQ-ARC-G-003: runtime services expose no source-registry data mutation routes in v1.
 - REQ-ARC-G-004: every request touching person-level data produces an audit record.
 - REQ-ARC-G-005: shared security primitives that must behave identically across services are sourced from Registry Platform (recommended).
 - REQ-ARC-G-006: Registry Relay owns runtime binding; the manifest format is owned by Registry Manifest.
@@ -191,6 +199,7 @@ An implementation conforms to this specification when it respects the following 
 - REQ-ARC-G-008: issued credentials use SD-JWT VC format (`application/dc+sd-jwt`).
 - REQ-ARC-G-009: federation is static-peer delegated evaluation; no dynamic discovery is implied.
 - REQ-ARC-G-010: discovery artifacts are treated as description, not as authorization, enforcement, or proof that a record exists.
+- REQ-ARC-G-011: governed Relay runtime routes enforce only the supported Evidence Gateway PDP profile and do not imply broader interoperability.
 
 Conformance to this specification does not imply conformance to any external standard cited in the `standards_referenced` frontmatter field. Each standard's adoption mode and scope are documented in the [standards register](../../reference/standards/).
 

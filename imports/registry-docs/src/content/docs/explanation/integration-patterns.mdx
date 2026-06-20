@@ -7,7 +7,7 @@ source_repos:
   - registry-manifest
   - registry-relay
   - registry-notary
-last_reviewed: "2026-06-12"
+last_reviewed: "2026-06-20"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -66,7 +66,7 @@ configured evidence responses, and tamper-evident audit records.
 
 Wire Registry Stack in alongside a domain platform when:
 
-- The platform does not yet publish DCAT/BRegDCAT-AP catalogs or CPSV-AP service descriptions.
+- The platform does not yet publish standards-shaped catalog, service, schema, policy, or evidence-offering metadata.
 - Callers need evidence-shaped responses (predicate, redacted, selected value) rather than full
   records.
 - A read path is needed for callers that must not be granted direct database access.
@@ -139,8 +139,8 @@ authoritative list of claim levels and per-project evidence.
 
 | Integration surface | Relevant standards |
 | --- | --- |
-| Catalog and service discovery (Registry Manifest, Relay metadata routes) | DCAT, BRegDCAT-AP, CPSV-AP, OGC API Records, SHACL, JSON Schema, ODRL |
-| Protected data routes (Registry Relay) | OpenAPI, SP-DCI, GovStack Digital Registries, OGC API Features |
+| Static catalog and service discovery (Registry Manifest) | DCAT, BRegDCAT-AP, CPSV-AP, OGC API Records, SHACL, JSON Schema, ODRL, SKOS-shaped codelists |
+| Scoped runtime metadata and protected data routes (Registry Relay) | OpenAPI, DCAT, BRegDCAT-AP, SHACL, JSON Schema, ODRL, OGC API Records, OGC API Features, OGC API EDR, SP-DCI, GovStack Digital Registries |
 | Evidence and credentials (Registry Notary) | OpenAPI, CCCEV, SD-JWT VC, OID4VCI, W3C DID |
 
 ## Next

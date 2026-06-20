@@ -155,32 +155,6 @@ repos:
     # Excluded (intentionally not public via the docs site):
     #   docs/release-notes.md               release notes (repo-owned)
     #   docs/repository-split.md            historical metadata/evidence split note
-#   registry-atlas:
-#     remote: https://github.com/jeremi/registry-atlas
-#     ref: d46f943b9fdcbab787d1d4eed114058aa43980be
-#     local: ../registry-atlas
-#     docs:
-#       - src: docs/overview.md
-#         dest: products/registry-atlas/index
-#         label: Registry Atlas
-#         nav_order: 0
-#         doc_type: explanation
-#         description: Reviewer and integrator documentation for Registry Atlas, pulled from the product repository.
-#       - src: docs/run-locally.md
-#         dest: products/registry-atlas/run-locally
-#         label: Run Atlas locally
-#         nav_order: 10
-#         doc_type: how-to
-#       - src: docs/inspect-a-registry.md
-#         dest: products/registry-atlas/inspect-a-registry
-#         label: Inspect a registry
-#         nav_order: 20
-#         doc_type: how-to
-#       - src: docs/reference.md
-#         dest: products/registry-atlas/reference
-#         label: Reference
-#         nav_order: 30
-#         doc_type: reference
 #   registry-platform:
 #     remote: https://github.com/jeremi/registry-platform
 #     ref: ee298e00e76ad6b1e56373fe85d6c1e3a95ea238

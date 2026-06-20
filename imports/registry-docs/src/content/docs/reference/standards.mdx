@@ -9,8 +9,7 @@ source_repos:
   - registry-platform
   - registry-manifest
   - registry-notary
-  - registry-atlas
-last_reviewed: "2026-06-10"
+last_reviewed: "2026-06-20"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -76,10 +75,8 @@ What these levels mean for integrators:
 
 ## Gaps
 
-- OGC API Features is listed as `aligns_with` (`referenced`).
-  Route evidence has not been pinned to a specific commit.
-  Promote to `emits` only after `src/api/ogc/features.rs` is exercised by an integration test.
-  {/* TODO[evidence]: relay evidence packet notes "feature-gated; GeoJSON support for spatial features" but no integration test fixture found at commit 85d32f0. */}
+- OGC API Features and OGC API EDR are listed as profiled `emits` claims for Registry Relay.
+  The claims are scoped to the tested feature-gated adapter routes, not full OGC conformance.
 - The Verifiable Credentials Data Model (W3C VC) is listed as `aligns_with` (`referenced`).
   [Registry Relay](../../products/registry-relay/) has VC-oriented provenance fixtures and [Registry Notary](../../products/registry-notary/) issues SD-JWT VC credentials,
   but neither project emits a full W3C VC Data Model envelope.

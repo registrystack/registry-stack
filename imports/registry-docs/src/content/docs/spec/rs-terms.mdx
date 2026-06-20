@@ -9,7 +9,7 @@ source_repos:
   - registry-platform
   - registry-manifest
   - registry-lab
-last_reviewed: "2026-06-13"
+last_reviewed: "2026-06-20"
 doc_type: specification
 doc_id: RS-TERMS
 category: normative
@@ -46,6 +46,8 @@ REQ-TERMS-001: The definitions in this document apply wherever a registry stack 
 | --- | --- | --- | --- |
 | 0.1.0 | 2026-06-13 | draft | Initial terms, distilled from the documentation glossary. |
 | 0.2.0 | 2026-06-13 | draft | Added the adoption mode term (Section 3) and the documentation declaration terms, layer and audience (Section 6). |
+| 0.3.0 | 2026-06-20 | draft | Added governed Evidence Gateway and PDP enforcement terms. |
+| 0.3.1 | 2026-06-20 | draft | Added PDP, PEP, trust context, source binding, route identity, checked scope, ecosystem binding, ODRL enforcement profile, audit provenance, and fail-closed definitions. |
 
 ## 1. Products
 
@@ -75,7 +77,7 @@ The five related projects that form the registry stack are listed below. Product
 
 **self-attestation**: Credential issuance pattern where the credential subject is bound to the identity the requester authenticated as. The hosted lab issues a `person_is_alive` self-attestation: Registry Notary will not issue a credential for a subject the caller did not sign in as. Registry Stack product term.
 
-**signed response credentials**: Opt-in Registry Relay feature that attaches a W3C Verifiable Credentials Data Model (VCDM) 2.0 VC-JWT signed credential to entity record and aggregate responses when the caller requests `Accept: application/vc+jwt`. The config key is `provenance` for backward compatibility. The Decentralized Identifier (DID) document, JSON Schemas, and JSON-LD contexts for this feature are served under `/.well-known/`. Enabled by the `crosswalk-runtime` Cargo feature group.
+**signed response credentials**: Opt-in Registry Relay feature that attaches a W3C Verifiable Credentials Data Model (VCDM) 2.0 VC-JWT signed credential to entity record and aggregate responses when the caller requests `Accept: application/vc+jwt`. The config key is `provenance` for backward compatibility. The Decentralized Identifier (DID) document is served at `/.well-known/did.json` in gateway issuer mode, JSON Schemas are served under `/schemas/...`, and JSON-LD contexts are served under `/contexts/...`. Enabled by the `crosswalk-runtime` Cargo feature group.
 
 **SD-JWT VC**: Selective Disclosure JWT Verifiable Credential (IETF draft). Registry Notary issues SD-JWT VC credentials signed with EdDSA. Media type: `application/dc+sd-jwt`.
 
@@ -87,13 +89,13 @@ The five related projects that form the registry stack are listed below. Product
 
 ## 3. Metadata and standards terms
 
-**metadata manifest**: Portable `metadata.yaml` document using schema version `registry-manifest/v1` that describes datasets, entities, fields, public services, forms, requirements, policies, and evidence offerings. MUST NOT include Registry Relay runtime bindings such as source paths, table names, or scopes. Registry Stack product term.
+**metadata manifest**: Portable `metadata.yaml` document using schema version `registry-manifest/v1` that describes datasets, entities, fields, public services, forms, requirements, policies, evidence offerings, federation metadata, evaluation profiles, and governed evidence ecosystem bindings. MUST NOT include Registry Relay runtime bindings such as source paths, table names, or scopes. Registry Stack product term.
 
 **runtime binding**: Registry Relay configuration that connects logical manifest concepts to actual files, database tables, scopes, and backend credentials. Lives in Relay config, not in the manifest. Registry Stack product term.
 
-**static publication bundle**: Manifest-generated directory containing `catalog.json`, `dcat.jsonld`, `cpsv-ap.jsonld`, `shacl.jsonld`, entity and form JSON Schemas, evidence offering JSON, and policy JSON-LD. Can be hosted as static files without running Registry Relay. Registry Stack product term.
+**static publication bundle**: Manifest-generated directory containing `catalog.json`, `dcat.jsonld`, `cpsv-ap.jsonld`, `shacl.jsonld`, entity and form JSON Schemas, OGC Records item collections, evidence offering JSON, policy JSON-LD, and embedded SKOS-shaped codelist metadata in linked-data outputs. Can be hosted as static files without running Registry Relay. Registry Stack product term.
 
-**standards-shaped metadata**: Machine-readable metadata emitted through formats such as Data Catalog Vocabulary (DCAT), Core Public Service Vocabulary Application Profile (CPSV-AP), Core Criterion and Core Evidence Vocabulary (CCCEV), Shapes Constraint Language (SHACL), JSON Schema, Open Digital Rights Language (ODRL), OpenAPI, and OGC API Records. Registry Stack product term.
+**standards-shaped metadata**: Machine-readable metadata emitted through formats such as Data Catalog Vocabulary (DCAT), Core Public Service Vocabulary Application Profile (CPSV-AP), Core Criterion and Core Evidence Vocabulary (CCCEV), Shapes Constraint Language (SHACL), JSON Schema, Open Digital Rights Language (ODRL), OpenAPI, OGC API Records, and SKOS-shaped codelist metadata. Registry Stack product term.
 
 **entity route**: A Registry Relay API route shaped around a domain resource such as `household` or `individual`, not around storage table identifiers. Registry Stack product term.
 
@@ -103,7 +105,7 @@ The five related projects that form the registry stack are listed below. Product
 
 **observations**: The array of data rows returned in the `AggregateResult.observations` field for a Registry Relay aggregate query. Each observation is an object keyed by dimension and measure identifiers. Replaces the former `data` field name from the SDMX-refactor rename. Registry Stack product term.
 
-**evidence offering**: Metadata entry that describes a verification capability and the access path a client uses to reach it. Can point to a Relay-native verification endpoint or to an external evidence service. Registry Stack product term.
+**evidence offering**: Metadata entry that describes a verification capability and the access path a client uses to reach it. In the current stack it points a client from Registry Relay metadata to Registry Notary or another evidence service; Relay describes the offering but does not evaluate the claim. Registry Stack product term.
 
 **evidence type list**: A Core Criterion and Core Evidence Vocabulary (CCCEV) list of evidence types that satisfy a requirement. In Registry Manifest, one list is one grouped option; multiple lists on the same requirement are alternatives. The CCCEV term is adopted directly.
 
@@ -117,11 +119,17 @@ The five related projects that form the registry stack are listed below. Product
 
 **SHACL**: Shapes Constraint Language. W3C recommendation. Registry Relay and Registry Manifest emit SHACL node shapes for entity validation.
 
-**ODRL**: Open Digital Rights Language. W3C recommendation. Registry Relay and Registry Manifest emit ODRL Offer documents for dataset-scoped policies.
+**ODRL**: Open Digital Rights Language. W3C recommendation. Registry Relay and Registry Manifest emit ODRL Offer documents for dataset-scoped descriptive policies. Governed Evidence Gateway runtime enforcement uses only the supported ODRL enforcement terms declared by the `registry-evidence-gateway-pdp/v1` profile; publishing an ODRL policy document is not itself runtime enforcement.
 
 **JSON-LD**: JSON-based linked data format. W3C recommendation (JSON-LD 1.1). Used for catalog, policy, CCCEV render output, and signed response credential contexts.
 
-**OGC API Records**: Open Geospatial Consortium API specification for records. Registry Relay exposes records endpoints behind the `ogcapi-records` feature flag. Registry Manifest renders OGC Records item bodies.
+**OGC API Records**: Open Geospatial Consortium API specification for records. Registry Relay exposes records endpoints behind the `ogcapi-records` feature flag. Registry Manifest renders and publishes an OGC Records item collection.
+
+**OGC API Features**: Open Geospatial Consortium API specification for feature collections and items. Registry Relay exposes a profiled feature collection surface behind the `ogcapi-features` feature flag.
+
+**OGC API EDR**: Open Geospatial Consortium API specification for Environmental Data Retrieval. Registry Relay exposes profiled area queries over configured spatial aggregates behind the `ogcapi-edr` feature flag.
+
+**SKOS**: Simple Knowledge Organization System. Registry Manifest currently emits flat SKOS-shaped `skos:ConceptScheme` and `skos:Concept` nodes for codelists inside SHACL and BRegDCAT/DCAT-shaped outputs. It does not yet publish a standalone SKOS artifact.
 
 **SP DCI**: Social Protection Digital Convergence Initiative. Registry Relay exposes an SP DCI adapter behind the `spdci-api-standards` feature flag. Registry Notary ships an HTTP source connector that maps SP DCI search responses into claim evaluation inputs.
 
@@ -133,7 +141,33 @@ The five related projects that form the registry stack are listed below. Product
 
 ## 4. Governance and safeguards terms
 
-**safeguards**: Commitment that every exchange the stack mediates is authorized, scoped, and audited. Concretely: authentication by API key or OIDC; scope-checked routes; per-claim disclosure control (value, predicate, or redacted); no write paths in v1; audit envelopes for every request that touches person-level data. Registry Stack product term.
+**Evidence Gateway**: Registry Stack product term for the governed runtime path that selects an evidence-pack or source policy and asks the shared PDP to permit, redact, or deny a Relay read or Notary source-bound evaluation. The metadata manifest describes governed evidence bindings and evidence packs; runtime services perform the PDP enforcement for their configured surfaces.
+
+**PDP**: Policy decision point. In Registry Stack, the shared Registry Platform primitive that evaluates a governed policy against trusted request and source context and returns permit, permit with redaction, or deny with stable `pdp.*` provenance. Registry Stack product term.
+
+**PEP**: Policy enforcement point. The runtime service surface, such as a Registry Relay governed read or a Registry Notary source-bound evaluation, that calls the PDP and enforces the resulting permit, redaction, or deny decision. Registry Stack product term.
+
+**governed evidence**: Evidence metadata and runtime behavior bound to a governed evidence ecosystem binding (`type: governed-evidence`). In the manifest, governed evidence requires evidence-pack metadata such as pack identity, source basis, semantic profile, evidence envelope, required PDP gates, allowed outputs, policy identity, policy hash, and ODRL enforcement profile. At runtime, Relay can use the selected binding to feed the PDP policy id, policy hash, supported ODRL terms, source freshness, route identity, source binding, checked scope, and trust context into a decision.
+
+**ecosystem binding**: Manifest-level binding that connects an external ecosystem profile or governed evidence pack to a Registry Stack runtime surface. A governed evidence ecosystem binding names the evidence-pack metadata and policy identity a runtime service can use for PDP enforcement. Registry Stack product term.
+
+**ODRL enforcement profile**: Registry Stack product term for the supported runtime-enforcement subset of Open Digital Rights Language (ODRL) terms. The current governed Evidence Gateway profile is `registry-evidence-gateway-pdp/v1`; it supports `odrl:purpose` and `odrl:spatial` as runtime-enforced ODRL constraint terms and denies unsupported ODRL terms rather than treating them as enforced.
+
+**PDP gate**: A named policy decision point check evaluated by the shared Registry PDP, such as policy identity, ODRL terms, purpose, jurisdiction, assurance, source freshness, legal basis, consent, requested disclosure, source binding, route identity, checked scope, and redaction. PDP gates produce evaluated rule IDs in audit records.
+
+**policy hash**: Lowercase `sha256:` digest that binds a governed evidence policy identity to canonical policy bytes or to an externally supplied policy artifact. Registry Manifest validates digest shape and verifies the digest when an inline evidence-pack `policy` object is present; Relay records the selected PDP policy hash in governed audit provenance.
+
+**trust context**: Trusted facts supplied to the PDP for a governed decision. The context can include the authenticated principal, checked scopes, requested purpose, route identity, source binding, requested fact or disclosure, jurisdiction, assurance, legal basis, consent, and source freshness. Caller-supplied facts count only when backed by trusted assertion scopes or trusted source metadata. Registry Stack product term.
+
+**source binding**: Runtime or source-policy identifier that names the configured source service, resource, or claim binding a governed decision is allowed to use. Source binding lets audit records and PDP rules distinguish one backend source from another. Registry Stack product term.
+
+**route identity**: Canonical identifier for the runtime route or claim path being evaluated by the PDP. Route identity prevents a policy written for one route from silently authorizing another route with a similar shape. Registry Stack product term.
+
+**checked scope**: Authorization scope that the runtime service has already verified before PDP enforcement and then passes into the PDP and audit provenance. A PDP decision MUST NOT invent a checked scope that ordinary authorization did not verify. Registry Stack product term.
+
+**PDP audit provenance**: Audit fields that explain a governed PDP decision, including policy id, policy hash, evaluated rule ids, route identity, source binding, checked scopes, trust-provenance labels, and stable `pdp.*` denial code when denied. Registry Stack product term.
+
+**safeguards**: Commitment that every exchange the stack mediates is authorized, scoped, and audited. Concretely: authentication by API key or OIDC; scope-checked routes; per-claim disclosure control (value, predicate, or redacted); no source-registry data mutation through Relay; audit envelopes for every request that touches person-level data. Registry Stack product term.
 
 **executable safeguards**: Runtime-enforced safeguards: scoped routes, disclosure policy, audit events, machine-readable metadata, and other policy enforcement point behavior that can be checked by software. Registry Stack product term.
 
@@ -141,11 +175,17 @@ The five related projects that form the registry stack are listed below. Product
 
 **purpose-bound request**: A request that carries or is evaluated against purpose limitation, policy-based access control, or context-aware authorization. Registry Relay records the `Data-Purpose` header in audit records where present. Registry Stack product term.
 
+**source freshness**: PDP gate that compares trusted source metadata or trusted source-observation context against a configured maximum age. A failure produces a stable PDP denial code such as `pdp.evidence_stale`.
+
 **minimized evidence**: An evidence response shaped by data minimization, selective disclosure, or verifiable attestation. The response can be narrower than the full source record when the configured use case supports that pattern. Registry Stack product term.
 
 **reviewability**: Commitment that every promise the stack makes is backed by an artifact a third party can inspect without trusting the operator's word. Examples include the published DCAT catalog, the SHACL shapes, the ODRL policy documents, the audit envelope schema, the JWKS public key endpoint, and the credential profile configuration. Registry Stack product term.
 
-**interoperability**: Commitment that every registry in the stack publishes its catalog, schemas, services, and policies in standards-shaped form (DCAT, BRegDCAT-AP, CPSV-AP, CCCEV, SHACL, JSON Schema, ODRL, OpenAPI, SD-JWT VC), so downstream systems integrate against stable contracts rather than per-deployment ones. Registry Stack product term.
+**interoperability**: Commitment that every registry in the stack publishes its catalog, schemas, services, and policies in standards-shaped form (DCAT, BRegDCAT-AP, CPSV-AP, CCCEV, SHACL, JSON Schema, ODRL, OpenAPI, OGC Records, SKOS-shaped codelists, SD-JWT VC), so downstream systems integrate against stable contracts rather than per-deployment ones. Registry Stack product term.
+
+**stable PDP denial code**: A machine-stable `pdp.*` problem code returned on governed PDP denials and recorded in audit provenance as `pdp_stable_problem_code`. Examples include `pdp.purpose_not_permitted`, `pdp.evidence_stale`, `pdp.legal_basis_required`, `pdp.jurisdiction_not_permitted`, `pdp.unsupported_policy_term`, and `pdp.policy_hash_invalid`.
+
+**fail closed**: Security posture where missing, malformed, unsupported, stale, or unauditable governed policy inputs result in denial rather than permit. Registry Stack product term.
 
 **DPI**: Digital Public Infrastructure. Shared, interoperable digital systems (identity, payments, data exchange) deployed at population scale to support public service delivery. The registry stack covers the registry-consultation slice of a DPI deployment.
 
@@ -164,9 +204,15 @@ The table below maps each acronym used in registry stack documentation to its ex
 | JSON-LD | JSON Linked Data |
 | ODRL | Open Digital Rights Language |
 | OID4VCI | OpenID for Verifiable Credential Issuance |
+| OGC API EDR | OGC API Environmental Data Retrieval |
+| OGC API Features | OGC API Features |
+| OGC API Records | OGC API Records |
+| PDP | Policy Decision Point |
+| PEP | Policy Enforcement Point |
 | PROV-O | W3C Provenance Ontology |
 | SD-JWT VC | Selective Disclosure JWT Verifiable Credential |
 | SHACL | Shapes Constraint Language |
+| SKOS | Simple Knowledge Organization System |
 | SP DCI | Social Protection Digital Convergence Initiative |
 | SDMX | Statistical Data and Metadata eXchange |
 

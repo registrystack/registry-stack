@@ -40,7 +40,7 @@
     "name": "Registry Notary OID4VCI surface",
     "owner": "registry-notary",
     "status": "current-source",
-    "surface": "OID4VCI credential offer (`GET /oid4vci/credential-offer`), nonce (`POST /oid4vci/nonce`), credential request (`POST /oid4vci/credential`), and issuer metadata (`GET /.well-known/openid-credential-issuer`). Primitives sourced from the `registry-platform-oid4vci` crate.",
+    "surface": "OID4VCI offer start and callback (`/oid4vci/offer/start`, `/oid4vci/offer/callback`), credential offer (`GET /oid4vci/credential-offer`), nonce (`POST /oid4vci/nonce`), token (`POST /oid4vci/token`), credential request (`POST /oid4vci/credential`), VCT credential and metadata routes (`/credentials/{vct_path}`, `/.well-known/vct/{vct_path}`), and issuer metadata (`GET /.well-known/openid-credential-issuer`). Primitives sourced from the `registry-platform-oid4vci` crate.",
     "source_of_truth": {
       "label": "Registry Notary OID4VCI routes",
       "url": "https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-server/src/api.rs"
@@ -88,7 +88,7 @@
     "name": "Static Metadata Publication Bundle",
     "owner": "registry-manifest",
     "status": "current-source",
-    "surface": "Static index, catalog JSON, evidence offerings, policies, DCAT, CPSV-AP, BRegDCAT-AP, SHACL, entity JSON Schemas, and form JSON Schemas.",
+    "surface": "Static index, catalog JSON, evidence offerings, policies, DCAT, CPSV-AP, BRegDCAT-AP, SHACL, OGC Records item collection, entity JSON Schemas, form JSON Schemas, and embedded SKOS-shaped codelist nodes.",
     "source_of_truth": {
       "label": "Registry Manifest CLI",
       "url": "https://github.com/jeremi/registry-manifest/tree/main/crates/registry-manifest-cli"
@@ -96,35 +96,11 @@
     "consumer_note": "The bundle can be hosted as static files without running Registry Relay."
   },
   {
-    "id": "registry-atlas.service-first-report",
-    "name": "Service-first Semantic Discovery Report",
-    "owner": "registry-atlas",
-    "status": "current-source",
-    "surface": "Semantic assets, typed relations, relation claims, service graph projections, requirement evidence options, provider routes, endpoint hints, forms, and discovery gaps.",
-    "source_of_truth": {
-      "label": "Registry Atlas service-first spec",
-      "url": "https://github.com/jeremi/registry-atlas/blob/main/SERVICE_FIRST_DISCOVERY_SPEC.md"
-    },
-    "consumer_note": "Consumers navigate the graph through typed projections; they must not infer routes from labels without relation evidence."
-  },
-  {
-    "id": "registry-atlas.capability-envelope",
-    "name": "System Capability Query Envelope",
-    "owner": "registry-atlas",
-    "status": "current-source",
-    "surface": "Capability query envelopes, information needs, term labels, field terms, and evidence links.",
-    "source_of_truth": {
-      "label": "Registry Atlas fixtures",
-      "url": "https://github.com/jeremi/registry-atlas/tree/main/fixtures/system-capability"
-    },
-    "consumer_note": "v0.1 matching is strict and based on accepted machine terms."
-  },
-  {
     "id": "registry-lab.release-check",
     "name": "Registry Lab Release Check",
     "owner": "registry-lab",
     "status": "current-source",
-    "surface": "Compose build, fixture generation, secret generation, static metadata publication, Atlas service graph checks, core smoke checks, live Postgres checks, live Zitadel and OIDC checks, OpenFn sidecar smoke checks, raw-secret log checks, and narrated demo flows.",
+    "surface": "Compose build, fixture generation, secret generation, static metadata publication, core smoke checks, live Postgres checks, live Zitadel and OIDC checks, OpenFn sidecar smoke checks, raw-secret log checks, and narrated demo flows.",
     "source_of_truth": {
       "label": "Registry Lab README",
       "url": "https://github.com/jeremi/registry-lab/blob/main/README.md"

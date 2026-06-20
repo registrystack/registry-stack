@@ -2,7 +2,7 @@
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title>Registry architecture flow</title>
-  <desc>Registry Platform provides shared primitives to Relay and Notary. Registry Manifest produces portable metadata contracts. Registry Relay binds those contracts to protected runtime data sources and serves entity and metadata APIs. Registry Notary evaluates claims against configured sources and issues credentials. Registry Atlas inspects published discovery artifacts. Registry Lab runs runtime services together as a compose-based local demo.</desc>
+  <desc>Registry Platform provides shared primitives to Relay and Notary. Registry Manifest produces portable metadata contracts. Registry Relay binds those contracts to protected runtime data sources and serves entity and metadata APIs. Registry Notary evaluates claims against configured sources and issues credentials. Registry Lab runs runtime services together as a compose-based local demo.</desc>
 
   <text x="16" y="22" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">SHARED PRIMITIVES</text>
   <rect x="16" y="30" width="32" height="2" fill="#000091"/>
@@ -20,7 +20,7 @@
   <g fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">
     <text x="16" y="178">CONTRACTS</text>
     <text x="240" y="178">RUNTIME</text>
-    <text x="464" y="178">CLIENT</text>
+    <text x="464" y="178">DEMO</text>
   </g>
   <g fill="#000091">
     <rect x="16" y="186" width="32" height="2"/>
@@ -36,7 +36,7 @@
     <text x="16" y="286">contracts and</text>
     <text x="16" y="304">renderers for DCAT,</text>
     <text x="16" y="322">SHACL, JSON Schema,</text>
-    <text x="16" y="340">and OGC API Records.</text>
+    <text x="16" y="340">OGC Records, and SKOS.</text>
   </g>
 
   <g stroke="#000091" stroke-width="1" fill="none">
@@ -69,14 +69,14 @@
     <polyline points="454,264 460,268 454,272"/>
   </g>
 
-  <text x="464" y="220" fill="#161616" font-size="14" font-weight="700">Registry Atlas</text>
+  <text x="464" y="220" fill="#161616" font-size="14" font-weight="700">Registry Lab</text>
   <text x="464" y="238" fill="#6a6a6a" font-size="11.5"
-        font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-atlas</text>
+        font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-lab</text>
   <g fill="#3a3a3a" font-size="12.5">
-    <text x="464" y="268">Browser workbench</text>
-    <text x="464" y="286">for published catalog,</text>
-    <text x="464" y="304">schema, API, evidence,</text>
-    <text x="464" y="322">and credential artifacts.</text>
+    <text x="464" y="268">Compose demo that</text>
+    <text x="464" y="286">wires Relay, Notary,</text>
+    <text x="464" y="304">Platform primitives,</text>
+    <text x="464" y="322">and static metadata.</text>
   </g>
 
   <line x1="0" y1="486" x2="720" y2="486" stroke="#e5e5e5" stroke-width="1"/>
