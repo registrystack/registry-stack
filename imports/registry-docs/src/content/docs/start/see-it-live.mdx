@@ -14,6 +14,8 @@ standards_referenced:
   - sd-jwt-vc
 ---
 
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
 In about ten minutes you can see the core of Registry Stack working against a public hosted lab. You
 will read a protected registry API from your terminal (**Registry Relay**, which returns records to
 authorized callers), then have **Registry Notary** issue a signed credential, delivered to a hosted
@@ -23,6 +25,13 @@ needs no install either; only the optional developer round-trip at the end also 
 `jq`, and `node`. Everything runs in the hosted lab at
 [lab.registrystack.org](https://lab.registrystack.org), so the main flow has no setup on your
 machine.
+
+<QuickstartMeta
+  outcome="One protected registry read and one signed, privacy-preserving credential, against the public hosted lab."
+  time="About 10 minutes"
+  level="Hosted lab, zero install"
+  prerequisites={['A web browser', 'Optional: curl, registryctl, jq, node']}
+/>
 
 This lab uses synthetic data and public demo-only credentials by design.
 Do not reuse anything you copy here outside the lab.

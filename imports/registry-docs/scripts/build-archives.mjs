@@ -33,7 +33,6 @@ export async function buildDocsetArchive(docset) {
   const outDir = outDirForDocset(docset);
   await rm(outDir, { recursive: true, force: true });
   await run('npm', ['run', 'generate'], env);
-  await run('npm', ['run', 'redoc'], env);
   await run('npx', ['astro', 'check'], env);
   await run('npx', ['astro', 'build', '--outDir', outDir], env);
   await applyArchiveSeo(outDir);

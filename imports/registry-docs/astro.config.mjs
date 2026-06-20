@@ -4,6 +4,7 @@ import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
+import starlightOpenAPI, { openAPISidebarGroups } from 'starlight-openapi';
 import mermaid from 'astro-mermaid';
 import remarkGfm from 'remark-gfm';
 // Single source of truth for the machine-discovery pointer. Reused as the
@@ -109,6 +110,10 @@ export default defineConfig({
     // registry-manifest, registry-atlas, registry-platform, registry-lab projects/*
     // redirects removed: targets are deferred from the MVP docs cut.
     '/projects/registry-lab/demo-flow/': internalRedirect('/start/see-it-live/'),
+    // The API reference moved from static Redoc HTML to native, theme-aware,
+    // searchable pages. Keep the old shareable links working.
+    '/api/registry-relay.html': internalRedirect('/reference/apis/relay/'),
+    '/api/registry-notary.html': internalRedirect('/reference/apis/notary/'),
   },
   integrations: [
     // Mermaid must come BEFORE starlight: its rehype plugin rewrites
@@ -140,6 +145,25 @@ export default defineConfig({
           promote: ['index*', 'explanation/**'],
           demote: ['reference/**', 'decisions/**'],
         })]),
+        // Renders the pinned OpenAPI documents as native Starlight pages, so the
+        // API reference follows the light/dark theme and is indexed by Pagefind
+        // search (the old Redoc HTML embeds were light-only and unsearchable).
+        // Schemas are produced by scripts/fetch-openapi.mjs in `npm run generate`,
+        // which runs before any build. The generated routes live alongside the
+        // hand-authored narrative pages (reference/apis/registry-*), which link
+        // into them; old /api/*.html links are preserved by redirects below.
+        starlightOpenAPI([
+          {
+            base: 'reference/apis/relay',
+            schema: './openapi/registry-relay.openapi.json',
+            sidebar: { label: 'Relay API operations', collapsed: true },
+          },
+          {
+            base: 'reference/apis/notary',
+            schema: './openapi/registry-notary.openapi.json',
+            sidebar: { label: 'Notary API operations', collapsed: true },
+          },
+        ]),
       ],
       defaultLocale: 'root',
       locales: {
@@ -229,10 +253,15 @@ export default defineConfig({
               collapsed: true,
               items: [
                 { label: 'Overview', slug: 'reference/apis' },
-                { label: 'Relay', slug: 'reference/apis/registry-relay' },
-                { label: 'Notary', slug: 'reference/apis/registry-notary' },
+                { label: 'Relay (narrative)', slug: 'reference/apis/registry-relay' },
+                { label: 'Notary (narrative)', slug: 'reference/apis/registry-notary' },
+                // Generated operation pages for each schema (theme-aware, searchable).
+                ...openAPISidebarGroups,
               ],
             },
+            { label: 'registryctl CLI', slug: 'reference/registryctl' },
+            { label: 'Errors and status codes', slug: 'reference/errors' },
+            { label: 'Environment variables', slug: 'reference/environment-variables' },
             { label: 'Contracts', slug: 'reference/contracts' },
             { label: 'Standards', slug: 'reference/standards' },
             { label: 'ITB and SEMIC evidence', slug: 'reference/itb-semic-evidence' },
@@ -258,6 +287,7 @@ export default defineConfig({
             { label: 'RS-DM-MANIFEST · Portable metadata model', slug: 'spec/rs-dm-manifest' },
           ],
         },
+        { label: 'Changelog', slug: 'changelog' },
       ],
     }),
     ...(isArchivedBuild ? [disabledSitemap] : [sitemap()]),

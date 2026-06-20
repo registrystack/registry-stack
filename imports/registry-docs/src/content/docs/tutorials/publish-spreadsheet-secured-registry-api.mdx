@@ -13,9 +13,18 @@ standards_referenced:
   - openapi
 ---
 
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
 Use this tutorial to create a local Registry Relay project from a sample Excel workbook.
 You will install `registryctl`, start a protected registry API, prove anonymous access is denied,
 read spreadsheet data through a secured route, and open the local API reference.
+
+<QuickstartMeta
+  outcome="A protected registry API over a sample workbook, with anonymous reads denied and an authorized read returning data."
+  time="About 10 minutes after Docker is installed"
+  level="Local single-node"
+  prerequisites={['registryctl 0.1.0+', 'A Docker Compose provider', 'curl, tar']}
+/>
 
 This tutorial uses synthetic data and local demo credentials.
 Do not use the generated local keys in production.

@@ -17,16 +17,16 @@ standards_referenced:
   - w3c-did
 ---
 
-[Open Registry Notary API reference](../../../api/registry-notary.html)
+[Open the Registry Notary API operations](../notary/)
 
-The Redoc page above is the **authoritative route reference**. It is built from Registry Notary's
-generated OpenAPI document, synced from the
+The generated API reference linked above is the **authoritative route reference**. It is built from
+Registry Notary's generated OpenAPI document, synced from the
 [`registry-notary`](https://github.com/jeremi/registry-notary) repository at the commit pinned in
 `src/data/repo-docs.yaml`. This page carries the context the specification does not: how
 authentication works, how disclosure is controlled, what credentials look like, and what is out of
 scope.
 
-For exact routes and schemas, read the Redoc reference. For setup and operations, see the
+For exact routes and schemas, read the generated API reference. For setup and operations, see the
 [Registry Notary product documentation](../../../products/registry-notary/).
 
 ## What the API is
@@ -38,7 +38,7 @@ Callers discover its capabilities and claim catalog at `GET /.well-known/evidenc
 This route requires authentication (the same `x-api-key` or `Authorization: Bearer` token as other
 evaluation routes); it is not a public discovery endpoint.
 The issuer JWKS at `GET /.well-known/evidence/jwks.json` is public and requires no credentials.
-The evaluation, rendering, credential, and OID4VCI routes are documented in the Redoc reference.
+The evaluation, rendering, credential, and OID4VCI routes are documented in the generated API reference.
 
 ## Authentication
 

@@ -3,9 +3,9 @@
 // Sources each product's OpenAPI spec from the sibling repo at the pinned ref
 // declared in src/data/repo-docs.yaml, instead of relying on a hand-copied
 // snapshot. The fetched specs land in openapi/<id>.openapi.json, which is what
-// redocly.yaml (and `npm run redoc` / `npm run check:openapi`) reads. The specs
-// are a build artifact pinned to the same ref the docs pipeline uses, so the
-// rendered API reference always matches the pulled product docs.
+// redocly.yaml (`npm run check:openapi`) and the starlight-openapi plugin read.
+// The specs are a build artifact pinned to the same ref the docs pipeline uses,
+// so the rendered API reference always matches the pulled product docs.
 //
 // Resolution mirrors scripts/sync-repo-docs.mjs: prefer the sibling checkout
 // (extracting the spec at the pinned ref via `git show <ref>:<path>` so dev and

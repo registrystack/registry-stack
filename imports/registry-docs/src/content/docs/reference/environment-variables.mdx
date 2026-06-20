@@ -1,0 +1,72 @@
+---
+title: Environment variable reference
+description: Environment variables read by Registry Notary, Registry Relay, and registryctl, with links to the full configuration references.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-notary
+  - registry-relay
+  - registry-registryctl
+last_reviewed: "2026-06-20"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+This page lists the environment variables read directly by the Registry Notary binary, the Registry Relay binary, and registryctl. These are fixed variable names that the process resolves itself.
+
+Secret material such as credential hashes, signing keys, and upstream tokens is not read from a fixed variable name. Instead, each config field names the environment variable to read, and the operator chooses the name. Those per-deployment variables are documented in the synced configuration references rather than repeated on this page. See the [Registry Notary operator config reference](../../products/registry-notary/operator-config-reference/) and the [Registry Relay configuration reference](../../products/registry-relay/configuration/) for the config fields that name secret environment variables.
+
+## Registry Notary
+
+The Registry Notary binary reads the variables below. Each also has an equivalent command-line flag.
+
+| Name | Purpose | Default or required |
+| --- | --- | --- |
+| `REGISTRY_NOTARY_CONFIG` | YAML config path. Equivalent to `--config`. | Required for commands that load config. |
+| `REGISTRY_NOTARY_ENV_FILE` | Dotenv-style file to load before config validation resolves env vars. Equivalent to `--env-file`. | Optional. |
+| `REGISTRY_NOTARY_BIND` | Override `server.bind` after config load. Equivalent to `--bind`. | Optional. |
+| `REGISTRY_NOTARY_HEALTHCHECK_URL` | Health endpoint URL for the `healthcheck` command. | Defaults to `http://127.0.0.1:8080/healthz`. |
+| `REGISTRY_NOTARY_HEALTHCHECK_TIMEOUT_MS` | Health probe timeout in milliseconds for the `healthcheck` command. | Defaults to `5000`. |
+| `REGISTRY_NOTARY_LOG_FORMAT` | Operational log format: `text` or `json`. | Defaults to `text`. |
+
+For the config fields that name secret environment variables, such as the audit hash secret, the issuer signing key, source tokens, and the replay store URL, see the [Registry Notary operator config reference](../../products/registry-notary/operator-config-reference/).
+
+## Registry Relay
+
+The Registry Relay binary reads the variables below.
+
+| Name | Purpose | Default or required |
+| --- | --- | --- |
+| `REGISTRY_RELAY_CONFIG` | YAML config path used when `--config` is not passed. | Falls back to `./config/example.yaml`. |
+| `REGISTRY_RELAY_ENV_FILE` | Dotenv-style file to load before config validation resolves env vars, used when `--env-file` is not passed. | Optional. |
+| `REGISTRY_RELAY_BIND` | Override `server.bind`. | Optional. |
+| `REGISTRY_RELAY_LOG_FORMAT` | Operational log format: `json` or `jsonl` select JSON output; any other value selects text. | Defaults to text. |
+
+The audit hash secret and other secret material are read from operator-named variables declared in config fields such as `audit.hash_secret_env` (for example, `REGISTRY_RELAY_AUDIT_HASH_SECRET`), the API key fingerprint env names, the provenance signer `jwk_env`, and the Postgres `connection_env`. For the full list of config fields that name secret environment variables, see the [Registry Relay configuration reference](../../products/registry-relay/configuration/).
+
+## registryctl
+
+registryctl reads the variables below. It also reads operator-provided source and credential variables whose names are passed to `registryctl openfn` and `registryctl init notary` flags; those are not fixed names.
+
+| Name | Purpose | Default or required |
+| --- | --- | --- |
+| `REGISTRYCTL_NO_UPDATE_CHECK` | Disable the automatic update check when set to a non-empty value other than `0` or `false`. | Optional. |
+| `REGISTRYCTL_UPDATE_CHECK` | Disable the automatic update check when set to `0` or `false`. | Optional. |
+| `REGISTRYCTL_VERSION` | Pinned release the installer downloads. Read by the install script, not the running binary. | Defaults to the installer's pinned release. |
+| `CI` | When set to a non-empty value other than `0` or `false`, disables the automatic update check. | Optional. |
+
+registryctl also passes through operator-named source and sidecar variables. The defaults below are the variable names registryctl writes into generated projects and OpenFn snippets; the operator can override them with flags.
+
+| Name | Purpose | Default or required |
+| --- | --- | --- |
+| `EVIDENCE_SOURCE_API_TOKEN` | Default source API bearer token variable for a `registry-data-api` Notary starter project. | Default name; override with `init notary --source-token-env`. |
+| `FHIR_SIDECAR_TOKEN` | Default source token variable for a `fhir-sidecar` Notary starter project. | Default name; override with `init notary --source-token-env`. |
+| `OPENFN_TOKEN` | OpenFn API token for `registryctl openfn import` URL imports. | Default name; override with `--openfn-token-env`. |
+| `OPENFN_SIDECAR_TOKEN` | Raw notary-to-sidecar bearer token written into the generated snippet. | Default name; override with `--sidecar-token-env`. |
+| `DEV_SIDECAR_TOKEN_HASH` | Notary-to-sidecar bearer token hash. | Default name; override with `--auth-hash-env`. |
+| `REGISTRY_NOTARY_BASE_URL`, `REGISTRY_NOTARY_BEARER_TOKEN`, `REGISTRY_NOTARY_API_KEY`, `REGISTRY_NOTARY_PURPOSE` | Shell exports emitted by `registryctl lab env` for hosted-lab SDK quickstarts. | Emitted by `lab env`; these are public synthetic lab values. |
+
+## Source
+
+The fixed variable names above are transcribed from the binaries and the registryctl source. For the canonical definitions, read the [Registry Notary binary entry point](https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-bin/src/main.rs), the [Registry Relay binary entry point](https://github.com/jeremi/registry-relay/blob/main/src/main.rs), and the [registryctl library source](https://github.com/jeremi/registry-registryctl/blob/main/src/lib.rs). The operator-named secret variables are documented in the [Registry Notary operator config reference](../../products/registry-notary/operator-config-reference/) and the [Registry Relay configuration reference](../../products/registry-relay/configuration/).

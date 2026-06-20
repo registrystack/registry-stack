@@ -13,6 +13,8 @@ standards_referenced:
   - openapi
 ---
 
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
 Use this guide when you operate your own registry data and want to run Registry Relay (and,
 optionally, Registry Notary) as self-hosted services against that data, rather than the
 `registryctl` sample project.
@@ -23,6 +25,12 @@ There is no `registryctl` initializer for your own dataset today: `registryctl i
 accepts only `--sample benefits`.
 For your own CSV or XLSX data you hand-write the Relay configuration, starting from the
 canonical example, and run the published container directly.
+
+<QuickstartMeta
+  outcome="Registry Relay, and optionally Registry Notary, self-hosted against your own CSV or XLSX data, with protected reads verified."
+  level="Single-node, self-hosted, for evaluation and pilot use"
+  prerequisites={['A Docker Compose provider or a host for the Relay binary', 'Your own CSV or XLSX dataset']}
+/>
 
 This guide targets a single-node, self-hosted deployment for evaluation and pilot use.
 It is not a formal production deployment profile.

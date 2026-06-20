@@ -24,7 +24,7 @@ const required = {
     'last_checked',
     'notes',
   ],
-  'openapi-sources': ['id', 'name', 'owner', 'source', 'artifact', 'status', 'redoc_path'],
+  'openapi-sources': ['id', 'name', 'owner', 'source', 'artifact', 'status', 'reference_path'],
 };
 
 const generated = [];
