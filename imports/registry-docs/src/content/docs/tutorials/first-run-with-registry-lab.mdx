@@ -16,6 +16,9 @@ standards_referenced:
   - sd-jwt-vc
 ---
 
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+import { Steps } from '@astrojs/starlight/components';
+
 Registry Lab is the compose-based local demo for the registry stack.
 It wires [Registry Platform](../../reference/glossary/#registry-platform) source crates, three [Registry Relay](../../products/registry-relay/)
 instances, the [Registry Notary](../../products/registry-notary/) instances, live Postgres and
@@ -32,6 +35,13 @@ For normal local adopter projects, start with the `registryctl` tutorials instea
 [publish a secured registry API](../publish-spreadsheet-secured-registry-api/) or
 [verify a claim with Registry Notary](../verify-claim-registry-api/). Clone `registry-lab` only when
 you want the full multi-service demo topology rather than a generated project.
+
+<QuickstartMeta
+  outcome="The full lab topology running on your laptop, verified by the smoke suite, with demo evidence artifacts written to output/."
+  time="About 30 minutes, most of it the first image build"
+  level="Local multi-service demo"
+  prerequisites={['Docker Compose 2.20+', 'just', 'uv, python3, openssl', 'git with GitHub SSH']}
+/>
 
 ## Prerequisites
 
@@ -55,6 +65,8 @@ cd registry-lab
 ## Steps
 
 Run these from the `registry-lab` checkout, in order.
+
+<Steps>
 
 1. Generate fixtures, demo credentials, Postgres TLS material, and the static metadata bundle:
 
@@ -85,6 +97,8 @@ Run these from the `registry-lab` checkout, in order.
     ```sh
     just client
     ```
+
+</Steps>
 
 `just up` starts the civil, social protection, and health Relay instances, the civil, social
 protection, and shared eligibility Notary instances, Postgres, Zitadel, the OpenFn sidecar services,

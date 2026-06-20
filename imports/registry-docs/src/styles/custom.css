@@ -21,6 +21,15 @@
   --registry-paper: #eef2ec;
   --registry-stamp: #9d2c1d;
   --registry-brass: #d4af4e;
+  /* Surface tokens. Light values match the constants they replace, so the
+     light theme is unchanged; the dark override below repoints them. --bg is
+     the page canvas, --surface is raised chrome (search, dialogs, right TOC),
+     --ink-rule is the strong masthead/footer/section rule (heavier than the
+     --rule hairline so it survives on a dark canvas). */
+  --registry-bg: #ffffff;
+  --registry-surface: #ffffff;
+  --registry-ink-rule: var(--registry-ink);
+  --registry-preview-border: #c2cce0;
   --__sl-font: 'Public Sans', system-ui, sans-serif;
   --__sl-font-mono: 'IBM Plex Mono', ui-monospace, monospace;
   --sl-font: var(--__sl-font);
@@ -35,12 +44,12 @@
   --sl-color-gray-4: var(--registry-muted);
   --sl-color-gray-5: var(--registry-rule);
   --sl-color-gray-6: var(--registry-sidebar);
-  --sl-color-black: #ffffff;
+  --sl-color-black: var(--registry-bg);
   --sl-color-text: var(--registry-body);
   --sl-color-text-accent: var(--registry-blue);
   --sl-color-text-invert: var(--registry-blue);
-  --sl-color-bg: #ffffff;
-  --sl-color-bg-nav: #ffffff;
+  --sl-color-bg: var(--registry-bg);
+  --sl-color-bg-nav: var(--registry-bg);
   --sl-color-bg-sidebar: var(--registry-sidebar);
   --sl-color-bg-inline-code: var(--registry-code-bg);
   --sl-color-hairline: var(--registry-rule);
@@ -67,7 +76,7 @@
 
 html,
 body {
-  background: #ffffff;
+  background: var(--registry-bg);
 }
 
 body {
@@ -92,12 +101,12 @@ body {
    broadsheet nameplate (same device as the marketing site's header). */
 .page > .header {
   align-items: stretch;
-  border-bottom: 2px solid var(--registry-ink);
+  border-bottom: 2px solid var(--registry-ink-rule);
   padding: 0 var(--sl-nav-pad-x);
 }
 
 .main-frame {
-  background: #ffffff;
+  background: var(--registry-bg);
 }
 
 .content-panel {
@@ -115,7 +124,7 @@ body {
 .sl-markdown-content video,
 .sl-markdown-content iframe {
   border: 1px solid var(--registry-rule);
-  background: #ffffff;
+  background: var(--registry-surface);
 }
 
 .registry-header {
@@ -217,10 +226,39 @@ body {
 .registry-version-switch select {
   min-block-size: 32px;
   border: 1px solid var(--registry-rule);
-  background: #ffffff;
+  background: var(--registry-surface);
   color: var(--registry-ink);
   font: 600 13px/1 var(--__sl-font);
   padding: 0 28px 0 8px;
+}
+
+/* The theme toggle is set as a quiet utility control: the same bordered,
+   square chrome as the version select, so the masthead reads as one row of
+   register controls rather than a button. */
+.registry-utility starlight-theme-select {
+  display: inline-flex;
+  align-items: center;
+}
+
+.registry-utility starlight-theme-select label {
+  color: var(--registry-muted);
+}
+
+.registry-utility starlight-theme-select label:hover {
+  color: var(--registry-ink);
+}
+
+/* Only the chrome is overridden (border, surface, ink, type). Padding is left
+   to Starlight's Select, which sizes the inline padding around its leading
+   theme icon and trailing caret, so the icon never overlaps the label. */
+.registry-utility starlight-theme-select select {
+  min-block-size: 32px;
+  border: 1px solid var(--registry-rule);
+  background: var(--registry-surface);
+  color: var(--registry-ink);
+  font-family: var(--__sl-font);
+  font-weight: 600;
+  font-size: 13px;
 }
 
 .registry-utility a {
@@ -258,7 +296,7 @@ body {
 
 button[data-open-modal] {
   border: 1px solid var(--registry-rule) !important;
-  background: #ffffff !important;
+  background: var(--registry-surface) !important;
   color: var(--registry-muted) !important;
   font-size: 14px !important;
   min-height: 38px;
@@ -266,14 +304,14 @@ button[data-open-modal] {
 
 button[data-open-modal] kbd {
   border: 1px solid var(--registry-rule);
-  background: #ffffff;
+  background: var(--registry-surface);
   color: var(--registry-muted);
   font-family: var(--__sl-font-mono);
 }
 
 dialog,
 mobile-starlight-toc .dropdown {
-  background: #ffffff !important;
+  background: var(--registry-surface) !important;
 }
 
 dialog::backdrop {
@@ -424,7 +462,7 @@ pre,
 /* Top-level groups read as ledger column headings: a strong ink rule above
    each label (the marketing site tops its proof columns the same way). */
 .sidebar-content .top-level > li > details > summary {
-  border-top: 2px solid var(--registry-ink);
+  border-top: 2px solid var(--registry-ink-rule);
   padding: 10px 0 0;
 }
 
@@ -490,7 +528,7 @@ pre,
   overflow-y: auto;
   border-inline-start: 0;
   padding: 32px 0;
-  background: #ffffff;
+  background: var(--registry-bg);
 }
 
 .registry-page-sidebar h2 {
@@ -563,7 +601,7 @@ pre,
   justify-content: space-between;
   gap: 24px;
   margin-top: 48px;
-  border-top: 2px solid var(--registry-ink);
+  border-top: 2px solid var(--registry-ink-rule);
   padding: 16px 0 0;
   color: var(--registry-muted);
   font-size: 13px;
@@ -824,7 +862,7 @@ mobile-starlight-toc summary {
    uses for its product cards. */
 .registry-preview-banner {
   margin: 24px var(--sl-content-pad-x) 0;
-  border: 1px dashed #c2cce0;
+  border: 1px dashed var(--registry-preview-border);
   background: var(--registry-paper);
   color: var(--registry-body);
   padding: 10px 14px;
@@ -870,7 +908,8 @@ mobile-starlight-toc summary {
 .standards-list,
 .contracts-list,
 .openapi-sources-list,
-.project-map {
+.project-map,
+.home-landing {
   display: flex;
   flex-direction: column;
   gap: 24px;
@@ -879,10 +918,39 @@ mobile-starlight-toc summary {
 .standards-card,
 .contracts-card,
 .openapi-source,
-.project-card {
+.project-card,
+.home-card {
   border: 1px solid var(--registry-rule);
   padding: 20px 24px;
   width: 100%;
+}
+
+/* Homepage primary action: a single bordered "See it live" control (the
+   redoc-link device) with quiet secondary links alongside, set on the
+   standfirst, before the section index. No band, no fill, no hype. */
+.home-actions {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  margin-block: 20px 32px;
+}
+
+.home-cta {
+  padding: 7px 16px;
+}
+
+.home-actions-secondary {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  font-size: var(--sl-text-sm);
+  font-weight: 600;
+}
+
+/* The "Then read" follow-ups read as a quiet list under the start link. */
+.home-then a + span {
+  color: var(--registry-muted);
 }
 
 /* Card header */
@@ -937,6 +1005,12 @@ mobile-starlight-toc summary {
   border-top: 1px solid var(--registry-rule);
   border-bottom: 1px solid var(--registry-rule);
   font-size: var(--sl-text-sm);
+}
+
+/* The same ledger key/value strip, used standalone on tutorial pages to carry
+   Outcome / Time / Prerequisites under the lead paragraph. */
+.quickstart-meta {
+  margin-block: 16px 28px;
 }
 
 .card-meta dt {
@@ -1111,4 +1185,47 @@ starlight-tabs [role='tab']:not([aria-selected='true']):hover {
   .project-ownership {
     grid-template-columns: 1fr;
   }
+}
+
+/* ── Dark theme ──────────────────────────────────────────────────────────────
+   Civic-print, inverted. A charcoal canvas (not OLED black), the civic blue
+   lifted so links clear WCAG AA on dark, and the ink-rule device kept as a
+   light rule on dark. Every other rule in this file already cascades from the
+   --registry-* vars, so it flips automatically. Contrast on --registry-bg
+   (#16181d): body ~10.5:1, links ~7.2:1, headings ~15:1, muted ~5.4:1. Keep in
+   sync with registrystack.org's dark palette. This block must stay after the
+   shared :root block so it wins under [data-theme='dark']. */
+:root[data-theme='dark'] {
+  --registry-blue: #7da3e0;
+  --registry-blue-dark: #a8c4ef;
+  --registry-ink: #f2f3f5;
+  --registry-body: #c7cad0;
+  --registry-muted: #9aa0a8;
+  --registry-rule: #2f333b;
+  --registry-sidebar: #1b1e24;
+  --registry-active: #202a3d;
+  --registry-code-bg: #212530;
+  --registry-paper: #1d2128;
+  --registry-stamp: #e0735f;
+  --registry-brass: #e6c66a;
+
+  --registry-bg: #16181d;
+  --registry-surface: #1b1e24;
+  --registry-ink-rule: #3c424c;
+  --registry-preview-border: #3a4763;
+
+  /* A few Starlight tokens were pinned to light constants in the shared block;
+     re-point the ones that affect dark legibility so the cascade is complete. */
+  --sl-color-bg: var(--registry-bg);
+  --sl-color-bg-nav: var(--registry-bg);
+  --sl-color-black: var(--registry-bg);
+  --sl-color-bg-sidebar: var(--registry-sidebar);
+  --sl-color-bg-inline-code: var(--registry-code-bg);
+  --sl-color-white: var(--registry-ink);
+  --sl-color-text: var(--registry-body);
+  --sl-color-text-accent: var(--registry-blue);
+  --sl-color-text-invert: var(--registry-bg);
+  --sl-color-hairline: var(--registry-rule);
+  --sl-color-hairline-light: var(--registry-rule);
+  --sl-color-hairline-shade: var(--registry-rule);
 }

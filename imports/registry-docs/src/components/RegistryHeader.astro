@@ -1,6 +1,7 @@
 ---
 import config from 'virtual:starlight/user-config';
 import Search from '@astrojs/starlight/components/Search.astro';
+import ThemeSelect from '@astrojs/starlight/components/ThemeSelect.astro';
 import docsetsManifest from '../data/generated/docsets.json';
 import RegistryDocsetSwitch from './RegistryDocsetSwitch.astro';
 
@@ -33,6 +34,7 @@ const activeDocset =
 
     <nav class="registry-utility" aria-label="Site">
       <RegistryDocsetSwitch />
+      <ThemeSelect />
       <a href="https://github.com/jeremi/registry-docs">GitHub ↗</a>
     </nav>
   </div>

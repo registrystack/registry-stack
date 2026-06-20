@@ -13,11 +13,20 @@ locale: en
 standards_referenced: []
 ---
 
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
 Use this tutorial after you publish the spreadsheet registry API.
 You will add Registry Notary to the same local project, start Relay and Notary together, prove
 anonymous claim access is denied, and evaluate one claim backed by the registry API.
 A final section, [Run Notary standalone for an API you operate](#run-notary-standalone-for-an-api-you-operate),
 shows the same flow with Notary in its own project pointed at a source API you choose.
+
+<QuickstartMeta
+  outcome="One claim evaluated against your local Relay, a claim result compared to a Relay row read, and a standalone Notary path for an API you operate."
+  time="About 10 minutes after the first tutorial passes"
+  level="Local single-node"
+  prerequisites={['Completed: Publish a spreadsheet', 'registryctl', 'A Docker Compose provider']}
+/>
 
 This tutorial uses synthetic data and local demo credentials.
 Do not use the generated local keys in production.
