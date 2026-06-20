@@ -141,7 +141,11 @@ impl FileConnector {
 
     fn enforce_size_limits(&self, metadata: &SourceMetadata) -> Result<(), ConnectorError> {
         let Some(size_bytes) = metadata.size_bytes else {
-            return Ok(());
+            // Fail closed: refuse to read when size is unknown. Future streaming
+            // or HTTP sources must always provide a size or implement their own caps.
+            return Err(ConnectorError::SourceUnreadable(
+                "source size is unknown; refusing to read without an enforceable size limit".to_string(),
+            ));
         };
         if size_bytes > self.max_source_file_bytes {
             return Err(ConnectorError::SourceUnreadable(format!(
@@ -1069,5 +1073,96 @@ mod tests {
     #[test]
     fn quote_ident_escapes_double_quotes() {
         assert_eq!(quote_ident("a\"b"), r#""a""b""#);
+    }
+
+    #[test]
+    fn enforce_size_limits_fails_closed_on_unknown_size() {
+        use std::pin::Pin;
+        use std::sync::Arc;
+
+        use crate::format::{DecodedStream, Format, FormatError, FormatFuture, FormatHints};
+        use crate::source::{
+            OpenedSource, Source, SourceDescriptor, SourceFuture, SourceMetadata,
+        };
+
+        // Minimal test helper: Source that returns size_bytes: None
+        struct TestSource;
+
+        impl Source for TestSource {
+            fn descriptor(&self) -> SourceDescriptor {
+                SourceDescriptor {
+                    scheme: "test",
+                    target: "unknown_size".to_string(),
+                }
+            }
+
+            fn open<'a>(&'a self) -> SourceFuture<'a, OpenedSource> {
+                Box::pin(async {
+                    Ok(OpenedSource {
+                        reader: Box::pin(tokio::io::empty()),
+                        metadata: SourceMetadata {
+                            size_bytes: None, // <-- unknown size
+                            ..SourceMetadata::default()
+                        },
+                    })
+                })
+            }
+
+            fn metadata<'a>(&'a self) -> SourceFuture<'a, SourceMetadata> {
+                Box::pin(async {
+                    Ok(SourceMetadata {
+                        size_bytes: None,
+                        ..SourceMetadata::default()
+                    })
+                })
+            }
+        }
+
+        // Minimal test helper: dummy Format
+        struct TestFormat;
+
+        impl Format for TestFormat {
+            fn name(&self) -> &'static str {
+                "test"
+            }
+
+            fn decode<'a>(
+                &'a self,
+                _reader: Pin<Box<dyn tokio::io::AsyncRead + Send + Unpin>>,
+                _hints: FormatHints,
+            ) -> FormatFuture<'a, DecodedStream> {
+                Box::pin(async { Err(FormatError::Parse("test".to_string())) })
+            }
+        }
+
+        let connector = FileConnector::new(
+            Arc::new(TestSource),
+            Arc::new(TestFormat),
+            FormatHints {
+                sheet: None,
+                header_row: None,
+                data_range: None,
+                delimiter: None,
+                quote: None,
+                declared: crate::ingest::declared_schema::DeclaredSchema::empty(),
+            },
+            256 * 1024 * 1024,
+            256 * 1024 * 1024,
+        );
+
+        let metadata = SourceMetadata {
+            size_bytes: None,
+            ..SourceMetadata::default()
+        };
+
+        let result = connector.enforce_size_limits(&metadata);
+
+        assert!(result.is_err());
+        match result {
+            Err(ConnectorError::SourceUnreadable(msg)) => {
+                assert!(msg.contains("unknown"), "error message should mention unknown size");
+            }
+            _ => panic!("expected SourceUnreadable error"),
+        }
     }
 }
