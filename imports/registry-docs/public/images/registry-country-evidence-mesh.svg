@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 880" role="img" aria-labelledby="t d" font-family="'Public Sans', system-ui, -apple-system, sans-serif" text-rendering="geometricPrecision">
 <title id="t">Country evidence mesh</title>
-<desc id="d">A country's authoritative registries and health systems (Civil/CRVS, Clinical Health, Public Health, Social Protection, Agriculture, Education) each carry a small Notary add-on, which shares facts as signed, minimized attestations: cross-domain consumers pull them from it. A Social Protection MIS (OpenSPP) consumes attestations from Civil, Clinical Health over FHIR API, and DHIS2 through OpenFn, and reads the social registry it owns directly. A federated Citizen Chat (Program Navigator) reuses Clinical Health and Public Health attestations, then adds Agriculture and Education. There is no central broker and no boundary bar.</desc>
+<desc id="d">A country's authoritative registries and health systems (Civil/CRVS, Clinical Health, Public Health, Social Protection, Agriculture, Education) each carry a small Notary add-on, which shares facts as signed, minimized attestations: cross-domain consumers pull them from it. A Social Protection MIS (OpenSPP) consumes attestations from Civil, Clinical Health over FHIR API, and DHIS2 via the built-in http_json or http_flow source adapter, and reads the social registry it owns directly. A federated Citizen Chat (Program Navigator) reuses Clinical Health and Public Health attestations, then adds Agriculture and Education. There is no central broker and no boundary bar.</desc>
 <style>
   .eyebrow { font: 700 11px 'Public Sans', system-ui, sans-serif; fill: #6a6a6a; letter-spacing: 0.08em; }
   .title { font: 700 25px 'Public Sans', system-ui, sans-serif; fill: #161616; letter-spacing: -0.01em; }
@@ -117,7 +117,7 @@
 <text x="500" y="606" class="mono">DHIS2</text>
 <line x1="500" y1="618" x2="677" y2="618" stroke="#e5e5e5" stroke-width="1"/>
 <rect x="522.5" y="631.0" width="132" height="22" fill="#ffffff" stroke="#000091" stroke-width="1"/>
-<text x="588.5" y="646" class="tag" fill="#000091" text-anchor="middle">VIA OPENFN</text>
+<text x="588.5" y="646" class="tag" fill="#000091" text-anchor="middle">HTTP ADAPTER</text>
 <circle cx="504" cy="672" r="2" fill="#000091"/>
 <text x="514" y="676" class="bsm">Programme enrolment</text>
 <circle cx="504" cy="691" r="2" fill="#000091"/>
@@ -240,7 +240,7 @@
 <rect x="40" y="778" width="30" height="16" fill="#000091"/>
 <text x="80" y="793" class="leg">DCI-native (OpenCRVS, OpenSPP)</text>
 <rect x="370" y="778" width="30" height="16" fill="#ffffff" stroke="#000091" stroke-width="1"/>
-<text x="410" y="793" class="leg">Via an adapter: Registry Relay (files), OpenFn (DHIS2), or FHIR API</text>
+<text x="410" y="793" class="leg">Via an adapter: Registry Relay (files), http_json/http_flow (DHIS2), or FHIR API</text>
 <circle cx="52" cy="818" r="10.4" fill="none" stroke="#9d2c1d" stroke-width="1.3"/>
 <circle cx="52" cy="818" r="7.2" fill="none" stroke="#9d2c1d" stroke-width="0.8"/>
 <line x1="59.7" y1="818.0" x2="61.9" y2="818.0" stroke="#9d2c1d" stroke-width="0.8"/>

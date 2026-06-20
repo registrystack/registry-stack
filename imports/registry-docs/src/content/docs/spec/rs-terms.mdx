@@ -61,7 +61,7 @@ The five related projects that form the registry stack are listed below. Product
 
 **Registry Notary** (`registry-notary`): Standalone Rust service for claim evaluation, disclosure policy, credential issuance, and audit. Decoupled from Registry Relay application code by design, while sharing Registry Platform primitives.
 
-**Registry Lab** (`registry-lab`): Compose-based runnable local demonstration that starts three Registry Relay instances, four Registry Notary instances, live Postgres and Zitadel services, a private OpenFn sidecar path, a static metadata publisher, and narrated clients.
+**Registry Lab** (`registry-lab`): Compose-based runnable local demonstration that starts three Registry Relay instances, four Registry Notary instances, live Postgres and Zitadel services, a source adapter sidecar path (using built-in `http_json`/`http_flow`/`fhir` engines), a static metadata publisher, and narrated clients.
 
 ## 2. Protocol and credential terms
 

@@ -99,7 +99,7 @@ A claim evaluation moves a subject identifier through a configured pipeline: a s
 ```mermaid
 flowchart LR
     subject["Subject identifier<br/>(from caller)"]
-    connector["Source connector<br/>registry_data_api · dci · openfn_sidecar<br/>(HTTP only)"]
+    connector["Source connector<br/>registry_data_api · dci · source_adapter_sidecar<br/>(HTTP only)"]
     rule["Rule<br/>extract · exists · cel"]
     disclosure["Disclosure mode<br/>value · predicate · redacted"]
     format["Evaluation render format<br/>claim-result JSON · CCCEV JSON-LD"]
@@ -112,7 +112,7 @@ The diagram restates the pipeline: a caller supplies a subject identifier and a 
 
 REQ-PR-NOTARY-005: Claim evaluation MUST be performed by Registry Notary against its configured sources. The caller supplies a subject identifier and a claim id and MUST NOT supply the evaluated value. This is the protocol-level form of REQ-ARC-G-007.
 
-REQ-PR-NOTARY-006: A source connector MUST reach its target over HTTP. The supported connector kinds are `registry_data_api` (a Registry Relay instance), `dci` (an SP DCI search source), and the OpenFn sidecar. There is no file-based or database connector, and a conforming deployment MUST NOT assume one.
+REQ-PR-NOTARY-006: A source connector MUST reach its target over HTTP. The supported connector kinds are `registry_data_api` (a Registry Relay instance), `dci` (an SP DCI search source), and the source adapter sidecar (which uses built-in `http_json`, `http_flow`, or `fhir` engines to reach external sources such as DHIS2 or FHIR servers). There is no file-based or database connector, and a conforming deployment MUST NOT assume one.
 
 REQ-PR-NOTARY-007: A claim's rule MUST be one of the implemented rule types: `extract`, `exists`, or `cel`. The `plugin` rule type is declared in configuration but is unimplemented at the reviewed commit; a conforming claim MUST NOT depend on it.
 

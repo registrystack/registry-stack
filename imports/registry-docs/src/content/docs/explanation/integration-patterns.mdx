@@ -38,7 +38,8 @@ the marketing [ecosystem page](https://registrystack.org/ecosystem/).
 
 At country scale, the same pattern can sit next to several domain platforms.
 Clinical health systems can expose bounded facts through a FHIR API, public-health program systems
-can be reached through DHIS2 and OpenFn, and social protection, agriculture, education, and civil
+such as DHIS2 are reached through the built-in source-adapter engines (`http_json` or `http_flow`),
+and social protection, agriculture, education, and civil
 registration systems can keep their own authoritative stores.
 Registry Notary instances return configured claims to a social protection management information
 system and citizen-facing service channels without turning those consumers into raw-record readers.
@@ -47,7 +48,7 @@ system and citizen-facing service channels without turning those consumers into 
 <figure>
   <img src="../../images/registry-country-evidence-mesh.svg"
        alt="Country evidence mesh: civil registration, clinical health over FHIR API,
-            public health through DHIS2 and OpenFn, social protection, agriculture, and
+            public health through DHIS2 via built-in http_json or http_flow source adapter, social protection, agriculture, and
             education registries each keep their source systems. Registry Notary add-ons
             return signed minimized attestations to a social protection MIS and citizen
             service channels. The consuming systems receive claims, not full source rows." />
