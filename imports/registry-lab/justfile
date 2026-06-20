@@ -97,6 +97,14 @@ lab2-up:
 lab2-doctor:
     scripts/lab2-doctor-profile.sh
 
+# Run product doctors against every active Relay and Notary config.
+config-doctor:
+    scripts/doctor-active-configs.sh
+
+# Fail if active configs or docs use removed config/report names.
+config-vocabulary-check:
+    scripts/check-stale-config-vocabulary.sh
+
 # Run the governed configuration smoke for Lab 2.
 lab2-smoke:
     scripts/lab2-smoke-governed-config.sh
