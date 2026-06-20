@@ -25,6 +25,18 @@ use crate::config::FieldType;
 use crate::format::{DecodedStream, Format, FormatError, FormatFuture, FormatHints};
 use crate::ingest::declared_schema::DeclaredField;
 
+/// Maximum number of columns accepted in a single CSV file.
+///
+/// Generous enough for any real-world CSV; exists to cap allocations
+/// (one Arrow builder per column) before they happen.
+const MAX_CSV_COLUMNS: usize = 65_536;
+
+/// Maximum total decoded cells (rows × columns) in a single CSV file.
+///
+/// Symmetric with `MAX_XLSX_CELLS` in `xlsx.rs`; prevents unbounded
+/// memory growth on large inputs in the blocking decode path.
+const MAX_CSV_CELLS: usize = 10_000_000;
+
 /// Decoder for CSV input.
 ///
 /// Stateless; one instance serves every CSV resource. Per-resource
@@ -148,6 +160,15 @@ fn parse_csv_blocking(
 
     let n_cols = column_names.len();
 
+    // ── Column cap (defense-in-depth, symmetric with xlsx/parquet guards). ──
+    // The error string is deliberately generic: it does not echo the cap or
+    // the observed count, so probing cannot extract the threshold.
+    if n_cols > MAX_CSV_COLUMNS {
+        return Err(FormatError::LimitExceeded(
+            "csv column count exceeds configured maximum".to_string(),
+        ));
+    }
+
     // Build Arrow field descriptors driven by declared schema (or Utf8 fallback).
     let arrow_fields: Vec<Field> = column_names
         .iter()
@@ -187,6 +208,17 @@ fn parse_csv_blocking(
                 "row {data_row_idx}: expected {n_cols} columns, got {}",
                 record.len()
             )));
+        }
+
+        // Bound total decoded cells (rows × columns), symmetric with the
+        // XLSX guard. `data_row_idx` is 1-indexed so this triggers at the
+        // row *after* the cap is reached. `saturating_mul` avoids overflow
+        // on pathological column counts that slip past MAX_CSV_COLUMNS.
+        let cells = (data_row_idx as usize).saturating_mul(n_cols);
+        if cells > MAX_CSV_CELLS {
+            return Err(FormatError::LimitExceeded(
+                "csv cell count exceeds configured maximum".to_string(),
+            ));
         }
 
         for (col_idx, value) in record.iter().enumerate() {
@@ -349,4 +381,45 @@ fn parse_bool(s: &str) -> Option<bool> {
 fn parse_date(s: &str) -> Result<Date, ()> {
     let fmt = format_description!("[year]-[month]-[day]");
     Date::parse(s.trim(), &fmt).map_err(|_| ())
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_csv_blocking, MAX_CSV_COLUMNS};
+    use crate::format::FormatError;
+    use crate::ingest::declared_schema::DeclaredSchema;
+
+    /// A CSV header with more than `MAX_CSV_COLUMNS` columns is rejected
+    /// with `FormatError::LimitExceeded` before any Arrow allocation happens.
+    #[test]
+    fn rejects_too_many_columns() {
+        // Build "a,b,c,..." with MAX_CSV_COLUMNS + 1 single-char headers.
+        // Each header is a single byte ('a'–'z' cycling) plus a delimiter,
+        // so the total is well within a few hundred KiB.
+        let col_count = MAX_CSV_COLUMNS + 1;
+        let mut header = String::with_capacity(col_count * 2);
+        for i in 0..col_count {
+            if i > 0 {
+                header.push(',');
+            }
+            // Use 'a'–'z' cycling to keep each token a single byte.
+            header.push((b'a' + (i % 26) as u8) as char);
+        }
+        // No data rows — we want the column guard, not the cell guard.
+        let bytes = header.into_bytes();
+        let declared = DeclaredSchema::empty();
+        let result = parse_csv_blocking(
+            bytes,
+            Some(1), // header_row = 1 (first row is the header)
+            None,    // delimiter = ','
+            None,    // quote = '"'
+            &declared,
+        );
+        match result {
+            Err(FormatError::LimitExceeded(_)) => {}
+            other => panic!("expected LimitExceeded for over-wide CSV, got {other:?}"),
+        }
+    }
 }
