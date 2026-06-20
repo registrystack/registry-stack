@@ -644,6 +644,10 @@ struct PreparedHttpJsonRequest {
     client: reqwest::Client,
 }
 
+// All variants are http_json-engine error categories; the shared prefix is
+// intentional now that the OpenFn engine (and its differently-prefixed
+// variants) is retired. Renaming would churn ~110 call sites for no clarity.
+#[allow(clippy::enum_variant_names)]
 enum SourceExecutionError {
     HttpJson,
     HttpJsonBadRequest,
