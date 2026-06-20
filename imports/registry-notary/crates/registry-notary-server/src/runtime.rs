@@ -116,6 +116,10 @@ type BindingFetchResult =
 
 type ClaimVersionSelections = BTreeMap<String, Option<String>>;
 
+const SOURCE_LOOKUP_INPUT_PREFIX: &str = "sources.";
+const SOURCE_LOOKUP_INPUT_ALIAS_PREFIX: &str = "source.";
+const SOURCE_LOOKUP_CONTEXT_ATTRIBUTE_PREFIX: &str = "__registry_notary_source_lookup_";
+
 pub(crate) fn claim_ids(claims: &[ClaimRef]) -> Vec<String> {
     claims.iter().map(|claim| claim.id.clone()).collect()
 }
@@ -2867,6 +2871,26 @@ async fn load_sources(
     if claim.source_bindings.is_empty() {
         return Ok((BTreeMap::new(), None, BTreeSet::new(), None));
     }
+    if claim
+        .source_bindings
+        .values()
+        .any(binding_has_source_lookup_inputs)
+    {
+        return load_sources_with_dependencies(
+            evidence,
+            source,
+            claim,
+            source_capability,
+            context,
+            trusted_policy,
+            purpose,
+            disclosure,
+            format,
+            binding_concurrency,
+            fetch_memo,
+        )
+        .await;
+    }
 
     // Bindings within a claim are independent: each owns its own memo key and
     // takes its own `binding_concurrency` permit only when it actually needs
@@ -2954,6 +2978,141 @@ async fn load_sources(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn load_sources_with_dependencies(
+    evidence: Arc<EvidenceConfig>,
+    source: Arc<dyn SourceReader>,
+    claim: Arc<ClaimDefinition>,
+    source_capability: SourceCapability,
+    context: EvidenceRequestContext,
+    trusted_policy: TrustedPolicyContext,
+    purpose: String,
+    disclosure: DisclosureProfile,
+    format: String,
+    binding_concurrency: Arc<Semaphore>,
+    fetch_memo: Option<FetchMemo>,
+) -> Result<
+    (
+        BTreeMap<String, Value>,
+        Option<OffsetDateTime>,
+        BTreeSet<String>,
+        Option<MatchingPolicyAudit>,
+    ),
+    EvidenceError,
+> {
+    let mut pending = claim.source_bindings.clone();
+    let mut out: BTreeMap<String, Value> = BTreeMap::new();
+    let mut oldest_memo_ts: Option<OffsetDateTime> = None;
+    let mut redaction_fields = BTreeSet::new();
+    let mut matching_policy_audit = MatchingPolicyAudit::default();
+    let mut dependencies_by_binding = BTreeMap::new();
+    for (id, binding) in &claim.source_bindings {
+        dependencies_by_binding.insert(
+            id.clone(),
+            binding_source_lookup_dependencies(binding, &claim.source_bindings)?,
+        );
+    }
+
+    while !pending.is_empty() {
+        let mut ready_ids = Vec::new();
+        for id in pending.keys() {
+            let Some(dependencies) = dependencies_by_binding.get(id) else {
+                return Err(EvidenceError::InvalidRequest);
+            };
+            if dependencies
+                .iter()
+                .all(|source_id| out.contains_key(source_id))
+            {
+                ready_ids.push(id.clone());
+            }
+        }
+        if ready_ids.is_empty() {
+            return Err(EvidenceError::InvalidRequest);
+        }
+
+        let mut tasks: JoinSet<(String, BindingFetchResult)> = JoinSet::new();
+        for id in ready_ids {
+            let Some(binding) = pending.remove(&id) else {
+                continue;
+            };
+            let (read_binding, read_context) =
+                binding_with_resolved_source_lookup_context(&binding, &context, &out)?;
+            let claim_id = claim.id.clone();
+            let source = Arc::clone(&source);
+            let evidence = Arc::clone(&evidence);
+            let source_capability = source_capability.clone();
+            let context = context.clone();
+            let trusted_policy = trusted_policy.clone();
+            let purpose = purpose.clone();
+            let binding_concurrency = Arc::clone(&binding_concurrency);
+            let fetch_memo = fetch_memo.clone();
+            let allowed_disclosures = claim.disclosure.allowed.clone();
+            let allowed_formats = claim.formats.clone();
+            let claim_value_type = claim.value.value_type.clone();
+            let claim_purpose_constraints = claim_purpose_constraints(&evidence, &claim);
+            let format = format.clone();
+            tasks.spawn(async move {
+                let result = load_one_binding_with_read_context(
+                    &evidence,
+                    source,
+                    &source_capability,
+                    claim_id.as_str(),
+                    &claim_purpose_constraints,
+                    &allowed_disclosures,
+                    &allowed_formats,
+                    claim_value_type.as_str(),
+                    &binding,
+                    &context,
+                    &read_binding,
+                    &read_context,
+                    &trusted_policy,
+                    &purpose,
+                    disclosure,
+                    format.as_str(),
+                    binding_concurrency,
+                    fetch_memo.as_ref(),
+                )
+                .await;
+                (id, result)
+            });
+        }
+
+        while let Some(joined) = tasks.join_next().await {
+            let (id, result) = match joined {
+                Ok(pair) => pair,
+                Err(join_error) if join_error.is_panic() => {
+                    tracing::error!(
+                        target: "registry_notary_server::runtime",
+                        error = %join_error,
+                        "binding task panicked",
+                    );
+                    return Err(EvidenceError::RuleEvaluationFailed);
+                }
+                Err(_) => return Err(EvidenceError::RuleEvaluationFailed),
+            };
+            let (value, memo_ts, binding_policy_effect) = result?;
+            redaction_fields.extend(binding_policy_effect.redaction_fields);
+            if let Some(audit) = binding_policy_effect.audit {
+                matching_policy_audit.record(id.clone(), audit);
+            }
+            if let Some(ts) = memo_ts {
+                oldest_memo_ts = Some(match oldest_memo_ts {
+                    None => ts,
+                    Some(prev) => prev.min(ts),
+                });
+            }
+            out.insert(id, value);
+        }
+    }
+
+    Ok((
+        out,
+        oldest_memo_ts,
+        redaction_fields,
+        (!matching_policy_audit.is_empty()).then_some(matching_policy_audit),
+    ))
+}
+
 /// Load a single source binding, consulting and updating the batch memo.
 ///
 /// Returns `(value, Some(observed_at))` when the result came from the memo
@@ -2989,6 +3148,50 @@ async fn load_one_binding(
     binding_concurrency: Arc<Semaphore>,
     fetch_memo: Option<&FetchMemo>,
 ) -> Result<(Value, Option<OffsetDateTime>, BindingPolicyEffect), EvidenceError> {
+    load_one_binding_with_read_context(
+        evidence,
+        source,
+        source_capability,
+        claim_id,
+        claim_purpose_constraints,
+        allowed_disclosures,
+        allowed_formats,
+        claim_value_type,
+        binding,
+        context,
+        binding,
+        context,
+        trusted_policy,
+        purpose,
+        disclosure,
+        format,
+        binding_concurrency,
+        fetch_memo,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn load_one_binding_with_read_context(
+    evidence: &EvidenceConfig,
+    source: Arc<dyn SourceReader>,
+    source_capability: &SourceCapability,
+    claim_id: &str,
+    claim_purpose_constraints: &[Vec<String>],
+    allowed_disclosures: &[String],
+    allowed_formats: &[String],
+    claim_value_type: &str,
+    binding: &registry_notary_core::SourceBindingConfig,
+    context: &EvidenceRequestContext,
+    read_binding: &registry_notary_core::SourceBindingConfig,
+    read_context: &EvidenceRequestContext,
+    trusted_policy: &TrustedPolicyContext,
+    purpose: &str,
+    disclosure: DisclosureProfile,
+    format: &str,
+    binding_concurrency: Arc<Semaphore>,
+    fetch_memo: Option<&FetchMemo>,
+) -> Result<(Value, Option<OffsetDateTime>, BindingPolicyEffect), EvidenceError> {
     let binding_policy_effect = match validate_matching_policy(
         evidence,
         source_capability,
@@ -3014,11 +3217,11 @@ async fn load_one_binding(
     // Compute the lookup value to build the cache key. If this fails (e.g.
     // unsupported lookup op) we skip the memo entirely and fall through to a
     // direct fetch; the connector will surface the same error there.
-    let lookup_value_for_key = binding_cache_value_for_context(binding, context).ok();
-    let source_context_for_key = minimized_context_for_binding(binding, context);
+    let lookup_value_for_key = binding_cache_value_for_context(read_binding, read_context).ok();
+    let source_context_for_key = minimized_context_for_binding(read_binding, read_context);
 
     if let (Some(memo), Some(ref lv)) = (fetch_memo, &lookup_value_for_key) {
-        let key = cache_key_for_binding(binding, lv, &source_context_for_key, purpose);
+        let key = cache_key_for_binding(read_binding, lv, &source_context_for_key, purpose);
 
         // --- Phase 1: check under lock, decide action (no await while locked) ---
         enum Action {
@@ -3069,8 +3272,8 @@ async fn load_one_binding(
                     source,
                     source_capability,
                     claim_id,
-                    binding,
-                    context,
+                    read_binding,
+                    read_context,
                     trusted_policy,
                     purpose,
                     claim_purpose_constraints,
@@ -3135,8 +3338,8 @@ async fn load_one_binding(
         source,
         source_capability,
         claim_id,
-        binding,
-        context,
+        read_binding,
+        read_context,
         trusted_policy,
         purpose,
         claim_purpose_constraints,
@@ -3460,6 +3663,131 @@ fn validate_required_binding_fields(
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SourceLookupReference<'a> {
+    binding_id: &'a str,
+    field_path: &'a str,
+}
+
+fn parse_source_lookup_reference(input: &str) -> Option<SourceLookupReference<'_>> {
+    let remainder = input
+        .strip_prefix(SOURCE_LOOKUP_INPUT_PREFIX)
+        .or_else(|| input.strip_prefix(SOURCE_LOOKUP_INPUT_ALIAS_PREFIX))?;
+    let (binding_id, field_path) = remainder.split_once('.')?;
+    if binding_id.is_empty() || field_path.is_empty() {
+        return None;
+    }
+    Some(SourceLookupReference {
+        binding_id,
+        field_path,
+    })
+}
+
+fn binding_has_source_lookup_inputs(binding: &registry_notary_core::SourceBindingConfig) -> bool {
+    parse_source_lookup_reference(&binding.lookup.input).is_some()
+        || binding
+            .query_fields
+            .iter()
+            .any(|field| parse_source_lookup_reference(&field.input).is_some())
+}
+
+fn binding_source_lookup_dependencies(
+    binding: &registry_notary_core::SourceBindingConfig,
+    all_bindings: &BTreeMap<String, SourceBindingConfig>,
+) -> Result<BTreeSet<String>, EvidenceError> {
+    let mut dependencies = BTreeSet::new();
+    let inputs = std::iter::once(binding.lookup.input.as_str()).chain(
+        binding
+            .query_fields
+            .iter()
+            .map(|field| field.input.as_str()),
+    );
+    for input in inputs {
+        let Some(reference) = parse_source_lookup_reference(input) else {
+            continue;
+        };
+        if !all_bindings.contains_key(reference.binding_id) {
+            return Err(EvidenceError::SourceNotFound);
+        }
+        dependencies.insert(reference.binding_id.to_string());
+    }
+    Ok(dependencies)
+}
+
+fn binding_with_resolved_source_lookup_context(
+    binding: &registry_notary_core::SourceBindingConfig,
+    context: &EvidenceRequestContext,
+    sources: &BTreeMap<String, Value>,
+) -> Result<(SourceBindingConfig, EvidenceRequestContext), EvidenceError> {
+    if !binding_has_source_lookup_inputs(binding) {
+        return Ok((binding.clone(), context.clone()));
+    }
+
+    let mut binding = binding.clone();
+    let mut context = context.clone();
+    let mut synthetic_index = 0;
+    let lookup_input = materialize_source_lookup_input(
+        &binding.lookup.input,
+        &mut context,
+        sources,
+        synthetic_index,
+    )?;
+    if let Some(input) = lookup_input {
+        binding.lookup.input = input;
+        synthetic_index += 1;
+    }
+    for query_field in &mut binding.query_fields {
+        let query_input = materialize_source_lookup_input(
+            &query_field.input,
+            &mut context,
+            sources,
+            synthetic_index,
+        )?;
+        if let Some(input) = query_input {
+            query_field.input = input;
+            synthetic_index += 1;
+        }
+    }
+    Ok((binding, context))
+}
+
+fn materialize_source_lookup_input(
+    input: &str,
+    context: &mut EvidenceRequestContext,
+    sources: &BTreeMap<String, Value>,
+    synthetic_index: usize,
+) -> Result<Option<String>, EvidenceError> {
+    let Some(reference) = parse_source_lookup_reference(input) else {
+        return Ok(None);
+    };
+    let value = scalar_source_lookup_value(sources, reference)?;
+    let attribute = format!("{SOURCE_LOOKUP_CONTEXT_ATTRIBUTE_PREFIX}{synthetic_index}");
+    context.target.attributes.insert(attribute.clone(), value);
+    Ok(Some(format!("target.attributes.{attribute}")))
+}
+
+fn scalar_source_lookup_value(
+    sources: &BTreeMap<String, Value>,
+    reference: SourceLookupReference<'_>,
+) -> Result<Value, EvidenceError> {
+    let source = sources
+        .get(reference.binding_id)
+        .ok_or(EvidenceError::SourceNotFound)?;
+    let row = match source {
+        Value::Array(rows) if rows.is_empty() => return Err(EvidenceError::SourceNotFound),
+        Value::Array(rows) if rows.len() > 1 => return Err(EvidenceError::SourceAmbiguous),
+        Value::Array(rows) => rows.first().ok_or(EvidenceError::SourceNotFound)?,
+        row => row,
+    };
+    let value = crate::standalone::get_json_path(row, reference.field_path)
+        .ok_or(EvidenceError::SourceNotFound)?;
+    match value {
+        Value::String(_) | Value::Number(_) | Value::Bool(_) => Ok(value.clone()),
+        Value::Null => Err(EvidenceError::SourceNotFound),
+        Value::Array(_) | Value::Object(_) => Err(EvidenceError::InvalidRequest),
+    }
 }
 
 /// Derive the lookup value for a binding from the request context.
@@ -5196,6 +5524,74 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct DependentLookupSource {
+        first_row: Value,
+        reads: Mutex<Vec<(String, Value)>>,
+    }
+
+    impl DependentLookupSource {
+        fn new(first_row: Value) -> Self {
+            Self {
+                first_row,
+                reads: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl SourceReader for DependentLookupSource {
+        fn read_one<'a>(
+            &'a self,
+            binding: &'a SourceBindingConfig,
+            subject: &'a SubjectRequest,
+            purpose: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+            Box::pin(async move {
+                let context = EvidenceRequestContext {
+                    requester: None,
+                    target: EvidenceEntity::from_subject_request("Person", subject.clone()),
+                    relationship: None,
+                    on_behalf_of: None,
+                };
+                self.read_one_for_context(binding, &context, purpose).await
+            })
+        }
+
+        fn read_one_for_context<'a>(
+            &'a self,
+            binding: &'a SourceBindingConfig,
+            context: &'a EvidenceRequestContext,
+            _purpose: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+            Box::pin(async move {
+                let lookup_value = context
+                    .lookup_value(&binding.lookup.input)
+                    .ok_or_else(|| missing_context_error(&binding.lookup.input))?;
+                self.reads
+                    .lock()
+                    .expect("reads mutex is not poisoned")
+                    .push((binding.entity.clone(), lookup_value.clone()));
+                match binding.entity.as_str() {
+                    "civil_status_record" => Ok(self.first_row.clone()),
+                    "birth_event" => Ok(json!({
+                        "id": lookup_value,
+                        "certificate_id": "certificate-456",
+                        "value": true,
+                    })),
+                    _ => Err(EvidenceError::SourceNotFound),
+                }
+            })
+        }
+
+        fn required_scopes(
+            &self,
+            _evidence: &EvidenceConfig,
+            _claim_id: &str,
+        ) -> Result<Vec<String>, EvidenceError> {
+            Ok(Vec::new())
+        }
+    }
+
     #[derive(Debug, Default)]
     struct RuntimeSummarySource {
         inner: CountingSource,
@@ -5476,6 +5872,21 @@ mod tests {
             )]),
             matching: registry_notary_core::SourceMatchingConfig::default(),
         }
+    }
+
+    fn dependent_source_binding(
+        entity: &str,
+        lookup_input: &str,
+        lookup_field: &str,
+    ) -> SourceBindingConfig {
+        let mut binding = test_source_binding();
+        binding.entity = entity.to_string();
+        binding.lookup.input = lookup_input.to_string();
+        binding.lookup.field = lookup_field.to_string();
+        binding.fields.clear();
+        binding.matching.allowed_purposes = vec!["test".to_string()];
+        binding.matching.allowed_target_inputs = vec!["target.id".to_string()];
+        binding
     }
 
     fn machine_capability(scopes: &[&str]) -> SourceCapability {
@@ -6452,6 +6863,154 @@ mod tests {
         );
         assert_eq!(source.preflight_count.load(Ordering::SeqCst), 1);
         assert_eq!(memo.hits(), 0);
+    }
+
+    #[tokio::test]
+    async fn source_binding_lookup_can_use_prior_source_row_field() {
+        let source = Arc::new(DependentLookupSource::new(json!({
+            "person_id": "person-1",
+            "birth_event_id": "birth-123",
+        })));
+        let mut claim = test_claim("selected", Vec::new(), false);
+        claim.source_bindings = BTreeMap::from([
+            (
+                "civil_status".to_string(),
+                dependent_source_binding("civil_status_record", "target.id", "person_id"),
+            ),
+            (
+                "birth_event".to_string(),
+                dependent_source_binding(
+                    "birth_event",
+                    "sources.civil_status.birth_event_id",
+                    "id",
+                ),
+            ),
+        ]);
+        let evidence = test_evidence(vec![claim.clone()]);
+        let context = test_request("selected")
+            .request_context()
+            .expect("test request has target context");
+
+        let (sources, _, _, _) = load_sources(
+            evidence,
+            source.clone() as Arc<dyn SourceReader>,
+            Arc::new(claim),
+            machine_capability(&[]),
+            context,
+            TrustedPolicyContext::default(),
+            "test".to_string(),
+            DisclosureProfile::Value,
+            FORMAT_CLAIM_RESULT_JSON.to_string(),
+            Arc::new(Semaphore::new(4)),
+            None,
+        )
+        .await
+        .expect("dependent source lookup succeeds");
+
+        assert_eq!(sources["birth_event"]["id"], json!("birth-123"));
+        let reads = source.reads.lock().expect("reads mutex is not poisoned");
+        assert_eq!(
+            reads.as_slice(),
+            &[
+                ("civil_status_record".to_string(), json!("person-1")),
+                ("birth_event".to_string(), json!("birth-123")),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn source_binding_lookup_missing_prior_field_is_not_found() {
+        let source = Arc::new(DependentLookupSource::new(json!({
+            "person_id": "person-1",
+        })));
+        let mut claim = test_claim("selected", Vec::new(), false);
+        claim.source_bindings = BTreeMap::from([
+            (
+                "civil_status".to_string(),
+                dependent_source_binding("civil_status_record", "target.id", "person_id"),
+            ),
+            (
+                "birth_event".to_string(),
+                dependent_source_binding(
+                    "birth_event",
+                    "sources.civil_status.birth_event_id",
+                    "id",
+                ),
+            ),
+        ]);
+        let evidence = test_evidence(vec![claim.clone()]);
+        let context = test_request("selected")
+            .request_context()
+            .expect("test request has target context");
+
+        let error = load_sources(
+            evidence,
+            source as Arc<dyn SourceReader>,
+            Arc::new(claim),
+            machine_capability(&[]),
+            context,
+            TrustedPolicyContext::default(),
+            "test".to_string(),
+            DisclosureProfile::Value,
+            FORMAT_CLAIM_RESULT_JSON.to_string(),
+            Arc::new(Semaphore::new(4)),
+            None,
+        )
+        .await
+        .expect_err("missing source row field fails");
+
+        assert!(matches!(error, EvidenceError::SourceNotFound));
+    }
+
+    #[tokio::test]
+    async fn source_binding_lookup_ambiguous_prior_rows_are_ambiguous() {
+        let source = Arc::new(DependentLookupSource::new(json!([
+            {
+                "person_id": "person-1",
+                "birth_event_id": "birth-123"
+            },
+            {
+                "person_id": "person-1",
+                "birth_event_id": "birth-456"
+            }
+        ])));
+        let mut claim = test_claim("selected", Vec::new(), false);
+        claim.source_bindings = BTreeMap::from([
+            (
+                "civil_status".to_string(),
+                dependent_source_binding("civil_status_record", "target.id", "person_id"),
+            ),
+            (
+                "birth_event".to_string(),
+                dependent_source_binding(
+                    "birth_event",
+                    "sources.civil_status.birth_event_id",
+                    "id",
+                ),
+            ),
+        ]);
+        let evidence = test_evidence(vec![claim.clone()]);
+        let context = test_request("selected")
+            .request_context()
+            .expect("test request has target context");
+
+        let error = load_sources(
+            evidence,
+            source as Arc<dyn SourceReader>,
+            Arc::new(claim),
+            machine_capability(&[]),
+            context,
+            TrustedPolicyContext::default(),
+            "test".to_string(),
+            DisclosureProfile::Value,
+            FORMAT_CLAIM_RESULT_JSON.to_string(),
+            Arc::new(Semaphore::new(4)),
+            None,
+        )
+        .await
+        .expect_err("ambiguous source rows fail");
+
+        assert!(matches!(error, EvidenceError::SourceAmbiguous));
     }
 
     #[test]
