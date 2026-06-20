@@ -104,6 +104,9 @@ const DOCTOR_COMMAND: &str = "doctor";
 /// Prints a redacted resolved configuration explanation.
 const EXPLAIN_CONFIG_COMMAND: &str = "explain-config";
 
+/// Prints a lightweight JSON schema for top-level config discovery.
+const SCHEMA_COMMAND: &str = "schema";
+
 /// Top-level namespace for operator configuration commands.
 const CONFIG_COMMAND: &str = "config";
 
@@ -166,6 +169,9 @@ enum CliCommand {
     ExplainConfig {
         config_path: PathBuf,
         env_file: Option<PathBuf>,
+        format: OutputFormat,
+    },
+    Schema {
         format: OutputFormat,
     },
     ConfigVerifyBundle(ConfigVerifyBundleCommand),
@@ -294,6 +300,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             env_file,
             format,
         } => run_explain_config(config_path, env_file, format).await,
+        CliCommand::Schema { format } => run_schema(format).await,
         CliCommand::ConfigVerifyBundle(command) => run_config_verify_bundle(command).await,
         CliCommand::ConfigApplyBundle(command) => run_config_apply_bundle(command).await,
     }
@@ -475,6 +482,15 @@ async fn run_explain_config(
                 "generated_at": now_rfc3339(),
             });
             println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(())
+        }
+    }
+}
+
+async fn run_schema(format: OutputFormat) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    match format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&lightweight_schema())?);
             Ok(())
         }
     }
@@ -1262,6 +1278,8 @@ fn parse_cli_command_from(args: Vec<String>) -> Result<CliCommand, CliError> {
         .is_some_and(|arg| arg == EXPLAIN_CONFIG_COMMAND)
     {
         parse_explain_config_command(&rest[1..])
+    } else if rest.first().is_some_and(|arg| arg == SCHEMA_COMMAND) {
+        parse_schema_command(&rest[1..])
     } else if rest.first().is_some_and(|arg| arg == CONFIG_COMMAND) {
         parse_config_command(&rest[1..])
     } else {
@@ -1393,11 +1411,55 @@ fn parse_explain_config_command(args: &[String]) -> Result<CliCommand, CliError>
     })
 }
 
+fn parse_schema_command(args: &[String]) -> Result<CliCommand, CliError> {
+    let mut format = OutputFormat::Json;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if let Some(value) = flag_value(arg, FORMAT_FLAG) {
+            format = parse_output_format(required_string_value(FORMAT_FLAG, value)?)?;
+        } else if arg == FORMAT_FLAG {
+            index += 1;
+            format = parse_output_format(required_string_arg(args, index, FORMAT_FLAG)?)?;
+        } else {
+            return Err(CliError(format!(
+                "unknown {SCHEMA_COMMAND} argument: {arg}"
+            )));
+        }
+        index += 1;
+    }
+    Ok(CliCommand::Schema { format })
+}
+
 fn parse_output_format(value: String) -> Result<OutputFormat, CliError> {
     match value.as_str() {
         "json" => Ok(OutputFormat::Json),
         _ => Err(CliError(format!("{FORMAT_FLAG} must be json"))),
     }
+}
+
+fn lightweight_schema() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Registry Relay config",
+        "type": "object",
+        "required": ["server", "catalog", "auth", "audit", "datasets"],
+        "properties": {
+            "instance": { "type": "object" },
+            "server": { "type": "object" },
+            "config_trust": { "type": "object" },
+            "metadata": { "type": "object" },
+            "catalog": { "type": "object" },
+            "vocabularies": { "type": "object" },
+            "auth": { "type": "object" },
+            "audit": { "type": "object" },
+            "datasets": { "type": "array" },
+            "provenance": { "type": "object" },
+            "standards": { "type": "object" },
+            "deployment": { "type": "object" }
+        },
+        "additionalProperties": false
+    })
 }
 
 fn parse_deployment_profile(value: String) -> Result<DeploymentProfile, CliError> {
@@ -2417,6 +2479,31 @@ audit:
             err.to_string(),
             "--profile must be local, hosted_lab, production, or evidence_grade"
         );
+    }
+
+    #[test]
+    fn schema_cli_accepts_json_format() {
+        let command =
+            parse_cli_command_from(command_args(&["registry-relay", "schema", "--format=json"]))
+                .expect("schema command parses");
+
+        let CliCommand::Schema { format } = command else {
+            panic!("expected schema command");
+        };
+        assert_eq!(format, OutputFormat::Json);
+    }
+
+    #[test]
+    fn schema_cli_rejects_unknown_format() {
+        let err = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "schema",
+            "--format",
+            "text",
+        ]))
+        .expect_err("schema rejects unsupported format");
+
+        assert_eq!(err.to_string(), "--format must be json");
     }
 
     #[test]

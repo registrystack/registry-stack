@@ -211,12 +211,42 @@ fn assert_config_explanation(report: &Value) {
     assert_eq!(report["config_schema_version"], "registry.relay.config.v1");
 }
 
+fn assert_json_schema_compiles(schema: &Value) {
+    jsonschema::JSONSchema::compile(schema).unwrap_or_else(|err| {
+        panic!("schema must compile as JSON Schema: {err}\n{schema:#}");
+    });
+}
+
 fn diagnostic_with_code<'a>(report: &'a Value, code: &str) -> Option<&'a Value> {
     report["diagnostics"]
         .as_array()
         .expect("diagnostics array")
         .iter()
         .find(|diagnostic| diagnostic["code"] == code)
+}
+
+#[test]
+fn schema_json_reports_top_level_config_sections() {
+    let output = Command::new(env!("CARGO_BIN_EXE_registry-relay"))
+        .env("RUST_LOG", "off")
+        .args(["schema", "--format", "json"])
+        .output()
+        .expect("schema command runs");
+
+    assert!(
+        output.status.success(),
+        "schema failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let schema = parse_stdout_json(&output.stdout);
+    assert_json_schema_compiles(&schema);
+    assert_eq!(schema["title"], "Registry Relay config");
+    assert_eq!(schema["additionalProperties"], false);
+    assert!(schema["properties"]["server"].is_object());
+    assert!(schema["properties"]["catalog"].is_object());
+    assert!(schema["properties"]["auth"].is_object());
+    assert!(schema["properties"]["audit"].is_object());
+    assert!(schema["properties"]["datasets"].is_object());
 }
 
 #[test]
