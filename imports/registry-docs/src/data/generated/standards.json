@@ -202,7 +202,7 @@
     ],
     "surfaces": [
       "generated API reference",
-      "Redoc publication"
+      "native OpenAPI publication"
     ],
     "evidence_docs": [
       {
@@ -223,7 +223,7 @@
       }
     ],
     "last_checked": "2026-06-13",
-    "notes": "Relay and Notary generate OpenAPI; the pinned generated documents are cited directly. These docs publish the same pinned artifacts through Redoc."
+    "notes": "Relay and Notary generate OpenAPI; the pinned generated documents are cited directly. These docs publish the same pinned artifacts as native API reference pages."
   },
   {
     "id": "shacl",

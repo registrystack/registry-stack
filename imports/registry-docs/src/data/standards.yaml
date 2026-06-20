@@ -141,7 +141,7 @@
     - registry-notary
   surfaces:
     - generated API reference
-    - Redoc publication
+    - native OpenAPI publication
   evidence_docs:
     - label: Registry Relay README
       url: https://github.com/jeremi/registry-relay/blob/05a4b249c74bd8f3788eda249a53277d02b22f12/README.md
@@ -152,7 +152,7 @@
     - label: Registry Notary generated OpenAPI document (pinned)
       url: https://github.com/jeremi/registry-notary/blob/2a866c1194f6f61db5680bb722c1da61c124252b/openapi/registry-notary.openapi.json
   last_checked: 2026-06-13
-  notes: Relay and Notary generate OpenAPI; the pinned generated documents are cited directly. These docs publish the same pinned artifacts through Redoc.
+  notes: Relay and Notary generate OpenAPI; the pinned generated documents are cited directly. These docs publish the same pinned artifacts as native API reference pages.
 - id: shacl
   name: SHACL
   standards_body: W3C

@@ -27,9 +27,9 @@ function withBase(path: string) {
         <dd><code>{source.artifact}</code></dd>
       </dl>
 
-      {source.redoc_path && (
+      {source.reference_path && (
         <footer class="card-footer">
-          <a href={withBase(source.redoc_path)} class="redoc-link">Open Redoc page</a>
+          <a href={withBase(source.reference_path)} class="redoc-link">Open API reference</a>
         </footer>
       )}
     </section>
