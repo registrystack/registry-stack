@@ -629,6 +629,7 @@ Metrics are intentionally bounded. Request metrics use low-cardinality labels su
 Recommended scrape posture:
 
 - Scrape only the admin listener from a private monitoring network.
+- Use a credential with `registry_relay:metrics_read`.
 - Treat `/metrics` as operational telemetry, not an audit record or per-request trace.
 - Use audit logs for security review and request-level accountability.
 - Alert on readiness gauges and elevated 5xx/error counters before routing traffic away.
@@ -690,11 +691,12 @@ Caller expected a signed VC but received plain JSON:
 Admin reload fails:
 
 - Confirm `server.admin_bind` is configured and reachable only from the private admin network.
-- Confirm the key has the independent `admin` scope.
+- Confirm the key has the independent `registry_relay:admin` scope.
 - Check the per-resource `error_code` in the reload-all response. Use the table-specific endpoint to retry one failed source after correcting the underlying data or connectivity issue.
 
 Metrics missing:
 
 - Confirm you are scraping the admin listener, not `server.bind`.
 - Confirm `server.admin_bind` is configured and reachable from the monitoring network.
+- Confirm the scrape credential has `registry_relay:metrics_read`.
 - Expect `/metrics` on the public listener to be unavailable. Depending on the auth stack, the response may be `401` rather than `404`.
