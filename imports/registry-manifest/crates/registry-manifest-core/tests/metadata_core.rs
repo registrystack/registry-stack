@@ -174,6 +174,79 @@ codelists: []
     );
 }
 
+#[test]
+fn runtime_only_rejection_covers_representative_product_configs() {
+    let cases = [
+        (
+            "relay",
+            r#"
+datasets:
+  - id: civil
+    title: Civil Registry
+    entities:
+      - name: person
+        table: people
+        fields: []
+codelists: []
+"#,
+            "table",
+        ),
+        (
+            "notary",
+            r#"
+datasets: []
+evidence_types:
+  - id: birth-record
+    title: Birth Record
+    source_connections:
+      civil:
+        base_url: http://registry-relay:8080
+codelists: []
+"#,
+            "source_connections",
+        ),
+        (
+            "governed",
+            r#"
+config_trust:
+  antirollback_state_path: state/config-antirollback.json
+  local_approval_state_path: state/config-approvals.json
+datasets: []
+codelists: []
+"#,
+            "config_trust",
+        ),
+    ];
+
+    for (label, body, expected_key) in cases {
+        let raw = format!(
+            r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: runtime-only-{label}
+  base_url: https://registry.example.test
+  title: Runtime-only {label}
+  publisher:
+    name: Publisher
+{body}
+"#
+        );
+        let error = match serde_yaml_ng::from_str::<MetadataManifest>(&raw) {
+            Ok(_) => panic!("{label} runtime-only config parsed"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error.to_string().contains("runtime-only keys"),
+            "{label} should fail with runtime-only key error, got: {error}"
+        );
+        assert!(
+            error.to_string().contains(expected_key),
+            "{label} should name {expected_key}, got: {error}"
+        );
+    }
+}
+
 fn manifest_with_body(body: &str) -> MetadataManifest {
     serde_yaml_ng::from_str(&format!(
         r#"
@@ -866,6 +939,42 @@ fn codelist_concepts_are_validated_and_fallback_ids_are_percent_encoded() {
     assert!(concept_ids.contains(&"https://registry.example.test/codelists/codes/01.02"));
     assert!(
         concept_ids.contains(&"https://registry.example.test/codelists/codes/A%2FB%20C%3Fx%23y")
+    );
+}
+
+#[test]
+fn codelist_concept_iris_expand_configured_prefixes() {
+    let mut manifest = minimal_manifest();
+    manifest.vocabularies.insert(
+        "status".to_string(),
+        "https://registry.example.test/codelists/status/".to_string(),
+    );
+    manifest.codelists.push(CodelistManifest {
+        id: "status".to_string(),
+        scheme_iri: "https://registry.example.test/codelists/status".to_string(),
+        version: None,
+        valid_from: None,
+        valid_to: None,
+        external_ref: None,
+        concepts: vec![CodelistConcept {
+            code: "ACTIVE".to_string(),
+            iri: Some("status:active".to_string()),
+            label: None,
+        }],
+    });
+
+    validate_manifest(&manifest).expect("prefixed concept IRI validates");
+    let compiled = compile_manifest(&manifest).expect("manifest compiles");
+    let shacl = render_shacl(&compiled);
+    let scheme = shacl["@graph"]
+        .as_array()
+        .expect("@graph")
+        .iter()
+        .find(|node| node["@id"] == "https://registry.example.test/codelists/status")
+        .expect("codelist scheme");
+    assert_eq!(
+        scheme["skos:hasTopConcept"][0]["@id"],
+        json!("https://registry.example.test/codelists/status/active")
     );
 }
 

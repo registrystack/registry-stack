@@ -45,8 +45,8 @@ validate-profiles [profiles-dir]
 
 The `--format` flag on `render` accepts:
 Terms used in the table include Data Catalog Vocabulary (DCAT), BRegDCAT-AP, Core Public Service
-Vocabulary Application Profile (CPSV-AP), Shapes Constraint Language (SHACL), and Open Digital
-Rights Language (ODRL).
+Vocabulary Application Profile (CPSV-AP), Shapes Constraint Language (SHACL), Open Digital
+Rights Language (ODRL), OGC API Records, and SKOS-shaped codelist metadata.
 
 | Format value | Required flags | Output |
 | --- | --- | --- |
@@ -61,7 +61,7 @@ Rights Language (ODRL).
 | `shacl` | None | SHACL node shapes JSON-LD |
 | `json-schema` | `--dataset <id>` and `--entity <name>` | JSON Schema Draft 2020-12 |
 | `form-json-schema` | `--form <id>` | Form JSON Schema Draft 2020-12 |
-| `ogc-records` | None | OGC API Records item bodies JSON |
+| `ogc-records` | None | OGC API Records FeatureCollection JSON |
 
 Valid `--profile` values for `--format dcat`: `dcat`, `dcat-ap` (both render base DCAT), and `bregdcat-ap` (renders BRegDCAT-AP JSON-LD).
 Use `--format cpsv-ap` for the service catalogue rather than `--format dcat --profile cpsv-ap`.
@@ -259,6 +259,7 @@ All paths are relative to the `--out` directory.
 | `policies/<dataset-id>.jsonld` | JSON-LD | `render_dataset_policy_document()` per dataset | `schema_version: registry-manifest-policy/v1` |
 | `schema/<dataset-id>/<entity-name>/schema.json` | JSON Schema Draft 2020-12 | `render_entity_schema_draft_2020_12()` per entity | `schema_version: registry-manifest-entity-json-schema/v1` |
 | `forms/<form-id>/schema.json` | JSON Schema Draft 2020-12 | `render_form_schema_draft_2020_12()` per form | `schema_version: registry-manifest-form-json-schema/v1` |
+| `ogc-records/items.json` | GeoJSON FeatureCollection | `render_ogc_records_items()` | `schema_version: registry-manifest-ogc-records/v1` |
 | `profiles/<profile-id>.json` | JSON | Compiled profile structure | Profile descriptor `schema_version` |
 | `index.json` | JSON | Bundle manifest index | `schema_version: registry-manifest-index/v1` |
 

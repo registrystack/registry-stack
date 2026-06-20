@@ -199,7 +199,9 @@ cargo run -p registry-manifest-cli -- publish \
 
 The output directory will contain `catalog.json`, `dcat.jsonld`, `cpsv-ap.jsonld` when the
 manifest declares the profile, `shacl.jsonld`, per-entity JSON Schema files, form JSON Schema
-files, OGC Records output, evidence-offering files, and per-dataset policy documents.
+files, `ogc-records/items.json`, evidence-offering files, and per-dataset policy documents.
+Linked-data outputs include embedded SKOS-shaped codelist nodes when the manifest declares
+codelists.
 See [Registry Manifest reference](./reference.md) for the full artifact list.
 
 The `index.json` at the root of the output directory carries schema version
@@ -233,6 +235,7 @@ After `publish`, confirm the key artifacts are present:
 ```sh
 ls target/metadata/public/catalog.json \
    target/metadata/public/dcat.jsonld \
+   target/metadata/public/ogc-records/items.json \
    target/metadata/public/shacl.jsonld \
    target/metadata/public/index.json
 ```

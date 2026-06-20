@@ -136,6 +136,7 @@ fn publish_command(args: &[String]) -> Result<(), String> {
     create_contained_dir_all(&out_root, "profiles")?;
     create_contained_dir_all(&out_root, "evidence-offerings")?;
     create_contained_dir_all(&out_root, "policies")?;
+    create_contained_dir_all(&out_root, "ogc-records")?;
 
     copy_contained(&out_root, "metadata.yaml", manifest_path)?;
     write_json(&out_root, "catalog.json", &render_catalog(&compiled))?;
@@ -177,6 +178,11 @@ fn publish_command(args: &[String]) -> Result<(), String> {
         }
     }
     write_json(&out_root, "shacl.jsonld", &render_shacl(&compiled))?;
+    write_json(
+        &out_root,
+        PathBuf::from("ogc-records").join("items.json"),
+        &render_ogc_records_items(&compiled),
+    )?;
 
     let mut schemas = Vec::new();
     let mut policy_documents = Vec::new();
@@ -306,6 +312,7 @@ fn publish_command(args: &[String]) -> Result<(), String> {
         "dcat_profiles": dcat_profiles,
         "service_catalogues": service_catalogues,
         "shacl": "/metadata/shacl.jsonld",
+        "ogc_records_items": "/metadata/ogc-records/items.json",
         "schemas": schemas,
         "form_schemas": form_schemas,
         "profiles": profiles,
@@ -399,6 +406,13 @@ fn write_api_catalog(public_root: &PublishRoot, index: &serde_json::Value) -> Re
         "SHACL shapes",
         "application/ld+json",
         None,
+    );
+    push_api_catalog_item(
+        &mut items,
+        index.get("ogc_records_items"),
+        "OGC Records item collection",
+        "application/geo+json",
+        Some("https://ogcapi.ogc.org/records/"),
     );
 
     let api_catalog = serde_json::json!({
@@ -509,6 +523,8 @@ fn media_type_for_artifact(path: &Path) -> &'static str {
     let path_string = path.to_string_lossy();
     if path_string.ends_with(".jsonld") || path == Path::new("cpsv-ap") {
         "application/ld+json"
+    } else if path == Path::new("ogc-records/items.json") {
+        "application/geo+json"
     } else if path_string.ends_with(".ttl") {
         "text/turtle"
     } else if path_string.ends_with(".yaml") || path_string.ends_with(".yml") {
