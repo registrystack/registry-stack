@@ -198,6 +198,8 @@ pub enum FilterError {
     TooManyValues,
     #[error("too many filters")]
     TooManyFilters,
+    #[error("too many search items")]
+    TooManyItems,
     #[error("invalid range")]
     InvalidRange,
     #[error("limit out of range")]
@@ -823,6 +825,7 @@ impl FilterError {
             FilterError::InvalidValue => "filter.invalid_value",
             FilterError::TooManyValues => "filter.too_many_values",
             FilterError::TooManyFilters => "filter.too_many_filters",
+            FilterError::TooManyItems => "filter.too_many_items",
             FilterError::InvalidRange => "filter.invalid_range",
             FilterError::LimitOutOfRange => "filter.limit_out_of_range",
         }
@@ -839,6 +842,7 @@ impl FilterError {
             | FilterError::UnsupportedOp
             | FilterError::InvalidValue
             | FilterError::TooManyFilters
+            | FilterError::TooManyItems
             | FilterError::InvalidRange
             | FilterError::LimitOutOfRange => StatusCode::BAD_REQUEST,
         }
@@ -852,6 +856,7 @@ impl FilterError {
             FilterError::InvalidValue => "Invalid filter value",
             FilterError::TooManyValues => "Too many filter values",
             FilterError::TooManyFilters => "Too many filters",
+            FilterError::TooManyItems => "Too many search items",
             FilterError::InvalidRange => "Invalid range",
             FilterError::LimitOutOfRange => "Limit out of range",
         }
@@ -868,6 +873,9 @@ impl FilterError {
             FilterError::TooManyValues => "in-list exceeds the configured maximum of 100 values",
             FilterError::TooManyFilters => {
                 "request carries more filter parameters than the per-request cap allows"
+            }
+            FilterError::TooManyItems => {
+                "search request carries more items than the per-request cap allows"
             }
             FilterError::InvalidRange => "range bounds are inverted or invalid",
             FilterError::LimitOutOfRange => {
