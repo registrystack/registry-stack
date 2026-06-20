@@ -1,0 +1,42 @@
+{
+  "schema_version": "registry.config.diagnostic_report.v1",
+  "product": "registry-relay",
+  "config_schema_version": "registry.relay.config.v1",
+  "source": {
+    "kind": "local_file",
+    "path": "relay/config.yaml"
+  },
+  "status": "error",
+  "summary": {
+    "error_count": 1,
+    "warning_count": 1
+  },
+  "diagnostics": [
+    {
+      "code": "relay.config.deprecated_field",
+      "severity": "error",
+      "path": "/server/admin_bind",
+      "message": "Field /server/admin_bind was removed; use /admin/listen instead.",
+      "replacement": "/admin/listen",
+      "documentation_key": "relay.config.admin_listen"
+    },
+    {
+      "code": "relay.config.env_missing",
+      "severity": "warning",
+      "path": "/auth/admin_token_env",
+      "message": "Required environment variable REGISTRY_RELAY_ADMIN_TOKEN was not checked."
+    }
+  ],
+  "required_env": [
+    {
+      "name": "REGISTRY_RELAY_ADMIN_TOKEN",
+      "classification": "secret",
+      "status": "missing"
+    }
+  ],
+  "hashes": {
+    "internal_config_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "posture_safe_config_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  },
+  "generated_at": "2026-06-20T00:00:00Z"
+}

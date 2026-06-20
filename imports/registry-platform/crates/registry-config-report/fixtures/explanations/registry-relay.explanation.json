@@ -1,0 +1,57 @@
+{
+  "schema_version": "registry.config.explanation.v1",
+  "product": "registry-relay",
+  "config_schema_version": "registry.relay.config.v1",
+  "source": {
+    "kind": "local_file",
+    "path": "relay/config.yaml"
+  },
+  "required_env": [
+    {
+      "name": "REGISTRY_RELAY_ADMIN_TOKEN",
+      "classification": "secret",
+      "status": "present"
+    }
+  ],
+  "defaults_applied": [
+    {
+      "path": "/server/read_timeout_ms",
+      "value": 5000
+    }
+  ],
+  "optional_sections_absent": [
+    {
+      "path": "/governed_config",
+      "reason": "local file deployment"
+    }
+  ],
+  "live_apply": [
+    {
+      "path": "/catalog",
+      "class": "hot_swappable"
+    },
+    {
+      "path": "/server",
+      "class": "restart_required"
+    },
+    {
+      "path": "/storage",
+      "class": "unsupported_live_apply"
+    }
+  ],
+  "resolved_config": {
+    "instance": {
+      "id": "relay-a",
+      "environment": "local"
+    },
+    "server": {
+      "public_base_url": "https://relay.example.test",
+      "admin_token": "[redacted]"
+    }
+  },
+  "hashes": {
+    "internal_config_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "posture_safe_config_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "generated_at": "2026-06-20T00:00:00Z"
+}
