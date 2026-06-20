@@ -603,35 +603,42 @@ pub struct AuditHashSecret(Arc<SecretBytes>);
 
 impl AuditHashSecret {
     pub fn new(secret: impl Into<Vec<u8>>) -> Result<Self, AuditError> {
-        let secret = Zeroizing::new(secret.into());
+        // Own the bytes directly: on the success path they move into the
+        // `ZeroizeOnDrop` `SecretBytes` with no intermediate copy; on the error
+        // path the rejected (too-short) secret is scrubbed explicitly.
+        let mut secret = secret.into();
         if secret.len() < MIN_AUDIT_SECRET_BYTES {
+            secret.zeroize();
             return Err(AuditError::WeakSecret {
                 name: "explicit secret".to_string(),
                 min_bytes: MIN_AUDIT_SECRET_BYTES,
             });
         }
-        Ok(Self(Arc::new(SecretBytes(secret.to_vec()))))
+        Ok(Self(Arc::new(SecretBytes(secret))))
     }
 
     fn from_env_value(name: &str, value: String) -> Result<Self, AuditError> {
-        let value = Zeroizing::new(value);
+        // Keep ownership of the env value so it can move into `SecretBytes`
+        // (`String::into_bytes` is allocation-free) instead of being copied;
+        // rejected values are scrubbed before returning.
+        let mut value = value;
         if value.is_empty() {
             return Err(AuditError::EmptySecret {
                 name: name.to_string(),
             });
         }
-        let bytes = Zeroizing::new(value.as_bytes().to_vec());
-        if bytes.len() < MIN_AUDIT_SECRET_BYTES {
+        if value.len() < MIN_AUDIT_SECRET_BYTES {
+            value.zeroize();
             return Err(AuditError::WeakSecret {
                 name: name.to_string(),
                 min_bytes: MIN_AUDIT_SECRET_BYTES,
             });
         }
-        Ok(Self(Arc::new(SecretBytes(bytes.to_vec()))))
+        Ok(Self(Arc::new(SecretBytes(value.into_bytes()))))
     }
 
-    fn from_bytes(secret: Zeroizing<Vec<u8>>) -> Self {
-        Self(Arc::new(SecretBytes(secret.to_vec())))
+    fn from_bytes(secret: Vec<u8>) -> Self {
+        Self(Arc::new(SecretBytes(secret)))
     }
 
     fn as_bytes(&self) -> &[u8] {
@@ -1373,15 +1380,15 @@ fn hmac_sha256_bytes(secret: &[u8], context: &[u8], bytes: &[u8]) -> [u8; 32] {
 /// without a separate Extract step (Expand-only); a distinct per-purpose `info`
 /// label domain-separates each derived sub-key. Because the SHA-256 output is a
 /// single block, the counter byte is always `0x01` and no `T(0)` carry is
-/// needed. The result is wrapped in [`Zeroizing`] so the derived sub-key is
-/// scrubbed once copied into an [`AuditHashSecret`].
-fn hkdf_expand_sha256(prk: &[u8], info: &[u8]) -> Zeroizing<Vec<u8>> {
+/// needed. The caller moves the returned bytes straight into the
+/// `ZeroizeOnDrop` [`SecretBytes`] backing an [`AuditHashSecret`], so the
+/// derived sub-key is scrubbed on drop without an intermediate copy.
+fn hkdf_expand_sha256(prk: &[u8], info: &[u8]) -> Vec<u8> {
     let mut mac =
         <Hmac<Sha256> as KeyInit>::new_from_slice(prk).expect("HMAC-SHA256 accepts any key length");
     mac.update(info);
     mac.update(&[0x01]);
-    let okm = mac.finalize().into_bytes();
-    Zeroizing::new(okm.to_vec())
+    mac.finalize().into_bytes().to_vec()
 }
 
 /// Derive a domain-separated [`AuditHashSecret`] sub-key from a master env
@@ -1403,14 +1410,16 @@ fn derive_subkey_from_env(env_var_name: &str, info: &[u8]) -> Result<AuditHashSe
             name: env_var_name.to_string(),
         });
     }
-    let master = Zeroizing::new(value.as_bytes().to_vec());
-    if master.len() < MIN_AUDIT_SECRET_BYTES {
+    // `value` (a `Zeroizing<String>`) owns and scrubs the master secret across
+    // every return path; borrow its bytes for the length check and HKDF rather
+    // than allocating a separate copy of the secret.
+    if value.len() < MIN_AUDIT_SECRET_BYTES {
         return Err(AuditError::WeakSecret {
             name: env_var_name.to_string(),
             min_bytes: MIN_AUDIT_SECRET_BYTES,
         });
     }
-    let derived = hkdf_expand_sha256(&master, info);
+    let derived = hkdf_expand_sha256(value.as_bytes(), info);
     Ok(AuditHashSecret::from_bytes(derived))
 }
 
