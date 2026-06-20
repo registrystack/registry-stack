@@ -37,11 +37,11 @@ Use this README for setup, service ports, and command reference. Use
 - `civil-notary`: civil evidence verifier on host port `4321`.
 - `social-protection-notary`: social protection verifier on host port `4322`.
 - `shared-eligibility-notary`: cross-authority civil, social, and health verifier on host port `4323`.
-- `openfn-civil-notary`: OpenFn sidecar-backed civil verifier on host port `4324`.
-- `openfn-civil-sidecar`: OpenFn adaptor sidecar on the private Compose network.
+- `openfn-civil-notary`: built-in http_json sidecar-backed civil verifier on host port `4324`.
+- `openfn-civil-sidecar`: built-in http_json sidecar on the private Compose network.
 - `openfn-mock-registry`: registry-like HTTP API on the private OpenFn network.
-- `dhis2-health-notary`: optional live DHIS2/OpenFn health evidence verifier on host port `4326`.
-- `openfn-dhis2-sidecar`: optional OpenFn DHIS2 adaptor sidecar on the private Compose network.
+- `dhis2-health-notary`: optional live DHIS2 health evidence verifier on host port `4326`.
+- `openfn-dhis2-sidecar`: optional built-in http_json DHIS2 sidecar on the private Compose network.
 - `static-metadata-publisher`: generated static metadata on host port `4331`.
 
 Inside Compose, services use DNS names like
@@ -145,9 +145,9 @@ Run the default API-key demo:
 ```bash
 just smoke       # API-level smoke for Relay and Notary
 just federation  # signed Notary-to-Notary delegated evaluation smoke
-just openfn      # OpenFn sidecar-backed Notary smoke
+just civil       # built-in http_json civil sidecar Notary smoke  (just openfn also works)
 just opencrvs-dci # live OpenCRVS DCI-backed Notary smoke
-just dhis2-openfn # live DHIS2/OpenFn health evidence smoke
+just dhis2       # live DHIS2 health evidence smoke (just dhis2-openfn also works)
 just notary-client # Registry Notary Python client smoke against lab Notaries
 just client      # narrated default client flow
 just quick       # generate, build, up, smoke, openfn, client
@@ -452,10 +452,10 @@ The nonce request is bound to the selected `credential_configuration_id`,
 matching the Notary nonce replay checks. To test the same facade with Walt
 Wallet API or Inji/Mimoto, see `docs/wallet-interop-testing.md`.
 
-## OpenFn sidecar demo
+## Built-in sidecar civil demo
 
-The OpenFn nodes prove the Registry Notary `openfn_sidecar` connector can
-source one-item civil lookups from an OpenFn HTTP adaptor sidecar and issue a
+The civil sidecar nodes prove the Registry Notary `openfn_sidecar` connector can
+source one-item civil lookups from a built-in `http_json` sidecar and issue a
 date-of-birth SD-JWT VC from that evidence. For the guided path, see
 [`docs/openfn-sidecar-notary-tutorial.md`](docs/openfn-sidecar-notary-tutorial.md).
 
@@ -463,15 +463,17 @@ date-of-birth SD-JWT VC from that evidence. For the guided path, see
 just generate
 just build
 just up
-just openfn
+just civil
 ```
 
-The default OpenFn build uses `REGISTRY_OPENFN_NOTARY_SOURCE_DIR`, which follows
+(`just openfn` is a backwards-compatible alias for `just civil`.)
+
+The build uses `REGISTRY_OPENFN_NOTARY_SOURCE_DIR`, which follows
 `REGISTRY_NOTARY_SOURCE_DIR` unless overridden.
 
-OpenFn is part of the default Compose topology. The sidecar and mock registry
-are not published to host ports; they run only on the private
-`openfn-internal` network. `scripts/smoke-openfn.sh` recreates the three OpenFn
+The civil sidecar is part of the default Compose topology. The sidecar and mock
+registry are not published to host ports; they run only on the private
+`openfn-internal` network. `scripts/smoke-civil.sh` recreates the three
 containers with `--force-recreate --remove-orphans` so repeated local runs do
 not get stuck on stale Compose container IDs.
 
@@ -494,11 +496,11 @@ curl -fsS \
   --data '{"target":{"type":"Person","identifiers":[{"scheme":"national_id","value":"person-123"}]},"claims":["date-of-birth"],"disclosure":"value","format":"application/vnd.registry-notary.claim-result+json"}' | jq
 ```
 
-## Live DHIS2 OpenFn demo
+## Live DHIS2 demo
 
 The optional DHIS2 profile uses the public DHIS2 2.43 demo at
-`https://play.im.dhis2.org/stable-2-43-0` through pinned OpenFn HTTP adaptor
-jobs against the DHIS2 Tracker API. It keeps the sidecar private on the Compose
+`https://play.im.dhis2.org/stable-2-43-0` through the built-in `http_json`
+engine against the DHIS2 Tracker API. It keeps the sidecar private on the Compose
 network and exposes only the Registry Notary API on host port `4326`.
 Because the DHIS2 demo is a live public sandbox, this smoke is outside
 `just quick` and may need sample subject refreshes if the upstream demo data is
@@ -510,8 +512,10 @@ For the guided path, see
 ```bash
 just generate
 just build
-just dhis2-openfn
+just dhis2
 ```
+
+(`just dhis2-openfn` is a backwards-compatible alias for `just dhis2`.)
 
 The DHIS2 Notary exposes four health predicate claims:
 

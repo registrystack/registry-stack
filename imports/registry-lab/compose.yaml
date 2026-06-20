@@ -265,16 +265,16 @@ services:
         : "$${OPENFN_SIDECAR_TOKEN_HASH:?missing OPENFN_SIDECAR_TOKEN_HASH; run scripts/generate-demo-secrets.py}"
         : "$${OPENFN_MOCK_REGISTRY_TOKEN_RAW:?missing OPENFN_MOCK_REGISTRY_TOKEN_RAW; run scripts/generate-demo-secrets.py}"
         exec registry-notary-openfn-sidecar \
-          --config /etc/registry-notary-openfn/openfn-civil-sidecar.yaml.template \
+          --config /etc/registry-notary-source-adapter/civil-sidecar.yaml \
           --allow-unsigned-dev-config
     volumes:
-      - ./config/openfn/openfn-civil-sidecar.yaml.template:/etc/registry-notary-openfn/openfn-civil-sidecar.yaml.template:ro
+      - ./config/source-adapter/civil-sidecar.yaml:/etc/registry-notary-source-adapter/civil-sidecar.yaml:ro
     networks:
       - openfn-internal
     healthcheck:
       test:
         - CMD-SHELL
-        - "node -e 'fetch(\"http://127.0.0.1:8080/ready\").then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));'"
+        - "curl -fsS http://127.0.0.1:8080/ready > /dev/null"
       interval: 2s
       timeout: 2s
       retries: 30
@@ -294,6 +294,7 @@ services:
     command: ["--config", "/etc/registry-notary/openfn-civil-notary.yaml"]
     environment:
       RUST_LOG: info
+      # Token shared with the built-in civil sidecar (same secret, same env name).
       OPENFN_SIDECAR_TOKEN_RAW: ${OPENFN_SIDECAR_TOKEN_RAW:-}
     ports:
       - "4324:8080"
@@ -325,23 +326,25 @@ services:
       OPENFN_DHIS2_HOST_URL: ${OPENFN_DHIS2_HOST_URL:-https://play.im.dhis2.org/stable-2-43-0-1}
       OPENFN_DHIS2_USERNAME: ${OPENFN_DHIS2_USERNAME:-admin}
       OPENFN_DHIS2_PASSWORD: ${OPENFN_DHIS2_PASSWORD:-district}
-      OPENFN_DHIS2_DEMO_CREDENTIAL_JSON: '{"hostUrl":"${OPENFN_DHIS2_HOST_URL:-https://play.im.dhis2.org/stable-2-43-0-1}","baseUrl":"${OPENFN_DHIS2_HOST_URL:-https://play.im.dhis2.org/stable-2-43-0-1}","username":"${OPENFN_DHIS2_USERNAME:-admin}","password":"${OPENFN_DHIS2_PASSWORD:-district}"}'
+      # Built-in http_json engine reads baseUrl, username, password from credential JSON.
+      # The "hostUrl" alias used by the OpenFn adaptor is no longer needed.
+      OPENFN_DHIS2_DEMO_CREDENTIAL_JSON: '{"baseUrl":"${OPENFN_DHIS2_HOST_URL:-https://play.im.dhis2.org/stable-2-43-0-1}","username":"${OPENFN_DHIS2_USERNAME:-admin}","password":"${OPENFN_DHIS2_PASSWORD:-district}"}'
     entrypoint: ["/bin/sh", "-eu", "-c"]
     command:
       - |
         : "$${OPENFN_SIDECAR_TOKEN_HASH:?missing OPENFN_SIDECAR_TOKEN_HASH; run scripts/generate-demo-secrets.py}"
         exec registry-notary-openfn-sidecar \
-          --config /etc/registry-notary-openfn/openfn-dhis2-sidecar.yaml.template \
+          --config /etc/registry-notary-source-adapter/dhis2-health-sidecar.yaml \
           --allow-unsigned-dev-config
     volumes:
-      - ./config/openfn/openfn-dhis2-sidecar.yaml.template:/etc/registry-notary-openfn/openfn-dhis2-sidecar.yaml.template:ro
+      - ./config/source-adapter/dhis2-health-sidecar.yaml:/etc/registry-notary-source-adapter/dhis2-health-sidecar.yaml:ro
     networks:
       - default
       - openfn-internal
     healthcheck:
       test:
         - CMD-SHELL
-        - "node -e 'fetch(\"http://127.0.0.1:8080/ready\").then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));'"
+        - "curl -fsS http://127.0.0.1:8080/ready > /dev/null"
       interval: 2s
       timeout: 2s
       retries: 30
@@ -359,6 +362,7 @@ services:
     command: ["--config", "/etc/registry-notary/dhis2-health-notary.yaml"]
     environment:
       RUST_LOG: info
+      # Token shared with the built-in DHIS2 sidecar (same secret, same env name).
       OPENFN_SIDECAR_TOKEN_RAW: ${OPENFN_SIDECAR_TOKEN_RAW:-}
     ports:
       - "4326:8080"

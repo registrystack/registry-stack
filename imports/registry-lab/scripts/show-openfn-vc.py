@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Issue and inspect the OpenFn-backed SD-JWT VC demo credential."""
+"""Issue and inspect the civil sidecar SD-JWT VC demo credential."""
 
 from __future__ import annotations
 
