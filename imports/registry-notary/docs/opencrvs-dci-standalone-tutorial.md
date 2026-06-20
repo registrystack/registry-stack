@@ -1,8 +1,8 @@
-# Issue a demo credential from OpenCRVS DCI
+# Issue a demo credential from OpenCRVS
 
 > **Page type:** Tutorial · **Product:** Registry Notary · **Layer:** evaluation, credential · **Audience:** integrator
 
-Use this tutorial to run Registry Notary locally, query OpenCRVS DCI for a test
+Use this tutorial to run Registry Notary locally, query OpenCRVS for a test
 birth record, and issue a local demo Selective Disclosure JSON Web Token
 Verifiable Credential (SD-JWT VC).
 
@@ -13,7 +13,7 @@ system-to-system evaluation topics.
 
 You will:
 
-- Generate a local Registry Notary config for OpenCRVS DCI.
+- Generate a local Registry Notary config for OpenCRVS.
 - Add OpenCRVS birth-record query settings.
 - Add OpenCRVS OAuth client credentials.
 - Check the live OpenCRVS connection with a known test UIN.
@@ -25,7 +25,7 @@ Registry Notary runs locally at:
 http://127.0.0.1:4255
 ```
 
-Registry Notary calls the OpenCRVS DCI API at:
+Registry Notary calls the OpenCRVS API at:
 
 ```text
 https://dci-crvs-api.farajaland-integration.opencrvs.dev
@@ -44,7 +44,7 @@ You need:
 - A `registry-notary` binary built from this repository.
 - `curl`.
 - `jq`.
-- An OpenCRVS DCI OAuth client ID and client secret.
+- An OpenCRVS OAuth client ID and client secret.
 - A known test UIN from the OpenCRVS environment owner.
 
 From the `registry-notary` repository root, build the binary when you do not
@@ -355,7 +355,7 @@ Expected result:
 
 ## Optional: use name and date of birth instead of UIN
 
-If your OpenCRVS DCI environment supports expression search over birth-record
+If your OpenCRVS environment supports expression search over birth-record
 fields, use the demographic demo config instead of the UIN lookup config:
 
 ```text
@@ -428,7 +428,7 @@ Registry Relay endpoint instead of a DCI endpoint. Relay must allow filters on
   an external endpoint limitation), so the UIN path is the supported credential
   path for that environment.
 - The supported event filter is `registry_event_type: birth`.
-- The OpenCRVS DCI middleware accepts unsigned requests.
+- The OpenCRVS middleware accepts unsigned requests.
 - Death record checks require a separate source connection or claim with
   `registry_event_type: death`.
 
