@@ -4886,6 +4886,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
+name = "registry-config-report"
+version = "0.3.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "registry-manifest-core"
 version = "0.2.0"
 dependencies = [
@@ -5133,6 +5141,7 @@ dependencies = [
  "postgres-native-tls",
  "proptest",
  "rand_core 0.6.4",
+ "registry-config-report",
  "registry-manifest-core",
  "registry-platform-audit",
  "registry-platform-authcommon",

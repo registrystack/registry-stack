@@ -3,6 +3,7 @@
 
 use std::process::Command;
 
+use registry_config_report::{CONFIG_EXPLANATION_SCHEMA_V1, PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -184,6 +185,70 @@ fn parse_stdout_json(output: &[u8]) -> Value {
     })
 }
 
+fn assert_schema_valid(schema: &str, report: &Value) {
+    let schema: Value = serde_json::from_str(schema).expect("schema parses");
+    let compiled = jsonschema::JSONSchema::compile(&schema).expect("schema compiles");
+    if let Err(errors) = compiled.validate(report) {
+        let messages = errors.map(|error| error.to_string()).collect::<Vec<_>>();
+        panic!("report should validate against schema: {messages:?}\n{report:#}");
+    };
+}
+
+fn assert_diagnostic_report(report: &Value) {
+    assert_schema_valid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, report);
+    assert_eq!(
+        report["schema_version"],
+        "registry.config.diagnostic_report.v1"
+    );
+    assert_eq!(report["product"], "registry-relay");
+    assert_eq!(report["config_schema_version"], "registry.relay.config.v1");
+}
+
+fn assert_config_explanation(report: &Value) {
+    assert_schema_valid(CONFIG_EXPLANATION_SCHEMA_V1, report);
+    assert_eq!(report["schema_version"], "registry.config.explanation.v1");
+    assert_eq!(report["product"], "registry-relay");
+    assert_eq!(report["config_schema_version"], "registry.relay.config.v1");
+}
+
+fn assert_json_schema_compiles(schema: &Value) {
+    jsonschema::JSONSchema::compile(schema).unwrap_or_else(|err| {
+        panic!("schema must compile as JSON Schema: {err}\n{schema:#}");
+    });
+}
+
+fn diagnostic_with_code<'a>(report: &'a Value, code: &str) -> Option<&'a Value> {
+    report["diagnostics"]
+        .as_array()
+        .expect("diagnostics array")
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == code)
+}
+
+#[test]
+fn schema_json_reports_top_level_config_sections() {
+    let output = Command::new(env!("CARGO_BIN_EXE_registry-relay"))
+        .env("RUST_LOG", "off")
+        .args(["schema", "--format", "json"])
+        .output()
+        .expect("schema command runs");
+
+    assert!(
+        output.status.success(),
+        "schema failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let schema = parse_stdout_json(&output.stdout);
+    assert_json_schema_compiles(&schema);
+    assert_eq!(schema["title"], "Registry Relay config");
+    assert_eq!(schema["additionalProperties"], false);
+    assert!(schema["properties"]["server"].is_object());
+    assert!(schema["properties"]["catalog"].is_object());
+    assert!(schema["properties"]["auth"].is_object());
+    assert!(schema["properties"]["audit"].is_object());
+    assert!(schema["properties"]["datasets"].is_object());
+}
+
 #[test]
 fn doctor_json_reports_success_and_redacts_env_file_values() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -220,28 +285,13 @@ fn doctor_json_reports_success_and_redacts_env_file_values() {
         "doctor output leaked env value: {stdout}"
     );
     let report = parse_stdout_json(&output.stdout);
-    assert_eq!(report["schema"], "registry.validation.report.v1");
-    assert_eq!(report["product"], "registry-relay");
-    assert_eq!(report["command"], "doctor");
-    assert_eq!(report["ok"], true);
-    assert_eq!(report["result"], "passed");
-    assert_eq!(report["deployment_profile"]["value"], Value::Null);
-    assert_eq!(report["deployment_profile"]["source"], "undeclared");
-    assert!(report["checks"]
-        .as_array()
-        .expect("checks array")
-        .iter()
-        .any(|check| check["code"] == "relay.config.loaded"));
-    assert!(report["checks"]
-        .as_array()
-        .expect("checks array")
-        .iter()
-        .any(|check| check["code"] == "relay.entity_registry.verified"));
-    assert!(report["findings"]
-        .as_array()
-        .expect("findings array")
-        .iter()
-        .any(|finding| finding["id"] == "deployment.profile_undeclared"));
+    assert_diagnostic_report(&report);
+    assert_eq!(report["status"], "warning");
+    assert!(diagnostic_with_code(&report, "relay.config.loaded").is_some());
+    assert!(diagnostic_with_code(&report, "relay.entity_registry.verified").is_some());
+    let diagnostic = diagnostic_with_code(&report, "deployment.profile_undeclared")
+        .expect("undeclared profile diagnostic");
+    assert_eq!(diagnostic["severity"], "warning");
 }
 
 #[test]
@@ -266,15 +316,9 @@ fn doctor_json_reports_config_failure_with_nonzero_exit() {
         "doctor should fail when config validation fails"
     );
     let report = parse_stdout_json(&output.stdout);
-    assert_eq!(report["schema"], "registry.validation.report.v1");
-    assert_eq!(report["product"], "registry-relay");
-    assert_eq!(report["ok"], false);
-    assert_eq!(report["result"], "failed");
-    assert!(report["checks"]
-        .as_array()
-        .expect("checks array")
-        .iter()
-        .any(|check| check["code"] == "config.missing_secret"));
+    assert_diagnostic_report(&report);
+    assert_eq!(report["status"], "error");
+    assert!(diagnostic_with_code(&report, "config.missing_secret").is_some());
 }
 
 #[test]
@@ -302,13 +346,9 @@ fn doctor_json_accepts_profile_override_without_undeclared_finding() {
         String::from_utf8_lossy(&output.stderr)
     );
     let report = parse_stdout_json(&output.stdout);
-    assert_eq!(report["deployment_profile"]["value"], "local");
-    assert_eq!(report["deployment_profile"]["source"], "override");
-    assert!(!report["findings"]
-        .as_array()
-        .expect("findings array")
-        .iter()
-        .any(|finding| finding["id"] == "deployment.profile_undeclared"));
+    assert_diagnostic_report(&report);
+    assert_eq!(report["status"], "ok");
+    assert!(diagnostic_with_code(&report, "deployment.profile_undeclared").is_none());
 }
 
 #[test]
@@ -332,15 +372,15 @@ fn doctor_json_fails_evidence_grade_unsigned_config() {
         "evidence-grade unsigned config should fail doctor"
     );
     let report = parse_stdout_json(&output.stdout);
-    assert_eq!(report["deployment_profile"]["value"], "evidence_grade");
-    assert_eq!(report["deployment_profile"]["source"], "config");
-    assert_eq!(report["ok"], false);
-    assert!(report["findings"]
-        .as_array()
-        .expect("findings array")
-        .iter()
-        .any(|finding| finding["id"] == "relay.config.unsigned"
-            && finding["severity"] == "startup_fail"));
+    assert_diagnostic_report(&report);
+    assert_eq!(report["status"], "error");
+    let diagnostic =
+        diagnostic_with_code(&report, "relay.config.unsigned").expect("unsigned config diagnostic");
+    assert_eq!(diagnostic["severity"], "error");
+    assert!(diagnostic["message"]
+        .as_str()
+        .expect("message string")
+        .contains("startup_fail"));
 }
 
 #[test]
@@ -363,12 +403,14 @@ fn doctor_json_reports_public_openapi_profile_gates() {
         "production finding_error should not force nonzero"
     );
     let report = parse_stdout_json(&production.stdout);
-    assert!(report["findings"]
-        .as_array()
-        .expect("findings array")
-        .iter()
-        .any(|finding| finding["id"] == "relay.openapi.public"
-            && finding["severity"] == "finding_error"));
+    assert_diagnostic_report(&report);
+    let diagnostic =
+        diagnostic_with_code(&report, "relay.openapi.public").expect("public OpenAPI diagnostic");
+    assert_eq!(diagnostic["severity"], "error");
+    assert!(diagnostic["message"]
+        .as_str()
+        .expect("message string")
+        .contains("finding_error"));
 
     let local_config = write_profile_config(&tmp, "local", false);
     let local = Command::new(env!("CARGO_BIN_EXE_registry-relay"))
@@ -386,11 +428,8 @@ fn doctor_json_reports_public_openapi_profile_gates() {
         "local public OpenAPI config should pass doctor"
     );
     let report = parse_stdout_json(&local.stdout);
-    assert!(!report["findings"]
-        .as_array()
-        .expect("findings array")
-        .iter()
-        .any(|finding| finding["id"] == "relay.openapi.public"));
+    assert_diagnostic_report(&report);
+    assert!(diagnostic_with_code(&report, "relay.openapi.public").is_none());
 }
 
 #[test]
@@ -414,13 +453,15 @@ fn doctor_json_reports_evidence_grade_public_openapi_catalog_severity() {
         "evidence-grade unsigned local config should fail doctor"
     );
     let report = parse_stdout_json(&output.stdout);
-    assert_eq!(report["ok"], false);
-    assert!(report["findings"]
-        .as_array()
-        .expect("findings array")
-        .iter()
-        .any(|finding| finding["id"] == "relay.openapi.public"
-            && finding["severity"] == "finding_error"));
+    assert_diagnostic_report(&report);
+    assert_eq!(report["status"], "error");
+    let diagnostic =
+        diagnostic_with_code(&report, "relay.openapi.public").expect("public OpenAPI diagnostic");
+    assert_eq!(diagnostic["severity"], "error");
+    assert!(diagnostic["message"]
+        .as_str()
+        .expect("message string")
+        .contains("finding_error"));
 }
 
 #[test]
@@ -444,14 +485,10 @@ fn doctor_json_reports_missing_ingress_rate_limit_evidence() {
         "production finding_error should not force nonzero"
     );
     let report = parse_stdout_json(&output.stdout);
-    assert!(report["findings"]
-        .as_array()
-        .expect("findings array")
-        .iter()
-        .any(
-            |finding| finding["id"] == "relay.ingress.rate_limit_missing"
-                && finding["severity"] == "finding_error"
-        ));
+    assert_diagnostic_report(&report);
+    let diagnostic = diagnostic_with_code(&report, "relay.ingress.rate_limit_missing")
+        .expect("ingress rate limit diagnostic");
+    assert_eq!(diagnostic["severity"], "error");
 }
 
 #[test]
@@ -475,15 +512,14 @@ fn doctor_json_fails_active_readiness_fail_gate() {
         "production readiness_fail gate should fail doctor"
     );
     let report = parse_stdout_json(&output.stdout);
-    assert_eq!(report["ok"], false);
-    assert_eq!(report["result"], "failed");
-    assert!(report["findings"]
-        .as_array()
-        .expect("findings array")
-        .iter()
-        .any(|finding| finding["id"] == "relay.admin.public_exposure"
-            && finding["severity"] == "readiness_fail"
-            && finding["status"] == "active"));
+    assert_diagnostic_report(&report);
+    assert_eq!(report["status"], "error");
+    let diagnostic = diagnostic_with_code(&report, "relay.admin.public_exposure")
+        .expect("public admin diagnostic");
+    assert_eq!(diagnostic["severity"], "error");
+    let message = diagnostic["message"].as_str().expect("message string");
+    assert!(message.contains("active"));
+    assert!(message.contains("readiness_fail"));
 }
 
 #[test]
@@ -507,13 +543,51 @@ fn doctor_json_reports_evidence_grade_missing_ingress_rate_limit_evidence() {
         "evidence-grade unsigned local config should fail doctor"
     );
     let report = parse_stdout_json(&output.stdout);
-    assert_eq!(report["ok"], false);
-    assert!(report["findings"]
+    assert_diagnostic_report(&report);
+    assert_eq!(report["status"], "error");
+    let diagnostic = diagnostic_with_code(&report, "relay.ingress.rate_limit_missing")
+        .expect("ingress rate limit diagnostic");
+    assert_eq!(diagnostic["severity"], "error");
+}
+
+#[test]
+fn explain_config_json_reports_redacted_resolved_config() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_path = write_minimal_config(&tmp);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_registry-relay"))
+        .env("RUST_LOG", "off")
+        .args([
+            "explain-config",
+            "--config",
+            config_path.to_str().expect("utf-8 path"),
+            "--format=json",
+        ])
+        .output()
+        .expect("explain-config command runs");
+
+    assert!(
+        output.status.success(),
+        "explain-config failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = parse_stdout_json(&output.stdout);
+    assert_config_explanation(&report);
+    assert_eq!(report["resolved_config"]["catalog"]["title"], "Test");
+    assert!(report["optional_sections_absent"]
         .as_array()
-        .expect("findings array")
+        .expect("optional sections array")
+        .iter()
+        .any(|section| section["path"] == "config_trust"));
+    assert!(report["live_apply"]
+        .as_array()
+        .expect("live apply array")
         .iter()
         .any(
-            |finding| finding["id"] == "relay.ingress.rate_limit_missing"
-                && finding["severity"] == "finding_error"
+            |component| component["path"] == "datasets" && component["class"] == "restart_required"
         ));
+    assert!(report["hashes"]["internal_config_hash"]
+        .as_str()
+        .expect("hash string")
+        .starts_with("sha256:"));
 }

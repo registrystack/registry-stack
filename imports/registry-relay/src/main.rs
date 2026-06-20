@@ -24,6 +24,7 @@
 //! process exit code is non-zero on any error and the failing line is
 //! also emitted via `tracing::error!` so operators can correlate.
 
+use std::collections::BTreeMap;
 use std::env;
 use std::error::Error as StdError;
 use std::fmt as std_fmt;
@@ -38,13 +39,16 @@ use std::time::Duration;
 use axum::Extension;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use datafusion::execution::context::SessionContext;
+use registry_config_report::{
+    redact_config_value, ConfigValueClassification, LiveApplyClass, ReportStatus, RequiredEnvStatus,
+};
 use registry_platform_audit::AuditChainProfile;
 use registry_platform_authcommon::{
     credential_fingerprint_commitment, fingerprint_api_key, CredentialCommitmentContext,
-    CredentialProduct, CredentialType,
+    CredentialFingerprintProvider, CredentialProduct, CredentialType,
 };
 use registry_platform_config::expand_config_env_vars;
-use registry_platform_ops::{ConfigSource, DeploymentProfile};
+use registry_platform_ops::{internal_config_hash, ConfigSource, DeploymentProfile};
 use registry_relay::audit::{AuditPipeline, FileSink, StdoutSink, SyslogSink};
 use registry_relay::auth::middleware::{AuthProviderRef, RuntimeAuthProvider};
 use registry_relay::auth::runtime::build_auth;
@@ -53,7 +57,9 @@ use registry_relay::config::governed::{
     resolve_tuf_config_candidate, LocalTufConfigTargetRequest, RemoteTufConfigTargetRequest,
     TufConfigTargetRequest,
 };
-use registry_relay::config::{self, AuditSinkConfig, Config};
+use registry_relay::config::{
+    self, AuditSinkConfig, Config, IssuerConfig, SignerConfig, SourceConfig,
+};
 use registry_relay::entity::EntityRegistry;
 use registry_relay::error::{ConfigError, Error};
 use registry_relay::format::FormatRegistry;
@@ -69,6 +75,8 @@ use registry_relay::serve::{serve_listener, ServeLimits};
 #[cfg(feature = "spdci-api-standards")]
 use registry_relay::spdci::build_spdci_response_mapper;
 use serde::Serialize;
+use serde_json::{json, Value};
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tracing::{error, info, warn};
@@ -92,6 +100,12 @@ const OPENAPI_COMMAND: &str = "openapi";
 
 /// Offline operator diagnostics for config, env, and metadata readiness.
 const DOCTOR_COMMAND: &str = "doctor";
+
+/// Prints a redacted resolved configuration explanation.
+const EXPLAIN_CONFIG_COMMAND: &str = "explain-config";
+
+/// Prints a lightweight JSON schema for top-level config discovery.
+const SCHEMA_COMMAND: &str = "schema";
 
 /// Top-level namespace for operator configuration commands.
 const CONFIG_COMMAND: &str = "config";
@@ -128,6 +142,7 @@ const ADMIN_TOKEN_ENV_FLAG: &str = "--admin-token-env";
 const LOCAL_APPROVAL_REFERENCE_FLAG: &str = "--local-approval-reference";
 const FORMAT_FLAG: &str = "--format";
 const PROFILE_FLAG: &str = "--profile";
+const RELAY_CONFIG_SCHEMA_VERSION: &str = "registry.relay.config.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CliCommand {
@@ -150,6 +165,14 @@ enum CliCommand {
         env_file: Option<PathBuf>,
         format: OutputFormat,
         profile_override: Option<DeploymentProfile>,
+    },
+    ExplainConfig {
+        config_path: PathBuf,
+        env_file: Option<PathBuf>,
+        format: OutputFormat,
+    },
+    Schema {
+        format: OutputFormat,
     },
     ConfigVerifyBundle(ConfigVerifyBundleCommand),
     ConfigApplyBundle(ConfigApplyBundleCommand),
@@ -272,6 +295,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             format,
             profile_override,
         } => run_doctor(config_path, env_file, format, profile_override).await,
+        CliCommand::ExplainConfig {
+            config_path,
+            env_file,
+            format,
+        } => run_explain_config(config_path, env_file, format).await,
+        CliCommand::Schema { format } => run_schema(format).await,
         CliCommand::ConfigVerifyBundle(command) => run_config_verify_bundle(command).await,
         CliCommand::ConfigApplyBundle(command) => run_config_apply_bundle(command).await,
     }
@@ -412,12 +441,57 @@ async fn run_doctor(
     match format {
         OutputFormat::Json => {
             let report = build_doctor_report(&config_path, env_file.as_deref(), profile_override);
-            println!("{}", serde_json::to_string_pretty(&report)?);
-            if report.ok {
+            println!("{}", serde_json::to_string_pretty(&report.output)?);
+            if report.exit_success {
                 Ok(())
             } else {
                 Err(io::Error::other("registry-relay doctor failed").into())
             }
+        }
+    }
+}
+
+async fn run_explain_config(
+    config_path: PathBuf,
+    env_file: Option<PathBuf>,
+    format: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    match format {
+        OutputFormat::Json => {
+            load_env_file_arg(env_file.as_deref())?;
+            let raw = fs::read_to_string(&config_path)?;
+            let expanded = expand_config_env_vars(&raw)?;
+            let resolved_config = redacted_resolved_config(&expanded)?;
+            let config = config::load(&config_path)?;
+            let report = json!({
+                "schema_version": "registry.config.explanation.v1",
+                "product": "registry-relay",
+                "config_schema_version": RELAY_CONFIG_SCHEMA_VERSION,
+                "source": {
+                    "kind": "local_file",
+                    "path": path_for_json(&config_path),
+                },
+                "required_env": required_env_report(&config),
+                "defaults_applied": [],
+                "optional_sections_absent": relay_optional_sections_absent(&config),
+                "live_apply": relay_live_apply_classes(),
+                "resolved_config": resolved_config,
+                "hashes": {
+                    "internal_config_hash": internal_config_hash(raw.as_bytes()),
+                },
+                "generated_at": now_rfc3339(),
+            });
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(())
+        }
+    }
+}
+
+async fn run_schema(format: OutputFormat) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    match format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&lightweight_schema())?);
+            Ok(())
         }
     }
 }
@@ -427,6 +501,7 @@ fn build_doctor_report(
     env_file: Option<&std::path::Path>,
     profile_override: Option<DeploymentProfile>,
 ) -> DoctorReport {
+    let raw_config = fs::read_to_string(config_path).ok();
     let mut checks = Vec::new();
     if let Some(env_file) = env_file {
         match load_env_file_arg(Some(env_file)) {
@@ -446,7 +521,13 @@ fn build_doctor_report(
     }
 
     if checks.iter().any(|check| check.status == "failed") {
-        return DoctorReport::new(checks, None, profile_override);
+        return DoctorReport::new(
+            checks,
+            None,
+            profile_override,
+            config_path,
+            raw_config.as_deref(),
+        );
     }
 
     let loaded_config = match config::load_with_metadata(config_path) {
@@ -507,7 +588,13 @@ fn build_doctor_report(
         }
     };
 
-    DoctorReport::new(checks, loaded_config.as_ref(), profile_override)
+    DoctorReport::new(
+        checks,
+        loaded_config.as_ref(),
+        profile_override,
+        config_path,
+        raw_config.as_deref(),
+    )
 }
 
 fn parse_doctor_config_without_validation(config_path: &std::path::Path) -> Option<Config> {
@@ -516,16 +603,9 @@ fn parse_doctor_config_without_validation(config_path: &std::path::Path) -> Opti
     serde_saphyr::from_str(&expanded).ok()
 }
 
-#[derive(Debug, Serialize)]
 struct DoctorReport {
-    schema: &'static str,
-    product: &'static str,
-    command: &'static str,
-    ok: bool,
-    result: &'static str,
-    deployment_profile: DeploymentProfileReport,
-    checks: Vec<DoctorCheck>,
-    findings: Vec<DoctorFinding>,
+    output: Value,
+    exit_success: bool,
 }
 
 impl DoctorReport {
@@ -533,22 +613,59 @@ impl DoctorReport {
         checks: Vec<DoctorCheck>,
         config: Option<&Config>,
         profile_override: Option<DeploymentProfile>,
+        config_path: &std::path::Path,
+        raw_config: Option<&str>,
     ) -> Self {
         let deployment_profile = resolve_deployment_profile(config, profile_override);
         let findings = deployment_findings(config, &deployment_profile);
-        let ok = checks.iter().all(|check| check.status != "failed")
+        let exit_success = checks.iter().all(|check| check.status != "failed")
             && findings
                 .iter()
                 .all(|finding| !doctor_finding_fails(finding));
+        let diagnostics = checks
+            .iter()
+            .map(doctor_check_diagnostic)
+            .chain(findings.iter().map(doctor_finding_diagnostic))
+            .collect::<Vec<_>>();
+        let error_count = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic["severity"] == "error")
+            .count();
+        let warning_count = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic["severity"] == "warning")
+            .count();
+        let mut output = json!({
+            "schema_version": "registry.config.diagnostic_report.v1",
+            "product": "registry-relay",
+            "config_schema_version": RELAY_CONFIG_SCHEMA_VERSION,
+            "source": {
+                "kind": "local_file",
+                "path": path_for_json(config_path),
+            },
+            "status": if error_count > 0 {
+                ReportStatus::Error.as_str()
+            } else if warning_count > 0 {
+                ReportStatus::Warning.as_str()
+            } else {
+                ReportStatus::Ok.as_str()
+            },
+            "summary": {
+                "error_count": error_count,
+                "warning_count": warning_count,
+            },
+            "diagnostics": diagnostics,
+            "required_env": config.map(required_env_report).unwrap_or_default(),
+            "generated_at": now_rfc3339(),
+        });
+        if let Some(raw) = raw_config {
+            output["hashes"] = json!({
+                "internal_config_hash": internal_config_hash(raw.as_bytes()),
+            });
+        }
         Self {
-            schema: "registry.validation.report.v1",
-            product: "registry-relay",
-            command: DOCTOR_COMMAND,
-            ok,
-            result: if ok { "passed" } else { "failed" },
-            deployment_profile,
-            checks,
-            findings,
+            output,
+            exit_success,
         }
     }
 }
@@ -677,6 +794,202 @@ impl DoctorCheck {
             action,
         }
     }
+}
+
+fn doctor_check_diagnostic(check: &DoctorCheck) -> Value {
+    let mut message = check.message.to_string();
+    if let Some(action) = check.action {
+        message.push_str(" Next action: ");
+        message.push_str(action);
+    }
+    json!({
+        "code": check.code,
+        "severity": check.severity,
+        "message": message,
+    })
+}
+
+fn doctor_finding_diagnostic(finding: &DoctorFinding) -> Value {
+    json!({
+        "code": finding.id,
+        "severity": shared_severity(finding.severity),
+        "message": format!(
+            "{}: {} is {} at severity {}",
+            finding.id, finding.message, finding.status, finding.severity
+        ),
+    })
+}
+
+fn shared_severity(severity: &str) -> &'static str {
+    match severity {
+        "startup_fail" | "readiness_fail" | "finding_error" | "error" => "error",
+        "finding_warn" | "warning" => "warning",
+        _ => "info",
+    }
+}
+
+fn required_env_report(config: &Config) -> Vec<Value> {
+    let mut envs = BTreeMap::new();
+    if config.auth.mode == config::AuthMode::ApiKey {
+        for api_key in &config.auth.api_keys {
+            if api_key.fingerprint.provider == CredentialFingerprintProvider::Env {
+                if let Some(name) = &api_key.fingerprint.name {
+                    envs.insert(name.clone(), ConfigValueClassification::Secret);
+                }
+            }
+        }
+    }
+    if let Some(hash_secret_env) = &config.audit.hash_secret_env {
+        envs.insert(hash_secret_env.clone(), ConfigValueClassification::Secret);
+    }
+    if let Some(provenance) = &config.provenance {
+        issuer_required_env(&provenance.issuer, &mut envs);
+    }
+    for dataset in &config.datasets {
+        for table in dataset.table_configs() {
+            if let SourceConfig::Postgres { connection_env, .. } = &table.source {
+                envs.insert(connection_env.clone(), ConfigValueClassification::Secret);
+            }
+        }
+    }
+    envs.into_iter()
+        .map(|(name, classification)| {
+            json!({
+                "name": name,
+                "classification": classification.as_str(),
+                "status": if env::var_os(&name).is_some() {
+                    RequiredEnvStatus::Present.as_str()
+                } else {
+                    RequiredEnvStatus::Missing.as_str()
+                },
+            })
+        })
+        .collect()
+}
+
+fn issuer_required_env(
+    issuer: &IssuerConfig,
+    envs: &mut BTreeMap<String, ConfigValueClassification>,
+) {
+    match issuer {
+        IssuerConfig::Gateway(config) => {
+            signer_required_env(&config.signer, envs);
+            for retired_key in &config.retired_keys {
+                envs.insert(
+                    retired_key.jwk_env.clone(),
+                    ConfigValueClassification::Public,
+                );
+            }
+        }
+        IssuerConfig::Delegated(config) => {
+            signer_required_env(&config.signer, envs);
+            for retired_key in &config.retired_keys {
+                envs.insert(
+                    retired_key.jwk_env.clone(),
+                    ConfigValueClassification::Public,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+fn signer_required_env(
+    signer: &SignerConfig,
+    envs: &mut BTreeMap<String, ConfigValueClassification>,
+) {
+    if let SignerConfig::Software(config) = signer {
+        envs.insert(config.jwk_env.clone(), ConfigValueClassification::Secret);
+    }
+}
+
+fn relay_optional_sections_absent(config: &Config) -> Vec<Value> {
+    let mut sections = Vec::new();
+    if config.config_trust.is_none() {
+        sections.push(json!({
+            "path": "config_trust",
+            "reason": "signed config apply is disabled",
+        }));
+    }
+    if config.metadata.is_none() {
+        sections.push(json!({
+            "path": "metadata",
+            "reason": "split metadata manifest is not configured",
+        }));
+    }
+    if config.provenance.is_none() {
+        sections.push(json!({
+            "path": "provenance",
+            "reason": "signed response credentials are disabled",
+        }));
+    }
+    sections
+}
+
+fn relay_live_apply_classes() -> Vec<Value> {
+    [
+        ("auth.api_keys", LiveApplyClass::HotSwappable),
+        ("auth.oidc", LiveApplyClass::HotSwappable),
+        ("audit", LiveApplyClass::HotSwappable),
+        ("catalog", LiveApplyClass::HotSwappable),
+        ("provenance.issuer.signer", LiveApplyClass::HotSwappable),
+        ("datasets", LiveApplyClass::RestartRequired),
+        ("server.bind", LiveApplyClass::RestartRequired),
+        ("server.admin_bind", LiveApplyClass::RestartRequired),
+        ("config_trust", LiveApplyClass::RestartRequired),
+    ]
+    .into_iter()
+    .map(|(path, class)| {
+        json!({
+            "path": path,
+            "class": class.as_str(),
+        })
+    })
+    .collect()
+}
+
+fn redacted_resolved_config(
+    expanded_yaml: &str,
+) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+    let value: Value = serde_saphyr::from_str(expanded_yaml)?;
+    Ok(redact_config_value(
+        &value,
+        relay_config_value_classification,
+    ))
+}
+
+fn relay_config_value_classification(path: &[&str], value: &Value) -> ConfigValueClassification {
+    if !matches!(
+        value,
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_)
+    ) {
+        return ConfigValueClassification::Public;
+    }
+    let Some(key) = path.last() else {
+        return ConfigValueClassification::Public;
+    };
+    let key = key.to_ascii_lowercase();
+    if key.contains("secret")
+        || key.contains("password")
+        || key.contains("token")
+        || key.contains("private")
+        || key.contains("passphrase")
+        || key == "jwk"
+    {
+        ConfigValueClassification::Secret
+    } else {
+        ConfigValueClassification::Public
+    }
+}
+
+fn path_for_json(path: &std::path::Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+fn now_rfc3339() -> String {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .expect("system clock timestamp formats as RFC3339")
 }
 
 async fn run_config_verify_bundle(
@@ -961,6 +1274,13 @@ fn parse_cli_command_from(args: Vec<String>) -> Result<CliCommand, CliError> {
         parse_openapi_command(&rest[1..])
     } else if rest.first().is_some_and(|arg| arg == DOCTOR_COMMAND) {
         parse_doctor_command(&rest[1..])
+    } else if rest
+        .first()
+        .is_some_and(|arg| arg == EXPLAIN_CONFIG_COMMAND)
+    {
+        parse_explain_config_command(&rest[1..])
+    } else if rest.first().is_some_and(|arg| arg == SCHEMA_COMMAND) {
+        parse_schema_command(&rest[1..])
     } else if rest.first().is_some_and(|arg| arg == CONFIG_COMMAND) {
         parse_config_command(&rest[1..])
     } else {
@@ -1053,11 +1373,94 @@ fn parse_doctor_command(args: &[String]) -> Result<CliCommand, CliError> {
     })
 }
 
+fn parse_explain_config_command(args: &[String]) -> Result<CliCommand, CliError> {
+    let mut config_path: Option<PathBuf> = None;
+    let mut env_file: Option<PathBuf> = None;
+    let mut format = OutputFormat::Json;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if let Some(value) = flag_value(arg, CONFIG_FLAG) {
+            config_path = Some(required_path_value(CONFIG_FLAG, value)?);
+        } else if arg == CONFIG_FLAG {
+            index += 1;
+            config_path = Some(required_path_arg(args, index, CONFIG_FLAG)?);
+        } else if let Some(value) = flag_value(arg, ENV_FILE_FLAG) {
+            env_file = Some(required_path_value(ENV_FILE_FLAG, value)?);
+        } else if arg == ENV_FILE_FLAG {
+            index += 1;
+            env_file = Some(required_path_arg(args, index, ENV_FILE_FLAG)?);
+        } else if let Some(value) = flag_value(arg, FORMAT_FLAG) {
+            format = parse_output_format(required_string_value(FORMAT_FLAG, value)?)?;
+        } else if arg == FORMAT_FLAG {
+            index += 1;
+            format = parse_output_format(required_string_arg(args, index, FORMAT_FLAG)?)?;
+        } else {
+            return Err(CliError(format!(
+                "unknown {EXPLAIN_CONFIG_COMMAND} argument: {arg}"
+            )));
+        }
+        index += 1;
+    }
+    if env_file.is_none() {
+        env_file = default_env_file_from_env();
+    }
+    Ok(CliCommand::ExplainConfig {
+        config_path: config_path.unwrap_or_else(default_config_path_from_env),
+        env_file,
+        format,
+    })
+}
+
+fn parse_schema_command(args: &[String]) -> Result<CliCommand, CliError> {
+    let mut format = OutputFormat::Json;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if let Some(value) = flag_value(arg, FORMAT_FLAG) {
+            format = parse_output_format(required_string_value(FORMAT_FLAG, value)?)?;
+        } else if arg == FORMAT_FLAG {
+            index += 1;
+            format = parse_output_format(required_string_arg(args, index, FORMAT_FLAG)?)?;
+        } else {
+            return Err(CliError(format!(
+                "unknown {SCHEMA_COMMAND} argument: {arg}"
+            )));
+        }
+        index += 1;
+    }
+    Ok(CliCommand::Schema { format })
+}
+
 fn parse_output_format(value: String) -> Result<OutputFormat, CliError> {
     match value.as_str() {
         "json" => Ok(OutputFormat::Json),
         _ => Err(CliError(format!("{FORMAT_FLAG} must be json"))),
     }
+}
+
+fn lightweight_schema() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Registry Relay config",
+        "type": "object",
+        "required": ["server", "catalog", "auth", "audit", "datasets"],
+        "properties": {
+            "instance": { "type": "object" },
+            "server": { "type": "object" },
+            "config_trust": { "type": "object" },
+            "metadata": { "type": "object" },
+            "catalog": { "type": "object" },
+            "vocabularies": { "type": "object" },
+            "auth": { "type": "object" },
+            "audit": { "type": "object" },
+            "datasets": { "type": "array" },
+            "provenance": { "type": "object" },
+            "standards": { "type": "object" },
+            "deployment": { "type": "object" }
+        },
+        "additionalProperties": false
+    })
 }
 
 fn parse_deployment_profile(value: String) -> Result<DeploymentProfile, CliError> {
@@ -1702,8 +2105,9 @@ async fn shutdown_signal() {
 mod tests {
     use super::{
         build_audit_sink, compile_relay_runtime, config_apply_bundle_request_body,
-        load_env_file_arg, parse_cli_command_from, parse_env_file_value, render_generated_api_key,
-        run_config_apply_bundle, run_healthcheck, CliCommand, ConfigApplyBundleCommand,
+        load_env_file_arg, parse_cli_command_from, parse_env_file_value,
+        relay_config_value_classification, render_generated_api_key, run_config_apply_bundle,
+        run_healthcheck, CliCommand, ConfigApplyBundleCommand, ConfigValueClassification,
         ConfigVerifyBundleSource, GenerateApiKeyCommand, OperationalLogFormat, OutputFormat,
         DEFAULT_HEALTHCHECK_TIMEOUT_MS, DEFAULT_HEALTHCHECK_URL,
     };
@@ -2080,6 +2484,31 @@ audit:
     }
 
     #[test]
+    fn schema_cli_accepts_json_format() {
+        let command =
+            parse_cli_command_from(command_args(&["registry-relay", "schema", "--format=json"]))
+                .expect("schema command parses");
+
+        let CliCommand::Schema { format } = command else {
+            panic!("expected schema command");
+        };
+        assert_eq!(format, OutputFormat::Json);
+    }
+
+    #[test]
+    fn schema_cli_rejects_unknown_format() {
+        let err = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "schema",
+            "--format",
+            "text",
+        ]))
+        .expect_err("schema rejects unsupported format");
+
+        assert_eq!(err.to_string(), "--format must be json");
+    }
+
+    #[test]
     fn serve_cli_preserves_config_flag_parsing() {
         let command = parse_cli_command_from(command_args(&[
             "registry-relay",
@@ -2239,6 +2668,23 @@ audit:
     fn env_file_value_parser_handles_single_quote_values() {
         assert_eq!(parse_env_file_value("\""), "\"");
         assert_eq!(parse_env_file_value("'"), "'");
+    }
+
+    #[test]
+    fn config_explanation_redacts_private_and_passphrase_keys() {
+        for key in [
+            "private_key",
+            "privatekey",
+            "private_jwk",
+            "signing_passphrase",
+            "passphrase",
+        ] {
+            assert_eq!(
+                relay_config_value_classification(&["provenance", key], &json!("sensitive")),
+                ConfigValueClassification::Secret,
+                "{key} should be classified as secret"
+            );
+        }
     }
 
     #[test]
