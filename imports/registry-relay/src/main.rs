@@ -972,7 +972,8 @@ fn relay_config_value_classification(path: &[&str], value: &Value) -> ConfigValu
     if key.contains("secret")
         || key.contains("password")
         || key.contains("token")
-        || key == "private_jwk"
+        || key.contains("private")
+        || key.contains("passphrase")
         || key == "jwk"
     {
         ConfigValueClassification::Secret
@@ -2104,8 +2105,9 @@ async fn shutdown_signal() {
 mod tests {
     use super::{
         build_audit_sink, compile_relay_runtime, config_apply_bundle_request_body,
-        load_env_file_arg, parse_cli_command_from, parse_env_file_value, render_generated_api_key,
-        run_config_apply_bundle, run_healthcheck, CliCommand, ConfigApplyBundleCommand,
+        load_env_file_arg, parse_cli_command_from, parse_env_file_value,
+        relay_config_value_classification, render_generated_api_key, run_config_apply_bundle,
+        run_healthcheck, CliCommand, ConfigApplyBundleCommand, ConfigValueClassification,
         ConfigVerifyBundleSource, GenerateApiKeyCommand, OperationalLogFormat, OutputFormat,
         DEFAULT_HEALTHCHECK_TIMEOUT_MS, DEFAULT_HEALTHCHECK_URL,
     };
@@ -2666,6 +2668,23 @@ audit:
     fn env_file_value_parser_handles_single_quote_values() {
         assert_eq!(parse_env_file_value("\""), "\"");
         assert_eq!(parse_env_file_value("'"), "'");
+    }
+
+    #[test]
+    fn config_explanation_redacts_private_and_passphrase_keys() {
+        for key in [
+            "private_key",
+            "privatekey",
+            "private_jwk",
+            "signing_passphrase",
+            "passphrase",
+        ] {
+            assert_eq!(
+                relay_config_value_classification(&["provenance", key], &json!("sensitive")),
+                ConfigValueClassification::Secret,
+                "{key} should be classified as secret"
+            );
+        }
     }
 
     #[test]
