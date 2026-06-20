@@ -1233,3 +1233,138 @@ starlight-tabs [role='tab']:not([aria-selected='true']):hover {
   --sl-color-hairline-light: var(--registry-rule);
   --sl-color-hairline-shade: var(--registry-rule);
 }
+
+/* ── Per-page footer (RegistryFooter override) ───────────────────────────────
+   Pagination, review/edit meta, and the "Was this helpful?" feedback row that
+   sit above the site-footer line. Themed entirely from the --registry-* tokens
+   (and the squared-by-default global rule), so it tracks light and dark with no
+   per-theme values here. The feedback buttons mirror the .redoc-link / version
+   -switch control chrome: 1px bordered, transparent fill, hover fills with the
+   active wash. */
+.registry-page-footer {
+  margin-top: 48px;
+  border-top: 1px solid var(--registry-rule);
+  padding-top: 20px;
+  display: grid;
+  gap: 24px;
+}
+
+/* Pagination: prev on the left, next on the right; stacks on narrow screens. */
+.doc-pagination {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.doc-pagination-link {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--registry-rule);
+  padding: 10px 14px;
+  color: var(--registry-ink);
+  text-decoration: none;
+}
+
+.doc-pagination-link:hover {
+  background: var(--registry-active);
+}
+
+.doc-pagination-next {
+  text-align: end;
+}
+
+.doc-pagination-eyebrow {
+  color: var(--registry-muted);
+  font-family: var(--__sl-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.doc-pagination-label {
+  color: var(--registry-ink);
+  font-size: var(--sl-text-sm);
+  font-weight: 600;
+}
+
+/* Meta row: small muted items separated by a middot, like the site footer. */
+.doc-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 0;
+  color: var(--registry-muted);
+  font-size: var(--sl-text-sm);
+}
+
+.doc-meta-item + .doc-meta-item::before {
+  content: ' · ';
+  color: var(--registry-muted);
+  white-space: pre;
+}
+
+a.doc-meta-item {
+  color: var(--registry-blue);
+  text-decoration: none;
+}
+
+a.doc-meta-item:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* Feedback: a label and two small square bordered controls. The status row is
+   always present (reserved height) so swapping in the acknowledgement does not
+   shift layout. */
+.doc-feedback {
+  display: grid;
+  gap: 8px;
+}
+
+.doc-feedback-prompt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.doc-feedback-label {
+  color: var(--registry-muted);
+  font-size: var(--sl-text-sm);
+}
+
+.doc-feedback-buttons {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.doc-feedback-buttons button {
+  border: 1px solid var(--registry-ink-rule);
+  background: transparent;
+  color: var(--registry-ink);
+  font: 600 13px/1 var(--__sl-font);
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+.doc-feedback-buttons button:hover {
+  background: var(--registry-active);
+}
+
+.doc-feedback-status {
+  margin: 0;
+  min-block-size: 1.2em;
+  color: var(--registry-muted);
+  font-size: var(--sl-text-sm);
+}
+
+@media (max-width: 50rem) {
+  .doc-pagination {
+    grid-template-columns: 1fr;
+  }
+
+  .doc-pagination-next {
+    text-align: start;
+  }
+}
